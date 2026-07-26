@@ -116,6 +116,7 @@ modules/algorithm/QuaternionEKF.c \
 modules/algorithm/crc8.c \
 modules/algorithm/crc16.c \
 modules/algorithm/user_lib.c \
+modules/algorithm/RLS.c \
 modules/bluetooth/HC05.c \
 modules/BMI088/bmi088.c \
 modules/imu/BMI088driver.c \

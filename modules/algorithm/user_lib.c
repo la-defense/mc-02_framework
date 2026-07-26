@@ -94,6 +94,12 @@ float float_deadband(float Value, float minValue, float maxValue)
     return Value;
 }
 
+// 判断数值相等
+float floatEqual(float num, float Value)
+{
+    return (num <= (Value + 1.192092896e-07f)) && (num >= (Value - 1.192092896e-07f));
+}
+
 // 限幅函数
 float float_constrain(float Value, float minValue, float maxValue)
 {
