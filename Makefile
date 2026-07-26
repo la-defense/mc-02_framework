@@ -141,6 +141,7 @@ modules/referee/referee_UI.c \
 modules/referee/referee_task.c \
 modules/remote/remote_control.c \
 modules/super_cap/super_cap.c \
+modules/power/power_manager.c \
 modules/can_comm/can_comm.c \
 modules/message_center/message_center.c \
 modules/daemon/daemon.c \
@@ -260,6 +261,7 @@ C_INCLUDES =  \
 -Imodules/referee \
 -Imodules/remote \
 -Imodules/super_cap \
+-Imodules/power \
 -Imodules/can_comm \
 -Imodules/message_center \
 -Imodules/daemon \

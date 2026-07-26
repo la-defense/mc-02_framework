@@ -48,4 +48,4 @@ SuperCapInstance *SuperCapInit(SuperCap_Init_Config_s *supercap_config);
  */
 void SuperCapSend(SuperCapInstance *instance, uint8_t *data);
 
-#endif // !SUPER_CAP_Hd
+#endif // !SUPER_CAP_H
