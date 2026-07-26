@@ -4,6 +4,7 @@
 #include "dji_motor.h"
 #include "step_motor.h"
 #include "servo_motor.h"
+#include "xmmotor.h"
 
 void MotorControlTask()
 {
@@ -14,6 +15,8 @@ void MotorControlTask()
 
     /* 如果有对应的电机则取消注释,可以加入条件编译或者register对应的idx判断是否注册了电机 */
     LKMotorControl();
+
+    // XMMotorControl();
 
     // legacy support
     // 由于ht04电机的反馈方式为接收到一帧消息后立刻回传,以此方式连续发送可能导致总线拥塞

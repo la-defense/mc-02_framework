@@ -68,6 +68,14 @@ typedef enum
     MOTOR_ENALBED = 1,
 } Motor_Working_Type_e;
 
+/* 电机工作状态 */
+/* 电机离线标志 */
+typedef enum
+{
+    MOTOR_ONLINE = 0,
+    MOTOR_OFFLINE = 1,
+} Motor_Online_Flag_e;
+
 /* 电机控制设置,包括闭环类型,反转标志和反馈来源 */
 typedef struct
 {
@@ -78,6 +86,7 @@ typedef struct
     Feedback_Source_e angle_feedback_source;       // 角度反馈类型
     Feedback_Source_e speed_feedback_source;       // 速度反馈类型
     Feedfoward_Type_e feedforward_flag;            // 前馈标志
+    uint8_t enable; // 是否启用
 
 } Motor_Control_Setting_s;
 
@@ -106,6 +115,8 @@ typedef enum
     M2006,
     LK9025,
     HT04,
+    DR04,
+    XMCY,
 } Motor_Type_e;
 
 /**

@@ -129,6 +129,8 @@ modules/motor/DJImotor/dji_motor.c \
 modules/motor/HTmotor/HT04.c \
 modules/motor/LKmotor/LK9025.c \
 modules/motor/DMmotor/dmmotor.c \
+modules/motor/DRmotor/drmotor.c \
+modules/motor/XMmotor/xmmotor.c \
 modules/motor/step_motor/step_motor.c \
 modules/motor/servo_motor/servo_motor.c \
 modules/motor/motor_task.c \
@@ -251,6 +253,8 @@ C_INCLUDES =  \
 -Imodules/motor/step_motor \
 -Imodules/motor/servo_motor \
 -Imodules/motor/DMmotor \
+-Imodules/motor/DRmotor \
+-Imodules/motor/XMmotor \
 -Imodules/motor \
 -Imodules/oled \
 -Imodules/referee \

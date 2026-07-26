@@ -257,6 +257,29 @@ void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop)
     motor->motor_settings.outer_loop_type = outer_loop;
 }
 
+/**
+ * @brief 判断电机是否离线
+ *
+ */
+void DJIMotorIsOnline(DJIMotorInstance *motor)
+{
+    if (DaemonIsOnline(motor->daemon) > 0)
+        motor->online_flag = MOTOR_ONLINE;
+    else
+        motor->online_flag = MOTOR_OFFLINE;
+}
+
+/**
+ * @brief 修改电机的实际闭环目标(内层闭环)
+ *
+ * @param motor  要修改的电机实例指针
+ * @param outer_loop 闭环类型(用于设置 close_loop_type)
+ */
+void DJIMotorCloseLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop)
+{
+    motor->motor_settings.close_loop_type = outer_loop;
+}
+
 // 设置参考值
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 {
@@ -283,7 +306,7 @@ void DJIMotorControl()
         motor_controller = &motor->motor_controller;
         measure = &motor->measure;
         pid_ref = motor_controller->pid_ref; // 保存设定值,防止motor_controller->pid_ref在计算过程中被修改
-        if (motor_setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE)
+        if (motor_setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
             pid_ref *= -1; // 设置反转
 
         // pid_ref会顺次通过被启用的闭环充当数据的载体
@@ -320,10 +343,10 @@ void DJIMotorControl()
             pid_ref = PIDCalculate(&motor_controller->current_PID, measure->real_current, pid_ref);
         }
 
-        if (motor_setting->feedback_reverse_flag == FEEDBACK_DIRECTION_REVERSE)
+        if (motor_setting->feedback_reverse_flag == FEEDBACK_DIRECTION_REVERSE && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
             pid_ref *= -1;
 
-        // 获取最终输出
+        // 获取最终输出,功率限制时直接输出电流值
         set = (int16_t)pid_ref;
 
         // 分组填入发送数据
