@@ -152,6 +152,8 @@ application/chassis/chassis.c \
 application/shoot/shoot.c \
 application/cmd/robot_cmd.c \
 application/robot.c \
+application/robot_def.c \
+application/config/sentinel_robot/sentinel_config.c \
 Core/Src/i2c.c
 
 # ASM sources
@@ -232,6 +234,8 @@ C_INCLUDES =  \
 -Iapplication/shoot \
 -Iapplication/gimbal \
 -Iapplication/cmd \
+-Iapplication/config \
+-Iapplication/config/sentinel_robot \
 -Iapplication \
 -Ibsp/dwt \
 -Ibsp/can \
