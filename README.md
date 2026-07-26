@@ -10,6 +10,33 @@
 
 达妙MC-02开发板资料仓库链接：https://gitee.com/kit-miao/dm-mc02
 
+---
+
+## feature/port-sentinel-features 分支：哨兵自瞄功能移植
+
+本分支从 [Restar2027Sentinel v1.0.0-autoaim-stable](https://github.com/la-defense/Restar2027Sentinel/tree/v1.0.0-autoaim-stable)
+（STM32F407 经典 C 板的哨兵自瞄稳定版）回移功能到 MC02（STM32H723），保留 H723 平台适配。
+移植按模块逐步进行，每个模块单独提交并通过 H723 编译验证：
+
+| 模块 | 内容 |
+|---|---|
+| 基础/算法 | general_def 6 个单位换算宏、user_lib `floatEqual`+清理、RLS 递归最小二乘辨识器 |
+| alarm | `alarm_def.h` 公共枚举、buzzer 重命名+`BuzzerSetOctave`、新增 LED 模块（用 WS2812 经 SPI6，替代远程 htim5 三路 PWM） |
+| motor | `Motor_Online_Flag_e`/`enable` 字段、`DR04`/`XMCY` 类型、`DJIMotorIsOnline`/`DJIMotorCloseLoop`、XMmotor 骨架、DRmotor 占位、HT04 扭矩系数宏 |
+| power | `power_manager.c/.h` 功率管理（k1/k2/k3 模型，RLS 待启用） |
+| referee | 新版 RM 协议（game_robot_state 13B、新增 0x0104/0x0105）、`refresh_flag`、交互结构新字段 |
+| master_machine | 视觉协议升级为 SP+CRC16（与上位机 sp_vision_25 对齐），支持 USB VCP 与 UART 双传输，`VisionUpdateTx` |
+| imu | ist8310 磁力计骨架（未接硬件）；ins_task 保留 H723 适配（htim3/hspi2/温度PID） |
+| config | 机器人配置框架 + 哨兵配置（OMNI 轮 + MINI 云台，hcan1/2 → hfdcan1/2） |
+| robot_cmd | 视觉自瞄核心：mode 1/2 接管云台、`RAD_TO_DEG`、`YAW_GEAR_RATIO`（1.25 皮带传动补偿）、视觉前馈字段 |
+| 构建 | CMake + Ninja、`.clangd`、openocd（stm32h7x）、GitHub Actions CI |
+
+**保留 H723 平台适配**：FDCAN（含 SetDLC/DataLength 修复）、`htim3/hspi2`、M7 DSP 库、`.ioc/.ld/.svd` 不变；
+远程 bxCAN/hspi1/htim10 等平台相关差异不移植。
+
+**已知后续工作**：gimbal 前馈实际应用、RefereeHandler/AlarmHandler、键鼠自瞄、UI 分离到 config、ist8310 接入 EKF、XMmotor 扩展帧适配。
+
+
 如果要使用JLink调试，建议采用JLink V9以上版本，因为V7或OB版本不支持H7系列MCU的调试。V8暂未测试。
 
 联系方式：QQ 2609008122
