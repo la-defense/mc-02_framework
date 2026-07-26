@@ -1,6 +1,7 @@
 #ifndef BUZZER_H
 #define BUZZER_H
 #include "bsp_pwm.h"
+#include "alarm_def.h"
 #define BUZZER_DEVICE_CNT 5
 
 #define  DoFreq  523
@@ -23,20 +24,6 @@ typedef enum
     OCTAVE_8,
 }octave_e;
 
-typedef enum
-{
-    ALARM_LEVEL_HIGH = 0,
-    ALARM_LEVEL_ABOVE_MEDIUM,
-    ALARM_LEVEL_MEDIUM,
-    ALARM_LEVEL_BELOW_MEDIUM,
-    ALARM_LEVEL_LOW,
-}AlarmLevel_e;
-
-typedef enum
-{
-    ALARM_OFF = 0,
-    ALARM_ON,
-}AlarmState_e;
 typedef struct
 {
     AlarmLevel_e alarm_level;
@@ -56,5 +43,6 @@ typedef struct
 void BuzzerInit();
 void BuzzerTask();
 BuzzzerInstance *BuzzerRegister(Buzzer_config_s *config);
-void AlarmSetStatus(BuzzzerInstance *buzzer, AlarmState_e state);
+void BuzzerSetStatus(BuzzzerInstance *buzzer, AlarmState_e state);
+void BuzzerSetOctave(BuzzzerInstance *buzzer, octave_e octave);
 #endif // !BUZZER_H

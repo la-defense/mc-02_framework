@@ -110,6 +110,7 @@ bsp/can/bsp_can.c \
 bsp/usart/bsp_usart.c \
 bsp/log/bsp_log.c \
 bsp/bsp_tools.c \
+bsp/ws2812/ws2812.c \
 modules/algorithm/controller.c \
 modules/algorithm/kalman_filter.c \
 modules/algorithm/QuaternionEKF.c \
@@ -142,6 +143,7 @@ modules/can_comm/can_comm.c \
 modules/message_center/message_center.c \
 modules/daemon/daemon.c \
 modules/alarm/buzzer.c \
+modules/alarm/led.c \
 application/gimbal/gimbal.c \
 application/chassis/chassis.c \
 application/shoot/shoot.c \
@@ -236,6 +238,7 @@ C_INCLUDES =  \
 -Ibsp/iic \
 -Ibsp/log \
 -Ibsp/pwm \
+-Ibsp/ws2812 \
 -Ibsp \
 -Imodules/algorithm \
 -Imodules/bluetooth \

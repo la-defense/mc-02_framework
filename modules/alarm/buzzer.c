@@ -39,9 +39,14 @@ BuzzzerInstance *BuzzerRegister(Buzzer_config_s *config)
     return buzzer_temp;
 }
 
-void AlarmSetStatus(BuzzzerInstance *buzzer, AlarmState_e state)
+void BuzzerSetStatus(BuzzzerInstance *buzzer, AlarmState_e state)
 {
     buzzer->alarm_state = state;
+}
+
+void BuzzerSetOctave(BuzzzerInstance *buzzer, octave_e octave)
+{
+    buzzer->octave = octave;
 }
 
 void BuzzerTask()
