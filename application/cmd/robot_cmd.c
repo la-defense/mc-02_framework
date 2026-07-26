@@ -1,6 +1,7 @@
 // app
 #include "robot_def.h"
 #include "robot_cmd.h"
+#include "config.h"
 // module
 #include "remote_control.h"
 #include "ins_task.h"
@@ -17,6 +18,11 @@
 #define YAW_ALIGN_ANGLE (YAW_CHASSIS_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 对齐时的角度,0-360
 #define PTICH_HORIZON_ANGLE (PITCH_HORIZON_ECD * ECD_ANGLE_COEF_DJI) // pitch水平时电机的角度,0-360
 
+/* 视觉自瞄相关宏: 视觉发送弧度, 云台PID需要角度; Yaw轴经1:1.25皮带传动需补偿 */
+#define RAD_TO_DEG (57.29577951308232f)
+#define YAW_GEAR_RATIO 1.25f
+#define PITCH_ZERO_OFFSET 0.0f
+
 /* cmd应用包含的模块实例指针和交互信息存储*/
 #ifdef GIMBAL_BOARD // 对双板的兼容,条件编译
 #include "can_comm.h"
@@ -32,7 +38,6 @@ static Chassis_Upload_Data_s chassis_fetch_data; // 从底盘应用接收的反�
 
 static RC_ctrl_t *rc_data;              // 遥控器数据,初始化时返回
 static Vision_Recv_s *vision_recv_data; // 视觉接收数据指针,初始化时返回
-static Vision_Send_s vision_send_data;  // 视觉发送数据
 
 static Publisher_t *gimbal_cmd_pub;            // 云台控制消息发布者
 static Subscriber_t *gimbal_feed_sub;          // 云台反馈信息订阅者
@@ -107,35 +112,77 @@ static void CalcOffsetAngle()
 }
 
 /**
+ * @brief 视觉自瞄接管云台控制. 优先级最高, mode 1/2 时直接用视觉数据控制云台.
+ * @return 1 表示视觉接管(调用方应跳过遥控器/键鼠的云台角度增量设置); 0 表示未接管
+ * @note  视觉发送弧度制, 这里用 RAD_TO_DEG 转角度; Yaw 轴 1:1.25 皮带传动用
+ *        YAW_GEAR_RATIO 补偿, 确保云台转到正确的绝对位置.
+ *        mode 0: 不控制  mode 1: 控制云台不开火  mode 2: 控制云台并开火
+ */
+static uint8_t VisionControlSet()
+{
+    if (vision_recv_data->mode == 1 || vision_recv_data->mode == 2)
+    {
+        float vision_yaw = vision_recv_data->yaw * RAD_TO_DEG / YAW_GEAR_RATIO;
+        float vision_pitch = vision_recv_data->pitch * RAD_TO_DEG + PITCH_ZERO_OFFSET;
+
+        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+        gimbal_cmd_send.yaw = vision_yaw;
+        gimbal_cmd_send.pitch = vision_pitch;
+
+        // 视觉前馈(弧度->角度), 供 gimbal 前馈控制
+        gimbal_cmd_send.yaw_vel = vision_recv_data->yaw_vel * RAD_TO_DEG;
+        gimbal_cmd_send.yaw_acc = vision_recv_data->yaw_acc * RAD_TO_DEG;
+        gimbal_cmd_send.pitch_vel = vision_recv_data->pitch_vel * RAD_TO_DEG;
+        gimbal_cmd_send.pitch_acc = vision_recv_data->pitch_acc * RAD_TO_DEG;
+
+        if (vision_recv_data->mode == 2) // 控制并开火
+        {
+            shoot_cmd_send.shoot_mode = SHOOT_ON;
+            shoot_cmd_send.friction_mode = FRICTION_ON;
+            shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
+            shoot_cmd_send.shoot_rate = 10;
+        }
+        else // mode 1: 控制云台不开火
+        {
+            shoot_cmd_send.load_mode = LOAD_STOP;
+            shoot_cmd_send.friction_mode = FRICTION_ON;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * @brief 控制输入为遥控器(调试时)的模式和控制量设置
  *
  */
 static void RemoteControlSet()
 {
-    // 控制底盘和云台运行模式,云台待添加,云台是否始终使用IMU数据?
+    // 视觉接管优先级最高, 接管时跳过遥控器云台角度增量
+    if (VisionControlSet())
+    {
+        // 视觉已设置云台角度, 这里仅保留底盘/发射的遥控器控制
+    }
+    else if (switch_is_down(rc_data[TEMP].rc.switch_left) || vision_recv_data->mode == 0)
+    {
+        // 纯遥控器拨杆控制云台角度增量
+        gimbal_cmd_send.yaw += RC_TO_YAW_ANGLE * (float)rc_data[TEMP].rc.rocker_l_;
+        gimbal_cmd_send.pitch += RC_TO_PITCH_ANGLE * (float)rc_data[TEMP].rc.rocker_l1;
+    }
+
     if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台
     {
         chassis_cmd_send.chassis_mode = CHASSIS_ROTATE;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+        if (!vision_recv_data->mode)
+            gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
     }
     else if (switch_is_mid(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[中],底盘和云台分离,底盘保持不转动
     {
         chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_FREE_MODE;
+        if (!vision_recv_data->mode)
+            gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
     }
 
-    // 云台参数,确定云台控制数据
-    if (switch_is_mid(rc_data[TEMP].rc.switch_left)) // 左侧开关状态为[中],视觉模式
-    {
-        // 待添加,视觉会发来和目标的误差,同样将其转化为total angle的增量进行控制
-        // ...
-    }
-    // 左侧开关状态为[下],或视觉未识别到目标,纯遥控器拨杆控制
-    if (switch_is_down(rc_data[TEMP].rc.switch_left) || vision_recv_data->mode == 0)
-    { // 按照摇杆的输出大小进行角度增量,增益系数需调整
-        gimbal_cmd_send.yaw += 0.005f * (float)rc_data[TEMP].rc.rocker_l_;
-        gimbal_cmd_send.pitch += 0.001f * (float)rc_data[TEMP].rc.rocker_l1;
-    }
     // 云台软件限位
 
     // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
@@ -297,12 +344,16 @@ void RobotCMDTask()
     else if (switch_is_up(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[上],键盘控制
         MouseKeySet();
 
+    // 视觉自瞄接管,优先级最高: mode 1/2 时覆盖遥控器/键鼠的云台控制
+    VisionControlSet();
+
     EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
 
-    // 设置视觉发送数据,还需增加加速度和角速度数据
-    // VisionSetFlag(chassis_fetch_data.enemy_color,,chassis_fetch_data.bullet_speed)
+    // 设置视觉发送数据(四元数+yaw/pitch+弹速+弹计数), 通过 VisionUpdateTx + VisionSend 回传上位机
+    // VisionUpdateTx 由 ins_task 完成姿态解算后填充, 这里只负责发送
+    VisionSend();
 
-    // 推送消息,双板通信,视觉通信等
+    // 推送消息,双板通信等
     // 其他应用所需的控制数据在remotecontrolsetmode和mousekeysetmode中完成设置
 #ifdef ONE_BOARD
     PubPushMessage(chassis_cmd_pub, (void *)&chassis_cmd_send);
@@ -312,5 +363,4 @@ void RobotCMDTask()
 #endif // GIMBAL_BOARD
     PubPushMessage(shoot_cmd_pub, (void *)&shoot_cmd_send);
     PubPushMessage(gimbal_cmd_pub, (void *)&gimbal_cmd_send);
-    //VisionSend(&vision_send_data);
 }

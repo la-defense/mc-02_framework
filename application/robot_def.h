@@ -156,6 +156,12 @@ typedef struct
     float pitch;
     float chassis_rotate_wz;
 
+    // 视觉前馈数据(弧度制已转为角度制),供 gimbal 前馈控制使用
+    float yaw_vel;
+    float yaw_acc;
+    float pitch_vel;
+    float pitch_acc;
+
     gimbal_mode_e gimbal_mode;
 } Gimbal_Ctrl_Cmd_s;
 
