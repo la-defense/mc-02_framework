@@ -168,7 +168,7 @@ void INS_Task(void)
         INS.Roll = QEKF_INS.Roll;
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
 
-        VisionSetAltitude(INS.Yaw, INS.Pitch, INS.Roll);
+        // VisionSetAltitude(INS.Yaw, INS.Pitch, INS.Roll); // 已由 VisionUpdateTx 替代(M10 在 robot_cmd 中调用)
     }
 
     // temperature control
