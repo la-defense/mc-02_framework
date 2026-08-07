@@ -148,8 +148,10 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
 
 void VisionSend(void)
 {
-    Vision_Send_s tx_pkt = send_data;
+    /* DMA 异步发送需要持久缓冲区, 不能用栈局部变量(函数返回后帧数据会被覆盖) */
+    static Vision_Send_s tx_pkt;
 
+    tx_pkt = send_data;
     tx_pkt.head[0] = 'S';
     tx_pkt.head[1] = 'P';
     tx_pkt.crc16 = VisionCRC16((const uint8_t *)&tx_pkt, sizeof(Vision_Send_s) - 2);
@@ -157,6 +159,9 @@ void VisionSend(void)
 #ifdef VISION_USE_VCP
     USBTransmit((uint8_t *)&tx_pkt, sizeof(Vision_Send_s));
 #elif defined(VISION_USE_UART)
+    /* 发送串口忙时跳过本帧, 避免 HAL_UART_Transmit_DMA 返回 BUSY 丢帧 */
+    if (!USARTIsReady(vision_usart_instance))
+        return;
     USARTSend(vision_usart_instance, (uint8_t *)&tx_pkt, sizeof(Vision_Send_s), USART_TRANSFER_DMA);
 #endif
 }

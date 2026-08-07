@@ -6,6 +6,7 @@
 
 #define VISION_RECV_SIZE 64u
 #define VISION_SEND_SIZE 64u
+#define VISION_BULLET_SPEED_DEFAULT 30.0f // 弹速默认值(m/s), 后续接入裁判系统后改为实际限速
 
 /* 以下枚举保留兼容(远程已移到 robot_def.h, 本地暂保留于此避免大范围改动) */
 typedef enum

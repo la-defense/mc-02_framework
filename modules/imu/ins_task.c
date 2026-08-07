@@ -22,6 +22,8 @@
 #include "arm_math.h"
 #include "bmi088.h"
 
+#define DEG_2_RAD (1.0f / RAD_2_DEGREE) // 角度转弧度, sp_vision_25 协议为弧度制
+
 static INS_t INS;
 static IMU_Param_t IMU_Param;
 static PIDInstance TempCtrl = {0};
@@ -221,7 +223,13 @@ void INS_Task(void)
         INS.Roll = QEKF_INS.Roll;
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
 
-        // VisionSetAltitude(INS.Yaw, INS.Pitch, INS.Roll); // 已由 VisionUpdateTx 替代(M10 在 robot_cmd 中调用)
+        // 姿态解算完成后填充视觉上行数据(与 sp_vision_25 GimbalToVision 对齐)
+        // yaw/pitch 需转弧度, gyro 已是 rad/s; mode 暂固定 1(自瞄)
+        VisionUpdateTx(1,
+                       INS.q[0], INS.q[1], INS.q[2], INS.q[3],
+                       INS.Yaw * DEG_2_RAD, INS.Gyro[Z],
+                       INS.Pitch * DEG_2_RAD, INS.Gyro[Y],
+                       VISION_BULLET_SPEED_DEFAULT, 0);
     }
 
     // temperature control
