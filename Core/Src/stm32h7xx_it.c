@@ -625,6 +625,14 @@ void TIM23_IRQHandler(void)
 /* USER CODE BEGIN 1 */
 
 /**
+  * @brief This function handles I2C2 error interrupt.
+  */
+void I2C2_ER_IRQHandler(void)
+{
+  HAL_I2C_ER_IRQHandler(&hi2c2);
+}
+
+/**
   * @brief This function handles UART8 global interrupt.
   */
 void UART8_IRQHandler(void)
