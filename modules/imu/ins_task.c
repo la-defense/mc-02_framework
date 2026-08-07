@@ -71,11 +71,42 @@ static void InitQuaternion(float *init_q4)
     }
     for (uint8_t i = 0; i < 3; ++i)
         acc_init[i] /= 100;
+    // 加速度数据异常(模长≈0)时兜底为水平姿态, 避免 Norm3d 除零
+    if (NormOf3d(acc_init) < 1e-6f)
+    {
+        acc_init[0] = 0.0f;
+        acc_init[1] = 0.0f;
+        acc_init[2] = 1.0f;
+    }
     Norm3d(acc_init);
     // 计算原始加速度矢量和导航系重力加速度矢量的夹角
-    float angle = acosf(Dot3d(acc_init, gravity_norm));
+    float dot = Dot3d(acc_init, gravity_norm);
+    if (dot > 1.0f)
+        dot = 1.0f;
+    else if (dot < -1.0f)
+        dot = -1.0f;
+    float angle = acosf(dot);
+
     Cross3d(acc_init, gravity_norm, axis_rot);
-    Norm3d(axis_rot);
+    if (NormOf3d(axis_rot) < 1e-6f)
+    {
+        // 加速度与重力平行: 水平时为初始姿态(单位四元数), 倒置时绕 X 轴转 180°
+        if (dot < 0.0f)
+        {
+            axis_rot[0] = 1.0f;
+            axis_rot[1] = 0.0f;
+            axis_rot[2] = 0.0f;
+        }
+        else
+        {
+            angle = 0.0f;
+        }
+    }
+    else
+    {
+        Norm3d(axis_rot);
+    }
+
     init_q4[0] = cosf(angle / 2.0f);
     for (uint8_t i = 0; i < 2; ++i)
         init_q4[i + 1] = axis_rot[i] * sinf(angle / 2.0f); // 轴角公式,第三轴为0(没有z轴分量)
