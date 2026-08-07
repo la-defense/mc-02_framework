@@ -20,10 +20,13 @@
 #include "general_def.h"
 #include "master_process.h"
 #include "arm_math.h"
+#include "bmi088.h"
 
 static INS_t INS;
 static IMU_Param_t IMU_Param;
 static PIDInstance TempCtrl = {0};
+static BMI088Instance *bmi088_ins;
+static BMI088_Data_t bmi088_data;
 
 const float xb[3] = {1, 0, 0};
 const float yb[3] = {0, 1, 0};
@@ -47,7 +50,7 @@ static void IMUPWMSet(uint16_t pwm)
  */
 static void IMU_Temperature_Ctrl(void)
 {
-    PIDCalculate(&TempCtrl, BMI088.Temperature, RefTemp);
+    PIDCalculate(&TempCtrl, bmi088_data.temperature, RefTemp);
     IMUPWMSet(float_constrain(float_rounding(TempCtrl.Output), 0, UINT32_MAX));
 }
 
@@ -60,10 +63,10 @@ static void InitQuaternion(float *init_q4)
     // 读取100次加速度计数据,取平均值作为初始值
     for (uint8_t i = 0; i < 100; ++i)
     {
-        BMI088_Read(&BMI088);
-        acc_init[X] += BMI088.Accel[X];
-        acc_init[Y] += BMI088.Accel[Y];
-        acc_init[Z] += BMI088.Accel[Z];
+        BMI088Acquire(bmi088_ins, &bmi088_data);
+        acc_init[X] += bmi088_data.acc[X];
+        acc_init[Y] += bmi088_data.acc[Y];
+        acc_init[Z] += bmi088_data.acc[Z];
         DWT_Delay(0.001);
     }
     for (uint8_t i = 0; i < 3; ++i)
@@ -87,8 +90,27 @@ attitude_t *INS_Init(void)
 
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 
-    while (BMI088Init(&hspi2, 1) != BMI088_NO_ERROR)
-        ;
+    BMI088_Init_Config_s imu_cfg = {
+        .work_mode = BMI088_BLOCK_PERIODIC_MODE,
+        .cali_mode = BMI088_CALIBRATE_ONLINE_MODE,
+        .spi_gyro_config = {
+            .spi_handle = &hspi2,
+            .GPIOx = CS2_GYRO_GPIO_Port,
+            .cs_pin = CS2_GYRO_Pin,
+            .spi_work_mode = SPI_BLOCK_MODE,
+        },
+        .spi_acc_config = {
+            .spi_handle = &hspi2,
+            .GPIOx = CS2_ACCEL_GPIO_Port,
+            .cs_pin = CS2_ACCEL_Pin,
+            .spi_work_mode = SPI_BLOCK_MODE,
+        },
+        // heat_pwm_config 不配置: bmi088.c 仅在 htim 非空时注册温控 PWM, 温控由本任务自行控制
+    };
+    bmi088_ins = BMI088Register(&imu_cfg);
+    if (bmi088_ins == NULL)
+        while (1)
+            ;
     IMU_Param.scale[X] = 1;
     IMU_Param.scale[Y] = 1;
     IMU_Param.scale[Z] = 1;
@@ -128,14 +150,14 @@ void INS_Task(void)
     // ins update
     if ((count % 1) == 0)
     {
-        BMI088_Read(&BMI088);
+        BMI088Acquire(bmi088_ins, &bmi088_data);
 
-        INS.Accel[X] = BMI088.Accel[X];
-        INS.Accel[Y] = BMI088.Accel[Y];
-        INS.Accel[Z] = BMI088.Accel[Z];
-        INS.Gyro[X] = BMI088.Gyro[X];
-        INS.Gyro[Y] = BMI088.Gyro[Y];
-        INS.Gyro[Z] = BMI088.Gyro[Z];
+        INS.Accel[X] = bmi088_data.acc[X];
+        INS.Accel[Y] = bmi088_data.acc[Y];
+        INS.Accel[Z] = bmi088_data.acc[Z];
+        INS.Gyro[X] = bmi088_data.gyro[X];
+        INS.Gyro[Y] = bmi088_data.gyro[Y];
+        INS.Gyro[Z] = bmi088_data.gyro[Z];
 
         // demo function,用于修正安装误差,可以不管,本demo暂时没用
         IMU_Param_Correction(&IMU_Param, INS.Gyro, INS.Accel);

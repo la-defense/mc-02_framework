@@ -440,7 +440,10 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     // 根据参数选择工作模式
     bmi088_instance->spi_acc = SPIRegister(&config->spi_acc_config);
     bmi088_instance->spi_gyro = SPIRegister(&config->spi_gyro_config);
-    bmi088_instance->heat_pwm = PWMRegister(&config->heat_pwm_config);
+    if (config->heat_pwm_config.htim != NULL) // 温控 PWM 可选: 未配置 htim 时不注册, 由上层自行控温
+    {
+        bmi088_instance->heat_pwm = PWMRegister(&config->heat_pwm_config);
+    }
     PIDInit(&bmi088_instance->heat_pid, &config->heat_pid_config);
 
     // 初始化acc和gyro
