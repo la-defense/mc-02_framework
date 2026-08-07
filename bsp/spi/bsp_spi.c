@@ -183,3 +183,13 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     HAL_SPI_RxCpltCallback(hspi); // 直接调用接收完成的回调函数
 }
+
+/**
+ * @brief 纯发送(DMA/IT)完成回调: 释放片选,复用与接收完成相同的 CS 释放逻辑
+ *
+ * @param hspi spi handle
+ */
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+    HAL_SPI_RxCpltCallback(hspi);
+}
