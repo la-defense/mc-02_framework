@@ -25,6 +25,7 @@ typedef struct
 {
     uint8_t recv_buff[USART_RXBUFF_LIMIT]; // 预先定义的最大buff大小,如果太小请修改USART_RXBUFF_LIMIT
     uint8_t recv_buff_size;                // 模块接收一包数据的大小
+    uint16_t last_recv_size;               // 最近一次回调收到的实际字节数(HAL RxEvent 的 Size)
     UART_HandleTypeDef *usart_handle;      // 实例对应的usart_handle
     usart_module_callback module_callback; // 解析收到的数据的回调函数
 } USARTInstance;

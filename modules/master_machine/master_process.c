@@ -79,7 +79,7 @@ static void DecodeVision(uint16_t recv_len)
 static void VisionUartRxCallback(void)
 {
     DaemonReload(vision_daemon_instance);
-    DecodeVision(vision_usart_instance->recv_buff_size);
+    DecodeVision(vision_usart_instance->last_recv_size);
 }
 #endif
 
