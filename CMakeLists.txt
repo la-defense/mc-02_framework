@@ -33,8 +33,11 @@ add_compile_options(-pipe ${MCU_FLAGS} -Wall -fmessage-length=0 # basic options
                     -ffunction-sections -fdata-sections -fno-common # optimize options
                     )
 add_link_options(-pipe ${MCU_FLAGS} -T${LINKER_SCRIPT} -Wl,--no-warn-rwx-segments # close RWX warning
-                 -lm -lc -lnosys # lib options
-                 -Wl,--gc-sections -specs=nano.specs -specs=nosys.specs # optimize options
+                 -lm -lc # lib options
+                 -Wl,--gc-sections -specs=nano.specs # optimize options
+                 # 不要加 -lnosys/-specs=nosys.specs:
+                 # Core/Src/syscalls.c 与 Core/Src/sysmem.c 已实现 _exit/_sbrk 等,
+                 # 再链 libnosys.a 会产生 multiple definition 链接错误。
                  -Wl,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map -Wl,--cref -Wl,--print-memory-usage # map options
                  )
 
@@ -62,24 +65,100 @@ function(include_sub_directories_recursively root_dir)
         endif()
     endforeach()
 endfunction()
-include_sub_directories_recursively(${CMAKE_SOURCE_DIR}/Drivers)
-include_sub_directories_recursively(${CMAKE_SOURCE_DIR}/Middlewares)
+
+# 注意: 不要递归包含整个 Drivers。
+# Drivers/CMSIS/RTOS/Template 下的 cmsis_os.h 是 CMSIS-RTOS v1 模板,
+# 与 Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS/cmsis_os.h 同名,
+# 若先被搜到会导致 Core/Src/freertos.c 编译失败。
+# 这里按 Makefile 的实际依赖列出头文件搜索路径。
+include_directories(
+    ${CMAKE_SOURCE_DIR}/Core/Inc
+    ${CMAKE_SOURCE_DIR}/USB_DEVICE/App
+    ${CMAKE_SOURCE_DIR}/USB_DEVICE/Target
+    ${CMAKE_SOURCE_DIR}/Drivers/STM32H7xx_HAL_Driver/Inc
+    ${CMAKE_SOURCE_DIR}/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy
+    ${CMAKE_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/include
+    ${CMAKE_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS
+    ${CMAKE_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
+    ${CMAKE_SOURCE_DIR}/Middlewares/ST/STM32_USB_Device_Library/Core/Inc
+    ${CMAKE_SOURCE_DIR}/Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
+    ${CMAKE_SOURCE_DIR}/Drivers/CMSIS/Device/ST/STM32H7xx/Include
+    ${CMAKE_SOURCE_DIR}/Drivers/CMSIS/Include
+    ${CMAKE_SOURCE_DIR}/Middlewares/ST/ARM/DSP/Inc
+    ${CMAKE_SOURCE_DIR}/Middlewares/Third_Party/SEGGER/RTT
+    ${CMAKE_SOURCE_DIR}/Middlewares/Third_Party/SEGGER/Config
+)
+# 业务代码目录可以递归, 便于新增模块自动加入
 include_sub_directories_recursively(${CMAKE_SOURCE_DIR}/bsp)
 include_sub_directories_recursively(${CMAKE_SOURCE_DIR}/modules)
 include_sub_directories_recursively(${CMAKE_SOURCE_DIR}/application)
-include_sub_directories_recursively(${CMAKE_SOURCE_DIR}/Core/Inc)
-include_directories(${CMAKE_SOURCE_DIR}/USB_DEVICE/App ${CMAKE_SOURCE_DIR}/USB_DEVICE/Target)
 
 # add source, only surfix .c
-file(GLOB_RECURSE SOURCES
-    "Drivers/*.c"
+# 只收集实际参与编译的源文件, 避免把 CMSIS DSP/NN 的示例与测试代码
+# (Drivers/CMSIS/DSP 下约 500 个 .c) 全部编进工程。
+file(GLOB SOURCES
     "Core/Src/*.c"
-    "USB_DEVICE/*.c"
-    "Middlewares/*.c"
+    "USB_DEVICE/App/*.c"
+    "USB_DEVICE/Target/*.c"
+    "Middlewares/Third_Party/FreeRTOS/Source/*.c"
+    "Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS/*.c"
+    "Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/*.c"
+    "Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c"
+    "Middlewares/Third_Party/SEGGER/RTT/*.c"
+    "Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c"
+    "Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c"
+    "Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c"
+    "Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Src/usbd_cdc.c"
+)
+# HAL 源文件按 Makefile 实际使用的列表选择。
+# 不能 glob 全部 Src/*.c: 部分 LL 驱动 (如 stm32h7xx_ll_utils.c) 在当前
+# HAL 版本下无法通过 H723 编译, 且 *_template.c 会与 Core/Src 的实现重复定义。
+set(HAL_SOURCES
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_cortex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_dma.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_dma_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_exti.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_flash.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_flash_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_gpio.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_hsem.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_i2c.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_i2c_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_mdma.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_ospi.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pwr.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pwr_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rcc.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rcc_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c
+)
+list(APPEND SOURCES ${HAL_SOURCES})
+file(GLOB_RECURSE SOURCES_APP
     "bsp/*.c"
     "modules/*.c"
     "application/*.c"
 )
+list(APPEND SOURCES ${SOURCES_APP})
+
+# 兜底排除 *_template.c (HAL/USB 目录里的 CubeMX 模板与 Core/Src 下的
+# 实际实现存在重复强符号)。
+list(FILTER SOURCES EXCLUDE REGEX ".*_template\\.c$")
+# bsp/flash/bsp_flash.c 是 F1/F4 风格的 Flash 驱动 (FLASH_TYPEPROGRAM_WORD /
+# FLASH_SECTOR_8~11), 与 H723 的 Flash API 不兼容, 且当前没有任何调用方,
+# 先排除出 CMake 构建, 待按 H7 规范重写后再加入。
+list(FILTER SOURCES EXCLUDE REGEX "bsp/flash/bsp_flash\\.c$")
 
 # 汇编文件路径
 set(ASM_SOURCES

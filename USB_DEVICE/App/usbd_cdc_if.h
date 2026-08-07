@@ -65,6 +65,9 @@
 
 /* USER CODE BEGIN EXPORTED_TYPES */
 
+/* USB VCP 回调: 参数为本次收发数据的长度 */
+typedef void (*USBCallback)(uint16_t len);
+
 /* USER CODE END EXPORTED_TYPES */
 
 /**
@@ -108,6 +111,9 @@ extern USBD_CDC_ItfTypeDef USBD_Interface_fops_HS;
 uint8_t CDC_Transmit_HS(uint8_t* Buf, uint16_t Len);
 
 /* USER CODE BEGIN EXPORTED_FUNCTIONS */
+
+/* 初始化 USB VCP 收发回调, 返回接收缓冲区指针 (供 bsp_usb 使用) */
+uint8_t *CDCInitRxbufferNcallback(USBCallback tx_cbk, USBCallback rx_cbk);
 
 /* USER CODE END EXPORTED_FUNCTIONS */
 
