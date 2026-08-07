@@ -43,6 +43,7 @@ typedef struct
 void BuzzerInit();
 void BuzzerTask();
 BuzzzerInstance *BuzzerRegister(Buzzer_config_s *config);
+BuzzzerInstance *BuzzerGetInstance(void);
 void BuzzerSetStatus(BuzzzerInstance *buzzer, AlarmState_e state);
 void BuzzerSetOctave(BuzzzerInstance *buzzer, octave_e octave);
 #endif // !BUZZER_H
