@@ -625,6 +625,14 @@ void TIM23_IRQHandler(void)
 /* USER CODE BEGIN 1 */
 
 /**
+  * @brief This function handles EXTI line[15:10] interrupts (BMI088 ACC/GYRO INT).
+  */
+void EXTI15_10_IRQHandler(void)
+{
+  HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_10 | GPIO_PIN_12);
+}
+
+/**
   * @brief This function handles I2C2 error interrupt.
   */
 void I2C2_ER_IRQHandler(void)

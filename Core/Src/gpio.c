@@ -82,7 +82,7 @@ void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : PEPin PEPin */
   GPIO_InitStruct.Pin = ACC_INT_Pin|GYRO_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
@@ -120,6 +120,10 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /* BMI088 数据就绪中断: PE10/PE12 均为 EXTI15_10 组, 按 bmi088.md 配置下降沿触发 */
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
 }
 
