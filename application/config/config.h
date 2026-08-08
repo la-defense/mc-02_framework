@@ -103,6 +103,9 @@ typedef struct
 
     uint8_t friction_motor_id[4];
     Motor_Reverse_Flag_e friction_motor_reverse_flag[4];
+    uint8_t loader_slot_num;     // 拨弹盘槽位数(每转一圈发射的弹丸数)
+    float loader_gearbox_ratio;  // 电机转子 -> 输出轴减速比(M2006=36, M3508=19)
+    float loader_disk_ratio;     // 输出轴 -> 拨弹盘减速比(哨兵=1)
 } Shoot_Config_s;
 
 // 机器人参数结构体

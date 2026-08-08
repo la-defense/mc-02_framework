@@ -246,7 +246,10 @@ Robot_Config_s *SentinelConfigInit(void)
                     .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
                 },
                 .motor_type = M2006
-            }
+            },
+            .loader_slot_num = 7,           // 拨弹盘槽位数(每转一圈发射弹丸数), 待实测确认
+            .loader_gearbox_ratio = 36.0f,  // M2006 自带减速箱(转子->输出轴), 用户确认 36
+            .loader_disk_ratio = 1.0f,      // 输出轴 -> 拨弹盘减速比(哨兵=1)
         }
     };
 

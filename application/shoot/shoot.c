@@ -1,15 +1,20 @@
 #include "shoot.h"
 #include "robot_def.h"
+#include "config.h"
 
 #include "dji_motor.h"
 #include "message_center.h"
 #include "bsp_dwt.h"
 #include "general_def.h"
 
+#define LOADER_REVERSE_SPEED_DEGS 500 // reverse unload speed (deg/s), TBD on bench
+
 /* 对于双发射机构的机器人,将下面的数据封装成结构体即可,生成两份shoot应用实例 */
 static DJIMotorInstance *friction_l, *friction_r, *loader; // 拨盘电机
 // static servo_instance *lid; 需要增加弹舱盖
 
+static Shoot_Config_s *shoot_config; // loader slot count / motor->disk ratio from config
+static loader_mode_e last_load_mode = LOAD_STOP; // last load mode, for edge-trigger
 static Publisher_t *shoot_pub;
 static Shoot_Ctrl_Cmd_s shoot_cmd_recv; // 来自cmd的发射控制信息
 static Subscriber_t *shoot_sub;
@@ -100,6 +105,8 @@ void ShootInit()
     };
     loader = DJIMotorInit(&loader_config);
 
+    shoot_config = ShootConfigFeed(); // load shooter config (slots / reduction ratio)
+
     shoot_pub = PubRegister("shoot_feed", sizeof(Shoot_Upload_Data_s));
     shoot_sub = SubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
 }
@@ -130,45 +137,55 @@ void ShootTask()
     //     return;
 
     // 若不在休眠状态,根据robotCMD传来的控制模式进行拨盘电机参考值设定和模式切换
+        // derive loader parameters from config
+    const uint8_t slots = shoot_config->loader_slot_num ? shoot_config->loader_slot_num : 10;
+    const float ratio = (shoot_config->loader_gearbox_ratio > 0.0f ? shoot_config->loader_gearbox_ratio : 1.0f) *
+                        (shoot_config->loader_disk_ratio > 0.0f ? shoot_config->loader_disk_ratio : 1.0f);
+    const float one_bullet_delta = 360.0f / slots * ratio; // motor angle per bullet (deg)
+
     switch (shoot_cmd_recv.load_mode)
     {
-    // 停止拨盘
+    // stop loader
     case LOAD_STOP:
-        DJIMotorOuterLoop(loader, SPEED_LOOP); // 切换到速度环
-        DJIMotorSetRef(loader, 0);             // 同时设定参考值为0,这样停止的速度最快
+        DJIMotorOuterLoop(loader, SPEED_LOOP);
+        DJIMotorSetRef(loader, 0);
         break;
-    // 单发模式,根据鼠标按下的时间,触发一次之后需要进入不响应输入的状态(否则按下的时间内可能多次进入,导致多次发射)
-    case LOAD_1_BULLET:                                                                     // 激活能量机关/干扰对方用,英雄用.
-        DJIMotorOuterLoop(loader, ANGLE_LOOP);                                              // 切换到角度环
-        DJIMotorSetRef(loader, loader->measure.total_angle + ONE_BULLET_DELTA_ANGLE); // 控制量增加一发弹丸的角度
-        hibernate_time = DWT_GetTimeline_ms();                                              // 记录触发指令的时间
-        dead_time = 150;                                                                    // 完成1发弹丸发射的时间
+    // single shot: trigger only on mode edge + after cooldown, avoid re-adding angle every cycle
+    case LOAD_1_BULLET:
+        if (last_load_mode != LOAD_1_BULLET && hibernate_time + dead_time <= DWT_GetTimeline_ms())
+        {
+            DJIMotorOuterLoop(loader, ANGLE_LOOP);
+            DJIMotorSetRef(loader, loader->measure.total_angle + one_bullet_delta);
+            hibernate_time = DWT_GetTimeline_ms();
+            dead_time = 150;
+        }
         break;
-    // 三连发,如果不需要后续可能删除
+    // 3-round burst
     case LOAD_3_BULLET:
-        DJIMotorOuterLoop(loader, ANGLE_LOOP);                                                  // 切换到速度环
-        DJIMotorSetRef(loader, loader->measure.total_angle + 3 * ONE_BULLET_DELTA_ANGLE); // 增加3发
-        hibernate_time = DWT_GetTimeline_ms();                                                  // 记录触发指令的时间
-        dead_time = 300;                                                                        // 完成3发弹丸发射的时间
+        if (last_load_mode != LOAD_3_BULLET && hibernate_time + dead_time <= DWT_GetTimeline_ms())
+        {
+            DJIMotorOuterLoop(loader, ANGLE_LOOP);
+            DJIMotorSetRef(loader, loader->measure.total_angle + 3 * one_bullet_delta);
+            hibernate_time = DWT_GetTimeline_ms();
+            dead_time = 300;
+        }
         break;
-    // 连发模式,对速度闭环,射频后续修改为可变,目前固定为1Hz
+    // burst fire: speed loop, rate(bullets/s) * 360deg * ratio / slots
     case LOAD_BURSTFIRE:
         DJIMotorOuterLoop(loader, SPEED_LOOP);
-        DJIMotorSetRef(loader, shoot_cmd_recv.shoot_rate * 360 * REDUCTION_RATIO_LOADER / 8);
-        // x颗/秒换算成速度: 已知一圈的载弹量,由此计算出1s需要转的角度,注意换算角速度(DJIMotor的速度单位是angle per second)
+        DJIMotorSetRef(loader, shoot_cmd_recv.shoot_rate * 360.0f * ratio / slots);
         break;
-    // 拨盘反转,对速度闭环,后续增加卡弹检测(通过裁判系统剩余热量反馈和电机电流)
-    // 也有可能需要从switch-case中独立出来
+    // reverse: speed loop, fixed reverse speed (TBD)
     case LOAD_REVERSE:
         DJIMotorOuterLoop(loader, SPEED_LOOP);
-        // ...
+        DJIMotorSetRef(loader, -LOADER_REVERSE_SPEED_DEGS);
         break;
     default:
         while (1)
-            ; // 未知模式,停止运行,检查指针越界,内存溢出等问题
+            ;
     }
+    last_load_mode = shoot_cmd_recv.load_mode;
 
-    // 确定是否开启摩擦轮,后续可能修改为键鼠模式下始终开启摩擦轮(上场时建议一直开启)
     if (shoot_cmd_recv.friction_mode == FRICTION_ON)
     {
         // 根据收到的弹速设置设定摩擦轮电机参考值,需实测后填入
