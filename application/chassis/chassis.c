@@ -161,11 +161,16 @@ static void LimitChassisOutput()
     // referee_data->PowerHeatData.chassis_power;
     // referee_data->PowerHeatData.chassis_power_buffer;
 
+    // 轮子线速度(mm/s) -> 电机轴角速度(deg/s):
+    //   v/R 得到轮子角速度(rad/s), *RAD_2_DEGREE 转 deg/s, *REDUCTION_RATIO_WHEEL 换算到电机轴
+    // 注: 当前尚无底盘实物, 换算系数与 robot_def.h 中的轮径/减速比需上实车标定验证
+    const float mm_s_to_motor_deg_s = RAD_2_DEGREE * REDUCTION_RATIO_WHEEL / RADIUS_WHEEL;
+
     // 完成功率限制后进行电机参考输入设定
-    DJIMotorSetRef(motor_lf, vt_lf);
-    DJIMotorSetRef(motor_rf, vt_rf);
-    DJIMotorSetRef(motor_lb, vt_lb);
-    DJIMotorSetRef(motor_rb, vt_rb);
+    DJIMotorSetRef(motor_lf, vt_lf * mm_s_to_motor_deg_s);
+    DJIMotorSetRef(motor_rf, vt_rf * mm_s_to_motor_deg_s);
+    DJIMotorSetRef(motor_lb, vt_lb * mm_s_to_motor_deg_s);
+    DJIMotorSetRef(motor_rb, vt_rb * mm_s_to_motor_deg_s);
 }
 
 /**
