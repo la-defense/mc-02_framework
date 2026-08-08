@@ -26,7 +26,7 @@ typedef enum
 typedef enum
 {
     IIC_SEQ_RELEASE,    // 完成传输后释放总线占有权,这是默认的传输方式
-    IIC_SEQ_HOLDON = 0, // 保持总线占有权不释放,只支持IT和DMA模式
+    IIC_SEQ_HOLDON = 1, // 保持总线占有权不释放,只支持IT和DMA模式(不能与RELEASE同为0)
 } IIC_Seq_Mode_e;
 
 /* i2c实例 */
