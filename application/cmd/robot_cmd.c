@@ -18,9 +18,8 @@
 #define YAW_ALIGN_ANGLE (YAW_CHASSIS_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 对齐时的角度,0-360
 #define PTICH_HORIZON_ANGLE (PITCH_HORIZON_ECD * ECD_ANGLE_COEF_DJI) // pitch水平时电机的角度,0-360
 
-/* 视觉自瞄相关宏: 视觉发送弧度, 云台PID需要角度; Yaw轴经1:1.25皮带传动需补偿 */
+/* 视觉自瞄相关宏: 视觉发送弧度, 云台PID需要角度*/
 #define RAD_TO_DEG (57.29577951308232f)
-#define YAW_GEAR_RATIO 1.25f
 #define PITCH_ZERO_OFFSET 0.0f
 
 /* cmd应用包含的模块实例指针和交互信息存储*/
@@ -56,7 +55,7 @@ BMI088_Data_t bmi088_data;
 void RobotCMDInit()
 {
     rc_data = RemoteControlInit(&huart5);   // 修改为对应串口,注意如果是自研板dbus协议串口需选用添加了反相器的那个
-    vision_recv_data = VisionInit(&huart9); // 视觉通信串口
+    vision_recv_data = VisionInit(&huart9); // 视觉通信串口(VCP 模式下此句柄不使用, 正式链路为板载 USB CDC 虚拟串口)
 
     gimbal_cmd_pub = PubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
     gimbal_feed_sub = SubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
@@ -114,15 +113,14 @@ static void CalcOffsetAngle()
 /**
  * @brief 视觉自瞄接管云台控制. 优先级最高, mode 1/2 时直接用视觉数据控制云台.
  * @return 1 表示视觉接管(调用方应跳过遥控器/键鼠的云台角度增量设置); 0 表示未接管
- * @note  视觉发送弧度制, 这里用 RAD_TO_DEG 转角度; Yaw 轴 1:1.25 皮带传动用
- *        YAW_GEAR_RATIO 补偿, 确保云台转到正确的绝对位置.
+ * @note  视觉发送弧度制, 这里用 RAD_TO_DEG 转角度.
  *        mode 0: 不控制  mode 1: 控制云台不开火  mode 2: 控制云台并开火
  */
 static uint8_t VisionControlSet()
 {
     if (vision_recv_data->mode == 1 || vision_recv_data->mode == 2)
     {
-        float vision_yaw = vision_recv_data->yaw * RAD_TO_DEG / YAW_GEAR_RATIO;
+        float vision_yaw = vision_recv_data->yaw * RAD_TO_DEG;
         float vision_pitch = vision_recv_data->pitch * RAD_TO_DEG + PITCH_ZERO_OFFSET;
 
         gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
