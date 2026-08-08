@@ -16,6 +16,7 @@ typedef struct daemon_ins
     offline_callback callback; // 异常处理函数,当模块发生异常时会被调用
 
     uint16_t temp_count; // 当前值,减为零说明模块离线或异常
+    uint8_t offline_flag; // 离线沿标志: 0=在线/未告警, 1=已触发过离线回调, 保证只告警一次
     void *owner_id;      // daemon实例的地址,初始化的时候填入
 } DaemonInstance;
 

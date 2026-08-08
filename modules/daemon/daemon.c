@@ -18,7 +18,6 @@ DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
     instance->callback = config->callback;
     instance->temp_count = config->init_count == 0 ? 100 : config->init_count; // 默认值为100,初始计数
 
-    instance->temp_count = config->reload_count;
     daemon_instances[idx++] = instance;
     return instance;
 }
@@ -27,6 +26,7 @@ DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
 void DaemonReload(DaemonInstance *instance)
 {
     instance->temp_count = instance->reload_count;
+    instance->offline_flag = 0; // 重新上线, 允许下次离线时再次告警
 }
 
 uint8_t DaemonIsOnline(DaemonInstance *instance)
@@ -43,9 +43,10 @@ void DaemonTask()
         dins = daemon_instances[i];
         if (dins->temp_count > 0) // 如果计数器还有值,说明上一次喂狗后还没有超时,则计数器减一
             dins->temp_count--;
-        else if (dins->callback) // 等于零说明超时了,调用回调函数(如果有的话)
+        else if (!dins->offline_flag && dins->callback) // 等于零说明超时了,仅在离线下降沿调用一次回调(如果有的话)
         {
             dins->callback(dins->owner_id); // module内可以将owner_id强制类型转换成自身类型从而调用特定module的offline callback
+            dins->offline_flag = 1;          // 本次离线已告警, 避免每个周期重复触发
             // @todo 为蜂鸣器/led等增加离线报警的功能,非常关键!
         }
     }
