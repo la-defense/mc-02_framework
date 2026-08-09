@@ -157,10 +157,10 @@ attitude_t *INS_Init(void)
     IMU_QuaternionEKF_Init(init_quaternion, 10, 0.001, 1000000, 1, 0);
     // imu heat init
     PID_Init_Config_s config = {.MaxOut = 8000,
-                                .IntegralLimit = 800,
+                                .IntegralLimit = 8000,
                                 .DeadBand = 0,
                                 .Kp = 400,
-                                .Ki = 5,
+                                .Ki = 20,
                                 .Kd = 0,
                                 .Improve = 0x01}; // enable integratiaon limit
     PIDInit(&TempCtrl, &config);
