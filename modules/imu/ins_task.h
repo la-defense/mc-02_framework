@@ -16,12 +16,16 @@
 #define __INS_TASK_H
 
 #include "stdint.h"
-#include "BMI088driver.h"
 #include "QuaternionEKF.h"
 
-#define X 0
-#define Y 1
-#define Z 2
+/* 用 enum 而非宏定义坐标轴索引, 避免 X/Y/Z 宏污染全局预处理器
+ * (曾与 CMSIS core_cm7.h 位域成员 Z 冲突) */
+enum
+{
+    X = 0,
+    Y = 1,
+    Z = 2
+};
 
 #define INS_TASK_PERIOD 1
 

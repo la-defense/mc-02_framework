@@ -7,6 +7,8 @@
 #include "bsp_pwm.h"
 #include "stdint.h"
 
+#define BMI088_INIT_MAX_RETRY 5u // 初始化重试上限, 传感器异常时避免开机死循环
+
 // bmi088工作模式枚举
 typedef enum
 {

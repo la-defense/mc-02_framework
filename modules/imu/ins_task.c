@@ -156,8 +156,8 @@ attitude_t *INS_Init(void)
     InitQuaternion(init_quaternion);
     IMU_QuaternionEKF_Init(init_quaternion, 10, 0.001, 1000000, 1, 0);
     // imu heat init
-    PID_Init_Config_s config = {.MaxOut = 800,
-                                .IntegralLimit = 80,
+    PID_Init_Config_s config = {.MaxOut = 8000,
+                                .IntegralLimit = 800,
                                 .DeadBand = 0,
                                 .Kp = 400,
                                 .Ki = 5,

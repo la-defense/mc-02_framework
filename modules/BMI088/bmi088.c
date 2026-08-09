@@ -2,6 +2,7 @@
 #include "bmi088.h"
 #include "user_lib.h"
 #include "daemon.h"
+#include "bsp_log.h"
 
 static DaemonInstance *bmi088_daemon_instance;
 
@@ -446,15 +447,22 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     }
     PIDInit(&bmi088_instance->heat_pid, &config->heat_pid_config);
 
-    // 初始化acc和gyro
+    // 初始化acc和gyro; 传感器异常时不能无限重试, 避免开机死循环
     BMI088_ERORR_CODE_e error = BMI088_NO_ERROR;
+    uint8_t init_retry = 0;
     do
     {
         error = BMI088_NO_ERROR;
         error |= BMI088AccelInit(bmi088_instance);
         error |= BMI088GyroInit(bmi088_instance);
-        // 可以增加try out times,超出次数则返回错误
-    } while (error != 0);
+        init_retry++;
+    } while (error != 0 && init_retry < BMI088_INIT_MAX_RETRY);
+
+    if (error != 0)
+    {
+        LOGERROR("[bmi088] init failed after %u retries, error=0x%02X", init_retry, error);
+        return NULL;
+    }
 
     bmi088_instance->work_mode = BMI088_BLOCK_PERIODIC_MODE; // 临时设置为阻塞模式
     BMI088CalibrateIMU(bmi088_instance);                     // 标定acc和gyro
