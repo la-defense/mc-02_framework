@@ -37,7 +37,7 @@ const float zb[3] = {0, 0, 1};
 // 用于获取两次采样之间的时间间隔
 static uint32_t INS_DWT_Count = 0;
 static float dt = 0, t = 0;
-static float RefTemp = 40; // 恒温设定温度
+static float RefTemp = 45; // 恒温设定温度(比板温高约10~15°C)
 
 static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[3]);
 
@@ -53,6 +53,11 @@ static void IMUPWMSet(uint16_t pwm)
 static void IMU_Temperature_Ctrl(void)
 {
     PIDCalculate(&TempCtrl, bmi088_data.temperature, RefTemp);
+
+    // 快速预热: 低于目标 5°C 时强制满功率, PID 积分同时累积, 接近目标后自然切回闭环
+    if (bmi088_data.temperature < RefTemp - 5.0f)
+        TempCtrl.Output = TempCtrl.MaxOut;
+
     IMUPWMSet(float_constrain(float_rounding(TempCtrl.Output), 0, UINT32_MAX));
 }
 
@@ -156,8 +161,8 @@ attitude_t *INS_Init(void)
     InitQuaternion(init_quaternion);
     IMU_QuaternionEKF_Init(init_quaternion, 10, 0.001, 1000000, 1, 0);
     // imu heat init
-    PID_Init_Config_s config = {.MaxOut = 8000,
-                                .IntegralLimit = 8000,
+    PID_Init_Config_s config = {.MaxOut = 10000,
+                                .IntegralLimit = 10000,
                                 .DeadBand = 0,
                                 .Kp = 400,
                                 .Ki = 20,
