@@ -10,6 +10,7 @@
  */
 #include "controller.h"
 #include "memory.h"
+#include <math.h>
 
 /* ----------------------------下面是pid优化环节的实现---------------------------- */
 
@@ -151,6 +152,8 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
         f_PID_ErrorHandle(pid);
 
     pid->dt = DWT_GetDeltaT(&pid->DWT_CNT); // 获取两次pid计算的时间间隔,用于积分和微分
+    if (pid->dt < 1e-5f) // dt 下限保护, 防止首次调用/时钟异常时除零产生 inf/NaN
+        pid->dt = 1e-5f;
 
     // 保存上次的测量值和误差,计算当前error
     pid->Measure = measure;
@@ -158,7 +161,7 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
     pid->Err = pid->Ref - pid->Measure;
 
     // 如果在死区外,则计算PID
-    if (abs(pid->Err) > pid->DeadBand)
+    if (fabsf(pid->Err) > pid->DeadBand)
     {
         // 基本的pid计算,使用位置式
         pid->Pout = pid->Kp * pid->Err;
@@ -191,10 +194,11 @@ float PIDCalculate(PIDInstance *pid, float measure, float ref)
         // 输出限幅
         f_Output_Limit(pid);
     }
-    else // 进入死区, 则清空积分和输出
+    else // 进入死区, 则清空积分和输出(含 Iout, 防退出死区时积分冲击)
     {
         pid->Output = 0;
         pid->ITerm = 0;
+        pid->Iout = 0;
     }
 
     // 保存当前数据,用于下次计算

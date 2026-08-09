@@ -151,18 +151,32 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
     QEKF_INS.Accel[2] = QEKF_INS.Accel[2] * QEKF_INS.accLPFcoef / (QEKF_INS.dt + QEKF_INS.accLPFcoef) + az * QEKF_INS.dt / (QEKF_INS.dt + QEKF_INS.accLPFcoef);
 
     // set z,单位化重力加速度向量
-    accelInvNorm = invSqrt(QEKF_INS.Accel[0] * QEKF_INS.Accel[0] + QEKF_INS.Accel[1] * QEKF_INS.Accel[1] + QEKF_INS.Accel[2] * QEKF_INS.Accel[2]);
-    for (uint8_t i = 0; i < 3; ++i)
+    float accelNormSq = QEKF_INS.Accel[0] * QEKF_INS.Accel[0] +
+                        QEKF_INS.Accel[1] * QEKF_INS.Accel[1] +
+                        QEKF_INS.Accel[2] * QEKF_INS.Accel[2];
+    if (accelNormSq < 1e-6f)
     {
-        QEKF_INS.IMU_QuaternionEKF.MeasuredVector[i] = QEKF_INS.Accel[i] * accelInvNorm; // 用加速度向量更新量测值
+        // 加速度全零/异常: 用重力方向兜底, 避免 invSqrt(0) 产生异常量测
+        QEKF_INS.IMU_QuaternionEKF.MeasuredVector[0] = 0.0f;
+        QEKF_INS.IMU_QuaternionEKF.MeasuredVector[1] = 0.0f;
+        QEKF_INS.IMU_QuaternionEKF.MeasuredVector[2] = 1.0f;
+        accelInvNorm = 1.0f;
+        QEKF_INS.accl_norm = 0.0f; // 不参与稳定判定
+    }
+    else
+    {
+        accelInvNorm = invSqrt(accelNormSq);
+        for (uint8_t i = 0; i < 3; ++i)
+        {
+            QEKF_INS.IMU_QuaternionEKF.MeasuredVector[i] = QEKF_INS.Accel[i] * accelInvNorm; // 用加速度向量更新量测值
+        }
+        QEKF_INS.accl_norm = 1.0f / accelInvNorm;
     }
 
     // get body state
     QEKF_INS.gyro_norm = 1.0f / invSqrt(QEKF_INS.Gyro[0] * QEKF_INS.Gyro[0] +
                                         QEKF_INS.Gyro[1] * QEKF_INS.Gyro[1] +
                                         QEKF_INS.Gyro[2] * QEKF_INS.Gyro[2]);
-    QEKF_INS.accl_norm = 1.0f / accelInvNorm;
-
     // 如果角速度小于阈值且加速度处于设定范围内,认为运动稳定,加速度可以用于修正角速度
     // 稍后在最后的姿态更新部分会利用StableFlag来确定
     if (QEKF_INS.gyro_norm < 0.3f && QEKF_INS.accl_norm > 9.8f - 0.5f && QEKF_INS.accl_norm < 9.8f + 0.5f)
