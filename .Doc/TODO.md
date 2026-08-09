@@ -54,6 +54,19 @@ Unicom
 
 - [ ] 给每个模块增加调试的条件编译，并增加bsp log的输出。或直接在运行时添加log等级，输出不同的信息。
 
+#### ==referee==
+
+- [ ] 裁判协议适配官方《RoboMaster 2026 机甲大师高校系列赛通信协议 V2.0.0（20260626）》。
+  当前 `modules/referee/referee_protocol.h` 仍为旧版结构体，需同步更新：
+  - 0x0003：32B → 20B（双方血量改为己方/对方前哨站与基地）
+  - 0x0201：13B → 17B（新增 bullet_speed_limit float 及电源输出位域后移）
+  - 0x0202：16B → 14B（移除一路 17mm 热量）
+  - 0x0203：16B → 12B（x/y/angle，无 z/yaw）
+  - 0x0204：6B → 8B（新增 remaining_energy）
+  - 删除已废弃的 0x0102 场地补给站动作标识
+  同步修改 `rm_referee.c` 解析长度与 `referee_UI.c` 使用到的字段；
+  协议实现可参考 `tools/referee_sim`（独立仓库）中的官方字段定义与测试。
+
 #### ==servo_motor==
 
 舵机模块，需要预先定义90/180/360连续旋转的电机类型，并且能够设定max和min位置。
