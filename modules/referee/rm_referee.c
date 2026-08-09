@@ -94,9 +94,13 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 			if (data_len >= LEN_event_data)
 				memcpy(&referee_info.EventData, (buff + offset + DATA_Offset), LEN_event_data);
 			break;
-		case ID_supply_projectile_action: // 0x0102
-			if (data_len >= LEN_supply_projectile_action)
-				memcpy(&referee_info.SupplyProjectileAction, (buff + offset + DATA_Offset), LEN_supply_projectile_action);
+		case ID_referee_warning: // 0x0104
+			if (data_len >= LEN_referee_warning)
+				memcpy(&referee_info.RefereeWarning, (buff + offset + DATA_Offset), LEN_referee_warning);
+			break;
+		case ID_dart_shoot_data: // 0x0105
+			if (data_len >= LEN_dart_shoot_data)
+				memcpy(&referee_info.DartInfo, (buff + offset + DATA_Offset), LEN_dart_shoot_data);
 			break;
 		case ID_game_robot_state: // 0x0201
 			if (data_len >= LEN_game_robot_state)
@@ -114,10 +118,6 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 			if (data_len >= LEN_buff_musk)
 				memcpy(&referee_info.BuffMusk, (buff + offset + DATA_Offset), LEN_buff_musk);
 			break;
-		case ID_aerial_robot_energy: // 0x0205
-			if (data_len >= LEN_aerial_robot_energy)
-				memcpy(&referee_info.AerialRobotEnergy, (buff + offset + DATA_Offset), LEN_aerial_robot_energy);
-			break;
 		case ID_robot_hurt: // 0x0206
 			if (data_len >= LEN_robot_hurt)
 				memcpy(&referee_info.RobotHurt, (buff + offset + DATA_Offset), LEN_robot_hurt);
@@ -125,6 +125,38 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 		case ID_shoot_data: // 0x0207
 			if (data_len >= LEN_shoot_data)
 				memcpy(&referee_info.ShootData, (buff + offset + DATA_Offset), LEN_shoot_data);
+			break;
+		case ID_projectile_allowance: // 0x0208
+			if (data_len >= LEN_projectile_allowance)
+				memcpy(&referee_info.ProjectileAllowance, (buff + offset + DATA_Offset), LEN_projectile_allowance);
+			break;
+		case ID_rfid_status: // 0x0209
+			if (data_len >= LEN_rfid_status)
+				memcpy(&referee_info.RfidStatus, (buff + offset + DATA_Offset), LEN_rfid_status);
+			break;
+		case ID_dart_client_cmd: // 0x020A
+			if (data_len >= LEN_dart_client_cmd)
+				memcpy(&referee_info.DartClientCmd, (buff + offset + DATA_Offset), LEN_dart_client_cmd);
+			break;
+		case ID_ground_robot_position: // 0x020B
+			if (data_len >= LEN_ground_robot_position)
+				memcpy(&referee_info.GroundRobotPosition, (buff + offset + DATA_Offset), LEN_ground_robot_position);
+			break;
+		case ID_radar_mark_data: // 0x020C
+			if (data_len >= LEN_radar_mark_data)
+				memcpy(&referee_info.RadarMarkData, (buff + offset + DATA_Offset), LEN_radar_mark_data);
+			break;
+		case ID_sentry_info: // 0x020D
+			if (data_len >= LEN_sentry_info)
+				memcpy(&referee_info.SentryInfo, (buff + offset + DATA_Offset), LEN_sentry_info);
+			break;
+		case ID_radar_info: // 0x020E
+			if (data_len >= LEN_radar_info)
+				memcpy(&referee_info.RadarInfo, (buff + offset + DATA_Offset), LEN_radar_info);
+			break;
+		case ID_map_command: // 0x0303
+			if (data_len >= LEN_map_command)
+				memcpy(&referee_info.MapCommand, (buff + offset + DATA_Offset), LEN_map_command);
 			break;
 		case ID_student_interactive: // 0x0301   syhtodo接收代码未测试
 			if (data_len >= LEN_receive_data)
