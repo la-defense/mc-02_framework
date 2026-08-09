@@ -60,3 +60,6 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# 裁判系统模拟器独立仓库（tools/referee_sim）
+/tools/referee_sim/
