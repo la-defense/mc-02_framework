@@ -7,10 +7,13 @@
 
 /*
  * IMU 加热安全策略(2026-09 起火事故后重构):
+ * - 原理图确认: R77~R84/R88/R89 加热电阻直接接 VCC_IN(24V 主输入),
+ *   由 Q9(低边N-MOS) + TIM3_CH4(PB01) PWM 开关. 因此占空比必须严格限制.
  * - 上电/初始化/故障/急停时 PWM=0, 不再有"无条件满功率预热".
  * - 温度必须有限且在合理范围内, 传感器无效或超时直接关加热.
- * - 占空比硬限幅: 平时 5%(500/9999), 允许短时 10%(1000/9999) 预热.
- * - 预热有最长时长, 超时后降到普通上限; 连续加热最长 60s, 超时锁存故障.
+ * - 占空比硬限幅: 最大 5%(500/9999), 与厂商例程 MAX_OUT=500 对齐;
+ *   24V 加热不允许任何 10%/满功率预热.
+ * - 连续加热最长 60s, 超时锁存故障.
  * - 温度 > 50°C 立即关加热并锁存, 降到 42°C 以下且手动清除后才允许恢复.
  */
 
@@ -20,8 +23,8 @@
 
 #define IMU_HEATER_ARR 9999u
 #define IMU_HEATER_DUTY_NORMAL 500u   // 5%
-#define IMU_HEATER_DUTY_BOOST 1000u   // 10%, 仅短时预热
-#define IMU_HEATER_BOOST_TIME_MS 3000u
+#define IMU_HEATER_DUTY_BOOST 500u    // 24V加热: 不允许超过5%
+#define IMU_HEATER_BOOST_TIME_MS 0u   // 预热阶段实际禁用
 #define IMU_HEATER_MAX_ON_TIME_MS 60000u
 
 #define IMU_HEATER_TEMP_VALID_MIN -20.0f
@@ -58,7 +61,7 @@ static void IMUHeaterApplyDuty(uint16_t duty)
 void IMUHeaterInit(void)
 {
     PID_Init_Config_s config = {
-        .MaxOut = IMU_HEATER_DUTY_BOOST,
+        .MaxOut = IMU_HEATER_DUTY_NORMAL,
         .IntegralLimit = IMU_HEATER_DUTY_NORMAL,
         .DeadBand = 0.0f,
         .Kp = 100.0f,
@@ -82,7 +85,7 @@ void IMUHeaterInit(void)
     __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, 0);
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 
-    LOGINFO("[imu_heat] init safe: target=%d.%dC max_duty=%u/%u",
+    LOGINFO("[imu_heat] init safe(VCC_IN 24V): target=%d.%dC max_duty=%u/%u",
             (int)heater_target, (int)(heater_target * 10.0f) % 10,
             (unsigned)IMU_HEATER_DUTY_NORMAL, (unsigned)IMU_HEATER_ARR);
 }
@@ -207,7 +210,7 @@ void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
         return;
     }
 
-    /* 短时预热允许10%, 超过时间后回落到5% */
+    /* 加热电阻接24V主输入, 5%是硬上限; 不使用任何预热提升 */
     uint16_t duty_limit = IMU_HEATER_DUTY_NORMAL;
     if ((uint32_t)(now - heat_start_ms) < IMU_HEATER_BOOST_TIME_MS &&
         temperature < heater_target - 5.0f)
