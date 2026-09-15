@@ -5,6 +5,7 @@
 #include "bsp_log.h"
 #include "bsp_dwt.h"
 #include "bsp_watchdog.h"
+#include "bsp_adc.h"
 //#include "bsp_usb.h"
 
 /**
@@ -18,6 +19,7 @@ void BSPInit()
 {
     DWT_Init(480);
     BSPLogInit();
+    BSP_ADCInit();
     BSP_WatchdogLogResetReason();
 }
 

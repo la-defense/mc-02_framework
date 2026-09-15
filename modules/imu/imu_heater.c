@@ -3,6 +3,7 @@
 #include "tim.h"
 #include "main.h"
 #include "bsp_log.h"
+#include "bsp_adc.h"
 #include <math.h>
 
 /*
@@ -34,6 +35,8 @@
 #define IMU_HEATER_TARGET_TOLERANCE 2.0f
 #define IMU_HEATER_SENSOR_TIMEOUT_MS 500u
 #define IMU_HEATER_LOG_PERIOD_MS 1000u
+#define IMU_HEATER_MIN_SUPPLY_V 10.0f
+#define IMU_HEATER_MAX_SUPPLY_V 30.0f
 
 static PIDInstance heater_pid;
 static float heater_target = IMU_HEATER_TARGET_DEFAULT;
@@ -47,6 +50,8 @@ static uint32_t heat_start_ms = 0;
 static uint32_t last_log_ms = 0;
 static float last_temperature = 0.0f;
 static uint8_t last_sensor_valid = 0;
+static float last_vcc_in = 0.0f;
+static uint8_t supply_missing_logged = 0;
 
 static void IMUHeaterApplyDuty(uint16_t duty)
 {
@@ -79,7 +84,16 @@ void IMUHeaterInit(void)
     last_valid_sample_ms = HAL_GetTick();
     heat_start_ms = 0;
     last_log_ms = 0;
+    last_vcc_in = 0.0f;
+    supply_missing_logged = 0;
     heater_initialized = 1;
+
+    last_vcc_in = BSP_ADCGetVccIn();
+    if (last_vcc_in < IMU_HEATER_MIN_SUPPLY_V || last_vcc_in > IMU_HEATER_MAX_SUPPLY_V)
+    {
+        LOGWARNING("[imu_heat] VCC_IN not ready (%d.%dV), heater disabled until 24V present",
+                   (int)last_vcc_in, (int)(last_vcc_in * 10.0f) % 10);
+    }
 
     /* 先确保比较值为0, 再启动PWM, 避免任何形式的开机满功率 */
     __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, 0);
@@ -129,7 +143,8 @@ static void IMUHeaterLogStatus(float temperature, uint8_t sensor_valid)
     if ((uint32_t)(now - last_log_ms) >= IMU_HEATER_LOG_PERIOD_MS)
     {
         last_log_ms = now;
-        LOGINFO("[imu_heat] temp=%d.%dC target=%d.%dC duty=%u valid=%u fault=%u",
+        LOGINFO("[imu_heat] vin=%d.%dV temp=%d.%dC target=%d.%dC duty=%u valid=%u fault=%u",
+                (int)last_vcc_in, (int)(last_vcc_in * 10.0f) % 10,
                 (int)temperature, (int)(temperature * 10.0f) % 10,
                 (int)heater_target, (int)(heater_target * 10.0f) % 10,
                 (unsigned)heater_duty,
@@ -150,6 +165,31 @@ void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
         IMUHeaterForceOff();
         return;
     }
+
+    /* 加热电阻接 VCC_IN(24V). 只有输入电压在合理范围内才允许加热.
+       这样 USB-only 供电时 VCC_IN=0, 加热会被禁止, 不会再出现 PID 饱和后
+       接上24V瞬间满功率的情况. */
+    last_vcc_in = BSP_ADCGetVccIn();
+    if (last_vcc_in < IMU_HEATER_MIN_SUPPLY_V)
+    {
+        IMUHeaterForceOff();
+        if (!supply_missing_logged)
+        {
+            LOGWARNING("[imu_heat] VCC_IN %d.%dV too low (USB-only?), heater disabled",
+                       (int)last_vcc_in, (int)(last_vcc_in * 10.0f) % 10);
+            supply_missing_logged = 1;
+        }
+        return;
+    }
+    if (last_vcc_in > IMU_HEATER_MAX_SUPPLY_V)
+    {
+        IMUHeaterForceOff();
+        heater_fault = 1;
+        LOGERROR("[imu_heat] VCC_IN %d.%dV too high, heater latched off",
+                 (int)last_vcc_in, (int)(last_vcc_in * 10.0f) % 10);
+        return;
+    }
+    supply_missing_logged = 0;
 
     /* 已锁存故障: 只有温度降到恢复阈值以下且手动清除后才允许再加热 */
     if (heater_fault)
