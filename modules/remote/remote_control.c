@@ -5,6 +5,7 @@
 #include "stdlib.h"
 #include "daemon.h"
 #include "bsp_log.h"
+#include "robot_safety.h"
 
 #define REMOTE_CONTROL_FRAME_SIZE 18u // 遥控器接收的buffer大小
 
@@ -94,6 +95,7 @@ static void sbus_to_rc(const uint8_t *sbus_buf)
 static void RemoteControlRxCallback()
 {
     DaemonReload(rc_daemon_instance);         // 先喂狗
+    RobotSafetySetRcOnline(1);                // 遥控器在线, 允许进入安全状态机
     sbus_to_rc(rc_usart_instance->recv_buff); // 进行协议解析
 }
 
@@ -104,6 +106,8 @@ static void RemoteControlRxCallback()
 static void RCLostCallback(void *id)
 {
     memset(rc_ctrl, 0, sizeof(rc_ctrl)); // 清空遥控器数据
+    RobotSafetySetRcOnline(0);
+    EstopRequest(ESTOP_REASON_RC_OFFLINE); // 遥控器离线锁存急停
     USARTServiceInit(rc_usart_instance); // 尝试重新启动接收
     LOGWARNING("[rc] remote control lost");
 }
@@ -124,6 +128,7 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle)
     };
     rc_daemon_instance = DaemonRegister(&daemon_conf);
 
+    RobotSafetySetRcOnline(0);
     rc_init_flag = 1;
     return rc_ctrl;
 }

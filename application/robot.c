@@ -2,6 +2,9 @@
 #include "robot.h"
 #include "robot_def.h"
 #include "robot_task.h"
+#include "robot_safety.h"
+#include "task_monitor.h"
+#include "bsp_watchdog.h"
 
 // 编译warning,提醒开发者修改机器人参数
 #ifndef ROBOT_DEF_PARAM_WARNING
@@ -28,6 +31,8 @@ void RobotInit()
     __disable_irq();
     
     BSPInit();
+    RobotSafetyInit();
+    TaskMonitorInit();
 
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     RobotCMDInit();
@@ -40,6 +45,9 @@ void RobotInit()
 #endif
 
     OSTaskInit(); // 创建基础任务
+
+    // 所有任务创建完成后再启动IWDG, 由Daemon任务中的TaskMonitorTick统一喂狗
+    BSP_WatchdogInit(200);
 
     // 初始化完成,开启中断
     __enable_irq();

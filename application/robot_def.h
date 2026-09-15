@@ -60,8 +60,13 @@
 // 机器人状态
 typedef enum
 {
-    ROBOT_STOP = 0,
-    ROBOT_READY,
+    ROBOT_STOP = 0, // 兼容旧代码: 停止输出
+    ROBOT_READY,    // 兼容旧代码: 正常运行
+    ROBOT_INIT,     // 上电初始化
+    ROBOT_SAFE,     // 已初始化但未使能
+    ROBOT_CALIB,    // 标定模式
+    ROBOT_FAULT,    // 故障降级
+    ROBOT_ESTOP,    // 急停锁存
 } Robot_Status_e;
 
 // 应用状态

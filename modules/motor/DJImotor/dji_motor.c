@@ -225,7 +225,9 @@ DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
     };
     instance->daemon = DaemonRegister(&daemon_config);
 
-    DJIMotorEnable(instance);
+    // 安全默认态: 初始化后保持失能, 由上层状态机在确认IMU/标定/使能条件后
+    // 通过 DJIMotorEnable() 显式恢复输出
+    DJIMotorStop(instance);
     dji_motor_instance[idx++] = instance;
     return instance;
 }

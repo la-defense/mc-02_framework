@@ -14,6 +14,7 @@
 #include "daemon.h"
 #include "HT04.h"
 #include "buzzer.h"
+#include "task_monitor.h"
 
 #include "bsp_log.h"
 
@@ -63,6 +64,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
     for (;;)
     {
         // 1kHz
+        TaskMonitorFeed(TASK_MONITOR_INS);
         ins_start = DWT_GetTimeline_ms();
         INS_Task();
         ins_dt = DWT_GetTimeline_ms() - ins_start;
@@ -81,6 +83,7 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
     LOGINFO("[freeRTOS] MOTOR Task Start");
     for (;;)
     {
+        TaskMonitorFeed(TASK_MONITOR_MOTOR);
         motor_start = DWT_GetTimeline_ms();
         MotorControlTask();
         motor_dt = DWT_GetTimeline_ms() - motor_start;
@@ -99,9 +102,11 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
     for (;;)
     {
         // 100Hz
+        TaskMonitorFeed(TASK_MONITOR_DAEMON);
         daemon_start = DWT_GetTimeline_ms();
         DaemonTask();
         BuzzerTask();
+        TaskMonitorTick();
         daemon_dt = DWT_GetTimeline_ms() - daemon_start;
         if (daemon_dt > 10)
             LOGERROR("[freeRTOS] Daemon Task is being DELAY! dt = [%f]", &daemon_dt);
@@ -117,6 +122,7 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
     // 200Hz-500Hz,若有额外的控制任务如平衡步兵可能需要提升至1kHz
     for (;;)
     {
+        TaskMonitorFeed(TASK_MONITOR_ROBOT);
         robot_start = DWT_GetTimeline_ms();
         RobotTask();
         robot_dt = DWT_GetTimeline_ms() - robot_start;

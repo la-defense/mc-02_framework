@@ -10,6 +10,8 @@
 #include "general_def.h"
 #include "dji_motor.h"
 #include "bmi088.h"
+#include "robot_safety.h"
+#include <string.h>
 // bsp
 #include "bsp_dwt.h"
 #include "bsp_log.h"
@@ -48,8 +50,6 @@ static Subscriber_t *shoot_feed_sub;         // 发射反馈信息订阅者
 static Shoot_Ctrl_Cmd_s shoot_cmd_send;      // 传递给发射的控制信息
 static Shoot_Upload_Data_s shoot_fetch_data; // 从发射获取的反馈信息
 
-static Robot_Status_e robot_state; // 机器人整体工作状态
-
 BMI088Instance *bmi088_test; // 云台IMU
 BMI088_Data_t bmi088_data;
 void RobotCMDInit()
@@ -80,7 +80,15 @@ void RobotCMDInit()
 #endif // GIMBAL_BOARD
     gimbal_cmd_send.pitch = 0;
 
-    robot_state = ROBOT_READY; // 启动时机器人进入工作模式,后续加入所有应用初始化完成之后再进入
+    // 上电默认安全: 所有控制量保持0/失能, 由RobotSafety状态机确认后才会进入READY
+    memset(&chassis_cmd_send, 0, sizeof(chassis_cmd_send));
+    memset(&gimbal_cmd_send, 0, sizeof(gimbal_cmd_send));
+    memset(&shoot_cmd_send, 0, sizeof(shoot_cmd_send));
+    gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
+    chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE;
+    shoot_cmd_send.shoot_mode = SHOOT_OFF;
+    shoot_cmd_send.friction_mode = FRICTION_OFF;
+    shoot_cmd_send.load_mode = LOAD_STOP;
 }
 
 /**
@@ -293,33 +301,95 @@ static void MouseKeySet()
     }
 }
 
-/**
- * @brief  紧急停止,包括遥控器左上侧拨轮打满/重要模块离线/双板通信失效等
- *         停止的阈值'300'待修改成合适的值,或改为开关控制.
- *
- * @todo   后续修改为遥控器离线则电机停止(关闭遥控器急停),通过给遥控器模块添加daemon实现
- *
- */
-static void EmergencyHandler()
+/* 把控制量强制置为失能状态, 用于SAFE/CALIB/FAULT/ESTOP */
+static void ApplySafeCommands(void)
 {
-    // 拨轮的向下拨超过一半进入急停模式.注意向打时下拨轮是正
-    if (rc_data[TEMP].rc.dial > 300 || robot_state == ROBOT_STOP) // 还需添加重要应用和模块离线的判断
+    gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
+    chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE;
+    chassis_cmd_send.vx = 0.0f;
+    chassis_cmd_send.vy = 0.0f;
+    chassis_cmd_send.wz = 0.0f;
+    chassis_cmd_send.offset_angle = 0.0f;
+    shoot_cmd_send.shoot_mode = SHOOT_OFF;
+    shoot_cmd_send.friction_mode = FRICTION_OFF;
+    shoot_cmd_send.load_mode = LOAD_STOP;
+    shoot_cmd_send.shoot_rate = 0.0f;
+}
+
+/**
+ * @brief  安全状态处理与遥控器组合键.
+ *         组合键(都需要持续1秒):
+ *         - 左右开关同时向下: 请求使能(进入READY)
+ *         - 左右开关同时向上: 请求失能(回到SAFE)
+ *         - 左右开关同时居中: 清除已锁存的急停
+ *         拨轮向下打满(dial > 300)触发手动急停锁存.
+ */
+static void EmergencyHandler(void)
+{
+    static uint32_t enable_combo_tick = 0;
+    static uint32_t disable_combo_tick = 0;
+    static uint32_t reset_combo_tick = 0;
+    uint32_t now = HAL_GetTick();
+
+    uint8_t enable_combo = switch_is_down(rc_data[TEMP].rc.switch_left) && switch_is_down(rc_data[TEMP].rc.switch_right);
+    uint8_t disable_combo = switch_is_up(rc_data[TEMP].rc.switch_left) && switch_is_up(rc_data[TEMP].rc.switch_right);
+    uint8_t reset_combo = switch_is_mid(rc_data[TEMP].rc.switch_left) && switch_is_mid(rc_data[TEMP].rc.switch_right);
+
+    if (enable_combo)
     {
-        robot_state = ROBOT_STOP;
-        gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE;
-        chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE;
-        shoot_cmd_send.shoot_mode = SHOOT_OFF;
-        shoot_cmd_send.friction_mode = FRICTION_OFF;
-        shoot_cmd_send.load_mode = LOAD_STOP;
-        LOGERROR("[CMD] emergency stop!");
+        if (enable_combo_tick == 0)
+            enable_combo_tick = now;
+        else if ((uint32_t)(now - enable_combo_tick) >= 1000)
+        {
+            RobotSafetyRequestEnable();
+            LOGINFO("[CMD] enable request");
+            enable_combo_tick = 0;
+        }
     }
-    // 遥控器右侧开关为[上],恢复正常运行
-    if (switch_is_up(rc_data[TEMP].rc.switch_right))
+    else
+        enable_combo_tick = 0;
+
+    if (disable_combo)
     {
-        robot_state = ROBOT_READY;
-        shoot_cmd_send.shoot_mode = SHOOT_ON;
-        LOGINFO("[CMD] reinstate, robot ready");
+        if (disable_combo_tick == 0)
+            disable_combo_tick = now;
+        else if ((uint32_t)(now - disable_combo_tick) >= 1000)
+        {
+            RobotSafetyRequestDisable();
+            LOGWARNING("[CMD] disable request");
+            disable_combo_tick = 0;
+        }
     }
+    else
+        disable_combo_tick = 0;
+
+    if (reset_combo)
+    {
+        if (reset_combo_tick == 0)
+            reset_combo_tick = now;
+        else if ((uint32_t)(now - reset_combo_tick) >= 1000)
+        {
+            if (EstopIsLatched())
+            {
+                if (EstopClear())
+                    LOGINFO("[CMD] estop reset");
+                else
+                    LOGWARNING("[CMD] estop reset rejected: fault still active");
+            }
+            reset_combo_tick = 0;
+        }
+    }
+    else
+        reset_combo_tick = 0;
+
+    // 拨轮向下打满: 手动急停锁存
+    if (rc_data[TEMP].rc.dial > 300)
+        EstopRequest(ESTOP_REASON_MANUAL);
+
+    RobotSafetyUpdate();
+
+    if (!RobotSafetyIsReady())
+        ApplySafeCommands();
 }
 
 /* 机器人核心控制任务,200Hz频率运行(必须高于视觉发送频率) */

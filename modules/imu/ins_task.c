@@ -21,12 +21,14 @@
 #include "master_process.h"
 #include "arm_math.h"
 #include "bmi088.h"
+#include "robot_safety.h"
+#include "imu_heater.h"
+#include <math.h>
 
 #define DEG_2_RAD (1.0f / RAD_2_DEGREE) // 角度转弧度, sp_vision_25 协议为弧度制
 
 static INS_t INS;
 static IMU_Param_t IMU_Param;
-static PIDInstance TempCtrl = {0};
 static BMI088Instance *bmi088_ins;
 static BMI088_Data_t bmi088_data;
 
@@ -37,29 +39,8 @@ const float zb[3] = {0, 0, 1};
 // 用于获取两次采样之间的时间间隔
 static uint32_t INS_DWT_Count = 0;
 static float dt = 0, t = 0;
-static float RefTemp = 45; // 恒温设定温度(比板温高约10~15°C)
 
 static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[3]);
-
-static void IMUPWMSet(uint16_t pwm)
-{
-    __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, pwm);
-}
-
-/**
- * @brief 温度控制
- *
- */
-static void IMU_Temperature_Ctrl(void)
-{
-    PIDCalculate(&TempCtrl, bmi088_data.temperature, RefTemp);
-
-    // 快速预热: 低于目标 5°C 时强制满功率, PID 积分同时累积, 接近目标后自然切回闭环
-    if (bmi088_data.temperature < RefTemp - 5.0f)
-        TempCtrl.Output = TempCtrl.MaxOut;
-
-    IMUPWMSet(float_constrain(float_rounding(TempCtrl.Output), 0, UINT32_MAX));
-}
 
 // 使用加速度计的数据初始化Roll和Pitch,而Yaw置0,这样可以避免在初始时候的姿态估计误差
 static void InitQuaternion(float *init_q4)
@@ -126,7 +107,8 @@ attitude_t *INS_Init(void)
     else
         return (attitude_t *)&INS.Gyro;
 
-    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+    // 上电默认关闭加热, 等BMI088初始化成功后再由IMUHeaterInit启动PWM(初始占空比0)
+    IMUHeaterForceOff();
 
     BMI088_Init_Config_s imu_cfg = {
         .work_mode = BMI088_BLOCK_PERIODIC_MODE,
@@ -147,8 +129,11 @@ attitude_t *INS_Init(void)
     };
     bmi088_ins = BMI088Register(&imu_cfg);
     if (bmi088_ins == NULL)
+    {
+        IMUHeaterForceOff();
         while (1)
             ;
+    }
     IMU_Param.scale[X] = 1;
     IMU_Param.scale[Y] = 1;
     IMU_Param.scale[Z] = 1;
@@ -160,15 +145,8 @@ attitude_t *INS_Init(void)
     float init_quaternion[4] = {0};
     InitQuaternion(init_quaternion);
     IMU_QuaternionEKF_Init(init_quaternion, 10, 0.001, 1000000, 1, 0);
-    // imu heat init
-    PID_Init_Config_s config = {.MaxOut = 10000,
-                                .IntegralLimit = 10000,
-                                .DeadBand = 0,
-                                .Kp = 400,
-                                .Ki = 20,
-                                .Kd = 0,
-                                .Improve = 0x01}; // enable integratiaon limit
-    PIDInit(&TempCtrl, &config);
+    // 温控安全初始化: 默认目标40°C, 平时5%占空比, 仅允许3s的10%预热
+    IMUHeaterInit();
 
     // noise of accel is relatively big and of high freq,thus lpf is used
     INS.AccelLPF = 0.0085;
@@ -188,7 +166,7 @@ void INS_Task(void)
     // ins update
     if ((count % 1) == 0)
     {
-        BMI088Acquire(bmi088_ins, &bmi088_data);
+        uint8_t acq_ok = BMI088Acquire(bmi088_ins, &bmi088_data);
 
         INS.Accel[X] = bmi088_data.acc[X];
         INS.Accel[Y] = bmi088_data.acc[Y];
@@ -228,20 +206,33 @@ void INS_Task(void)
         INS.Roll = QEKF_INS.Roll;
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
 
-        // 姿态解算完成后填充视觉上行数据(与 sp_vision_25 GimbalToVision 对齐)
-        // yaw/pitch 需转弧度, gyro 已是 rad/s; mode 暂固定 1(自瞄)
-        VisionUpdateTx(1,
-                       INS.q[0], INS.q[1], INS.q[2], INS.q[3],
-                       INS.Yaw * DEG_2_RAD, INS.Gyro[Z],
-                       INS.Pitch * DEG_2_RAD, INS.Gyro[Y],
-                       VISION_BULLET_SPEED_DEFAULT, 0);
+        // 姿态有效性检查: 任何 NaN/Inf 都视为IMU失效, 停止向视觉发送姿态
+        uint8_t imu_valid = acq_ok && isfinite(INS.q[0]) && isfinite(INS.q[1]) && isfinite(INS.q[2]) && isfinite(INS.q[3]) &&
+                            isfinite(INS.Gyro[X]) && isfinite(INS.Gyro[Y]) && isfinite(INS.Gyro[Z]) &&
+                            isfinite(INS.Yaw) && isfinite(INS.Pitch);
+        RobotSafetySetImuValid(imu_valid);
+
+        if (imu_valid)
+        {
+            // 姿态解算完成后填充视觉上行数据(与 sp_vision_25 GimbalToVision 对齐)
+            // yaw/pitch 需转弧度, gyro 已是 rad/s; 只有READY状态才向NUC报告自瞄模式
+            VisionUpdateTx(RobotSafetyIsReady() ? 1 : 0,
+                           INS.q[0], INS.q[1], INS.q[2], INS.q[3],
+                           INS.Yaw * DEG_2_RAD, INS.Gyro[Z],
+                           INS.Pitch * DEG_2_RAD, INS.Gyro[Y],
+                           VISION_BULLET_SPEED_DEFAULT, 0);
+        }
     }
 
-    // temperature control
+    // temperature control: 500Hz; 急停/故障时强制关闭加热
     if ((count % 2) == 0)
     {
-        // 500hz
-        IMU_Temperature_Ctrl();
+        Robot_Status_e state = RobotSafetyGetState();
+        uint8_t force_off = (state == ROBOT_ESTOP || state == ROBOT_FAULT) ? 1 : 0;
+        uint8_t sensor_valid = isfinite(bmi088_data.temperature) &&
+                               bmi088_data.temperature > -20.0f &&
+                               bmi088_data.temperature < 80.0f;
+        IMUHeaterUpdate(bmi088_data.temperature, sensor_valid, force_off);
     }
 
     if ((count++ % 1000) == 0)
