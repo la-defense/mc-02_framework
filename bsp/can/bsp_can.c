@@ -4,12 +4,86 @@
 #include "stdlib.h"
 #include "bsp_dwt.h"
 #include "bsp_log.h"
+#include "cmsis_os.h"
 
 /* can instance ptrs storage, used for recv callback */
 // 在CAN产生接收中断会遍历数组,选出hcan和rxid与发生中断的实例相同的那个,调用其回调函数
 // @todo: 后续为每个CAN总线单独添加一个can_instance指针数组,提高回调查找的性能
 static CANInstance *can_instance[CAN_MX_REGISTER_CNT] = {NULL};
 static uint8_t idx; // 全局CAN实例索引,每次有新的模块注册会自增
+
+/* ---------------- 总线状态与接收查表(2026-09 CAN 重构) ----------------
+   - 每条总线一份统计: 发送丢帧/完成、BusOff、错误计数;
+   - rx_lookup[总线][rx_id & 0x1FF] 做 O(1) 派发, 命中后再校验完整 rx_id;
+     512×4B×3 总线 = 6KB RAM(用完整 11 位做直表要 24KB, 太贵)。 */
+#define CAN_RX_LOOKUP_SIZE 0x200u
+
+/* 接收中断只保留"有新帧"和"丢帧诊断"两种:
+   FULL / WATERMARK 与 NEW_MESSAGE 触发的是同一个处理函数, 全开等于同一事件多次进中断 */
+#define FDCAN_RX_ACTIVE_ITS                                            \
+    (FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO0_MESSAGE_LOST |  \
+     FDCAN_IT_RX_FIFO1_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_MESSAGE_LOST)
+/* 发送完成中断要按 TX 缓冲位掩码使能; 必须与 fdcan.c 的 TxFifoQueueElmtsNbr(16) 一致 */
+#define FDCAN_TX_BUFFER_IT_MASK 0xFFFFu
+
+typedef struct
+{
+    FDCAN_HandleTypeDef *handle;
+    CAN_TxStats_t tx;
+    CAN_BusStats_t bus;
+    uint32_t log_ms;   /* 限速日志时间戳 */
+    uint32_t log_cnt;  /* 被限速掉的日志条数 */
+} CANBusState_t;
+
+static CANBusState_t can_bus[DEVICE_CAN_CNT] = {
+    {.handle = &hfdcan1}, {.handle = &hfdcan2}, {.handle = &hfdcan3}};
+static CANInstance *rx_lookup[DEVICE_CAN_CNT][CAN_RX_LOOKUP_SIZE];
+
+/* ---------------- 性能探针(见 docs/学习笔记/03) ---------------- */
+volatile DWT_Probe_t can_prof_tx = {0};
+volatile uint32_t can_prof_tx_spins = 0;   /* 保留: 自旋已删除, 恒为 0 */
+volatile uint32_t can_prof_tx_full = 0;    /* 保留: 兼容旧观察, 等于 tx_drop 累计 */
+volatile DWT_Probe_t can_prof_rx_isr = {0};
+volatile uint32_t can_prof_rx_frames = 0;
+
+static CANBusState_t *CANBusFromHandle(FDCAN_HandleTypeDef *_handle)
+{
+    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+    {
+        if (can_bus[i].handle == _handle)
+            return &can_bus[i];
+    }
+    return NULL;
+}
+
+static uint8_t CANBusIndexFromHandle(FDCAN_HandleTypeDef *_handle)
+{
+    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+    {
+        if (can_bus[i].handle == _handle)
+            return i;
+    }
+    return 0xFFu;
+}
+
+/* 限速日志: 同一类消息最多 1 条/秒, 其余只计数(避免日志把 CPU 和 RTT 缓冲吃光) */
+static void CANLogRateLimited(CANBusState_t *bus, const char *tag, uint32_t value)
+{
+    uint32_t now = HAL_GetTick();
+    if (bus == NULL)
+        return;
+    if ((uint32_t)(now - bus->log_ms) >= 1000u)
+    {
+        bus->log_ms = now;
+        LOGWARNING("[bsp_can] %s (%lu, 本秒内被限速 %lu 条)",
+                   tag, (unsigned long)value, (unsigned long)bus->log_cnt);
+        bus->log_cnt = 0;
+    }
+    else
+    {
+        bus->log_cnt++;
+    }
+}
 
 /* ----------------two static function called by CANRegister()-------------------- */
 
@@ -106,32 +180,34 @@ static void CANAddFilter(CANInstance *_instance)
 void CANServiceInit()
 {
 #ifdef FDCAN
-	//可能不需要这么多中断
-	uint32_t FDCAN_RXActiveITs = FDCAN_IT_RX_FIFO0_NEW_MESSAGE|FDCAN_IT_RX_FIFO0_FULL\
-			|FDCAN_IT_RX_FIFO0_WATERMARK|FDCAN_IT_RX_FIFO0_MESSAGE_LOST \
-			|FDCAN_IT_RX_FIFO1_NEW_MESSAGE| FDCAN_IT_RX_FIFO1_FULL\
-			|FDCAN_IT_RX_FIFO1_WATERMARK|FDCAN_IT_RX_FIFO1_MESSAGE_LOST;
-
-
 	//HAL_FDCAN_ConfigClockCalibration()
 	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan1,FDCAN_RX_FIFO0,FDCAN_RX_FIFO_OVERWRITE);
 	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan1,FDCAN_RX_FIFO1,FDCAN_RX_FIFO_OVERWRITE);
 	HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);//全局过滤器设置
 	HAL_FDCAN_Start(&hfdcan1);
-	HAL_FDCAN_ActivateNotification(&hfdcan1,FDCAN_RXActiveITs, 0);
+	HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_RX_ACTIVE_ITS, 0);
+	/* TX 完成/队列空中断默认不开: 实测这两个中断每秒会进 2 万多次(远多于实际帧数),
+	   而它们能提供的信息(tx_done)与 tx_ok 基本重复, 不划算。
+	   需要统计时把下面两行的注释打开即可(回调已经实现)。 */
+	// HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_TX_FIFO_EMPTY, 0);
+	// HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_TX_COMPLETE, FDCAN_TX_BUFFER_IT_MASK);
 
 	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan2,FDCAN_RX_FIFO0,FDCAN_RX_FIFO_OVERWRITE);
 	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan2,FDCAN_RX_FIFO1,FDCAN_RX_FIFO_OVERWRITE);
 	HAL_FDCAN_ConfigGlobalFilter(&hfdcan2, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
 	HAL_FDCAN_Start(&hfdcan2);
-	HAL_FDCAN_ActivateNotification(&hfdcan2,FDCAN_RXActiveITs, 0);
+	HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_RX_ACTIVE_ITS, 0);
+	// HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_TX_FIFO_EMPTY, 0);
+	// HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_TX_COMPLETE, FDCAN_TX_BUFFER_IT_MASK);
 
 
 	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan3,FDCAN_RX_FIFO0,FDCAN_RX_FIFO_OVERWRITE);
 	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan3,FDCAN_RX_FIFO1,FDCAN_RX_FIFO_OVERWRITE);
 	HAL_FDCAN_ConfigGlobalFilter(&hfdcan3, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
 	HAL_FDCAN_Start(&hfdcan3);
-	HAL_FDCAN_ActivateNotification(&hfdcan3,FDCAN_RXActiveITs, 0);
+	HAL_FDCAN_ActivateNotification(&hfdcan3, FDCAN_RX_ACTIVE_ITS, 0);
+	// HAL_FDCAN_ActivateNotification(&hfdcan3, FDCAN_IT_TX_FIFO_EMPTY, 0);
+	// HAL_FDCAN_ActivateNotification(&hfdcan3, FDCAN_IT_TX_COMPLETE, FDCAN_TX_BUFFER_IT_MASK);
 
 
 #else
@@ -158,9 +234,11 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     {
         while (1)
         {
-        	LOGERROR("[bsp_can] CAN instance exceeded MAX num, consider balance the load of CAN bus");
+        	/* 这类错误属于"启动期配置错误", 保持不继续注册, 但限速打印 + 让出 CPU,
+        	   避免刷爆日志/把整机拖死(排查完应修正注册数量) */
+        	LOGERROR("[bsp_can] CAN instance exceeded MAX num (%d), 请减少注册数量或分摊总线", CAN_MX_REGISTER_CNT);
+        	osDelay(1000);
         }
-
     }
     for (size_t i = 0; i < idx; i++)
     { // 重复注册 | id重复
@@ -168,9 +246,10 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
         {
             while (1)
             {
-            	LOGERROR("[}bsp_can] CAN id crash ,tx [%d] or rx [%d] already registered", &config->tx_id, &config->rx_id);
+            	LOGERROR("[bsp_can] CAN rx_id 冲突: rx_id=%lu 已在同一条总线上注册, 请检查设备 ID 配置",
+            	         (unsigned long)config->rx_id);
+            	osDelay(1000);
             }
-
         }
     }
 
@@ -203,59 +282,148 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     CANAddFilter(instance);         // 添加CAN过滤器规则
     can_instance[idx++] = instance; // 将实例保存到can_instance中
 
+    /* 建立 O(1) 接收派发表: rx_lookup[总线][rx_id & 0x1FF] */
+    uint8_t bus_idx = CANBusIndexFromHandle(config->can_handle);
+    if (bus_idx != 0xFFu)
+        rx_lookup[bus_idx][config->rx_id & (CAN_RX_LOOKUP_SIZE - 1u)] = instance;
+
     return instance; // 返回can实例指针
 }
 
 /* @todo 目前似乎封装过度,应该添加一个指向tx_buff的指针,tx_buff不应该由CAN instance保存 */
 /* 如果让CANinstance保存txbuff,会增加一次复制的开销 */
-/* ---------------- 性能探针(2026-09, CPU 占用排查) ----------------
-   单位: us; can_prof_tx = 单次 CANTransmit 总耗时(含自旋等待),
-   can_prof_tx_spins = 自旋轮数, can_prof_rx_isr = RX 中断派发耗时。*/
-volatile DWT_Probe_t can_prof_tx = {0};
-volatile uint32_t can_prof_tx_spins = 0;
-volatile uint32_t can_prof_tx_full = 0;
-volatile DWT_Probe_t can_prof_rx_isr = {0};
-volatile uint32_t can_prof_rx_frames = 0;
-
 uint8_t CANTransmit(CANInstance *_instance, float timeout)
 {
-    static uint32_t busy_count;
-    static volatile float wait_time __attribute__((unused)); // for cancel warning
+    (void)timeout; /* 保留参数以免改动所有调用者; 现在是非阻塞语义, 不再等待 */
     uint32_t probe_start = DWT_ProbeStart();
-    float dwt_start = DWT_GetTimeline_ms();
-#ifdef FDCAN
-    while(HAL_FDCAN_GetTxFifoFreeLevel(_instance->can_handle)==0)
-#else
-    while (HAL_CAN_GetTxMailboxesFreeLevel(_instance->can_handle) == 0) // 等待邮箱空闲
-#endif
-    {
-        can_prof_tx_spins++;
-        if (DWT_GetTimeline_ms() - dwt_start > timeout) // 超时
-        {
-            LOGWARNING("[bsp_can] CAN MAILbox full! failed to add msg to mailbox. Cnt [%d]", busy_count);
-            busy_count++;
-            can_prof_tx_full++;
-            DWT_ProbeDone(&can_prof_tx, probe_start);
-            return 0;
-        }
-    }
-    wait_time = DWT_GetTimeline_ms() - dwt_start;
+    CANBusState_t *bus = CANBusFromHandle(_instance->can_handle);
 
 #ifdef FDCAN
-    if (HAL_FDCAN_AddMessageToTxFifoQ(_instance->can_handle, &_instance->txconf, _instance->tx_buff))
-#else
-    // tx_mailbox会保存实际填入了这一帧消息的邮箱,但是知道是哪个邮箱发的似乎也没啥用
-    if (HAL_CAN_AddTxMessage(_instance->can_handle, &_instance->txconf, _instance->tx_buff, &_instance->tx_mailbox))
-#endif
+    if (HAL_FDCAN_GetTxFifoFreeLevel(_instance->can_handle) == 0u)
     {
-        LOGWARNING("[bsp_can] CAN bus BUSY! cnt:%d", busy_count);
-        busy_count++;
-        can_prof_tx_full++;
+        /* 硬件 FIFO 满: 直接丢帧, 绝不等待。
+           丢一帧的代价是"这个电机再执行 1ms 上一帧指令"(可忽略);
+           等待的代价是整个 motor 任务超预算、所有电机一起延迟。 */
+        if (bus != NULL)
+        {
+            bus->tx.tx_drop++;
+            can_prof_tx_full = bus->tx.tx_drop;
+            CANLogRateLimited(bus, "TX FIFO 满, 丢帧(下一周期重发)", bus->tx.tx_drop);
+        }
         DWT_ProbeDone(&can_prof_tx, probe_start);
         return 0;
     }
+    if (HAL_FDCAN_AddMessageToTxFifoQ(_instance->can_handle, &_instance->txconf, _instance->tx_buff) != HAL_OK)
+    {
+        if (bus != NULL)
+        {
+            bus->tx.tx_error++;
+            CANLogRateLimited(bus, "AddMessageToTxFifoQ 失败", bus->tx.tx_error);
+        }
+        DWT_ProbeDone(&can_prof_tx, probe_start);
+        return 0;
+    }
+#else
+    if (HAL_CAN_GetTxMailboxesFreeLevel(_instance->can_handle) == 0u)
+    {
+        if (bus != NULL)
+            bus->tx.tx_drop++;
+        DWT_ProbeDone(&can_prof_tx, probe_start);
+        return 0;
+    }
+    if (HAL_CAN_AddTxMessage(_instance->can_handle, &_instance->txconf, _instance->tx_buff, &_instance->tx_mailbox) != HAL_OK)
+    {
+        if (bus != NULL)
+            bus->tx.tx_error++;
+        DWT_ProbeDone(&can_prof_tx, probe_start);
+        return 0;
+    }
+#endif
+
+    if (bus != NULL)
+        bus->tx.tx_ok++;
     DWT_ProbeDone(&can_prof_tx, probe_start);
-    return 1; // 发送成功
+    return 1; // 已成功交给硬件
+}
+
+/* 发送完成相关回调(中断上下文: 只做计数, 不打印不阻塞) */
+void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *hfdcan)
+{
+    CANBusState_t *bus = CANBusFromHandle(hfdcan);
+    if (bus != NULL)
+        bus->tx.tx_fifo_empty_events++;
+}
+
+void HAL_FDCAN_TxBufferCompleteCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t BufferIndexes)
+{
+    (void)BufferIndexes; /* TXBTO 是累计标志, 用 popcount 统计会重复累加, 这里只统计事件次数 */
+    CANBusState_t *bus = CANBusFromHandle(hfdcan);
+    if (bus != NULL)
+        bus->tx.tx_done++;
+}
+
+void CANGetTxStats(FDCAN_HandleTypeDef *hcan, CAN_TxStats_t *stats)
+{
+    CANBusState_t *bus = CANBusFromHandle(hcan);
+    if (bus == NULL || stats == NULL)
+        return;
+    *stats = bus->tx;
+}
+
+void CANGetBusStats(FDCAN_HandleTypeDef *hcan, CAN_BusStats_t *stats)
+{
+    CANBusState_t *bus = CANBusFromHandle(hcan);
+    CAN_Status_t st;
+    if (bus == NULL || stats == NULL)
+        return;
+    CANGetStatus(hcan, &st);
+    bus->bus.status = st.status;
+    bus->bus.tx_error_count = st.tx_error_count;
+    bus->bus.rx_error_count = st.rx_error_count;
+    *stats = bus->bus;
+}
+
+/**
+ * @brief CAN 总线健康检查 + BusOff 恢复
+ *        空总线(没有从机应答)会让 TEC 迅速累计到 256 进入 BusOff, 而 BusOff 后
+ *        外设停止收发、TX FIFO 永远不会空 —— 必须由软件把它拉回来。
+ *        建议在 100Hz 的 daemon 任务里以 10Hz 调用。
+ */
+void CANHealthMonitor(void)
+{
+    static uint32_t last_ms = 0;
+    uint32_t now = HAL_GetTick();
+    if ((uint32_t)(now - last_ms) < 100u)
+        return;
+    last_ms = now;
+
+#ifdef FDCAN
+    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+    {
+        FDCAN_ProtocolStatusTypeDef ps;
+        FDCAN_ErrorCountersTypeDef ec;
+        CANBusState_t *bus = &can_bus[i];
+
+        if (HAL_FDCAN_GetProtocolStatus(bus->handle, &ps) != HAL_OK)
+            continue;
+        if (HAL_FDCAN_GetErrorCounters(bus->handle, &ec) == HAL_OK)
+        {
+            bus->bus.tx_error_count = (uint8_t)ec.TxErrorCnt;
+            bus->bus.rx_error_count = (uint8_t)ec.RxErrorCnt;
+        }
+
+        if (ps.BusOff)
+        {
+            bus->bus.busoff++;
+            HAL_FDCAN_Stop(bus->handle);   /* 置 CCCR.INIT, 复位错误状态 */
+            HAL_FDCAN_Start(bus->handle);  /* 清 INIT, 重新上线 */
+            /* Stop 之后中断使能会丢失, 重新打开 */
+            HAL_FDCAN_ActivateNotification(bus->handle, FDCAN_RX_ACTIVE_ITS, 0);
+            bus->bus.busoff_recover++;
+            CANLogRateLimited(bus, "BusOff 检测到并尝试恢复", bus->bus.busoff);
+        }
+    }
+#endif
 }
 
 void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status)
@@ -288,12 +456,29 @@ void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status)
 
 void CANSetDLC(CANInstance *_instance, uint8_t length)
 {
-    // 发送长度错误!检查调用参数是否出错,或出现野指针/越界访问
-    if (length > 8 || length == 0) // 安全检查
-        while (1)
+    /* 原来的实现在参数错误时会 while(1) 死循环(整机卡死)。
+       这里改成: 钳位到合法范围 + 计数 + 限速告警, 系统继续运行 */
+    static uint32_t dlc_err_cnt = 0;
+    static uint32_t dlc_log_ms = 0;
+
+    if (_instance == NULL)
+        return;
+
+    if (length > 8u || length == 0u)
+    {
+        dlc_err_cnt++;
+        uint32_t now = HAL_GetTick();
+        if ((uint32_t)(now - dlc_log_ms) >= 1000u)
         {
-        	LOGERROR("[bsp_can] CAN DLC error! check your code or wild pointer");
+            dlc_log_ms = now;
+            LOGWARNING("[bsp_can] DLC 参数非法(%u), 已钳位为 1..8; 累计 %lu 次(检查调用方或野指针)",
+                       (unsigned)length, (unsigned long)dlc_err_cnt);
         }
+        if (length > 8u)
+            length = 8u;
+        else
+            length = 1u;
+    }
 
     _instance->txconf.DataLength = DLC_LookUp_Table[length];
 }
@@ -315,10 +500,15 @@ static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
 	static uint16_t DataLength = 0;
     static uint8_t fdcan_rx_buff[8];
     uint32_t probe_start = DWT_ProbeStart();
+    CANBusState_t *bus = CANBusFromHandle(_hfdcan);
+    uint8_t bus_idx = CANBusIndexFromHandle(_hfdcan);
+
     while (HAL_FDCAN_GetRxFifoFillLevel(_hfdcan, fifox)) // FIFO不为空,有可能在其他中断时有多帧数据进入
     {
         HAL_FDCAN_GetRxMessage(_hfdcan, fifox, &rxconf, fdcan_rx_buff); // 从FIFO中获取数据
         can_prof_rx_frames++;
+        if (bus != NULL)
+            bus->bus.rx_frames++;
 		//解析数据长度，@Todo 此处在用新版本重新生成后可能得修改，DataLength可能不需要右移，具体情况具体看	！
 		if(((rxconf.DataLength >> 16) & 0xF)>=0 && ((rxconf.DataLength >> 16) & 0xF)<=8)
 		{
@@ -330,21 +520,34 @@ static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
 		}
         if(rxconf.RxFrameType==FDCAN_DATA_FRAME && rxconf.IdType==FDCAN_STANDARD_ID)
         {
-        	for (size_t i = 0; i < idx; ++i)
-			{
-        		// 两者相等说明这是要找的实例
-				if (_hfdcan == can_instance[i]->can_handle && rxconf.Identifier == can_instance[i]->rx_id)
-				{
-					if (can_instance[i]->can_module_callback != NULL) // 回调函数不为空就调用
-					{
-						can_instance[i]->rx_len = DataLength;               // 保存接收到的数据长度
-						memcpy(can_instance[i]->rx_buff, fdcan_rx_buff, can_instance[i]->rx_len); // 消息拷贝到对应实例
-						can_instance[i]->can_module_callback(can_instance[i]);     // 触发回调进行数据解析和处理
-					}
-					DWT_ProbeDone(&can_prof_rx_isr, probe_start);
-					return;
-				}
-			}
+        	/* 常见路径: 用 rx_id 低 9 位查表, O(1) 找到归属实例 */
+        	CANInstance *target = NULL;
+        	if (bus_idx != 0xFFu)
+        	{
+        		CANInstance *cand = rx_lookup[bus_idx][rxconf.Identifier & (CAN_RX_LOOKUP_SIZE - 1u)];
+        		if (cand != NULL && cand->rx_id == rxconf.Identifier)
+        			target = cand;
+        	}
+        	if (target == NULL)
+        	{
+        		/* 回退路径: 低位别名冲突时退回线性查找(极少发生) */
+        		for (size_t i = 0; i < idx; ++i)
+        		{
+        			if (_hfdcan == can_instance[i]->can_handle && rxconf.Identifier == can_instance[i]->rx_id)
+        			{
+        				target = can_instance[i];
+        				break;
+        			}
+        		}
+        	}
+
+        	if (target != NULL && target->can_module_callback != NULL)
+        	{
+        		target->rx_len = (uint8_t)DataLength;                     // 保存接收到的数据长度
+        		memcpy(target->rx_buff, fdcan_rx_buff, target->rx_len);    // 消息拷贝到对应实例
+        		target->can_module_callback(target);                      // 触发回调解析
+        	}
+        	/* 注意: 这里不能 return! 必须把 FIFO 里的帧全部取完, 否则 FIFO 满就会丢帧 */
         }
     }
     DWT_ProbeDone(&can_prof_rx_isr, probe_start);
@@ -356,7 +559,12 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 	/* 检查Rx FIFO 0中是否有消息丢失 */
 	if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_MESSAGE_LOST) != 0)
 	{
-		//报错
+		CANBusState_t *bus = CANBusFromHandle(hfdcan);
+		if (bus != NULL)
+		{
+			bus->bus.rx_lost++;
+			CANLogRateLimited(bus, "RxFIFO0 溢出丢帧", bus->bus.rx_lost);
+		}
 	}
 	/* 检查是否有新消息写入Rx FIFO 0或到达一定阈值 */
 	if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE)||(RxFifo0ITs & FDCAN_IT_RX_FIFO0_FULL)||(RxFifo0ITs & FDCAN_IT_RX_FIFO0_WATERMARK))
@@ -369,7 +577,12 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs)
 	/* 检查Rx FIFO 1中是否有消息丢失 */
 	if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_MESSAGE_LOST) != 0)
 	{
-		//报错
+		CANBusState_t *bus = CANBusFromHandle(hfdcan);
+		if (bus != NULL)
+		{
+			bus->bus.rx_lost++;
+			CANLogRateLimited(bus, "RxFIFO1 溢出丢帧", bus->bus.rx_lost);
+		}
 	}
 	/* 检查是否有新消息写入Rx FIFO 1或到达一定阈值 */
 	if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_NEW_MESSAGE)||(RxFifo1ITs & FDCAN_IT_RX_FIFO1_FULL)||(RxFifo1ITs & FDCAN_IT_RX_FIFO1_WATERMARK))

@@ -111,6 +111,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         daemon_start = DWT_GetTimeline_ms();
         DaemonTask();
         BuzzerTask();
+        CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */
         TaskMonitorTick();
         daemon_dt = DWT_GetTimeline_ms() - daemon_start;
         if (daemon_dt > 10)

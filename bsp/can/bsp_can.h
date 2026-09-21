@@ -101,6 +101,28 @@ typedef struct
     uint8_t tx_error_count;
 } CAN_Status_t;
 
+/* CAN 发送统计(每条总线一份): 用于观察"丢帧换实时性"的实际代价 */
+typedef struct
+{
+    uint32_t tx_ok;               /* 成功写入硬件 TX FIFO 的帧数 */
+    uint32_t tx_drop;             /* FIFO 满被丢弃的帧数(下一周期自然重发) */
+    uint32_t tx_error;            /* HAL 返回错误的次数 */
+    uint32_t tx_done;             /* 发送完成中断统计到的帧数 */
+    uint32_t tx_fifo_empty_events;/* TX FIFO 变空事件次数 */
+} CAN_TxStats_t;
+
+/* CAN 总线健康统计 */
+typedef struct
+{
+    uint32_t busoff;              /* 检测到 BusOff 的次数 */
+    uint32_t busoff_recover;      /* 执行恢复(Stop+Start)的次数 */
+    uint32_t rx_lost;             /* MESSAGE_LOST 事件次数 */
+    uint32_t rx_frames;           /* 收到的帧数 */
+    uint8_t tx_error_count;       /* TEC */
+    uint8_t rx_error_count;       /* REC */
+    CAN_Status_e status;          /* 当前状态 */
+} CAN_BusStats_t;
+
 /**
  * @brief Register a module to CAN service,remember to call this before using a CAN device
  *        注册(初始化)一个can实例,需要传入初始化配置的指针.
@@ -132,5 +154,21 @@ uint8_t CANTransmit(CANInstance *_instance,float timeout);
  * @brief 获取FDCAN总线状态(OK/ERROR/BUSOFF)
  */
 void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status);
+
+/**
+ * @brief 读取某条总线的发送统计(丢帧/完成计数)
+ */
+void CANGetTxStats(FDCAN_HandleTypeDef *hcan, CAN_TxStats_t *stats);
+
+/**
+ * @brief 读取某条总线的健康统计(BusOff 次数/恢复次数/错误计数)
+ */
+void CANGetBusStats(FDCAN_HandleTypeDef *hcan, CAN_BusStats_t *stats);
+
+/**
+ * @brief CAN 总线健康检查与 BusOff 恢复; 建议以 10Hz 在任务上下文调用
+ *        (恢复动作要动多个寄存器, 不能放在中断里)
+ */
+void CANHealthMonitor(void);
 
 #endif
