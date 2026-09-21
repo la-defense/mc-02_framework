@@ -10,6 +10,8 @@
 
 static uint16_t lcd_line_buf[LCD_BUF_MAX_W];
 
+_Static_assert(LCD_PANEL_W <= LCD_BUF_MAX_W, "行缓冲必须能装下整屏一行像素");
+
 static void LCD_BufBegin(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 {
     LCD_Address_Set(x1, y1, x2, y2);
@@ -25,6 +27,45 @@ static void LCD_BufWriteRow(uint16_t pixels)
 static void LCD_BufEnd(void)
 {
     LCD_CS_Set();
+}
+
+/* 玻璃物理坐标设置窗口(不加可见区内缩)，只用整屏清屏。
+   与 lcd.c 的 LCD_Address_Set 保持一致：竖屏在行轴偏移 20，横屏在列轴偏移 20。 */
+static void LCD_BufBeginPanel(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
+{
+#if USE_HORIZONTAL==0||USE_HORIZONTAL==1
+    LCD_WR_REG(0x2a);
+    LCD_WR_DATA(x1);
+    LCD_WR_DATA(x2);
+    LCD_WR_REG(0x2b);
+    LCD_WR_DATA(y1 + 20u);
+    LCD_WR_DATA(y2 + 20u);
+#else
+    LCD_WR_REG(0x2a);
+    LCD_WR_DATA(x1 + 20u);
+    LCD_WR_DATA(x2 + 20u);
+    LCD_WR_REG(0x2b);
+    LCD_WR_DATA(y1);
+    LCD_WR_DATA(y2);
+#endif
+    LCD_WR_REG(0x2c);
+    LCD_DC_Set();
+    LCD_CS_Clr();
+}
+
+/* 整屏(整块玻璃)刷黑: 擦掉上一版固件或更早画面留在内缩区之外的残留像素。
+   内缩(LCD_MARGIN)使正常绘制区变小，如果不做这一步，旧像素会一直留在边框附近。 */
+void LCD_BufClearPanel(void)
+{
+    for (uint16_t i = 0; i < (uint16_t)LCD_PANEL_W; ++i)
+        lcd_line_buf[i] = BLACK;
+
+    LCD_BufBeginPanel(LCD_PANEL_X0, LCD_PANEL_Y0,
+                      (uint16_t)(LCD_PANEL_X0 + LCD_PANEL_W - 1u),
+                      (uint16_t)(LCD_PANEL_Y0 + LCD_PANEL_H - 1u));
+    for (uint16_t row = 0; row < (uint16_t)LCD_PANEL_H; ++row)
+        LCD_BufWriteRow((uint16_t)LCD_PANEL_W);
+    LCD_BufEnd();
 }
 
 void LCD_BufFill(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color)

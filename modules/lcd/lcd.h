@@ -10,20 +10,32 @@
 #define USE_HORIZONTAL 2  // 璁剧疆妯睆鎴栬€呯珫灞忔樉绀?0鎴?涓虹珫灞?2鎴?涓烘í灞?
 
 
-/* 模组玻璃尺寸大于实际可见区(被边框遮挡)，且安装后可见区偏向画面右下方。
-   这里把绘制原点整体偏移 (LCD_OFFSET_X, LCD_OFFSET_Y)，并把可用绘图区
-   缩小同样的像素数，保证内容不会被边框切掉。单位: 像素。
-   需要微调时只改这两个宏(增大 = 画面继续往右/下移动)。 */
-#define LCD_OFFSET_X 12
-#define LCD_OFFSET_Y 8
+/* 模组玻璃尺寸大于实际可见窗，而且可见窗四角是圆角(圆角处的内容看不见)。
+   这里把绘制区四周统一内缩 (LCD_MARGIN_X, LCD_MARGIN_Y) 像素，四角内容就
+   不会再被圆角切掉。单位: 像素，需要微调时只改这两个宏(增大 = 四周留白更多)。 */
+#define LCD_MARGIN_X 14
+#define LCD_MARGIN_Y 14
 
 #if USE_HORIZONTAL==0||USE_HORIZONTAL==1
-#define LCD_W (240 - LCD_OFFSET_X)
-#define LCD_H (280 - LCD_OFFSET_Y)
+#define LCD_W (240 - 2 * LCD_MARGIN_X)
+#define LCD_H (280 - 2 * LCD_MARGIN_Y)
 
 #else
-#define LCD_W (280 - LCD_OFFSET_X)
-#define LCD_H (240 - LCD_OFFSET_Y)
+#define LCD_W (280 - 2 * LCD_MARGIN_X)
+#define LCD_H (240 - 2 * LCD_MARGIN_Y)
+#endif
+
+/* 模组玻璃的物理范围(不含内缩)，用于整屏清屏擦掉旧画面残留 */
+#if USE_HORIZONTAL==0||USE_HORIZONTAL==1
+#define LCD_PANEL_X0 0
+#define LCD_PANEL_Y0 20
+#define LCD_PANEL_W  240
+#define LCD_PANEL_H  280
+#else
+#define LCD_PANEL_X0 20
+#define LCD_PANEL_Y0 0
+#define LCD_PANEL_W  280
+#define LCD_PANEL_H  240
 #endif
 
  

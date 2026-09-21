@@ -474,6 +474,8 @@ void LCD_UI_Init(void)
     lcd_page = 0;
     lcd_frozen = 0;
     LCD_Init();
+    /* 先按玻璃物理范围整屏刷黑，擦掉上一版固件留在内缩区之外的残留像素 */
+    LCD_BufClearPanel();
     LCD_BufFill(0, 0, LCD_W - 1u, LCD_H - 1u, BLACK);
     LCD_UI_DrawStatic(0);
     LCD_UI_UpdateValues(0);
