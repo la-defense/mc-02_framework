@@ -3,6 +3,7 @@
 #include "lcdfont.h"
 #include "spi.h"
 #include "main.h"
+#include "bsp_dwt.h"
 #include "string.h"
 #include "stdio.h"
 
@@ -14,6 +15,14 @@ _Static_assert(LCD_PANEL_W <= LCD_BUF_MAX_W, "行缓冲必须能装下整屏一�
 
 /* 调试用: 统计 SPI 发送失败的次数(热插拔/总线异常时可以看出来) */
 volatile uint32_t lcd_spi_errors = 0;
+/* 调试用: 累计发送字节数, 用于换算 LCD 实际 SPI 吞吐 */
+volatile uint32_t lcd_spi_bytes = 0;
+/* 调试用: 最近一次行传输的耗时(us)与字节数, 用于反推实际 SCK */
+volatile uint32_t lcd_prof_row_us = 0;
+volatile uint16_t lcd_prof_row_bytes = 0;
+/* 调试用: 累计 SPI 传输时间(us)与行调用次数, 用于区分"真正在传数据"和"被高优先级任务抢占" */
+volatile uint32_t lcd_prof_spi_us = 0;
+volatile uint32_t lcd_prof_rows = 0;
 
 static void LCD_BufBegin(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 {
@@ -24,12 +33,18 @@ static void LCD_BufBegin(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 
 static void LCD_BufWriteRow(uint16_t pixels)
 {
+    uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
     if (HAL_SPI_Transmit(&hspi1, (uint8_t *)lcd_line_buf, (uint16_t)(pixels * 2u), 20) != HAL_OK)
     {
         /* 失败后 HAL 句柄可能停在 BUSY, 中止掉, 免得后面所有发送都失败 */
         lcd_spi_errors++;
         HAL_SPI_Abort(&hspi1);
     }
+    lcd_prof_row_us = (uint32_t)DWT_GetTimeline_us() - t0;
+    lcd_prof_row_bytes = (uint16_t)(pixels * 2u);
+    lcd_prof_spi_us += lcd_prof_row_us;
+    lcd_prof_rows++;
+    lcd_spi_bytes += (uint32_t)pixels * 2u;
 }
 
 static void LCD_BufEnd(void)

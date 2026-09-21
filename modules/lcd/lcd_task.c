@@ -3,8 +3,10 @@
 #include "lcd_buf.h"
 #include "bsp_adc.h"
 #include "bsp_log.h"
+#include "bsp_dwt.h"
 #include "cmsis_os.h"
 #include "main.h"
+#include "task.h"
 
 typedef enum
 {
@@ -72,6 +74,74 @@ volatile uint8_t lcd_key_last = 0;
 volatile uint8_t lcd_module_absent = 0;
 volatile uint16_t lcd_key_spread = 0;
 volatile uint32_t lcd_recover_count = 0;
+
+/* ---- 性能测量(供 OpenOCD 读取, 单位 us / 字节) ----
+   lcd_prof_*_last/max: 单次操作耗时; lcd_prof_busy_us: 累计占用时间;
+   lcd_prof_cycles: 统计到的刷新周期数; lcd_spi_bytes: 累计 SPI 字节数 */
+volatile uint32_t lcd_prof_sample_last_us = 0;
+volatile uint32_t lcd_prof_sample_max_us = 0;
+volatile uint32_t lcd_prof_update_last_us = 0;
+volatile uint32_t lcd_prof_update_max_us = 0;
+volatile uint32_t lcd_prof_draw_last_us = 0;
+volatile uint32_t lcd_prof_draw_max_us = 0;
+volatile uint32_t lcd_prof_init_us = 0;
+volatile uint32_t lcd_prof_recover_us = 0;
+volatile uint32_t lcd_prof_busy_us = 0;
+volatile uint32_t lcd_prof_cycles = 0;
+
+/* ---- 全系统 CPU 占用快照(每 5s 采一次, 供 OpenOCD 读取) ----
+   RTOS 运行时间统计依赖 Core/Src/freertos.c 里 getRunTimeCounterValue() = DWT->CYCCNT。
+   任务占用率 = Δlcd_stats_runtime[i] / Δlcd_stats_total。 */
+#define LCD_TASK_STATS_PERIOD 25u /* 25 个 200ms 周期 = 5s */
+#define LCD_TASK_STATS_MAX 12u
+volatile uint32_t lcd_stats_total = 0;
+volatile uint8_t lcd_stats_count = 0;
+volatile uint32_t lcd_stats_runtime[LCD_TASK_STATS_MAX] = {0};
+volatile uint8_t lcd_stats_prio[LCD_TASK_STATS_MAX] = {0};
+volatile char lcd_stats_name[LCD_TASK_STATS_MAX][12] = {{0}};
+
+static void lcd_task_stats_snapshot(void)
+{
+    static TaskStatus_t st[LCD_TASK_STATS_MAX];
+    uint32_t total = 0;
+
+    UBaseType_t n = uxTaskGetSystemState(st, LCD_TASK_STATS_MAX, &total);
+    if (n > LCD_TASK_STATS_MAX)
+        n = LCD_TASK_STATS_MAX;
+
+    /* 用各任务累计运行时间之和作为总时间: 计数器单位是 us(见 freertos.c),
+       单个任务要 4295s 才回绕, 比直接读 portGET_RUN_TIME_COUNTER_VALUE() 稳。 */
+    (void)total;
+    uint32_t sum = 0;
+    for (UBaseType_t i = 0; i < n; ++i)
+        sum += st[i].ulRunTimeCounter;
+    lcd_stats_total = sum;
+    lcd_stats_count = (uint8_t)n;
+
+    for (UBaseType_t i = 0; i < n; ++i)
+    {
+        lcd_stats_runtime[i] = st[i].ulRunTimeCounter;
+        lcd_stats_prio[i] = (uint8_t)st[i].uxCurrentPriority;
+        for (uint8_t k = 0; k < 12u; ++k)
+            lcd_stats_name[i][k] = '\0';
+        for (uint8_t k = 0; k < 11u; ++k)
+        {
+            char c = st[i].pcTaskName[k];
+            lcd_stats_name[i][k] = c;
+            if (c == '\0')
+                break;
+        }
+    }
+}
+
+static void lcd_prof_record(uint32_t t0, volatile uint32_t *last, volatile uint32_t *maxv)
+{
+    uint32_t dt = (uint32_t)DWT_GetTimeline_us() - t0;
+    *last = dt;
+    if (dt > *maxv)
+        *maxv = dt;
+    lcd_prof_busy_us += dt;
+}
 
 static LcdKey_e lcd_key_read(void)
 {
@@ -184,7 +254,9 @@ static void lcd_module_presence_check(void)
             lcd_module_absent = 0u;
             lcd_recover_count++;
             LOGINFO("[lcd] module back, re-init panel (recover=%lu)", (unsigned long)lcd_recover_count);
+            uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
             LCD_UI_Recover();
+            lcd_prof_recover_us = (uint32_t)DWT_GetTimeline_us() - t0;
         }
     }
 }
@@ -221,7 +293,9 @@ static void lcd_key_update(void)
         {
             lcd_recover_count++;
             LOGINFO("[lcd] manual re-init (recover=%lu)", (unsigned long)lcd_recover_count);
+            uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
             LCD_UI_Recover();
+            lcd_prof_recover_us = (uint32_t)DWT_GetTimeline_us() - t0;
         }
         return;
     }
@@ -246,8 +320,10 @@ static void lcd_key_update(void)
         return;
     }
 
+    uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
     LCD_UI_DrawStatic(lcd_page);
     LCD_UI_UpdateValues(lcd_page);
+    lcd_prof_record(t0, &lcd_prof_draw_last_us, &lcd_prof_draw_max_us);
     LOGINFO("[lcd] page %u", (unsigned)(lcd_page + 1u));
 }
 
@@ -255,7 +331,9 @@ void StartLCDTASK(void const *argument)
 {
     (void)argument;
 
+    uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
     LCD_UI_Init();
+    lcd_prof_init_us = (uint32_t)DWT_GetTimeline_us() - t0;
     lcd_init_done = 1;
     LOGINFO("[lcd] init done, page=%u", (unsigned)(lcd_page + 1u));
 
@@ -265,12 +343,22 @@ void StartLCDTASK(void const *argument)
         /* 50ms 采样按键与模组在位状态, 200ms 刷新一次数值(5Hz) */
         for (uint8_t i = 0; i < 4u; ++i)
         {
+            uint32_t ts = (uint32_t)DWT_GetTimeline_us();
             lcd_key_update();
             lcd_module_presence_check();
+            lcd_prof_record(ts, &lcd_prof_sample_last_us, &lcd_prof_sample_max_us);
             osDelay(50);
         }
 
         if (!lcd_frozen && !lcd_module_absent)
+        {
+            uint32_t tu = (uint32_t)DWT_GetTimeline_us();
             LCD_UI_UpdateValues(lcd_page);
+            lcd_prof_record(tu, &lcd_prof_update_last_us, &lcd_prof_update_max_us);
+            lcd_prof_cycles++;
+        }
+
+        if ((lcd_heartbeat % LCD_TASK_STATS_PERIOD) == 0u)
+            lcd_task_stats_snapshot();
     }
 }
