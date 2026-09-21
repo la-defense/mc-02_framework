@@ -13,7 +13,8 @@
  * - 上电/初始化/故障/急停时 PWM=0, 不再有"无条件满功率预热".
  * - 温度必须有限且在合理范围内, 传感器无效或超时直接关加热.
  * - 占空比硬限幅: 最大 5%(500/9999), 与厂商例程 MAX_OUT=500 对齐;
- *   24V 加热不允许任何 10%/满功率预热.
+ *   24V 下再按功率上限自动压低占空比(首测保守值 0.30W, 按最坏47Ω估算).
+ * - 24V 加热不允许任何 10%/满功率预热.
  * - 连续加热最长 60s, 超时锁存故障.
  * - 温度 > 50°C 立即关加热并锁存, 降到 42°C 以下且手动清除后才允许恢复.
  */
@@ -23,9 +24,9 @@
 #define IMU_HEATER_TARGET_MAX 45.0f
 
 #define IMU_HEATER_ARR 9999u
-#define IMU_HEATER_DUTY_NORMAL 500u   // 5%
-#define IMU_HEATER_DUTY_BOOST 500u    // 24V加热: 不允许超过5%
-#define IMU_HEATER_BOOST_TIME_MS 0u   // 预热阶段实际禁用
+#define IMU_HEATER_DUTY_NORMAL 500u   // 5% 绝对硬上限(厂商例程 MAX_OUT=500)
+#define IMU_HEATER_R_EQUIV_MIN 47.0f  // R77~R89 全并联最坏等效电阻
+#define IMU_HEATER_MAX_POWER_W 0.30f  // 首次24V测试的功率上限
 #define IMU_HEATER_MAX_ON_TIME_MS 60000u
 
 #define IMU_HEATER_TEMP_VALID_MIN -20.0f
@@ -55,8 +56,9 @@ static uint8_t supply_missing_logged = 0;
 
 static void IMUHeaterApplyDuty(uint16_t duty)
 {
-    if (duty > IMU_HEATER_ARR)
-        duty = IMU_HEATER_ARR;
+    /* 无论调用方传入什么, 都不允许超过 5% 硬上限 */
+    if (duty > IMU_HEATER_DUTY_NORMAL)
+        duty = IMU_HEATER_DUTY_NORMAL;
 
     heater_duty = duty;
     if (heater_initialized)
@@ -99,9 +101,10 @@ void IMUHeaterInit(void)
     __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, 0);
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 
-    LOGINFO("[imu_heat] init safe(VCC_IN 24V): target=%d.%dC max_duty=%u/%u",
+    LOGINFO("[imu_heat] init safe(VCC_IN 24V): target=%d.%dC max_duty=%u/%u power_cap=%d.%dW",
             (int)heater_target, (int)(heater_target * 10.0f) % 10,
-            (unsigned)IMU_HEATER_DUTY_NORMAL, (unsigned)IMU_HEATER_ARR);
+            (unsigned)IMU_HEATER_DUTY_NORMAL, (unsigned)IMU_HEATER_ARR,
+            (int)IMU_HEATER_MAX_POWER_W, (int)(IMU_HEATER_MAX_POWER_W * 10.0f) % 10);
 }
 
 void IMUHeaterForceOff(void)
@@ -191,6 +194,21 @@ void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
     }
     supply_missing_logged = 0;
 
+    /* 24V 加热电阻功率上限保护:
+       按最坏情况等效电阻47Ω估算, 限制平均功率不超过0.30W.
+       24V时 duty≈244(2.4%), 25.2V时更低; 12V时功率本身较低, 仍保留5%硬上限. */
+    uint16_t duty_limit = IMU_HEATER_DUTY_NORMAL;
+    float max_duty_by_power =
+        (IMU_HEATER_MAX_POWER_W * (float)IMU_HEATER_ARR * IMU_HEATER_R_EQUIV_MIN) /
+        (last_vcc_in * last_vcc_in);
+    if (max_duty_by_power < (float)duty_limit)
+        duty_limit = (uint16_t)max_duty_by_power;
+    if (duty_limit == 0)
+    {
+        IMUHeaterForceOff();
+        return;
+    }
+
     /* 已锁存故障: 只有温度降到恢复阈值以下且手动清除后才允许再加热 */
     if (heater_fault)
     {
@@ -248,14 +266,6 @@ void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
         heater_fault = 1;
         LOGERROR("[imu_heat] max heating time exceeded, heater latched off");
         return;
-    }
-
-    /* 加热电阻接24V主输入, 5%是硬上限; 不使用任何预热提升 */
-    uint16_t duty_limit = IMU_HEATER_DUTY_NORMAL;
-    if ((uint32_t)(now - heat_start_ms) < IMU_HEATER_BOOST_TIME_MS &&
-        temperature < heater_target - 5.0f)
-    {
-        duty_limit = IMU_HEATER_DUTY_BOOST;
     }
 
     float output = PIDCalculate(&heater_pid, temperature, heater_target);
