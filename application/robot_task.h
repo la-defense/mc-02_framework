@@ -104,6 +104,11 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
     static float daemon_start;
     BuzzerInit();
     LOGINFO("[freeRTOS] Daemon Task Start");
+#if CAN_SELFTEST_LOOPBACK
+    /* FDCAN 回环自测(默认关闭): 必须在所有设备注册完成之后跑(否则 CANRegister 会重新
+       配置总线把自测配置覆盖掉), 放在任务上下文里也便于用 HAL_GetTick 做超时 */
+    CANRunLoopbackSelfTest();
+#endif
     for (;;)
     {
         // 100Hz

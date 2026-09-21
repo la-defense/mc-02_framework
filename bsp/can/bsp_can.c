@@ -38,6 +38,32 @@ typedef struct
 static CANBusState_t can_bus[DEVICE_CAN_CNT] = {
     {.handle = &hfdcan1}, {.handle = &hfdcan2}, {.handle = &hfdcan3}};
 static CANInstance *rx_lookup[DEVICE_CAN_CNT][CAN_RX_LOOKUP_SIZE];
+/* 每条总线已用的标准滤镜下标(自测重装滤镜时需要整体重置) */
+static uint8_t can_filter_idx[DEVICE_CAN_CNT] = {0};
+
+/* 诊断: 最近一次总线配置的结果(HAL 返回码/状态/中断寄存器), 用于排查"中断不触发" */
+volatile uint32_t can_diag_start_ret = 0;
+volatile uint32_t can_diag_state = 0;
+volatile uint32_t can_diag_act_ret = 0;
+volatile uint32_t can_diag_ie = 0;
+volatile uint32_t can_diag_ile = 0;
+volatile uint32_t can_diag_ils = 0;
+
+/* 每条总线允许的标准滤镜数量(来自 CubeMX 配置的 StdFiltersNbr) */
+static uint32_t CANFilterLimit(uint8_t bus_idx)
+{
+    switch (bus_idx)
+    {
+    case 0:
+        return hfdcan1.Init.StdFiltersNbr;
+    case 1:
+        return hfdcan2.Init.StdFiltersNbr;
+    case 2:
+        return hfdcan3.Init.StdFiltersNbr;
+    default:
+        return 0;
+    }
+}
 
 /* ---------------- 性能探针(见 docs/学习笔记/03) ---------------- */
 volatile DWT_Probe_t can_prof_tx = {0};
@@ -108,36 +134,21 @@ static void CANAddFilter(CANInstance *_instance)
 {
 
 #ifdef FDCAN
-	static uint8_t can1_filter_idx = 0, can2_filter_idx = 0 , can3_filter_idx = 0;
-	//检查是否超出过滤器设定数量上限
-	if(can1_filter_idx > hfdcan1.Init.StdFiltersNbr || can2_filter_idx>hfdcan2.Init.StdFiltersNbr || can3_filter_idx > hfdcan3.Init.StdFiltersNbr)
+	/* 滤镜下标改为按总线存放(文件作用域), 这样自测结束后可以整体重装滤镜 */
+	uint8_t bus_idx = CANBusIndexFromHandle(_instance->can_handle);
+	if (bus_idx == 0xFFu)
 	{
-		while(1)
-		{
-			//报错
-		}
+		LOGERROR("[bsp_can] 未知的 CAN 句柄, 无法添加滤镜");
+		return;
 	}
-	uint8_t *filter_idx_p;
-
-	if(_instance->can_handle==&hfdcan1)
+	/* 检查是否超出过滤器设定数量上限(启动期配置错误: 打印后跳过, 不再死循环) */
+	if (can_filter_idx[bus_idx] >= (uint8_t)CANFilterLimit(bus_idx))
 	{
-		filter_idx_p=&can1_filter_idx;
+		LOGERROR("[bsp_can] 总线 %u 滤镜数量超限(>=%lu), 请减少该总线上的注册设备",
+		         (unsigned)(bus_idx + 1), (unsigned long)CANFilterLimit(bus_idx));
+		return;
 	}
-	else if(_instance->can_handle==&hfdcan2)
-	{
-		filter_idx_p=&can2_filter_idx;
-	}
-	else if(_instance->can_handle==&hfdcan3)
-	{
-		filter_idx_p=&can3_filter_idx;
-	}
-	else
-	{
-		while(1)
-		{
-			//报错
-		}
-	}
+	uint8_t *filter_idx_p = &can_filter_idx[bus_idx];
 
 	FDCAN_FilterTypeDef fdcan_filter_conf;
 	fdcan_filter_conf.FilterIndex=(*filter_idx_p)++;
@@ -177,38 +188,27 @@ static void CANAddFilter(CANInstance *_instance)
  *       FDCAN比bxCAN多了一个全局过滤器，这里配置为全部拒绝，只接受指定ID。
  *       
  */
+/* 单条总线的通用配置: 全局滤镜(拒收未匹配) + FIFO 溢出策略 + 启动 + 开接收中断
+   (自测切换模式后也需要重新调用它) */
+static void CANBusConfigure(FDCAN_HandleTypeDef *h)
+{
+	HAL_FDCAN_ConfigRxFifoOverwrite(h, FDCAN_RX_FIFO0, FDCAN_RX_FIFO_OVERWRITE);
+	HAL_FDCAN_ConfigRxFifoOverwrite(h, FDCAN_RX_FIFO1, FDCAN_RX_FIFO_OVERWRITE);
+	HAL_FDCAN_ConfigGlobalFilter(h, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
+	can_diag_start_ret = (uint32_t)HAL_FDCAN_Start(h);
+	can_diag_state = (uint32_t)h->State;
+	can_diag_act_ret = (uint32_t)HAL_FDCAN_ActivateNotification(h, FDCAN_RX_ACTIVE_ITS, 0);
+	can_diag_ie = h->Instance->IE;
+	can_diag_ile = h->Instance->ILE;
+	can_diag_ils = h->Instance->ILS;
+	/* TX 完成/队列空中断默认不开: 实测每秒会进 2 万多次中断, 信息与 tx_ok 重复 */
+}
+
 void CANServiceInit()
 {
 #ifdef FDCAN
-	//HAL_FDCAN_ConfigClockCalibration()
-	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan1,FDCAN_RX_FIFO0,FDCAN_RX_FIFO_OVERWRITE);
-	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan1,FDCAN_RX_FIFO1,FDCAN_RX_FIFO_OVERWRITE);
-	HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);//全局过滤器设置
-	HAL_FDCAN_Start(&hfdcan1);
-	HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_RX_ACTIVE_ITS, 0);
-	/* TX 完成/队列空中断默认不开: 实测这两个中断每秒会进 2 万多次(远多于实际帧数),
-	   而它们能提供的信息(tx_done)与 tx_ok 基本重复, 不划算。
-	   需要统计时把下面两行的注释打开即可(回调已经实现)。 */
-	// HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_TX_FIFO_EMPTY, 0);
-	// HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_TX_COMPLETE, FDCAN_TX_BUFFER_IT_MASK);
-
-	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan2,FDCAN_RX_FIFO0,FDCAN_RX_FIFO_OVERWRITE);
-	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan2,FDCAN_RX_FIFO1,FDCAN_RX_FIFO_OVERWRITE);
-	HAL_FDCAN_ConfigGlobalFilter(&hfdcan2, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
-	HAL_FDCAN_Start(&hfdcan2);
-	HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_RX_ACTIVE_ITS, 0);
-	// HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_TX_FIFO_EMPTY, 0);
-	// HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_TX_COMPLETE, FDCAN_TX_BUFFER_IT_MASK);
-
-
-	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan3,FDCAN_RX_FIFO0,FDCAN_RX_FIFO_OVERWRITE);
-	HAL_FDCAN_ConfigRxFifoOverwrite(&hfdcan3,FDCAN_RX_FIFO1,FDCAN_RX_FIFO_OVERWRITE);
-	HAL_FDCAN_ConfigGlobalFilter(&hfdcan3, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
-	HAL_FDCAN_Start(&hfdcan3);
-	HAL_FDCAN_ActivateNotification(&hfdcan3, FDCAN_RX_ACTIVE_ITS, 0);
-	// HAL_FDCAN_ActivateNotification(&hfdcan3, FDCAN_IT_TX_FIFO_EMPTY, 0);
-	// HAL_FDCAN_ActivateNotification(&hfdcan3, FDCAN_IT_TX_COMPLETE, FDCAN_TX_BUFFER_IT_MASK);
-
+	for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+		CANBusConfigure(can_bus[i].handle);
 
 #else
 	HAL_CAN_Start(&hcan1);
@@ -222,6 +222,230 @@ void CANServiceInit()
 }
 
 /* ----------------------- two extern callable function -----------------------*/
+
+/* ---------------- FDCAN 内部回环自测 ----------------
+   流程(逐条总线):
+     1. Stop -> 把 Init.Mode 改成 INTERNAL_LOOPBACK -> Init -> 配全局滤镜/启动/开中断
+     2. 注册一个"测试实例"(会占用一个真实滤镜 + 进 rx_lookup)
+     3. 发 N 帧, 每帧等接收回调确认(校验 ID/DLC/数据)
+     4. 注销测试实例 -> 恢复 NORMAL 模式 -> Init -> 重新配置 -> 重装已注册实例的滤镜
+   注意: 重新 Init 会清空消息 RAM 里的滤镜, 所以第 4 步的"重装"必不可少。 */
+#define CAN_SELFTEST_FRAMES 8u
+/* 自测 ID: 发送 ID 必须等于接收 ID, 否则测的帧会被自己的滤镜挡掉(踩过这个坑) */
+#define CAN_SELFTEST_ID 0x123u
+#define CAN_SELFTEST_WAIT_MS 20u
+/* 自测用哪种回环:
+   - INTERNAL_LOOPBACK: 不驱动总线, 但实测(STM32H7 FDCAN)没有内部自应答 ->
+     发送的帧被判 ACK 错误丢弃, 接收端收不到, 只能验证"能发出去";
+   - EXTERNAL_LOOPBACK: 帧真的发到总线上并且**由自己应答**, 能完整验证
+     发送 + 接收 + 中断 + 滤镜 + 回调; 测试 ID 用 0x123(不是电机指令)所以安全。 */
+#ifndef CAN_SELFTEST_MODE
+#define CAN_SELFTEST_MODE FDCAN_MODE_EXTERNAL_LOOPBACK
+#endif
+
+volatile uint32_t can_selftest_tx_ok = 0;
+volatile uint32_t can_selftest_tx_fail = 0;
+volatile uint32_t can_selftest_rx_ok = 0;
+volatile uint32_t can_selftest_rx_bad = 0;
+volatile uint8_t can_selftest_pass_mask = 0;
+volatile uint8_t can_selftest_done = 0;
+volatile uint8_t can_selftest_stage = 0;   /* 调试用: 卡住时能看出走到哪一步 */
+volatile uint32_t can_selftest_state_err = 0; /* 自测里模式切换/启动未生效的次数 */
+/* 自测后的寄存器快照(排障用): TEST/PSR/ECR/RXF0S/RXGFC/RXF0C */
+volatile uint32_t can_selftest_test = 0;
+volatile uint32_t can_selftest_psr = 0;
+volatile uint32_t can_selftest_ecr = 0;
+volatile uint32_t can_selftest_rxf0s = 0;
+volatile uint32_t can_selftest_rxgfc = 0;
+volatile uint32_t can_selftest_rxf0c = 0;
+
+/* 把一条总线强制切到指定模式并确保真正启动:
+   - HAL_FDCAN_Init() 结束后不会清 CCCR.INIT, 必须再调 HAL_FDCAN_Start();
+   - HAL 内部 hfdcan->State 很容易与真实硬件状态失配(Start 只在 State==READY 时才动作,
+     否则直接返回错误什么都不做), 所以这里先对齐 State, 启动后再回读 CCCR.INIT 校验。 */
+static uint8_t CANForceMode(FDCAN_HandleTypeDef *h, uint32_t mode, uint8_t accept_all)
+{
+    if (h == NULL)
+        return 0u;
+    if (h->State == HAL_FDCAN_STATE_BUSY)
+        (void)HAL_FDCAN_Stop(h);
+    h->State = HAL_FDCAN_STATE_READY;
+    h->Init.Mode = mode;
+    if (HAL_FDCAN_Init(h) != HAL_OK)
+        return 0u;
+
+    (void)accept_all; /* 预留: 需要"不过滤接收全部"时可在此切换 */
+    CANBusConfigure(h);
+    if ((h->Instance->CCCR & FDCAN_CCCR_INIT) != 0u) /* Start 没生效, 再对齐一次 */
+    {
+        h->State = HAL_FDCAN_STATE_READY;
+        (void)HAL_FDCAN_Start(h);
+    }
+    if ((h->Instance->CCCR & FDCAN_CCCR_INIT) != 0u)
+        return 0u;                                   /* 仍停着: 记一次错误 */
+    return 1u;
+}
+
+static CANInstance *selftest_instance = NULL;
+static volatile uint8_t selftest_rx_seen = 0;
+static uint8_t selftest_expect[8];
+static uint8_t selftest_expect_len = 8;
+
+/* 测试实例的接收回调: 只做校验与计数(在中断上下文执行) */
+static void CANSelfTestRxCallback(CANInstance *ins)
+{
+    if (ins->rx_len == selftest_expect_len &&
+        memcmp(ins->rx_buff, selftest_expect, selftest_expect_len) == 0)
+        can_selftest_rx_ok++;
+    else
+        can_selftest_rx_bad++;
+    selftest_rx_seen = 1;
+}
+
+/* 注销一个实例: 从 can_instance[] 与 rx_lookup 里摘掉并释放内存 */
+static void CANUnregisterInstance(CANInstance *ins)
+{
+    uint8_t i;
+    if (ins == NULL)
+        return;
+    for (i = 0; i < idx; ++i)
+    {
+        if (can_instance[i] == ins)
+            break;
+    }
+    if (i >= idx)
+        return;
+
+    uint8_t bus_idx = CANBusIndexFromHandle(ins->can_handle);
+    if (bus_idx != 0xFFu)
+    {
+        uint16_t slot = (uint16_t)(ins->rx_id & (CAN_RX_LOOKUP_SIZE - 1u));
+        if (rx_lookup[bus_idx][slot] == ins)
+            rx_lookup[bus_idx][slot] = NULL;
+    }
+    free(ins);
+    for (; i + 1u < idx; ++i)
+        can_instance[i] = can_instance[i + 1u];
+    can_instance[--idx] = NULL;
+}
+
+/* 重装所有已注册实例的滤镜(重新 Init 之后必须调用) */
+static void CANReapplyFilters(void)
+{
+    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+        can_filter_idx[i] = 0;
+    for (uint8_t i = 0; i < idx; ++i)
+        CANAddFilter(can_instance[i]);
+}
+
+uint8_t CANRunLoopbackSelfTest(void)
+{
+    uint8_t passed = 0;
+
+    can_selftest_tx_ok = 0;
+    can_selftest_tx_fail = 0;
+    can_selftest_rx_ok = 0;
+    can_selftest_rx_bad = 0;
+    can_selftest_pass_mask = 0;
+    can_selftest_done = 0;
+    can_selftest_stage = 0;
+    can_selftest_test = can_selftest_psr = can_selftest_ecr = 0;
+    can_selftest_rxf0s = can_selftest_rxgfc = can_selftest_rxf0c = 0;
+
+    for (uint8_t bus = 0; bus < DEVICE_CAN_CNT; ++bus)
+    {
+        FDCAN_HandleTypeDef *h = can_bus[bus].handle;
+        uint8_t bus_ok = 1;
+
+        /* 1. 切到回环模式 */
+        can_selftest_stage = (uint8_t)(10u * (bus + 1u) + 1u);
+        if (CANForceMode(h, CAN_SELFTEST_MODE, 1u) == 0u)
+        {
+            can_selftest_state_err++;
+            (void)CANForceMode(h, FDCAN_MODE_NORMAL, 0u);
+            CANReapplyFilters();
+            continue;
+        }
+
+        /* 2. 注册测试实例(会加滤镜 + 进 rx_lookup) */
+        can_selftest_stage = (uint8_t)(10u * (bus + 1u) + 2u);
+        CAN_Init_Config_s test_cfg = {
+            .can_handle = h,
+            .tx_id = CAN_SELFTEST_ID,
+            .rx_id = CAN_SELFTEST_ID,
+            .can_module_callback = CANSelfTestRxCallback,
+            .id = NULL,
+        };
+        selftest_instance = CANRegister(&test_cfg);
+
+        /* 3. 发 N 帧并等待回环接收 */
+        for (uint8_t n = 0; n < CAN_SELFTEST_FRAMES; ++n)
+        {
+            for (uint8_t k = 0; k < 8u; ++k)
+            {
+                uint8_t v = (uint8_t)(n * 16u + k);
+                selftest_expect[k] = v;
+                selftest_instance->tx_buff[k] = v;
+            }
+            selftest_expect_len = 8;
+            selftest_rx_seen = 0;
+
+            if (CANTransmit(selftest_instance, 0.0f) != 1u)
+            {
+                can_selftest_tx_fail++;
+                bus_ok = 0;
+                continue;
+            }
+            can_selftest_tx_ok++;
+
+            /* 注意: 调度器启动前 TIM23 时间基准尚未正常递增, HAL_GetTick() 不会走,
+               所以这里必须用 DWT 周期计数器计时, 否则会死等(TIM23 的 uwTick 停住)。 */
+            uint64_t t0 = DWT_GetTimeline_us();
+            while (!selftest_rx_seen &&
+                   (DWT_GetTimeline_us() - t0) < (uint64_t)CAN_SELFTEST_WAIT_MS * 1000ull)
+            {
+            }
+            if (!selftest_rx_seen)
+                bus_ok = 0;
+
+            /* 排障快照: 回环模式位 / 协议状态 / 错误计数 / RX FIFO 填充 / 滤镜配置 */
+            if (bus == 0u)
+            {
+                can_selftest_test = h->Instance->TEST;
+                can_selftest_psr = h->Instance->PSR;
+                can_selftest_ecr = h->Instance->ECR;
+                can_selftest_rxf0s = h->Instance->RXF0S;
+                can_selftest_rxgfc = h->Instance->GFC;
+                can_selftest_rxf0c = h->Instance->RXF0C;
+            }
+        }
+
+        if (can_selftest_rx_ok > 0u && can_selftest_rx_bad == 0u && bus_ok)
+            can_selftest_pass_mask |= (uint8_t)(1u << bus);
+
+        /* 4. 恢复 NORMAL 模式并重装滤镜 */
+        CANUnregisterInstance(selftest_instance);
+        selftest_instance = NULL;
+        if (CANForceMode(h, FDCAN_MODE_NORMAL, 0u) == 0u)
+        {
+            can_selftest_state_err++;
+            LOGERROR("[bsp_can] 自测后恢复 NORMAL 模式失败 (bus %u)", (unsigned)(bus + 1));
+        }
+        CANReapplyFilters();
+    }
+
+    can_selftest_done = 1;
+    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+    {
+        if (can_selftest_pass_mask & (1u << i))
+            passed++;
+    }
+    LOGINFO("[bsp_can] 内部回环自测: 通过 %u/%u 条总线, tx_ok=%lu rx_ok=%lu rx_bad=%lu tx_fail=%lu",
+             (unsigned)passed, (unsigned)DEVICE_CAN_CNT,
+             (unsigned long)can_selftest_tx_ok, (unsigned long)can_selftest_rx_ok,
+             (unsigned long)can_selftest_rx_bad, (unsigned long)can_selftest_tx_fail);
+    return passed;
+}
 
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
@@ -412,15 +636,20 @@ void CANHealthMonitor(void)
             bus->bus.rx_error_count = (uint8_t)ec.RxErrorCnt;
         }
 
-        if (ps.BusOff)
+        /* 两种情况都要救: ① BusOff(错误计数超限) ② CCCR.INIT=1(外设停在初始化状态,
+           例如某个流程只 Stop 没 Start)。后者不主动检查的话, 总线会静默失联。 */
+        if (ps.BusOff || ((bus->handle->Instance->CCCR & FDCAN_CCCR_INIT) != 0u))
         {
-            bus->bus.busoff++;
-            HAL_FDCAN_Stop(bus->handle);   /* 置 CCCR.INIT, 复位错误状态 */
-            HAL_FDCAN_Start(bus->handle);  /* 清 INIT, 重新上线 */
-            /* Stop 之后中断使能会丢失, 重新打开 */
+            if (ps.BusOff)
+                bus->bus.busoff++;
+            /* 对齐 HAL 的 State(它可能与真实硬件不一致), 否则 Start 会直接返回错误 */
+            if (bus->handle->State == HAL_FDCAN_STATE_BUSY)
+                (void)HAL_FDCAN_Stop(bus->handle);
+            bus->handle->State = HAL_FDCAN_STATE_READY;
+            (void)HAL_FDCAN_Start(bus->handle);  /* 清 INIT, 重新上线 */
             HAL_FDCAN_ActivateNotification(bus->handle, FDCAN_RX_ACTIVE_ITS, 0);
             bus->bus.busoff_recover++;
-            CANLogRateLimited(bus, "BusOff 检测到并尝试恢复", bus->bus.busoff);
+            CANLogRateLimited(bus, "BusOff/INIT 检测到并尝试恢复", bus->bus.busoff);
         }
     }
 #endif

@@ -25,6 +25,16 @@
 #define DEVICE_CAN_CNT 3           //H723VG有3个FDCAN
 
 #endif
+
+/* ---------------- FDCAN 内部回环自测(2026-09) ----------------
+   置 1 则启动时自动跑一次自测: 把每条总线临时切到"内部回环"模式, 自己发自己收,
+   验证 "软件发送 -> 硬件 -> 接收中断 -> 滤镜匹配 -> 回调解析" 整条链路。
+   特点: 不驱动总线, 所以总线上挂着其他设备也安全; 无需外部 ACK, 不会累积错误计数。
+   测完会自动恢复 NORMAL 模式并把已注册实例的滤镜重新加回去。
+   结果见下面的 can_selftest_* 变量, 也可以用 Live Watch / OpenOCD 读。 */
+#ifndef CAN_SELFTEST_LOOPBACK
+#define CAN_SELFTEST_LOOPBACK 0   /* 置 1 = 启动后在 daemon 任务里跑一次 FDCAN 回环自测 */
+#endif
 #ifdef BXCAN
 #include "can.h"
 // 最多能够支持的CAN设备数
@@ -170,5 +180,16 @@ void CANGetBusStats(FDCAN_HandleTypeDef *hcan, CAN_BusStats_t *stats);
  *        (恢复动作要动多个寄存器, 不能放在中断里)
  */
 void CANHealthMonitor(void);
+
+/* 手动运行一次内部回环自测(会短暂中断该总线收发), 返回通过的总线数(0~3) */
+uint8_t CANRunLoopbackSelfTest(void);
+
+/* 自测结果(供 Live Watch / OpenOCD 读取) */
+extern volatile uint32_t can_selftest_tx_ok;    /* 成功交给硬件的测试帧数 */
+extern volatile uint32_t can_selftest_tx_fail;  /* 发送被拒绝的帧数 */
+extern volatile uint32_t can_selftest_rx_ok;    /* 接收回调里数据完全正确的帧数 */
+extern volatile uint32_t can_selftest_rx_bad;   /* 收到但数据不对的帧数 */
+extern volatile uint8_t can_selftest_pass_mask; /* bit0/1/2 = CAN1/2/3 通过 */
+extern volatile uint8_t can_selftest_done;      /* 1 = 已跑过 */
 
 #endif
