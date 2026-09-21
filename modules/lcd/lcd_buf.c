@@ -12,6 +12,9 @@ static uint16_t lcd_line_buf[LCD_BUF_MAX_W];
 
 _Static_assert(LCD_PANEL_W <= LCD_BUF_MAX_W, "行缓冲必须能装下整屏一行像素");
 
+/* 调试用: 统计 SPI 发送失败的次数(热插拔/总线异常时可以看出来) */
+volatile uint32_t lcd_spi_errors = 0;
+
 static void LCD_BufBegin(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 {
     LCD_Address_Set(x1, y1, x2, y2);
@@ -21,7 +24,12 @@ static void LCD_BufBegin(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 
 static void LCD_BufWriteRow(uint16_t pixels)
 {
-    HAL_SPI_Transmit(&hspi1, (uint8_t *)lcd_line_buf, (uint16_t)(pixels * 2u), 20);
+    if (HAL_SPI_Transmit(&hspi1, (uint8_t *)lcd_line_buf, (uint16_t)(pixels * 2u), 20) != HAL_OK)
+    {
+        /* 失败后 HAL 句柄可能停在 BUSY, 中止掉, 免得后面所有发送都失败 */
+        lcd_spi_errors++;
+        HAL_SPI_Abort(&hspi1);
+    }
 }
 
 static void LCD_BufEnd(void)
@@ -29,25 +37,17 @@ static void LCD_BufEnd(void)
     LCD_CS_Set();
 }
 
-/* 玻璃物理坐标设置窗口(不加可见区内缩)，只用整屏清屏。
-   与 lcd.c 的 LCD_Address_Set 保持一致：竖屏在行轴偏移 20，横屏在列轴偏移 20。 */
+/* 直接按 ST7789 物理地址设置窗口: 参数就是 0x2a/0x2b 要写入的值, 不再做任何叠加。
+   LCD_PANEL_X0/Y0/W/H 已经包含竖屏行轴(横屏列轴)的 20 偏移, 所以这里不能再加 20
+   (之前多加了 20, 导致左边缘一条 20 像素宽的区域永远清不到)。 */
 static void LCD_BufBeginPanel(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 {
-#if USE_HORIZONTAL==0||USE_HORIZONTAL==1
     LCD_WR_REG(0x2a);
     LCD_WR_DATA(x1);
     LCD_WR_DATA(x2);
     LCD_WR_REG(0x2b);
-    LCD_WR_DATA(y1 + 20u);
-    LCD_WR_DATA(y2 + 20u);
-#else
-    LCD_WR_REG(0x2a);
-    LCD_WR_DATA(x1 + 20u);
-    LCD_WR_DATA(x2 + 20u);
-    LCD_WR_REG(0x2b);
     LCD_WR_DATA(y1);
     LCD_WR_DATA(y2);
-#endif
     LCD_WR_REG(0x2c);
     LCD_DC_Set();
     LCD_CS_Clr();

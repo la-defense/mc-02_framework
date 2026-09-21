@@ -6,6 +6,7 @@
 #define LCD_PAGE_COUNT 4u
 
 void LCD_UI_Init(void);
+void LCD_UI_Recover(void);
 void LCD_UI_DrawStatic(uint8_t page);
 void LCD_UI_UpdateValues(uint8_t page);
 void LCD_UI_SetFrozen(uint8_t frozen);

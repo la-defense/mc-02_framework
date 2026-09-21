@@ -41,6 +41,21 @@ typedef enum
 #define LCD_KEY_DOWN_LO ADC16(2800u)
 #define LCD_KEY_DOWN_HI ADC16(3500u)
 
+/* 模组在位检测(热插拔恢复):
+   模组拔掉后 PA5(按键分压输入)悬空, 采样会跑到量程外或者大幅跳动;
+   重新插上后模组已经掉电复位, 必须重发初始化序列才可能重新显示。
+   判据: 采样超出 [LCD_ABSENT_RAW_LO, LCD_ABSENT_RAW_HI] 或者窗口内极差超过阈值。 */
+#define LCD_PRESENCE_WINDOW 10u
+#define LCD_PRESENCE_SPREAD_MAX 1500u
+#define LCD_ABSENT_RAW_LO 100u
+#define LCD_ABSENT_RAW_HI 65200u
+#define LCD_ABSENT_CONFIRM 3u   /* 连续 150ms 异常 -> 判定拔掉 */
+#define LCD_PRESENT_CONFIRM 10u /* 连续 500ms 正常 -> 判定插回 */
+
+/* 短按: 翻页/冻结; 长按中键: 手动重初始化面板(拔插后没自动恢复时的兜底) */
+#define LCD_KEY_SHORT_MAX_MS 1000u
+#define LCD_KEY_LONG_MIN_MS 1500u
+
 static uint8_t lcd_page = 0;
 static uint8_t lcd_frozen = 0;
 static LcdKey_e key_active = LCD_KEY_NONE;
@@ -50,6 +65,9 @@ volatile uint8_t lcd_init_done = 0;
 volatile uint32_t lcd_heartbeat = 0;
 volatile uint16_t lcd_key_raw = 0;
 volatile uint8_t lcd_key_last = 0;
+volatile uint8_t lcd_module_absent = 0;
+volatile uint16_t lcd_key_spread = 0;
+volatile uint32_t lcd_recover_count = 0;
 
 static LcdKey_e lcd_key_read(void)
 {
@@ -57,7 +75,7 @@ static LcdKey_e lcd_key_read(void)
     lcd_key_raw = raw;
 
     /* 采样无效(悬空/未接模组)保护: 不要把 0 附近的浮空值当成按键 */
-    if (raw < 100u)
+    if (raw < LCD_ABSENT_RAW_LO)
         return LCD_KEY_NONE;
 
     if (raw >= LCD_KEY_MID_LO && raw < LCD_KEY_MID_HI)
@@ -70,6 +88,67 @@ static LcdKey_e lcd_key_read(void)
         return LCD_KEY_DOWN;
 
     return LCD_KEY_NONE;
+}
+
+static void lcd_module_presence_check(void)
+{
+    static uint16_t hist[LCD_PRESENCE_WINDOW];
+    static uint8_t hist_idx = 0;
+    static uint8_t hist_filled = 0;
+    static uint8_t absent_streak = 0;
+    static uint8_t present_streak = 0;
+
+    uint16_t raw = lcd_key_raw;
+    uint8_t absent = 0;
+
+    hist[hist_idx] = raw;
+    hist_idx = (uint8_t)((hist_idx + 1u) % LCD_PRESENCE_WINDOW);
+    if (hist_idx == 0u)
+        hist_filled = 1u;
+
+    if (raw < LCD_ABSENT_RAW_LO || raw > LCD_ABSENT_RAW_HI)
+    {
+        absent = 1u;
+    }
+    else if (hist_filled)
+    {
+        uint16_t mn = 0xFFFFu;
+        uint16_t mx = 0u;
+        for (uint8_t i = 0; i < LCD_PRESENCE_WINDOW; ++i)
+        {
+            if (hist[i] < mn)
+                mn = hist[i];
+            if (hist[i] > mx)
+                mx = hist[i];
+        }
+        lcd_key_spread = (uint16_t)(mx - mn);
+        if (lcd_key_spread > LCD_PRESENCE_SPREAD_MAX)
+            absent = 1u;
+    }
+
+    if (absent)
+    {
+        absent_streak++;
+        present_streak = 0u;
+    }
+    else
+    {
+        present_streak++;
+        absent_streak = 0u;
+    }
+
+    if (!lcd_module_absent && absent_streak >= LCD_ABSENT_CONFIRM)
+    {
+        lcd_module_absent = 1u;
+        LOGINFO("[lcd] module absent, raw=%u spread=%u", (unsigned)raw, (unsigned)lcd_key_spread);
+    }
+    else if (lcd_module_absent && present_streak >= LCD_PRESENT_CONFIRM)
+    {
+        lcd_module_absent = 0u;
+        lcd_recover_count++;
+        LOGINFO("[lcd] module back, re-init panel (recover=%lu)", (unsigned long)lcd_recover_count);
+        LCD_UI_Recover();
+    }
 }
 
 static void lcd_key_update(void)
@@ -89,13 +168,27 @@ static void lcd_key_update(void)
         return;
     }
 
-    /* 松开: 只认短按, 长按不做动作(避免误触翻页); 单击中键 = 冻结/恢复 */
+    /* 松开: 短按 = 翻页/冻结, 长按中键 = 手动重初始化面板 */
     LcdKey_e released = key_active;
     uint32_t duration = now - key_press_ms;
     key_active = LCD_KEY_NONE;
     lcd_key_last = 0u;
 
-    if (released == LCD_KEY_NONE || duration < 30u || duration > 1000u)
+    if (released == LCD_KEY_NONE || duration < 30u)
+        return;
+
+    if (duration >= LCD_KEY_LONG_MIN_MS)
+    {
+        if (released == LCD_KEY_MID)
+        {
+            lcd_recover_count++;
+            LOGINFO("[lcd] manual re-init (recover=%lu)", (unsigned long)lcd_recover_count);
+            LCD_UI_Recover();
+        }
+        return;
+    }
+
+    if (duration > LCD_KEY_SHORT_MAX_MS)
         return;
 
     switch (released)
@@ -131,14 +224,15 @@ void StartLCDTASK(void const *argument)
     for (;;)
     {
         lcd_heartbeat++;
-        /* 50ms 采样按键, 200ms 刷新一次数值(5Hz) */
+        /* 50ms 采样按键与模组在位状态, 200ms 刷新一次数值(5Hz) */
         for (uint8_t i = 0; i < 4u; ++i)
         {
             lcd_key_update();
+            lcd_module_presence_check();
             osDelay(50);
         }
 
-        if (!lcd_frozen)
+        if (!lcd_frozen && !lcd_module_absent)
             LCD_UI_UpdateValues(lcd_page);
     }
 }

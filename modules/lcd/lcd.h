@@ -25,7 +25,8 @@
 #define LCD_H (240 - 2 * LCD_MARGIN_Y)
 #endif
 
-/* 模组玻璃的物理范围(不含内缩)，用于整屏清屏擦掉旧画面残留 */
+/* 模组玻璃在 ST7789 物理地址空间中的范围(已含 ±20 偏移, 不含可见区内缩)。
+   整屏清屏时必须用这组物理坐标, 不能再叠加偏移。 */
 #if USE_HORIZONTAL==0||USE_HORIZONTAL==1
 #define LCD_PANEL_X0 0
 #define LCD_PANEL_Y0 20

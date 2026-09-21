@@ -481,6 +481,22 @@ void LCD_UI_Init(void)
     LCD_UI_UpdateValues(0);
 }
 
+/* 面板掉电(拔插模组/欠压复位)后重新初始化并整屏重画。
+   模组重新上电时 ST7789 回到默认状态(休眠、18bit 色深)，不重发初始化序列就会一直黑屏。 */
+void LCD_UI_Recover(void)
+{
+    if (HAL_SPI_GetState(&hspi1) != HAL_SPI_STATE_READY)
+    {
+        HAL_SPI_Abort(&hspi1);
+        MX_SPI1_Init();
+    }
+
+    LCD_Init();
+    LCD_BufClearPanel();
+    LCD_UI_DrawStatic(lcd_page);
+    LCD_UI_UpdateValues(lcd_page);
+}
+
 void LCD_UI_SetFrozen(uint8_t frozen)
 {
     lcd_frozen = frozen ? 1u : 0u;
