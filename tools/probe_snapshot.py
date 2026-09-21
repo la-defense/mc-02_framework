@@ -42,7 +42,9 @@ SCALARS = [
 TASK_NAME = "lcd_stats_name"   # 12 个任务名 × 12 字节
 TASK_RT = "lcd_stats_runtime"  # 12 个 uint32
 CAN_BUS = "can_bus"            # CANBusState_t can_bus[3]
-CAN_BUS_STRIDE = 56
+# ARM EABI 默认枚举取"能容纳的最小类型"(这里 status 是 1 字节):
+# 结构体 = 4(handle) + 20(tx) + 20(bus) + 8(log_ms/log_cnt) = 52 字节(实测步长一致)
+CAN_BUS_STRIDE = 52
 RUNTIME_UNIT_US = 1000.0 / 480.0  # RTOS 计数器单位(千周期) → us
 
 
@@ -127,11 +129,14 @@ def main() -> int:
     win = time.time() - t0
     print(f"=== 采样窗口 {win:.1f}s ===")
 
-    rt = [d(n, o) for n, o in zip(b["runtime"], a["runtime"])]
-    total = sum(rt)
+    # 两次快照之间任务顺序可能变化, 必须按名字配对(与 lcd_task.c 里的做法一致)
+    now_rt = dict(zip(b["names"], b["runtime"]))
+    old_rt = dict(zip(a["names"], a["runtime"]))
+    deltas = {n: d(now_rt[n], old_rt[n]) for n in now_rt if n in old_rt}
+    total = sum(deltas.values())
     print("[任务占用率] (千分比, 1000 = 100%)")
     for name, share in sorted(((n, r * 1000.0 / total if total else 0.0)
-                               for n, r in zip(b["names"], rt) if n), key=lambda x: -x[1]):
+                               for n, r in deltas.items() if n), key=lambda x: -x[1]):
         print(f"  {name:<12} {share:7.1f}")
 
     print("[分段耗时] avg=窗口增量/次数, max=绝对最大值, 单位 us")
@@ -150,7 +155,8 @@ def main() -> int:
         if len(now) < 13:
             continue
         # 字段顺序: 0=handle 1=tx_ok 2=tx_drop 3=tx_error 4=tx_done 5=tfe事件
-        #          6=busoff 7=busoff_recover 8=rx_lost 9=rx_frames 10=TEC|REC<<8 11=status
+        #          6=busoff 7=busoff_recover 8=rx_lost 9=rx_frames
+        #          10=字节打包[TEC | REC<<8 | status<<16] 11=log_ms 12=log_cnt
         print(f"  {label}: tx_ok+={d(now[1], old[1])} tx_drop+={d(now[2], old[2])} "
               f"tx_err+={d(now[3], old[3])} tx_done+={d(now[4], old[4])} "
               f"busoff=+{d(now[6], old[6])} recover=+{d(now[7], old[7])} "

@@ -296,6 +296,23 @@ python tools\probe_snapshot.py --seconds 30
 python tools\rtt_dump.py --seconds 20
 ```
 
+### 8.1 本机那台 USB-CAN 适配器的实测结论（2026-09）
+
+- **它不是 slcan/CANable**：对 `\r`、`C\r`、`S8\r`、`O\r` 等 ASCII 命令零响应，而是持续输出**私有二进制协议**；
+  帧长 16 字节、同步字 `55 AA`，实测格式（由观测推断）：
+
+  ```
+  55 AA | 11 08 | ID_L ID_H | DATA0..7 | xx xx
+  ```
+
+- 因此 **python-can 不能直接驱动它**（python-can 支持 pcan/kvaser/slcan/canalystii/… 但都要求厂商规定的协议或 DLL）。
+- 但它**能当"只听"的监视器用**：`tools/usbcan_serial_monitor.py` 就是按上面的格式解帧的，
+  实测能看到 MCU 发出的 `0x200` 帧（约 1.2~2.2k 帧/s）；**把 MCU 暂停后数据流几乎归零**，
+  这条实验反过来证明了"它报的就是总线上的真实帧、且波特率/接线都是对的"。
+- 它**不回 ACK**：MCU 侧 TEC 一直涨到 200+（接近 BusOff），说明它要么处于"通道未打开/静默"状态，
+  要么就是纯监听设计。要让它参与收发（ACK、发帧），需要厂商上位机/协议文档里的"打开通道"命令。
+  这也说明：**用一台不回 ACK 的适配器做验证时，"发送失败/BusOff"不一定是 MCU 的问题。**
+
 ---
 
 ## 9. 术语速查表
