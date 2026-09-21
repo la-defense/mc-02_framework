@@ -42,15 +42,19 @@ typedef enum
 #define LCD_KEY_DOWN_HI ADC16(3500u)
 
 /* 模组在位检测(热插拔恢复):
-   模组拔掉后 PA5(按键分压输入)悬空, 采样会跑到量程外或者大幅跳动;
-   重新插上后模组已经掉电复位, 必须重发初始化序列才可能重新显示。
-   判据: 采样超出 [LCD_ABSENT_RAW_LO, LCD_ABSENT_RAW_HI] 或者窗口内极差超过阈值。 */
+   模组拔掉后 PA5(按键分压输入)没有驱动, 重新插上时模组已经掉电复位,
+   必须重发初始化序列才可能重新显示。
+   实测(2026-09-21, 拔掉模组): PA5 稳定在 ~5900(0.29V), 既不越界也不跳动,
+   所以"越界/极差"判据抓不到, 必须按"极性档位带"判断:
+     合法档位 = mid(0~3200) / right(11200~16000) / left(24000~28800)
+                / up(35200~40000) / down(44800~56000) / 空闲(>=58000)
+   落在档位之间的缝隙(如拔掉时的 5900)即视为不在位。 */
 #define LCD_PRESENCE_WINDOW 10u
 #define LCD_PRESENCE_SPREAD_MAX 1500u
+#define LCD_IDLE_RAW_MIN 58000u
 #define LCD_ABSENT_RAW_LO 100u
 #define LCD_ABSENT_RAW_HI 65200u
-#define LCD_ABSENT_CONFIRM 3u   /* 连续 150ms 异常 -> 判定拔掉 */
-#define LCD_PRESENT_CONFIRM 10u /* 连续 500ms 正常 -> 判定插回 */
+#define LCD_PRESENT_CONFIRM 8u  /* 连续 400ms 正常 -> 判定插回 */
 
 /* 短按: 翻页/冻结; 长按中键: 手动重初始化面板(拔插后没自动恢复时的兜底) */
 #define LCD_KEY_SHORT_MAX_MS 1000u
@@ -90,64 +94,98 @@ static LcdKey_e lcd_key_read(void)
     return LCD_KEY_NONE;
 }
 
+/* 采样是否落在某个合法档位带内(含空闲带)。落在档位之间的缝隙里 = 模组不在位。 */
+static uint8_t lcd_raw_valid_level(uint16_t raw)
+{
+    if (raw > LCD_ABSENT_RAW_HI)
+        return 0u;
+    if (raw >= LCD_IDLE_RAW_MIN)
+        return 1u;
+    if (raw < LCD_KEY_MID_HI)
+        return 1u;
+    if (raw >= LCD_KEY_RIGHT_LO && raw < LCD_KEY_RIGHT_HI)
+        return 1u;
+    if (raw >= LCD_KEY_LEFT_LO && raw < LCD_KEY_LEFT_HI)
+        return 1u;
+    if (raw >= LCD_KEY_UP_LO && raw < LCD_KEY_UP_HI)
+        return 1u;
+    if (raw >= LCD_KEY_DOWN_LO && raw < LCD_KEY_DOWN_HI)
+        return 1u;
+    return 0u;
+}
+
 static void lcd_module_presence_check(void)
 {
     static uint16_t hist[LCD_PRESENCE_WINDOW];
     static uint8_t hist_idx = 0;
     static uint8_t hist_filled = 0;
-    static uint8_t absent_streak = 0;
     static uint8_t present_streak = 0;
+    static uint8_t invalid_seen = 0;
 
     uint16_t raw = lcd_key_raw;
-    uint8_t absent = 0;
 
     hist[hist_idx] = raw;
     hist_idx = (uint8_t)((hist_idx + 1u) % LCD_PRESENCE_WINDOW);
     if (hist_idx == 0u)
         hist_filled = 1u;
 
-    if (raw < LCD_ABSENT_RAW_LO || raw > LCD_ABSENT_RAW_HI)
+    uint8_t invalid = 0;
+    if (!lcd_raw_valid_level(raw))
     {
-        absent = 1u;
+        invalid = 1u;
     }
     else if (hist_filled)
     {
-        uint16_t mn = 0xFFFFu;
-        uint16_t mx = 0u;
+        uint8_t idle_cnt = 0;
+        uint16_t idle_min = 0xFFFFu;
+        uint16_t idle_max = 0u;
         for (uint8_t i = 0; i < LCD_PRESENCE_WINDOW; ++i)
         {
-            if (hist[i] < mn)
-                mn = hist[i];
-            if (hist[i] > mx)
-                mx = hist[i];
+            uint16_t s = hist[i];
+            if (s >= LCD_IDLE_RAW_MIN)
+            {
+                idle_cnt++;
+                if (s < idle_min)
+                    idle_min = s;
+                if (s > idle_max)
+                    idle_max = s;
+            }
         }
-        lcd_key_spread = (uint16_t)(mx - mn);
-        if (lcd_key_spread > LCD_PRESENCE_SPREAD_MAX)
-            absent = 1u;
+        lcd_key_spread = (idle_cnt > 0u) ? (uint16_t)(idle_max - idle_min) : 0u;
+
+        /* 空闲电平自己抖得厉害也说明模组不在位。
+           只看空闲采样之间的极差, 否则长按按键时电平本来就是变化的 */
+        if (idle_cnt >= 5u && lcd_key_spread > LCD_PRESENCE_SPREAD_MAX)
+            invalid = 1u;
     }
 
-    if (absent)
+    if (invalid)
     {
-        absent_streak++;
+        /* 只要出现过一次"缝隙档位/剧烈跳动", 就记下这次拔插事件,
+           之后电平回到合法档位并稳定 400ms 就重初始化面板。
+           这样即使拔插很快(只抓到一两帧), 也能恢复。 */
+        invalid_seen = 1u;
         present_streak = 0u;
+        if (!lcd_module_absent)
+        {
+            lcd_module_absent = 1u;
+            LOGINFO("[lcd] module absent? raw=%u spread=%u", (unsigned)raw, (unsigned)lcd_key_spread);
+        }
     }
     else
     {
-        present_streak++;
-        absent_streak = 0u;
-    }
+        if (present_streak < 0xFFu)
+            present_streak++;
 
-    if (!lcd_module_absent && absent_streak >= LCD_ABSENT_CONFIRM)
-    {
-        lcd_module_absent = 1u;
-        LOGINFO("[lcd] module absent, raw=%u spread=%u", (unsigned)raw, (unsigned)lcd_key_spread);
-    }
-    else if (lcd_module_absent && present_streak >= LCD_PRESENT_CONFIRM)
-    {
-        lcd_module_absent = 0u;
-        lcd_recover_count++;
-        LOGINFO("[lcd] module back, re-init panel (recover=%lu)", (unsigned long)lcd_recover_count);
-        LCD_UI_Recover();
+        if (invalid_seen && present_streak >= LCD_PRESENT_CONFIRM)
+        {
+            invalid_seen = 0u;
+            present_streak = 0u;
+            lcd_module_absent = 0u;
+            lcd_recover_count++;
+            LOGINFO("[lcd] module back, re-init panel (recover=%lu)", (unsigned long)lcd_recover_count);
+            LCD_UI_Recover();
+        }
     }
 }
 
