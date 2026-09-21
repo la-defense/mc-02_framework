@@ -27,7 +27,9 @@
 #define IMU_HEATER_DUTY_NORMAL 500u   // 5% 绝对硬上限(厂商例程 MAX_OUT=500)
 #define IMU_HEATER_R_EQUIV_MIN 47.0f  // R77~R89 全并联最坏等效电阻
 #define IMU_HEATER_MAX_POWER_W 0.30f  // 首次24V测试的功率上限
-#define IMU_HEATER_MAX_ON_TIME_MS 60000u
+/* 首测功率被压到0.30W, 预热较慢; 5分钟超时用于抓传感器/加热片卡死,
+   避免低功率正常预热被误判为故障 */
+#define IMU_HEATER_MAX_ON_TIME_MS 300000u
 
 #define IMU_HEATER_TEMP_VALID_MIN -20.0f
 #define IMU_HEATER_TEMP_VALID_MAX 80.0f
