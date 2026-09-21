@@ -118,10 +118,10 @@ static void draw_title(const Lcd_CnChar_e *title_cn, const char *title_ascii)
 
     char page_buf[8];
     snprintf(page_buf, sizeof(page_buf), "%u/%u", (unsigned)(lcd_page + 1u), (unsigned)LCD_PAGE_COUNT);
-    LCD_BufShowAscii(244, 4, page_buf, CYAN, BLUE, 16);
+    LCD_BufShowAscii((uint16_t)(LCD_W - 28u), 4, page_buf, CYAN, BLUE, 16);
 
     if (lcd_frozen)
-        LCD_BufShowCnString(180, 4, L_FREEZE, YELLOW, BLUE);
+        LCD_BufShowCnString((uint16_t)(LCD_W - 68u), 4, L_FREEZE, YELLOW, BLUE);
 }
 
 static void draw_label(uint8_t row, const Lcd_CnChar_e *label)
@@ -142,8 +142,38 @@ static void clear_value(uint8_t row)
 static void draw_value_ascii(uint8_t row, const char *str)
 {
     clear_value(row);
-    uint8_t sizey = (strlen(str) > 20u) ? 12u : 16u;
-    LCD_BufShowAscii(COL_VALUE_X, ROW_Y(row), str, CYAN, BLACK, sizey);
+
+    /* 可用宽度随 LCD_W 变化(可见区偏移会缩小绘图区)，过长时先降字号，
+       仍然放不下就截断，避免整行因为越界校验而什么都不显示。 */
+    size_t len = strlen(str);
+    uint16_t avail = (uint16_t)(LCD_W - COL_VALUE_X);
+    uint8_t sizey = 16u;
+    uint8_t char_w = 8u;
+    if (len * (size_t)char_w > (size_t)avail)
+    {
+        sizey = 12u;
+        char_w = 6u;
+    }
+
+    char buf[48];
+    size_t max_chars = (size_t)(avail / char_w);
+    if (max_chars > sizeof(buf) - 2u)
+        max_chars = sizeof(buf) - 2u;
+
+    if (len > max_chars)
+    {
+        size_t keep = (max_chars >= 2u) ? (max_chars - 1u) : max_chars;
+        memcpy(buf, str, keep);
+        buf[keep] = '~';
+        buf[keep + 1u] = '\0';
+    }
+    else
+    {
+        memcpy(buf, str, len);
+        buf[len] = '\0';
+    }
+
+    LCD_BufShowAscii(COL_VALUE_X, ROW_Y(row), buf, CYAN, BLACK, sizey);
 }
 
 static void draw_value_cn(uint8_t row, const Lcd_CnChar_e *str)
@@ -347,6 +377,7 @@ static void draw_page3_static(void)
     draw_label_ascii(4, "YAW");
     draw_label(5, L_BUS);
     draw_label(6, L_LINK);
+    draw_label_ascii(7, "KEY");
 }
 
 static void draw_page3_values(void)
@@ -389,6 +420,10 @@ static void draw_page3_values(void)
     snprintf(buf, sizeof(buf), "%s M:%u BC:%u", vs.online ? "ON" : "OFF",
              (unsigned)vs.mode, (unsigned)vs.bullet_count);
     draw_value_ascii(6, buf);
+
+    /* 五向按键原始 ADC 值: 用于把摇杆方向与阈值对上(按一下即可读出)。 */
+    snprintf(buf, sizeof(buf), "raw:%u", (unsigned)BSP_ADCGetRawKey());
+    draw_value_ascii(7, buf);
 }
 
 void LCD_UI_DrawStatic(uint8_t page)

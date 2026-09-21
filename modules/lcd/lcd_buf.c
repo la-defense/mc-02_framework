@@ -69,7 +69,8 @@ void LCD_BufShowAscii(uint16_t x, uint16_t y, const char *str, uint16_t fc, uint
     if (width == 0 || width > LCD_BUF_MAX_W || x + width > LCD_W || y + sizey > LCD_H)
         return;
 
-    const uint8_t bytes_per_char = (uint8_t)(((sizex + 7u) / 8u) * sizey);
+    const uint8_t bytes_per_row = (uint8_t)((sizex + 7u) / 8u);
+    const uint8_t bytes_per_char = (uint8_t)(bytes_per_row * sizey);
     LCD_BufBegin(x, y, (uint16_t)(x + width - 1u), (uint16_t)(y + sizey - 1u));
 
     for (uint8_t row = 0; row < sizey; ++row)
@@ -83,8 +84,9 @@ void LCD_BufShowAscii(uint16_t x, uint16_t y, const char *str, uint16_t fc, uint
 
             for (uint8_t col = 0; col < sizex; ++col)
             {
-                uint8_t byte_index = (uint8_t)(col * 2u + (row / 8u));
-                uint8_t mask = (uint8_t)(1u << (row % 8u));
+                /* The example ASCII fonts are row-major, LSB = leftmost pixel. */
+                uint8_t byte_index = (uint8_t)(row * bytes_per_row + (col / 8u));
+                uint8_t mask = (uint8_t)(1u << (col % 8u));
                 lcd_line_buf[ci * sizex + col] = (glyph[byte_index] & mask) ? fc : bc;
             }
         }

@@ -9,13 +9,21 @@
 #define USE_ANALOG_SPI 0	// 鍙€夌殑杞欢SPI鎴栬€呯‖浠禨PI		0: 纭欢SPI  1: 杞欢SPI
 #define USE_HORIZONTAL 2  // 璁剧疆妯睆鎴栬€呯珫灞忔樉绀?0鎴?涓虹珫灞?2鎴?涓烘í灞?
 
+
+/* 模组玻璃尺寸大于实际可见区(被边框遮挡)，且安装后可见区偏向画面右下方。
+   这里把绘制原点整体偏移 (LCD_OFFSET_X, LCD_OFFSET_Y)，并把可用绘图区
+   缩小同样的像素数，保证内容不会被边框切掉。单位: 像素。
+   需要微调时只改这两个宏(增大 = 画面继续往右/下移动)。 */
+#define LCD_OFFSET_X 12
+#define LCD_OFFSET_Y 8
+
 #if USE_HORIZONTAL==0||USE_HORIZONTAL==1
-#define LCD_W 240
-#define LCD_H 280
+#define LCD_W (240 - LCD_OFFSET_X)
+#define LCD_H (280 - LCD_OFFSET_Y)
 
 #else
-#define LCD_W 280
-#define LCD_H 240
+#define LCD_W (280 - LCD_OFFSET_X)
+#define LCD_H (240 - LCD_OFFSET_Y)
 #endif
 
  
