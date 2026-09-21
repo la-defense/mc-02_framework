@@ -25,6 +25,50 @@ typedef struct
     uint16_t us;
 } DWT_Time_t;
 
+/* -----------------------------------------------------------------------------
+   热路径轻量探针(2026-09 新增, 用于 CPU 占用排查)
+   - 直接读 CYCCNT, 没有 64bit 除法、没有回绕处理, 适合放进 1kHz 任务和 ISR;
+   - 限制: 单次测量区间必须远小于 CYCCNT 回绕周期(480MHz 下 8.94s);
+   - DWT_GetTimeline_us() 内部有 64bit 除法, 不要放进热路径当探针。
+   -------------------------------------------------------------------------- */
+extern volatile uint32_t dwt_cpu_freq_mhz; /* 由 DWT_Init() 设置 */
+
+typedef struct
+{
+    volatile uint32_t last_us;  /* 最近一次耗时 */
+    volatile uint32_t max_us;   /* 最大耗时 */
+    volatile uint32_t total_us; /* 累计耗时(4295s 回绕, 会话内足够) */
+    volatile uint32_t calls;    /* 调用次数 */
+} DWT_Probe_t;
+
+static inline uint32_t DWT_ProbeStart(void)
+{
+    return DWT->CYCCNT;
+}
+
+static inline uint32_t DWT_ProbeElapsedCycles(uint32_t start)
+{
+    return (uint32_t)(DWT->CYCCNT - start);
+}
+
+static inline uint32_t DWT_ProbeElapsedUs(uint32_t start)
+{
+    uint32_t f = dwt_cpu_freq_mhz;
+    if (f == 0u)
+        f = 480u;
+    return DWT_ProbeElapsedCycles(start) / f;
+}
+
+static inline void DWT_ProbeDone(DWT_Probe_t *probe, uint32_t start)
+{
+    uint32_t dt = DWT_ProbeElapsedUs(start);
+    probe->last_us = dt;
+    if (dt > probe->max_us)
+        probe->max_us = dt;
+    probe->total_us += dt;
+    probe->calls++;
+}
+
 /**
  * @brief 该宏用于计算代码段执行时间,单位为秒/s,返回值为float类型
  *        首先需要创建一个float类型的变量,用于存储时间间隔

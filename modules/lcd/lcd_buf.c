@@ -23,6 +23,8 @@ volatile uint16_t lcd_prof_row_bytes = 0;
 /* 调试用: 累计 SPI 传输时间(us)与行调用次数, 用于区分"真正在传数据"和"被高优先级任务抢占" */
 volatile uint32_t lcd_prof_spi_us = 0;
 volatile uint32_t lcd_prof_rows = 0;
+/* 调试用: 整屏清屏最近一次耗时 */
+volatile uint32_t lcd_prof_clear_us = 0;
 
 static void LCD_BufBegin(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 {
@@ -72,6 +74,7 @@ static void LCD_BufBeginPanel(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2
    内缩(LCD_MARGIN)使正常绘制区变小，如果不做这一步，旧像素会一直留在边框附近。 */
 void LCD_BufClearPanel(void)
 {
+    uint32_t probe_start = DWT_ProbeStart();
     for (uint16_t i = 0; i < (uint16_t)LCD_PANEL_W; ++i)
         lcd_line_buf[i] = BLACK;
 
@@ -81,6 +84,7 @@ void LCD_BufClearPanel(void)
     for (uint16_t row = 0; row < (uint16_t)LCD_PANEL_H; ++row)
         LCD_BufWriteRow((uint16_t)LCD_PANEL_W);
     LCD_BufEnd();
+    lcd_prof_clear_us = DWT_ProbeElapsedUs(probe_start);
 }
 
 void LCD_BufFill(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color)

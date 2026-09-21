@@ -162,10 +162,22 @@ attitude_t *INS_GetAttitude(void)
 }
 
 /* 注意以1kHz的频率运行此任务 */
+/* ---------------- 性能探针(2026-09, CPU 占用排查) ----------------
+   ins_prof_all   : 单次 INS_Task 总耗时
+   ins_prof_read  : BMI088Acquire(传感器读取)
+   ins_prof_ekf   : 四元数 EKF 更新
+   ins_prof_temp  : 温控(每 2 个 tick 一次) */
+volatile DWT_Probe_t ins_prof_all = {0};
+volatile DWT_Probe_t ins_prof_read = {0};
+volatile DWT_Probe_t ins_prof_ekf = {0};
+volatile DWT_Probe_t ins_prof_temp = {0};
+
 void INS_Task(void)
 {
     static uint32_t count = 0;
     const float gravity[3] = {0, 0, 9.81f};
+    uint32_t probe_all = DWT_ProbeStart();
+    uint32_t probe_seg;
 
     dt = DWT_GetDeltaT(&INS_DWT_Count);
     t += dt;
@@ -173,7 +185,9 @@ void INS_Task(void)
     // ins update
     if ((count % 1) == 0)
     {
+        probe_seg = DWT_ProbeStart();
         uint8_t acq_ok = BMI088Acquire(bmi088_ins, &bmi088_data);
+        DWT_ProbeDone(&ins_prof_read, probe_seg);
 
         INS.Accel[X] = bmi088_data.acc[X];
         INS.Accel[Y] = bmi088_data.acc[Y];
@@ -190,7 +204,9 @@ void INS_Task(void)
         // INS.atanyz = atan2f(INS.Accel[Y], INS.Accel[Z]) * 180 / PI;
 
         // 核心函数,EKF更新四元数
+        probe_seg = DWT_ProbeStart();
         IMU_QuaternionEKF_Update(INS.Gyro[X], INS.Gyro[Y], INS.Gyro[Z], INS.Accel[X], INS.Accel[Y], INS.Accel[Z], dt);
+        DWT_ProbeDone(&ins_prof_ekf, probe_seg);
 
         memcpy(INS.q, QEKF_INS.q, sizeof(QEKF_INS.q));
 
@@ -234,18 +250,21 @@ void INS_Task(void)
     // temperature control: 500Hz; 急停/故障时强制关闭加热
     if ((count % 2) == 0)
     {
+        probe_seg = DWT_ProbeStart();
         Robot_Status_e state = RobotSafetyGetState();
         uint8_t force_off = (state == ROBOT_ESTOP || state == ROBOT_FAULT) ? 1 : 0;
         uint8_t sensor_valid = isfinite(bmi088_data.temperature) &&
                                bmi088_data.temperature > -20.0f &&
                                bmi088_data.temperature < 80.0f;
         IMUHeaterUpdate(bmi088_data.temperature, sensor_valid, force_off);
+        DWT_ProbeDone(&ins_prof_temp, probe_seg);
     }
 
     if ((count++ % 1000) == 0)
     {
         // 1Hz 可以加入monitor函数,检查IMU是否正常运行/离线
     }
+    DWT_ProbeDone(&ins_prof_all, probe_all);
 }
 
 /**

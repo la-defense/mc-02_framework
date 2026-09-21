@@ -7,6 +7,7 @@
 #include "cmsis_os.h"
 #include "main.h"
 #include "task.h"
+#include <string.h>
 
 typedef enum
 {
@@ -100,9 +101,63 @@ volatile uint32_t lcd_stats_runtime[LCD_TASK_STATS_MAX] = {0};
 volatile uint8_t lcd_stats_prio[LCD_TASK_STATS_MAX] = {0};
 volatile char lcd_stats_name[LCD_TASK_STATS_MAX][12] = {{0}};
 
+/* 其它模块的分段探针(定义见各自的 .c), 用于 RTT 汇总行 */
+extern volatile DWT_Probe_t motor_prof_all, motor_prof_dji, motor_prof_lk;
+extern volatile DWT_Probe_t dji_prof_all, dji_prof_pid, dji_prof_send;
+extern volatile DWT_Probe_t ins_prof_all, ins_prof_read, ins_prof_ekf, ins_prof_temp;
+extern volatile DWT_Probe_t can_prof_tx, can_prof_rx_isr;
+extern volatile uint32_t can_prof_tx_spins, can_prof_tx_full, can_prof_rx_frames;
+
+/* RTOS 计时单位: getRunTimeCounterValue() 返回 CYCCNT/1000, 即"千周期",
+   480MHz 下一单位 = 1/480 ms ≈ 2.083us。换算成 us 用 *1000/480。 */
+#define LCD_STATS_UNIT_TO_US(x) ((uint32_t)(((uint64_t)(x) * 1000u) / 480u))
+
+typedef struct
+{
+    char name[12];
+    uint32_t runtime;
+} LcdTaskPrev_t;
+
+/* 每 5s 打印一次: 第一行各任务占用率(千分比, RTT 不支持浮点), 第二行分段耗时 */
+static void lcd_cpu_report(uint32_t delta_total, const uint32_t *deltas)
+{
+    char line[256];
+    int off = snprintf(line, sizeof(line), "[cpu] win=%lums ",
+                       (unsigned long)LCD_STATS_UNIT_TO_US(delta_total) / 1000u);
+
+    for (uint8_t i = 0; i < lcd_stats_count && off > 0 && off < (int)sizeof(line); ++i)
+    {
+        uint32_t permille = (delta_total != 0u)
+                                ? (uint32_t)(((uint64_t)deltas[i] * 1000u) / delta_total)
+                                : 0u;
+        int w = snprintf(line + off, sizeof(line) - (size_t)off, "%s=%lu ",
+                         (const char *)lcd_stats_name[i], (unsigned long)permille);
+        if (w < 0)
+            break;
+        off += w;
+    }
+    LOGINFO("%s (千分比, 1000=100%%)", line);
+
+    LOGINFO("[seg] mot_all=%lu mot_dji=%lu mot_lk=%lu dji_pid=%lu dji_send=%lu ins_all=%lu ins_read=%lu ins_ekf=%lu ins_temp=%lu lcd_upd=%lu (us, last)",
+            (unsigned long)motor_prof_all.last_us, (unsigned long)motor_prof_dji.last_us,
+            (unsigned long)motor_prof_lk.last_us, (unsigned long)dji_prof_pid.last_us,
+            (unsigned long)dji_prof_send.last_us, (unsigned long)ins_prof_all.last_us,
+            (unsigned long)ins_prof_read.last_us, (unsigned long)ins_prof_ekf.last_us,
+            (unsigned long)ins_prof_temp.last_us, (unsigned long)lcd_prof_update_last_us);
+    LOGINFO("[can] tx_calls=%lu tx_full=%lu tx_spins=%lu tx_max=%lu rx_frames=%lu rx_isr_max=%lu (us)",
+            (unsigned long)can_prof_tx.calls, (unsigned long)can_prof_tx_full,
+            (unsigned long)can_prof_tx_spins, (unsigned long)can_prof_tx.max_us,
+            (unsigned long)can_prof_rx_frames, (unsigned long)can_prof_rx_isr.max_us);
+    LOGINFO("[lcd] upd=%lu clr=%lu init=%lu recover=%lu (us)",
+            (unsigned long)lcd_prof_update_last_us, (unsigned long)lcd_prof_clear_us,
+            (unsigned long)lcd_prof_init_us, (unsigned long)lcd_prof_recover_us);
+}
+
 static void lcd_task_stats_snapshot(void)
 {
     static TaskStatus_t st[LCD_TASK_STATS_MAX];
+    static LcdTaskPrev_t prev[LCD_TASK_STATS_MAX];
+    static uint8_t prev_cnt = 0;
     uint32_t total = 0;
 
     UBaseType_t n = uxTaskGetSystemState(st, LCD_TASK_STATS_MAX, &total);
@@ -118,6 +173,9 @@ static void lcd_task_stats_snapshot(void)
     lcd_stats_total = sum;
     lcd_stats_count = (uint8_t)n;
 
+    uint32_t deltas[LCD_TASK_STATS_MAX] = {0};
+    uint32_t delta_total = 0;
+
     for (UBaseType_t i = 0; i < n; ++i)
     {
         lcd_stats_runtime[i] = st[i].ulRunTimeCounter;
@@ -131,7 +189,29 @@ static void lcd_task_stats_snapshot(void)
             if (c == '\0')
                 break;
         }
+
+        /* 与上一次快照按任务名配对, 求增量; 无符号差值天然兼容计数器回绕 */
+        for (uint8_t k = 0; k < prev_cnt; ++k)
+        {
+            if (strncmp((const char *)lcd_stats_name[i], prev[k].name, sizeof(prev[k].name)) == 0)
+            {
+                deltas[i] = lcd_stats_runtime[i] - prev[k].runtime;
+                delta_total += deltas[i];
+                break;
+            }
+        }
     }
+
+    if (prev_cnt != 0u)
+        lcd_cpu_report(delta_total, deltas);
+
+    for (uint8_t i = 0; i < n; ++i)
+    {
+        for (uint8_t k = 0; k < 12u; ++k)
+            prev[i].name[k] = (char)lcd_stats_name[i][k];
+        prev[i].runtime = lcd_stats_runtime[i];
+    }
+    prev_cnt = (uint8_t)n;
 }
 
 static void lcd_prof_record(uint32_t t0, volatile uint32_t *last, volatile uint32_t *maxv)

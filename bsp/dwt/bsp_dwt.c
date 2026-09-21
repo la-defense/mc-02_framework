@@ -17,6 +17,9 @@ static uint32_t CYCCNT_RountCount;
 static uint32_t CYCCNT_LAST;
 static uint64_t CYCCNT64;
 
+/* 热路径探针的除数(见 bsp_dwt.h)。给初值, 防止 DWT_Init 之前被调用时除 0 */
+volatile uint32_t dwt_cpu_freq_mhz = 480u;
+
 /**
  * @brief 私有函数,用于检查DWT CYCCNT寄存器是否溢出,并更新CYCCNT_RountCount
  * @attention 此函数假设两次调用之间的时间间隔不超过一次溢出
@@ -54,6 +57,7 @@ void DWT_Init(uint32_t CPU_Freq_mHz)
     CPU_FREQ_Hz = CPU_Freq_mHz * 1000000;
     CPU_FREQ_Hz_ms = CPU_FREQ_Hz / 1000;
     CPU_FREQ_Hz_us = CPU_FREQ_Hz / 1000000;
+    dwt_cpu_freq_mhz = CPU_Freq_mHz;
     CYCCNT_RountCount = 0;
 
     DWT_CNT_Update();

@@ -208,10 +208,20 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
 
 /* @todo 目前似乎封装过度,应该添加一个指向tx_buff的指针,tx_buff不应该由CAN instance保存 */
 /* 如果让CANinstance保存txbuff,会增加一次复制的开销 */
+/* ---------------- 性能探针(2026-09, CPU 占用排查) ----------------
+   单位: us; can_prof_tx = 单次 CANTransmit 总耗时(含自旋等待),
+   can_prof_tx_spins = 自旋轮数, can_prof_rx_isr = RX 中断派发耗时。*/
+volatile DWT_Probe_t can_prof_tx = {0};
+volatile uint32_t can_prof_tx_spins = 0;
+volatile uint32_t can_prof_tx_full = 0;
+volatile DWT_Probe_t can_prof_rx_isr = {0};
+volatile uint32_t can_prof_rx_frames = 0;
+
 uint8_t CANTransmit(CANInstance *_instance, float timeout)
 {
     static uint32_t busy_count;
     static volatile float wait_time __attribute__((unused)); // for cancel warning
+    uint32_t probe_start = DWT_ProbeStart();
     float dwt_start = DWT_GetTimeline_ms();
 #ifdef FDCAN
     while(HAL_FDCAN_GetTxFifoFreeLevel(_instance->can_handle)==0)
@@ -219,10 +229,13 @@ uint8_t CANTransmit(CANInstance *_instance, float timeout)
     while (HAL_CAN_GetTxMailboxesFreeLevel(_instance->can_handle) == 0) // 等待邮箱空闲
 #endif
     {
+        can_prof_tx_spins++;
         if (DWT_GetTimeline_ms() - dwt_start > timeout) // 超时
         {
             LOGWARNING("[bsp_can] CAN MAILbox full! failed to add msg to mailbox. Cnt [%d]", busy_count);
             busy_count++;
+            can_prof_tx_full++;
+            DWT_ProbeDone(&can_prof_tx, probe_start);
             return 0;
         }
     }
@@ -237,8 +250,11 @@ uint8_t CANTransmit(CANInstance *_instance, float timeout)
     {
         LOGWARNING("[bsp_can] CAN bus BUSY! cnt:%d", busy_count);
         busy_count++;
+        can_prof_tx_full++;
+        DWT_ProbeDone(&can_prof_tx, probe_start);
         return 0;
     }
+    DWT_ProbeDone(&can_prof_tx, probe_start);
     return 1; // 发送成功
 }
 
@@ -298,9 +314,11 @@ static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
     static FDCAN_RxHeaderTypeDef rxconf; // 同上
 	static uint16_t DataLength = 0;
     static uint8_t fdcan_rx_buff[8];
+    uint32_t probe_start = DWT_ProbeStart();
     while (HAL_FDCAN_GetRxFifoFillLevel(_hfdcan, fifox)) // FIFO不为空,有可能在其他中断时有多帧数据进入
     {
         HAL_FDCAN_GetRxMessage(_hfdcan, fifox, &rxconf, fdcan_rx_buff); // 从FIFO中获取数据
+        can_prof_rx_frames++;
 		//解析数据长度，@Todo 此处在用新版本重新生成后可能得修改，DataLength可能不需要右移，具体情况具体看	！
 		if(((rxconf.DataLength >> 16) & 0xF)>=0 && ((rxconf.DataLength >> 16) & 0xF)<=8)
 		{
@@ -323,11 +341,13 @@ static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
 						memcpy(can_instance[i]->rx_buff, fdcan_rx_buff, can_instance[i]->rx_len); // 消息拷贝到对应实例
 						can_instance[i]->can_module_callback(can_instance[i]);     // 触发回调进行数据解析和处理
 					}
+					DWT_ProbeDone(&can_prof_rx_isr, probe_start);
 					return;
 				}
 			}
         }
     }
+    DWT_ProbeDone(&can_prof_rx_isr, probe_start);
 }
 
 

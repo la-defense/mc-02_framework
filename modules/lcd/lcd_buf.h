@@ -5,6 +5,7 @@
 #include "lcd_font_cn.h"
 
 void LCD_BufClearPanel(void);
+extern volatile uint32_t lcd_prof_clear_us; /* 整屏清屏最近耗时(us), 调试用 */
 void LCD_BufFill(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color);
 void LCD_BufShowAscii(uint16_t x, uint16_t y, const char *str, uint16_t fc, uint16_t bc, uint8_t sizey);
 void LCD_BufShowCnString(uint16_t x, uint16_t y, const Lcd_CnChar_e *str, uint16_t fc, uint16_t bc);

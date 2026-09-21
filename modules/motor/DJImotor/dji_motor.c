@@ -4,6 +4,14 @@
 #include "bsp_log.h"
 
 static uint8_t idx = 0; // register idx,是该文件的全局电机索引,在注册时使用
+
+/* ---------------- 性能探针(2026-09, CPU 占用排查) ----------------
+   dji_prof_all : 单次 DJIMotorControl 总耗时
+   dji_prof_pid : 串级 PID 计算 + 组帧(不含 CAN 发送)
+   dji_prof_send: CAN 报文发送(含 bsp_can 里的自旋等待) */
+volatile DWT_Probe_t dji_prof_all = {0};
+volatile DWT_Probe_t dji_prof_pid = {0};
+volatile DWT_Probe_t dji_prof_send = {0};
 /* DJI电机的实例,此处仅保存指针,内存的分配将通过电机实例初始化时通过malloc()进行 */
 static DJIMotorInstance *dji_motor_instance[DJI_MOTOR_CNT] = {NULL}; // 会在control任务中遍历该指针数组进行pid计算
 
@@ -305,6 +313,7 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 // 为所有电机实例计算三环PID,发送控制报文
 void DJIMotorControl()
 {
+    uint32_t probe_all = DWT_ProbeStart();
     // 直接保存一次指针引用从而减小访存的开销,同样可以提高可读性
     uint8_t group, num; // 电机组号和组内编号
     int16_t set;        // 电机控制CAN发送设定值
@@ -377,6 +386,8 @@ void DJIMotorControl()
     }
 
     // 遍历flag,检查是否要发送这一帧报文
+    DWT_ProbeDone(&dji_prof_pid, probe_all);
+    uint32_t probe_send = DWT_ProbeStart();
 #ifdef FDCAN
     for (size_t i = 0; i < 9; ++i)
 #else
@@ -388,4 +399,6 @@ void DJIMotorControl()
             CANTransmit(&sender_assignment[i], 1);
         }
     }
+    DWT_ProbeDone(&dji_prof_send, probe_send);
+    DWT_ProbeDone(&dji_prof_all, probe_all);
 }
