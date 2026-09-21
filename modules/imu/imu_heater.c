@@ -164,16 +164,10 @@ void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
 
     uint32_t now = HAL_GetTick();
 
-    /* 急停/故障状态由上层传入force_off, 最高优先级 */
-    if (force_off)
-    {
-        IMUHeaterForceOff();
-        return;
-    }
-
     /* 加热电阻接 VCC_IN(24V). 只有输入电压在合理范围内才允许加热.
        这样 USB-only 供电时 VCC_IN=0, 加热会被禁止, 不会再出现 PID 饱和后
-       接上24V瞬间满功率的情况. */
+       接上24V瞬间满功率的情况.
+       注意: 先读VCC_IN再处理force_off, 保证EST时也能看到低压/过压日志. */
     last_vcc_in = BSP_ADCGetVccIn();
     if (last_vcc_in < IMU_HEATER_MIN_SUPPLY_V)
     {
@@ -195,6 +189,13 @@ void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
         return;
     }
     supply_missing_logged = 0;
+
+    /* 急停/故障状态由上层传入force_off, 即使输入电压正常也必须关加热 */
+    if (force_off)
+    {
+        IMUHeaterForceOff();
+        return;
+    }
 
     /* 24V 加热电阻功率上限保护:
        按最坏情况等效电阻47Ω估算, 限制平均功率不超过0.30W.
