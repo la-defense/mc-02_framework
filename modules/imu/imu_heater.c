@@ -164,6 +164,21 @@ void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
 
     uint32_t now = HAL_GetTick();
 
+    /* 先记录本次采样: 温度显示/监控与"当前是否允许加热"无关。
+       之前这段在供电检查之后, USB-only(VCC_IN 过低)时会提前 return,
+       导致 IMUHeaterGetStatus() 一直返回初值 0.0C、传感器显示"无效"。 */
+    uint8_t temp_ok = (sensor_valid && isfinite(temperature) &&
+                       temperature >= IMU_HEATER_TEMP_VALID_MIN &&
+                       temperature <= IMU_HEATER_TEMP_VALID_MAX)
+                          ? 1u
+                          : 0u;
+    if (temp_ok)
+    {
+        last_temperature = temperature;
+        last_valid_sample_ms = now;
+    }
+    last_sensor_valid = temp_ok;
+
     /* 加热电阻接 VCC_IN(24V). 只有输入电压在合理范围内才允许加热.
        这样 USB-only 供电时 VCC_IN=0, 加热会被禁止, 不会再出现 PID 饱和后
        接上24V瞬间满功率的情况.
@@ -220,9 +235,7 @@ void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
     }
 
     /* 传感器有效性检查 */
-    if (!sensor_valid || !isfinite(temperature) ||
-        temperature < IMU_HEATER_TEMP_VALID_MIN ||
-        temperature > IMU_HEATER_TEMP_VALID_MAX)
+    if (!temp_ok)
     {
         IMUHeaterForceOff();
         if ((uint32_t)(now - last_valid_sample_ms) > IMU_HEATER_SENSOR_TIMEOUT_MS)
@@ -232,10 +245,6 @@ void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
         }
         return;
     }
-
-    last_temperature = temperature;
-    last_sensor_valid = sensor_valid;
-    last_valid_sample_ms = now;
 
     /* 过温硬切断: 立即关加热并锁存 */
     if (temperature >= IMU_HEATER_OVERTEMP_CUTOFF)
