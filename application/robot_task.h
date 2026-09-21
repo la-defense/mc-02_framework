@@ -15,6 +15,7 @@
 #include "HT04.h"
 #include "buzzer.h"
 #include "task_monitor.h"
+#include "lcd_task.h"
 
 #include "bsp_log.h"
 
@@ -23,6 +24,7 @@ osThreadId robotTaskHandle;
 osThreadId motorTaskHandle;
 osThreadId daemonTaskHandle;
 osThreadId uiTaskHandle;
+osThreadId lcdTaskHandle;
 
 void StartINSTASK(void const *argument);
 void StartMOTORTASK(void const *argument);
@@ -51,6 +53,9 @@ void OSTaskInit()
 
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
+
+    osThreadDef(lcdtask, StartLCDTASK, osPriorityLow, 0, 1024);
+    lcdTaskHandle = osThreadCreate(osThread(lcdtask), NULL);
 
     HTMotorControlInit(); // 没有注册HT电机则不会执行
 }

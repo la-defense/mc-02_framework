@@ -11,6 +11,11 @@
 referee_info_t *UITaskInit(UART_HandleTypeDef *referee_usart_handle, Referee_Interactive_info_t *UI_data);
 
 /**
+ * @brief 获取裁判系统接收数据指针(未初始化时返回NULL)
+ */
+referee_info_t *RefereeGetInfo(void);
+
+/**
  * @brief 在referee task之前调用,添加在freertos.c中
  * 
  */

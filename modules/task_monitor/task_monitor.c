@@ -108,3 +108,15 @@ uint8_t TaskMonitorAllAlive(void)
     }
     return 1;
 }
+
+void TaskMonitorGetStatus(TaskMonitor_Id_e id, TaskMonitorStatus_t *status)
+{
+    if (id >= TASK_MONITOR_COUNT || status == NULL)
+        return;
+
+    const TaskMonitorItem_t *item = &monitor_items[id];
+    status->name = item->name;
+    status->alive = item->alive;
+    status->fault = (uint8_t)(item->alive == 0);
+    status->timeout_ms = item->timeout_ms;
+}

@@ -122,7 +122,7 @@ int main(void)
   MX_UART5_Init();
   MX_UART8_Init();
   MX_UART9_Init();
-  MX_I2C2_Init();
+  /* PB10/PB11 released from I2C2: used as LCD_BLK/LCD_RES */
   /* USER CODE BEGIN 2 */
   RobotInit(); // 唯一的初始化函数
   LOGINFO("[main] SystemInit() and RobotInit() done");

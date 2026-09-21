@@ -66,6 +66,17 @@ typedef struct
     float dt;
 } DJIMotorInstance;
 
+typedef struct
+{
+    uint8_t online;
+    uint8_t enabled;
+    float speed_aps;
+    float angle_single_round;
+    float total_angle;
+    int16_t current;
+    uint8_t temperature;
+} DJIMotorSummary_t;
+
 /**
  * @brief 调用此函数注册一个DJI智能电机,需要传递较多的初始化参数,请在application初始化的时候调用此函数
  *        推荐传参时像标准库一样构造initStructure然后传入此函数.
@@ -141,5 +152,10 @@ void DJIMotorIsOnline(DJIMotorInstance *motor);
  * @param outer_loop 闭环类型(用于设置 close_loop_type)
  */
 void DJIMotorCloseLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop);
+
+/**
+ * @brief 获取电机只读摘要(供LCD/调试显示)
+ */
+void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);
 
 #endif // !DJI_MOTOR_H

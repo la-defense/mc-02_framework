@@ -154,6 +154,13 @@ attitude_t *INS_Init(void)
     return (attitude_t *)&INS.Gyro; // @todo: 这里偷懒了,不要这样做! 修改INT_t结构体可能会导致异常,待修复.
 }
 
+attitude_t *INS_GetAttitude(void)
+{
+    if (!INS.init)
+        return NULL;
+    return (attitude_t *)&INS.Gyro;
+}
+
 /* 注意以1kHz的频率运行此任务 */
 void INS_Task(void)
 {

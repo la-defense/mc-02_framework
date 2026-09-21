@@ -44,6 +44,13 @@ uint16_t BSP_ADCGetRawVccIn(void)
     return adc_dma_buffer[0];
 }
 
+uint16_t BSP_ADCGetRawKey(void)
+{
+    if (!adc_started)
+        return 0;
+    return adc_dma_buffer[1];
+}
+
 float BSP_ADCGetVccIn(void)
 {
     if (!adc_started)

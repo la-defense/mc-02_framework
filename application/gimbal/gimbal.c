@@ -152,3 +152,12 @@ void GimbalTask()
     // 推送消息
     PubPushMessage(gimbal_pub, (void *)&gimbal_feedback_data);
 }
+
+void Gimbal_GetMotorSummary(Gimbal_Motor_Summary_t *summary)
+{
+    if (summary == NULL)
+        return;
+
+    DJIMotorGetSummary(yaw_motor, &summary->yaw);
+    DJIMotorGetSummary(pitch_motor, &summary->pitch);
+}

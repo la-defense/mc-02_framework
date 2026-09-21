@@ -96,6 +96,11 @@ attitude_t *INS_Init(void);
 void INS_Task(void);
 
 /**
+ * @brief 获取当前姿态数据指针(不重新初始化)
+ */
+attitude_t *INS_GetAttitude(void);
+
+/**
  * @brief 四元数更新函数,即实现dq/dt=0.5Ωq
  *
  * @param q  四元数

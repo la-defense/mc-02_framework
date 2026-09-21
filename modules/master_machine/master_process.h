@@ -91,6 +91,18 @@ typedef struct
 	uint16_t crc16;
 } Vision_Send_s;
 
+typedef struct
+{
+	uint8_t online;
+	uint8_t mode;
+	uint32_t last_rx_ms;
+	uint32_t rx_count;
+	uint32_t tx_count;
+	uint32_t crc_error_count;
+	float bullet_speed;
+	uint16_t bullet_count;
+} Vision_Status_t;
+
 #pragma pack(pop)
 
 /**
@@ -105,6 +117,11 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle);
  *
  */
 void VisionSend(void);
+
+/**
+ * @brief 获取视觉链路状态(在线/模式/收发计数/CRC错误)
+ */
+void VisionGetStatus(Vision_Status_t *status);
 
 /**
  * @brief 每个控制周期把下位机状态塞给上位机

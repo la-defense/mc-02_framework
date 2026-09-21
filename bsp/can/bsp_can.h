@@ -86,6 +86,21 @@ typedef struct
     void *id;                                   // 拥有can实例的模块地址,用于区分不同的模块(如果有需要的话),如果不需要可以不传入
 } CAN_Init_Config_s;
 
+typedef enum
+{
+    CAN_STATUS_OK = 0,
+    CAN_STATUS_ERROR,
+    CAN_STATUS_BUSOFF,
+    CAN_STATUS_UNKNOWN,
+} CAN_Status_e;
+
+typedef struct
+{
+    CAN_Status_e status;
+    uint8_t rx_error_count;
+    uint8_t tx_error_count;
+} CAN_Status_t;
+
 /**
  * @brief Register a module to CAN service,remember to call this before using a CAN device
  *        注册(初始化)一个can实例,需要传入初始化配置的指针.
@@ -112,5 +127,10 @@ void CANSetDLC(CANInstance *_instance, uint8_t length);
  * @param _instance* can instance owned by module
  */
 uint8_t CANTransmit(CANInstance *_instance,float timeout);
+
+/**
+ * @brief 获取FDCAN总线状态(OK/ERROR/BUSOFF)
+ */
+void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status);
 
 #endif

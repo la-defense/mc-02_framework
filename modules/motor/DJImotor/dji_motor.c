@@ -282,6 +282,20 @@ void DJIMotorCloseLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop)
     motor->motor_settings.close_loop_type = outer_loop;
 }
 
+void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
+{
+    if (motor == NULL || summary == NULL)
+        return;
+
+    summary->online = (DaemonIsOnline(motor->daemon) > 0) ? 1 : 0;
+    summary->enabled = (motor->stop_flag == MOTOR_ENALBED) ? 1 : 0;
+    summary->speed_aps = motor->measure.speed_aps;
+    summary->angle_single_round = motor->measure.angle_single_round;
+    summary->total_angle = motor->measure.total_angle;
+    summary->current = motor->measure.real_current;
+    summary->temperature = motor->measure.temperature;
+}
+
 // 设置参考值
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 {

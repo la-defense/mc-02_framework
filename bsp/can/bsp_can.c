@@ -242,6 +242,34 @@ uint8_t CANTransmit(CANInstance *_instance, float timeout)
     return 1; // 发送成功
 }
 
+void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status)
+{
+    if (hcan == NULL || status == NULL)
+        return;
+
+    FDCAN_ProtocolStatusTypeDef protocol_status;
+    FDCAN_ErrorCountersTypeDef error_counters;
+
+    status->status = CAN_STATUS_UNKNOWN;
+    status->rx_error_count = 0;
+    status->tx_error_count = 0;
+
+    if (HAL_FDCAN_GetProtocolStatus(hcan, &protocol_status) != HAL_OK)
+        return;
+    if (HAL_FDCAN_GetErrorCounters(hcan, &error_counters) != HAL_OK)
+        return;
+
+    status->rx_error_count = (uint8_t)error_counters.RxErrorCnt;
+    status->tx_error_count = (uint8_t)error_counters.TxErrorCnt;
+
+    if (protocol_status.BusOff)
+        status->status = CAN_STATUS_BUSOFF;
+    else if (protocol_status.ErrorPassive || error_counters.RxErrorCnt > 0 || error_counters.TxErrorCnt > 0)
+        status->status = CAN_STATUS_ERROR;
+    else
+        status->status = CAN_STATUS_OK;
+}
+
 void CANSetDLC(CANInstance *_instance, uint8_t length)
 {
     // 发送长度错误!检查调用参数是否出错,或出现野指针/越界访问

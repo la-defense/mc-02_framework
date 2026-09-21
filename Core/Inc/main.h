@@ -79,6 +79,10 @@ void Error_Handler(void);
 #define DCMI_REST_GPIO_Port GPIOB
 #define LCD_DC_Pin GPIO_PIN_10
 #define LCD_DC_GPIO_Port GPIOD
+#define LCD_RES_Pin GPIO_PIN_11
+#define LCD_RES_GPIO_Port GPIOB
+#define LCD_BLK_Pin GPIO_PIN_10
+#define LCD_BLK_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

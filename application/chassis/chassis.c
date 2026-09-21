@@ -260,3 +260,14 @@ void ChassisTask()
     CANCommSend(chasiss_can_comm, (void *)&chassis_feedback_data);
 #endif // CHASSIS_BOARD
 }
+
+void Chassis_GetMotorSummary(Chassis_Motor_Summary_t *summary)
+{
+    if (summary == NULL)
+        return;
+
+    DJIMotorGetSummary(motor_lf, &summary->lf);
+    DJIMotorGetSummary(motor_rf, &summary->rf);
+    DJIMotorGetSummary(motor_lb, &summary->lb);
+    DJIMotorGetSummary(motor_rb, &summary->rb);
+}

@@ -12,6 +12,10 @@
 static Vision_Recv_s recv_data;
 static Vision_Send_s send_data;
 static DaemonInstance *vision_daemon_instance;
+static uint32_t vision_rx_count = 0;
+static uint32_t vision_tx_count = 0;
+static uint32_t vision_crc_error_count = 0;
+static uint32_t vision_last_rx_ms = 0;
 
 #ifdef VISION_USE_UART
 #include "bsp_usart.h"
@@ -66,9 +70,14 @@ static void DecodeVision(uint16_t recv_len)
             continue;
 
         if (!VisionCheckCRC16((const uint8_t *)&pkt, sizeof(Vision_Recv_s)))
+        {
+            vision_crc_error_count++;
             continue;
+        }
 
         recv_data = pkt;
+        vision_rx_count++;
+        vision_last_rx_ms = HAL_GetTick();
         DaemonReload(vision_daemon_instance);
         return;
     }
@@ -158,10 +167,27 @@ void VisionSend(void)
 
 #ifdef VISION_USE_VCP
     USBTransmit((uint8_t *)&tx_pkt, sizeof(Vision_Send_s));
+    vision_tx_count++;
 #elif defined(VISION_USE_UART)
     /* 发送串口忙时跳过本帧, 避免 HAL_UART_Transmit_DMA 返回 BUSY 丢帧 */
     if (!USARTIsReady(vision_usart_instance))
         return;
     USARTSend(vision_usart_instance, (uint8_t *)&tx_pkt, sizeof(Vision_Send_s), USART_TRANSFER_DMA);
+    vision_tx_count++;
 #endif
+}
+
+void VisionGetStatus(Vision_Status_t *status)
+{
+    if (status == NULL)
+        return;
+
+    status->online = (vision_daemon_instance != NULL && DaemonIsOnline(vision_daemon_instance) > 0) ? 1 : 0;
+    status->mode = recv_data.mode;
+    status->last_rx_ms = vision_last_rx_ms;
+    status->rx_count = vision_rx_count;
+    status->tx_count = vision_tx_count;
+    status->crc_error_count = vision_crc_error_count;
+    status->bullet_speed = send_data.bullet_speed;
+    status->bullet_count = send_data.bullet_count;
 }

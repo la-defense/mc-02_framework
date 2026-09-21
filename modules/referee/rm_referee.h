@@ -110,4 +110,14 @@ referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle);
  */
 void RefereeSend(uint8_t *send, uint16_t tx_len);
 
+/**
+ * @brief 裁判系统是否在线
+ */
+uint8_t RefereeIsOnline(void);
+
+/**
+ * @brief 最后一次收到裁判数据的时间戳(ms)
+ */
+uint32_t RefereeGetLastRxMs(void);
+
 #endif // !REFEREE_H

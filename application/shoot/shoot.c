@@ -228,3 +228,13 @@ void ShootTask()
     // 反馈数据,目前暂时没有要设定的反馈数据,后续可能增加应用离线监测以及卡弹反馈
     PubPushMessage(shoot_pub, (void *)&shoot_feedback_data);
 }
+
+void Shoot_GetMotorSummary(Shoot_Motor_Summary_t *summary)
+{
+    if (summary == NULL)
+        return;
+
+    DJIMotorGetSummary(friction_l, &summary->friction_l);
+    DJIMotorGetSummary(friction_r, &summary->friction_r);
+    DJIMotorGetSummary(loader, &summary->loader);
+}

@@ -1,0 +1,452 @@
+#include "lcd_ui.h"
+#include "lcd.h"
+#include "lcd_buf.h"
+#include "lcd_font_cn.h"
+#include "robot_safety.h"
+#include "bsp_adc.h"
+#include "bsp_watchdog.h"
+#include "task_monitor.h"
+#include "remote_control.h"
+#include "master_process.h"
+#include "imu_heater.h"
+#include "ins_task.h"
+#include "referee_task.h"
+#include "rm_referee.h"
+#include "chassis.h"
+#include "gimbal.h"
+#include "shoot.h"
+#include "bsp_can.h"
+#include "fdcan.h"
+#include <stdio.h>
+#include <string.h>
+
+#define COL_LABEL_X 4u
+#define COL_VALUE_X 80u
+#define ROW_Y(n) (28u + (uint16_t)(n) * 20u)
+
+static const Lcd_CnChar_e L_SYS[] = LCD_LABEL_SYS;
+static const Lcd_CnChar_e L_STATE[] = LCD_LABEL_STATE;
+static const Lcd_CnChar_e L_FAULT[] = LCD_LABEL_FAULT;
+static const Lcd_CnChar_e L_ESTOP[] = LCD_LABEL_ESTOP;
+static const Lcd_CnChar_e L_VOLT[] = LCD_LABEL_VOLT;
+static const Lcd_CnChar_e L_TASK[] = LCD_LABEL_TASK;
+static const Lcd_CnChar_e L_RC[] = LCD_LABEL_RC;
+static const Lcd_CnChar_e L_VISION[] = LCD_LABEL_VISION;
+static const Lcd_CnChar_e L_WATCHDOG[] = LCD_LABEL_WATCHDOG;
+static const Lcd_CnChar_e L_TEMP[] = LCD_LABEL_TEMP;
+static const Lcd_CnChar_e L_TARGET[] = LCD_LABEL_TARGET;
+static const Lcd_CnChar_e L_DUTY[] = LCD_LABEL_DUTY;
+static const Lcd_CnChar_e L_HEAT[] = LCD_LABEL_HEAT;
+static const Lcd_CnChar_e L_VALID[] = LCD_LABEL_VALID;
+static const Lcd_CnChar_e L_INVALID[] = {LCD_CN_WU2, LCD_CN_XIAO, LCD_CN_COUNT};
+static const Lcd_CnChar_e L_REFEREE[] = LCD_LABEL_REFEREE;
+static const Lcd_CnChar_e L_STAGE[] = LCD_LABEL_STAGE;
+static const Lcd_CnChar_e L_HP[] = LCD_LABEL_HP;
+static const Lcd_CnChar_e L_POWER[] = LCD_LABEL_POWER;
+static const Lcd_CnChar_e L_BUFFER[] = LCD_LABEL_BUFFER;
+static const Lcd_CnChar_e L_HEATQ[] = LCD_LABEL_HEATQ;
+static const Lcd_CnChar_e L_AMMO[] = LCD_LABEL_AMMO;
+static const Lcd_CnChar_e L_BULLET_SPEED[] = LCD_LABEL_BULLET_SPEED;
+static const Lcd_CnChar_e L_COIN[] = LCD_LABEL_COIN;
+static const Lcd_CnChar_e L_CHASSIS[] = LCD_LABEL_CHASSIS;
+static const Lcd_CnChar_e L_GIMBAL[] = LCD_LABEL_GIMBAL;
+static const Lcd_CnChar_e L_SHOOT[] = LCD_LABEL_SHOOT;
+static const Lcd_CnChar_e L_MOTOR[] = LCD_LABEL_MOTOR;
+static const Lcd_CnChar_e L_BUS[] = LCD_LABEL_BUS;
+static const Lcd_CnChar_e L_LINK[] = LCD_LABEL_LINK;
+static const Lcd_CnChar_e L_ONLINE[] = LCD_LABEL_ONLINE;
+static const Lcd_CnChar_e L_OFFLINE[] = LCD_LABEL_OFFLINE;
+static const Lcd_CnChar_e L_FREEZE[] = LCD_LABEL_FREEZE;
+static const Lcd_CnChar_e L_INIT[] = LCD_LABEL_INIT;
+static const Lcd_CnChar_e L_SAFE[] = LCD_LABEL_SAFE;
+static const Lcd_CnChar_e L_CALIB[] = LCD_LABEL_CALIB;
+static const Lcd_CnChar_e L_READY[] = LCD_LABEL_READY;
+static const Lcd_CnChar_e L_ERROR[] = LCD_LABEL_ERROR;
+static const Lcd_CnChar_e L_NO[] = LCD_LABEL_NO;
+
+static uint8_t lcd_page = 0;
+static uint8_t lcd_frozen = 0;
+
+static const Lcd_CnChar_e *state_label(Robot_Status_e state)
+{
+    switch (state)
+    {
+    case ROBOT_INIT:
+        return L_INIT;
+    case ROBOT_SAFE:
+        return L_SAFE;
+    case ROBOT_CALIB:
+        return L_CALIB;
+    case ROBOT_READY:
+        return L_READY;
+    case ROBOT_FAULT:
+        return L_ERROR;
+    case ROBOT_ESTOP:
+        return L_ESTOP;
+    default:
+        return L_NO;
+    }
+}
+
+static const Lcd_CnChar_e *online_label(uint8_t online)
+{
+    return online ? L_ONLINE : L_OFFLINE;
+}
+
+static const char *can_status_str(CAN_Status_e status)
+{
+    switch (status)
+    {
+    case CAN_STATUS_OK:
+        return "OK";
+    case CAN_STATUS_ERROR:
+        return "ERR";
+    case CAN_STATUS_BUSOFF:
+        return "OFF";
+    default:
+        return "--";
+    }
+}
+
+static void draw_title(const Lcd_CnChar_e *title_cn, const char *title_ascii)
+{
+    LCD_BufFill(0, 0, LCD_W - 1u, 23u, BLUE);
+    if (title_cn != NULL)
+        LCD_BufShowCnString(4, 4, title_cn, WHITE, BLUE);
+    else
+        LCD_BufShowAscii(4, 4, title_ascii, WHITE, BLUE, 16);
+
+    char page_buf[8];
+    snprintf(page_buf, sizeof(page_buf), "%u/%u", (unsigned)(lcd_page + 1u), (unsigned)LCD_PAGE_COUNT);
+    LCD_BufShowAscii(244, 4, page_buf, CYAN, BLUE, 16);
+
+    if (lcd_frozen)
+        LCD_BufShowCnString(180, 4, L_FREEZE, YELLOW, BLUE);
+}
+
+static void draw_label(uint8_t row, const Lcd_CnChar_e *label)
+{
+    LCD_BufShowCnString(COL_LABEL_X, ROW_Y(row), label, WHITE, BLACK);
+}
+
+static void draw_label_ascii(uint8_t row, const char *label)
+{
+    LCD_BufShowAscii(COL_LABEL_X, ROW_Y(row), label, WHITE, BLACK, 16);
+}
+
+static void clear_value(uint8_t row)
+{
+    LCD_BufFill(COL_VALUE_X, ROW_Y(row), LCD_W - 1u, ROW_Y(row) + 15u, BLACK);
+}
+
+static void draw_value_ascii(uint8_t row, const char *str)
+{
+    clear_value(row);
+    uint8_t sizey = (strlen(str) > 20u) ? 12u : 16u;
+    LCD_BufShowAscii(COL_VALUE_X, ROW_Y(row), str, CYAN, BLACK, sizey);
+}
+
+static void draw_value_cn(uint8_t row, const Lcd_CnChar_e *str)
+{
+    clear_value(row);
+    LCD_BufShowCnString(COL_VALUE_X, ROW_Y(row), str, CYAN, BLACK);
+}
+
+static void draw_value_float_unit(uint8_t row, float value, uint8_t decimals, const char *unit)
+{
+    clear_value(row);
+    LCD_BufShowFloat(COL_VALUE_X, ROW_Y(row), value, decimals, CYAN, BLACK, 16);
+    LCD_BufShowAscii(COL_VALUE_X + 8u * 8u, ROW_Y(row), unit, GRAY, BLACK, 16);
+}
+
+static void build_fault_string(uint32_t faults, char *buf, size_t len)
+{
+    snprintf(buf, len, "0x%04lX ", (unsigned long)faults);
+    if (faults & ROBOT_FAULT_RC_OFFLINE)
+        strncat(buf, "RC ", len - strlen(buf) - 1u);
+    if (faults & ROBOT_FAULT_IMU_INVALID)
+        strncat(buf, "IMU ", len - strlen(buf) - 1u);
+    if (faults & ROBOT_FAULT_MOTOR_OFFLINE)
+        strncat(buf, "MOT ", len - strlen(buf) - 1u);
+    if (faults & ROBOT_FAULT_CAN_BUSOFF)
+        strncat(buf, "CAN ", len - strlen(buf) - 1u);
+    if (faults & ROBOT_FAULT_TILT)
+        strncat(buf, "TILT ", len - strlen(buf) - 1u);
+    if (faults & ROBOT_FAULT_CALIB_INVALID)
+        strncat(buf, "CAL ", len - strlen(buf) - 1u);
+    if (faults & ROBOT_FAULT_TASK_TIMEOUT)
+        strncat(buf, "TASK", len - strlen(buf) - 1u);
+}
+
+static void draw_page0_static(void)
+{
+    draw_title(L_SYS, NULL);
+    draw_label(0, L_STATE);
+    draw_label(1, L_FAULT);
+    draw_label(2, L_ESTOP);
+    draw_label(3, L_VOLT);
+    draw_label(4, L_TASK);
+    draw_label(5, L_RC);
+    draw_label(6, L_VISION);
+    draw_label(7, L_WATCHDOG);
+}
+
+static void draw_page0_values(void)
+{
+    draw_value_cn(0, state_label(RobotSafetyGetState()));
+
+    char buf[40];
+    build_fault_string(RobotSafetyGetFaults(), buf, sizeof(buf));
+    draw_value_ascii(1, buf);
+
+    if (EstopIsLatched())
+        snprintf(buf, sizeof(buf), "YES %s", (EstopGetReason() == ESTOP_REASON_RC_OFFLINE) ? "RC" : "MAN");
+    else
+        snprintf(buf, sizeof(buf), "NO");
+    draw_value_ascii(2, buf);
+
+    draw_value_float_unit(3, BSP_ADCGetVccIn(), 1, "V");
+
+    TaskMonitorStatus_t st;
+    char t[8][4];
+    for (uint8_t i = 0; i < TASK_MONITOR_COUNT; ++i)
+    {
+        TaskMonitorGetStatus((TaskMonitor_Id_e)i, &st);
+        snprintf(t[i], sizeof(t[i]), "%s", st.alive ? "OK" : "--");
+    }
+    snprintf(buf, sizeof(buf), "I:%s M:%s R:%s D:%s", t[0], t[1], t[2], t[3]);
+    draw_value_ascii(4, buf);
+
+    draw_value_cn(5, online_label(RemoteControlIsOnline()));
+
+    Vision_Status_t vs;
+    VisionGetStatus(&vs);
+    snprintf(buf, sizeof(buf), "%s M:%u A:%lums", vs.online ? "ON" : "OFF",
+             (unsigned)vs.mode, (unsigned long)(vs.online ? (HAL_GetTick() - vs.last_rx_ms) : 0u));
+    draw_value_ascii(6, buf);
+
+    snprintf(buf, sizeof(buf), "RUN:%s RST:%s", BSP_WatchdogIsRunning() ? "Y" : "N",
+             BSP_WatchdogWasIwdgReset() ? "Y" : "N");
+    draw_value_ascii(7, buf);
+}
+
+static void draw_page1_static(void)
+{
+    draw_title(NULL, "IMU");
+    draw_label(0, L_TEMP);
+    draw_label(1, L_TARGET);
+    draw_label(2, L_DUTY);
+    draw_label(3, L_HEAT);
+    draw_label(4, L_VALID);
+    draw_label_ascii(5, "YAW");
+    draw_label_ascii(6, "PIT");
+    draw_label_ascii(7, "ROL");
+}
+
+static void draw_page1_values(void)
+{
+    IMUHeaterStatus_t hs;
+    IMUHeaterGetStatus(&hs);
+
+    draw_value_float_unit(0, hs.temperature, 1, "C");
+    draw_value_float_unit(1, hs.target_temp, 1, "C");
+
+    char buf[32];
+    uint32_t permille = (uint32_t)hs.duty * 1000u / 9999u;
+    snprintf(buf, sizeof(buf), "%u %lu.%lu%%", (unsigned)hs.duty,
+             (unsigned long)(permille / 10u), (unsigned long)(permille % 10u));
+    draw_value_ascii(2, buf);
+
+    if (hs.fault)
+        snprintf(buf, sizeof(buf), "FAULT%s%s%s", hs.overtemp ? " OVT" : "",
+                 hs.timeout_fault ? " TMO" : "", hs.sensor_valid ? "" : " SEN");
+    else
+        snprintf(buf, sizeof(buf), "%s", hs.heating ? "ON" : "OFF");
+    draw_value_ascii(3, buf);
+
+    draw_value_cn(4, hs.sensor_valid ? L_VALID : L_INVALID);
+
+    attitude_t *att = INS_GetAttitude();
+    if (att == NULL)
+    {
+        draw_value_ascii(5, "--");
+        draw_value_ascii(6, "--");
+        draw_value_ascii(7, "--");
+        return;
+    }
+    draw_value_float_unit(5, att->Yaw, 1, "d");
+    draw_value_float_unit(6, att->Pitch, 1, "d");
+    draw_value_float_unit(7, att->Roll, 1, "d");
+}
+
+static void draw_page2_static(void)
+{
+    draw_title(L_POWER, NULL);
+    draw_label(0, L_REFEREE);
+    draw_label(1, L_STAGE);
+    draw_label(2, L_HP);
+    draw_label(3, L_POWER);
+    draw_label(4, L_BUFFER);
+    draw_label(5, L_HEATQ);
+    draw_label(6, L_AMMO);
+    draw_label(7, L_BULLET_SPEED);
+    draw_label(8, L_COIN);
+}
+
+static void draw_page2_values(void)
+{
+    uint8_t online = RefereeIsOnline();
+    referee_info_t *ref = RefereeGetInfo();
+    draw_value_cn(0, online_label(online));
+
+    if (!online || ref == NULL)
+    {
+        for (uint8_t row = 1; row <= 8u; ++row)
+            draw_value_ascii(row, "--");
+        return;
+    }
+
+    char buf[40];
+    snprintf(buf, sizeof(buf), "G:%u T:%us", (unsigned)ref->GameState.game_progress,
+             (unsigned)ref->GameState.stage_remain_time);
+    draw_value_ascii(1, buf);
+
+    snprintf(buf, sizeof(buf), "%u/%u", (unsigned)ref->GameRobotState.current_HP,
+             (unsigned)ref->GameRobotState.maximum_HP);
+    draw_value_ascii(2, buf);
+
+    float chassis_power = ref->PowerHeatData.reserved_3;
+    snprintf(buf, sizeof(buf), "%u/%uW", (unsigned)chassis_power,
+             (unsigned)ref->GameRobotState.chassis_power_limit);
+    draw_value_ascii(3, buf);
+
+    snprintf(buf, sizeof(buf), "%u", (unsigned)ref->PowerHeatData.buffer_energy);
+    draw_value_ascii(4, buf);
+
+    snprintf(buf, sizeof(buf), "%u/%u", (unsigned)ref->PowerHeatData.shooter_17mm_barrel_heat,
+             (unsigned)ref->GameRobotState.shooter_barrel_heat_limit);
+    draw_value_ascii(5, buf);
+
+    snprintf(buf, sizeof(buf), "%u/%u", (unsigned)ref->ProjectileAllowance.projectile_allowance_17mm,
+             (unsigned)ref->ProjectileAllowance.remaining_gold_coin);
+    draw_value_ascii(6, buf);
+
+    draw_value_float_unit(7, ref->ShootData.initial_speed, 1, "m/s");
+
+    snprintf(buf, sizeof(buf), "%u", (unsigned)ref->ProjectileAllowance.remaining_gold_coin);
+    draw_value_ascii(8, buf);
+}
+
+static void draw_page3_static(void)
+{
+    draw_title(L_MOTOR, NULL);
+    draw_label(0, L_CHASSIS);
+    draw_label(1, L_GIMBAL);
+    draw_label(2, L_SHOOT);
+    draw_label_ascii(3, "LF");
+    draw_label_ascii(4, "YAW");
+    draw_label(5, L_BUS);
+    draw_label(6, L_LINK);
+}
+
+static void draw_page3_values(void)
+{
+    char buf[48];
+    Chassis_Motor_Summary_t cs;
+    Gimbal_Motor_Summary_t gs;
+    Shoot_Motor_Summary_t ss;
+    Chassis_GetMotorSummary(&cs);
+    Gimbal_GetMotorSummary(&gs);
+    Shoot_GetMotorSummary(&ss);
+
+    snprintf(buf, sizeof(buf), "%s %s %s %s", cs.lf.online ? "1" : "0", cs.rf.online ? "1" : "0",
+             cs.lb.online ? "1" : "0", cs.rb.online ? "1" : "0");
+    draw_value_ascii(0, buf);
+
+    snprintf(buf, sizeof(buf), "Y:%s P:%s", gs.yaw.online ? "1" : "0", gs.pitch.online ? "1" : "0");
+    draw_value_ascii(1, buf);
+
+    snprintf(buf, sizeof(buf), "FL:%s FR:%s LDR:%s", ss.friction_l.online ? "1" : "0",
+             ss.friction_r.online ? "1" : "0", ss.loader.online ? "1" : "0");
+    draw_value_ascii(2, buf);
+
+    snprintf(buf, sizeof(buf), "spd:%ld cur:%d", (long)cs.lf.speed_aps, (int)cs.lf.current);
+    draw_value_ascii(3, buf);
+
+    snprintf(buf, sizeof(buf), "spd:%ld cur:%d", (long)gs.yaw.speed_aps, (int)gs.yaw.current);
+    draw_value_ascii(4, buf);
+
+    CAN_Status_t c1, c2, c3;
+    CANGetStatus(&hfdcan1, &c1);
+    CANGetStatus(&hfdcan2, &c2);
+    CANGetStatus(&hfdcan3, &c3);
+    snprintf(buf, sizeof(buf), "C1:%s C2:%s C3:%s", can_status_str(c1.status),
+             can_status_str(c2.status), can_status_str(c3.status));
+    draw_value_ascii(5, buf);
+
+    Vision_Status_t vs;
+    VisionGetStatus(&vs);
+    snprintf(buf, sizeof(buf), "%s M:%u BC:%u", vs.online ? "ON" : "OFF",
+             (unsigned)vs.mode, (unsigned)vs.bullet_count);
+    draw_value_ascii(6, buf);
+}
+
+void LCD_UI_DrawStatic(uint8_t page)
+{
+    lcd_page = page % LCD_PAGE_COUNT;
+    LCD_BufFill(0, 0, LCD_W - 1u, LCD_H - 1u, BLACK);
+
+    switch (lcd_page)
+    {
+    case 0:
+        draw_page0_static();
+        break;
+    case 1:
+        draw_page1_static();
+        break;
+    case 2:
+        draw_page2_static();
+        break;
+    default:
+        draw_page3_static();
+        break;
+    }
+}
+
+void LCD_UI_UpdateValues(uint8_t page)
+{
+    lcd_page = page % LCD_PAGE_COUNT;
+
+    switch (lcd_page)
+    {
+    case 0:
+        draw_page0_values();
+        break;
+    case 1:
+        draw_page1_values();
+        break;
+    case 2:
+        draw_page2_values();
+        break;
+    default:
+        draw_page3_values();
+        break;
+    }
+}
+
+void LCD_UI_Init(void)
+{
+    lcd_page = 0;
+    lcd_frozen = 0;
+    LCD_Init();
+    LCD_BufFill(0, 0, LCD_W - 1u, LCD_H - 1u, BLACK);
+    LCD_UI_DrawStatic(0);
+    LCD_UI_UpdateValues(0);
+}
+
+void LCD_UI_SetFrozen(uint8_t frozen)
+{
+    lcd_frozen = frozen ? 1u : 0u;
+    LCD_UI_DrawStatic(lcd_page);
+    LCD_UI_UpdateValues(lcd_page);
+}

@@ -145,3 +145,8 @@ uint8_t BSP_WatchdogWasIwdgReset(void)
 {
     return iwdg_reset_flag;
 }
+
+uint8_t BSP_WatchdogIsRunning(void)
+{
+    return watchdog_started;
+}

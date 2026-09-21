@@ -22,6 +22,7 @@
 
 static USARTInstance *referee_usart_instance; // 裁判系统串口实例
 static DaemonInstance *referee_daemon;		  // 裁判系统守护进程
+static uint32_t referee_last_rx_ms = 0;
 static referee_info_t referee_info;			  // 裁判系统数据
 
 /**
@@ -172,6 +173,7 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 static void RefereeRxCallback()
 {
 	DaemonReload(referee_daemon);
+	referee_last_rx_ms = HAL_GetTick();
 	JudgeReadData(referee_usart_instance->recv_buff, referee_usart_instance->last_recv_size);
 }
 // 裁判系统丢失回调函数,重新初始化裁判系统串口
@@ -208,4 +210,14 @@ void RefereeSend(uint8_t *send, uint16_t tx_len)
 {
 	USARTSend(referee_usart_instance, send, tx_len, USART_TRANSFER_DMA);
 	osDelay(115);
+}
+
+uint8_t RefereeIsOnline(void)
+{
+	return (referee_daemon != NULL && DaemonIsOnline(referee_daemon) > 0) ? 1 : 0;
+}
+
+uint32_t RefereeGetLastRxMs(void)
+{
+	return referee_last_rx_ms;
 }
