@@ -31,7 +31,7 @@ void TaskMonitorInit(void)
         monitor_items[i].alive = 1;
         monitor_items[i].fault_logged = 0;
     }
-    monitor_paused = 0;
+    monitor_paused = 0;   /* 正式行为: 关键任务都健康时才喂狗 */
 }
 
 void TaskMonitorFeed(TaskMonitor_Id_e id)

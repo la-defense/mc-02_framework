@@ -337,20 +337,23 @@ void BMI088CalibrateIMU(BMI088Instance *_bmi088)
         _bmi088->acc_coef = BMI088_ACCEL_6G_SEN;         // 标定完后要乘以9.805/gNorm
         _bmi088->BMI088_GYRO_SEN = BMI088_GYRO_2000_SEN; // 后续改为从initTable中获取
         // 一次性参数用完就丢,不用static
-        float startTime;                     // 开始标定时间,用于确定是否超时
+        /* 计时改用周期计数器(DWT_ProbeStart/ElapsedUs), 不再用 DWT_GetTimeline_s():
+           -O2 下 DWT 时间轴(带 64bit 除法与回绕处理的那套)返回值不前进, 导致下面
+           12s 超时永远不触发, 标定会无限重试(实测 outer 计数一直涨) → 启动卡死。 */
+        uint32_t startCycle;                 // 开始标定的周期计数, 用于超时判断
         uint16_t CaliTimes = 6000;           // 标定次数(6s)
         float gyroMax[3], gyroMin[3];        // 保存标定过程中读取到的数据最大值判断是否满足标定环境
         float gNormTemp, gNormMax, gNormMin; // 同上,计算矢量范数(模长)
         float gyroDiff[3], gNormDiff;        // 每个轴的最大角速度跨度及其模长
 
         BMI088_Data_t raw_data;
-        startTime = DWT_GetTimeline_s();
+        startCycle = DWT_ProbeStart();
         // 循环继续的条件为标定环境不满足
         do // 用do while至少执行一次,省得对上面的参数进行初始化
         {  // 标定超时,直接使用预标定参数(如果有)
             cali_diag_outer++;
-            cali_diag_elapsed_ms = (uint32_t)((DWT_GetTimeline_s() - startTime) * 1000.0f);
-            if (DWT_GetTimeline_s() - startTime > 12.01)
+            cali_diag_elapsed_ms = DWT_ProbeElapsedUs(startCycle) / 1000u;
+            if (DWT_ProbeElapsedUs(startCycle) > 12010000u) /* 12.01s */
             { // 两次都没有成功就切换标定模式,丢给下一个if处理,使用预标定参数
                 cali_diag_timeout_hit++;
                 _bmi088->cali_mode = BMI088_LOAD_PRE_CALI_MODE;
