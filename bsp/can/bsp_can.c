@@ -394,9 +394,9 @@ uint8_t CANRunLoopbackSelfTest(void)
 
             /* 注意: 调度器启动前 TIM23 时间基准尚未正常递增, HAL_GetTick() 不会走,
                所以这里必须用 DWT 周期计数器计时, 否则会死等(TIM23 的 uwTick 停住)。 */
-            uint64_t t0 = DWT_GetTimeline_us();
+            uint32_t t0 = DWT_ProbeStart();
             while (!selftest_rx_seen &&
-                   (DWT_GetTimeline_us() - t0) < (uint64_t)CAN_SELFTEST_WAIT_MS * 1000ull)
+                   DWT_ProbeElapsedUs(t0) < (uint32_t)CAN_SELFTEST_WAIT_MS * 1000u)
             {
             }
             if (!selftest_rx_seen)

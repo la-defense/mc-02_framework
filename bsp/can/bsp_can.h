@@ -60,7 +60,15 @@ static const uint32_t DLC_LookUp_Table[9] = {
 
 
 /* can instance typedef, every module registered to CAN should have this variable */
-#pragma pack(1)
+/* !! 这里绝对不能再加 #pragma pack(1) !!
+   -O2 下 HAL 的 FDCAN_CopyMessageToRAM() 会把 4 次字节读合并成一次 32 位读
+   ("pTxData[3]<<24 | pTxData[2]<<16 | pTxData[1]<<8 | pTxData[0]" 等价于一条 ldr),
+   而 pack(1) 会把 CANInstance 压成 1 字节对齐: dji_motor.c 里的
+   static CANInstance sender_assignment[9] 每个元素 77 字节, 于是
+   sender_assignment[1]/[2]/... 的地址落在非 4 字节边界, tx_buff 也是 →
+   一次 32 位读直接 UsageFault(UNALIGNED) → HardFault。
+   实测: -Og 逐字节拷贝不炸, -O2 一上电就 HardFault(复位循环)。
+   自然对齐后 sizeof 从 77 → 80, 多出的 3 字节填充完全可以接受。 */
 typedef struct _
 {
 #ifdef FDCAN
@@ -80,7 +88,12 @@ typedef struct _
     void (*can_module_callback)(struct _ *); // callback needs an instance to tell among registered ones
     void *id;                                // 使用can外设的模块指针(即id指向的模块拥有此can实例,是父子关系)
 } CANInstance;
-#pragma pack()
+
+/* 编译期兜底: HAL 会把 tx_buff / &txconf 当 32 位数据访问, 必须 4 字节对齐。
+   谁将来再加回 pack(1), 这里会直接编译不过。 */
+_Static_assert((sizeof(CANInstance) % 4u) == 0u, "CANInstance 大小必须是 4 的倍数");
+_Static_assert((__builtin_offsetof(CANInstance, txconf) % 4u) == 0u, "txconf 必须 4 字节对齐");
+_Static_assert((__builtin_offsetof(CANInstance, tx_buff) % 4u) == 0u, "tx_buff 必须 4 字节对齐");
 
 /* CAN实例初始化结构体,将此结构体指针传入注册函数 */
 typedef struct
