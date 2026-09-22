@@ -21,6 +21,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* 按键诊断(定义在 lcd_task.c): 上电以来见过的最小原始 ADC 值 */
+extern volatile uint16_t lcd_key_raw_min;
+
 #define COL_LABEL_X 4u
 #define COL_VALUE_X 80u
 #define ROW_Y(n) (28u + (uint16_t)(n) * 20u)
@@ -476,8 +479,11 @@ static void draw_page3_values(void)
              (unsigned)vs.mode, (unsigned)vs.bullet_count);
     draw_value_ascii(6, buf);
 
-    /* 五向按键原始 ADC 值: 用于把摇杆方向与阈值对上(按一下即可读出)。 */
-    snprintf(buf, sizeof(buf), "raw:%u", (unsigned)BSP_ADCGetRawKey());
+    /* 五向按键原始 ADC 值: 用于把摇杆方向与阈值对上(按一下即可读出)。
+       min 是"上电以来见过的最小原始值" —— 摇杆中键按下时 ADC 会趋近 0,
+       所以按住中键看一眼 min 就知道中键的实际档位值(即使识别失败也能据此调阈值)。 */
+    snprintf(buf, sizeof(buf), "raw:%u min:%u", (unsigned)BSP_ADCGetRawKey(),
+             (unsigned)lcd_key_raw_min);
     draw_value_ascii(7, buf);
 }
 

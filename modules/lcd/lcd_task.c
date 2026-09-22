@@ -15,8 +15,10 @@ typedef enum
 {
     LCD_KEY_NONE = 0,
     LCD_KEY_MID,
-    LCD_KEY_UP,
-    LCD_KEY_DOWN,
+    LCD_KEY_UP,    /* 用户视角"上" = 模组原始 right 触点 */
+    LCD_KEY_DOWN,  /* 用户视角"下" = 模组原始 left  触点 */
+    LCD_KEY_LEFT,  /* 用户视角"左" = 模组原始 up    触点 */
+    LCD_KEY_RIGHT, /* 用户视角"右" = 模组原始 down  触点 */
 } LcdKey_e;
 
 /* 五向摇杆为电阻分压, 板级例程给出的阈值是 12bit ADC, 本机 ADC 为 16bit, 故 x16:
@@ -57,16 +59,22 @@ typedef enum
 #define LCD_PRESENCE_WINDOW 10u
 #define LCD_PRESENCE_SPREAD_MAX 1500u
 #define LCD_IDLE_RAW_MIN 58000u
-#define LCD_ABSENT_RAW_LO 100u
 #define LCD_ABSENT_RAW_HI 65200u
 #define LCD_PRESENT_CONFIRM 8u  /* 连续 400ms 正常 -> 判定插回 */
 
-/* 短按: 翻页/冻结; 长按中键分两档(松开时判定):
-     1.5s ~ 3s : 手动重初始化面板(拔插后没自动恢复时的兜底)
-     >= 3s     : 进入按需 IMU 标定(进 CALIB, 电机失能, 保持静止) */
-#define LCD_KEY_SHORT_MAX_MS 1000u
+/* 按键定义(全部在"松开"时判定, 以 1.5s 为界分成"短按/长按", 没有中间的空白区):
+     < 1.5s  上/下       : 翻页
+     < 1.5s  中键        : 冻结 / 恢复
+     < 1.5s  左/右       : (无功能)
+     >= 1.5s 中键        : 手动重初始化面板(拔插后没自动恢复时的兜底), 并解除冻结
+     >= 1.5s 左/右       : 进入按需 IMU 标定(进 CALIB, 电机失能, 保持静止)
+   为什么把标定从中键挪到左右:
+     中键的长按已经被"面板重初始化"占用, 再塞"标定"会让人分不清按了多久会发生什么;
+     而且用户最常用的就是中键, 误触标定会让机器人突然失能。
+     左右键原本没有任何功能(而且之前根本没被识别), 拿来做"破坏性动作"最合适。 */
 #define LCD_KEY_LONG_MIN_MS 1500u
-#define LCD_KEY_CALIB_MIN_MS 3000u
+/* 按键去抖: 连续多少次采样一致才认账(采样周期 50ms) */
+#define LCD_KEY_DEBOUNCE_CNT 3u
 
 /* 标定结果显示保持时间(ms) */
 #define LCD_CALIB_RESULT_MS 3000u
@@ -75,6 +83,10 @@ static uint8_t lcd_page = 0;
 static uint8_t lcd_frozen = 0;
 static LcdKey_e key_active = LCD_KEY_NONE;
 static uint32_t key_press_ms = 0;
+/* 去抖状态: 见 lcd_key_update() 的说明 */
+static LcdKey_e key_cand = LCD_KEY_NONE;
+static uint8_t key_cand_cnt = 0;
+static uint8_t key_release_cnt = 0;
 
 /* 按需标定的屏幕提示状态: 0=无提示(正常刷新) 1=显示"标定中" 2=显示结果 */
 static uint8_t lcd_calib_msg = 0;
@@ -83,6 +95,7 @@ static uint32_t lcd_calib_result_until = 0;
 volatile uint8_t lcd_init_done = 0;
 volatile uint32_t lcd_heartbeat = 0;
 volatile uint16_t lcd_key_raw = 0;
+volatile uint16_t lcd_key_raw_min = 0xFFFFu; /* 上电以来见过的最小原始 ADC 值(诊断中键/左右档位) */
 volatile uint8_t lcd_key_last = 0;
 volatile uint8_t lcd_module_absent = 0;
 volatile uint16_t lcd_key_spread = 0;
@@ -241,11 +254,20 @@ static LcdKey_e lcd_key_read(void)
     uint16_t raw = BSP_ADCGetRawKey();
     lcd_key_raw = raw;
 
-    /* 采样无效(悬空/未接模组)保护: 不要把 0 附近的浮空值当成按键 */
-    if (raw < LCD_ABSENT_RAW_LO)
-        return LCD_KEY_NONE;
+    /* 诊断: 记下上电以来见过的最小原始值。摇杆"中键"按下时 ADC 会趋近 0,
+       所以即使某次按键没被识别, 事后读这个变量也能知道实际按下值是多少。 */
+    if (raw < lcd_key_raw_min)
+        lcd_key_raw_min = raw;
 
-    if (raw >= LCD_KEY_MID_LO && raw < LCD_KEY_MID_HI)
+    /* 中键: 按下时 ADC 趋近 0。
+       原来这里还有一条 "raw < LCD_ABSENT_RAW_LO(100) 判为悬空" 的保护, 那是
+       为了防"模组拔掉后引脚浮空" —— 但实测拔掉模组时读数稳定在 ~5900(落在
+       档位缝隙里, 本来就会被判成 NONE), 根本不会出现在 0 附近; 那条保护反而把
+       中键按下的真实值吃掉了 → 短按/长按中键时灵时不灵。这里去掉它,
+       也**不能**用 lcd_module_absent 来兜底: 按住按键时读数本来就会大幅变化,
+       在位检测偶尔会误判成"模组拔出", 那样会把按键整个屏蔽掉(用户体感:
+       按什么都没反应)。 */
+    if (raw < LCD_KEY_MID_HI)
         return LCD_KEY_MID;
 
     /* 用户视角的上下 = 模组原始 right/left 触点 */
@@ -253,6 +275,14 @@ static LcdKey_e lcd_key_read(void)
         return LCD_KEY_UP;
     if (raw >= LCD_KEY_LEFT_LO && raw < LCD_KEY_LEFT_HI)
         return LCD_KEY_DOWN;
+
+    /* 用户视角的左右 = 模组原始 up/down 触点。
+       模组逆时针旋转 90° 安装: 局部 +y(up) → 用户 -x(左), 局部 -y(down) → 用户 +x(右)。
+       之前这里漏了这两档, 所以摇杆左右按下去没有任何反应(直接落到 LCD_KEY_NONE)。 */
+    if (raw >= LCD_KEY_UP_LO && raw < LCD_KEY_UP_HI)
+        return LCD_KEY_LEFT;
+    if (raw >= LCD_KEY_DOWN_LO && raw < LCD_KEY_DOWN_HI)
+        return LCD_KEY_RIGHT;
 
     return LCD_KEY_NONE;
 }
@@ -316,10 +346,11 @@ static void lcd_module_presence_check(void)
         }
         lcd_key_spread = (idle_cnt > 0u) ? (uint16_t)(idle_max - idle_min) : 0u;
 
-        /* 空闲电平自己抖得厉害也说明模组不在位。
-           只看空闲采样之间的极差, 否则长按按键时电平本来就是变化的 */
-        if (idle_cnt >= 5u && lcd_key_spread > LCD_PRESENCE_SPREAD_MAX)
-            invalid = 1u;
+        /* 这里原来还有一条"空闲电平极差过大 → 判模组不在位"的判据(spread > 1500)。
+           实测本模组的空闲电平本身就会在 58000~65000 之间抖动(极差 6000+),
+           于是好端端的模组被反复判成"不在位" → 数值区停止刷新 + 误触发重初始化。
+           插拔检测其实只靠"读数落在档位缝隙里"(拔掉时稳定在 ~5900)就够了,
+           所以这条判据去掉, lcd_key_spread 仍保留仅供观察。 */
     }
 
     if (invalid)
@@ -359,19 +390,52 @@ static void lcd_key_update(void)
     LcdKey_e key = lcd_key_read();
     uint32_t now = HAL_GetTick();
 
-    if (key == key_active)
-        return;
-
-    if (key != LCD_KEY_NONE)
+    /* ---- 去抖(2026-09-22 加) ----
+       摇杆的 ADC 读数本身抖动很大(实测空闲时极差可达 6000+), 单次采样可能瞬间
+       落进相邻档位或缝隙。不做去抖会有两个后果:
+         ① 长按过程中偶发一次"读不到键", 长按就被截断成好几次短按 → 长按时灵时不灵;
+         ② 空闲抖动可能被当成按键, 甚至误触发"长按左右 = 进标定失能"。
+       规则: 按下要连续 DEBOUNCE_CNT 次采到同一个键; 松开要连续 DEBOUNCE_CNT 次
+       采到"无按键"。采样周期 50ms, 所以确认时间是 150ms。 */
+    if (key_active == LCD_KEY_NONE)
     {
+        if (key == LCD_KEY_NONE)
+        {
+            key_cand = LCD_KEY_NONE;
+            key_cand_cnt = 0u;
+            return;
+        }
+        if (key != key_cand)
+        {
+            key_cand = key;
+            key_cand_cnt = 1u;
+            return;
+        }
+        if (++key_cand_cnt < LCD_KEY_DEBOUNCE_CNT)
+            return;
+
         key_active = key;
         key_press_ms = now;
         lcd_key_last = (uint8_t)key;
-        LOGINFO("[lcd] key %u raw=%u", (unsigned)key, (unsigned)lcd_key_raw);
+        key_release_cnt = 0u;
+        LOGINFO("[lcd] key down %u raw=%u", (unsigned)key, (unsigned)lcd_key_raw);
         return;
     }
 
-    /* 松开: 短按 = 翻页/冻结, 长按中键 = 手动重初始化面板 */
+    /* 已按下: 按下期间的偶发抖动一律忽略, 只有连续 DEBOUNCE_CNT 次"无按键"才算松开 */
+    if (key != LCD_KEY_NONE)
+    {
+        key_release_cnt = 0u;
+        return;
+    }
+    if (++key_release_cnt < LCD_KEY_DEBOUNCE_CNT)
+        return;
+
+    key_cand = LCD_KEY_NONE;
+    key_cand_cnt = 0u;
+    key_release_cnt = 0u;
+
+    /* 确认松开: 短按 = 翻页/冻结; 长按中键 = 重初始化面板; 长按左右 = 按需标定 */
     LcdKey_e released = key_active;
     uint32_t duration = now - key_press_ms;
     key_active = LCD_KEY_NONE;
@@ -380,31 +444,41 @@ static void lcd_key_update(void)
     if (released == LCD_KEY_NONE || duration < 30u)
         return;
 
-    /* >=3s 长按中键: 触发一次按需 IMU 标定 */
-    if (released == LCD_KEY_MID && duration >= LCD_KEY_CALIB_MIN_MS)
-    {
-        if (BMI088CalibGetState() == BMI088_RECALIB_BUSY)
-            return; /* 已经在标定中, 忽略本次 */
-
-        LOGINFO("[lcd] long press %lums -> request IMU calibration", (unsigned long)duration);
-        RobotSafetyRequestCalib(1); /* 先失能: 标定期间电机不能动 */
-        if (!BMI088CalibRequest())
-        {
-            LOGWARNING("[lcd] calibration request rejected");
-            RobotSafetyRequestCalib(0);
-            return;
-        }
-        /* 立刻出提示, 不等标定真正跑起来 —— 一开标定 CPU 就被抢走了 */
-        LCD_UI_ShowCalibMsg(1u);
-        lcd_calib_msg = 1u;
-        return;
-    }
-
+    /* ===== 长按(>=1.5s) =====
+       注: 原来这里分了 [1s,1.5s) 和 [1.5s,3s) 两段, 其中 [1s,1.5s) 是"什么都不做"的
+       黑洞 —— 用户按 1 秒多钟松手时既不翻页也不冻结, 看起来就是"按键没反应"。
+       现在统一成"<1.5s 一律当短按, >=1.5s 一律当长按", 没有空洞区间。 */
     if (duration >= LCD_KEY_LONG_MIN_MS)
     {
+        /* 长按左/右: 触发一次按需 IMU 标定 */
+        if (released == LCD_KEY_LEFT || released == LCD_KEY_RIGHT)
+        {
+            if (BMI088CalibGetState() == BMI088_RECALIB_BUSY)
+                return; /* 已经在标定中, 忽略本次 */
+
+            LOGINFO("[lcd] long press %s %lums -> request IMU calibration",
+                    (released == LCD_KEY_LEFT) ? "L" : "R", (unsigned long)duration);
+            RobotSafetyRequestCalib(1); /* 先失能: 标定期间电机不能动 */
+            if (!BMI088CalibRequest())
+            {
+                LOGWARNING("[lcd] calibration request rejected");
+                RobotSafetyRequestCalib(0);
+                return;
+            }
+            /* 立刻出提示, 不等标定真正跑起来 —— 一开标定 CPU 就被抢走了 */
+            LCD_UI_ShowCalibMsg(1u);
+            lcd_calib_msg = 1u;
+            return;
+        }
+
+        /* 长按中键: 重初始化面板 + 顺便解冻 */
         if (released == LCD_KEY_MID)
         {
             lcd_recover_count++;
+            /* 长按中键的语义是"重置显示", 顺便解冻 —— 否则用户习惯了长按,
+               冻结之后怎么长按都解不开(长按被"重初始化"吃掉了)。 */
+            lcd_frozen = 0u;
+            LCD_UI_SetFrozen(0u);
             LOGINFO("[lcd] manual re-init (recover=%lu)", (unsigned long)lcd_recover_count);
             uint32_t t0 = DWT_ProbeStart();
             LCD_UI_Recover();
@@ -413,9 +487,7 @@ static void lcd_key_update(void)
         return;
     }
 
-    if (duration > LCD_KEY_SHORT_MAX_MS)
-        return;
-
+    /* ===== 短按(<1.5s): 上下翻页, 中键冻结/恢复; 左右无短按功能 ===== */
     switch (released)
     {
     case LCD_KEY_UP:
