@@ -67,6 +67,10 @@ static const Lcd_CnChar_e L_NO[] = LCD_LABEL_NO;
 static uint8_t lcd_page = 0;
 static uint8_t lcd_frozen = 0;
 
+/* 初始化阶段标记(排查用): 0=未开始 1=LCD_Init 2=整屏清屏 3=填充 4=静态绘制 5=数值刷新 6=完成
+   启动卡死时读它就能知道卡在哪一步, 不用靠猜。 */
+volatile uint8_t lcd_init_stage = 0;
+
 static const Lcd_CnChar_e *state_label(Robot_Status_e state)
 {
     switch (state)
@@ -473,12 +477,18 @@ void LCD_UI_Init(void)
 {
     lcd_page = 0;
     lcd_frozen = 0;
+    lcd_init_stage = 1;
     LCD_Init();
+    lcd_init_stage = 2;
     /* 先按玻璃物理范围整屏刷黑，擦掉上一版固件留在内缩区之外的残留像素 */
     LCD_BufClearPanel();
+    lcd_init_stage = 3;
     LCD_BufFill(0, 0, LCD_W - 1u, LCD_H - 1u, BLACK);
+    lcd_init_stage = 4;
     LCD_UI_DrawStatic(0);
+    lcd_init_stage = 5;
     LCD_UI_UpdateValues(0);
+    lcd_init_stage = 6;
 }
 
 /* 面板掉电(拔插模组/欠压复位)后重新初始化并整屏重画。

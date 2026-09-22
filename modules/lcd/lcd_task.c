@@ -75,6 +75,7 @@ volatile uint8_t lcd_key_last = 0;
 volatile uint8_t lcd_module_absent = 0;
 volatile uint16_t lcd_key_spread = 0;
 volatile uint32_t lcd_recover_count = 0;
+volatile uint8_t lcd_task_entered = 0; /* 1 = 任务体已开始执行(排查任务是否被创建/调度) */
 
 /* ---- 性能测量(供 OpenOCD 读取, 单位 us / 字节) ----
    lcd_prof_*_last/max: 单次操作耗时; lcd_prof_busy_us: 累计占用时间;
@@ -411,6 +412,7 @@ void StartLCDTASK(void const *argument)
 {
     (void)argument;
 
+    lcd_task_entered = 1;
     uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
     LCD_UI_Init();
     lcd_prof_init_us = (uint32_t)DWT_GetTimeline_us() - t0;

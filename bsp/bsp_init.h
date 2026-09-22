@@ -18,6 +18,15 @@
 void BSPInit()
 {
     DWT_Init(480);
+    /* 先用一个长超时启动看门狗: IWDG 一旦启动, 只有上电复位才会停止 —— 系统复位后它
+       仍按原来的 200ms 计时, 而启动流程(BMI088 在线标定 ~4s)远长于 200ms, 于是
+       "一次看门狗复位"会变成"永远起不来"的死循环。启动阶段用长超时兜住冒烟测试,
+       等 RTOS 起来后再切回 200ms(BSP_WatchdogInit(200), 见 robot.c)。 */
+    /* 启动阶段先用一个够长的超时启用看门狗: IWDG 一旦启动, 只有上电复位才会停,
+       系统复位后它仍按上次配置计时; 而启动流程(BMI088 在线标定 3~15s)远长于运行期
+       的 200ms, 于是"一次看门狗复位"会演变成"永远起不来"的死循环。
+       长耗时步骤(如标定循环)里会主动 BSP_WatchdogFeed() 报进度。 */
+    BSP_WatchdogInit(4000);
     BSPLogInit();
     BSP_ADCInit();
     BSP_WatchdogLogResetReason();

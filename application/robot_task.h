@@ -56,6 +56,12 @@ void OSTaskInit()
 
     osThreadDef(lcdtask, StartLCDTASK, osPriorityLow, 0, 1024);
     lcdTaskHandle = osThreadCreate(osThread(lcdtask), NULL);
+    if (lcdTaskHandle == NULL) /* 创建失败返回 NULL(通常是 FreeRTOS 堆不够) */
+        LOGERROR("[freeRTOS] LCD 任务创建失败: 检查 configTOTAL_HEAP_SIZE / 栈大小");
+    if (insTaskHandle == NULL)
+        LOGERROR("[freeRTOS] INS 任务创建失败");
+    if (motorTaskHandle == NULL)
+        LOGERROR("[freeRTOS] MOTOR 任务创建失败");
 
     HTMotorControlInit(); // 没有注册HT电机则不会执行
 }

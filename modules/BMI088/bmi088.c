@@ -3,8 +3,27 @@
 #include "user_lib.h"
 #include "daemon.h"
 #include "bsp_log.h"
+#include "bsp_watchdog.h"
 
 static DaemonInstance *bmi088_daemon_instance;
+
+/* ---------------- 在线标定诊断量(2026-09-22, 排查 -O2 启动卡死) ----------------
+   标定循环"卡住"时, 光看 PC 只能知道卡在哪, 看不出"为什么出不来"。这几个量把循环
+   内部状态暴露出来: 外层重试了几次、内层跑到第几轮、采集成功/失败、加速度模长、
+   超时分支是否命中。变量是 volatile, 方便 Live Watch / OpenOCD 直接读。 */
+volatile uint32_t cali_diag_outer = 0;        /* 外层 do-while 执行次数 */
+volatile uint32_t cali_diag_inner = 0;        /* 内层循环最后一次的 i */
+volatile uint32_t cali_diag_acq_ok = 0;       /* BMI088Acquire 返回 1 次数 */
+volatile uint32_t cali_diag_acq_fail = 0;     /* BMI088Acquire 返回 0 次数 */
+volatile uint32_t cali_diag_timeout_hit = 0;  /* 12s 超时分支命中次数 */
+volatile uint32_t cali_diag_diff_break = 0;   /* 因数据跳动过大提前 break 次数 */
+volatile uint32_t cali_diag_elapsed_ms = 0;   /* 进入外层时已耗时(ms) */
+volatile uint32_t cali_diag_finish = 0;       /* 标定函数正常返回次数 */
+volatile float cali_diag_acc_norm = 0.0f;     /* 最近一次 |acc| */
+volatile float cali_diag_gyro_x = 0.0f;       /* 最近一次 gyro[0] */
+volatile uint32_t cali_diag_acq_us_max = 0;   /* BMI088Acquire 单次最大耗时(us) */
+volatile uint32_t cali_diag_delay_us_max = 0; /* DWT_Delay(0.5ms) 实际最大耗时(us) */
+volatile uint32_t cali_diag_iter_us_max = 0;  /* 内层单轮最大总耗时(us) */
 
 // ---------------------------以下私有函数,用于读写BMI088寄存器封装,blocking--------------------------------//
 /**
@@ -329,8 +348,11 @@ void BMI088CalibrateIMU(BMI088Instance *_bmi088)
         // 循环继续的条件为标定环境不满足
         do // 用do while至少执行一次,省得对上面的参数进行初始化
         {  // 标定超时,直接使用预标定参数(如果有)
+            cali_diag_outer++;
+            cali_diag_elapsed_ms = (uint32_t)((DWT_GetTimeline_s() - startTime) * 1000.0f);
             if (DWT_GetTimeline_s() - startTime > 12.01)
             { // 两次都没有成功就切换标定模式,丢给下一个if处理,使用预标定参数
+                cali_diag_timeout_hit++;
                 _bmi088->cali_mode = BMI088_LOAD_PRE_CALI_MODE;
                 break;
             }
@@ -343,7 +365,22 @@ void BMI088CalibrateIMU(BMI088Instance *_bmi088)
             // @todo : 这里也有获取bmi088数据的操作,后续与BMI088Acquire合并.注意标定时的工作模式是阻塞,且offset和acc_coef要初始化成0和1,标定完成后再设定为标定值
             for (uint16_t i = 0; i < CaliTimes; ++i) // 提前计算,优化
             {
-                BMI088Acquire(_bmi088, &raw_data);
+                uint32_t diag_iter = DWT_ProbeStart();
+                cali_diag_inner = i;
+                /* 标定是启动期最长的步骤(6000 次采样), 期间没人喂狗 → 主动报进度,
+                   否则 200ms 看门狗会把启动打断(实测过: 表现为"上电起不来") */
+                if ((i % 512u) == 0u)
+                    BSP_WatchdogFeed();
+                uint32_t diag_acq = DWT_ProbeStart();
+                if (BMI088Acquire(_bmi088, &raw_data) != 0)
+                    cali_diag_acq_ok++;
+                else
+                    cali_diag_acq_fail++;
+                uint32_t acq_us = DWT_ProbeElapsedUs(diag_acq);
+                if (acq_us > cali_diag_acq_us_max)
+                    cali_diag_acq_us_max = acq_us;
+                cali_diag_acc_norm = NormOf3d(raw_data.acc);
+                cali_diag_gyro_x = raw_data.gyro[0];
                 gNormTemp = NormOf3d(raw_data.acc);
                 _bmi088->gNorm += gNormTemp; // 计算范数并累加,最后除以calib times获取单次值
                 for (uint8_t ii = 0; ii < 3; ii++)
@@ -376,8 +413,18 @@ void BMI088CalibrateIMU(BMI088Instance *_bmi088)
                     gyroDiff[0] > 0.15f ||
                     gyroDiff[1] > 0.15f ||
                     gyroDiff[2] > 0.15f)
+                {
+                    cali_diag_diff_break++;
                     break;         // 超出范围了,重开! remake到while循环,外面还有一层
+                }
+                uint32_t diag_delay = DWT_ProbeStart();
                 DWT_Delay(0.0005); // 休息一会再开始下一轮数据获取,IMU准备数据需要时间
+                uint32_t delay_us = DWT_ProbeElapsedUs(diag_delay);
+                if (delay_us > cali_diag_delay_us_max)
+                    cali_diag_delay_us_max = delay_us;
+                uint32_t iter_us = DWT_ProbeElapsedUs(diag_iter);
+                if (iter_us > cali_diag_iter_us_max)
+                    cali_diag_iter_us_max = iter_us;
             }
             _bmi088->gNorm /= (float)CaliTimes; // 加速度范数重力
             for (uint8_t i = 0; i < 3; ++i)
@@ -404,6 +451,7 @@ void BMI088CalibrateIMU(BMI088Instance *_bmi088)
         _bmi088->gNorm = BMI088_PRE_CALI_G_NORM;
     }
     _bmi088->acc_coef *= 9.805 / _bmi088->gNorm;
+    cali_diag_finish++;
 }
 
 // 考虑阻塞模式和非阻塞模式的兼容性,通过条件编译(则需要在编译前修改宏定义)或runtime参数判断
