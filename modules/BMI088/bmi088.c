@@ -486,15 +486,23 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
            原来无条件 `*= 9.805/gNorm` 会算出 inf/NaN 并污染整条加速度链路 */
         _bmi088->acc_coef = BMI088_ACCEL_6G_SEN * (9.805f / _bmi088->gNorm);
         bmi088_calib_temp = _bmi088->temperature;
-        LOGINFO("[bmi088] online calib OK: round=%u gNorm=%.4f off=%.5f/%.5f/%.5f temp=%.2f",
-                (unsigned)attempt, _bmi088->gNorm, _bmi088->gyro_offset[0],
-                _bmi088->gyro_offset[1], _bmi088->gyro_offset[2], bmi088_calib_temp);
+        /* 注意: RTT 的 printf 实现不支持 %f, 而且遇到 %f 时**不会消费参数**,
+           会让后面的 %s 取到错位的参数(见 LOG_PROTO 的结尾 %s) → 把浮点位模式
+           当指针解引用 → BusFault/HardFault。所以这里统一用"放大成整数"打印。 */
+        LOGINFO("[bmi088] online calib OK: round=%u gNorm_x1000=%ld off_x10000=%ld/%ld/%ld temp_x100=%ld",
+                (unsigned)attempt,
+                (long)(_bmi088->gNorm * 1000.0f),
+                (long)(_bmi088->gyro_offset[0] * 10000.0f),
+                (long)(_bmi088->gyro_offset[1] * 10000.0f),
+                (long)(_bmi088->gyro_offset[2] * 10000.0f),
+                (long)(bmi088_calib_temp * 100.0f));
     }
     else
     {
         _bmi088->acc_coef = BMI088_ACCEL_6G_SEN;
-        LOGERROR("[bmi088] online calib FAILED: round=%u timed_out=%u gNorm=%.4f elapsed=%lums",
-                 (unsigned)attempt, (unsigned)timed_out, _bmi088->gNorm,
+        LOGERROR("[bmi088] online calib FAILED: round=%u timed_out=%u gNorm_x1000=%ld elapsed=%lums",
+                 (unsigned)attempt, (unsigned)timed_out,
+                 (long)(_bmi088->gNorm * 1000.0f),
                  (unsigned long)cali_diag_elapsed_ms);
     }
 
@@ -634,8 +642,9 @@ static void BMI088CalibInit(BMI088Instance *b, BMI088_Calibrate_Mode_e cfg_mode)
         bmi088_calib_source = BMI088_CALIB_SRC_FLASH;
         s_calib_ok = 1;
         RobotSafetySetCalibValid(1);
-        LOGINFO("[bmi088] 使用 Flash 标定记录: gNorm=%.4f off=%.5f/%.5f/%.5f", b->gNorm,
-                b->gyro_offset[0], b->gyro_offset[1], b->gyro_offset[2]);
+        LOGINFO("[bmi088] 使用 Flash 标定记录: gNorm_x1000=%ld off_x10000=%ld/%ld/%ld",
+                (long)(b->gNorm * 1000.0f), (long)(b->gyro_offset[0] * 10000.0f),
+                (long)(b->gyro_offset[1] * 10000.0f), (long)(b->gyro_offset[2] * 10000.0f));
         return;
     }
 

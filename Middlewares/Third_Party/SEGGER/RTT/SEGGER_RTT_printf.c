@@ -442,6 +442,25 @@ int SEGGER_RTT_vprintf(unsigned BufferIndex, const char * sFormat, va_list * pPa
         _StoreChar(&BufferDesc, '%');
         break;
       default:
+        //
+        // 本实现不支持浮点说明符(%f/%e/%g/%a)。
+        // 关键: 即使不打, 也必须**把对应的参数消费掉**。
+        // 因为 LOG_PROTO() 的格式串是 "  %s%s" format "\r\n%s" —— format 后面
+        // 还跟着一个 %s。若这里不消费参数, 后面那个 %s 就会取到错位的参数,
+        // 把 float 的位模式当指针解引用 → BusFault → HardFault。
+        // (本工程实测踩过: BFAR=0xC0000000, PC 停在 SEGGER_RTT_vprintf 的 *s)
+        // 注意: 可变参数里 float 会提升为 double, 占 2 个 32bit 槽。
+        //
+        switch (c) {
+        case 'f': case 'F':
+        case 'e': case 'E':
+        case 'g': case 'G':
+        case 'a': case 'A':
+          (void)va_arg(*pParamList, double);
+          break;
+        default:
+          break;
+        }
         break;
       }
       sFormat++;

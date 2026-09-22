@@ -80,7 +80,9 @@ static inline void DWT_ProbeDone(DWT_Probe_t *probe, uint32_t start)
         float tstart = DWT_GetTimeline_s();      \
         code;                                    \
         dt = DWT_GetTimeline_s() - tstart;       \
-        LOGINFO("[DWT] " #dt " = %f s\r\n", dt); \
+        /* RTT 的 printf 不支持 %f 且遇到 %f 不消费参数 → 会打崩后面的 %s, */ \
+        /* 所以放大成整数打印(单位 us)。 */                                \
+        LOGINFO("[DWT] " #dt " = %ld us\r\n", (long)(dt * 1000000.0f));    \
     } while (0)
 
 /**
