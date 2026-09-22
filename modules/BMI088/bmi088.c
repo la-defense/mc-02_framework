@@ -4,6 +4,10 @@
 #include "daemon.h"
 #include "bsp_log.h"
 #include "bsp_watchdog.h"
+#include "bsp_param.h"
+#include "robot_safety.h"
+#include "cmsis_os.h"
+#include <math.h>
 
 static DaemonInstance *bmi088_daemon_instance;
 
@@ -319,6 +323,13 @@ uint8_t BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data_store)
 #define BMI088_PRE_CALI_ACC_Y_OFFSET 0.0f
 #define BMI088_PRE_CALI_ACC_Z_OFFSET 0.0f
 #define BMI088_PRE_CALI_G_NORM 9.805f
+
+/* 在线标定最多重试轮数(每轮 6000 次采样, 约 3.6s)。
+   原来是 12s 超时前无限重试; -O2 下超时判据失效就变成无限重标定 → 启动卡死。 */
+#define BMI088_CALI_MAX_ATTEMPTS 3u
+/* 标定循环里每隔多少次采样让出一次 CPU(给 daemon 喂狗、给 LCD 显示"标定中") */
+#define BMI088_CALI_YIELD_INTERVAL 512u
+#define BMI088_CALI_YIELD_MS 5u
 /**
  * @brief BMI088 acc gyro 标定
  * @note 标定后的数据存储在bmi088->bias和gNorm中,用于后续数据消噪和单位转换归一化
@@ -330,8 +341,12 @@ uint8_t BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data_store)
  *
  * @param _bmi088 待标定的BMI088实例
  */
-void BMI088CalibrateIMU(BMI088Instance *_bmi088)
+uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
 {
+    uint8_t online_ok = 0;
+    uint8_t timed_out = 0; /* 1=超时放弃, 结果不可信 */
+    uint16_t attempt = 0;  /* 已尝试轮数(最多 BMI088_CALI_MAX_ATTEMPTS) */
+
     if (_bmi088->cali_mode == BMI088_CALIBRATE_ONLINE_MODE) // 性感bmi088在线标定,耗时6s
     {
         _bmi088->acc_coef = BMI088_ACCEL_6G_SEN;         // 标定完后要乘以9.805/gNorm
@@ -352,11 +367,13 @@ void BMI088CalibrateIMU(BMI088Instance *_bmi088)
         do // 用do while至少执行一次,省得对上面的参数进行初始化
         {  // 标定超时,直接使用预标定参数(如果有)
             cali_diag_outer++;
+            attempt++;
+            bmi088_calib_attempts = (uint8_t)attempt;
             cali_diag_elapsed_ms = DWT_ProbeElapsedUs(startCycle) / 1000u;
             if (DWT_ProbeElapsedUs(startCycle) > 12010000u) /* 12.01s */
             { // 两次都没有成功就切换标定模式,丢给下一个if处理,使用预标定参数
                 cali_diag_timeout_hit++;
-                _bmi088->cali_mode = BMI088_LOAD_PRE_CALI_MODE;
+                timed_out = 1;
                 break;
             }
 
@@ -375,6 +392,12 @@ void BMI088CalibrateIMU(BMI088Instance *_bmi088)
                    也让"是否仍有复位"成为判断复位源的干净实验:
                    若逐轮喂狗后仍复位, 就说明复位不是看门狗引起的。 */
                 BSP_WatchdogFeed();
+                /* 标定在 INS 任务(AboveNormal)里跑, 且这里是忙等 → 低优先级的
+                   daemon/LCD 任务会被饿死几秒。运行期定期让出 CPU 一小会儿,
+                   让 daemon 继续喂狗、LCD 能显示"标定中"。
+                   启动期调度器还没跑, 只能纯忙等(osDelay 会失败)。 */
+                if (((i % BMI088_CALI_YIELD_INTERVAL) == 0u) && osKernelRunning())
+                    osDelay(BMI088_CALI_YIELD_MS);
                 uint32_t diag_acq = DWT_ProbeStart();
                 if (BMI088Acquire(_bmi088, &raw_data) != 0)
                     cali_diag_acq_ok++;
@@ -436,26 +459,277 @@ void BMI088CalibrateIMU(BMI088Instance *_bmi088)
             // 这里直接存到temperature,可以另外增加BMI088Instance的成员变量TempWhenCalib
             _bmi088->temperature = raw_data.temperature * BMI088_TEMP_FACTOR + BMI088_TEMP_OFFSET; // 保存标定时的温度,如果已知温度和零飘的关系
             // caliTryOutCount++; 保存已经尝试的标定次数?由你.
-        } while (gNormDiff > 0.5f ||
-                 fabsf(_bmi088->gNorm - 9.8f) > 0.5f ||
-                 gyroDiff[0] > 0.15f ||
-                 gyroDiff[1] > 0.15f ||
-                 gyroDiff[2] > 0.15f ||
-                 fabsf(_bmi088->gyro_offset[0]) > 0.01f ||
-                 fabsf(_bmi088->gyro_offset[1]) > 0.01f ||
-                 fabsf(_bmi088->gyro_offset[2]) > 0.01f); // 满足条件说明标定环境不好
+        } while ((gNormDiff > 0.5f ||
+                  fabsf(_bmi088->gNorm - 9.8f) > 0.5f ||
+                  gyroDiff[0] > 0.15f ||
+                  gyroDiff[1] > 0.15f ||
+                  gyroDiff[2] > 0.15f ||
+                  fabsf(_bmi088->gyro_offset[0]) > 0.01f ||
+                  fabsf(_bmi088->gyro_offset[1]) > 0.01f ||
+                  fabsf(_bmi088->gyro_offset[2]) > 0.01f) && // 满足条件说明标定环境不好
+                 attempt < BMI088_CALI_MAX_ATTEMPTS); // 最多试 3 轮, 避免开机无限重标定
+
+        /* 判据与循环条件完全一致: 循环是"因为判据满足才退出"才算成功 */
+        online_ok = (uint8_t)(timed_out == 0 &&
+                              gNormDiff <= 0.5f &&
+                              fabsf(_bmi088->gNorm - 9.8f) <= 0.5f &&
+                              gyroDiff[0] <= 0.15f && gyroDiff[1] <= 0.15f && gyroDiff[2] <= 0.15f &&
+                              fabsf(_bmi088->gyro_offset[0]) <= 0.01f &&
+                              fabsf(_bmi088->gyro_offset[1]) <= 0.01f &&
+                              fabsf(_bmi088->gyro_offset[2]) <= 0.01f);
     }
 
-    // 离线标定
-    if (_bmi088->cali_mode == BMI088_LOAD_PRE_CALI_MODE) // 如果标定失败也会进来,直接使用离线数据
+    if (online_ok)
+    {
+        /* 只有判据通过才允许算 acc_coef: 失败时 gNorm 可能是垃圾值(甚至 0),
+           原来无条件 `*= 9.805/gNorm` 会算出 inf/NaN 并污染整条加速度链路 */
+        _bmi088->acc_coef = BMI088_ACCEL_6G_SEN * (9.805f / _bmi088->gNorm);
+        bmi088_calib_temp = _bmi088->temperature;
+        LOGINFO("[bmi088] online calib OK: round=%u gNorm=%.4f off=%.5f/%.5f/%.5f temp=%.2f",
+                (unsigned)attempt, _bmi088->gNorm, _bmi088->gyro_offset[0],
+                _bmi088->gyro_offset[1], _bmi088->gyro_offset[2], bmi088_calib_temp);
+    }
+    else
+    {
+        _bmi088->acc_coef = BMI088_ACCEL_6G_SEN;
+        LOGERROR("[bmi088] online calib FAILED: round=%u timed_out=%u gNorm=%.4f elapsed=%lums",
+                 (unsigned)attempt, (unsigned)timed_out, _bmi088->gNorm,
+                 (unsigned long)cali_diag_elapsed_ms);
+    }
+
+    // 离线标定: 上层显式要求(离线调试)时使用编译期默认值
+    if (_bmi088->cali_mode == BMI088_LOAD_PRE_CALI_MODE) // 直接使用离线数据
     {
         _bmi088->gyro_offset[0] = BMI088_PRE_CALI_ACC_X_OFFSET;
         _bmi088->gyro_offset[1] = BMI088_PRE_CALI_ACC_Y_OFFSET;
         _bmi088->gyro_offset[2] = BMI088_PRE_CALI_ACC_Z_OFFSET;
         _bmi088->gNorm = BMI088_PRE_CALI_G_NORM;
+        _bmi088->BMI088_GYRO_SEN = BMI088_GYRO_2000_SEN;
+        _bmi088->acc_coef = BMI088_ACCEL_6G_SEN;
     }
-    _bmi088->acc_coef *= 9.805 / _bmi088->gNorm;
     cali_diag_finish++;
+    return online_ok;
+}
+
+/* ============================================================================
+   标定结果持久化 + 按需标定 (2026-09)
+   ----------------------------------------------------------------------------
+   背景: 原来 BMI088Register 无条件做 6000 次采样在线标定, 启动要 3~15s;
+         -O2 下更会因为 DWT 时间轴失效导致 12s 超时永不触发 → 无限重标定 → 启动卡死。
+   现在:
+     1) 启动先查内部 Flash 参数区(bsp/param) 有没有有效记录 → 有就直接用(启动 <1s),
+        并 RobotSafetySetCalibValid(1);
+     2) 没有记录 → 首次自动标定一次(最多 BMI088_CALI_MAX_ATTEMPTS 轮), 成功即写参数区;
+        失败用编译期默认值 + CALIB_INVALID 报警, 但**不阻塞启动**;
+     3) 运行期由 LCD 长按中键 3s 触发按需标定(BMI088CalibRequest),
+        由 INS 任务在自身上下文里执行(BMI088CalibService), 避免和 INS_Task 抢 SPI。
+   ========================================================================== */
+
+volatile uint8_t bmi088_calib_source = BMI088_CALIB_SRC_NONE; /* 标定来源 */
+volatile float bmi088_calib_temp = 0.0f;                      /* 标定时 IMU 温度 */
+volatile uint8_t bmi088_calib_attempts = 0;                   /* 最近一次标定用了几轮 */
+
+static BMI088Instance *s_calib_instance = NULL; /* 由 BMI088Register 设置 */
+static volatile uint8_t s_calib_ok = 0;         /* 当前 gyro_offset/gNorm 是否可信 */
+static volatile uint8_t s_recalib_state = BMI088_RECALIB_IDLE;
+static volatile uint8_t s_recalib_request = 0;
+
+/**
+ * @brief 把一组标定值写进实例(顺带把 acc_coef / 陀螺灵敏度一起算好, 防止漏设)
+ */
+static void BMI088ApplyCalib(BMI088Instance *b, const float *off, float gNorm)
+{
+    for (uint8_t i = 0; i < 3; ++i)
+        b->gyro_offset[i] = off[i];
+    b->gNorm = gNorm;
+    b->BMI088_GYRO_SEN = BMI088_GYRO_2000_SEN;
+    b->acc_coef = BMI088_ACCEL_6G_SEN * (9.805f / gNorm);
+}
+
+/**
+ * @brief 标定值合理性检查
+ * @note  CRC32 只能证明"写进去的字节没坏", 证不了"数值合理"
+ *        (比如参数区被别的固件写过), 所以这里再卡一次范围
+ */
+static uint8_t BMI088CalibSanity(const float *off, float gNorm)
+{
+    if (!isfinite(off[0]) || !isfinite(off[1]) || !isfinite(off[2]) || !isfinite(gNorm))
+        return 0;
+    if (fabsf(off[0]) > 0.1f || fabsf(off[1]) > 0.1f || fabsf(off[2]) > 0.1f)
+        return 0;
+    if (gNorm < 9.0f || gNorm > 10.5f)
+        return 0;
+    return 1;
+}
+
+/** @brief 从参数区读标定值并应用; 返回 1=成功 */
+static uint8_t BMI088CalibLoad(BMI088Instance *b)
+{
+    float off[3];
+    float gNorm = 0.0f;
+
+    if (!ParamGetFloats(PARAM_KEY_IMU_GYRO_OFFSET, off, 3))
+        return 0;
+    if (!ParamGetFloat(PARAM_KEY_IMU_G_NORM, &gNorm))
+        return 0;
+    if (!BMI088CalibSanity(off, gNorm))
+    {
+        LOGERROR("[bmi088] Flash 里的标定值超出合理范围, 视为无效");
+        return 0;
+    }
+    BMI088ApplyCalib(b, off, gNorm);
+    return 1;
+}
+
+/** @brief 把当前标定值写进参数区并提交(擦写期间看门狗被参数模块临时放长); 返回 1=成功 */
+static uint8_t BMI088CalibSave(BMI088Instance *b)
+{
+    ParamImuCalibMeta_t meta;
+    float off[3] = {b->gyro_offset[0], b->gyro_offset[1], b->gyro_offset[2]};
+
+    meta.result = (uint32_t)PARAM_IMU_CALIB_OK;
+    meta.temperature = b->temperature;
+    meta.time_s = (uint32_t)(HAL_GetTick() / 1000u);
+
+    if (!ParamSetFloats(PARAM_KEY_IMU_GYRO_OFFSET, off, 3) ||
+        !ParamSetFloat(PARAM_KEY_IMU_G_NORM, b->gNorm) ||
+        !ParamSet(PARAM_KEY_IMU_CALIB_META, &meta, sizeof(meta)))
+    {
+        LOGERROR("[bmi088] 标定值写入参数缓存失败");
+        return 0;
+    }
+    return ParamCommit();
+}
+
+/**
+ * @brief 启动期决定这次用哪套标定值: Flash 记录 → 首次自动标定 → 编译期默认值
+ */
+static void BMI088CalibInit(BMI088Instance *b, BMI088_Calibrate_Mode_e cfg_mode)
+{
+    const float default_off[3] = {BMI088_PRE_CALI_ACC_X_OFFSET,
+                                  BMI088_PRE_CALI_ACC_Y_OFFSET,
+                                  BMI088_PRE_CALI_ACC_Z_OFFSET};
+
+    ParamInit(); /* 幂等: 已经扫过就直接返回, 不会覆盖 RAM 缓存 */
+
+    if (cfg_mode == BMI088_LOAD_PRE_CALI_MODE)
+    { /* 上层显式要求离线标定(纯硬件调试), 尊重配置, 不去读 Flash */
+        BMI088ApplyCalib(b, default_off, BMI088_PRE_CALI_G_NORM);
+        bmi088_calib_source = BMI088_CALIB_SRC_DEFAULT;
+        s_calib_ok = 0;
+        LOGWARNING("[bmi088] cali_mode=LOAD_PRE_CALI: 使用编译期默认标定值");
+        return;
+    }
+
+    if (BMI088CalibLoad(b))
+    {
+        bmi088_calib_source = BMI088_CALIB_SRC_FLASH;
+        s_calib_ok = 1;
+        RobotSafetySetCalibValid(1);
+        LOGINFO("[bmi088] 使用 Flash 标定记录: gNorm=%.4f off=%.5f/%.5f/%.5f", b->gNorm,
+                b->gyro_offset[0], b->gyro_offset[1], b->gyro_offset[2]);
+        return;
+    }
+
+    /* 没有有效记录: 首次自动标定(最多 3 轮), 成功即写参数区 */
+    LOGWARNING("[bmi088] 无 Flash 标定记录, 首次自动标定(请保持静止)...");
+    BMI088_Calibrate_Mode_e saved_mode = b->cali_mode;
+    b->cali_mode = BMI088_CALIBRATE_ONLINE_MODE;
+    bmi088_calib_attempts = 0;
+    uint8_t ok = BMI088CalibrateIMU(b);
+    b->cali_mode = saved_mode;
+
+    if (ok)
+    {
+        bmi088_calib_source = BMI088_CALIB_SRC_FIRST_AUTO;
+        s_calib_ok = 1;
+        RobotSafetySetCalibValid(1);
+        if (BMI088CalibSave(b))
+            LOGINFO("[bmi088] 首次自动标定成功并已保存(rounds=%u)", (unsigned)bmi088_calib_attempts);
+        else
+            LOGERROR("[bmi088] 首次自动标定成功但保存失败, 下次启动会重新标定");
+    }
+    else
+    {
+        BMI088ApplyCalib(b, default_off, BMI088_PRE_CALI_G_NORM);
+        bmi088_calib_source = BMI088_CALIB_SRC_DEFAULT;
+        s_calib_ok = 0;
+        RobotSafetySetCalibValid(0); /* → ROBOT_FAULT_CALIB_INVALID, 不阻塞启动 */
+        LOGERROR("[bmi088] 首次自动标定失败(rounds=%u), 使用默认值并置 CALIB_INVALID",
+                 (unsigned)bmi088_calib_attempts);
+    }
+}
+
+uint8_t BMI088CalibRequest(void)
+{
+    if (s_calib_instance == NULL)
+        return 0;
+    if (s_recalib_state == BMI088_RECALIB_BUSY)
+        return 0; /* 已经在标定中, 不重复受理 */
+
+    s_recalib_state = BMI088_RECALIB_BUSY;
+    s_recalib_request = 1;
+    return 1;
+}
+
+uint8_t BMI088CalibService(void)
+{
+    if (!s_recalib_request)
+        return 0;
+    s_recalib_request = 0;
+
+    BMI088Instance *b = s_calib_instance;
+    s_recalib_state = BMI088_RECALIB_BUSY;
+    if (b == NULL)
+    {
+        s_recalib_state = BMI088_RECALIB_FAIL;
+        return 1;
+    }
+
+    LOGWARNING("[bmi088] 按需标定开始, 请保持静止...");
+    BMI088_Calibrate_Mode_e saved_mode = b->cali_mode;
+    b->cali_mode = BMI088_CALIBRATE_ONLINE_MODE;
+    bmi088_calib_attempts = 0;
+    uint8_t ok = BMI088CalibrateIMU(b);
+    b->cali_mode = saved_mode;
+
+    if (ok)
+    {
+        s_calib_ok = 1;
+        RobotSafetySetCalibValid(1);
+        bmi088_calib_source = BMI088_CALIB_SRC_MANUAL;
+        if (BMI088CalibSave(b))
+            LOGINFO("[bmi088] 按需标定成功并已保存(rounds=%u)", (unsigned)bmi088_calib_attempts);
+        else
+            LOGERROR("[bmi088] 按需标定成功, 但写参数区失败(重启会退回旧值)");
+    }
+    else
+    {
+        /* 保留旧值/默认值, 并上报 CALIB_INVALID 阻止进入 READY */
+        s_calib_ok = 0;
+        RobotSafetySetCalibValid(0);
+        LOGERROR("[bmi088] 按需标定失败(rounds=%u), 保留旧值并置 CALIB_INVALID",
+                 (unsigned)bmi088_calib_attempts);
+    }
+
+    s_recalib_state = ok ? BMI088_RECALIB_OK : BMI088_RECALIB_FAIL;
+    return 1;
+}
+
+uint8_t BMI088CalibGetState(void)
+{
+    return s_recalib_state;
+}
+
+void BMI088CalibAckResult(void)
+{
+    if (s_recalib_state == BMI088_RECALIB_OK || s_recalib_state == BMI088_RECALIB_FAIL)
+        s_recalib_state = BMI088_RECALIB_IDLE;
+}
+
+uint8_t BMI088CalibIsValid(void)
+{
+    return s_calib_ok;
 }
 
 // 考虑阻塞模式和非阻塞模式的兼容性,通过条件编译(则需要在编译前修改宏定义)或runtime参数判断
@@ -517,8 +791,10 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     }
 
     bmi088_instance->work_mode = BMI088_BLOCK_PERIODIC_MODE; // 临时设置为阻塞模式
-    BMI088CalibrateIMU(bmi088_instance);                     // 标定acc和gyro
-    bmi088_instance->work_mode = config->work_mode;          // 恢复工作模式
+    s_calib_instance = bmi088_instance;                      // 供按需标定使用
+    // 标定: Flash 有记录→直接用(启动<1s); 没有→首次自动标定并保存; 失败→默认值+报警
+    BMI088CalibInit(bmi088_instance, config->cali_mode);
+    bmi088_instance->work_mode = config->work_mode; // 恢复工作模式
     if (config->work_mode == BMI088_BLOCK_TRIGGER_MODE)
     {
         bmi088_instance->spi_acc->spi_work_mode = SPI_DMA_MODE;

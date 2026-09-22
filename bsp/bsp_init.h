@@ -6,6 +6,7 @@
 #include "bsp_dwt.h"
 #include "bsp_watchdog.h"
 #include "bsp_adc.h"
+#include "bsp_param.h"
 //#include "bsp_usb.h"
 
 /**
@@ -30,6 +31,9 @@ void BSPInit()
     BSPLogInit();
     BSP_ADCInit();
     BSP_WatchdogLogResetReason();
+    /* 通用参数区读取(内部 Flash 扇区 6/7, A/B 双份): BMI088 标定值等
+       需要掉电保持的参数都放这里。幂等, 后面各模块再调用也只是直接返回上次结果。 */
+    ParamInit();
 }
 
 

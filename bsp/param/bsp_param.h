@@ -40,6 +40,16 @@ typedef enum
     PARAM_IMU_CALIB_FAILED = 2,  /* 标定失败(用默认值, 下次仍会尝试) */
 } Param_ImuCalibResult_e;
 
+/* PARAM_KEY_IMU_CALIB_META 的内容: 标定结果 + 标定时的温度 + 标定时刻 */
+typedef struct
+{
+    uint32_t result;      /* Param_ImuCalibResult_e */
+    float temperature;    /* 标定时的 IMU 温度(摄氏度) */
+    uint32_t time_s;      /* 距上电的秒数(仅作记录, 没有 RTC) */
+} ParamImuCalibMeta_t;
+
+_Static_assert(sizeof(ParamImuCalibMeta_t) == 12, "标定元数据必须是 12 字节");
+
 /**
  * @brief 初始化参数存储: 扫描 A/B 区, 校验并从 seq 更大的有效记录载入 RAM 缓存
  * @return 1=载入到有效记录; 0=两个区都没有有效记录(参数为空, 调用方应使用默认值)

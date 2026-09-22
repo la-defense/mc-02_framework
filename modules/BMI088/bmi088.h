@@ -109,10 +109,55 @@ uint8_t BMI088Acquire(BMI088Instance *bmi088,BMI088_Data_t* data_store);
 
 /**
  * @brief 标定传感器.BMI088在初始化的时候会调用此函数. 提供接口方便标定离线数据
- * @attention @todo 注意,当操作系统开始运行后,此函数会和INS_Task冲突.目前不允许在运行时调用此函数,后续加入标志位判断以提供运行时重新的标定功能
+ * @attention 本函数只做"在线标定"这一件事, 不再自己决定失败后用哪套参数
+ *            (Flash 记录 / 编译期默认值由 BMI088CalibInit 与 BMI088CalibService 决定)。
+ *            运行期请通过 BMI088CalibRequest + BMI088CalibService 触发, 不要直接调用。
  *
  * @param _bmi088 待标定的实例
+ * @return 1=在线标定成功(已通过严格判据); 0=超时/判据不满足, 结果不可信
  */
-void BMI088CalibrateIMU(BMI088Instance *_bmi088);
+uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088);
+
+/* ---------------- 标定来源(供 LCD / RTT / OpenOCD 观察) ---------------- */
+typedef enum
+{
+    BMI088_CALIB_SRC_NONE = 0,   /* 尚未确定 */
+    BMI088_CALIB_SRC_FLASH,      /* 直接用内部 Flash 参数区里的记录 */
+    BMI088_CALIB_SRC_FIRST_AUTO, /* 首次启动自动标定, 已保存 */
+    BMI088_CALIB_SRC_MANUAL,     /* 运行期按需标定, 已保存 */
+    BMI088_CALIB_SRC_DEFAULT,    /* 标定失败, 退回编译期默认值 */
+} BMI088_CalibSource_e;
+
+/* ---------------- 按需标定状态机 ---------------- */
+typedef enum
+{
+    BMI088_RECALIB_IDLE = 0, /* 空闲 */
+    BMI088_RECALIB_BUSY,     /* 已受理, 标定/写参数进行中 */
+    BMI088_RECALIB_OK,       /* 成功(已写参数区) */
+    BMI088_RECALIB_FAIL,     /* 失败(保留旧值, 已置 CALIB_INVALID) */
+} BMI088_RecalibState_e;
+
+extern volatile uint8_t bmi088_calib_source;   /* BMI088_CalibSource_e */
+extern volatile float bmi088_calib_temp;       /* 标定时 IMU 温度(摄氏度) */
+extern volatile uint8_t bmi088_calib_attempts; /* 最近一次标定用了几轮 */
+
+/**
+ * @brief 申请一次"按需标定"(由 LCD 长按中键触发, 进程内只允许一个未完成请求)
+ * @return 1=已受理(状态变 BUSY); 0=已在进行中或 IMU 未注册
+ */
+uint8_t BMI088CalibRequest(void);
+
+/**
+ * @brief 按需标定的执行体. 必须在 INS 任务里每轮调用(IMU 的 SPI 只被该任务使用)
+ * @return 1=本次真的执行了标定(调用方应跳过本轮姿态解算); 0=无请求, 什么都没做
+ */
+uint8_t BMI088CalibService(void);
+
+/** @brief 取按需标定状态(BMI088_RecalibState_e) */
+uint8_t BMI088CalibGetState(void);
+/** @brief LCD 显示完结果后调用, 把 OK/FAIL 状态清回 IDLE */
+void BMI088CalibAckResult(void);
+/** @brief 当前正在使用的标定值是否可信(0 时不允许进入 READY) */
+uint8_t BMI088CalibIsValid(void);
 
 #endif // !__BMI088_H__

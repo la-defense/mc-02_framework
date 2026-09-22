@@ -179,6 +179,15 @@ void INS_Task(void)
     uint32_t probe_all = DWT_ProbeStart();
     uint32_t probe_seg;
 
+    /* 按需标定: 由 LCD 长按中键触发, 必须由 IMU 的拥有者任务来执行,
+       否则会和这里的 BMI088Acquire 抢同一条 SPI。 */
+    if (BMI088CalibService())
+    {
+        DWT_GetDeltaT(&INS_DWT_Count); /* 丢掉标定耗时, 否则 EKF 会拿到一个巨大的 dt */
+        DWT_ProbeDone(&ins_prof_all, probe_all);
+        return;
+    }
+
     dt = DWT_GetDeltaT(&INS_DWT_Count);
     t += dt;
 

@@ -224,7 +224,15 @@ static uint8_t ParamReadSector(uint32_t sector_addr, uint8_t *out, ParamHeader_t
 
 uint8_t ParamInit(void)
 {
+    static uint8_t s_inited = 0;
     ParamHeader_t hdr_a, hdr_b;
+
+    /* 幂等: 参数区在启动期读一次就够, 重复调用直接返回上次结果,
+       避免把后来 ParamSet 的 RAM 缓存又用 Flash 老内容覆盖掉 */
+    if (s_inited)
+        return param_loaded;
+    s_inited = 1;
+
     uint8_t valid_a = ParamReadSector(PARAM_SECTOR_A_ADDR, NULL, &hdr_a);
     uint8_t valid_b = ParamReadSector(PARAM_SECTOR_B_ADDR, NULL, &hdr_b);
 
