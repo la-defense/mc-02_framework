@@ -1,11 +1,42 @@
 #include "bsp_spi.h"
 #include "memory.h"
 #include "stdlib.h"
+#include "bsp_dwt.h"
+#include "bsp_log.h"
 
 /* 所有的spi instance保存于此,用于callback时判断中断来源*/
 static SPIInstance *spi_instance[SPI_DEVICE_CNT] = {NULL};
 static uint8_t idx = 0;                         // 配合中断以及初始化
-uint8_t SPIDeviceOnGoing[SPI_DEVICE_CNT] = {[0 ... SPI_DEVICE_CNT - 1] = 1}; // 用于判断当前spi是否正在传输,防止多个模块同时使用一个spi总线 (0: 正在传输, 1: 未传输)
+/* 用于判断当前 spi 是否正在传输, 防止多个模块同时使用一条总线 (0: 正在传输, 1: 空闲)
+   @attention 必须 volatile: 它在 SPI 完成中断里被写、在任务里被轮询。
+   之前漏了 volatile, -Og 下"碰巧"能跑, 换 -O2 后轮询被优化成死循环(BMI088 初始化卡死)。 */
+volatile uint8_t SPIDeviceOnGoing[SPI_DEVICE_CNT] = {[0 ... SPI_DEVICE_CNT - 1] = 1};
+
+/* SPI 总线忙等待超时(us): 正常一次传输是个位数微秒~百微秒量级, 1ms 足够;
+   超时说明完成中断没来(总线/中断异常), 不能永久卡死在这里。 */
+#define SPI_BUSY_TIMEOUT_US 1000u
+volatile uint32_t spi_bus_timeout_cnt[SPI_DEVICE_CNT] = {0};
+
+/* 等待总线空闲: 带超时, 超时就计数 + 限速告警 + 强制放行(否则会永久卡死) */
+static void SPIWaitIdle(volatile uint8_t *busy_flag, uint32_t timeout_us)
+{
+    uint32_t t0 = DWT_ProbeStart();
+    while (!(*busy_flag))
+    {
+        if (DWT_ProbeElapsedUs(t0) > timeout_us)
+        {
+            static LogRateLimit_t rl_spi_busy = {0};
+            uint8_t bus_idx = (uint8_t)(busy_flag - &SPIDeviceOnGoing[0]);
+            if (bus_idx < SPI_DEVICE_CNT)
+                spi_bus_timeout_cnt[bus_idx]++;
+            if (LogRateLimitAllow(&rl_spi_busy, 1000u))
+                LOGERROR("[bsp_spi] 总线忙等待超时, 强制放行 (累计 %lu 次, 期间限速 %lu 条)",
+                         (unsigned long)rl_spi_busy.total, (unsigned long)rl_spi_busy.dropped);
+            *busy_flag = 1u; /* 认为上一次传输已经死掉, 释放总线避免永久卡死 */
+            break;
+        }
+    }
+}
 
 SPIInstance *SPIRegister(SPI_Init_Config_s *conf)
 {
@@ -95,18 +126,14 @@ void SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_
     // 用于稍后回调使用,请保证ptr_data_rx在回调函数被调用之前仍然在作用域内,否则析构之后的行为是未定义的!!!
     spi_ins->rx_size = len;
     spi_ins->rx_buffer = ptr_data_rx;
-    // 等待上一次传输完成
+    // 等待上一次传输完成(带超时): 没有超时保护的话, 一旦完成中断没来就会永久卡死
     if (spi_ins->spi_handle->Instance == SPI1)
     {
-        while (!SPIDeviceOnGoing[0])
-        {
-        };
+        SPIWaitIdle(&SPIDeviceOnGoing[0], SPI_BUSY_TIMEOUT_US);
     }
     else if (spi_ins->spi_handle->Instance == SPI2)
     {
-        while (!SPIDeviceOnGoing[1])
-        {
-        };
+        SPIWaitIdle(&SPIDeviceOnGoing[1], SPI_BUSY_TIMEOUT_US);
     }
     // 拉低片选,开始传输
     HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_RESET);
@@ -192,4 +219,24 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     HAL_SPI_RxCpltCallback(hspi);
+}
+
+/**
+ * @brief SPI 出错回调: 释放总线忙标志
+ *        传输出错时完成回调不会来, 如果不在这里清标志, 总线会永久"忙", 后续所有
+ *        SPI 访问都会卡在等待里(尤其 -O2 下再也"碰巧"不过去)。
+ */
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
+{
+    for (size_t i = 0; i < idx; i++)
+    {
+        if (spi_instance[i]->spi_handle == hspi)
+        {
+            HAL_GPIO_WritePin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin, GPIO_PIN_SET);
+            *spi_instance[i]->cs_pin_state = 1u; /* 释放总线 */
+            spi_instance[i]->CS_State = 1u;
+            LOGERROR("[bsp_spi] SPI 传输出错, 已释放总线 (idx %u)", (unsigned)i);
+            return;
+        }
+    }
 }

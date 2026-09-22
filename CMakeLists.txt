@@ -19,8 +19,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # 指定工程名称和语言类型
 project(Basic_Framework_MC02 C ASM)
 
-# 选择构建类型
-set(CMAKE_BUILD_TYPE Debug) # Debug Release RelWithDebInfo MinSizeRel
+# 选择构建类型(允许命令行覆盖: -DCMAKE_BUILD_TYPE=RelWithDebInfo)
+#   Debug        : -Og -g   —— 日常开发/单步调试
+#   RelWithDebInfo: -O2 -g   —— 性能构建(测性能、上车), 见 docs/学习笔记/01
+if (NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug)
+endif ()
 
 # board specific settings, arch/fpu/instruction (H723: cortex-m7, fpv5-d16)
 set(MCU_FLAGS -mcpu=cortex-m7 -mthumb -mfloat-abi=hard -mfpu=fpv5-d16)
@@ -168,12 +172,15 @@ set(ASM_SOURCES
 set_source_files_properties(${ASM_SOURCES} PROPERTIES COMPILE_FLAGS "-x assembler-with-cpp")
 
 # Build types
+# 注意: 原来 Release/RelWithDebInfo 用 -Ofast(= -O3 -ffast-math)。
+# fast-math 允许编译器假设"没有 NaN/Inf", 会把 isfinite() 这类安全判据优化掉
+# (本工程的 EKF/PID/IMU 有效性/温控保护都依赖它们), 因此改为 -O2。
 if ("${CMAKE_BUILD_TYPE}" STREQUAL "Release")
-    message(STATUS "Maximum optimization for speed")
-    add_compile_options(-Ofast)
+    message(STATUS "Optimization -O2 (fast-math disabled for safety checks)")
+    add_compile_options(-O2)
 elseif ("${CMAKE_BUILD_TYPE}" STREQUAL "RelWithDebInfo")
-    message(STATUS "Maximum optimization for speed, debug info included")
-    add_compile_options(-Ofast -g)
+    message(STATUS "Optimization -O2 with debug info (fast-math disabled)")
+    add_compile_options(-O2 -g)
 elseif ("${CMAKE_BUILD_TYPE}" STREQUAL "MinSizeRel")
     message(STATUS "Maximum optimization for size")
     add_compile_options(-Os)
