@@ -194,7 +194,12 @@ static void DJIMotorLostCallback(void *motor_ptr)
 {
     DJIMotorInstance *motor = (DJIMotorInstance *)motor_ptr;
     uint16_t can_bus = motor->motor_can_instance->can_handle == &hcan1 ? 1 : 2;
-    LOGWARNING("[dji_motor] Motor lost, can bus [%d] , id [%d]", can_bus, motor->motor_can_instance->tx_id);
+    /* 电机离线检测是 20ms 周期触发的: 没接电机时每 20ms 一条, 会把 RTT 缓冲刷爆 → 限速 1 条/秒 */
+    static LogRateLimit_t rl_motor_lost = {0};
+    if (LogRateLimitAllow(&rl_motor_lost, 1000u))
+        LOGWARNING("[dji_motor] 电机离线: bus %d id %d (累计 %lu 次, 期间限速 %lu 条)",
+                   (int)can_bus, (int)motor->motor_can_instance->tx_id,
+                   (unsigned long)rl_motor_lost.total, (unsigned long)rl_motor_lost.dropped);
 }
 
 // 电机初始化,返回一个电机实例

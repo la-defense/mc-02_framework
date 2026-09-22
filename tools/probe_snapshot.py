@@ -42,19 +42,20 @@ SCALARS = [
 TASK_NAME = "lcd_stats_name"   # 12 个任务名 × 12 字节
 TASK_RT = "lcd_stats_runtime"  # 12 个 uint32
 CAN_BUS = "can_bus"            # CANBusState_t can_bus[3]
-# ARM EABI 默认枚举取"能容纳的最小类型"(这里 status 是 1 字节):
-# 结构体 = 4(handle) + 20(tx) + 20(bus) + 8(log_ms/log_cnt) = 52 字节(实测步长一致)
-CAN_BUS_STRIDE = 52
 RUNTIME_UNIT_US = 1000.0 / 480.0  # RTOS 计数器单位(千周期) → us
 
 
-def symbols(elf: str) -> dict:
-    out = subprocess.run(["arm-none-eabi-nm", "-C", "-n", elf],
+def symbols(elf: str, with_size: bool = False) -> dict:
+    """with_size=True 时返回 {name: (addr, size)}; 否则 {name: addr}。"""
+    out = subprocess.run(["arm-none-eabi-nm", "-C", "-n", "--print-size", elf]
+                         if with_size else ["arm-none-eabi-nm", "-C", "-n", elf],
                          capture_output=True, text=True, check=True).stdout
     table = {}
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) == 3 and re.fullmatch(r"[0-9a-fA-F]+", parts[0]):
+        if with_size and len(parts) == 4 and re.fullmatch(r"[0-9a-fA-F]+", parts[0]):
+            table[parts[3]] = (int(parts[0], 16), int(parts[1], 16))
+        elif not with_size and len(parts) == 3 and re.fullmatch(r"[0-9a-fA-F]+", parts[0]):
             table[parts[2]] = int(parts[0], 16)
     return table
 
@@ -81,12 +82,12 @@ def read_words(openocd: str, reqs: list) -> dict:
     return data
 
 
-def gather(openocd: str, sym: dict) -> dict:
+def gather(openocd: str, sym: dict, stride: int) -> dict:
     reqs = [(sym[p], 4) for p in PROBES]
     reqs += [(sym[s], 1) for s in SCALARS]
     reqs += [(sym[TASK_NAME], 36), (sym[TASK_RT], 12)]
     bus_base = sym.get(CAN_BUS, 0)
-    reqs += [(bus_base + i * CAN_BUS_STRIDE, 14) for i in range(3)]
+    reqs += [(bus_base + i * stride, 14) for i in range(3)]
     raw = read_words(openocd, reqs)
 
     def words(addr):
@@ -106,7 +107,7 @@ def gather(openocd: str, sym: dict) -> dict:
         names.append(chunk.split(b"\x00")[0].decode("ascii", errors="replace"))
     snap["names"] = names
     snap["runtime"] = words(sym[TASK_RT])[:12]
-    snap["bus"] = [words(bus_base + i * CAN_BUS_STRIDE)[:14] for i in range(3)]
+    snap["bus"] = [words(bus_base + i * stride)[:14] for i in range(3)]
     return snap
 
 
@@ -122,10 +123,14 @@ def main() -> int:
     args = ap.parse_args()
 
     sym = symbols(args.elf)
-    a = gather(args.openocd, sym)
+    # CANBusState_t 的步长直接从 ELF 符号大小推算(3 条总线), 这样改了结构体也不用动工具
+    bus_addr, bus_size = symbols(args.elf, with_size=True)[CAN_BUS]
+    stride = bus_size // 3
+    print(f"# {CAN_BUS} @ {hex(bus_addr)}, 大小 {bus_size}B → 每条总线 {stride}B")
+    a = gather(args.openocd, sym, stride)
     t0 = time.time()
     time.sleep(args.seconds)
-    b = gather(args.openocd, sym)
+    b = gather(args.openocd, sym, stride)
     win = time.time() - t0
     print(f"=== 采样窗口 {win:.1f}s ===")
 

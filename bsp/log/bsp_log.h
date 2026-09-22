@@ -4,6 +4,7 @@
 #include "SEGGER_RTT.h"
 #include "SEGGER_RTT_Conf.h"
 #include <stdio.h>
+#include <stdint.h>
 
 #define BUFFER_INDEX 0
 
@@ -49,6 +50,31 @@ void BSPLogInit();
 // error level
 #define LOGERROR(format, ...) LOG_PROTO("E:", RTT_CTRL_TEXT_BRIGHT_RED, format, ##__VA_ARGS__)
 #endif //  DISABLE_LOG_SYSTEM
+
+/* ---------------- 热路径日志限速(2026-09) ----------------
+   高频路径(任务超时、电机离线、CAN 丢帧、串口错误…)如果不限速, 会把 CPU 和 1KB 的 RTT
+   缓冲一起刷爆(本工程实测过: 每秒上千条, 连占用率汇总行都被挤掉)。
+
+   用法:
+       static LogRateLimit_t rl = {0};
+       if (LogRateLimitAllow(&rl, 1000u))   // 同一类消息最多 1 条/秒
+           LOGWARNING("[xxx] 出问题了 (累计 %lu 次, 期间限速 %lu 条)",
+                      (unsigned long)rl.total, (unsigned long)rl.dropped);
+
+   注意: 该组件用 HAL_GetTick() 计时; 调度器启动前 TIM23 时间基准还没跑起来(HAL_GetTick
+   不递增), 启动阶段的限速日志会只打第一条 —— 这是可接受的(启动阶段不是热点)。 */
+typedef struct
+{
+    uint32_t last_ms; /* 上次真正打印的时间 */
+    uint32_t total;   /* 累计事件数(每次调用 +1) */
+    uint32_t printed; /* 上次打印时的累计数 */
+    uint32_t dropped; /* 上次打印至今被限速掉的条数(打印时读取) */
+} LogRateLimit_t;
+
+/**
+ * @brief 热路径日志限速: 返回 1 表示这次允许打印(调用方随后自己 LOGxxx)
+ */
+uint8_t LogRateLimitAllow(LogRateLimit_t *rl, uint32_t period_ms);
 
 /**
  * @brief 通过segger RTT打印日志,支持格式化输出,格式化输出的实现参考printf.

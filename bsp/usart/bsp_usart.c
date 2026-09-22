@@ -129,17 +129,18 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     {
         if (huart == usart_instance[i]->usart_handle)
         {
+            /* 中断上下文 + 可能连续出错: 三条日志合并成一条, 并且限速 1 条/秒 */
+            static LogRateLimit_t rl_uart_err = {0};
             /* 先中止旧接收并清错误标志,确保 RxState 回到 READY 再重启,否则离线后无法自恢复 */
-            if (HAL_UART_AbortReceive(huart) != HAL_OK)
-            {
-                LOGWARNING("[bsp_usart] USART AbortReceive failed, instance idx [%d]", i);
-            }
-            if (HAL_UARTEx_ReceiveToIdle_DMA(usart_instance[i]->usart_handle, usart_instance[i]->recv_buff, usart_instance[i]->recv_buff_size) != HAL_OK)
-            {
-                LOGWARNING("[bsp_usart] USART restart DMA receive failed, instance idx [%d]", i);
-            }
+            HAL_StatusTypeDef abort_ret = HAL_UART_AbortReceive(huart);
+            HAL_StatusTypeDef restart_ret = HAL_UARTEx_ReceiveToIdle_DMA(usart_instance[i]->usart_handle,
+                                                                        usart_instance[i]->recv_buff,
+                                                                        usart_instance[i]->recv_buff_size);
             __HAL_DMA_DISABLE_IT(usart_instance[i]->usart_handle->hdmarx, DMA_IT_HT);
-            LOGWARNING("[bsp_usart] USART error callback triggered, instance idx [%d]", i);
+            if (LogRateLimitAllow(&rl_uart_err, 1000u))
+                LOGWARNING("[bsp_usart] 串口错误: idx %d abort=%d restart=%d (累计 %lu 次, 期间限速 %lu 条)",
+                           (int)i, (int)abort_ret, (int)restart_ret,
+                           (unsigned long)rl_uart_err.total, (unsigned long)rl_uart_err.dropped);
             return;
         }
     }

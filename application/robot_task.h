@@ -70,11 +70,23 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
     {
         // 1kHz
         TaskMonitorFeed(TASK_MONITOR_INS);
-        ins_start = DWT_GetTimeline_ms();
+        /* 用轻量周期计数代替 DWT_GetTimeline_ms(): 后者内部有 64bit 除法, 1kHz 下也不便宜 */
+        uint32_t ins_probe = DWT_ProbeStart();
         INS_Task();
-        ins_dt = DWT_GetTimeline_ms() - ins_start;
-        if (ins_dt > 1)
-            LOGERROR("[freeRTOS] INS Task is being DELAY! dt = [%f]", &ins_dt);
+        ins_dt = (float)DWT_ProbeElapsedUs(ins_probe);
+        if (ins_dt > 1000.0f)
+        {
+            /* 原实现把 &ins_dt(指针)当 %f 打印, RTT 也不支持浮点 → 日志一直是坏的;
+               现在改成整数微秒 + 限速(否则 1kHz 超时会刷爆 RTT 缓冲) */
+            static LogRateLimit_t rl_ins_overrun = {0};
+            if (LogRateLimitAllow(&rl_ins_overrun, 1000u))
+            {
+                ins_start = DWT_GetTimeline_ms(); /* 保留: 便于 Live Watch 看最近一次时刻 */
+                LOGERROR("[freeRTOS] INS Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
+                         (unsigned long)(uint32_t)ins_dt,
+                         (unsigned long)rl_ins_overrun.total, (unsigned long)rl_ins_overrun.dropped);
+            }
+        }
         // 视觉上行数据由 INS_Task 内的 VisionUpdateTx() 填充,
         // VisionSend() 统一在 RobotCMDTask(200Hz) 中调用, 避免多任务并发 DMA 发送
         osDelay(1);
@@ -89,11 +101,20 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
     for (;;)
     {
         TaskMonitorFeed(TASK_MONITOR_MOTOR);
-        motor_start = DWT_GetTimeline_ms();
+        uint32_t motor_probe = DWT_ProbeStart();
         MotorControlTask();
-        motor_dt = DWT_GetTimeline_ms() - motor_start;
-        if (motor_dt > 1)
-            LOGERROR("[freeRTOS] MOTOR Task is being DELAY! dt = [%f]", &motor_dt);
+        motor_dt = (float)DWT_ProbeElapsedUs(motor_probe);
+        if (motor_dt > 1000.0f)
+        {
+            static LogRateLimit_t rl_motor_overrun = {0};
+            if (LogRateLimitAllow(&rl_motor_overrun, 1000u))
+            {
+                motor_start = DWT_GetTimeline_ms();
+                LOGERROR("[freeRTOS] MOTOR Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
+                         (unsigned long)(uint32_t)motor_dt,
+                         (unsigned long)rl_motor_overrun.total, (unsigned long)rl_motor_overrun.dropped);
+            }
+        }
         osDelay(1);
     }
 }
@@ -113,14 +134,23 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
     {
         // 100Hz
         TaskMonitorFeed(TASK_MONITOR_DAEMON);
-        daemon_start = DWT_GetTimeline_ms();
+        uint32_t daemon_probe = DWT_ProbeStart();
         DaemonTask();
         BuzzerTask();
         CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */
         TaskMonitorTick();
-        daemon_dt = DWT_GetTimeline_ms() - daemon_start;
-        if (daemon_dt > 10)
-            LOGERROR("[freeRTOS] Daemon Task is being DELAY! dt = [%f]", &daemon_dt);
+        daemon_dt = (float)DWT_ProbeElapsedUs(daemon_probe);
+        if (daemon_dt > 10000.0f)
+        {
+            static LogRateLimit_t rl_daemon_overrun = {0};
+            if (LogRateLimitAllow(&rl_daemon_overrun, 1000u))
+            {
+                daemon_start = DWT_GetTimeline_ms();
+                LOGERROR("[freeRTOS] Daemon Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
+                         (unsigned long)(uint32_t)daemon_dt,
+                         (unsigned long)rl_daemon_overrun.total, (unsigned long)rl_daemon_overrun.dropped);
+            }
+        }
         osDelay(10);
     }
 }
@@ -134,11 +164,20 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
     for (;;)
     {
         TaskMonitorFeed(TASK_MONITOR_ROBOT);
-        robot_start = DWT_GetTimeline_ms();
+        uint32_t robot_probe = DWT_ProbeStart();
         RobotTask();
-        robot_dt = DWT_GetTimeline_ms() - robot_start;
-        if (robot_dt > 5)
-            LOGERROR("[freeRTOS] ROBOT core Task is being DELAY! dt = [%f]", &robot_dt);
+        robot_dt = (float)DWT_ProbeElapsedUs(robot_probe);
+        if (robot_dt > 5000.0f)
+        {
+            static LogRateLimit_t rl_robot_overrun = {0};
+            if (LogRateLimitAllow(&rl_robot_overrun, 1000u))
+            {
+                robot_start = DWT_GetTimeline_ms();
+                LOGERROR("[freeRTOS] ROBOT core Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
+                         (unsigned long)(uint32_t)robot_dt,
+                         (unsigned long)rl_robot_overrun.total, (unsigned long)rl_robot_overrun.dropped);
+            }
+        }
         osDelay(5);
     }
 }

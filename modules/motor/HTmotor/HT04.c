@@ -70,7 +70,11 @@ static void HTMotorDecode(CANInstance *motor_can)
 static void HTMotorLostCallback(void *motor_ptr)
 {
     HTMotorInstance *motor = (HTMotorInstance *)motor_ptr;
-    LOGWARNING("[ht_motor] motor %d lost\n", motor->motor_can_instace->tx_id);
+    static LogRateLimit_t rl_ht_lost = {0};
+    if (LogRateLimitAllow(&rl_ht_lost, 1000u))
+        LOGWARNING("[ht_motor] 电机离线: id %d (累计 %lu 次, 期间限速 %lu 条)",
+                   (int)motor->motor_can_instace->tx_id,
+                   (unsigned long)rl_ht_lost.total, (unsigned long)rl_ht_lost.dropped);
     if (++motor->lost_cnt % 10 != 0)
         HTMotorSetMode(CMD_MOTOR_MODE, motor); // 尝试重新让电机进入控制模式
 }

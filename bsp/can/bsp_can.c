@@ -31,8 +31,7 @@ typedef struct
     FDCAN_HandleTypeDef *handle;
     CAN_TxStats_t tx;
     CAN_BusStats_t bus;
-    uint32_t log_ms;   /* 限速日志时间戳 */
-    uint32_t log_cnt;  /* 被限速掉的日志条数 */
+    LogRateLimit_t log_rl; /* 限速日志状态(见 bsp_log.h) */
 } CANBusState_t;
 
 static CANBusState_t can_bus[DEVICE_CAN_CNT] = {
@@ -92,22 +91,17 @@ static uint8_t CANBusIndexFromHandle(FDCAN_HandleTypeDef *_handle)
     return 0xFFu;
 }
 
-/* 限速日志: 同一类消息最多 1 条/秒, 其余只计数(避免日志把 CPU 和 RTT 缓冲吃光) */
+/* 限速日志: 同一类消息最多 1 条/秒, 其余只计数(避免日志把 CPU 和 RTT 缓冲吃光)
+   限速逻辑统一用 bsp_log 的 LogRateLimitAllow(), 与其它模块保持一致 */
 static void CANLogRateLimited(CANBusState_t *bus, const char *tag, uint32_t value)
 {
-    uint32_t now = HAL_GetTick();
     if (bus == NULL)
         return;
-    if ((uint32_t)(now - bus->log_ms) >= 1000u)
+    if (LogRateLimitAllow(&bus->log_rl, 1000u))
     {
-        bus->log_ms = now;
-        LOGWARNING("[bsp_can] %s (%lu, 本秒内被限速 %lu 条)",
-                   tag, (unsigned long)value, (unsigned long)bus->log_cnt);
-        bus->log_cnt = 0;
-    }
-    else
-    {
-        bus->log_cnt++;
+        LOGWARNING("[bsp_can] %s (值 %lu, 累计 %lu 次, 期间限速 %lu 条)",
+                   tag, (unsigned long)value,
+                   (unsigned long)bus->log_rl.total, (unsigned long)bus->log_rl.dropped);
     }
 }
 

@@ -47,7 +47,11 @@ static void LKMotorDecode(CANInstance *_instance)
 static void LKMotorLostCallback(void *motor_ptr)
 {
     LKMotorInstance *motor = (LKMotorInstance *)motor_ptr;
-    LOGWARNING("[LKMotor] motor lost, id: %d", motor->motor_can_ins->tx_id);
+    static LogRateLimit_t rl_lk_lost = {0};
+    if (LogRateLimitAllow(&rl_lk_lost, 1000u))
+        LOGWARNING("[LKMotor] 电机离线: id %d (累计 %lu 次, 期间限速 %lu 条)",
+                   (int)motor->motor_can_ins->tx_id,
+                   (unsigned long)rl_lk_lost.total, (unsigned long)rl_lk_lost.dropped);
 }
 
 LKMotorInstance *LKMotorInit(Motor_Init_Config_s *config)

@@ -1,4 +1,5 @@
 #include "bsp_log.h"
+#include "main.h"
 
 #include "SEGGER_RTT.h"
 #include "SEGGER_RTT_Conf.h"
@@ -8,6 +9,24 @@
 void BSPLogInit()
 {
     SEGGER_RTT_Init();
+}
+
+uint8_t LogRateLimitAllow(LogRateLimit_t *rl, uint32_t period_ms)
+{
+    uint32_t now;
+    if (rl == NULL)
+        return 1u;
+
+    now = HAL_GetTick();
+    rl->total++;
+    if ((uint32_t)(now - rl->last_ms) >= period_ms)
+    {
+        rl->last_ms = now;
+        rl->dropped = rl->total - rl->printed; /* 距离上次打印期间又发生了多少条 */
+        rl->printed = rl->total;
+        return 1u;
+    }
+    return 0u;
 }
 
 int PrintLog(const char *fmt, ...)
