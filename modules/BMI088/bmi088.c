@@ -6,6 +6,7 @@
 #include "bsp_watchdog.h"
 #include "bsp_param.h"
 #include "robot_safety.h"
+#include "task_monitor.h"
 #include "cmsis_os.h"
 #include <math.h>
 
@@ -329,7 +330,7 @@ uint8_t BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data_store)
 #define BMI088_CALI_MAX_ATTEMPTS 3u
 /* 标定循环里每隔多少次采样让出一次 CPU(给 daemon 喂狗、给 LCD 显示"标定中") */
 #define BMI088_CALI_YIELD_INTERVAL 512u
-#define BMI088_CALI_YIELD_MS 5u
+#define BMI088_CALI_YIELD_MS 10u
 /**
  * @brief BMI088 acc gyro 标定
  * @note 标定后的数据存储在bmi088->bias和gNorm中,用于后续数据消噪和单位转换归一化
@@ -578,6 +579,13 @@ static uint8_t BMI088CalibLoad(BMI088Instance *b)
         return 0;
     }
     BMI088ApplyCalib(b, off, gNorm);
+
+    /* 顺带把"标定时的温度"读出来给 LCD 显示(meta 缺失也不影响标定值的使用) */
+    ParamImuCalibMeta_t meta;
+    if (ParamGet(PARAM_KEY_IMU_CALIB_META, &meta, sizeof(meta)) &&
+        meta.result == (uint32_t)PARAM_IMU_CALIB_OK &&
+        isfinite(meta.temperature) && meta.temperature > -40.0f && meta.temperature < 100.0f)
+        bmi088_calib_temp = meta.temperature;
     return 1;
 }
 
@@ -687,11 +695,18 @@ uint8_t BMI088CalibService(void)
     }
 
     LOGWARNING("[bmi088] 按需标定开始, 请保持静止...");
+    /* 标定要独占 INS 任务 3~4s: 先暂停任务监控, 否则 INS/MOTOR 会被判超时 →
+       状态被推到 FAULT(虽然标定循环自己喂狗不会复位, 但状态跳来跳去很难看)。
+       暂停期间 TaskMonitorTick 无条件喂狗, 标定循环里也逐轮喂。 */
+    TaskMonitorPause();
+
     BMI088_Calibrate_Mode_e saved_mode = b->cali_mode;
     b->cali_mode = BMI088_CALIBRATE_ONLINE_MODE;
     bmi088_calib_attempts = 0;
     uint8_t ok = BMI088CalibrateIMU(b);
     b->cali_mode = saved_mode;
+
+    TaskMonitorResume(); /* 重置所有任务的喂狗时间戳, 避免刚恢复就判超时 */
 
     if (ok)
     {

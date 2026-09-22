@@ -35,6 +35,10 @@ CHARS = [
     ("JIAN", "间"), ("YE", "页"), ("SHANG", "上"), ("XIA", "下"),
     ("DONG", "冻"), ("JIE2", "结"), ("HUI", "恢"), ("FU", "复"),
     ("CUO", "错"), ("WU3", "误"),
+    # 按需标定提示用字(2026-09): 标定中 / 请保持静止 / 标定成功 / 标定失败
+    ("ZHONG", "中"), ("JING", "静"), ("ZHI", "止"), ("CHENG", "成"),
+    ("SHI5", "失"), ("BAI", "败"), ("QING", "请"), ("BAO", "保"),
+    ("CHI", "持"),
 ]
 
 LABELS = {
@@ -86,6 +90,10 @@ LABELS = {
     "FREEZE": ["DONG", "JIE2"],
     "RESUME": ["HUI", "FU"],
     "ERROR": ["CUO", "WU3"],
+    "CALIB_RUN": ["BIAO", "DING", "ZHONG"],
+    "CALIB_HOLD": ["QING", "BAO", "CHI", "JING", "ZHI"],
+    "CALIB_OK": ["BIAO", "DING", "CHENG", "GONG"],
+    "CALIB_FAIL": ["BIAO", "DING", "SHI5", "BAI"],
 }
 
 # Some characters used only by labels below are not in the base list yet.

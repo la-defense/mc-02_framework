@@ -17,6 +17,7 @@
 #include "shoot.h"
 #include "bsp_can.h"
 #include "fdcan.h"
+#include "bmi088.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -63,6 +64,10 @@ static const Lcd_CnChar_e L_CALIB[] = LCD_LABEL_CALIB;
 static const Lcd_CnChar_e L_READY[] = LCD_LABEL_READY;
 static const Lcd_CnChar_e L_ERROR[] = LCD_LABEL_ERROR;
 static const Lcd_CnChar_e L_NO[] = LCD_LABEL_NO;
+static const Lcd_CnChar_e L_CAL_RUN[] = LCD_LABEL_CALIB_RUN;
+static const Lcd_CnChar_e L_CAL_HOLD[] = LCD_LABEL_CALIB_HOLD;
+static const Lcd_CnChar_e L_CAL_OK[] = LCD_LABEL_CALIB_OK;
+static const Lcd_CnChar_e L_CAL_FAIL[] = LCD_LABEL_CALIB_FAIL;
 
 static uint8_t lcd_page = 0;
 static uint8_t lcd_frozen = 0;
@@ -110,6 +115,15 @@ static const char *can_status_str(CAN_Status_e status)
     default:
         return "--";
     }
+}
+
+/* 数一个以 LCD_CN_COUNT 结尾的中文字符串有几个字(用于居中) */
+static uint8_t cn_len(const Lcd_CnChar_e *str)
+{
+    uint8_t n = 0;
+    while (str[n] != LCD_CN_COUNT && n < 32u)
+        ++n;
+    return n;
 }
 
 static void draw_title(const Lcd_CnChar_e *title_cn, const char *title_ascii)
@@ -275,12 +289,49 @@ static void draw_page1_static(void)
     draw_label_ascii(5, "YAW");
     draw_label_ascii(6, "PIT");
     draw_label_ascii(7, "ROL");
+    draw_label_ascii(8, "CAL"); /* 标定来源 + 标定温度 */
 }
 
 static void draw_page1_values(void)
 {
     IMUHeaterStatus_t hs;
     IMUHeaterGetStatus(&hs);
+
+    /* 标定来源(FLASH=读参数区 / AUTO=首次自动 / MAN=按需标定 / DEF=默认值)
+       + 标定时温度。snprintf 在本工程用 nano.specs, 不支持 %f, 所以手算一位小数。 */
+    char cal_buf[24];
+    const char *src;
+    switch (bmi088_calib_source)
+    {
+    case BMI088_CALIB_SRC_FLASH:
+        src = "FLASH";
+        break;
+    case BMI088_CALIB_SRC_FIRST_AUTO:
+        src = "AUTO";
+        break;
+    case BMI088_CALIB_SRC_MANUAL:
+        src = "MAN";
+        break;
+    case BMI088_CALIB_SRC_DEFAULT:
+        src = "DEF";
+        break;
+    default:
+        src = "--";
+        break;
+    }
+    if (bmi088_calib_temp > -40.0f && bmi088_calib_temp < 100.0f && bmi088_calib_temp != 0.0f)
+    {
+        int32_t t10 = (int32_t)(bmi088_calib_temp * 10.0f + 0.5f);
+        if (t10 < 0)
+            t10 = 0; /* 手算取整在负数上会不对称, 这里温度不会为负, 直接钳到 0 */
+        snprintf(cal_buf, sizeof(cal_buf), "%s %ld.%ldC", src,
+                 (long)(t10 / 10), (long)(t10 % 10));
+    }
+    else
+    {
+        snprintf(cal_buf, sizeof(cal_buf), "%s --", src);
+    }
+    draw_value_ascii(8, cal_buf);
 
     draw_value_float_unit(0, hs.temperature, 1, "C");
     draw_value_float_unit(1, hs.target_temp, 1, "C");
@@ -512,4 +563,61 @@ void LCD_UI_SetFrozen(uint8_t frozen)
     lcd_frozen = frozen ? 1u : 0u;
     LCD_UI_DrawStatic(lcd_page);
     LCD_UI_UpdateValues(lcd_page);
+}
+
+/**
+ * @brief 按需标定的屏幕提示(覆盖当前页面中间一块)
+ * @param msg 0=清除提示并重画整页, 1=标定中(请保持静止), 2=成功, 3=失败
+ * @note  只画中间一块, 不整屏重画 —— 标定期间 CPU 被 INS 任务大量占用,
+ *        LCD 任务只能抢到很小的切片, 全屏重画会来不及。
+ */
+void LCD_UI_ShowCalibMsg(uint8_t msg)
+{
+    if (msg == 0u)
+    {
+        LCD_UI_DrawStatic(lcd_page);
+        LCD_UI_UpdateValues(lcd_page);
+        return;
+    }
+
+    const Lcd_CnChar_e *title;
+    const Lcd_CnChar_e *sub = NULL;
+    uint16_t color;
+    switch (msg)
+    {
+    case 1u:
+        title = L_CAL_RUN;
+        sub = L_CAL_HOLD;
+        color = YELLOW;
+        break;
+    case 2u:
+        title = L_CAL_OK;
+        color = GREEN;
+        break;
+    default:
+        title = L_CAL_FAIL;
+        color = RED;
+        break;
+    }
+
+    uint16_t y0 = 66u;
+    uint16_t y1 = (uint16_t)(y0 + ((sub != NULL) ? 78u : 56u));
+    if (y1 > (uint16_t)(LCD_H - 1u))
+        y1 = (uint16_t)(LCD_H - 1u);
+
+    /* 底色 + 上下两条彩线, 不用整屏重画 */
+    LCD_BufFill(0, y0, (uint16_t)(LCD_W - 1u), y1, BLACK);
+    LCD_BufFill(0, y0, (uint16_t)(LCD_W - 1u), (uint16_t)(y0 + 1u), color);
+    LCD_BufFill(0, (uint16_t)(y1 - 1u), (uint16_t)(LCD_W - 1u), y1, color);
+
+    uint8_t n = cn_len(title);
+    uint16_t tx = (uint16_t)((LCD_W - (uint16_t)n * 16u) / 2u);
+    LCD_BufShowCnString(tx, (uint16_t)(y0 + 14u), title, color, BLACK);
+
+    if (sub != NULL)
+    {
+        uint8_t m = cn_len(sub);
+        tx = (uint16_t)((LCD_W - (uint16_t)m * 16u) / 2u);
+        LCD_BufShowCnString(tx, (uint16_t)(y0 + 44u), sub, WHITE, BLACK);
+    }
 }

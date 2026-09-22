@@ -35,14 +35,14 @@ static void LCD_BufBegin(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 
 static void LCD_BufWriteRow(uint16_t pixels)
 {
-    uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
+    uint32_t t0 = DWT_ProbeStart();
     if (HAL_SPI_Transmit(&hspi1, (uint8_t *)lcd_line_buf, (uint16_t)(pixels * 2u), 20) != HAL_OK)
     {
         /* 失败后 HAL 句柄可能停在 BUSY, 中止掉, 免得后面所有发送都失败 */
         lcd_spi_errors++;
         HAL_SPI_Abort(&hspi1);
     }
-    lcd_prof_row_us = (uint32_t)DWT_GetTimeline_us() - t0;
+    lcd_prof_row_us = DWT_ProbeElapsedUs(t0); /* 直接读 CYCCNT, 不经过时间轴 */
     lcd_prof_row_bytes = (uint16_t)(pixels * 2u);
     lcd_prof_spi_us += lcd_prof_row_us;
     lcd_prof_rows++;

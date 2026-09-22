@@ -7,6 +7,8 @@
 #include "cmsis_os.h"
 #include "main.h"
 #include "task.h"
+#include "bmi088.h"
+#include "robot_safety.h"
 #include <string.h>
 
 typedef enum
@@ -59,14 +61,24 @@ typedef enum
 #define LCD_ABSENT_RAW_HI 65200u
 #define LCD_PRESENT_CONFIRM 8u  /* 连续 400ms 正常 -> 判定插回 */
 
-/* 短按: 翻页/冻结; 长按中键: 手动重初始化面板(拔插后没自动恢复时的兜底) */
+/* 短按: 翻页/冻结; 长按中键分两档(松开时判定):
+     1.5s ~ 3s : 手动重初始化面板(拔插后没自动恢复时的兜底)
+     >= 3s     : 进入按需 IMU 标定(进 CALIB, 电机失能, 保持静止) */
 #define LCD_KEY_SHORT_MAX_MS 1000u
 #define LCD_KEY_LONG_MIN_MS 1500u
+#define LCD_KEY_CALIB_MIN_MS 3000u
+
+/* 标定结果显示保持时间(ms) */
+#define LCD_CALIB_RESULT_MS 3000u
 
 static uint8_t lcd_page = 0;
 static uint8_t lcd_frozen = 0;
 static LcdKey_e key_active = LCD_KEY_NONE;
 static uint32_t key_press_ms = 0;
+
+/* 按需标定的屏幕提示状态: 0=无提示(正常刷新) 1=显示"标定中" 2=显示结果 */
+static uint8_t lcd_calib_msg = 0;
+static uint32_t lcd_calib_result_until = 0;
 
 volatile uint8_t lcd_init_done = 0;
 volatile uint32_t lcd_heartbeat = 0;
@@ -217,7 +229,7 @@ static void lcd_task_stats_snapshot(void)
 
 static void lcd_prof_record(uint32_t t0, volatile uint32_t *last, volatile uint32_t *maxv)
 {
-    uint32_t dt = (uint32_t)DWT_GetTimeline_us() - t0;
+    uint32_t dt = DWT_ProbeElapsedUs(t0); /* 探针统一直接读 CYCCNT */
     *last = dt;
     if (dt > *maxv)
         *maxv = dt;
@@ -335,9 +347,9 @@ static void lcd_module_presence_check(void)
             lcd_module_absent = 0u;
             lcd_recover_count++;
             LOGINFO("[lcd] module back, re-init panel (recover=%lu)", (unsigned long)lcd_recover_count);
-            uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
+            uint32_t t0 = DWT_ProbeStart();
             LCD_UI_Recover();
-            lcd_prof_recover_us = (uint32_t)DWT_GetTimeline_us() - t0;
+            lcd_prof_recover_us = DWT_ProbeElapsedUs(t0);
         }
     }
 }
@@ -368,15 +380,35 @@ static void lcd_key_update(void)
     if (released == LCD_KEY_NONE || duration < 30u)
         return;
 
+    /* >=3s 长按中键: 触发一次按需 IMU 标定 */
+    if (released == LCD_KEY_MID && duration >= LCD_KEY_CALIB_MIN_MS)
+    {
+        if (BMI088CalibGetState() == BMI088_RECALIB_BUSY)
+            return; /* 已经在标定中, 忽略本次 */
+
+        LOGINFO("[lcd] long press %lums -> request IMU calibration", (unsigned long)duration);
+        RobotSafetyRequestCalib(1); /* 先失能: 标定期间电机不能动 */
+        if (!BMI088CalibRequest())
+        {
+            LOGWARNING("[lcd] calibration request rejected");
+            RobotSafetyRequestCalib(0);
+            return;
+        }
+        /* 立刻出提示, 不等标定真正跑起来 —— 一开标定 CPU 就被抢走了 */
+        LCD_UI_ShowCalibMsg(1u);
+        lcd_calib_msg = 1u;
+        return;
+    }
+
     if (duration >= LCD_KEY_LONG_MIN_MS)
     {
         if (released == LCD_KEY_MID)
         {
             lcd_recover_count++;
             LOGINFO("[lcd] manual re-init (recover=%lu)", (unsigned long)lcd_recover_count);
-            uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
+            uint32_t t0 = DWT_ProbeStart();
             LCD_UI_Recover();
-            lcd_prof_recover_us = (uint32_t)DWT_GetTimeline_us() - t0;
+            lcd_prof_recover_us = DWT_ProbeElapsedUs(t0);
         }
         return;
     }
@@ -401,11 +433,61 @@ static void lcd_key_update(void)
         return;
     }
 
-    uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
+    uint32_t t0 = DWT_ProbeStart();
     LCD_UI_DrawStatic(lcd_page);
     LCD_UI_UpdateValues(lcd_page);
     lcd_prof_record(t0, &lcd_prof_draw_last_us, &lcd_prof_draw_max_us);
     LOGINFO("[lcd] page %u", (unsigned)(lcd_page + 1u));
+}
+
+/**
+ * @brief 按需标定的"提示/结果/收尾"状态机(由 LCD 任务周期调用)
+ * @note  标定本体在 INS 任务里跑(BMI088CalibService), 这里只负责显示和
+ *        把标定结果呈现 3s, 然后确认结果并回到 SAFE(必须重新走使能流程)。
+ */
+static void lcd_calib_service(void)
+{
+    uint8_t st = BMI088CalibGetState();
+
+    if (st == BMI088_RECALIB_BUSY)
+    {
+        if (lcd_calib_msg != 1u)
+        {
+            LCD_UI_ShowCalibMsg(1u); /* 标定被别的路径触发时也能补上提示 */
+            lcd_calib_msg = 1u;
+        }
+        return;
+    }
+
+    if (st == BMI088_RECALIB_OK || st == BMI088_RECALIB_FAIL)
+    {
+        if (lcd_calib_msg != 2u)
+        {
+            LCD_UI_ShowCalibMsg((st == BMI088_RECALIB_OK) ? 2u : 3u);
+            lcd_calib_msg = 2u;
+            lcd_calib_result_until = HAL_GetTick() + LCD_CALIB_RESULT_MS;
+            LOGINFO("[lcd] calib result: %s (rounds=%u)",
+                    (st == BMI088_RECALIB_OK) ? "OK" : "FAIL",
+                    (unsigned)bmi088_calib_attempts);
+        }
+        if ((int32_t)(HAL_GetTick() - lcd_calib_result_until) >= 0)
+        {
+            BMI088CalibAckResult();
+            RobotSafetyRequestCalib(0); /* 回 SAFE: 必须重新走正常使能流程 */
+            lcd_calib_msg = 0u;
+            LCD_UI_ShowCalibMsg(0u); /* 清提示并重画整页 */
+            LOGINFO("[lcd] calib UI done, back to normal page");
+        }
+        return;
+    }
+
+    /* IDLE: 如果之前显示过提示(比如被异常路径打断), 这里收尾 */
+    if (lcd_calib_msg != 0u)
+    {
+        lcd_calib_msg = 0u;
+        RobotSafetyRequestCalib(0);
+        LCD_UI_ShowCalibMsg(0u);
+    }
 }
 
 void StartLCDTASK(void const *argument)
@@ -413,9 +495,9 @@ void StartLCDTASK(void const *argument)
     (void)argument;
 
     lcd_task_entered = 1;
-    uint32_t t0 = (uint32_t)DWT_GetTimeline_us();
+    uint32_t t0 = DWT_ProbeStart();
     LCD_UI_Init();
-    lcd_prof_init_us = (uint32_t)DWT_GetTimeline_us() - t0;
+    lcd_prof_init_us = DWT_ProbeElapsedUs(t0);
     lcd_init_done = 1;
     LOGINFO("[lcd] init done, page=%u", (unsigned)(lcd_page + 1u));
 
@@ -425,16 +507,19 @@ void StartLCDTASK(void const *argument)
         /* 50ms 采样按键与模组在位状态, 200ms 刷新一次数值(5Hz) */
         for (uint8_t i = 0; i < 4u; ++i)
         {
-            uint32_t ts = (uint32_t)DWT_GetTimeline_us();
+            uint32_t ts = DWT_ProbeStart();
             lcd_key_update();
             lcd_module_presence_check();
             lcd_prof_record(ts, &lcd_prof_sample_last_us, &lcd_prof_sample_max_us);
             osDelay(50);
         }
 
-        if (!lcd_frozen && !lcd_module_absent)
+        lcd_calib_service();
+
+        /* 标定提示正在显示时不刷新数值区, 否则会把提示盖掉 */
+        if (!lcd_frozen && !lcd_module_absent && lcd_calib_msg == 0u)
         {
-            uint32_t tu = (uint32_t)DWT_GetTimeline_us();
+            uint32_t tu = DWT_ProbeStart();
             LCD_UI_UpdateValues(lcd_page);
             lcd_prof_record(tu, &lcd_prof_update_last_us, &lcd_prof_update_max_us);
             lcd_prof_cycles++;
