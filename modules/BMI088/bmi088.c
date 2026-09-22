@@ -367,10 +367,11 @@ void BMI088CalibrateIMU(BMI088Instance *_bmi088)
             {
                 uint32_t diag_iter = DWT_ProbeStart();
                 cali_diag_inner = i;
-                /* 标定是启动期最长的步骤(6000 次采样), 期间没人喂狗 → 主动报进度,
-                   否则 200ms 看门狗会把启动打断(实测过: 表现为"上电起不来") */
-                if ((i % 512u) == 0u)
-                    BSP_WatchdogFeed();
+                /* 标定是启动期最长的步骤(6000 次采样), 期间没人喂狗 → 主动报进度。
+                   这里选择"逐轮喂"(代价约 0.1us/次), 既保证启动不会被看门狗打断,
+                   也让"是否仍有复位"成为判断复位源的干净实验:
+                   若逐轮喂狗后仍复位, 就说明复位不是看门狗引起的。 */
+                BSP_WatchdogFeed();
                 uint32_t diag_acq = DWT_ProbeStart();
                 if (BMI088Acquire(_bmi088, &raw_data) != 0)
                     cali_diag_acq_ok++;
