@@ -1,0 +1,173 @@
+{
+    // 调试说明：
+    // 1. 推荐：直接选 "DAPlink (flash + attach)" 按 F5，会自动编译→烧录→等待固件初始化 RTT→attach，
+    //    RTT 日志与 Live Watch 都能正常工作（规避 cortex-debug 在复位阶段 RTT 启动失败会连带跳过 Live Watch 的问题）。
+    // 2. 使用 J-Link 选 "JLink"（需要安装 SEGGER J-Link 软件，且 JLinkGDBServer 在 PATH 中）。
+    // 3. RTT 日志：调试启动后会自动打开 "RTT Log" 终端，显示 bsp_log 输出的下位机日志，无需再开 RTT Viewer。
+    // 4. 实时变量：在 CORTEX LIVE WATCH 添加全局/静态变量（static 变量需用 '文件.c'::变量 限定），
+    //    配合 liveWatch 实时刷新；FreeRTOS 任务列表可看任务状态。
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "DAPlink (OpenOCD)",
+            "type": "cortex-debug",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
+            "servertype": "openocd",
+            "configFiles": [
+                "openocd_dap.cfg"
+            ],
+            "runToEntryPoint": "main",
+            "preLaunchTask": "build task",
+            "rtos": "FreeRTOS",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            },
+            "rttConfig": {
+                "enabled": true,
+                "address": "auto",
+                "clearSearch": true,
+                "rtt_start_retry": 1000,
+                "polling_interval": 500,
+                "decoders": [
+                    {
+                        "type": "console",
+                        "port": 0,
+                        "label": "RTT Log",
+                        "noprompt": true
+                    }
+                ]
+            }
+        },
+        {
+            // 一键方案：preLaunchTask 会先编译烧录，并等待固件完成 RTT 初始化，再以 attach 方式进入调试。
+            "name": "DAPlink (flash + attach)",
+            "type": "cortex-debug",
+            "request": "attach",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
+            "servertype": "openocd",
+            "configFiles": [
+                "openocd_dap.cfg"
+            ],
+            "preLaunchTask": "flash and wait",
+            "rtos": "FreeRTOS",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            },
+            "rttConfig": {
+                "enabled": true,
+                "address": "auto",
+                "clearSearch": true,
+                "rtt_start_retry": 1000,
+                "polling_interval": 500,
+                "decoders": [
+                    {
+                        "type": "console",
+                        "port": 0,
+                        "label": "RTT Log",
+                        "noprompt": true
+                    }
+                ]
+            }
+        },
+        {
+            "name": "JLink",
+            "type": "cortex-debug",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
+            "servertype": "jlink",
+            "device": "STM32H723VG",
+            "interface": "swd",
+            "runToEntryPoint": "main",
+            "preLaunchTask": "build task",
+            "rtos": "FreeRTOS",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            },
+            "rttConfig": {
+                "enabled": true,
+                "address": "auto",
+                "clearSearch": true,
+                "decoders": [
+                    {
+                        "type": "console",
+                        "port": 0,
+                        "label": "RTT Log",
+                        "noprompt": true
+                    }
+                ]
+            }
+        },
+        {
+            // 手动 attach：固件需要已经在运行（例如刚烧录完或已运行 "download dap" 任务）。
+            "name": "DAPlink-attach",
+            "type": "cortex-debug",
+            "request": "attach",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
+            "servertype": "openocd",
+            "configFiles": [
+                "openocd_dap.cfg"
+            ],
+            "rtos": "FreeRTOS",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            },
+            "rttConfig": {
+                "enabled": true,
+                "address": "auto",
+                "clearSearch": true,
+                "rtt_start_retry": 1000,
+                "polling_interval": 500,
+                "decoders": [
+                    {
+                        "type": "console",
+                        "port": 0,
+                        "label": "RTT Log",
+                        "noprompt": true
+                    }
+                ]
+            }
+        },
+        {
+            "name": "JLink-attach",
+            "type": "cortex-debug",
+            "request": "attach",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Basic_Framework_MC02.elf",
+            "svdFile": "${workspaceFolder}/STM32H723.svd",
+            "servertype": "jlink",
+            "device": "STM32H723VG",
+            "interface": "swd",
+            "rtos": "FreeRTOS",
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            },
+            "rttConfig": {
+                "enabled": true,
+                "address": "auto",
+                "clearSearch": true,
+                "decoders": [
+                    {
+                        "type": "console",
+                        "port": 0,
+                        "label": "RTT Log",
+                        "noprompt": true
+                    }
+                ]
+            }
+        }
+    ]
+}

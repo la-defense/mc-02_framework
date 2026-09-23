@@ -1,0 +1,107 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build task",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "build"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "build task (Makefile)",
+            "type": "shell",
+            "command": "mingw32-make",
+            "args": [
+                "-j24"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "download dap",
+            "type": "shell",
+            "command": "${config:cortex-debug.openocdPath}",
+            "args": [
+                "-f",
+                "openocd_dap.cfg",
+                "-c",
+                "program build/Basic_Framework_MC02.elf verify reset exit"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "build task",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "download jlink",
+            "type": "shell",
+            "command": "${config:cortex-debug.openocdPath}",
+            "args": [
+                "-f",
+                "openocd_jlink.cfg",
+                "-c",
+                "program build/Basic_Framework_MC02.elf verify reset exit"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "build task",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "wait for rtt",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "Start-Sleep -Seconds 3"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "flash and wait",
+            "dependsOn": [
+                "download dap",
+                "wait for rtt"
+            ],
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        },
+        {
+            // 可选：J-Link 官方 RTT 客户端。使用本工程 launch.json 内置的 RTT 终端时不需要它。
+            // 需要已安装 SEGGER J-Link 软件，且 JlinkRTTClient 在 PATH 中。
+            "label": "log (JLink RTT Client)",
+            "type": "shell",
+            "command": "JlinkRTTClient",
+            "args": [],
+            "problemMatcher": []
+        }
+    ]
+}

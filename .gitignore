@@ -63,3 +63,13 @@ dkms.conf
 
 # 裁判系统模拟器独立仓库（tools/referee_sim）
 /tools/referee_sim/
+
+# 本地多出来的两套构建目录(日常用 /build/)
+/build-perf/
+/build-test/
+
+# 厂商资料(说明书/3D模型/图纸/通信协议 PDF, 体积 600MB+ 且有版权, 不入库)
+/资料/
+
+# 个人编辑器配置(里面是本机绝对路径, 别人 clone 下来用不了)
+.vscode/settings.json

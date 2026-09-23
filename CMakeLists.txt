@@ -51,7 +51,6 @@ add_definitions(
     -DUSE_HAL_DRIVER
     -DSTM32H723xx
     -DARM_MATH_CM7
-    -DDISABLE_LOG_SYSTEM
     )
 
 # add inc
