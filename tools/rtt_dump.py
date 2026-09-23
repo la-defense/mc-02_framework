@@ -20,6 +20,14 @@ import subprocess
 import sys
 import time
 
+# 中文 Windows 控制台默认是 GBK: 日志里混着 UTF-8 的中文和替换字符时,
+# print 会抛 UnicodeEncodeError 把整个工具打断。这里把输出编码的
+# "遇到编不出来的字符就替换掉" 打开, 保证工具永远能把日志吐出来。
+try:
+    sys.stdout.reconfigure(errors="replace")
+except Exception:
+    pass
+
 DEFAULT_OPENOCD = (
     r"C:\Users\Administrator\AppData\Roaming\Code\User\globalStorage"
     r"\bmd.stm32-for-vscode\@xpack-dev-tools\openocd\0.12.0-7.1\.content\bin\openocd.EXE"
