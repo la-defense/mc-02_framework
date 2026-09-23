@@ -71,6 +71,10 @@
 #define configTOTAL_HEAP_SIZE                    ((size_t)25600)
 #define configMAX_TASK_NAME_LEN                  ( 16 )
 #define configGENERATE_RUN_TIME_STATS            1
+/* 任务栈溢出检测(2026-09-23): 取 2 = 任务切换时检查栈末端 16 字节的填充图案。
+   开销约每次切换几十个周期(1000 次/s 下可忽略), 换来的是"栈溢出时能被记录下来、
+   而不是悄悄踩坏别人的内存"。检测到之后走 vApplicationStackOverflowHook。 */
+#define configCHECK_FOR_STACK_OVERFLOW           2
 #define configUSE_TRACE_FACILITY                 1
 #define configUSE_16_BIT_TICKS                   0
 #define configUSE_MUTEXES                        1
@@ -133,7 +137,11 @@ See http://www.FreeRTOS.org/RTOS-Cortex-M3-M4.html. */
 /* Normal assert() semantics without relying on the provision of an assert.h
 header file. */
 /* USER CODE BEGIN 1 */
-#define configASSERT( x ) if ((x) == 0) {taskDISABLE_INTERRUPTS(); for( ;; );}
+/* 断言失败不再"关中断死循环"(那样只能看到板子卡住):
+   交给统一的崩溃记录模块 —— 存下文件名与行号、主动复位, 下次启动打印出来。
+   (这里只做前置声明, 避免配置头去 include 业务头。) */
+void CrashLogAssertFail(const char *file, uint32_t line);
+#define configASSERT( x ) if ((x) == 0) { CrashLogAssertFail(__FILE__, (uint32_t)__LINE__); }
 /* USER CODE END 1 */
 
 /* Definitions that map the FreeRTOS port interrupt handlers to their CMSIS

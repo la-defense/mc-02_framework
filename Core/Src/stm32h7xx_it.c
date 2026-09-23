@@ -22,7 +22,27 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "bsp_crash.h"
 /* USER CODE END Includes */
+
+/* ============================================================================
+   异常入口统一处理(2026-09-23, LOG-03)
+   ----------------------------------------------------------------------------
+   这 5 个 handler 必须保持 __attribute__((naked)): 普通函数会在序言里 push 寄存器,
+   那样汇编里的 "mrs r0, msp / mrsne r0, psp" 拿到的就不是"异常压栈的那 8 个字"
+   (R0,R1,R2,R3,R12,LR,PC,xPSR) 了, 现场会整体错位。
+   取到帧指针后跳到 CrashLogHandlerC(): 记录现场(纯内存写)并主动复位。
+   !! CubeMX 重新生成代码会覆盖这一段, 生成后需要手工恢复 !!
+   ========================================================================== */
+#define CRASH_HANDLER_BODY(type_val)          \
+    __asm volatile(                           \
+        "tst lr, #4        \n"                \
+        "ite eq            \n"                \
+        "mrseq r0, msp     \n"                \
+        "mrsne r0, psp     \n"                \
+        "movs r1, %c0      \n"                \
+        "b CrashLogHandlerC\n"                \
+        :: "i"(type_val) : "r0", "r1", "memory")
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
@@ -96,76 +116,51 @@ extern TIM_HandleTypeDef htim23;
 /**
   * @brief This function handles Non maskable interrupt.
   */
-void NMI_Handler(void)
+__attribute__((naked)) void NMI_Handler(void)
 {
   /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
-
+  CRASH_HANDLER_BODY(CRASH_TYPE_NMI);
   /* USER CODE END NonMaskableInt_IRQn 0 */
-  /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
-   while (1)
-  {
-  }
-  /* USER CODE END NonMaskableInt_IRQn 1 */
 }
 
 /**
   * @brief This function handles Hard fault interrupt.
   */
-void HardFault_Handler(void)
+__attribute__((naked)) void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  CRASH_HANDLER_BODY(CRASH_TYPE_HARDFAULT);
   /* USER CODE END HardFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
-  }
 }
 
 /**
   * @brief This function handles Memory management fault.
   */
-void MemManage_Handler(void)
+__attribute__((naked)) void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
+  CRASH_HANDLER_BODY(CRASH_TYPE_MEMMANAGE);
   /* USER CODE END MemoryManagement_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
-    /* USER CODE END W1_MemoryManagement_IRQn 0 */
-  }
 }
 
 /**
   * @brief This function handles Pre-fetch fault, memory access fault.
   */
-void BusFault_Handler(void)
+__attribute__((naked)) void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-
+  CRASH_HANDLER_BODY(CRASH_TYPE_BUSFAULT);
   /* USER CODE END BusFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_BusFault_IRQn 0 */
-    /* USER CODE END W1_BusFault_IRQn 0 */
-  }
 }
 
 /**
   * @brief This function handles Undefined instruction or illegal state.
   */
-void UsageFault_Handler(void)
+__attribute__((naked)) void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-
+  CRASH_HANDLER_BODY(CRASH_TYPE_USAGEFAULT);
   /* USER CODE END UsageFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_UsageFault_IRQn 0 */
-    /* USER CODE END W1_UsageFault_IRQn 0 */
-  }
 }
 
 /**

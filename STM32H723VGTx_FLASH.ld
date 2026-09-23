@@ -167,6 +167,17 @@ SECTIONS
     __bss_end__ = _ebss;
   } >RAM
 
+  /* 崩溃现场段: 启动代码的 FillZerobss 只清 _sbss.._ebss, 所以这一段的内容
+     在系统复位(看门狗/软件复位/NRST)后依然保留 —— 崩溃记录就放在这里,
+     下次启动时能被读出来。注意: 掉电后内容丢失。 */
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.noinit)
+    *(.noinit*)
+    . = ALIGN(4);
+  } >RAM
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack :
   {

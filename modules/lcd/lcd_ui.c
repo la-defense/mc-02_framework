@@ -18,6 +18,7 @@
 #include "bsp_can.h"
 #include "fdcan.h"
 #include "bmi088.h"
+#include "bsp_crash.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -240,6 +241,7 @@ static void draw_page0_static(void)
     draw_label(5, L_RC);
     draw_label(6, L_VISION);
     draw_label(7, L_WATCHDOG);
+    draw_label_ascii(8, "CRASH"); /* 上次崩溃(异常/断言/栈溢出)现场, 没崩过显示 -- */
 }
 
 static void draw_page0_values(void)
@@ -279,6 +281,15 @@ static void draw_page0_values(void)
     snprintf(buf, sizeof(buf), "RUN:%s RST:%s", BSP_WatchdogIsRunning() ? "Y" : "N",
              BSP_WatchdogWasIwdgReset() ? "Y" : "N");
     draw_value_ascii(7, buf);
+
+    /* 上次崩溃现场: 类型 + 出错 PC + 累计次数(没崩过就显示 --) */
+    CrashLog_t cl;
+    if (CrashLogGetLast(&cl))
+        snprintf(buf, sizeof(buf), "%s@%08lX x%lu", CrashLogTypeShort(cl.type),
+                 (unsigned long)cl.pc, (unsigned long)cl.count);
+    else
+        snprintf(buf, sizeof(buf), "--");
+    draw_value_ascii(8, buf);
 }
 
 static void draw_page1_static(void)

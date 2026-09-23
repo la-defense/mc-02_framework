@@ -17,6 +17,7 @@
 #include "buzzer.h"
 #include "task_monitor.h"
 #include "lcd_task.h"
+#include "bsp_crash.h"
 
 #include "bsp_log.h"
 
@@ -137,6 +138,10 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
        配置总线把自测配置覆盖掉), 放在任务上下文里也便于用 HAL_GetTick 做超时 */
     CANRunLoopbackSelfTest();
 #endif
+#if CRASH_TEST
+    /* 崩溃自测(默认关闭)的等待计数: 见下面循环里的用法 */
+    static uint32_t s_crash_test_wait = 0u;
+#endif
 #if CAN_DJI_INJECT_TEST >= 1
     /* DJI 假反馈注入自测(默认关闭): 验证"中断入队 → CANProcessRx 派发 → 解码 → 多圈累加" */
     (void)CANRunDjiFeedbackInjectTest();
@@ -150,6 +155,15 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         BuzzerTask();
         CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */
         TaskMonitorTick();
+#if CRASH_TEST
+        /* 崩溃自测(默认关闭): 等系统完全跑起来(启动日志都出去、RTT 稳定)之后再故意崩,
+           否则崩溃发生在 RTT 初始化后几毫秒内, 复位太频繁以至于抓不到日志。
+           这里用"数循环"而不是 osDelay: daemon 任务一睡, 就没人喂狗,
+           IWDG 200ms 会先把板子复位(实测复位原因就是 IWDG1), 自测根本跑不到。
+           每次启动触发一种, 依次 BusFault / 断言 / 栈溢出 循环。 */
+        if (++s_crash_test_wait >= CRASH_TEST_DELAY_LOOPS)
+            CrashLogSelfTest(); /* 不返回: 记录现场后主动复位 */
+#endif
 #if CAN_DJI_INJECT_TEST >= 2
         DJIInjectStressTick(); /* 压测模式: 持续往接收队列里灌帧 */
 #endif
