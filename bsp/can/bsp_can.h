@@ -188,6 +188,31 @@ void CANGetTxStats(FDCAN_HandleTypeDef *hcan, CAN_TxStats_t *stats);
  */
 void CANGetBusStats(FDCAN_HandleTypeDef *hcan, CAN_BusStats_t *stats);
 
+/* ---------------- 接收队列(ISR 入队 / 任务派发, BSPCAN-02) ----------------
+   接收中断现在只把帧压进每条总线各自的环形队列, 由 CANProcessRx() 在任务上下文
+   逐帧调用模块回调。必须遵守:
+     1) CANProcessRx() 全工程只能有一个调用者(否则 tail 会被多任务竞争),
+        当前固定由 MotorControlTask() 在算控制之前调用;
+     2) 回环类自测的等待循环里也要调用它, 否则回调永远不会跑;
+     3) 队列满时丢弃新帧, 用 CANGetRxQueueDrop() 观察丢帧数。 */
+void CANProcessRx(void);
+
+/** @brief 读取某条总线"接收队列满导致的丢帧数" */
+uint32_t CANGetRxQueueDrop(FDCAN_HandleTypeDef *hcan);
+
+/* 接收队列诊断(由 CANHealthMonitor 每 100ms 汇总): drop 应恒为 0,
+   peak 是队列历史最大占用, 用来判断深度(32)够不够 */
+extern volatile uint32_t can_rxq_drop_total;
+extern volatile uint16_t can_rxq_peak_max;
+
+/* 把一条总线强制切到指定模式 / 重装全部滤镜: 供回环类自测复用 */
+uint8_t CANForceMode(FDCAN_HandleTypeDef *h, uint32_t mode, uint8_t accept_all);
+void CANReapplyFilters(void);
+
+/* 注销一个实例(从 can_instance[]/rx_lookup 摘掉并 free): 仅供自测流程收尾使用,
+   正常业务不要调用。 */
+void CANUnregisterInstance(CANInstance *ins);
+
 /**
  * @brief CAN 总线健康检查与 BusOff 恢复; 建议以 10Hz 在任务上下文调用
  *        (恢复动作要动多个寄存器, 不能放在中断里)

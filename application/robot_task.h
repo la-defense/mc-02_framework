@@ -9,6 +9,7 @@
 #include "robot.h"
 #include "ins_task.h"
 #include "motor_task.h"
+#include "dji_motor.h"
 #include "referee_task.h"
 #include "master_process.h"
 #include "daemon.h"
@@ -136,6 +137,10 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
        配置总线把自测配置覆盖掉), 放在任务上下文里也便于用 HAL_GetTick 做超时 */
     CANRunLoopbackSelfTest();
 #endif
+#if CAN_DJI_INJECT_TEST >= 1
+    /* DJI 假反馈注入自测(默认关闭): 验证"中断入队 → CANProcessRx 派发 → 解码 → 多圈累加" */
+    (void)CANRunDjiFeedbackInjectTest();
+#endif
     for (;;)
     {
         // 100Hz
@@ -145,6 +150,9 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         BuzzerTask();
         CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */
         TaskMonitorTick();
+#if CAN_DJI_INJECT_TEST >= 2
+        DJIInjectStressTick(); /* 压测模式: 持续往接收队列里灌帧 */
+#endif
         daemon_dt = (float)DWT_ProbeElapsedUs(daemon_probe);
         if (daemon_dt > 10000.0f)
         {

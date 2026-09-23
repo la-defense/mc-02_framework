@@ -158,4 +158,31 @@ void DJIMotorCloseLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop);
  */
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);
 
+/* ============================================================================
+   DJI 假反馈注入自测(默认关闭)
+   ----------------------------------------------------------------------------
+   用途: 在没有真实电机的情况下验证整条 CAN 反馈链路 ——
+         "回环发送 → 中断入队 → CANProcessRx() 派发 → DecodeDJIMotor 解码 → 多圈累加"。
+   原理: 把某条总线切到内部回环, 注册一个"只发不收"的临时实例(tx_id = 目标电机的
+         rx_id, 比如 0x201), 它发出去的帧会命中该电机的接收滤镜, 于是走进正常解码路径。
+   取值: 0 = 关闭(默认); 1 = 启动时跑一次功能自测; 2 = 功能自测 + daemon 循环持续压测
+   注意: 会覆盖目标电机的 measure, 只在确认没接真实电机时打开。
+   ========================================================================== */
+#ifndef CAN_DJI_INJECT_TEST
+#define CAN_DJI_INJECT_TEST 0
+#endif
+
+#if CAN_DJI_INJECT_TEST >= 1
+/** @brief 跑一次注入自测(解码 + 多圈累加), 返回 1=全通过 */
+uint8_t CANRunDjiFeedbackInjectTest(void);
+extern volatile uint32_t can_dji_inject_pass;
+extern volatile uint32_t can_dji_inject_fail;
+extern volatile uint32_t can_dji_inject_multi_turn_err;
+extern volatile uint32_t can_dji_inject_frame_cnt;
+#endif
+#if CAN_DJI_INJECT_TEST >= 2
+/** @brief 压测模式: 由 daemon 循环周期调用, 每轮塞一批帧观察队列深度与丢帧 */
+void DJIInjectStressTick(void);
+#endif
+
 #endif // !DJI_MOTOR_H

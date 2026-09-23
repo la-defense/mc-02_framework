@@ -18,6 +18,25 @@ static uint8_t idx; // 全局CAN实例索引,每次有新的模块注册会自�
      512×4B×3 总线 = 6KB RAM(用完整 11 位做直表要 24KB, 太贵)。 */
 #define CAN_RX_LOOKUP_SIZE 0x200u
 
+/* ---------------- 接收队列(BSPCAN-02, 2026-09-23) ----------------
+   背景: 原来 CAN 接收中断里直接调用模块回调做解析(DJI 电机的低通滤波 + 多圈累加),
+         而控制任务同时在读同一份 measure —— 属于"中断写 / 任务读"的典型数据竞争。
+   现在: 中断只做"查表找到归属实例 → 把 {实例,长度,8字节} 压进本总线的环形队列",
+         解析延后到任务上下文由 CANProcessRx() 逐帧派发。
+   为什么不是"只把最新一帧丢给任务": 滤波和多圈累加都有跨帧状态(last_ecd/speed_aps/
+         total_round), 必须逐帧按到达顺序处理, 否则多圈角度会算错。队列保证了顺序。
+   并发模型: 单生产者(本总线的 FDCAN RX 中断, 每条总线各自一个队列所以不会互相嵌套)
+            单消费者(CANProcessRx, 固定由 MotorControlTask 调用)。
+   队列满: 丢弃"新帧"并累加 rxq_drop(队列满本身已是异常, 不做覆盖最旧的复杂语义)。 */
+#define CAN_RXQ_DEPTH 32u /* 每条总线 32 帧 ≈ 32ms 缓冲 @1k 帧/s */
+
+typedef struct
+{
+    CANInstance *instance; /* 已由 rx_lookup 查好的归属实例 */
+    uint8_t len;           /* 数据长度 0~8 */
+    uint8_t data[8];       /* 帧数据 */
+} CANRxItem_t;
+
 /* 接收中断只保留"有新帧"和"丢帧诊断"两种:
    FULL / WATERMARK 与 NEW_MESSAGE 触发的是同一个处理函数, 全开等于同一事件多次进中断 */
 #define FDCAN_RX_ACTIVE_ITS                                            \
@@ -32,6 +51,15 @@ typedef struct
     CAN_TxStats_t tx;
     CAN_BusStats_t bus;
     LogRateLimit_t log_rl; /* 限速日志状态(见 bsp_log.h) */
+    LogRateLimit_t log_rl_rx; /* 接收侧日志单独限速, 免得被发送侧告警压掉 */
+
+    /* ---- 接收队列(SPSC): 中断入队, 任务用 CANProcessRx() 消费 ---- */
+    CANRxItem_t rxq[CAN_RXQ_DEPTH];
+    volatile uint16_t rxq_head;    /* 生产者(中断)写 */
+    volatile uint16_t rxq_tail;    /* 消费者(任务)写 */
+    volatile uint32_t rxq_drop;    /* 队列满丢弃帧数 */
+    volatile uint16_t rxq_peak;    /* 历史最大占用(诊断: 判断深度够不够) */
+    volatile uint32_t rx_dispatch; /* 已派发给回调的帧数 */
 } CANBusState_t;
 
 static CANBusState_t can_bus[DEVICE_CAN_CNT] = {
@@ -70,6 +98,9 @@ volatile uint32_t can_prof_tx_spins = 0;   /* 保留: 自旋已删除, 恒为 0 
 volatile uint32_t can_prof_tx_full = 0;    /* 保留: 兼容旧观察, 等于 tx_drop 累计 */
 volatile DWT_Probe_t can_prof_rx_isr = {0};
 volatile uint32_t can_prof_rx_frames = 0;
+volatile DWT_Probe_t can_prof_rx_dispatch = {0}; /* 任务侧逐帧派发耗时(改造后新增) */
+volatile uint32_t can_rxq_drop_total = 0;        /* 三条总线接收队列满丢帧合计 */
+volatile uint16_t can_rxq_peak_max = 0;          /* 三条总线里队列占用的历史峰值 */
 
 static CANBusState_t *CANBusFromHandle(FDCAN_HandleTypeDef *_handle)
 {
@@ -91,18 +122,118 @@ static uint8_t CANBusIndexFromHandle(FDCAN_HandleTypeDef *_handle)
     return 0xFFu;
 }
 
+/**
+ * @brief 把一帧接收数据压进本总线的环形队列
+ * @note  只能在对应总线的 RX 中断里调用(单生产者的前提)。
+ *        数据先写完, 再 __DMB 之后发布 head, 保证消费者看到 head 时数据已就绪。
+ */
+static void CANRxQueuePush(CANBusState_t *bus, CANInstance *ins, uint8_t len, const uint8_t *data)
+{
+    if (bus == NULL || ins == NULL)
+        return;
+    if (len > 8u)
+        len = 8u;
+
+    uint16_t head = bus->rxq_head;
+    uint16_t next = (uint16_t)((head + 1u) % CAN_RXQ_DEPTH);
+    if (next == bus->rxq_tail)
+    {
+        /* 队列满: 丢弃新帧 + 计数(不覆盖最旧, 免得和消费者抢 tail) */
+        bus->rxq_drop++;
+        return;
+    }
+
+    CANRxItem_t *it = &bus->rxq[head];
+    it->instance = ins;
+    it->len = len;
+    memcpy(it->data, data, len);
+
+    __DMB();
+    bus->rxq_head = next;
+
+    /* 诊断: 记录队列历史最大占用, 用来判断深度(32)够不够 */
+    uint16_t used = (uint16_t)((uint16_t)(head - bus->rxq_tail + CAN_RXQ_DEPTH) % CAN_RXQ_DEPTH) + 1u;
+    if (used > bus->rxq_peak)
+        bus->rxq_peak = used;
+}
+
+/**
+ * @brief 派发所有已入队的 CAN 接收帧(逐帧、按到达顺序调用模块回调)
+ * @note  全工程只允许一个调用者(MotorControlTask), 否则 tail 会被多任务竞争。
+ *        必须在"算控制"之前调用, 这样本周期到达的帧全部解析完再算 ——
+ *        拿到的仍是最新反馈, 端到端延迟与"中断里直接解析"相同。
+ */
+void CANProcessRx(void)
+{
+    /* 双消费者保护: 正常工作流里只有 MotorControlTask 调用, 但启动期的自测
+       (CANRunLoopbackSelfTest / CANRunDjiFeedbackInjectTest, 跑在 daemon 任务里)
+       也会调用, 那时 motor 任务可能已经在跑 —— 两个任务同时推进 tail 会让同一个
+       槽位被消费两次/漏消费。用原子的 test-and-set 挡住: 被挡掉的一方本轮直接返回,
+       队列里的帧不会丢, 另一个消费者会处理掉。 */
+    static volatile uint8_t processing = 0;
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    if (processing)
+    {
+        __set_PRIMASK(primask);
+        return;
+    }
+    processing = 1u;
+    __set_PRIMASK(primask);
+
+    uint32_t probe = DWT_ProbeStart();
+
+    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+    {
+        CANBusState_t *bus = &can_bus[i];
+        while (bus->rxq_tail != bus->rxq_head)
+        {
+            CANRxItem_t *it = &bus->rxq[bus->rxq_tail];
+            CANInstance *ins = it->instance;
+            if (ins != NULL && ins->can_module_callback != NULL)
+            {
+                ins->rx_len = it->len;
+                memcpy(ins->rx_buff, it->data, it->len);
+                ins->can_module_callback(ins);
+            }
+            bus->rx_dispatch++;
+
+            /* 先把数据取完再推进 tail, 否则生产者可能覆盖正在读的槽 */
+            __DMB();
+            bus->rxq_tail = (uint16_t)((bus->rxq_tail + 1u) % CAN_RXQ_DEPTH);
+        }
+    }
+
+    DWT_ProbeDone(&can_prof_rx_dispatch, probe);
+    processing = 0u;
+}
+
+uint32_t CANGetRxQueueDrop(FDCAN_HandleTypeDef *hcan)
+{
+    CANBusState_t *bus = CANBusFromHandle(hcan);
+    return (bus != NULL) ? bus->rxq_drop : 0u;
+}
+
 /* 限速日志: 同一类消息最多 1 条/秒, 其余只计数(避免日志把 CPU 和 RTT 缓冲吃光)
    限速逻辑统一用 bsp_log 的 LogRateLimitAllow(), 与其它模块保持一致 */
+static void CANLogRateLimitedEx(CANBusState_t *bus, LogRateLimit_t *rl, const char *tag, uint32_t value)
+{
+    if (bus == NULL || rl == NULL)
+        return;
+    if (LogRateLimitAllow(rl, 1000u))
+    {
+        LOGWARNING("[bsp_can] %s (值 %lu, 累计 %lu 次, 期间限速 %lu 条)",
+                   tag, (unsigned long)value,
+                   (unsigned long)rl->total, (unsigned long)rl->dropped);
+    }
+}
+
+/* 默认用总线的"发送侧"限速状态(保持既有调用点不变) */
 static void CANLogRateLimited(CANBusState_t *bus, const char *tag, uint32_t value)
 {
     if (bus == NULL)
         return;
-    if (LogRateLimitAllow(&bus->log_rl, 1000u))
-    {
-        LOGWARNING("[bsp_can] %s (值 %lu, 累计 %lu 次, 期间限速 %lu 条)",
-                   tag, (unsigned long)value,
-                   (unsigned long)bus->log_rl.total, (unsigned long)bus->log_rl.dropped);
-    }
+    CANLogRateLimitedEx(bus, &bus->log_rl, tag, value);
 }
 
 /* ----------------two static function called by CANRegister()-------------------- */
@@ -257,7 +388,7 @@ volatile uint32_t can_selftest_rxf0c = 0;
    - HAL_FDCAN_Init() 结束后不会清 CCCR.INIT, 必须再调 HAL_FDCAN_Start();
    - HAL 内部 hfdcan->State 很容易与真实硬件状态失配(Start 只在 State==READY 时才动作,
      否则直接返回错误什么都不做), 所以这里先对齐 State, 启动后再回读 CCCR.INIT 校验。 */
-static uint8_t CANForceMode(FDCAN_HandleTypeDef *h, uint32_t mode, uint8_t accept_all)
+uint8_t CANForceMode(FDCAN_HandleTypeDef *h, uint32_t mode, uint8_t accept_all)
 {
     if (h == NULL)
         return 0u;
@@ -297,7 +428,7 @@ static void CANSelfTestRxCallback(CANInstance *ins)
 }
 
 /* 注销一个实例: 从 can_instance[] 与 rx_lookup 里摘掉并释放内存 */
-static void CANUnregisterInstance(CANInstance *ins)
+void CANUnregisterInstance(CANInstance *ins)
 {
     uint8_t i;
     if (ins == NULL)
@@ -324,7 +455,7 @@ static void CANUnregisterInstance(CANInstance *ins)
 }
 
 /* 重装所有已注册实例的滤镜(重新 Init 之后必须调用) */
-static void CANReapplyFilters(void)
+void CANReapplyFilters(void)
 {
     for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
         can_filter_idx[i] = 0;
@@ -398,6 +529,9 @@ uint8_t CANRunLoopbackSelfTest(void)
             while (!selftest_rx_seen &&
                    DWT_ProbeElapsedUs(t0) < (uint32_t)CAN_SELFTEST_WAIT_MS * 1000u)
             {
+                /* 接收改成"中断入队 + 任务派发"之后, 回调不再在中断里执行,
+                   这里必须主动消费队列, 否则永远等不到 selftest_rx_seen。 */
+                CANProcessRx();
             }
             if (!selftest_rx_seen)
                 bus_ok = 0;
@@ -645,7 +779,29 @@ void CANHealthMonitor(void)
             bus->bus.busoff_recover++;
             CANLogRateLimited(bus, "BusOff/INIT 检测到并尝试恢复", bus->bus.busoff);
         }
+
+        /* 接收侧的异常在这里限速打印(中断里只计数):
+           ① rx_lost: 硬件 RX FIFO 溢出丢帧(总线太忙);
+           ② rxq_drop: 软件接收队列满(任务消费不及时, 队列深度不够或任务被阻塞)。
+           两者都是"帧真的丢了", 一旦出现就该查, 所以放在这里统一告警。 */
+        if (bus->bus.rx_lost != 0u)
+            CANLogRateLimitedEx(bus, &bus->log_rl_rx, "RX FIFO 溢出丢帧", bus->bus.rx_lost);
+        if (bus->rxq_drop != 0u)
+            CANLogRateLimitedEx(bus, &bus->log_rl_rx, "接收队列满丢帧(任务消费不及时)", bus->rxq_drop);
     }
+
+    /* 接收队列诊断汇总(供 OpenOCD/LCD 读取):
+       drop 应恒为 0; peak 用来判断队列深度(32)够不够。 */
+    uint32_t drop_sum = 0u;
+    uint16_t peak_max = 0u;
+    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+    {
+        drop_sum += can_bus[i].rxq_drop;
+        if (can_bus[i].rxq_peak > peak_max)
+            peak_max = can_bus[i].rxq_peak;
+    }
+    can_rxq_drop_total = drop_sum;
+    can_rxq_peak_max = peak_max;
 #endif
 }
 
@@ -766,9 +922,10 @@ static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
 
         	if (target != NULL && target->can_module_callback != NULL)
         	{
-        		target->rx_len = (uint8_t)DataLength;                     // 保存接收到的数据长度
-        		memcpy(target->rx_buff, fdcan_rx_buff, target->rx_len);    // 消息拷贝到对应实例
-        		target->can_module_callback(target);                      // 触发回调解析
+        		/* 只入队, 不在中断里解析(BSPCAN-02):
+        		   解析(含滤波/多圈累加)延后到 CANProcessRx() 在任务上下文逐帧执行,
+        		   既让中断最短, 又消除了"中断写 measure / 任务读 measure"的数据竞争。 */
+        		CANRxQueuePush(bus, target, (uint8_t)DataLength, fdcan_rx_buff);
         	}
         	/* 注意: 这里不能 return! 必须把 FIFO 里的帧全部取完, 否则 FIFO 满就会丢帧 */
         }
@@ -786,7 +943,8 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 		if (bus != NULL)
 		{
 			bus->bus.rx_lost++;
-			CANLogRateLimited(bus, "RxFIFO0 溢出丢帧", bus->bus.rx_lost);
+			/* 这里只计数, 不在中断里打日志(写 RTT 是长耗时操作);
+			   实际打印由 CANHealthMonitor() 在任务上下文限速完成。 */
 		}
 	}
 	/* 检查是否有新消息写入Rx FIFO 0或到达一定阈值 */
@@ -804,7 +962,7 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs)
 		if (bus != NULL)
 		{
 			bus->bus.rx_lost++;
-			CANLogRateLimited(bus, "RxFIFO1 溢出丢帧", bus->bus.rx_lost);
+			/* 同上: 只计数, 打印交给 CANHealthMonitor() */
 		}
 	}
 	/* 检查是否有新消息写入Rx FIFO 1或到达一定阈值 */
