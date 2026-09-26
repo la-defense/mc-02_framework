@@ -74,7 +74,10 @@ static void CANCommLostCallback(void *cancomm)
 {
     CANCommInstance *comm = (CANCommInstance *)cancomm;
     CANCommResetRx(comm);
-    LOGWARNING("[can_comm] can comm rx[%d] lost, reset rx state.", &comm->can_ins->rx_id);
+    /* 原来这里打的是 &rx_id(指针)当 %d —— 新日志机制启用 GCC 的格式检查后暴露出来的:
+       改成张冠李戴的副作用是日志里出现一个像样的随机数, 反而更难查问题。 */
+    LOGWARNING("[can_comm] can comm rx[%lu] lost, reset rx state.",
+               (unsigned long)comm->can_ins->rx_id);
 }
 
 CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config)

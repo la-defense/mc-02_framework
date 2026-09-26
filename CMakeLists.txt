@@ -36,6 +36,15 @@ link_directories(${CMAKE_SOURCE_DIR}/Drivers/CMSIS/DSP/Lib/GCC)
 add_compile_options(-pipe ${MCU_FLAGS} -Wall -fmessage-length=0 # basic options
                     -ffunction-sections -fdata-sections -fno-common # optimize options
                     )
+
+# newlib-nano 默认不带浮点格式化: libc 里的 _printf_float 是个弱符号, 不显式拉进来时
+# printf/snprintf 遇到 %f 会"不打印、也不消费参数" —— 参数一旦错位, 后面的 %s 就可能
+# 取到 float 的位模式当指针解引用(见 docs/学习笔记/10 与 LOG-01 的崩溃现场)。
+# 日志宏(LOG-02)的前提是"参数一律按标准 C 规则消费", 所以默认把它链上。
+# 代价: 约 4KB Flash(实测 _printf_float + _dtoa_r 等)。
+# 想省这 4KB 可 -DENABLE_PRINTF_FLOAT=OFF, 但那样日志里 %f 会不打印且让后面的格式符错位。
+option(ENABLE_PRINTF_FLOAT "链接 newlib 的 _printf_float, 让 %f/%e/%g 能正常格式化" ON)
+
 add_link_options(-pipe ${MCU_FLAGS} -T${LINKER_SCRIPT} -Wl,--no-warn-rwx-segments # close RWX warning
                  -lm -lc # lib options
                  -Wl,--gc-sections -specs=nano.specs # optimize options
@@ -44,6 +53,11 @@ add_link_options(-pipe ${MCU_FLAGS} -T${LINKER_SCRIPT} -Wl,--no-warn-rwx-segment
                  # 再链 libnosys.a 会产生 multiple definition 链接错误。
                  -Wl,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map -Wl,--cref -Wl,--print-memory-usage # map options
                  )
+
+if (ENABLE_PRINTF_FLOAT)
+    # -u 与符号名必须是两个独立的参数, 否则会被当成一个非法开关
+    add_link_options(-u _printf_float)
+endif ()
 
 # add_compile_definitions() works for compile stage
 # while add_definitions() works for both compile and link stage

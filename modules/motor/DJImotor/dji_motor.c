@@ -118,7 +118,11 @@ static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *conf
                 LOGERROR("[dji_motor] ID crash. Check in debug mode, add dji_motor_instance to watch to get more information.");
                 uint16_t can_bus = config->can_handle == &hcan1 ? 1 : 2;
                 while (1) // 6020的id 1-4和2006/3508的id 5-8会发生冲突(若有注册,即1!5,2!6,3!7,4!8) (1!5!,LTC! (((不是)
-                    LOGERROR("[dji_motor] id [%d], can_bus [%d]", config->rx_id, can_bus);
+                    /* rx_id 是 uint32_t(在 arm-none-eabi 上是 unsigned long), can_bus 是
+                       uint16_t: 用 %d 打它们属于格式符与实参类型不符(新日志机制启用 GCC 的
+                       格式检查后暴露)。 */
+                    LOGERROR("[dji_motor] id [%lu], can_bus [%u]",
+                             (unsigned long)config->rx_id, (unsigned)can_bus);
             }
         }
         break;
@@ -147,7 +151,8 @@ static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *conf
                 LOGERROR("[dji_motor] ID crash. Check in debug mode, add dji_motor_instance to watch to get more information.");
                 uint16_t can_bus = config->can_handle == &hcan1 ? 1 : 2;
                 while (1) // 6020的id 1-4和2006/3508的id 5-8会发生冲突(若有注册,即1!5,2!6,3!7,4!8) (1!5!,LTC! (((不是)
-                    LOGERROR("[dji_motor] id [%d], can_bus [%d]", config->rx_id, can_bus);
+                    LOGERROR("[dji_motor] id [%lu], can_bus [%u]",
+                             (unsigned long)config->rx_id, (unsigned)can_bus);
             }
         }
         break;

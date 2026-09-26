@@ -44,10 +44,18 @@ void OSTaskInit()
     insTaskHandle = osThreadCreate(osThread(instask), NULL); // 由于是阻塞读取传感器,为姿态解算设置较高优先级,确保以1khz的频率执行
     // // 后续修改为读取传感器数据准备好的中断处理,
 
-    osThreadDef(motortask, StartMOTORTASK, osPriorityNormal, 0, 256);
+    /* motortask 栈 256 -> 512 words(2026-09-26, LOG-02): 该任务会通过
+       "MotorControlTask -> CANProcessRx -> 模块回调" 打日志(can_comm 掉线、电机离线等),
+       而日志宏现在会在栈上开一块 256 字节的格式化缓冲。实测 256 words(1KB) 会被顶爆:
+       FreeRTOS 栈溢出钩子记录到任务名 motortask(STACKOVF)。 */
+    osThreadDef(motortask, StartMOTORTASK, osPriorityNormal, 0, 512);
     motorTaskHandle = osThreadCreate(osThread(motortask), NULL);
 
-    osThreadDef(daemontask, StartDAEMONTASK, osPriorityNormal, 0, 128);
+    /* daemon 栈 128 -> 512 words(2026-09-26, LOG-02): 本任务打的日志最多(限速告警、
+       CAN/串口统计), 而日志宏现在会在栈上开一块 LOG_BUF_SIZE=256 字节的格式化缓冲。
+       实测(见 RTT 的 [stk] 行): 512 words 时历史最小剩余 ~370 words, 余量充足。
+       只加到一个"刚好不溢出"的值是危险的 —— 日志的调用深度会随代码增长。 */
+    osThreadDef(daemontask, StartDAEMONTASK, osPriorityNormal, 0, 512);
     daemonTaskHandle = osThreadCreate(osThread(daemontask), NULL);
 
     osThreadDef(robottask, StartROBOTTASK, osPriorityNormal, 0, 1024);
@@ -133,6 +141,11 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
     static float daemon_start;
     BuzzerInit();
     LOGINFO("[freeRTOS] Daemon Task Start");
+#if LOG_TEST
+    /* 日志格式串安全自测(默认关闭): 见 bsp_log.h 的 LOG_TEST / bsp_log.c 的 LogSelfTest()
+       启动先打一次, 之后每 2s 重打一次(100Hz x 200), 方便临时接上 RTT 抓取。 */
+    LogSelfTest();
+#endif
 #if CAN_SELFTEST_LOOPBACK
     /* FDCAN 回环自测(默认关闭): 必须在所有设备注册完成之后跑(否则 CANRegister 会重新
        配置总线把自测配置覆盖掉), 放在任务上下文里也便于用 HAL_GetTick 做超时 */
@@ -151,6 +164,14 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         // 100Hz
         TaskMonitorFeed(TASK_MONITOR_DAEMON);
         uint32_t daemon_probe = DWT_ProbeStart();
+#if LOG_TEST
+        static uint32_t s_log_test_tick = 0u;
+        if (++s_log_test_tick >= 200u)
+        {
+            s_log_test_tick = 0u;
+            LogSelfTest();
+        }
+#endif
         DaemonTask();
         BuzzerTask();
         CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */

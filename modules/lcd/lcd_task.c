@@ -126,6 +126,10 @@ volatile uint8_t lcd_stats_count = 0;
 volatile uint32_t lcd_stats_runtime[LCD_TASK_STATS_MAX] = {0};
 volatile uint8_t lcd_stats_prio[LCD_TASK_STATS_MAX] = {0};
 volatile char lcd_stats_name[LCD_TASK_STATS_MAX][12] = {{0}};
+/* 各任务"历史最小剩余栈"（word, 4 字节/word；0 = 已经溢出）。
+   来源: uxTaskGetSystemState() 填的 TaskStatus_t.usStackHighWaterMark。
+   顺序与 lcd_stats_name[] / [cpu] 那一行一致 —— 改动任务栈大小前先看这个数字。 */
+volatile uint16_t lcd_stats_stack[LCD_TASK_STATS_MAX] = {0};
 
 /* 其它模块的分段探针(定义见各自的 .c), 用于 RTT 汇总行 */
 extern volatile DWT_Probe_t motor_prof_all, motor_prof_dji, motor_prof_lk;
@@ -147,7 +151,11 @@ typedef struct
 /* 每 5s 打印一次: 第一行各任务占用率(千分比, RTT 不支持浮点), 第二行分段耗时 */
 static void lcd_cpu_report(uint32_t delta_total, const uint32_t *deltas)
 {
-    char line[256];
+    /* 208 字节足够放下"最多 12 个任务 × (11 字符任务名 + = + 4 位千分比 + 空格)"(实测最多
+       8 个任务, 实际约 140 字节); 不能更大 —— 这一行是作为 %s 塞进 LOGINFO 的, 日志宏的
+       缓冲区(LOG_BUF_SIZE-8 = 248)必须能连前缀和尾注一起装下, 否则 GCC 的
+       -Wformat-truncation 会报警, 真超长时也会被截断。 */
+    char line[208];
     int off = snprintf(line, sizeof(line), "[cpu] win=%lums ",
                        (unsigned long)LCD_STATS_UNIT_TO_US(delta_total) / 1000u);
 
@@ -177,6 +185,20 @@ static void lcd_cpu_report(uint32_t delta_total, const uint32_t *deltas)
     LOGINFO("[lcd] upd=%lu clr=%lu init=%lu recover=%lu (us)",
             (unsigned long)lcd_prof_update_last_us, (unsigned long)lcd_prof_clear_us,
             (unsigned long)lcd_prof_init_us, (unsigned long)lcd_prof_recover_us);
+
+    /* 各任务"剩余栈最小值"(word, 4 字节/word), 顺序与本段上面 [cpu] 那行一致 ——
+       数字越小越接近溢出(0 = 已经溢出)。改任务栈大小/加日志缓冲前先看它。 */
+    char stk[208];
+    int soff = snprintf(stk, sizeof(stk), "[stk] 剩余栈(word, 顺序同 [cpu]):");
+    for (uint8_t i = 0; i < lcd_stats_count && soff > 0 && soff < (int)sizeof(stk); ++i)
+    {
+        int w = snprintf(stk + soff, sizeof(stk) - (size_t)soff, " %u",
+                         (unsigned)lcd_stats_stack[i]);
+        if (w < 0)
+            break;
+        soff += w;
+    }
+    LOGINFO("%s", stk);
 }
 
 static void lcd_task_stats_snapshot(void)
@@ -206,6 +228,7 @@ static void lcd_task_stats_snapshot(void)
     {
         lcd_stats_runtime[i] = st[i].ulRunTimeCounter;
         lcd_stats_prio[i] = (uint8_t)st[i].uxCurrentPriority;
+        lcd_stats_stack[i] = (uint16_t)st[i].usStackHighWaterMark;
         for (uint8_t k = 0; k < 12u; ++k)
             lcd_stats_name[i][k] = '\0';
         for (uint8_t k = 0; k < 11u; ++k)

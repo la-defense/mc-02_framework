@@ -19,7 +19,17 @@ __attribute__((section(".noinit"))) static CrashLog_t g_crash_log;
    重新烧录过固件之后, 老的 __FILE__ 指针可能已经失效, 打印前必须挡一下。 */
 static uint8_t CrashPtrPlausible(uint32_t p)
 {
-    return (p >= 0x08000000u && p < 0x08200000u) ? 1u : 0u;
+    /* 允许的指针范围: Flash(字符串字面量, 如断言的文件名) + 内部 RAM
+       (DTCM 0x2000_0000 / AXI SRAM 0x2400_0000, 如 FreeRTOS TCB 里的任务名)。
+       2026-09-26: 原来只认 Flash, 于是"栈溢出"记录里的任务名(在 TCB 里, 属于
+       AXI SRAM)被判为不可信, 那一行"任务 '%s' 栈溢出"永远打不出来 —— 实测
+       栈溢出时只能看到一堆寄存器, 定位不了是哪个任务。 */
+    return ((p >= 0x08000000u && p < 0x08200000u) /* Flash */
+            || (p >= 0x20000000u && p < 0x20020000u) /* DTCM */
+            || (p >= 0x24000000u && p < 0x24020000u) /* AXI SRAM */
+            )
+               ? 1u
+               : 0u;
 }
 
 void CrashLogRecord(uint32_t type, uint32_t *frame, uint32_t arg0, uint32_t arg1,
