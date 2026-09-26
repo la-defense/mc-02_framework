@@ -161,10 +161,86 @@ static void clear_value(uint8_t row)
     LCD_BufFill(COL_VALUE_X, ROW_Y(row), LCD_W - 1u, ROW_Y(row) + 15u, BLACK);
 }
 
+/* ---------------- 值区重绘缓存(2026-09-26, LCD-12) ----------------
+   刷新率 5Hz、每帧无条件重画 9 行值区, 但大部分数值(电压/状态/在线位)根本不变化 ——
+   白白吃掉 SPI 带宽和 CPU。这里按"页 × 行"记住上次画的内容, 内容没变就整行跳过
+   (连清屏都不做)。
+   !! 任何"整页被重画/被破坏"的路径都必须先 LCD_UI_InvalidateValueCache(),
+      否则会出现"屏幕被清了但值一直不刷新"。目前只在 LCD_UI_DrawStatic() 里调用,
+      而所有整页重画(Init/Recover/SetFrozen/翻页/标定提示消失)都会经过它。 */
+#define LCD_ROW_COUNT 9u
+#define LCD_TEXT_MAX 48u
+
+/* 行内容类型: 0=空(没画过) 1=ASCII 2=中文标签 3=浮点+单位 */
+#define VALUE_KIND_NONE 0u
+#define VALUE_KIND_ASCII 1u
+#define VALUE_KIND_CN 2u
+#define VALUE_KIND_FLOAT 3u
+
+static char s_last_text[LCD_PAGE_COUNT][LCD_ROW_COUNT][LCD_TEXT_MAX];
+static const Lcd_CnChar_e *s_last_cn[LCD_PAGE_COUNT][LCD_ROW_COUNT];
+static float s_last_float[LCD_PAGE_COUNT][LCD_ROW_COUNT];
+static uint8_t s_last_decimals[LCD_PAGE_COUNT][LCD_ROW_COUNT];
+static uint8_t s_last_kind[LCD_PAGE_COUNT][LCD_ROW_COUNT];
+
+volatile uint32_t lcd_rows_drawn = 0;   /* 实际重绘的行数(累计) */
+volatile uint32_t lcd_rows_skipped = 0; /* 因内容未变而跳过的行数(累计) */
+
+/* 内容与上次相同 → 1(可以整行跳过) */
+static uint8_t value_unchanged(uint8_t row, uint8_t kind, const void *data, uint8_t decimals)
+{
+    if (row >= LCD_ROW_COUNT || lcd_page >= LCD_PAGE_COUNT)
+        return 0u;
+    if (s_last_kind[lcd_page][row] != kind)
+        return 0u;
+
+    switch (kind)
+    {
+    case VALUE_KIND_ASCII:
+        return (strcmp(s_last_text[lcd_page][row], (const char *)data) == 0) ? 1u : 0u;
+    case VALUE_KIND_CN:
+        return (s_last_cn[lcd_page][row] == (const Lcd_CnChar_e *)data) ? 1u : 0u;
+    case VALUE_KIND_FLOAT:
+        return ((s_last_float[lcd_page][row] == *(const float *)data) &&
+                (s_last_decimals[lcd_page][row] == decimals)) ? 1u : 0u;
+    default:
+        return 0u;
+    }
+}
+
+/* 记录"这一行刚画了什么", 供下次比较 */
+static void value_mark_drawn(uint8_t row, uint8_t kind, const void *data, uint8_t decimals)
+{
+    if (row >= LCD_ROW_COUNT || lcd_page >= LCD_PAGE_COUNT)
+        return;
+
+    s_last_kind[lcd_page][row] = kind;
+    switch (kind)
+    {
+    case VALUE_KIND_ASCII:
+        strncpy(s_last_text[lcd_page][row], (const char *)data, LCD_TEXT_MAX - 1u);
+        s_last_text[lcd_page][row][LCD_TEXT_MAX - 1u] = '\0';
+        break;
+    case VALUE_KIND_CN:
+        s_last_cn[lcd_page][row] = (const Lcd_CnChar_e *)data;
+        break;
+    case VALUE_KIND_FLOAT:
+        s_last_float[lcd_page][row] = *(const float *)data;
+        s_last_decimals[lcd_page][row] = decimals;
+        break;
+    default:
+        break;
+    }
+    lcd_rows_drawn++;
+}
+
+void LCD_UI_InvalidateValueCache(void)
+{
+    memset(s_last_kind, 0, sizeof(s_last_kind));
+}
+
 static void draw_value_ascii(uint8_t row, const char *str)
 {
-    clear_value(row);
-
     /* 可用宽度随 LCD_W 变化(可见区偏移会缩小绘图区)，过长时先降字号，
        仍然放不下就截断，避免整行因为越界校验而什么都不显示。 */
     size_t len = strlen(str);
@@ -195,20 +271,47 @@ static void draw_value_ascii(uint8_t row, const char *str)
         buf[len] = '\0';
     }
 
+    /* 比较"实际要画出去的文本"而不是原始入参: 原始串可能每次都不同但显示结果相同。
+       内容没变就整行跳过(连清屏都不做) —— 这是本次性能优化的主要来源。 */
+    if (value_unchanged(row, VALUE_KIND_ASCII, buf, 0u))
+    {
+        lcd_rows_skipped++;
+        return;
+    }
+
+    clear_value(row);
     LCD_BufShowAscii(COL_VALUE_X, ROW_Y(row), buf, CYAN, BLACK, sizey);
+    value_mark_drawn(row, VALUE_KIND_ASCII, buf, 0u);
 }
 
 static void draw_value_cn(uint8_t row, const Lcd_CnChar_e *str)
 {
+    /* 中文值都是标签数组(如"在线"/"离线"), 比指针就够 —— 同一内容每次传的是同一个数组 */
+    if (value_unchanged(row, VALUE_KIND_CN, str, 0u))
+    {
+        lcd_rows_skipped++;
+        return;
+    }
+
     clear_value(row);
     LCD_BufShowCnString(COL_VALUE_X, ROW_Y(row), str, CYAN, BLACK);
+    value_mark_drawn(row, VALUE_KIND_CN, str, 0u);
 }
 
 static void draw_value_float_unit(uint8_t row, float value, uint8_t decimals, const char *unit)
 {
+    /* 本工程不用 %f(nano.specs 不支持), 没法先格式化成字符串比较,
+       所以直接比较"数值 + 小数位数"。同一行 unit 是固定的, 不参与比较。 */
+    if (value_unchanged(row, VALUE_KIND_FLOAT, &value, decimals))
+    {
+        lcd_rows_skipped++;
+        return;
+    }
+
     clear_value(row);
     LCD_BufShowFloat(COL_VALUE_X, ROW_Y(row), value, decimals, CYAN, BLACK, 16);
     LCD_BufShowAscii(COL_VALUE_X + 8u * 8u, ROW_Y(row), unit, GRAY, BLACK, 16);
+    value_mark_drawn(row, VALUE_KIND_FLOAT, &value, decimals);
 }
 
 static void build_fault_string(uint32_t faults, char *buf, size_t len)
@@ -500,6 +603,10 @@ static void draw_page3_values(void)
 
 void LCD_UI_DrawStatic(uint8_t page)
 {
+    /* 整页重画会覆盖/清空整个值区: 必须让值缓存失效,
+       否则下一次 UpdateValues() 会因为"内容没变"而跳过, 屏幕就一直空着。 */
+    LCD_UI_InvalidateValueCache();
+
     lcd_page = page % LCD_PAGE_COUNT;
     LCD_BufFill(0, 0, LCD_W - 1u, LCD_H - 1u, BLACK);
 

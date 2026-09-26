@@ -45,7 +45,13 @@ void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+  /* !! 手工改动(2026-09-26, LCD-08): CubeMX 重新生成会覆盖这里 !!
+     SPI1 的时钟源是 PLL1Q = 120MHz(main.c 没配 PeriphClkInit, 用的是默认),
+     所以分频 8 → 15MHz, 分频 4 → **30MHz**。LCD(ST7789V2) 在 30MHz 下的写周期
+     余量足够, 把刷新一帧的 SPI 传输时间砍掉一半。
+     若实测出现花屏/错位, 把它改回 SPI_BAUDRATEPRESCALER_8 即可
+     (LCD 那边的"按内容变化重绘"优化不受影响)。 */
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
