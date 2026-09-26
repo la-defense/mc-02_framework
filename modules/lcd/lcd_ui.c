@@ -409,11 +409,18 @@ static void draw_page0_values(void)
              BSP_WatchdogWasIwdgReset() ? "Y" : "N");
     draw_value_ascii(7, buf);
 
-    /* 上次崩溃现场: 类型 + 出错 PC + 累计次数(没崩过就显示 --) */
+    /* 上次崩溃现场: 类型 + 出错 PC + 累计次数(没崩过/记录不可信就显示 --)。
+       栈溢出那条记录里没有有意义的 PC(原来的 pc 字段是任务名指针), 改显示任务名。 */
     CrashLog_t cl;
     if (CrashLogGetLast(&cl))
-        snprintf(buf, sizeof(buf), "%s@%08lX x%lu", CrashLogTypeShort(cl.type),
-                 (unsigned long)cl.pc, (unsigned long)cl.count);
+    {
+        if (cl.type == CRASH_TYPE_STACK_OVF)
+            snprintf(buf, sizeof(buf), "%s@%s x%lu", CrashLogTypeShort(cl.type),
+                     cl.task_name, (unsigned long)cl.count);
+        else
+            snprintf(buf, sizeof(buf), "%s@%08lX x%lu", CrashLogTypeShort(cl.type),
+                     (unsigned long)cl.pc, (unsigned long)cl.count);
+    }
     else
         snprintf(buf, sizeof(buf), "--");
     draw_value_ascii(8, buf);

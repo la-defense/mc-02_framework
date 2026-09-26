@@ -17,7 +17,31 @@
      异常可能由**内存/总线错误**引起, 此时任何函数调用、外设访问、日志输出都可能
      二次触发异常(CPU 会进 Lockup, 连现场都保不住)。所以记录过程只做:
        "读寄存器 → 写 RAM → 复位", 不调用函数、不写日志、不碰外设。
+
+   记录的可信度(2026-09-26, LOG-05)
+   ----------------------------------------------------------------------------
+   原来只用 4 字节 magic 判断"这份记录是不是我们写的", 于是 .noinit 的地址随
+   布局漂移之后, RAM 里的残留数据会被当成"上次崩溃现场"打印出来(实测出现过
+   "累计第 2261714040 次、任务名空白"这种误导横幅)。现在改成四重判据:
+
+     magic(=OK) + len(=sizeof) + version(=当前格式版本) + fw_id(=本固件构建指纹)
+     + crc32(对 payload 的 CRC32-IEEE)
+
+   任何一个不符 → CrashLogValid() 返回 0 → 启动时**一个字都不打印**(静默忽略)。
+   另外 magic 有两个取值: 开始写记录时先写 BUSY, 整份写完才写 OK ——
+   于是"看到 BUSY"就是一条真线索: 我们写到一半又崩了(见 CrashLogInit)。
    ========================================================================== */
+
+/* 记录格式版本: 改动 CrashLog_t 的布局时必须 +1 */
+#define CRASH_LOG_VERSION 2u
+
+/* 头部 magic 的两个取值(小端拼写): "BUSY" = 正在写, "CROK" = 写完整 */
+#define CRASH_LOG_MAGIC_BUSY 0x59535542u
+#define CRASH_LOG_MAGIC_OK 0x4B4F5243u
+
+/* 内联保存的任务名长度: 至少要放得下 FreeRTOS 的 configMAX_TASK_NAME_LEN
+   (bsp_crash.c 里有 _Static_assert 兜底) */
+#define CRASH_TASK_NAME_LEN 16u
 
 /* 崩溃入口类型 */
 typedef enum
@@ -38,13 +62,23 @@ typedef enum
 typedef struct
 {
     /* ---- 头部 ---- */
-    uint32_t magic; /* = CRASH_LOG_MAGIC 表示这份记录有效(最后写, 保证"看到它就说明写完了") */
+    uint32_t magic; /* BUSY(开始写) → OK(写完才写它) */
+    uint32_t len;     /* = sizeof(CrashLog_t): 换记录布局后自动失效 */
+    uint32_t version; /* = CRASH_LOG_VERSION */
+    uint32_t fw_id;   /* 本固件的构建指纹(由 __DATE__/__TIME__ 派生): 换固件后自动失效 */
+    uint32_t crc32;   /* 对 payload(下面第 1 个字段起到结构体末尾)的 CRC32-IEEE */
     uint32_t progress; /* 写入进度: 1=已写头部 2=已写故障寄存器 3=已写栈帧 4=已写栈快照
-                          用来诊断"记录写到一半就死了"(magic 无效但 progress 有值) */
+                          用来诊断"记录写到一半就死了"(此时 magic 停在 BUSY) */
     uint32_t count; /* 累计崩溃次数(跨复位累加, 不清零) */
     uint32_t type;  /* CrashType_e */
-    uint32_t arg0;  /* 附加信息: 断言所在的文件名指针 / 溢出任务名指针 */
+    uint32_t arg0;  /* 附加信息: 断言所在的文件名指针(栈溢出不用它, 见 task_name) */
     uint32_t arg1;  /* 附加信息: 断言行号 */
+
+    /* ---- 以下都是 payload: 全部参与 crc32 ---- */
+
+    /* 栈溢出时的任务名(内联副本)。为什么不再存指针: 任务名在 TCB 里(RAM),
+       下次启动时那块内存可能已被复用, 指针指向的内容早就不是任务名了。 */
+    char task_name[CRASH_TASK_NAME_LEN];
 
     /* ---- 故障状态寄存器(直接读寄存器得到) ---- */
     uint32_t cfsr;
@@ -81,7 +115,7 @@ const char *CrashLogTypeShort(uint32_t type);
 
 /* ---------------- 以下函数在异常上下文被调用 ----------------
    frame:     指向异常压栈的 8 个字(R0,R1,R2,R3,R12,LR,PC,xPSR); 没有帧时传 NULL
-   arg0/arg1: 附加信息(断言=文件名指针+行号, 栈溢出=任务名指针)
+   arg0/arg1: 附加信息(断言=文件名指针+行号; 栈溢出=0, 任务名走 task_name 内联副本)
    caller_pc: 没有异常帧时用作"出错位置"(由调用者用 __builtin_return_address(0) 取得);
               有异常帧时忽略(帧里的 PC 更准)
    这些函数记录完现场就主动复位, 不会返回。 */
