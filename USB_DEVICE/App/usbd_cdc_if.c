@@ -22,7 +22,7 @@
 #include "usbd_cdc_if.h"
 
 /* USER CODE BEGIN INCLUDE */
-
+#include "bsp_usb.h" /* VCPQueuePush: 接收中断只入队, 解析交给任务里的 VCPProcessRx() */
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -267,10 +267,10 @@ static int8_t CDC_Control_HS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_HS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 11 */
-  if (usb_rx_callback != NULL)
-  {
-    usb_rx_callback((uint16_t)(*Len));
-  }
+  /* 只入队, 不在中断里解析(BSPUART-02): 解析(视觉的滑动找帧 + CRC16)由任务里的
+     VCPProcessRx() 逐包执行。必须拷贝而不是传指针 —— 下面重新武装接收之后,
+     这个端点缓冲随时会被下一包数据覆盖。 */
+  VCPQueuePush(Buf, (uint16_t)(*Len));
   USBD_CDC_SetRxBuffer(&hUsbDeviceHS, &Buf[0]);
   USBD_CDC_ReceivePacket(&hUsbDeviceHS);
   return (USBD_OK);

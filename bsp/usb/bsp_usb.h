@@ -28,3 +28,15 @@ typedef struct
 uint8_t *USBInit(USB_Init_Config_s usb_conf); // bsp初始化时调用会重新枚举设备
 
 void USBTransmit(uint8_t *buffer, uint16_t len); // 通过usb发送数据
+
+/**
+ * @brief 把 USB 收到的一包数据压进队列(由 CDC_Receive_HS 在中断上下文调用)
+ * @note  接收中断不再直接解析: 由 VCPProcessRx() 在任务里按到达顺序逐包调用
+ *        rx_cbk, 避免在中断里做滑动找帧 + CRC 校验这类重活。
+ */
+void VCPQueuePush(const uint8_t *buf, uint16_t len);
+
+/**
+ * @brief 逐包派发 VCP 收到的数据(必须在任务上下文调用, 全工程只允许一个调用者)
+ */
+void VCPProcessRx(void);

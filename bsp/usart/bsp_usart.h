@@ -73,4 +73,12 @@ void USARTSend(USARTInstance *_instance, uint8_t *send_buf, uint16_t send_size,U
  */
 uint8_t USARTIsReady(USARTInstance *_instance);
 
+/**
+ * @brief 派发所有串口已接收的数据 + 处理错误恢复(必须在任务上下文调用)
+ * @note  接收中断现在只把数据拷进队列, 协议解析在这里按到达顺序逐帧执行。
+ *        全工程只允许一个调用者(当前挂在 1kHz 的 MotorControlTask 里),
+ *        放在"用数据之前"调用即可, 解析延迟就是一个任务周期。
+ */
+void USARTProcessRx(void);
+
 #endif

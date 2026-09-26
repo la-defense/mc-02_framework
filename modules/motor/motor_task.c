@@ -6,6 +6,8 @@
 #include "servo_motor.h"
 #include "xmmotor.h"
 #include "bsp_can.h"
+#include "bsp_usart.h"
+#include "bsp_usb.h"
 
 /* ---------------- 性能探针(2026-09, CPU 占用排查) ---------------- */
 volatile DWT_Probe_t motor_prof_all = {0};
@@ -24,6 +26,10 @@ void MotorControlTask()
        这样拿到的仍是最新反馈, 端到端延迟和"在中断里直接解析"相同。
        注意: 这里是全工程唯一的接收队列消费者, 不要在别处再调用 CANProcessRx()。 */
     CANProcessRx();
+    /* 串口与 VCP 同理: 中断只入队, 解析(裁判帧/视觉帧)在这里逐帧做。
+       三个消费者都放在 1kHz 任务里, 解析延迟 ≤1ms。 */
+    USARTProcessRx();
+    VCPProcessRx();
 
     probe_seg = DWT_ProbeStart();
     DJIMotorControl();
