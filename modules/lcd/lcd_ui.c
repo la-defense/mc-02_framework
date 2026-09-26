@@ -146,6 +146,31 @@ static void draw_title(const Lcd_CnChar_e *title_cn, const char *title_ascii)
         LCD_BufShowCnString((uint16_t)(LCD_W - 68u), 4, L_FREEZE, YELLOW, BLUE);
 }
 
+/**
+ * @brief 按页码重画标题栏(draw_title 内部会先铺满标题栏底色, 所以是"完整重画")
+ * @note  抽出来是为了两个地方能单独刷新标题栏而不必整页重画:
+ *          1) 冻结/恢复 —— 只影响右上角那个"冻结"标记;
+ *          2) LCD_UI_DrawStatic() —— 统一画标题, 各页的 static 函数就不再重复画了。
+ */
+static void draw_page_title(uint8_t page)
+{
+    switch (page)
+    {
+    case 0u:
+        draw_title(L_SYS, NULL);
+        break;
+    case 1u:
+        draw_title(NULL, "IMU");
+        break;
+    case 2u:
+        draw_title(L_POWER, NULL);
+        break;
+    default:
+        draw_title(L_MOTOR, NULL);
+        break;
+    }
+}
+
 static void draw_label(uint8_t row, const Lcd_CnChar_e *label)
 {
     LCD_BufShowCnString(COL_LABEL_X, ROW_Y(row), label, WHITE, BLACK);
@@ -335,7 +360,6 @@ static void build_fault_string(uint32_t faults, char *buf, size_t len)
 
 static void draw_page0_static(void)
 {
-    draw_title(L_SYS, NULL);
     draw_label(0, L_STATE);
     draw_label(1, L_FAULT);
     draw_label(2, L_ESTOP);
@@ -397,7 +421,6 @@ static void draw_page0_values(void)
 
 static void draw_page1_static(void)
 {
-    draw_title(NULL, "IMU");
     draw_label(0, L_TEMP);
     draw_label(1, L_TARGET);
     draw_label(2, L_DUTY);
@@ -483,7 +506,6 @@ static void draw_page1_values(void)
 
 static void draw_page2_static(void)
 {
-    draw_title(L_POWER, NULL);
     draw_label(0, L_REFEREE);
     draw_label(1, L_STAGE);
     draw_label(2, L_HP);
@@ -541,7 +563,6 @@ static void draw_page2_values(void)
 
 static void draw_page3_static(void)
 {
-    draw_title(L_MOTOR, NULL);
     draw_label(0, L_CHASSIS);
     draw_label(1, L_GIMBAL);
     draw_label(2, L_SHOOT);
@@ -608,7 +629,16 @@ void LCD_UI_DrawStatic(uint8_t page)
     LCD_UI_InvalidateValueCache();
 
     lcd_page = page % LCD_PAGE_COUNT;
-    LCD_BufFill(0, 0, LCD_W - 1u, LCD_H - 1u, BLACK);
+
+    /* 只清"会变的那一块", 不再整屏清黑 ——
+       原来这里 LCD_BufFill 整屏刷黑, 于是每次按键(翻页/冻结/重初始化)屏幕都会
+       黑一下再刷回来, 用户能看到"黑屏然后重刷"。现在:
+         · 标题栏由 draw_page_title() 自己铺底色覆盖;
+         · 标签列(x: 0~COL_VALUE_X-1)在这里清掉(新旧页的标签内容不同, 不清会留残影);
+         · 值区交给后面的 UpdateValues() 逐行清+画(缓存刚失效, 一定会全部重画)。
+       四页都是 9 行值区, 行数一致, 不会出现"上一页多出来的行没被覆盖"。 */
+    LCD_BufFill(0, 24u, (uint16_t)(COL_VALUE_X - 1u), LCD_H - 1u, BLACK);
+    draw_page_title(lcd_page);
 
     switch (lcd_page)
     {
@@ -685,8 +715,10 @@ void LCD_UI_Recover(void)
 void LCD_UI_SetFrozen(uint8_t frozen)
 {
     lcd_frozen = frozen ? 1u : 0u;
-    LCD_UI_DrawStatic(lcd_page);
-    LCD_UI_UpdateValues(lcd_page);
+    /* 冻结/恢复只影响标题栏右上角那个"冻结"标记 —— 只重画标题栏就够,
+       不要走 DrawStatic+UpdateValues 那样整页重画(按中键会闪一下)。
+       draw_title() 内部会先把整个标题栏铺成底色, 所以标记能正确出现/消失。 */
+    draw_page_title(lcd_page);
 }
 
 /**
