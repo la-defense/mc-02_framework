@@ -27,6 +27,7 @@
 | 15 | [DMA 串口接收与空闲中断](./15-DMA串口接收与空闲中断.md) | 为什么串口要用 DMA（算中断开销）、不定长数据四种判包方案、`ReceiveToIdle_DMA` 会进多次回调所以要关 `DMA_IT_HT`、**同一缓冲区复用陷阱**、ORE/NE/FE/PE、为什么阻塞 Abort 不能进 ISR |
 | 16 | [USB CDC 虚拟串口通信](./16-USB-CDC虚拟串口通信.md) | USB 与物理串口的本质区别（主机/设备、端点、包）、CDC 怎么变出 COM 口、**为什么 ReceivePacket 要重新武装**、为什么回调里不能久留、`USBD_BUSY` 与发送队列、视觉链路为什么选 VCP |
 | 17 | [LCD 刷新的性能账](./17-LCD刷新的性能账.md) | SPI 带宽怎么换算成每帧耗时、**墙钟时间 ≠ CPU 占用**、"画得快"与"画得少"的收益上限对比、缓存失效时机（整页重画必须失效）、帧缓冲/局部刷新/脏矩形的取舍 |
+| 18 | [一条日志的旅程](./18-一条日志的旅程.md) | `LOGINFO` 到屏幕的六段链路、SEGGER RTT 的 RAM 环形缓冲与"一次 Write 原子"、**newlib 是什么/它与 `syscalls.c`/`_sbrk` 的关系**、`nano.specs` 与 `-u _printf_float`、缓冲为什么放栈上、`-Wformat` 查出的 3 个真 bug |
 
 ## 阅读顺序建议
 
