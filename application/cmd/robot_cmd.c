@@ -14,15 +14,15 @@
 #include "vision_control.h"
 #include <string.h>
 
-_Static_assert(LOAD_STOP == VISION_CONTROL_LOAD_STOP,
+_Static_assert((int)LOAD_STOP == (int)VISION_CONTROL_LOAD_STOP,
                "Vision control loader mapping must match LOAD_STOP");
-_Static_assert(LOAD_REVERSE == VISION_CONTROL_LOAD_REVERSE,
+_Static_assert((int)LOAD_REVERSE == (int)VISION_CONTROL_LOAD_REVERSE,
                "Vision control loader mapping must match LOAD_REVERSE");
-_Static_assert(LOAD_1_BULLET == VISION_CONTROL_LOAD_SINGLE_BULLET,
+_Static_assert((int)LOAD_1_BULLET == (int)VISION_CONTROL_LOAD_SINGLE_BULLET,
                "Vision control loader mapping must match LOAD_1_BULLET");
-_Static_assert(LOAD_3_BULLET == VISION_CONTROL_LOAD_THREE_BULLETS,
+_Static_assert((int)LOAD_3_BULLET == (int)VISION_CONTROL_LOAD_THREE_BULLETS,
                "Vision control loader mapping must match LOAD_3_BULLET");
-_Static_assert(LOAD_BURSTFIRE == VISION_CONTROL_LOAD_BURSTFIRE,
+_Static_assert((int)LOAD_BURSTFIRE == (int)VISION_CONTROL_LOAD_BURSTFIRE,
                "Vision control loader mapping must match LOAD_BURSTFIRE");
 // bsp
 #include "bsp_dwt.h"
