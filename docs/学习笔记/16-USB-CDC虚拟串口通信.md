@@ -186,3 +186,5 @@ uint8_t CDC_Transmit_HS(uint8_t *Buf, uint16_t Len)
 | 发送返回 `USBD_BUSY` 怎么办 | 说明上一包没发完；状态类数据直接跳过，要紧的数据用发送队列 |
 | 发送用的 buffer 能是局部变量吗 | **不能**，发送是异步的，局部变量会先失效 |
 | 视觉为什么用 VCP 不用串口 | 带宽高一个数量级，而且省一路串口/一根线 |
+
+2026-10：将 CDC 生命周期写成主机模拟练习：配置未完成时拒绝，忙时不覆盖持久缓冲，只有完成回调后才复用。练习不调用 HAL；它验证状态机约定，不代替 USB 设备实测。见[CDC 练习](../课程/自瞄链路/exercises/02-usb-cdc/solution/main.cpp)和[ST UM1734](https://www.st.com/resource/en/user_manual/dm00108129-stm32cube-usb-device-library-stmicroelectronics.pdf)。

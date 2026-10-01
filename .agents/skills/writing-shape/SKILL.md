@@ -6,6 +6,10 @@ disable-model-invocation: true
 
 <what-to-do>
 
+## MC-02 project adaptation
+
+Use this interactive skill only when the user wants to shape a complex engineering article together. Routine task notes are agent-drafted from code, tests, and trusted sources. Read raw fragments from `docs/课程/自瞄链路/writing/fragments/`; stage the working article under `docs/课程/自瞄链路/writing/drafts/`. After the user approves the finished article, move it to `docs/学习笔记/` and update that directory's index. Keep the raw fragments. Never write `.scratch` ticket or article copies.
+
 The user has passed (or will pass) a markdown file of raw material. Treat it as the input pile: anything from a tidy list of fragments to a wall of unstructured prose to a transcript. The format does not matter. Read it end-to-end before doing anything else.
 
 Then run a shaping session that produces a separate article document. This is **exploit**: the exploring is done, the pile is fixed: commit to a structure and mine the pile to fill it. Do not edit the raw material file: it is read-only to this skill.

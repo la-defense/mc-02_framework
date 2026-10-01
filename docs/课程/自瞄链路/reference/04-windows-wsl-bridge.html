@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Windows–WSL 桥接速查</title><link rel="stylesheet" href="../assets/lesson.css"></head><body><main>
+<p class="kicker">速查 · 边界</p><h1>Windows–WSL 桥接</h1>
+<table><thead><tr><th>路径</th><th>设备由谁打开</th><th>核验点</th></tr></thead><tbody><tr><td>USB/IP</td><td>WSL Linux</td><td>usbipd attach 后用 lsusb/设备节点确认，设备此时不能由 Windows 使用。</td></tr><tr><td>Windows SDK bridge</td><td>Windows MVS 进程</td><td>有界帧队列、图像格式和时间戳明确，WSL 收到连续图像。</td></tr><tr><td>串口 bridge</td><td>Windows COM 代理</td><td>保留 SP 原始字节流，核验帧长、CRC、断连与重连。</td></tr></tbody></table>
+<p>所有桥接都要定义容量和过载策略。缓存陈旧帧会增加延迟；无界队列会持续占用内存。</p>
+<p>来源：<a href="https://learn.microsoft.com/en-us/windows/wsl/connect-usb">Microsoft USB/IP 指南</a> · <a href="../exercises/04-windows-wsl-bridge/solution/main.cpp">主机练习</a></p>
+<nav><a href="../lessons/0004-windows-wsl-bridge.html">课程</a><a href="../README.md">课程主页</a></nav></main></body></html>

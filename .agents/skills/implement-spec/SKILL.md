@@ -1,40 +1,18 @@
 ---
 name: implement-spec
-description: "Implement the result of /to-spec and /to-tickets in code."
+description: Implement a local specification as dependency-ordered, testable TODO tasks on a task branch.
 disable-model-invocation: true
 ---
 
-You have been provided a spec. This spec should have tickets associated with it, describing how to implement the spec.
+# Implement Spec
 
-The issue tracker should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
-
-The goal is the entire spec implemented on a single **integration branch**, with every ticket resolved the way the issue tracker closes work.
-
-The tickets are not a list of steps. They are a **task graph** with blocking relationships between them. This means there is always a **frontier** of tickets which are ready to be grabbed.
-
-Communication to and from subagents should be sparse. Communicate primarily through **context pointers**: to the spec, tickets, research notes, and previous commits. Don't duplicate information already available via pointers.
-
-**Implementer subagents** should be run in the background where possible for maximum concurrency.
+Implement the spec linked from the repository TODO. Read all ticket-detail files and respect the task graph. Each independently deliverable task has a task branch and PR; a cross-repository task has a separate commit and PR in both repositories, with reciprocal TODO links.
 
 ## Steps
 
-1. Read the spec and tickets to understand the task graph.
-
-2. (optional) Use an **exploration subagent** to conduct any exploration required by the tickets - relevant codebase files or external documentation. Ensure the exploration subagent can save files - it should save its markdown notes in a directory outside the repo, accessible by all future subagents. This lets **implementer subagents** focus on implementation rather than exploration.
-
-3. Create the integration branch. If the issue tracker closes work through PRs, or the user asks for one, open a draft PR after the first merge in step 5 (a branch with no commits ahead of main can't open one), marked as closing the spec and tickets.
-
-4. Use **implementer subagents** to implement each ticket, each in its own worktree on its own branch. Each implementer subagent:
-   - confirms its worktree is based on the integration branch before starting, and resets onto it if not;
-   - calls the Skill tool with `tdd` to build the ticket;
-   - merges the integration branch tip into its own branch before reporting done
-
-5. Once an **implementer subagent** completes, merge its work to the integration branch with a **merger subagent**.
-
-6. If this changes the **frontier** of available tickets, kick off more **implementer subagents** to work on the new tickets. This allows for maximum concurrency.
-
-7. Once all tickets are complete, call the Skill tool with `code-review` on the integration branch. Fix all issues raised by the code review in a single **implementer subagent**.
-
-8. If a draft PR exists, mark it ready for review. Otherwise, resolve each ticket the way the issue tracker closes work, and report the integration branch.
-
-9. Clean up all **implementer subagent** worktrees.
+1. Read the specification, TODO entries, blocker details, repository guide, glossary, and relevant ADRs.
+2. Work from the ready frontier. Use test-first work where a stable seam exists. Keep hardware-facing work fire-disabled and simulator-only unless the corresponding manually gated HIL is explicitly being run.
+3. For each task, update the TODO only when acceptance is met. Save rationale and test evidence in the detail file or task report, never a second status tracker.
+4. Commit the complete task on its task branch before code review. Run `code-review` on the committed diff from the branch merge base. Address findings in a follow-up commit and review again.
+5. When remote access is available, open or update a PR and link its report. If remote access is unavailable, leave the branch ready to push and state what external step remains.
+6. Close out with commit SHAs, test evidence, remaining blockers, and updated learning notes. A written lesson is not evidence that the user has mastered it.

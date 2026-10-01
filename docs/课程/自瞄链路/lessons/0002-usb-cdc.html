@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 2 课：USB CDC 收发</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body><main>
+  <p class="kicker">自瞄链路 · 02 / 04</p>
+  <h1>USB CDC 收发</h1>
+  <p class="callout">本课目标：解释为什么异步发送的数据必须活得比发送函数更久。</p>
+  <h2>调用返回，不代表发送完成</h2>
+  <p>USB CDC 把设备端数据表现成主机上的虚拟串口。发送通常交给 USB 中断和端点状态机继续处理。函数返回时，硬件可能仍在读取传入缓冲区；如果这块内存是栈变量，函数退出后就可能被复用。</p>
+  <p>因此发送缓冲区要有稳定生命周期，并且在传输完成前不能改写。遇到 <code>USBD_BUSY</code> 时，应保留或明确丢弃本帧并计数，不能假定它已经进入 USB。</p>
+  <pre><code>空闲 → 复制到持久缓冲 → 提交传输 → 等待完成回调 → 空闲</code></pre>
+  <p>可以对照本工程的 <a href="../../../../bsp/usb/bsp_usb.c">USB BSP</a>、<a href="../../../学习笔记/16-USB-CDC虚拟串口通信.md">学习笔记 16</a> 和最近的发送缓冲修复。</p>
+  <h2>试着回忆</h2>
+  <ol><li>如果异步 USB 发送仍在读取，应用能否马上覆盖同一缓冲？</li><li><code>USBD_BUSY</code> 表示数据已经发送成功了吗？</li></ol>
+  <details><summary>核对答案</summary><p>不能覆盖；缓冲要等传输完成。<code>USBD_BUSY</code> 表示当前不能接受新发送请求，不能记成成功。</p></details>
+  <p>去做 <a href="../exercises/02-usb-cdc/problem/readme.md">练习 2</a>，再看 <a href="../reference/02-usb-cdc.html">CDC 状态速查页</a>。</p>
+  <p>主要资料：<a href="https://www.st.com/resource/en/user_manual/dm00108129-stm32cube-usb-device-library-stmicroelectronics.pdf">ST UM1734：USB Device Library</a>。有不清楚的状态转换，可以直接追问。</p>
+  <nav><a href="0001-sp-frame-crc.html">上一课</a><a href="../README.md">课程主页</a><a href="0003-vision-timeout-revoke.html">下一课：失联撤销控制</a></nav>
+</main></body></html>

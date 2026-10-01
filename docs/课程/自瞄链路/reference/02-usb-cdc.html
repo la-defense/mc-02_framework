@@ -1,0 +1,9 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>USB CDC 发送状态速查</title><link rel="stylesheet" href="../assets/lesson.css"></head><body><main>
+<p class="kicker">速查 · USB CDC</p><h1>发送状态</h1>
+<pre><code>未配置 → 拒绝
+空闲且缓冲有效 → 复制到持久缓冲并提交
+BUSY → 保留现有帧，不覆盖正在发送的数据
+传输完成回调 → 释放缓冲供下一帧使用</code></pre>
+<ul><li>计数区分提交成功与忙时丢弃。</li><li>函数返回不表示端点传输完成。</li><li>异步 DMA/USB 使用栈局部缓冲属于生命周期错误。</li><li>接收侧按 USB 库约定重新武装 OUT 端点。</li></ul>
+<p>来源：<a href="../../../学习笔记/16-USB-CDC虚拟串口通信.md">学习笔记 16</a> · <a href="https://www.st.com/resource/en/user_manual/dm00108129-stm32cube-usb-device-library-stmicroelectronics.pdf">ST UM1734</a> · <a href="../exercises/02-usb-cdc/solution/main.cpp">主机练习</a></p>
+<nav><a href="../lessons/0002-usb-cdc.html">课程</a><a href="03-vision-timeout-revoke.html">下一张：失联撤销</a></nav></main></body></html>

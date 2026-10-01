@@ -6,6 +6,10 @@ disable-model-invocation: true
 
 <what-to-do>
 
+## MC-02 project adaptation
+
+Use this interactive skill only when the user wants to co-write a complex engineering article as a sequence of concepts or a failure case. Routine task notes are agent-drafted from code, tests, and trusted sources. Read raw fragments from `docs/课程/自瞄链路/writing/fragments/`; stage beats in `docs/课程/自瞄链路/writing/drafts/`. After the user approves the complete article, move it to `docs/学习笔记/` and update the index. Keep the raw fragments. Never create `.scratch` copies.
+
 The user has passed (or will pass) a markdown file of raw material. This is **exploit**: the exploring is done, the pile is fixed. Commit to a path through it and mine the pile to fill each beat.
 
 If the user did not say where to save the article, ask once and remember the path.

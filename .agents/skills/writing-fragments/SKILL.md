@@ -6,6 +6,12 @@ disable-model-invocation: true
 
 <what-to-do>
 
+## MC-02 project adaptation
+
+Use this interactive skill only when the user wants to co-write a complex engineering article. Daily task learning notes are drafted by the agent from code, tests, and cited primary sources; do not route routine task closeout through this interview flow.
+
+When the user has not named a raw-material path, append fragments to `docs/课程/自瞄链路/writing/fragments/<topic>.md` in MC-02. Keep the raw material after an article is finished. Never create `.scratch` copies or a second task-status record.
+
 This is pure **explore**: widen the space of what could be written without committing to structure. Committing is _exploit_, a separate skill's job. Run a grilling session that produces fragments, interviewing the user relentlessly about whatever they want to write about. Imposing phases, outlines, or article structure is out of scope here.
 
 As fragments emerge from either side of the conversation, append them to a single markdown file.

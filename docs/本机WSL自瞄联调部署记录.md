@@ -49,6 +49,13 @@ MC-02 当前是裸板，没有云台电机。本阶段只验证上位机生成�
 - OpenCV CommandLineParser 对联调参数需使用 --config-path=configs/demo.yaml 形式；用空格拆开选项和值会将视频路径和 YAML 路径误解析。WSL HIL 文档中的命令已改为等号写法。
 - WSL 测试 IP 172.30.227.104，Windows NAT 网关 172.30.224.1；这些地址会随重启变化，启动桥接前需重新查询。桥接脚本仅接受传入的 --allow-peer 指定客户端地址。
 
+## 2026-10-02 工作流验证
+
+- 从 Windows 工作区经 WSL Ubuntu 22.04 对视觉 CPU preset 做 Release 配置和构建，目标包括 `standard_mpc`、`auto_aim_test`、`bareboard_hil` 和协议测试；两个 CTest 均通过。离线回放 151 帧，其中 122 帧有目标，且同帧产生有限瞄准输出。
+- MC-02 主机协议/控制测试通过；四组 C++ 课程练习均完成构建并通过 CTest。练习不访问摄像头 SDK、HAL 或真实执行器。
+- 当前没有复现 HIL-10。历史记录没有长会话的原始 OpenOCD/GDB 命令及完整错误输出，无法构造能对该错误变红的反馈循环。全局 `debug-gdb-openocd` 的 `attach-only` 脚本实际执行 `monitor halt`，退出前不恢复目标，因此不用于“目标持续运行”的计数快照。
+- GitHub 侧已创建公开 fork `la-defense/sp_vision_25` 和私有 HIL 仓库 `la-defense/mc-02-hil`。尚未注册专用受限 Windows runner；HIL 报告应在实际手动联调后填写两端 SHA、构建/烧录状态、禁火帧、RX/CRC 增量和复位证据。
+
 ### 还需完成
 
 - 若需要 Linux 原生 MVS USB 取流，另行排查 SDK 返回值 `0x80000006`；当前 Windows MVS 桥已把相机画面送入 WSL 识别程序。

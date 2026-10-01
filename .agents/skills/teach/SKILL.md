@@ -1,7 +1,6 @@
 ---
 name: teach
-description: Teach the user a new skill or concept, within this workspace.
-disable-model-invocation: true
+description: Use for a short just-in-time lesson when a new technical concept changes a design decision, or when the user signals they do not understand a concept introduced during engineering work. Also use when the user explicitly asks to learn.
 argument-hint: "What would you like to learn about?"
 ---
 
@@ -9,7 +8,7 @@ The user has asked you to teach them something. This is a stateful request - the
 
 ## Teaching Workspace
 
-Treat the current directory as a teaching workspace. The state of their learning is captured in this directory in several files:
+Use `docs/课程/自瞄链路/` in the MC-02 repository as the persistent teaching workspace, regardless of the current code repository. The user has already established the mission in `MISSION.md`; read it instead of asking why they want to learn. Store workspace files there:
 
 - `MISSION.md`: A document capturing the _reason_ the user is interested in the topic. This should be used to ground all teaching. Use the format in [MISSION-FORMAT.md](./MISSION-FORMAT.md).
 - `./reference/*.html`: A directory of reference materials. These are the compressed learnings from the lessons - cheat sheets, reference algorithms, syntax, yoga poses, glossaries. They are the raw units of learning. They should be beautiful documents which print out well, and are designed for quick reference.
@@ -18,6 +17,8 @@ Treat the current directory as a teaching workspace. The state of their learning
 - `./lessons/*.html`: A directory of lessons. A **lesson** is a single, self-contained HTML output that teaches one tightly-scoped thing tied to the mission. This is the primary unit of teaching in this workspace.
 - `./assets/*`: Reusable **components** shared across lessons. See [Assets](#assets).
 - `NOTES.md`: A scratchpad for you to jot down user preferences, or working notes.
+
+During implementation, give a brief explanation beside the change for unfamiliar syntax or concepts. Start a full short lesson immediately when the concept affects a current design choice or the user says they are confused. For other concepts, add or update the learning note during task closeout. Safe, verified fixes do not wait for the user's lesson exercises. Never add a learning record until the user demonstrates understanding in an answer or completed exercise.
 
 ## Philosophy
 

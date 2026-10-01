@@ -1,30 +1,13 @@
-# Issue tracker: Local Markdown
+# Issue tracker: local TODO
 
-Issues and specs for this repo live as markdown files in `.scratch/`.
+Task state is stored only in the target repository's TODO file: `.Doc/TODO.md` for MC-02 and `TODO.md` for sp_vision_25.
 
 ## Conventions
 
-- One feature per directory: `.scratch/<feature-slug>/`
-- The spec is `.scratch/<feature-slug>/spec.md`
-- Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`, never a single combined tickets file
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
-- Comments and conversation history append to the bottom of the file under a `## Comments` heading
+- An open TODO item has a stable ID, category, active state, and concrete acceptance condition.
+- Specs live in `docs/workflow/specs/`; optional ticket detail lives in `docs/workflow/tickets/<ID>.md`.
+- Decision maps live in `docs/workflow/maps/` and link to TODO IDs without copying status.
+- Rejected-request rationale lives in `docs/workflow/out-of-scope/`.
+- Cross-repository tasks have reciprocal TODO links, with status stored locally in each repository.
 
-## When a skill says "publish to the issue tracker"
-
-Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
-
-## When a skill says "fetch the relevant ticket"
-
-Read the file at the referenced path. The user will normally pass the path or the issue number directly.
-
-## Wayfinding operations
-
-Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
-
-- **Map**: `.scratch/<effort>/map.md` (the Notes / Decisions-so-far / Fog body).
-- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
-- **Blocking**: a `Blocked by: NN, NN` line near the top. A ticket is unblocked when every file it lists is `resolved`.
-- **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
-- **Claim**: set `Status: claimed` and save before any work.
-- **Resolve**: append the answer under an `## Answer` heading, set `Status: resolved`, then append a context pointer (gist + link) to the map's Decisions-so-far in `map.md`.
+When asked to find a task, search TODO by ID or domain phrase and follow its linked detail. Never create `.scratch` files, external issues, or a second status field.

@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SP 帧与 CRC 速查</title><link rel="stylesheet" href="../assets/lesson.css"></head><body><main>
+<p class="kicker">速查 · 协议</p><h1>SP 帧与 CRC</h1>
+<ul><li>MC-02 → vision：43 字节状态帧。</li><li>Vision → MC-02：29 字节控制帧。</li><li>帧头：字节 <code>'S'</code>、<code>'P'</code>。</li><li>控制模式：0 中立，1 控制不开火，2 控制并允许开火；裸板练习只发 0 或 1。</li><li>CRC 帧尾按低字节优先写入；验证算法、覆盖范围、初值和输出约定。</li></ul>
+<p>合法数据条件：精确长度 + 帧头正确 + CRC 匹配。CRC 检测意外损坏，不认证发送方。</p>
+<p>代码：<a href="../../../../modules/master_machine/master_process.c">固件</a> · <a href="https://github.com/TongjiSuperPower/sp_vision_25/blob/main/io/gimbal/protocol.cpp">视觉协议辅助函数</a> · <a href="../exercises/01-sp-frame-crc/solution/main.cpp">主机练习</a></p>
+<nav><a href="../lessons/0001-sp-frame-crc.html">课程</a><a href="02-usb-cdc.html">下一张：CDC</a></nav></main></body></html>

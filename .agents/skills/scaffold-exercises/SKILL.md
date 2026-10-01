@@ -1,106 +1,34 @@
 ---
 name: scaffold-exercises
-description: Create exercise directory structures with sections, problems, solutions, and explainers that pass linting. Use when user wants to scaffold exercises, create exercise stubs, or set up a new course section.
+description: Create host-side C/C++ exercises for MC-02 and sp_vision_25 concepts, with problem, solution, and explainer material validated by local-link checks and CMake/CTest.
 ---
 
 # Scaffold Exercises
 
-Create exercise directory structures that pass `pnpm ai-hero-cli internal lint`, then commit with `git commit`.
+Use the shared course at `docs/课程/自瞄链路/exercises/`. Exercises model the SP protocol, CDC state, vision safety, and camera/serial bridge with host data only. They never call HAL, OpenVINO, a camera SDK, or an actuator.
 
-## Directory naming
+## Structure
 
-- **Sections**: `XX-section-name/` inside `exercises/` (e.g., `01-retrieval-skill-building`)
-- **Exercises**: `XX.YY-exercise-name/` inside a section (e.g., `01.03-retrieval-with-bm25`)
-- Section number = `XX`, exercise number = `XX.YY`
-- Names are dash-case (lowercase, hyphens)
+Create one numbered exercise directory per concept:
 
-## Exercise variants
-
-Each exercise needs at least one of these subfolders:
-
-- `problem/` - student workspace with TODOs
-- `solution/` - reference implementation
-- `explainer/` - conceptual material, no TODOs
-
-When stubbing, default to `explainer/` unless the plan specifies otherwise.
-
-## Required files
-
-Each subfolder (`problem/`, `solution/`, `explainer/`) needs a `readme.md` that:
-
-- Is **not empty** (must have real content, even a single title line works)
-- Has no broken links
-
-When stubbing, create a minimal readme with a title and a description:
-
-```md
-# Exercise Title
-
-Description here
+```text
+exercises/01-sp-frame-crc/
+  problem/    # learner starter and task
+  solution/   # runnable host implementation and tests
+  explainer/  # concept explanation and links to the lesson/reference
 ```
 
-If the subfolder has code, it also needs a `main.ts` (>1 line). But for stubs, a readme-only exercise is fine.
+Each directory has a nonempty `readme.md`. Problem starters may contain `TODO` markers; the solution must be complete. Use portable C++17, simulated inputs, no external test framework, and observable assertions.
 
 ## Workflow
 
-1. **Parse the plan** - extract section names, exercise names, and variant types
-2. **Create directories** - `mkdir -p` for each path
-3. **Create stub readmes** - one `readme.md` per variant folder with a title
-4. **Run lint** - `pnpm ai-hero-cli internal lint` to validate
-5. **Fix any errors** - iterate until lint passes
+1. Read `MISSION.md`, `RESOURCES.md`, the linked lesson, and the exercise tree.
+2. Create or update one `problem / solution / explainer` set per requested concept.
+3. Register runnable solution tests in the course `CMakeLists.txt` and add them to CTest.
+4. Link each exercise to its lesson, reference page, and relevant code or test in the correct repository.
+5. Run `python tools/workflow/check_exercises.py`; run it with `--build` to configure, build, and run CTest in a temporary build directory.
+6. Confirm examples use simulated data and contain no hardware-control entry points.
 
-## Lint rules summary
+## Done
 
-The linter (`pnpm ai-hero-cli internal lint`) checks:
-
-- Each exercise has subfolders (`problem/`, `solution/`, `explainer/`)
-- At least one of `problem/`, `explainer/`, or `explainer.1/` exists
-- `readme.md` exists and is non-empty in the primary subfolder
-- No `.gitkeep` files
-- No `speaker-notes.md` files
-- No broken links in readmes
-- No `pnpm run exercise` commands in readmes
-- `main.ts` required per subfolder unless it's readme-only
-
-## Moving/renaming exercises
-
-When renumbering or moving exercises:
-
-1. Use `git mv` (not `mv`) to rename directories - preserves git history
-2. Update the numeric prefix to maintain order
-3. Re-run lint after moves
-
-Example:
-
-```bash
-git mv exercises/01-retrieval/01.03-embeddings exercises/01-retrieval/01.04-embeddings
-```
-
-## Example: stubbing from a plan
-
-Given a plan like:
-
-```
-Section 05: Memory Skill Building
-- 05.01 Introduction to Memory
-- 05.02 Short-term Memory (explainer + problem + solution)
-- 05.03 Long-term Memory
-```
-
-Create:
-
-```bash
-mkdir -p exercises/05-memory-skill-building/05.01-introduction-to-memory/explainer
-mkdir -p exercises/05-memory-skill-building/05.02-short-term-memory/{explainer,problem,solution}
-mkdir -p exercises/05-memory-skill-building/05.03-long-term-memory/explainer
-```
-
-Then create readme stubs:
-
-```
-exercises/05-memory-skill-building/05.01-introduction-to-memory/explainer/readme.md -> "# Introduction to Memory"
-exercises/05-memory-skill-building/05.02-short-term-memory/explainer/readme.md -> "# Short-term Memory"
-exercises/05-memory-skill-building/05.02-short-term-memory/problem/readme.md -> "# Short-term Memory"
-exercises/05-memory-skill-building/05.02-short-term-memory/solution/readme.md -> "# Short-term Memory"
-exercises/05-memory-skill-building/05.03-long-term-memory/explainer/readme.md -> "# Long-term Memory"
-```
+The exercise is complete when all three readmes exist, local Markdown/HTML links resolve, its solution test passes through CTest, and the starter/explainer links point to the relevant lesson and project evidence.
