@@ -13,6 +13,17 @@
 #include "robot_safety.h"
 #include "vision_control.h"
 #include <string.h>
+
+_Static_assert(LOAD_STOP == VISION_CONTROL_LOAD_STOP,
+               "Vision control loader mapping must match LOAD_STOP");
+_Static_assert(LOAD_REVERSE == VISION_CONTROL_LOAD_REVERSE,
+               "Vision control loader mapping must match LOAD_REVERSE");
+_Static_assert(LOAD_1_BULLET == VISION_CONTROL_LOAD_SINGLE_BULLET,
+               "Vision control loader mapping must match LOAD_1_BULLET");
+_Static_assert(LOAD_3_BULLET == VISION_CONTROL_LOAD_THREE_BULLETS,
+               "Vision control loader mapping must match LOAD_3_BULLET");
+_Static_assert(LOAD_BURSTFIRE == VISION_CONTROL_LOAD_BURSTFIRE,
+               "Vision control loader mapping must match LOAD_BURSTFIRE");
 // bsp
 #include "bsp_dwt.h"
 #include "bsp_log.h"
@@ -145,29 +156,28 @@ static uint8_t VisionControlInputIsCurrent(void)
     return VisionControlInputIsUsable(&input);
 }
 
-static uint8_t VisionControlSet()
+static void ApplyShootCommand(const VisionControlShootCommand_s *command)
 {
-    const VisionControlInput_s input = GetVisionControlInput();
-    VisionControlShootCommand_s shoot_command;
-    const uint8_t vision_is_current = VisionControlBuildShootCommand(&input, &shoot_command);
+    shoot_cmd_send.shoot_mode = command->shoot_enabled ? SHOOT_ON : SHOOT_OFF;
+    shoot_cmd_send.friction_mode = command->friction_enabled ? FRICTION_ON : FRICTION_OFF;
+    shoot_cmd_send.load_mode = (loader_mode_e)command->load_mode;
+    shoot_cmd_send.shoot_rate = command->shoot_rate;
+}
 
-    shoot_cmd_send.shoot_mode = shoot_command.shoot_enabled ? SHOOT_ON : SHOOT_OFF;
-    shoot_cmd_send.friction_mode = shoot_command.friction_enabled ? FRICTION_ON : FRICTION_OFF;
-    shoot_cmd_send.load_mode = shoot_command.burstfire_enabled ? LOAD_BURSTFIRE : LOAD_STOP;
-    shoot_cmd_send.shoot_rate = shoot_command.shoot_rate;
-
-    if (!vision_is_current)
+static uint8_t VisionControlSetGimbal(const VisionControlInput_s *input)
+{
+    if (!VisionControlInputIsUsable(input))
         return 0u;
 
     gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
-    gimbal_cmd_send.yaw = input.yaw * RAD_TO_DEG;
-    gimbal_cmd_send.pitch = input.pitch * RAD_TO_DEG + PITCH_ZERO_OFFSET;
+    gimbal_cmd_send.yaw = input->yaw * RAD_TO_DEG;
+    gimbal_cmd_send.pitch = input->pitch * RAD_TO_DEG + PITCH_ZERO_OFFSET;
 
     // Vision feed-forward values arrive in radians and feed the gimbal controller in degrees.
-    gimbal_cmd_send.yaw_vel = input.yaw_vel * RAD_TO_DEG;
-    gimbal_cmd_send.yaw_acc = input.yaw_acc * RAD_TO_DEG;
-    gimbal_cmd_send.pitch_vel = input.pitch_vel * RAD_TO_DEG;
-    gimbal_cmd_send.pitch_acc = input.pitch_acc * RAD_TO_DEG;
+    gimbal_cmd_send.yaw_vel = input->yaw_vel * RAD_TO_DEG;
+    gimbal_cmd_send.yaw_acc = input->yaw_acc * RAD_TO_DEG;
+    gimbal_cmd_send.pitch_vel = input->pitch_vel * RAD_TO_DEG;
+    gimbal_cmd_send.pitch_acc = input->pitch_acc * RAD_TO_DEG;
     return 1u;
 }
 
@@ -177,8 +187,9 @@ static uint8_t VisionControlSet()
  */
 static void RemoteControlSet()
 {
+    const VisionControlInput_s vision_input = GetVisionControlInput();
     // 视觉接管优先级最高, 接管时跳过遥控器云台角度增量
-    if (VisionControlSet())
+    if (VisionControlSetGimbal(&vision_input))
     {
         // 视觉已设置云台角度, 这里仅保留底盘/发射的遥控器控制
     }
@@ -215,17 +226,9 @@ static void RemoteControlSet()
         ; // 弹舱舵机控制,待添加servo_motor模块,关闭
 
     // 摩擦轮控制,拨轮向上打为负,向下为正
-    if (rc_data[TEMP].rc.dial < -100) // 向上超过100,打开摩擦轮
-        shoot_cmd_send.friction_mode = FRICTION_ON;
-    else
-        shoot_cmd_send.friction_mode = FRICTION_OFF;
-    // 拨弹控制,遥控器固定为一种拨弹模式,可自行选择
-    if (rc_data[TEMP].rc.dial < -500)
-        shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
-    else
-        shoot_cmd_send.load_mode = LOAD_STOP;
-    // 射频控制,固定每秒1发,后续可以根据左侧拨轮的值大小切换射频,
-    shoot_cmd_send.shoot_rate = 8;
+    VisionControlShootCommand_s manual_command;
+    VisionControlBuildRemoteShootCommand(rc_data[TEMP].rc.dial, &manual_command);
+    ApplyShootCommand(&manual_command);
 }
 
 /**
@@ -254,21 +257,6 @@ static void MouseKeySet()
         shoot_cmd_send.bullet_speed = 30;
         break;
     }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_E] % 4) // E键设置发射模式
-    {
-    case 0:
-        shoot_cmd_send.load_mode = LOAD_STOP;
-        break;
-    case 1:
-        shoot_cmd_send.load_mode = LOAD_1_BULLET;
-        break;
-    case 2:
-        shoot_cmd_send.load_mode = LOAD_3_BULLET;
-        break;
-    default:
-        shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
-        break;
-    }
     switch (rc_data[TEMP].key_count[KEY_PRESS][Key_R] % 2) // R键开关弹舱
     {
     case 0:
@@ -278,15 +266,12 @@ static void MouseKeySet()
         shoot_cmd_send.lid_mode = LID_CLOSE;
         break;
     }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_F] % 2) // F键开关摩擦轮
-    {
-    case 0:
-        shoot_cmd_send.friction_mode = FRICTION_OFF;
-        break;
-    default:
-        shoot_cmd_send.friction_mode = FRICTION_ON;
-        break;
-    }
+    VisionControlShootCommand_s manual_command;
+    VisionControlBuildMouseKeyShootCommand(
+        (uint8_t)(rc_data[TEMP].key_count[KEY_PRESS][Key_E] % 4),
+        (uint8_t)(rc_data[TEMP].key_count[KEY_PRESS][Key_F] % 2),
+        &manual_command);
+    ApplyShootCommand(&manual_command);
     switch (rc_data[TEMP].key_count[KEY_PRESS][Key_C] % 4) // C键设置底盘速度
     {
     case 0:
@@ -425,13 +410,29 @@ void RobotCMDTask()
     // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
     CalcOffsetAngle();
     // 根据遥控器左侧开关,确定当前使用的控制模式为遥控器调试还是键鼠
+    const uint8_t manual_control_active =
+        (uint8_t)(switch_is_down(rc_data[TEMP].rc.switch_left) ||
+                  switch_is_up(rc_data[TEMP].rc.switch_left));
     if (switch_is_down(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[下],遥控器控制
         RemoteControlSet();
     else if (switch_is_up(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[上],键盘控制
         MouseKeySet();
 
     // 视觉自瞄接管,优先级最高: mode 1/2 时覆盖遥控器/键鼠的云台控制
-    VisionControlSet();
+    const VisionControlInput_s vision_input = GetVisionControlInput();
+    VisionControlSetGimbal(&vision_input);
+
+    const VisionControlShootCommand_s manual_shoot_command = {
+        .shoot_enabled = (uint8_t)(shoot_cmd_send.shoot_mode == SHOOT_ON),
+        .friction_enabled = (uint8_t)(shoot_cmd_send.friction_mode == FRICTION_ON),
+        .load_mode = (uint8_t)shoot_cmd_send.load_mode,
+        .shoot_rate = shoot_cmd_send.shoot_rate,
+    };
+    VisionControlShootCommand_s selected_shoot_command;
+    VisionControlSelectShootCommand(&vision_input,
+                                    manual_control_active ? &manual_shoot_command : NULL,
+                                    &selected_shoot_command);
+    ApplyShootCommand(&selected_shoot_command);
 
     EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
 
