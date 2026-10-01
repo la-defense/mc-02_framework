@@ -129,7 +129,10 @@ uint8_t *USBInit(USB_Init_Config_s usb_conf)
     return bsp_usb_rx_buffer;
 }
 
-void USBTransmit(uint8_t *buffer, uint16_t len)
+uint8_t USBTransmit(const uint8_t *buffer, uint16_t len)
 {
-    CDC_Transmit_HS(buffer, len); // 发送
+    if (buffer == NULL || len == 0u)
+        return USBD_FAIL;
+
+    return CDC_Transmit_HS((uint8_t *)buffer, len);
 }

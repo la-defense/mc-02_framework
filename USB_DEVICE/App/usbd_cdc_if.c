@@ -20,6 +20,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "usbd_cdc_if.h"
+#include <string.h>
 
 /* USER CODE BEGIN INCLUDE */
 #include "bsp_usb.h" /* VCPQueuePush: 接收中断只入队, 解析交给任务里的 VCPProcessRx() */
@@ -288,11 +289,32 @@ uint8_t CDC_Transmit_HS(uint8_t* Buf, uint16_t Len)
 {
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 12 */
-  USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceHS.pClassData;
-  if (hcdc->TxState != 0){
+  USBD_CDC_HandleTypeDef *hcdc;
+
+  if ((Buf == NULL) || (Len == 0U) || (Len > APP_TX_DATA_SIZE))
+  {
+    return USBD_FAIL;
+  }
+  if (hUsbDeviceHS.dev_state != USBD_STATE_CONFIGURED)
+  {
     return USBD_BUSY;
   }
-  USBD_CDC_SetTxBuffer(&hUsbDeviceHS, Buf, Len);
+
+  hcdc = (USBD_CDC_HandleTypeDef *)hUsbDeviceHS.pClassData;
+  if (hcdc == NULL)
+  {
+    return USBD_BUSY;
+  }
+  if (hcdc->TxState != 0U)
+  {
+    return USBD_BUSY;
+  }
+
+  if (Buf != UserTxBufferHS)
+  {
+    memcpy(UserTxBufferHS, Buf, Len);
+  }
+  USBD_CDC_SetTxBuffer(&hUsbDeviceHS, UserTxBufferHS, Len);
   result = USBD_CDC_TransmitPacket(&hUsbDeviceHS);
   /* USER CODE END 12 */
   return result;

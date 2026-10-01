@@ -98,6 +98,7 @@ typedef struct
 	uint32_t last_rx_ms;
 	uint32_t rx_count;
 	uint32_t tx_count;
+	uint32_t tx_drop_count;
 	uint32_t crc_error_count;
 	float bullet_speed;
 	uint16_t bullet_count;
