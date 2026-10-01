@@ -49,6 +49,7 @@ def check_links() -> list[str]:
         learning_notes / "README.md",
         learning_notes / "20-SP固定帧与CRC校验.md",
         learning_notes / "21-从TODO到可重复验证的工程闭环.md",
+        learning_notes / "22-失联安全与有界等待.md",
     )
     for document in sorted(documents):
         content = document.read_text(encoding="utf-8")
