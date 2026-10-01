@@ -11,7 +11,19 @@
 #include "dji_motor.h"
 #include "bmi088.h"
 #include "robot_safety.h"
+#include "vision_control.h"
 #include <string.h>
+
+_Static_assert((int)LOAD_STOP == (int)VISION_CONTROL_LOAD_STOP,
+               "Vision control loader mapping must match LOAD_STOP");
+_Static_assert((int)LOAD_REVERSE == (int)VISION_CONTROL_LOAD_REVERSE,
+               "Vision control loader mapping must match LOAD_REVERSE");
+_Static_assert((int)LOAD_1_BULLET == (int)VISION_CONTROL_LOAD_SINGLE_BULLET,
+               "Vision control loader mapping must match LOAD_1_BULLET");
+_Static_assert((int)LOAD_3_BULLET == (int)VISION_CONTROL_LOAD_THREE_BULLETS,
+               "Vision control loader mapping must match LOAD_3_BULLET");
+_Static_assert((int)LOAD_BURSTFIRE == (int)VISION_CONTROL_LOAD_BURSTFIRE,
+               "Vision control loader mapping must match LOAD_BURSTFIRE");
 // bsp
 #include "bsp_dwt.h"
 #include "bsp_log.h"
@@ -23,6 +35,7 @@
 /* 视觉自瞄相关宏: 视觉发送弧度, 云台PID需要角度*/
 #define RAD_TO_DEG (57.29577951308232f)
 #define PITCH_ZERO_OFFSET 0.0f
+#define VISION_MAX_CONTROL_AGE_MS 50u
 
 /* cmd应用包含的模块实例指针和交互信息存储*/
 #ifdef GIMBAL_BOARD // 对双板的兼容,条件编译
@@ -38,7 +51,8 @@ static Chassis_Ctrl_Cmd_s chassis_cmd_send;      // 发送给底盘应用的信�
 static Chassis_Upload_Data_s chassis_fetch_data; // 从底盘应用接收的反馈信息信息,底盘功率枪口热量与底盘运动状态等
 
 static RC_ctrl_t *rc_data;              // 遥控器数据,初始化时返回
-static Vision_Recv_s *vision_recv_data; // 视觉接收数据指针,初始化时返回
+static Vision_Recv_s vision_recv_snapshot;
+static Vision_Status_t vision_status_snapshot;
 
 static Publisher_t *gimbal_cmd_pub;            // 云台控制消息发布者
 static Subscriber_t *gimbal_feed_sub;          // 云台反馈信息订阅者
@@ -55,7 +69,7 @@ BMI088_Data_t bmi088_data;
 void RobotCMDInit()
 {
     rc_data = RemoteControlInit(&huart5);   // 修改为对应串口,注意如果是自研板dbus协议串口需选用添加了反相器的那个
-    vision_recv_data = VisionInit(&huart9); // 视觉通信串口(VCP 模式下此句柄不使用, 正式链路为板载 USB CDC 虚拟串口)
+    VisionInit(&huart9); // 正式链路为板载 USB CDC 虚拟串口
 
     gimbal_cmd_pub = PubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
     gimbal_feed_sub = SubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
@@ -118,44 +132,53 @@ static void CalcOffsetAngle()
 #endif
 }
 
-/**
- * @brief 视觉自瞄接管云台控制. 优先级最高, mode 1/2 时直接用视觉数据控制云台.
- * @return 1 表示视觉接管(调用方应跳过遥控器/键鼠的云台角度增量设置); 0 表示未接管
- * @note  视觉发送弧度制, 这里用 RAD_TO_DEG 转角度.
- *        mode 0: 不控制  mode 1: 控制云台不开火  mode 2: 控制云台并开火
- */
-static uint8_t VisionControlSet()
+static VisionControlInput_s GetVisionControlInput(void)
 {
-    if (vision_recv_data->mode == 1 || vision_recv_data->mode == 2)
-    {
-        float vision_yaw = vision_recv_data->yaw * RAD_TO_DEG;
-        float vision_pitch = vision_recv_data->pitch * RAD_TO_DEG + PITCH_ZERO_OFFSET;
+    const VisionControlInput_s input = {
+        .online = vision_status_snapshot.online,
+        .mode = vision_recv_snapshot.mode,
+        .last_rx_ms = vision_status_snapshot.last_rx_ms,
+        .now_ms = HAL_GetTick(),
+        .max_age_ms = VISION_MAX_CONTROL_AGE_MS,
+        .yaw = vision_recv_snapshot.yaw,
+        .yaw_vel = vision_recv_snapshot.yaw_vel,
+        .yaw_acc = vision_recv_snapshot.yaw_acc,
+        .pitch = vision_recv_snapshot.pitch,
+        .pitch_vel = vision_recv_snapshot.pitch_vel,
+        .pitch_acc = vision_recv_snapshot.pitch_acc,
+    };
+    return input;
+}
 
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
-        gimbal_cmd_send.yaw = vision_yaw;
-        gimbal_cmd_send.pitch = vision_pitch;
+static uint8_t VisionControlInputIsCurrent(void)
+{
+    const VisionControlInput_s input = GetVisionControlInput();
+    return VisionControlInputIsUsable(&input);
+}
 
-        // 视觉前馈(弧度->角度), 供 gimbal 前馈控制
-        gimbal_cmd_send.yaw_vel = vision_recv_data->yaw_vel * RAD_TO_DEG;
-        gimbal_cmd_send.yaw_acc = vision_recv_data->yaw_acc * RAD_TO_DEG;
-        gimbal_cmd_send.pitch_vel = vision_recv_data->pitch_vel * RAD_TO_DEG;
-        gimbal_cmd_send.pitch_acc = vision_recv_data->pitch_acc * RAD_TO_DEG;
+static void ApplyShootCommand(const VisionControlShootCommand_s *command)
+{
+    shoot_cmd_send.shoot_mode = command->shoot_enabled ? SHOOT_ON : SHOOT_OFF;
+    shoot_cmd_send.friction_mode = command->friction_enabled ? FRICTION_ON : FRICTION_OFF;
+    shoot_cmd_send.load_mode = (loader_mode_e)command->load_mode;
+    shoot_cmd_send.shoot_rate = command->shoot_rate;
+}
 
-        if (vision_recv_data->mode == 2) // 控制并开火
-        {
-            shoot_cmd_send.shoot_mode = SHOOT_ON;
-            shoot_cmd_send.friction_mode = FRICTION_ON;
-            shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
-            shoot_cmd_send.shoot_rate = 10;
-        }
-        else // mode 1: 控制云台不开火
-        {
-            shoot_cmd_send.load_mode = LOAD_STOP;
-            shoot_cmd_send.friction_mode = FRICTION_ON;
-        }
-        return 1;
-    }
-    return 0;
+static uint8_t VisionControlSetGimbal(const VisionControlInput_s *input)
+{
+    if (!VisionControlInputIsUsable(input))
+        return 0u;
+
+    gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+    gimbal_cmd_send.yaw = input->yaw * RAD_TO_DEG;
+    gimbal_cmd_send.pitch = input->pitch * RAD_TO_DEG + PITCH_ZERO_OFFSET;
+
+    // Vision feed-forward values arrive in radians and feed the gimbal controller in degrees.
+    gimbal_cmd_send.yaw_vel = input->yaw_vel * RAD_TO_DEG;
+    gimbal_cmd_send.yaw_acc = input->yaw_acc * RAD_TO_DEG;
+    gimbal_cmd_send.pitch_vel = input->pitch_vel * RAD_TO_DEG;
+    gimbal_cmd_send.pitch_acc = input->pitch_acc * RAD_TO_DEG;
+    return 1u;
 }
 
 /**
@@ -164,12 +187,13 @@ static uint8_t VisionControlSet()
  */
 static void RemoteControlSet()
 {
+    const VisionControlInput_s vision_input = GetVisionControlInput();
     // 视觉接管优先级最高, 接管时跳过遥控器云台角度增量
-    if (VisionControlSet())
+    if (VisionControlSetGimbal(&vision_input))
     {
         // 视觉已设置云台角度, 这里仅保留底盘/发射的遥控器控制
     }
-    else if (switch_is_down(rc_data[TEMP].rc.switch_left) || vision_recv_data->mode == 0)
+    else if (switch_is_down(rc_data[TEMP].rc.switch_left) || !VisionControlInputIsCurrent())
     {
         // 纯遥控器拨杆控制云台角度增量
         gimbal_cmd_send.yaw += RC_TO_YAW_ANGLE * (float)rc_data[TEMP].rc.rocker_l_;
@@ -179,13 +203,13 @@ static void RemoteControlSet()
     if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台
     {
         chassis_cmd_send.chassis_mode = CHASSIS_ROTATE;
-        if (!vision_recv_data->mode)
+        if (!VisionControlInputIsCurrent())
             gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
     }
     else if (switch_is_mid(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[中],底盘和云台分离,底盘保持不转动
     {
         chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
-        if (!vision_recv_data->mode)
+        if (!VisionControlInputIsCurrent())
             gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
     }
 
@@ -202,17 +226,9 @@ static void RemoteControlSet()
         ; // 弹舱舵机控制,待添加servo_motor模块,关闭
 
     // 摩擦轮控制,拨轮向上打为负,向下为正
-    if (rc_data[TEMP].rc.dial < -100) // 向上超过100,打开摩擦轮
-        shoot_cmd_send.friction_mode = FRICTION_ON;
-    else
-        shoot_cmd_send.friction_mode = FRICTION_OFF;
-    // 拨弹控制,遥控器固定为一种拨弹模式,可自行选择
-    if (rc_data[TEMP].rc.dial < -500)
-        shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
-    else
-        shoot_cmd_send.load_mode = LOAD_STOP;
-    // 射频控制,固定每秒1发,后续可以根据左侧拨轮的值大小切换射频,
-    shoot_cmd_send.shoot_rate = 8;
+    VisionControlShootCommand_s manual_command;
+    VisionControlBuildRemoteShootCommand(rc_data[TEMP].rc.dial, &manual_command);
+    ApplyShootCommand(&manual_command);
 }
 
 /**
@@ -241,21 +257,6 @@ static void MouseKeySet()
         shoot_cmd_send.bullet_speed = 30;
         break;
     }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_E] % 4) // E键设置发射模式
-    {
-    case 0:
-        shoot_cmd_send.load_mode = LOAD_STOP;
-        break;
-    case 1:
-        shoot_cmd_send.load_mode = LOAD_1_BULLET;
-        break;
-    case 2:
-        shoot_cmd_send.load_mode = LOAD_3_BULLET;
-        break;
-    default:
-        shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
-        break;
-    }
     switch (rc_data[TEMP].key_count[KEY_PRESS][Key_R] % 2) // R键开关弹舱
     {
     case 0:
@@ -265,15 +266,12 @@ static void MouseKeySet()
         shoot_cmd_send.lid_mode = LID_CLOSE;
         break;
     }
-    switch (rc_data[TEMP].key_count[KEY_PRESS][Key_F] % 2) // F键开关摩擦轮
-    {
-    case 0:
-        shoot_cmd_send.friction_mode = FRICTION_OFF;
-        break;
-    default:
-        shoot_cmd_send.friction_mode = FRICTION_ON;
-        break;
-    }
+    VisionControlShootCommand_s manual_command;
+    VisionControlBuildMouseKeyShootCommand(
+        (uint8_t)(rc_data[TEMP].key_count[KEY_PRESS][Key_E] % 4),
+        (uint8_t)(rc_data[TEMP].key_count[KEY_PRESS][Key_F] % 2),
+        &manual_command);
+    ApplyShootCommand(&manual_command);
     switch (rc_data[TEMP].key_count[KEY_PRESS][Key_C] % 4) // C键设置底盘速度
     {
     case 0:
@@ -406,16 +404,35 @@ void RobotCMDTask()
     SubGetMessage(shoot_feed_sub, &shoot_fetch_data);
     SubGetMessage(gimbal_feed_sub, &gimbal_fetch_data);
 
+    /* Copy frame and link status together so a partial ISR update cannot mix generations. */
+    VisionGetSnapshot(&vision_recv_snapshot, &vision_status_snapshot);
+
     // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
     CalcOffsetAngle();
     // 根据遥控器左侧开关,确定当前使用的控制模式为遥控器调试还是键鼠
+    const uint8_t manual_control_active =
+        (uint8_t)(switch_is_down(rc_data[TEMP].rc.switch_left) ||
+                  switch_is_up(rc_data[TEMP].rc.switch_left));
     if (switch_is_down(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[下],遥控器控制
         RemoteControlSet();
     else if (switch_is_up(rc_data[TEMP].rc.switch_left)) // 遥控器左侧开关状态为[上],键盘控制
         MouseKeySet();
 
     // 视觉自瞄接管,优先级最高: mode 1/2 时覆盖遥控器/键鼠的云台控制
-    VisionControlSet();
+    const VisionControlInput_s vision_input = GetVisionControlInput();
+    VisionControlSetGimbal(&vision_input);
+
+    const VisionControlShootCommand_s manual_shoot_command = {
+        .shoot_enabled = (uint8_t)(shoot_cmd_send.shoot_mode == SHOOT_ON),
+        .friction_enabled = (uint8_t)(shoot_cmd_send.friction_mode == FRICTION_ON),
+        .load_mode = (uint8_t)shoot_cmd_send.load_mode,
+        .shoot_rate = shoot_cmd_send.shoot_rate,
+    };
+    VisionControlShootCommand_s selected_shoot_command;
+    VisionControlSelectShootCommand(&vision_input,
+                                    manual_control_active ? &manual_shoot_command : NULL,
+                                    &selected_shoot_command);
+    ApplyShootCommand(&selected_shoot_command);
 
     EmergencyHandler(); // 处理模块离线和遥控器急停等紧急情况
 

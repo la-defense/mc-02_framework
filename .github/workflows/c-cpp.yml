@@ -1,24 +1,39 @@
-name: C/C++ CI
+name: MC-02 firmware and host CI
 
 on:
   push:
-    branches: [ "master", "feature/*" ]
+    branches: [main]
   pull_request:
-    branches: [ "master" ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-
-    runs-on: ubuntu-latest
-
+  build-and-test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
     steps:
-      - uses: carlosperate/arm-none-eabi-gcc-action@v1
-      - run: arm-none-eabi-gcc --version
+      - uses: actions/checkout@v4
 
-      - uses: actions/checkout@v3
-      - name: make
-        run: make -j12
+      - name: Install host and ARM build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi
 
-      - uses: seanmiddleditch/gha-setup-ninja@master
-      - name: ninja
-        run: mkdir -p build && cd build && cmake -G Ninja .. && ninja
+      - name: Check firmware TODO contract
+        run: python3 tools/workflow/check_todo.py .Doc/TODO.md
+
+      - name: Build and run host safety tests
+        run: |
+          cmake -S tests/host -B build/host-tests -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/host-tests --parallel 2
+          ctest --test-dir build/host-tests --output-on-failure
+
+      - name: Validate and run learning exercises
+        run: python3 tools/workflow/check_exercises.py --build --generator Ninja
+
+      - name: Build STM32H723 firmware
+        run: |
+          cmake -S . -B build/firmware -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/firmware --parallel 2

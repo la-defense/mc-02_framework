@@ -2,6 +2,7 @@
 #define MASTER_PROCESS_H
 
 #include "bsp_usart.h"
+#include "vision_protocol.h"
 #include <stdint.h>
 
 #define VISION_RECV_SIZE 64u
@@ -60,37 +61,6 @@ typedef enum
 	BASE = 8
 } Target_Type_e;
 
-#pragma pack(push, 1)
-
-/* 上位机 -> 下位机，和 sp_vision_25 的 VisionToGimbal 对齐 */
-typedef struct
-{
-	uint8_t head[2];   // 'S', 'P'
-	uint8_t mode;      // 0: 不控制, 1: 控制云台不开火, 2: 控制云台并开火
-	float yaw;
-	float yaw_vel;
-	float yaw_acc;
-	float pitch;
-	float pitch_vel;
-	float pitch_acc;
-	uint16_t crc16;
-} Vision_Recv_s;
-
-/* 下位机 -> 上位机，和 sp_vision_25 的 GimbalToVision 对齐 */
-typedef struct
-{
-	uint8_t head[2];   // 'S', 'P'
-	uint8_t mode;      // 0: 空闲, 1: 自瞄, 2: 小符, 3: 大符
-	float q[4];        // w, x, y, z
-	float yaw;
-	float yaw_vel;
-	float pitch;
-	float pitch_vel;
-	float bullet_speed;
-	uint16_t bullet_count;
-	uint16_t crc16;
-} Vision_Send_s;
-
 typedef struct
 {
 	uint8_t online;
@@ -98,12 +68,11 @@ typedef struct
 	uint32_t last_rx_ms;
 	uint32_t rx_count;
 	uint32_t tx_count;
+	uint32_t tx_drop_count;
 	uint32_t crc_error_count;
 	float bullet_speed;
 	uint16_t bullet_count;
 } Vision_Status_t;
-
-#pragma pack(pop)
 
 /**
  * @brief 调用此函数初始化和视觉的通信(USB VCP 或 UART, 由 robot_def.h 宏切换)
@@ -122,6 +91,11 @@ void VisionSend(void);
  * @brief 获取视觉链路状态(在线/模式/收发计数/CRC错误)
  */
 void VisionGetStatus(Vision_Status_t *status);
+
+/**
+ * @brief 原子快照读取视觉命令帧和链路状态
+ */
+void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status);
 
 /**
  * @brief 每个控制周期把下位机状态塞给上位机

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 4 课：Windows–WSL 相机及串口桥接</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body><main>
+  <p class="kicker">自瞄链路 · 04 / 04</p>
+  <h1>Windows–WSL 相机及串口桥接</h1>
+  <p class="callout">本课目标：把相机采集与 Linux 识别分成两个可观测的进程边界。</p>
+  <h2>驱动在哪里，采集就在哪里</h2>
+  <p>工业相机 SDK 常常依赖厂商驱动。若 SDK 只在 Windows 可用，可以让 Windows 进程负责枚举相机和取帧，再通过显式桥接把帧送到 WSL 中的识别程序。USB/IP 是另一条路径：设备直接附加到 WSL 后由 Linux 侧访问；同一时刻设备不能由 Windows 同时使用。</p>
+  <p>桥接需定义帧边界、图像格式、时间戳、队列上限和断连行为。队列满时丢帧或阻塞必须是明确选择；串口桥也要保持原始 SP 帧字节流，不能在中间偷偷转换字段。</p>
+  <pre><code>Windows MVS 取帧 → 有界帧桥 → WSL recognizer
+MC-02 COM → 原始 SP 串口桥 → WSL serial client</code></pre>
+  <p>USB/IP 步骤以 <a href="https://learn.microsoft.com/en-us/windows/wsl/connect-usb">Microsoft 官方说明</a>为准；本机桥接命令记录在 <a href="../../../../docs/本机WSL自瞄联调部署记录.md">WSL 部署记录</a>。</p>
+  <h2>试着回忆</h2>
+  <ol><li>设备附加到 WSL 后，Windows MVS 还能同时打开它吗？</li><li>桥接队列不限制长度，会怎样影响延迟和内存？</li></ol>
+  <details><summary>核对答案</summary><p>不能；附加期间设备交给 WSL 使用。无界队列可能积累旧帧，让延迟与内存占用持续增长。</p></details>
+  <p>去做 <a href="../exercises/04-windows-wsl-bridge/problem/readme.md">练习 4</a>，再查 <a href="../reference/04-windows-wsl-bridge.html">桥接速查页</a>。</p>
+  <p>主要资料：<a href="https://learn.microsoft.com/en-us/windows/wsl/connect-usb">Microsoft：在 WSL 2 中连接 USB 设备</a>。运行练习不需要相机、USB 设备或 COM 端口。</p>
+  <nav><a href="0003-vision-timeout-revoke.html">上一课</a><a href="../README.md">课程主页</a></nav>
+</main></body></html>

@@ -64,9 +64,10 @@ dkms.conf
 # 裁判系统模拟器独立仓库（tools/referee_sim）
 /tools/referee_sim/
 
-# 本地多出来的两套构建目录(日常用 /build/)
+# 本地附加构建目录（日常用 /build/）
 /build-perf/
 /build-test/
+/build-audit/
 
 # 厂商资料(说明书/3D模型/图纸/通信协议 PDF, 体积 600MB+ 且有版权, 不入库)
 /资料/

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 1 课：SP 帧与 CRC</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body><main>
+  <p class="kicker">自瞄链路 · 01 / 04</p>
+  <h1>SP 帧与 CRC</h1>
+  <p class="callout">本课目标：拿到一段字节时，判断它是不是完整、完整但损坏，或只是缓冲区里的噪声。</p>
+  <h2>先看真实接口</h2>
+  <p>MC-02 发给视觉端的状态帧固定为 43 字节；视觉端发回的控制帧固定为 29 字节。帧首是两个 ASCII 字节 <code>SP</code>。固定长度让两端能按相同布局解释字段；CRC 让接收方发现传输中被改动的帧。</p>
+  <p>MC-02 的 <a href="../../../../modules/master_machine/master_process.c">接收代码</a>会在字节流里滑动查找帧头，再校验 CRC。短于一帧的数据不能被当作完整控制；校验错误的候选帧也不能更新在线状态和旧指令。</p>
+  <pre><code>先确认长度 → 找 SP → 计算 CRC → 比较帧尾 → 发布有效帧</code></pre>
+  <h2>CRC 的边界</h2>
+  <p>CRC 是传输错误检测值，不是加密或身份认证。这里的 CRC 算法、初值、输出处理和字节序都是协议的一部分。两边都用同一份 9 字节校验向量测试，可避免只验证“看起来像 CRC16”的实现。</p>
+  <p>本仓库历史实现把 CRC 数值以低字节在前写入帧尾。课程练习按该协议模拟；修改实现时要对照 MCU 和上位机两端，而不是仅凭算法名称换库。</p>
+  <h2>试着回忆</h2>
+  <ol>
+    <li>帧头正确但长度只有 20 字节，能否更新接收状态？</li>
+    <li>CRC 能证明发送者可信，还是只能帮助发现意外损坏？</li>
+  </ol>
+  <details><summary>核对答案</summary><p>不能：它不是 29 字节完整帧。CRC 只用于检测约定覆盖范围内的偶然错误，不提供身份认证。</p></details>
+  <p>去做 <a href="../exercises/01-sp-frame-crc/problem/readme.md">练习 1</a>，再查阅 <a href="../reference/01-sp-frame-crc.html">SP 帧速查页</a>。</p>
+  <p>主要资料：<a href="../../../../modules/master_machine/master_process.c">MC-02 协议实现</a>和 <a href="https://github.com/TongjiSuperPower/sp_vision_25/blob/main/io/gimbal/gimbal.hpp">视觉端协议结构</a>。有不清楚的字段，可以直接追问。</p>
+  <nav><a href="../README.md">课程主页</a><a href="0002-usb-cdc.html">下一课：USB CDC 收发</a></nav>
+</main></body></html>

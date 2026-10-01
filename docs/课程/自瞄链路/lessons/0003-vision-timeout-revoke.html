@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 3 课：视觉超时与撤销控制</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body><main>
+  <p class="kicker">自瞄链路 · 03 / 04</p>
+  <h1>视觉超时与撤销控制</h1>
+  <p class="callout">本课目标：从“上一次收到了好指令”推理到“现在仍允许执行”。</p>
+  <h2>有效性会随时间消失</h2>
+  <p>一帧 CRC 正确，只能说明它在到达时通过了格式检查。链路断开后，内存里的 yaw/pitch 仍然有数值，但那只是旧命令。控制判断还要检查最近一次有效接收的年龄、模式、数值是否有限，以及角度是否落在已配置的机械范围内。</p>
+  <p>有目标且数据新鲜时，主机可以发送控制模式 1 的瞄准帧。本机裸板联调还要强制关火。无目标、数据过期、串口断开或程序退出时都发送中立帧；若链路已经断开无法发送，MC-02 的视觉超时处理要清除旧命令并禁能。</p>
+  <pre><code>有效的新目标 → 控制模式 1 / fire=false
+无目标、过期、NaN/Inf、越界或断链 → 中立模式 0 / fire=false</code></pre>
+  <h2>试着回忆</h2>
+  <ol><li>CRC 正确的旧帧为什么不能永久保持“在线”？</li><li>通信已经断开，为什么还需要下位机自己的超时撤销？</li></ol>
+  <details><summary>核对答案</summary><p>CRC 不包含“当前还新鲜”这个事实，因此状态必须按接收时间过期。链路断开时上位机无法发送中立帧，所以下位机必须自行清除旧控制。</p></details>
+  <p>去做 <a href="../exercises/03-vision-timeout-revoke/problem/readme.md">练习 3</a>，再看 <a href="../reference/03-vision-timeout-revoke.html">安全撤销速查页</a>。</p>
+  <p>主要资料：<a href="../../../../modules/master_machine/master_process.c">MC-02 视觉离线回调和状态读取</a>、<a href="../../../学习笔记/16-USB-CDC虚拟串口通信.md">USB CDC 状态说明</a>。不要把课程模拟结果当作机械限位实测。</p>
+  <nav><a href="0002-usb-cdc.html">上一课</a><a href="../README.md">课程主页</a><a href="0004-windows-wsl-bridge.html">下一课：Windows–WSL 桥接</a></nav>
+</main></body></html>

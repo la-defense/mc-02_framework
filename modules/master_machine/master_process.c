@@ -8,12 +8,15 @@
 #include "bsp_log.h"
 #include "robot_def.h"
 #include "string.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 static Vision_Recv_s recv_data;
 static Vision_Send_s send_data;
 static DaemonInstance *vision_daemon_instance;
 static uint32_t vision_rx_count = 0;
 static uint32_t vision_tx_count = 0;
+static uint32_t vision_tx_drop_count = 0;
 static uint32_t vision_crc_error_count = 0;
 static uint32_t vision_last_rx_ms = 0;
 
@@ -28,66 +31,30 @@ static uint8_t *vis_recv_buff;
 static uint8_t *vis_recv_buff;
 #endif
 
-/* 和 sp_vision_25 一致的 CRC16/X25 */
-static uint16_t VisionCRC16(const uint8_t *data, uint32_t len)
-{
-    uint16_t crc = 0xFFFF;
-
-    while (len--)
-    {
-        crc ^= *data++;
-        for (uint8_t i = 0; i < 8; i++)
-        {
-            if (crc & 0x0001)
-                crc = (crc >> 1) ^ 0x8408;
-            else
-                crc >>= 1;
-        }
-    }
-
-    return crc;
-}
-
-static uint8_t VisionCheckCRC16(const uint8_t *data, uint32_t len)
-{
-    uint16_t rx_crc = (uint16_t)data[len - 2] | ((uint16_t)data[len - 1] << 8);
-    uint16_t calc_crc = VisionCRC16(data, len - 2);
-    return (rx_crc == calc_crc);
-}
-
 /* 从接收缓冲中滑动寻找 SP 帧并解码 */
 static void DecodeVision(uint16_t recv_len)
 {
-    if (recv_len < sizeof(Vision_Recv_s))
-        return;
+    Vision_Recv_s packet;
+    uint32_t crc_errors = 0u;
+    const uint8_t found = VisionProtocolFindCommandFrame(
+        vis_recv_buff, recv_len, &packet, &crc_errors);
 
-    for (uint16_t i = 0; i + sizeof(Vision_Recv_s) <= recv_len; i++)
+    taskENTER_CRITICAL();
+    vision_crc_error_count += crc_errors;
+    if (found)
     {
-        Vision_Recv_s pkt;
-        memcpy(&pkt, vis_recv_buff + i, sizeof(Vision_Recv_s));
-
-        if (pkt.head[0] != 'S' || pkt.head[1] != 'P')
-            continue;
-
-        if (!VisionCheckCRC16((const uint8_t *)&pkt, sizeof(Vision_Recv_s)))
-        {
-            vision_crc_error_count++;
-            continue;
-        }
-
-        recv_data = pkt;
+        recv_data = packet;
         vision_rx_count++;
         vision_last_rx_ms = HAL_GetTick();
         DaemonReload(vision_daemon_instance);
-        return;
     }
+    taskEXIT_CRITICAL();
 }
 
 #ifdef VISION_USE_UART
 /* bsp_usart 回调(无参): 数据到达后调用 DecodeVision */
 static void VisionUartRxCallback(void)
 {
-    DaemonReload(vision_daemon_instance);
     DecodeVision(vision_usart_instance->last_recv_size);
 }
 #endif
@@ -95,6 +62,10 @@ static void VisionUartRxCallback(void)
 static void VisionOfflineCallback(void *id)
 {
     (void)id;
+    taskENTER_CRITICAL();
+    memset(&recv_data, 0, sizeof(recv_data));
+    vision_last_rx_ms = 0u;
+    taskEXIT_CRITICAL();
 #ifdef VISION_USE_UART
     USARTServiceInit(vision_usart_instance);
 #endif
@@ -163,11 +134,14 @@ void VisionSend(void)
     tx_pkt = send_data;
     tx_pkt.head[0] = 'S';
     tx_pkt.head[1] = 'P';
-    tx_pkt.crc16 = VisionCRC16((const uint8_t *)&tx_pkt, sizeof(Vision_Send_s) - 2);
+    tx_pkt.crc16 = VisionProtocolCRC16((const uint8_t *)&tx_pkt, sizeof(Vision_Send_s) - 2u);
 
 #ifdef VISION_USE_VCP
-    USBTransmit((uint8_t *)&tx_pkt, sizeof(Vision_Send_s));
-    vision_tx_count++;
+    uint8_t usb_status = USBTransmit((const uint8_t *)&tx_pkt, sizeof(Vision_Send_s));
+    if (usb_status == USBD_OK)
+        vision_tx_count++;
+    else if (usb_status == USBD_BUSY)
+        vision_tx_drop_count++;
 #elif defined(VISION_USE_UART)
     /* 发送串口忙时跳过本帧, 避免 HAL_UART_Transmit_DMA 返回 BUSY 丢帧 */
     if (!USARTIsReady(vision_usart_instance))
@@ -179,15 +153,25 @@ void VisionSend(void)
 
 void VisionGetStatus(Vision_Status_t *status)
 {
-    if (status == NULL)
-        return;
+    VisionGetSnapshot(NULL, status);
+}
 
-    status->online = (vision_daemon_instance != NULL && DaemonIsOnline(vision_daemon_instance) > 0) ? 1 : 0;
-    status->mode = recv_data.mode;
-    status->last_rx_ms = vision_last_rx_ms;
-    status->rx_count = vision_rx_count;
-    status->tx_count = vision_tx_count;
-    status->crc_error_count = vision_crc_error_count;
-    status->bullet_speed = send_data.bullet_speed;
-    status->bullet_count = send_data.bullet_count;
+void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status)
+{
+    taskENTER_CRITICAL();
+    if (frame != NULL)
+        *frame = recv_data;
+    if (status != NULL)
+    {
+        status->online = (vision_daemon_instance != NULL && DaemonIsOnline(vision_daemon_instance) > 0) ? 1 : 0;
+        status->mode = recv_data.mode;
+        status->last_rx_ms = vision_last_rx_ms;
+        status->rx_count = vision_rx_count;
+        status->tx_count = vision_tx_count;
+        status->tx_drop_count = vision_tx_drop_count;
+        status->crc_error_count = vision_crc_error_count;
+        status->bullet_speed = send_data.bullet_speed;
+        status->bullet_count = send_data.bullet_count;
+    }
+    taskEXIT_CRITICAL();
 }

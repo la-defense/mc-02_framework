@@ -124,6 +124,8 @@ modules/imu/BMI088driver.c \
 modules/imu/BMI088Middleware.c \
 modules/imu/ins_task.c \
 modules/master_machine/master_process.c \
+modules/master_machine/vision_protocol.c \
+modules/master_machine/vision_control.c \
 modules/master_machine/seasky_protocol.c \
 modules/motor/DJImotor/dji_motor.c \
 modules/motor/HTmotor/HT04.c \

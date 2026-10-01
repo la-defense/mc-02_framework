@@ -45,7 +45,17 @@ add_compile_options(-pipe ${MCU_FLAGS} -Wall -fmessage-length=0 # basic options
 # 想省这 4KB 可 -DENABLE_PRINTF_FLOAT=OFF, 但那样日志里 %f 会不打印且让后面的格式符错位。
 option(ENABLE_PRINTF_FLOAT "链接 newlib 的 _printf_float, 让 %f/%e/%g 能正常格式化" ON)
 
-add_link_options(-pipe ${MCU_FLAGS} -T${LINKER_SCRIPT} -Wl,--no-warn-rwx-segments # close RWX warning
+execute_process(
+    COMMAND "${CMAKE_LINKER}" --help
+    OUTPUT_VARIABLE MC02_LINKER_HELP
+    ERROR_VARIABLE MC02_LINKER_HELP_ERROR
+)
+set(MC02_LINKER_OPTIONS)
+if ("${MC02_LINKER_HELP}${MC02_LINKER_HELP_ERROR}" MATCHES "--no-warn-rwx-segments")
+    list(APPEND MC02_LINKER_OPTIONS -Wl,--no-warn-rwx-segments)
+endif ()
+
+add_link_options(-pipe ${MCU_FLAGS} -T${LINKER_SCRIPT} ${MC02_LINKER_OPTIONS}
                  -lm -lc # lib options
                  -Wl,--gc-sections -specs=nano.specs # optimize options
                  # 不要加 -lnosys/-specs=nosys.specs:

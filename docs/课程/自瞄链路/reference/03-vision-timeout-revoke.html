@@ -1,0 +1,7 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>视觉安全撤销速查</title><link rel="stylesheet" href="../assets/lesson.css"></head><body><main>
+<p class="kicker">速查 · 安全控制</p><h1>瞄准控制有效性</h1>
+<p>输出模式 1 的必要条件：MC-02 在线且处于允许联调的空闲模式、目标存在、状态未超龄、角度有限且在已配置边界内。裸板测试始终禁火。</p>
+<p>上述任一条件失败：构造模式 0 中立帧并禁火。链路不可发送时，由 MC-02 本地视觉超时清空旧接收命令并失能。</p>
+<p>机械边界必须来自目标设备配置或测量，课程中的数值只用于模拟。</p>
+<p>代码：<a href="../../../../modules/master_machine/master_process.c">固件失联处理</a> · <a href="../exercises/03-vision-timeout-revoke/solution/main.cpp">主机练习</a></p>
+<nav><a href="../lessons/0003-vision-timeout-revoke.html">课程</a><a href="04-windows-wsl-bridge.html">下一张：桥接</a></nav></main></body></html>
