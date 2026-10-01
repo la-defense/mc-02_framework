@@ -110,10 +110,63 @@ static int TestVisionControlValidity(void)
     return 0;
 }
 
+static int TestVisionControlRevokesStaleShootCommand(void)
+{
+    VisionControlInput_s input = {
+        .online = 1u,
+        .mode = 2u,
+        .last_rx_ms = 100u,
+        .now_ms = 120u,
+        .max_age_ms = 50u,
+        .yaw = 0.1f,
+        .yaw_vel = 0.2f,
+        .yaw_acc = 0.3f,
+        .pitch = -0.1f,
+        .pitch_vel = -0.2f,
+        .pitch_acc = -0.3f,
+    };
+    VisionControlShootCommand_s command = {
+        .shoot_enabled = 1u,
+        .friction_enabled = 1u,
+        .burstfire_enabled = 1u,
+        .shoot_rate = 10.0f,
+    };
+
+    CHECK(VisionControlBuildShootCommand(&input, &command));
+    CHECK(command.shoot_enabled == 1u && command.friction_enabled == 1u);
+    CHECK(command.burstfire_enabled == 1u && command.shoot_rate == 10.0f);
+
+    input.mode = 1u;
+    CHECK(VisionControlBuildShootCommand(&input, &command));
+    CHECK(command.shoot_enabled == 1u && command.friction_enabled == 1u);
+    CHECK(command.burstfire_enabled == 0u && command.shoot_rate == 0.0f);
+
+    input.mode = 0u;
+    CHECK(!VisionControlBuildShootCommand(&input, &command));
+    CHECK(command.shoot_enabled == 0u && command.friction_enabled == 0u);
+    CHECK(command.burstfire_enabled == 0u && command.shoot_rate == 0.0f);
+
+    input.mode = 2u;
+    CHECK(VisionControlBuildShootCommand(&input, &command));
+    input.now_ms = 151u;
+    CHECK(!VisionControlBuildShootCommand(&input, &command));
+    CHECK(command.shoot_enabled == 0u && command.friction_enabled == 0u);
+    CHECK(command.burstfire_enabled == 0u && command.shoot_rate == 0.0f);
+
+    input.now_ms = 120u;
+    CHECK(VisionControlBuildShootCommand(&input, &command));
+    input.online = 0u;
+    CHECK(!VisionControlBuildShootCommand(&input, &command));
+    CHECK(command.shoot_enabled == 0u && command.friction_enabled == 0u);
+    CHECK(command.burstfire_enabled == 0u && command.shoot_rate == 0.0f);
+    return 0;
+}
+
 int main(void)
 {
     CHECK(TestProtocol() == 0);
     CHECK(TestVisionControlValidity() == 0);
+    CHECK(TestVisionControlRevokesStaleShootCommand() == 0);
     puts("MC-02 SP protocol and vision freshness checks passed");
     return 0;
 }

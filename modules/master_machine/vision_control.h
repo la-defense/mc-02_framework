@@ -18,7 +18,19 @@ typedef struct
     float pitch_acc;
 } VisionControlInput_s;
 
+typedef struct
+{
+    uint8_t shoot_enabled;
+    uint8_t friction_enabled;
+    uint8_t burstfire_enabled;
+    float shoot_rate;
+} VisionControlShootCommand_s;
+
 /* Mechanical angle limits must be checked by the caller using robot config. */
 uint8_t VisionControlInputIsUsable(const VisionControlInput_s *input);
+
+/* Builds a safe shooter command on invalid, stale, or disconnected vision input. */
+uint8_t VisionControlBuildShootCommand(const VisionControlInput_s *input,
+                                       VisionControlShootCommand_s *command);
 
 #endif

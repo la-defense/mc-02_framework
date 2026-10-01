@@ -21,3 +21,27 @@ uint8_t VisionControlInputIsUsable(const VisionControlInput_s *input)
                      isfinite(input->pitch_vel * radians_to_degrees) &&
                      isfinite(input->pitch_acc * radians_to_degrees));
 }
+
+uint8_t VisionControlBuildShootCommand(const VisionControlInput_s *input,
+                                       VisionControlShootCommand_s *command)
+{
+    if (command == NULL)
+        return 0u;
+
+    command->shoot_enabled = 0u;
+    command->friction_enabled = 0u;
+    command->burstfire_enabled = 0u;
+    command->shoot_rate = 0.0f;
+
+    if (!VisionControlInputIsUsable(input))
+        return 0u;
+
+    command->shoot_enabled = 1u;
+    command->friction_enabled = 1u;
+    if (input->mode == 2u)
+    {
+        command->burstfire_enabled = 1u;
+        command->shoot_rate = 10.0f;
+    }
+    return 1u;
+}

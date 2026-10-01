@@ -13,7 +13,6 @@
 #include "robot_safety.h"
 #include "vision_control.h"
 #include <string.h>
-#include <math.h>
 // bsp
 #include "bsp_dwt.h"
 #include "bsp_log.h"
@@ -122,7 +121,7 @@ static void CalcOffsetAngle()
 #endif
 }
 
-static uint8_t VisionControlInputIsCurrent(void)
+static VisionControlInput_s GetVisionControlInput(void)
 {
     const VisionControlInput_s input = {
         .online = vision_status_snapshot.online,
@@ -137,56 +136,39 @@ static uint8_t VisionControlInputIsCurrent(void)
         .pitch_vel = vision_recv_snapshot.pitch_vel,
         .pitch_acc = vision_recv_snapshot.pitch_acc,
     };
+    return input;
+}
+
+static uint8_t VisionControlInputIsCurrent(void)
+{
+    const VisionControlInput_s input = GetVisionControlInput();
     return VisionControlInputIsUsable(&input);
 }
 
-/**
- * @brief 视觉自瞄接管云台控制. 优先级最高, mode 1/2 时直接用视觉数据控制云台.
- * @return 1 表示视觉接管(调用方应跳过遥控器/键鼠的云台角度增量设置); 0 表示未接管
- * @note  视觉发送弧度制, 这里用 RAD_TO_DEG 转角度.
- *        mode 0: 不控制  mode 1: 控制云台不开火  mode 2: 控制云台并开火
- */
 static uint8_t VisionControlSet()
 {
-    if (VisionControlInputIsCurrent())
-    {
-        float vision_yaw = vision_recv_snapshot.yaw * RAD_TO_DEG;
-        float vision_pitch = vision_recv_snapshot.pitch * RAD_TO_DEG + PITCH_ZERO_OFFSET;
-        float yaw_vel = vision_recv_snapshot.yaw_vel * RAD_TO_DEG;
-        float yaw_acc = vision_recv_snapshot.yaw_acc * RAD_TO_DEG;
-        float pitch_vel = vision_recv_snapshot.pitch_vel * RAD_TO_DEG;
-        float pitch_acc = vision_recv_snapshot.pitch_acc * RAD_TO_DEG;
+    const VisionControlInput_s input = GetVisionControlInput();
+    VisionControlShootCommand_s shoot_command;
+    const uint8_t vision_is_current = VisionControlBuildShootCommand(&input, &shoot_command);
 
-        if (!isfinite(vision_yaw) || !isfinite(vision_pitch) || !isfinite(yaw_vel) ||
-            !isfinite(yaw_acc) || !isfinite(pitch_vel) || !isfinite(pitch_acc))
-            return 0;
+    shoot_cmd_send.shoot_mode = shoot_command.shoot_enabled ? SHOOT_ON : SHOOT_OFF;
+    shoot_cmd_send.friction_mode = shoot_command.friction_enabled ? FRICTION_ON : FRICTION_OFF;
+    shoot_cmd_send.load_mode = shoot_command.burstfire_enabled ? LOAD_BURSTFIRE : LOAD_STOP;
+    shoot_cmd_send.shoot_rate = shoot_command.shoot_rate;
 
-        gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
-        gimbal_cmd_send.yaw = vision_yaw;
-        gimbal_cmd_send.pitch = vision_pitch;
+    if (!vision_is_current)
+        return 0u;
 
-        // 视觉前馈(弧度->角度), 供 gimbal 前馈控制
-        gimbal_cmd_send.yaw_vel = yaw_vel;
-        gimbal_cmd_send.yaw_acc = yaw_acc;
-        gimbal_cmd_send.pitch_vel = pitch_vel;
-        gimbal_cmd_send.pitch_acc = pitch_acc;
+    gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+    gimbal_cmd_send.yaw = input.yaw * RAD_TO_DEG;
+    gimbal_cmd_send.pitch = input.pitch * RAD_TO_DEG + PITCH_ZERO_OFFSET;
 
-        if (vision_recv_snapshot.mode == 2) // 控制并开火
-        {
-            shoot_cmd_send.shoot_mode = SHOOT_ON;
-            shoot_cmd_send.friction_mode = FRICTION_ON;
-            shoot_cmd_send.load_mode = LOAD_BURSTFIRE;
-            shoot_cmd_send.shoot_rate = 10;
-        }
-        else // mode 1: 控制云台不开火
-        {
-            shoot_cmd_send.shoot_mode = SHOOT_ON;
-            shoot_cmd_send.load_mode = LOAD_STOP;
-            shoot_cmd_send.friction_mode = FRICTION_ON;
-        }
-        return 1;
-    }
-    return 0;
+    // Vision feed-forward values arrive in radians and feed the gimbal controller in degrees.
+    gimbal_cmd_send.yaw_vel = input.yaw_vel * RAD_TO_DEG;
+    gimbal_cmd_send.yaw_acc = input.yaw_acc * RAD_TO_DEG;
+    gimbal_cmd_send.pitch_vel = input.pitch_vel * RAD_TO_DEG;
+    gimbal_cmd_send.pitch_acc = input.pitch_acc * RAD_TO_DEG;
+    return 1u;
 }
 
 /**
