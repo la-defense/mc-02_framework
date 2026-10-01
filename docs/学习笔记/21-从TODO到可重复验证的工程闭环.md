@@ -35,5 +35,5 @@ ctest --test-dir build/host-tests --output-on-failure
 - [MC-02 主机安全测试](../../tests/host/CMakeLists.txt)
 - [MC-02 固件与主机 CI](../../.github/workflows/c-cpp.yml)
 - [课程与 C/C++ 练习](../课程/自瞄链路/README.md)
-- [视觉协议测试和 CPU 构建](../../../sp_vision_25-upstream/CMakeLists.txt)
+- [视觉协议测试和 CPU 构建](https://github.com/la-defense/sp_vision_25/blob/85c27907725b58929505de69f05a6235cf217386/CMakeLists.txt)
 - [工程工作流规格](../workflow/specs/engineering-learning-workflow.md)

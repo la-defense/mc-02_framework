@@ -23,4 +23,4 @@
 ## 状态位置
 
 - MC-02：[MC02-0030 / MC02-0031 / R25-13 / HIL-10](../../../.Doc/TODO.md)
-- sp_vision_25：[VIS25-0013 / VIS25-0014 / VIS25-0001–0012](../../../../sp_vision_25-upstream/TODO.md)
+- sp_vision_25：[VIS25-0013 / VIS25-0014 / VIS25-0001–0012](https://github.com/la-defense/sp_vision_25/blob/85c27907725b58929505de69f05a6235cf217386/TODO.md)
