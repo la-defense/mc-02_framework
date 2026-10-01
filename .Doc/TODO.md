@@ -17,7 +17,7 @@
 - [ ] **R25-03** [bug] [ready-for-agent] 遥控回调仅接受完整且合法的 18 字节帧，通过校验后才喂 daemon 和置在线。验收：短帧、噪声、错误校验帧不能解除急停，合法帧可恢复在线状态。
 - [ ] **R25-04** [bug] [ready-for-human] 关键电机反馈超时后停止相关输出并上报故障。验收：逐路断开关键 CAN 反馈，相关输出在规定超时内停止且故障可读取。
 - [ ] **R25-05** [bug] [ready-for-agent] 将电机离线、CAN BusOff、倾斜等已定义故障位接入 RobotSafety 的 READY/失能决策。验收：每个故障位均有状态转换测试，故障存在时不能进入 READY。
-- [ ] **R25-06** [bug] [ready-for-agent] 每周期明确计算发射总使能，覆盖手动、键鼠、视觉切换及视觉失联。验收：mode 2→1→0、控制源切换和断链测试均无残留开火使能。验证：`VisionControlBuildShootCommand` 已在无效模式、过期帧和断连时清除开火、摩擦轮与装填命令；主机回归测试通过。视觉对应任务为 [VIS25-0005](../sp_vision_25-upstream/TODO.md)；仍需 GitHub CI 和台架验证完整模式切换；固件实现为 [11c99a3441db8cc593ac0deca143c676f381bfa4](https://github.com/la-defense/mc-02_framework/commit/11c99a3441db8cc593ac0deca143c676f381bfa4)，配套视觉改动见 [38afcd3431a80e42f063a3c8a1351d603af1012f](https://github.com/la-defense/sp_vision_25/commit/38afcd3431a80e42f063a3c8a1351d603af1012f) 和 [学习笔记 22](../学习笔记/22-失联安全与有界等待.md)。
+- [ ] **R25-06** [bug] [ready-for-agent] 每周期明确计算发射总使能，覆盖手动、键鼠、视觉切换及视觉失联。验收：mode 2→1→0、控制源切换和断链测试均无残留开火使能。验证：`VisionControlBuildShootCommand` 已在无效模式、过期帧和断连时清除开火、摩擦轮与装填命令；主机回归测试通过。视觉对应任务为 **VIS25-0005**（[视觉联调 PR #1](https://github.com/la-defense/sp_vision_25/pull/1)）；仍需 GitHub CI 和台架验证完整模式切换；固件实现为 [11c99a3441db8cc593ac0deca143c676f381bfa4](https://github.com/la-defense/mc-02_framework/commit/11c99a3441db8cc593ac0deca143c676f381bfa4)，配套视觉改动见 [38afcd3431a80e42f063a3c8a1351d603af1012f](https://github.com/la-defense/sp_vision_25/commit/38afcd3431a80e42f063a3c8a1351d603af1012f)、[固件 PR #1](https://github.com/la-defense/mc-02_framework/pull/1) 和 [学习笔记 22](../学习笔记/22-失联安全与有界等待.md)。
 - [ ] **R25-07** [bug] [ready-for-agent] 底盘跟随计算改用 fabsf，限制角速度和四轮速度；复核小陀螺 4000 deg/s 定值（与既有 APP-08 合并）。验收：边界及非有限输入测试通过，输出不越过配置限值。
 - [ ] **R25-08** [bug] [ready-for-human] 从实车配置加载俯仰机械限位并执行钳位，拒绝非法视觉角度（与既有 APP-10 合并）。验收：配置边界、超界、缺失配置均有测试，台架角度不越机械限位。
 - [ ] **R25-15** [bug] [ready-for-human] 将裁判功率、枪口热量和弹速限制接入底盘与发射输出；裁判数据缺失时使用保守限值。验收：模拟器覆盖正常、超限和失联数据，台架确认不超功率且不能非法击发。
@@ -28,7 +28,7 @@
 - [ ] **R25-10** [bug] [ready-for-agent] 初始化失败返回可诊断状态；注册器检查容量和 malloc 结果，避免关中断阶段无限循环或越界写。验收：故障注入测试覆盖容量耗尽和分配失败，初始化返回可诊断错误且系统不挂死。
 - [ ] **R25-11** [bug] [ready-for-agent] 为消息增加接收时间与过期策略，对 CANComm、消息中心和视觉统一执行超时失能；合并 CANComm 未更新数据检查。验收：主机测试证明过期输入不能维持旧控制，在线新数据可恢复。
 - [ ] **R25-12** [enhancement] [ready-for-human] 按 Debug 构建主 RAM 81.16% 使用率复核静态缓冲与各任务栈余量，并结合最坏耗时拆分电机任务中的协议解析。验收：提交内存及栈水位测量、最坏耗时数据和明确的余量结论。
-- [ ] **R25-13** [enhancement] [ready-for-agent] CI 增加断链、短帧、越界角度、发射模式切换和运动学主机测试，并清理本轮 Debug 构建告警。验收：GitHub Actions 在 main 与 PR 上构建固件并运行全部新增主机测试。
+- [ ] **R25-13** [enhancement] [ready-for-agent] CI 增加断链、短帧、越界角度、发射模式切换和运动学主机测试，并清理本轮 Debug 构建告警。验收：GitHub Actions 在 main 与 PR 上构建固件并运行全部新增主机测试。验证记录：CI 首次全固件构建发现 `servo_motor.h` 依赖 GCC 私有头 `stdint-gcc.h`，已改用标准头 `<stdint.h>`；仍缺机械角度范围拒绝和底盘运动学主机测试，远端 ARM 构建待复验。
 - [ ] **R25-14** [bug] [ready-for-agent] 审核跨任务共享的命令、传感器状态和消息中心队列，按生产者/消费者选择临界区、队列或双缓冲，并覆盖既有并发检查条目。验收：共享数据清单逐项有同步策略，主机或台架测试验证抢占时读写一致。
 
 ## assorted
@@ -237,6 +237,6 @@ Unicom
 
 规格：[工程与教学工作流](../docs/workflow/specs/engineering-learning-workflow.md)。
 
-- [x] **MC02-0030** [enhancement] 把本地 skills、TODO、教学工作区及 C/C++ 练习统一到可验证流程。验收：skill 指引不再写入 `.scratch`，TODO 为唯一状态源，四组离线练习、链接检查和 CMake/CTest 均通过；视觉侧对应 **VIS25-0013**（[视觉 TODO](../../sp_vision_25-upstream/TODO.md)）。验证：TODO contract、课程离线链接和四组 CMake/CTest 主机练习通过。
-- [ ] **MC02-0031** [enhancement] [ready-for-human] 建立公开视觉 fork、私有 HIL 仓库和受限 Windows runner，并配置手动双 SHA 联调。验收：runner 只运行仓库内受信任工作流，报告记录固件/视觉 SHA、构建烧录结果、禁止开火帧、RX/CRC 计数和复位状态；视觉侧对应 **VIS25-0014**（[视觉 TODO](../../sp_vision_25-upstream/TODO.md)）。已创建 [公开视觉 fork](https://github.com/la-defense/sp_vision_25) 和 [私有 HIL 仓库](https://github.com/la-defense/mc-02-hil)；runner、手动工作流与报告尚待配置。
+- [x] **MC02-0030** [enhancement] 把本地 skills、TODO、教学工作区及 C/C++ 练习统一到可验证流程。验收：skill 指引不再写入 `.scratch`，TODO 为唯一状态源，四组离线练习、链接检查和 CMake/CTest 均通过；视觉侧对应 **VIS25-0013**（[视觉工作流 PR #1](https://github.com/la-defense/sp_vision_25/pull/1)）。验证：TODO contract、课程离线链接和四组 CMake/CTest 主机练习通过；完整实现见[固件 PR #1](https://github.com/la-defense/mc-02_framework/pull/1)。
+- [ ] **MC02-0031** [enhancement] [ready-for-human] 建立公开视觉 fork、私有 HIL 仓库和受限 Windows runner，并配置手动双 SHA 联调。验收：runner 只运行仓库内受信任工作流，报告记录固件/视觉 SHA、构建烧录结果、禁止开火帧、RX/CRC 计数和复位状态；视觉侧对应 **VIS25-0014**（[视觉 HIL PR #1](https://github.com/la-defense/sp_vision_25/pull/1)）。已创建 [公开视觉 fork](https://github.com/la-defense/sp_vision_25) 和 [私有 HIL 仓库](https://github.com/la-defense/mc-02-hil)；runner、手动工作流与报告尚待配置。固件侧实施追踪：[固件 PR #1](https://github.com/la-defense/mc-02_framework/pull/1)。
 
