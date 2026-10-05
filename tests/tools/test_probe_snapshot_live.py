@@ -59,8 +59,18 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
         commands = [line.strip().split() for line in config.splitlines()
                     if line.strip() and not line.lstrip().startswith("#")]
 
-        self.assertIn(["mc02.cpu0", "configure", "-event", "gdb-attach", "{}"], commands)
-        self.assertIn(["mc02.cpu0", "configure", "-event", "gdb-detach", "{}"], commands)
+        for event in ("gdb-attach", "gdb-detach"):
+            handlers = [
+                parts
+                for parts in commands
+                if len(parts) >= 4
+                and parts[:3] == ["mc02.cpu0", "configure", "-event"]
+                and parts[3] == event
+            ]
+            self.assertEqual(
+                handlers,
+                [["mc02.cpu0", "configure", "-event", event, "{}"]],
+            )
         self.assertIn(["gdb", "memory_map", "disable"], commands)
         self.assertFalse(any(parts[0] in {"halt", "reset", "resume", "shutdown"} for parts in commands))
 
