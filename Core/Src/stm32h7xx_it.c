@@ -23,27 +23,31 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "bsp_crash.h"
+#include "bsp_safety.h"
 /* USER CODE END Includes */
 
-/* ============================================================================
-   异常入口统一处理(2026-09-23, LOG-03)
-   ----------------------------------------------------------------------------
-   这 5 个 handler 必须保持 __attribute__((naked)): 普通函数会在序言里 push 寄存器,
-   那样汇编里的 "mrs r0, msp / mrsne r0, psp" 拿到的就不是"异常压栈的那 8 个字"
-   (R0,R1,R2,R3,R12,LR,PC,xPSR) 了, 现场会整体错位。
-   取到帧指针后跳到 CrashLogHandlerC(): 记录现场(纯内存写)并主动复位。
-   !! CubeMX 重新生成代码会覆盖这一段, 生成后需要手工恢复 !!
-   ========================================================================== */
-#define CRASH_HANDLER_BODY(type_val)          \
-    __asm volatile(                           \
-        "tst lr, #4        \n"                \
-        "ite eq            \n"                \
-        "mrseq r0, msp     \n"                \
-        "mrsne r0, psp     \n"                \
-        "movs r1, %c0      \n"                \
-        "b CrashLogHandlerC\n"                \
-        :: "i"(type_val) : "r0", "r1", "memory")
-
+/* Cortex-M exception entry. The naked wrappers capture the original stack pointer and
+   EXC_RETURN, call the direct register output shutdown, then enter CrashLogHandlerC
+   to validate and record the frame. Keep this block hand-maintained across CubeMX refreshes. */
+#define CRASH_HANDLER_BODY(type_val)                    \
+    __asm volatile(                                     \
+        "tst lr, #4            \n"                    \
+        "ite eq                \n"                    \
+        "mrseq r0, msp         \n"                    \
+        "mrsne r0, psp         \n"                    \
+        "mov r2, lr            \n"                    \
+        "movs r1, %c0          \n"                    \
+        "mov r4, r0            \n"                    \
+        "mov r5, r1            \n"                    \
+        "mov r6, r2            \n"                    \
+        "bl BSP_SafetyLatchOutputsOff \n"              \
+        "mov r0, r4            \n"                    \
+        "mov r1, r5            \n"                    \
+        "mov r2, r6            \n"                    \
+        "b CrashLogHandlerC    \n"                    \
+        :: "i"(type_val) : "r0", "r1", "r2", "r3",  \
+                             "r4", "r5", "r6", "r12",  \
+                             "lr", "cc", "memory")
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
 

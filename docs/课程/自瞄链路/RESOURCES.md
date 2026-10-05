@@ -14,6 +14,10 @@
   WSL 2 功能、系统版本与虚拟化前置条件；用于解释主机侧部署边界。
 - [CMake CTest 命令参考](https://cmake.org/cmake/help/latest/manual/ctest.1.html)
   CTest 如何发现和运行测试；用于课程练习的主机验证流程。
+- [Arm Cortex-M7 Devices Generic User Guide](https://developer.arm.com/documentation/dui0646/latest/)
+  第 2.4 节说明异常基本/浮点扩展栈帧、EXC_RETURN 和压栈故障位；用于异常入口及现场读取规则。
+- [ST RM0468：STM32H723/733 系列参考手册](https://www.st.com/resource/en/reference_manual/dm00603761.pdf)
+  给出 H723 的片上 SRAM 区域与外设寄存器；用于将异常栈地址校验限定到本链接脚本映射的 SRAM。
 
 ## Wisdom (Communities)
 

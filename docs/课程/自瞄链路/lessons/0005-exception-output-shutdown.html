@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第 5 课：异常先关输出</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body><main>
+  <p class="kicker">自瞄链路 · 安全基础</p>
+  <h1>异常先关输出</h1>
+  <p class="callout">本课目标：说明为什么异常入口要先用少量直接寄存器写入关输出，再读取和记录崩溃现场。</p>
+
+  <h2>异常入口做两件事</h2>
+  <ol>
+    <li><strong>先让已知输出失能。</strong> HAL tick、任务和日志可能还没初始化，也可能已经停止。<code>BSP_SafetyLatchOutputsOff()</code> 直接禁用中断、把 PB1 切到低电平 GPIO、停止 TIM3_CH4，并拉低 PC13/14/15。</li>
+    <li><strong>再记录可信现场。</strong> 读取 CFSR 后，先检查异常压栈地址、帧长度和栈错误标志；不能确认安全时就标记帧无效，不读取它。</li>
+  </ol>
+  <p>HardFault 等入口是 <code>naked</code> 汇编。它先保存原始 MSP/PSP 指针和 <code>EXC_RETURN</code>，调用低层关断，再跳到 C 记录函数。低层函数没有 HAL、RTOS、tick、日志或内部子函数。</p>
+
+  <h2>FPU 会把 R0 帧往后移</h2>
+  <p>基本异常帧包含 R0、R1、R2、R3、R12、LR、PC、xPSR，共 8 个字。浮点扩展帧会在它之前占 18 个字，所以核心寄存器 R0 从 <code>SP + 0x48</code> 开始。<code>EXC_RETURN</code> 的 bit4 为 0 时使用浮点扩展布局。</p>
+  <pre><code>基本帧：       SP ──→ R0 ... xPSR
+浮点扩展帧：  SP ──→ S0 ... FPSCR / 保留区 ──→ R0 ... xPSR
+                                          偏移 18 × 4 = 0x48</code></pre>
+  <p>MC-02 用浮点运算，因此把“前 8 个字永远是 R0 到 xPSR”当成事实会读错现场。生产代码还检查 Cortex-M7 异常帧的 8 字节对齐、链接脚本列出的 SRAM 范围，以及 CFSR 的压栈和延迟浮点保存错误位。</p>
+
+  <h2>调度停摆后的启动兜底</h2>
+  <p>如果整个调度器停止运行，守护任务也不能执行软件关断；IWDG 负责触发复位。重启后，<a href="../../../../Core/Src/main.c"><code>main()</code></a> 的首个用户初始化步骤调用 <a href="../../../../bsp/safety/bsp_safety.c"><code>BSP_SafetyStartupLatchOutputsOff()</code></a>，先关断已知输出，再进入 HAL 和模块初始化。它会恢复调用前的 PRIMASK，避免安全关断让后续初始化一直处于关中断状态。复位向量到达 <code>main()</code> 之前的引脚状态仍需实测，不能把启动兜底当成物理边界验收。</p>
+  <h2>怎样验证行为</h2>
+  <p><a href="../../../../tests/host/bsp_safety_test.c">关断测试</a>给生产模块喂入非零 PWM 和高电平的寄存器状态，再检查 BSRR、GPIO 模式、TIM3 CCR4/CCER/CEN 和中断屏蔽。<a href="../../../../tests/host/bsp_crash_frame_test.c">压栈测试</a>覆盖基本帧、浮点扩展帧、错位地址、超出 SRAM 的地址和 CFSR 错误位。 <a href="../../../../tests/host/fatal_error_entry_test.c">Error_Handler 关断测试</a>、<a href="../../../../tests/host/crash_guard_test.c">异常重入复位测试</a>。</p>
+  <p>这些测试证明程序发出了预期寄存器写入，并拒绝了不可信栈地址。它们<strong>不能证明板上电压、引脚波形、供电通道或负载响应</strong>；这些需要仪表和外部限能条件。</p>
+
+  <h2>闭上页面，试着回忆</h2>
+  <ol>
+    <li><code>EXC_RETURN=0xFFFFFFED</code> 时，R0 位于异常栈起点的哪个偏移？</li>
+    <li>为什么异常入口先关输出，再读取 CFSR 和异常栈？</li>
+    <li>整个调度器停摆时，谁触发复位，重启后在哪一步先关输出？</li>
+      <li>寄存器测试通过后，还缺哪类证据才能说物理输出已关断？</li>
+  </ol>
+  <details><summary>核对答案</summary>
+    <p>R0 从 <code>SP + 0x48</code> 开始；bit4 为 0 表示浮点扩展帧，bit2 为 1 表示原线程使用 PSP。先关输出可避免读取崩坏的栈或使用不可用的系统服务时继续维持旧输出。物理结论还需要安全接线和外部限能条件下的电压/波形测量。</p>
+  </details>
+  <p>主要资料：Arm 的 <a href="https://developer.arm.com/documentation/dui0646/latest/">Cortex-M7 Devices Generic User Guide</a> 第 2.4 节、STM32H723 的 <a href="https://www.st.com/resource/en/reference_manual/dm00603761.pdf">RM0468</a>。本工程的代码入口是 <a href="../../../../bsp/safety/bsp_safety.c">紧急关断</a> 和 <a href="../../../../bsp/crash/bsp_crash_frame.c">异常栈校验</a>；详细笔记见 <a href="../../../学习笔记/13-崩溃现场与异常处理入门.md">学习笔记 13</a>。有不清楚的地方，可以继续问。</p>
+  <nav><a href="../README.md">课程主页</a><a href="../reference/05-exception-output-shutdown.html">安全速查页</a><a href="../../../学习笔记/13-崩溃现场与异常处理入门.md">完整学习笔记</a></nav>
+</main></body></html>

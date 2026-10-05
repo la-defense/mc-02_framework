@@ -15,3 +15,46 @@ if(UNIX)
   target_link_libraries(vision_protocol_test PRIVATE m)
 endif()
 add_test(NAME vision_protocol_and_control_safety COMMAND vision_protocol_test)
+
+add_executable(
+  bsp_safety_test
+  bsp_safety_test.c
+  ../../bsp/safety/bsp_safety.c)
+target_include_directories(bsp_safety_test BEFORE PRIVATE fakes)
+target_include_directories(bsp_safety_test PRIVATE ../../bsp/safety)
+target_compile_definitions(bsp_safety_test PRIVATE MC02_SAFETY_TRACE_TEST)
+add_test(NAME production_emergency_output_shutdown COMMAND bsp_safety_test)
+
+add_executable(
+  fatal_error_entry_test
+  fatal_error_entry_test.c
+  ../../bsp/safety/bsp_safety.c
+  ../../bsp/safety/bsp_safety_error.c)
+target_include_directories(fatal_error_entry_test BEFORE PRIVATE fakes)
+target_include_directories(fatal_error_entry_test PRIVATE ../../bsp/safety)
+target_compile_definitions(fatal_error_entry_test PRIVATE MC02_HOST_TEST)
+add_test(NAME production_fatal_error_entry_shutdown COMMAND fatal_error_entry_test)
+
+add_executable(
+  bsp_crash_frame_test
+  bsp_crash_frame_test.c
+  ../../bsp/crash/bsp_crash_frame.c)
+target_include_directories(bsp_crash_frame_test PRIVATE ../../bsp/crash)
+add_test(NAME crash_frame_range_and_stacking_errors COMMAND bsp_crash_frame_test)
+
+add_executable(
+  crash_guard_test
+  crash_guard_test.c
+  ../../bsp/crash/bsp_crash_guard.c)
+target_include_directories(crash_guard_test BEFORE PRIVATE fakes)
+target_include_directories(crash_guard_test PRIVATE ../../bsp/crash)
+add_test(NAME crash_reentry_immediate_reset COMMAND crash_guard_test)
+
+add_executable(
+  task_monitor_shutdown_test
+  task_monitor_shutdown_test.c
+  ../../modules/task_monitor/task_monitor.c
+  ../../bsp/safety/bsp_safety.c)
+target_include_directories(task_monitor_shutdown_test BEFORE PRIVATE fakes)
+target_include_directories(task_monitor_shutdown_test PRIVATE ../../modules/task_monitor ../../bsp/safety)
+add_test(NAME task_monitor_fault_shutdown_order COMMAND task_monitor_shutdown_test)

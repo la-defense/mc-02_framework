@@ -3,6 +3,7 @@
 #include "robot_safety.h"
 #include "bsp_log.h"
 #include "main.h"
+#include "bsp_safety.h"
 
 typedef struct
 {
@@ -63,6 +64,7 @@ void TaskMonitorTick(void)
             all_alive = 0;
             if (!item->fault_logged)
             {
+                BSP_SafetyLatchOutputsOff();
                 LOGERROR("[monitor] task %s timeout (%ums)", item->name, (unsigned)item->timeout_ms);
                 item->fault_logged = 1;
             }

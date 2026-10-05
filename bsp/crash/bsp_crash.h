@@ -13,10 +13,11 @@
    现场存在 **.noinit 段**(链接脚本里新增): 启动代码只清 .bss, 所以它能跨
    系统复位保留(掉电丢失), 下次启动由 CrashLogInit() 读出来打印 + 供 LCD 显示。
 
-   设计约束(为什么 handler 里写得那么"素"):
-     异常可能由**内存/总线错误**引起, 此时任何函数调用、外设访问、日志输出都可能
-     二次触发异常(CPU 会进 Lockup, 连现场都保不住)。所以记录过程只做:
-       "读寄存器 → 写 RAM → 复位", 不调用函数、不写日志、不碰外设。
+   安全顺序:
+     异常汇编入口先调用 BSP_SafetyLatchOutputsOff(), 以直接寄存器访问关闭已知输出，
+     不依赖 HAL、tick、RTOS 或日志。随后记录过程关闭中断、验证压栈地址与故障状态，
+     只读允许范围内的 SRAM；二次异常通过活动标志走关断并立即复位路径。
+     这里的寄存器关断是软件尽力措施，不代表已测量外部引脚电平或主供电边界。
 
    记录的可信度(2026-09-26, LOG-05)
    ----------------------------------------------------------------------------
@@ -33,7 +34,7 @@
    ========================================================================== */
 
 /* 记录格式版本: 改动 CrashLog_t 的布局时必须 +1 */
-#define CRASH_LOG_VERSION 2u
+#define CRASH_LOG_VERSION 3u
 
 /* 头部 magic 的两个取值(小端拼写): "BUSY" = 正在写, "CROK" = 写完整 */
 #define CRASH_LOG_MAGIC_BUSY 0x59535542u
@@ -89,6 +90,7 @@ typedef struct
 
     /* ---- 出错时的异常栈帧(ARM 硬件压栈的 8 个字) ---- */
     uint32_t r0, r1, r2, r3, r12, lr, pc, xpsr;
+    uint32_t frame_status; /* 0=无异常帧, 1=有效, 2=地址/压栈状态无效 */
 
     /* ---- 栈指针 ---- */
     uint32_t sp;  /* 出错时真正使用的栈指针(MSP 或 PSP) */
@@ -114,7 +116,7 @@ const char *CrashLogTypeName(uint32_t type);
 const char *CrashLogTypeShort(uint32_t type);
 
 /* ---------------- 以下函数在异常上下文被调用 ----------------
-   frame:     指向异常压栈的 8 个字(R0,R1,R2,R3,R12,LR,PC,xPSR); 没有帧时传 NULL
+   frame:     指向异常栈起始位置; FP 扩展帧布局由 EXC_RETURN 标志解析
    arg0/arg1: 附加信息(断言=文件名指针+行号; 栈溢出=0, 任务名走 task_name 内联副本)
    caller_pc: 没有异常帧时用作"出错位置"(由调用者用 __builtin_return_address(0) 取得);
               有异常帧时忽略(帧里的 PC 更准)
@@ -127,9 +129,8 @@ void CrashLogAssertFail(const char *file, uint32_t line);
 /** @brief FreeRTOS 栈溢出钩子调用 */
 void CrashLogStackOverflow(const char *task_name);
 
-/* 异常入口的统一落点: stm32h7xx_it.c 里那几个 naked handler 用
-   "b CrashLogHandlerC" 跳进来, r0 = 异常栈帧指针, r1 = 异常类型。 */
-void CrashLogHandlerC(uint32_t *frame, uint32_t type);
+/* 异常入口先低层关断，再跳到这里；r0=异常栈指针，r1=异常类型，r2=EXC_RETURN。 */
+void CrashLogHandlerC(uint32_t *stack_frame, uint32_t type, uint32_t exception_return);
 
 /* ---------------- 崩溃自测(默认关闭) ----------------
    置 1 后: 每次启动依次触发 BusFault / 断言失败 / 栈溢出记录, 用来验证

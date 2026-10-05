@@ -8,6 +8,7 @@
 2. [USB CDC 收发](lessons/0002-usb-cdc.html) — 持久发送缓冲、忙状态和完成回调。
 3. [视觉超时与撤销控制](lessons/0003-vision-timeout-revoke.html) — 目标失效后将旧控制撤销为中立帧。
 4. [Windows–WSL 相机及串口桥接](lessons/0004-windows-wsl-bridge.html) — 将 Windows SDK 采集的数据送进 Linux 识别进程。
+5. [异常先关输出](lessons/0005-exception-output-shutdown.html) — 在现场记录前先失能输出，并正确识别 Cortex-M7 基本/浮点扩展栈帧。
 
 每课都链接到一组 [主机练习](exercises/README.md) 和一份 [速查页](reference/)。课程写出不代表掌握；只有用户回答练习或解释关键行为后，才记录学习记录。
 

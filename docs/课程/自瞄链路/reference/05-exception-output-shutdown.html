@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>异常关断与栈帧速查</title>
+  <link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body><main>
+  <p class="kicker">MC-02 安全联调 · 速查</p>
+  <h1>异常关断与栈帧</h1>
+  <p class="callout">顺序：直接关输出 → 读故障寄存器 → 验证栈帧 → 保存现场 → 复位。重复异常只走关断与复位。</p>
+
+  <h2>直接关断对象</h2>
+  <table>
+    <thead><tr><th>信号</th><th>动作</th><th>代码</th></tr></thead>
+    <tbody>
+      <tr><td>PB1 / TIM3_CH4</td><td>先把 ODR 锁存为低，再切 GPIO 输出；清 CCR4、CC4E、CEN</td><td><code>BSP_SafetyLatchOutputsOff</code></td></tr>
+      <tr><td>PC13、PC14、PC15</td><td>BSRR 拉低，再配置为低速、推挽、无上下拉输出</td><td>受控 24V / 5V 使能脚</td></tr>
+    </tbody>
+  </table>
+  <p>该动作是软件请求。它不等同于测量板上引脚电平、外部供电轨或外接设备响应。</p>
+
+  <h2>EXC_RETURN 与核心帧</h2>
+  <table>
+    <thead><tr><th>位</th><th>含义</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>bit2</td><td>0=MSP，1=PSP</td><td>选取异常压栈指针</td></tr>
+      <tr><td>bit4</td><td>1=基本帧，0=浮点扩展帧</td><td>扩展帧核心 R0 从 SP+0x48 开始</td></tr>
+      <tr><td>其他位</td><td>必须属于 Cortex-M7 定义的 EXC_RETURN 值</td><td>无效值不读帧</td></tr>
+    </tbody>
+  </table>
+  <p>基本帧 8 个字；浮点扩展前缀 18 个字，总计 26 个字。核心帧起点及完整读取范围必须留在一段链接脚本映射的片上 SRAM 内。</p>
+
+  <h2>拒绝读取的 CFSR 栈错误位</h2>
+  <ul>
+    <li>MemManage：MUNSTKERR bit3、MSTKERR bit4、MLSPERR bit5。</li>
+    <li>BusFault：UNSTKERR bit11、STKERR bit12、LSPERR bit13。</li>
+    <li>异常帧需 8 字节对齐；地址、帧长度、EXC_RETURN 或 CFSR 任一不可信时，不解引用帧和异常栈快照。</li>
+  </ul>
+
+  <h2>整机调度停摆</h2>
+  <p>整体调度停摆时，IWDG 会复位目标，软件关断在重启后的 <code>main()</code> 最早用户初始化步骤执行。调用恢复进入前的 PRIMASK；复位向量至 <code>main()</code> 之间的引脚状态仍未完成物理验收。</p>
+  <h2>本地验证</h2>
+  <pre><code>cmake -S tests/host -B build/host-tests -G Ninja
+cmake --build build/host-tests
+ctest --test-dir build/host-tests --output-on-failure</code></pre>
+  <p>重点测试：<a href="../../../../tests/host/bsp_safety_test.c">寄存器关断写入</a>、<a href="../../../../tests/host/bsp_crash_frame_test.c">基本/扩展帧及范围拒绝</a>、<a href="../../../../tests/host/task_monitor_shutdown_test.c">任务监控故障先关断再记日志</a>。 <a href="../../../../tests/host/fatal_error_entry_test.c">Error_Handler 关断测试</a>、<a href="../../../../tests/host/crash_guard_test.c">异常重入复位测试</a>。</p>
+  <p>主要资料：<a href="https://developer.arm.com/documentation/dui0646/latest/">Arm Cortex-M7 用户指南</a>、<a href="https://www.st.com/resource/en/reference_manual/dm00603761.pdf">ST RM0468</a>。课程入口：<a href="../lessons/0005-exception-output-shutdown.html">异常先关输出</a>。</p>
+</main></body></html>

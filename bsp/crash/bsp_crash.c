@@ -1,4 +1,7 @@
 #include "bsp_crash.h"
+#include "bsp_crash_frame.h"
+#include "bsp_crash_guard.h"
+#include "bsp_safety.h"
 #include "main.h"
 #include "bsp_log.h"
 
@@ -13,6 +16,7 @@
    能跨系统复位保留, 下次启动时由 CrashLogInit() 读出来。
    (掉电后内容丢失, 这是有意为之: handler 里不写 Flash, 避免二次故障。) */
 __attribute__((section(".noinit"))) static CrashLog_t g_crash_log;
+static volatile uint32_t g_crash_handler_active;
 
 /* ---------------- 构建指纹 (2026-09-26, LOG-05) ----------------
    由编译时间派生: 换一个固件(哪怕只改了一行)指纹就变, 于是"上一个固件留下的
@@ -169,20 +173,18 @@ static uint8_t CrashLogValid(void)
     return (crc == g_crash_log.crc32) ? 1u : 0u;
 }
 
-void CrashLogRecord(uint32_t type, uint32_t *frame, uint32_t arg0, uint32_t arg1,
-                    uint32_t caller_pc)
+static void CrashLogBegin(void)
 {
-    /* !! 本函数只在异常上下文执行 !!
-       异常可能由内存/总线错误引起, 此时任何函数调用、外设访问、日志输出都可能
-       二次触发异常(CPU 进 Lockup, 连现场都保不住)。所以这里只做:
-       "读寄存器 -> 写 RAM -> 复位"。顺序上先写数据、最后写 magic ——
-       下次启动看到 magic 有效, 就说明这份记录是完整写下去的。 */
+    CrashLogGuardEnter(&g_crash_handler_active);
+    BSP_SafetyLatchOutputsOff();
+}
 
-    /* 关中断: 记录过程必须独占。否则一个中断(比如 SysTick)插进来, 中断里再崩一次
-       就会从头再写一遍这份记录, 而这次写入可能被复位/看门狗在半截掐断 ——
-       实测看到的现象就是"magic 停在 BUSY、progress=4, 但字段全都写好了"。
-       (本来几微秒后就要复位, 关中断不会影响任何功能。) */
-    __disable_irq();
+static void CrashLogWriteRecord(uint32_t type, uint32_t *frame, uint32_t exception_return,
+                                uint32_t arg0, uint32_t arg1, uint32_t caller_pc)
+{
+    /* CrashLogBegin has already disabled interrupts and directly shut down
+       controlled outputs. Avoid HAL, RTOS, logging, and unbounded reads here;
+       stack access is limited to ranges validated by bsp_crash_frame.c. */
 
     /* 1) 先把头部写成"正在记录"状态(magic=BUSY): 万一记录过程中又崩了,
           下次启动会看到 BUSY 并报一句"写到第 N 步就中断了" —— 这是真线索。 */
@@ -224,38 +226,55 @@ void CrashLogRecord(uint32_t type, uint32_t *frame, uint32_t arg0, uint32_t arg1
 
     g_crash_log.psp = __get_PSP();
     g_crash_log.msp = __get_MSP();
+    uint32_t snapshot_words = 0u;
 
     if (frame != NULL)
     {
-        /* 异常压栈的 8 个字, 顺序由 ARM 硬件固定 */
-        g_crash_log.r0 = frame[0];
-        g_crash_log.r1 = frame[1];
-        g_crash_log.r2 = frame[2];
-        g_crash_log.r3 = frame[3];
-        g_crash_log.r12 = frame[4];
-        g_crash_log.lr = frame[5];
-        g_crash_log.pc = frame[6];
-        g_crash_log.xpsr = frame[7];
+        CrashLogFrameView_t frame_view;
         g_crash_log.sp = (uint32_t)(uintptr_t)frame;
+        if (CrashLogFrameResolve((uintptr_t)frame, exception_return, g_crash_log.cfsr,
+                                 &frame_view))
+        {
+            const volatile uint32_t *core_frame =
+                (const volatile uint32_t *)frame_view.core_frame_address;
+            g_crash_log.r0 = core_frame[0];
+            g_crash_log.r1 = core_frame[1];
+            g_crash_log.r2 = core_frame[2];
+            g_crash_log.r3 = core_frame[3];
+            g_crash_log.r12 = core_frame[4];
+            g_crash_log.lr = core_frame[5];
+            g_crash_log.pc = core_frame[6];
+            g_crash_log.xpsr = core_frame[7];
+            g_crash_log.frame_status = 1u;
+            snapshot_words = frame_view.snapshot_words;
+        }
+        else
+        {
+            g_crash_log.r0 = g_crash_log.r1 = g_crash_log.r2 = g_crash_log.r3 = 0u;
+            g_crash_log.r12 = g_crash_log.lr = g_crash_log.pc = g_crash_log.xpsr = 0u;
+            g_crash_log.frame_status = 2u;
+        }
     }
     else
     {
         /* 断言/栈溢出这类"主动调用"没有异常帧: 直接取当前栈指针 */
         g_crash_log.r0 = g_crash_log.r1 = g_crash_log.r2 = g_crash_log.r3 = 0u;
         g_crash_log.r12 = g_crash_log.lr = g_crash_log.xpsr = 0u;
+        g_crash_log.frame_status = 0u;
         g_crash_log.sp = (g_crash_log.psp != 0u) ? g_crash_log.psp : g_crash_log.msp;
+        snapshot_words = CrashLogReadableStackWords((uintptr_t)g_crash_log.sp);
         /* 没有异常帧就没有"出错 PC"; 用调用者给的返回地址代替 ——
            至少能看出断言/溢出是从哪一行代码报上来的, 否则 PC 只能是 0。 */
         g_crash_log.pc = caller_pc;
     }
     g_crash_log.progress = 3u;
 
-    /* 栈快照: 从 sp 起连续拷若干字, 事后可以手工回溯调用链。
-       纯内存读; 万一 sp 本身已经不可访问会再次异常, 但那时关键字段已经写好了。 */
+    /* 栈快照只读链接脚本定义 SRAM 范围内可完整访问的字，栈溢出或坏压栈时
+       将不可读的尾部清零，避免记录过程再次因为越界读进入二次异常。 */
     {
         const volatile uint32_t *p = (const volatile uint32_t *)(uintptr_t)g_crash_log.sp;
         for (uint32_t i = 0; i < CRASH_STACK_SNAPSHOT_WORDS; ++i)
-            g_crash_log.stack_snapshot[i] = p[i];
+            g_crash_log.stack_snapshot[i] = (i < snapshot_words) ? p[i] : 0u;
     }
     g_crash_log.progress = 4u;
 
@@ -289,6 +308,13 @@ void CrashLogRecord(uint32_t type, uint32_t *frame, uint32_t arg0, uint32_t arg1
         ;
 }
 
+void CrashLogRecord(uint32_t type, uint32_t *frame, uint32_t arg0, uint32_t arg1,
+                    uint32_t caller_pc)
+{
+    CrashLogBegin();
+    CrashLogWriteRecord(type, frame, 0xFFFFFFF9u, arg0, arg1, caller_pc);
+}
+
 /* noinline: __builtin_return_address(0) 要取"调用本函数的那一句"的地址,
    如果本函数被内联掉, 这个地址就没有意义了。 */
 __attribute__((noinline)) void CrashLogAssertFail(const char *file, uint32_t line)
@@ -299,6 +325,10 @@ __attribute__((noinline)) void CrashLogAssertFail(const char *file, uint32_t lin
 
 __attribute__((noinline)) void CrashLogStackOverflow(const char *task_name)
 {
+    /* Stack-overflow input may be in damaged memory; shut down and establish the
+       reentry guard before reading the task-name pointer. */
+    CrashLogBegin();
+
     /* 任务名不再"存指针", 而是在记录里内联一份副本: 指针指向的是 TCB 里的
        char 数组(RAM), 下次启动时那块内存可能已经被复用/重排。
        这里拷贝时顺手把非可打印字符换成 '.', 于是无论后面打印还是 LCD 显示,
@@ -317,8 +347,8 @@ __attribute__((noinline)) void CrashLogStackOverflow(const char *task_name)
             break;
     }
 
-    CrashLogRecord(CRASH_TYPE_STACK_OVF, NULL, 0u, 0u,
-                   (uint32_t)(uintptr_t)__builtin_return_address(0));
+    CrashLogWriteRecord(CRASH_TYPE_STACK_OVF, NULL, 0u, 0u, 0u,
+                        (uint32_t)(uintptr_t)__builtin_return_address(0));
 }
 
 /**
@@ -332,11 +362,15 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
     CrashLogStackOverflow((const char *)pcTaskName);
 }
 
-/* 异常入口的统一落点: 由 stm32h7xx_it.c 里的 naked handler 用
-   "b CrashLogHandlerC" 跳进来(r0 = 异常栈帧指针, r1 = 异常类型)。 */
-void CrashLogHandlerC(uint32_t *frame, uint32_t type)
+/* Naked exception wrappers shut outputs down before entering C. This entry
+   checks reentry before recording and does not repeat those register writes. */
+void CrashLogHandlerC(uint32_t *stack_frame, uint32_t type, uint32_t exception_return)
 {
-    CrashLogRecord(type, frame, 0u, 0u, 0u); /* 有异常帧, PC 从帧里取 */
+    /* The naked exception wrapper has already latched outputs off before
+       entering C. Do not repeat RCC/GPIO/TIM accesses here; a second fault
+       should reach the reset path immediately. */
+    CrashLogGuardEnter(&g_crash_handler_active);
+    CrashLogWriteRecord(type, stack_frame, exception_return, 0u, 0u, 0u);
 }
 
 void CrashLogInit(void)
@@ -358,8 +392,10 @@ void CrashLogInit(void)
 
     LOGERROR("==== 上次运行崩溃现场(累计第 %lu 次) ====",
              (unsigned long)g_crash_log.count);
-    LOGERROR("[crash] type=%s pc=0x%08lX lr=0x%08lX sp=0x%08lX",
+    LOGERROR("[crash] type=%s frame=%s pc=0x%08lX lr=0x%08lX sp=0x%08lX",
              CrashLogTypeName(g_crash_log.type),
+             (g_crash_log.frame_status == 1u) ? "valid" :
+             (g_crash_log.frame_status == 2u) ? "invalid" : "none",
              (unsigned long)g_crash_log.pc, (unsigned long)g_crash_log.lr,
              (unsigned long)g_crash_log.sp);
     LOGERROR("[crash] CFSR=0x%08lX HFSR=0x%08lX BFAR=0x%08lX MMFAR=0x%08lX DFSR=0x%08lX",
