@@ -100,12 +100,14 @@ def _small_decrease(old: int, new: int) -> bool:
 
 
 def classify_change(previous: dict[str, int], current: dict[str, int]) -> str:
+    if not previous["iwdg_reset_flag"] and current["iwdg_reset_flag"]:
+        return "target-reset-iwdg"
     if _small_decrease(previous["tick_ms"], current["tick_ms"]):
         if current["iwdg_reset_flag"]:
             return "target-reset-iwdg"
         return "target-reset-other-or-unknown"
     if any(_small_decrease(previous[key], current[key]) for key in COUNTERS):
-        return "counter-cleared"
+        return "counter-decrease-unclassified"
     return "running"
 
 

@@ -72,7 +72,7 @@ iwdg_reset_flag=0
         self.assertEqual(snapshot["vision_crc_error_count"], 1)
         self.assertEqual(snapshot["iwdg_reset_flag"], 0)
 
-    def test_counter_decrease_is_classified_using_tick_and_reset_flag(self):
+    def test_reset_and_counter_decrease_are_not_conflated(self):
         before = {
             "tick_ms": 1000,
             "vision_rx_count": 25,
@@ -87,12 +87,26 @@ iwdg_reset_flag=0
             "vision_crc_error_count": 0,
             "iwdg_reset_flag": 1,
         }
-        counter_clear = {
+        watchdog_reset_without_tick_rollback = {
+            "tick_ms": 1200,
+            "vision_rx_count": 25,
+            "vision_tx_count": 50,
+            "vision_crc_error_count": 1,
+            "iwdg_reset_flag": 1,
+        }
+        counter_decrease_without_reset_evidence = {
             "tick_ms": 1200,
             "vision_rx_count": 0,
             "vision_tx_count": 0,
             "vision_crc_error_count": 0,
             "iwdg_reset_flag": 0,
+        }
+        counter_decrease_after_preexisting_iwdg_reset = {
+            "tick_ms": 1200,
+            "vision_rx_count": 0,
+            "vision_tx_count": 0,
+            "vision_crc_error_count": 0,
+            "iwdg_reset_flag": 1,
         }
         natural_wrap = {
             "tick_ms": 0xFFFFFFF0,
@@ -110,7 +124,21 @@ iwdg_reset_flag=0
         }
 
         self.assertEqual(probe_snapshot_live.classify_change(before, watchdog_reset), "target-reset-iwdg")
-        self.assertEqual(probe_snapshot_live.classify_change(before, counter_clear), "counter-cleared")
+        self.assertEqual(
+            probe_snapshot_live.classify_change(before, watchdog_reset_without_tick_rollback),
+            "target-reset-iwdg",
+        )
+        self.assertEqual(
+            probe_snapshot_live.classify_change(before, counter_decrease_without_reset_evidence),
+            "counter-decrease-unclassified",
+        )
+        self.assertEqual(
+            probe_snapshot_live.classify_change(
+                watchdog_reset_without_tick_rollback,
+                counter_decrease_after_preexisting_iwdg_reset,
+            ),
+            "counter-decrease-unclassified",
+        )
         self.assertEqual(probe_snapshot_live.classify_change(natural_wrap, after_wrap), "running")
 
     def test_gdb_read_uses_a_process_timeout(self):

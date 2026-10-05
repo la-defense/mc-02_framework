@@ -249,13 +249,13 @@ Unicom
 - [x] **HIL-07 / P0** 重插 CMSIS-DAP 后经 OpenOCD/SWD 读取 HIL 前后固件计数：RX 1243→1545（+302），CRC 错误维持 0；增加量与 268 个瞄准帧、32 个中立帧及退出中立帧一致，证明下位机解析成功。断链后视觉超时清零已由固件验证。
 - [x] **HIL-08 / P1** 已记录 WSL 依赖、CMake 构建、demo/相机运行、USB/IP 与 MVS 桥命令及测试结果；遗留 CMSIS-DAP 计数复核已记录在部署文档。
 - [x] **HIL-09 / P1** Windows COM14 连续监听 5.027 秒收到 1004 个 CRC 正确的 43 字节状态帧（199.73 Hz），同期固件状态帧提交 +1006、USB busy 丢帧不变。WSL HIL 活跃中段 SWD 采样约 200 Hz，busy 计数保持不变；程序退出且无读取者后 busy 计数继续增长，已记录为无人读取时的待优化现象。
-- [ ] **HIL-10** [bug] [needs-info] 历史记录显示长时间 OpenOCD 会话出现 CMSIS-DAP USB I/O 错误，短时重连后 RX=0、TX=1；目前没有原始命令、完整错误日志或可重现反馈循环，复位原因未确认。验收：短时 SWD 快照脚本连续读取且不复位、不停核；报告区分探针 I/O 错误、目标复位和计数清零原因。新增 `tools/probe_snapshot_live.py` 与 `tools/openocd_running_inspection.cfg`，主机测试已验证命令不含 halt/reset、附加／断开事件为空、进程有硬超时；实际连接 CMSIS-DAP 验收及历史错误根因仍待原始日志与硬件报告。
+- [ ] **HIL-10** [bug] [needs-info] 历史记录显示长时间 OpenOCD 会话出现 CMSIS-DAP USB I/O 错误，短时重连后 RX=0、TX=1；目前没有原始命令、完整错误日志或可重现反馈循环，复位原因未确认。验收：短时 SWD 快照脚本连续读取且不复位、不停核；报告区分探针 I/O 错误、由 tick 回退／新置位 IWDG 标志检测到的目标复位，以及无法归因的计数回退，不能把原因未明的回退断言为计数器清零。新增 `tools/probe_snapshot_live.py` 与 `tools/openocd_running_inspection.cfg`，主机测试已验证命令不含 halt/reset、附加／断开事件为空、进程有硬超时；实际连接 CMSIS-DAP 验收及历史错误根因仍待原始日志与硬件报告。
 
 ## 工程与教学工作流
 
 2026-10-04 对 **HIL-10** 的补充证据：旧 `tools/probe_snapshot.py` 明确使用 `halt`，且探针进程无超时／恢复兜底；它不能作为不停车观察工具。
 
-2026-10-05 软件补充：新增 `tools/probe_snapshot_live.py` 和 `tools/openocd_running_inspection.cfg`，由 `gdb-attach`／`gdb-detach` 空处理器及关闭 GDB memory map 支持运行态 RAM 读取；GDB 只发起 extended-remote 与只读表达式，无 halt/reset/resume/写寄存器命令。样本数、间隔及单次 GDB 进程均设上限；快照包含 `uwTick`、视觉模式与 RX/TX/CRC 计数、IWDG 复位标志，可区分连接错误、目标复位和计数器清零。Python 主机回归覆盖命令、超时和计数变化分类。此工具尚未接探针实测；OpenOCD 的不停车内存检查还要求目标支持运行态后台内存访问。历史 USB I/O 错误与 RX／TX 清零原因仍需原始日志，不能认定已复现。关联 **MC02-0034** 和 [6S 审查](../docs/6S上电安全审查_2026-10-04.md)。
+2026-10-05 软件补充：新增 `tools/probe_snapshot_live.py` 和 `tools/openocd_running_inspection.cfg`，由 `gdb-attach`／`gdb-detach` 空处理器及关闭 GDB memory map 支持运行态 RAM 读取；GDB 只发起 extended-remote 与只读表达式，无 halt/reset/resume/写寄存器命令。样本数、间隔及单次 GDB 进程均设上限；快照包含 `uwTick`、视觉模式与 RX/TX/CRC 计数、IWDG 复位标志。IWDG 标志从 0 新置为 1 或 tick 回退时报告目标复位；视觉计数回退而没有复位证据时报告原因未明，不擅自断言计数器被清零。Python 主机回归覆盖命令、超时和计数变化分类。此工具尚未接探针实测；OpenOCD 的不停车内存检查还要求目标支持运行态后台内存访问。历史 USB I/O 错误与 RX／TX 清零原因仍需原始日志，不能认定已复现。关联 **MC02-0034** 和 [6S 审查](../docs/6S上电安全审查_2026-10-04.md)。
 
 规格：[工程与教学工作流](../docs/workflow/specs/engineering-learning-workflow.md)。
 
