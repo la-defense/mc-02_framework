@@ -1,0 +1,6 @@
+#ifndef MC02_HOST_BMI088_FAKE_BSP_WATCHDOG_H
+#define MC02_HOST_BMI088_FAKE_BSP_WATCHDOG_H
+
+void BSP_WatchdogFeed(void);
+
+#endif

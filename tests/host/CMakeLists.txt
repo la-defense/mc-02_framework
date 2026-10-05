@@ -71,3 +71,20 @@ set_tests_properties(watchdog_debug_freeze_and_bounded_wait PROPERTIES TIMEOUT 2
 add_executable(bmi088_temperature_test bmi088_temperature_test.c)
 target_include_directories(bmi088_temperature_test PRIVATE ../../modules/BMI088)
 add_test(NAME bmi088_temperature_signed_decode COMMAND bmi088_temperature_test)
+
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
+  add_executable(
+    bmi088_calibration_temperature_test
+    bmi088_calibration_temperature_test.c
+    ../../modules/BMI088/bmi088.c)
+  target_include_directories(
+    bmi088_calibration_temperature_test
+    BEFORE PRIVATE bmi088_fakes)
+  target_include_directories(
+    bmi088_calibration_temperature_test
+    PRIVATE ../../modules/BMI088)
+  target_compile_options(bmi088_calibration_temperature_test PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(bmi088_calibration_temperature_test PRIVATE -Wl,--gc-sections)
+  target_link_libraries(bmi088_calibration_temperature_test PRIVATE m)
+  add_test(NAME bmi088_calibration_preserves_celsius COMMAND bmi088_calibration_temperature_test)
+endif()
