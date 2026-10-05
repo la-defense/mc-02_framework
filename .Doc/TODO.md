@@ -11,6 +11,7 @@
 证据与测试边界见 [6S 上电安全审查](../docs/6S上电安全审查_2026-10-04.md)，规格见 [供电审查规格](../docs/workflow/specs/6s-power-on-safety-audit.md)。当前没有外部可控限流，不进行电池直连验收。以下软件缺口并不意味着此次已经发生起火、回灌或硬件损坏；硬件条件仍需验证。
 
 - [x] **MC02-0033** [enhancement] 完成 TB47S、LCD、USB、调试器接线范围下的整工程供电安全审查。验收：报告包含源码基线、官方硬件依据、跨模块证据、阻断条件和验证边界，问题纳入本 TODO，学习资料更新并提交 Git。验证：现有 SP 协议与控制主机 CTest 1/1 通过；本次不改运行固件，不上电、烧录或停核。
+  交付追踪：[审查提交 4fb5f48](https://github.com/la-defense/mc-02_framework/commit/4fb5f48)、[中文提交约定 f2e005d](https://github.com/la-defense/mc-02_framework/commit/f2e005d)、[供电审查 PR #2](https://github.com/la-defense/mc-02_framework/pull/2)。2026-10-05 已提交差异的 Standards／Spec 两轴复核均为 0 项发现；PR 基于 `workflow/adopt-engineering-learning`，依赖工作流 PR #1，尚未合并。安全结论和修复验收仍分别见报告及下列任务。
 - [ ] **MC02-0034** [bug] [ready-for-agent] 加热非零时调试 halt 会暂停温控并冻结 IWDG，缺少同步加热关闭保证。验收：调试／供电测试配置从启动阶段禁止加热；不把 TIM3 freeze 当成关断；无加热能量的模拟与受控台架证明停核／探针错误后 PB1 不维持有效输出，并记录配置与固件 SHA。
 - [ ] **MC02-0035** [bug] [ready-for-agent] SPI HAL 错误未传播至 BMI088 阻塞采样，加热有效性没有成功采样时间与年龄判定。验收：生产采样路径覆盖 HAL_ERROR、BUSY、超时、部分读取和重复旧样本；无效或过期样本立即关闭加热，不续喂温度有效时间；INS 姿态有效性采用相同可信采样依据。
 - [ ] **MC02-0036** [bug] [ready-for-agent] 按需标定与 Flash 长操作跳过温控、放宽看门狗，入口未确保先关闭加热。验收：在模拟非零 PWM 下进入 CALIB、参数提交／重置前，硬件关闭先于长操作；监控暂停有期限，失败／超时不恢复旧 PWM；正常恢复需重新确认状态与新采样。
