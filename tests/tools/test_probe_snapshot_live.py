@@ -32,18 +32,27 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
             for key, expression in EXPECTED_EXPRESSIONS.items()
         ]
         self.assertEqual(probe_snapshot_live.EXPRESSIONS, EXPECTED_EXPRESSIONS)
-        self.assertEqual(
-            gdb_commands,
-            [
-                "set pagination off",
-                "set confirm off",
-                "set remote interrupt-on-connect off",
-                "target extended-remote 127.0.0.1:3333",
-                *expected_reads,
-            ],
-        )
-        self.assertIn("--nx", command)
-        self.assertIn("--return-child-result", command)
+        expected_commands = [
+            "set pagination off",
+            "set confirm off",
+            "set remote interrupt-on-connect off",
+            "target extended-remote 127.0.0.1:3333",
+            *expected_reads,
+        ]
+        expected_argv = [
+            "arm-none-eabi-gdb",
+            "--nx",
+            "--quiet",
+            "--batch",
+            "--return-child-result",
+            "--symbols",
+            "firmware.elf",
+        ]
+        for gdb_command in expected_commands:
+            expected_argv.extend(("--ex", gdb_command))
+
+        self.assertEqual(gdb_commands, expected_commands)
+        self.assertEqual(command, expected_argv)
 
     def test_running_target_config_disables_intrusive_attach_events(self):
         config = (ROOT / "tools" / "openocd_running_inspection.cfg").read_text(encoding="utf-8")
