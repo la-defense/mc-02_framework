@@ -1,5 +1,6 @@
 #include "bmi088.h"
 #include "bmi088_regNdef.h"
+#include "bsp_param.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -9,6 +10,11 @@
 static SPIInstance accelerometer_spi = {.is_accelerometer = 1u};
 static SPIInstance gyroscope_spi = {.is_accelerometer = 0u};
 static uint32_t synthetic_time_us;
+static uint8_t accelerometer_registers[128];
+static uint8_t gyroscope_registers[128];
+static uint8_t spi_register_count;
+static ParamImuCalibMeta_t committed_calibration_meta;
+static uint8_t calibration_meta_committed;
 
 static void fail(const char *message)
 {
@@ -16,11 +22,32 @@ static void fail(const char *message)
     exit(EXIT_FAILURE);
 }
 
+SPIInstance *SPIRegister(SPI_Init_Config_s *config)
+{
+    if (spi_register_count++ == 0u)
+    {
+        accelerometer_spi.spi_work_mode = config->spi_work_mode;
+        accelerometer_spi.id = config->id;
+        accelerometer_registers[BMI088_ACC_CHIP_ID] = BMI088_ACC_CHIP_ID_VALUE;
+        return &accelerometer_spi;
+    }
+
+    gyroscope_spi.spi_work_mode = config->spi_work_mode;
+    gyroscope_spi.id = config->id;
+    gyroscope_registers[BMI088_GYRO_CHIP_ID] = BMI088_GYRO_CHIP_ID_VALUE;
+    return &gyroscope_spi;
+}
+
 void SPITransRecv(SPIInstance *spi, uint8_t *rx, uint8_t *tx, uint8_t len)
 {
     memset(rx, 0, len);
 
     uint8_t reg = (uint8_t)(tx[0] & 0x7fu);
+    uint8_t *registers = spi->is_accelerometer ? accelerometer_registers : gyroscope_registers;
+    uint8_t data_offset = spi->is_accelerometer ? 2u : 1u;
+    for (uint8_t i = data_offset; i < len; ++i)
+        rx[i] = registers[(uint8_t)(reg + i - data_offset)];
+
     if (spi->is_accelerometer && reg == BMI088_ACCEL_XOUT_L && len >= 8u)
     {
         /* 5464 LSB at the configured 6g sensitivity is approximately 9.8 m/s^2. */
@@ -41,9 +68,11 @@ void SPITransRecv(SPIInstance *spi, uint8_t *rx, uint8_t *tx, uint8_t len)
 
 void SPITransmit(SPIInstance *spi, uint8_t *tx, uint8_t len)
 {
-    (void)spi;
-    (void)tx;
-    (void)len;
+    if (len >= 2u)
+    {
+        uint8_t *registers = spi->is_accelerometer ? accelerometer_registers : gyroscope_registers;
+        registers[tx[0]] = tx[1];
+    }
 }
 
 uint32_t DWT_ProbeStart(void)
@@ -76,6 +105,24 @@ void *zmalloc(size_t size)
     return calloc(1u, size);
 }
 
+void PIDInit(PIDInstance *pid, PID_Init_Config_s *config)
+{
+    (void)pid;
+    (void)config;
+}
+
+PWMInstance *PWMRegister(PWM_Init_Config_s *config)
+{
+    (void)config;
+    return NULL;
+}
+
+GPIOInstance *GPIORegister(GPIO_Init_Config_s *config)
+{
+    (void)config;
+    return NULL;
+}
+
 void RobotSafetySetCalibValid(uint8_t valid) { (void)valid; }
 void TaskMonitorPause(void) {}
 void TaskMonitorResume(void) {}
@@ -98,9 +145,11 @@ uint8_t ParamGetFloats(uint16_t key, float *out, uint8_t count)
 }
 uint8_t ParamSet(uint16_t key, const void *buf, uint16_t len)
 {
-    (void)key;
-    (void)buf;
-    (void)len;
+    if (key == PARAM_KEY_IMU_CALIB_META && len == sizeof(committed_calibration_meta))
+    {
+        memcpy(&committed_calibration_meta, buf, len);
+        calibration_meta_committed = 1u;
+    }
     return 1u;
 }
 uint8_t ParamSetFloat(uint16_t key, float value) { (void)key; (void)value; return 1u; }
@@ -118,20 +167,25 @@ void GPIOReset(GPIOInstance *instance) { (void)instance; }
 
 int main(void)
 {
-    BMI088Instance instance = {0};
-    instance.work_mode = BMI088_BLOCK_PERIODIC_MODE;
-    instance.cali_mode = BMI088_CALIBRATE_ONLINE_MODE;
-    instance.spi_acc = &accelerometer_spi;
-    instance.spi_gyro = &gyroscope_spi;
+    BMI088_Init_Config_s config = {0};
+    config.work_mode = BMI088_BLOCK_PERIODIC_MODE;
+    config.cali_mode = BMI088_CALIBRATE_ONLINE_MODE;
 
-    if (!BMI088CalibrateIMU(&instance))
-        fail("BMI088CalibrateIMU should accept stable synthetic samples");
+    BMI088Instance *instance = BMI088Register(&config);
+    if (instance == NULL)
+        fail("BMI088Register should initialize and calibrate stable synthetic samples");
 
-    if (fabsf(instance.temperature - 22.875f) > 0.0001f)
+    if (fabsf(instance->temperature - 22.875f) > 0.0001f)
         fail("calibration instance temperature must remain Celsius without rescaling");
 
     if (fabsf(bmi088_calib_temp - 22.875f) > 0.0001f)
         fail("published calibration temperature must remain Celsius without rescaling");
+
+    if (!calibration_meta_committed || committed_calibration_meta.result != PARAM_IMU_CALIB_OK)
+        fail("successful startup calibration must commit metadata through the parameter API");
+
+    if (fabsf(committed_calibration_meta.temperature - 22.875f) > 0.0001f)
+        fail("persisted calibration temperature must remain Celsius without rescaling");
 
     return EXIT_SUCCESS;
 }
