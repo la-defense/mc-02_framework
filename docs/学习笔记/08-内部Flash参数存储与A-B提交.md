@@ -178,7 +178,7 @@ TLV = **T**ype（键）+ **L**ength（长度）+ **V**alue（数据）：
 
 `PARAM_KEY_IMU_CALIB_META` 里的温度字段保存的是**摄氏度**，不是 BMI088 寄存器原始码。按 [Bosch BMI088 数据手册 §5.3.7](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi088-ds001.pdf)，温度由 11 位二进制补码组成：先拼出 `raw = (temp_msb << 3) | (temp_lsb >> 5)`；若 `raw > 1023`，要减去 `2048` 做符号扩展；最后按 `23 + signed_raw × 0.125°C` 换算。比如原始码 `2047` 表示 `-1`，温度是 `22.875°C`。
 
-工程里的 [`BMI088DecodeTemperature`](../../modules/BMI088/bmi088_temperature.h) 在采样入口完成这次换算；在线标定拿到的 `raw_data.temperature` 已经是摄氏度，所以直接保存。再乘 `0.125` 并加 `23` 会把同一个值换算第二次。边界回归在 [`bmi088_temperature_test.c`](../../tests/host/bmi088_temperature_test.c)：覆盖原始码 `0、1023、1024、2047`，以及数据手册给出的 `-40°C`／`85°C` 端点。生产标定路径回归 [`bmi088_calibration_temperature_test.c`](../../tests/host/bmi088_calibration_temperature_test.c) 会运行 `BMI088CalibrateIMU`，并验证实例与发布状态都保留 `22.875°C`。
+工程里的 [`BMI088DecodeTemperature`](../../modules/BMI088/bmi088_temperature.h) 在采样入口完成这次换算；在线标定拿到的 `raw_data.temperature` 已经是摄氏度，所以直接保存。再乘 `0.125` 并加 `23` 会把同一个值换算第二次。边界回归在 [`bmi088_temperature_test.c`](../../tests/host/bmi088_temperature_test.c)：覆盖原始码 `0、1023、1024、2047`，以及数据手册给出的 `-40°C`／`85°C` 端点。生产标定路径回归 [`bmi088_calibration_temperature_test.c`](../../tests/host/bmi088_calibration_temperature_test.c) 通过 `BMI088Register` 启动真实标定与参数提交流程，并验证实例、发布状态和参数元数据都保留 `22.875°C`。
 
 ---
 
