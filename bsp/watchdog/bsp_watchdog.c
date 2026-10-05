@@ -1,6 +1,7 @@
 #include "bsp_watchdog.h"
 #include "main.h"
 #include "bsp_log.h"
+#include "bsp_dwt.h"
 
 #define IWDG_KEY_RELOAD 0x0000AAAAu
 #define IWDG_KEY_ENABLE 0x0000CCCCu
@@ -19,10 +20,15 @@ static volatile uint8_t iwdg_reset_flag = 0;
 
 static uint8_t IWDG_WaitForUpdateFlags(void)
 {
-    uint32_t start = HAL_GetTick();
+    uint32_t cycles_per_ms = dwt_cpu_freq_mhz * 1000u;
+    if (cycles_per_ms == 0u)
+        cycles_per_ms = 480000u;
+    const uint32_t timeout_cycles = cycles_per_ms * IWDG_UPDATE_TIMEOUT_MS;
+    const uint32_t start = DWT->CYCCNT;
+
     while (IWDG1->SR & IWDG_UPDATE_FLAGS)
     {
-        if ((uint32_t)(HAL_GetTick() - start) > IWDG_UPDATE_TIMEOUT_MS)
+        if ((uint32_t)(DWT->CYCCNT - start) >= timeout_cycles)
             return 0;
     }
     return 1;
@@ -75,11 +81,6 @@ static void IWDG_WritePrescalerAndReload(uint32_t timeout_ms)
 void BSP_WatchdogInit(uint32_t timeout_ms)
 {
     watchdog_timeout_ms = timeout_ms;
-
-#ifdef DBGMCU_APB4FZ1_DBG_IWDG1
-    /* 调试halt时冻结IWDG, 避免打断点导致复位 */
-    DBGMCU->APB4FZ1 |= DBGMCU_APB4FZ1_DBG_IWDG1;
-#endif
 
     /* 必须先启动 IWDG 让 LSI 起振, 否则写 PR/RLR 后 PVU/RVU 永远不会清零.
        顺序与 HAL_IWDG_Init 保持一致. */

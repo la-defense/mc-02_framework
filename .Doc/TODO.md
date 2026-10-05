@@ -12,7 +12,7 @@
 
 - [x] **MC02-0033** [enhancement] 完成 TB47S、LCD、USB、调试器接线范围下的整工程供电安全审查。验收：报告包含源码基线、官方硬件依据、跨模块证据、阻断条件和验证边界，问题纳入本 TODO，学习资料更新并提交 Git。验证：现有 SP 协议与控制主机 CTest 1/1 通过；本次不改运行固件，不上电、烧录或停核。
   交付追踪：[审查提交 4fb5f48](https://github.com/la-defense/mc-02_framework/commit/4fb5f48)、[中文提交约定 f2e005d](https://github.com/la-defense/mc-02_framework/commit/f2e005d)、[供电审查 PR #2](https://github.com/la-defense/mc-02_framework/pull/2)。2026-10-05 已提交差异的 Standards／Spec 两轴复核均为 0 项发现；PR 基于 `workflow/adopt-engineering-learning`，依赖工作流 PR #1，尚未合并。安全结论和修复验收仍分别见报告及下列任务。
-- [ ] **MC02-0034** [bug] [ready-for-agent] 加热非零时调试 halt 会暂停温控并冻结 IWDG，缺少同步加热关闭保证。验收：调试／供电测试配置从启动阶段禁止加热；不把 TIM3 freeze 当成关断；无加热能量的模拟与受控台架证明停核／探针错误后 PB1 不维持有效输出，并记录配置与固件 SHA。
+- [ ] **MC02-0034** [bug] [ready-for-human] 加热非零时调试 halt 会暂停温控，原固件还会冻结 IWDG，缺少同步加热关闭保证。验收：调试／供电测试配置从启动阶段禁止加热；不把 TIM3 freeze 当成关断；无加热能量的模拟与受控台架证明停核／探针错误后 PB1 不维持有效输出，并记录配置与固件 SHA。软件部分已移除固件 IWDG 调试冻结，改用 DWT 周期计数限制寄存器更新等待；bench_safe 始终禁热。主机覆盖 Debug/Release，但当前无仪表，halt 后电平及探针故障的物理行为待受限台架验收。
 - [ ] **MC02-0035** [bug] [ready-for-agent] SPI HAL 错误未传播至 BMI088 阻塞采样，加热有效性没有成功采样时间与年龄判定。验收：生产采样路径覆盖 HAL_ERROR、BUSY、超时、部分读取和重复旧样本；无效或过期样本立即关闭加热，不续喂温度有效时间；INS 姿态有效性采用相同可信采样依据。
 - [ ] **MC02-0036** [bug] [ready-for-agent] 按需标定与 Flash 长操作跳过温控、放宽看门狗，入口未确保先关闭加热。验收：在模拟非零 PWM 下进入 CALIB、参数提交／重置前，硬件关闭先于长操作；监控暂停有期限，失败／超时不恢复旧 PWM；正常恢复需重新确认状态与新采样。
 - [ ] **MC02-0037** [bug] [ready-for-agent] ADC VIN getter 只看 DMA 启动标志，采样停更或 ADC／DMA 故障后仍可使用旧电压限制加热功率。验收：生产 VIN 接口提供采样年龄与错误状态，停更、错误、参考／分压异常和越界输入均关闭加热；测试覆盖缓存 12V、实际电压变化的情形，并在受控供电下对照仪表确认精度。
@@ -249,11 +249,13 @@ Unicom
 - [x] **HIL-07 / P0** 重插 CMSIS-DAP 后经 OpenOCD/SWD 读取 HIL 前后固件计数：RX 1243→1545（+302），CRC 错误维持 0；增加量与 268 个瞄准帧、32 个中立帧及退出中立帧一致，证明下位机解析成功。断链后视觉超时清零已由固件验证。
 - [x] **HIL-08 / P1** 已记录 WSL 依赖、CMake 构建、demo/相机运行、USB/IP 与 MVS 桥命令及测试结果；遗留 CMSIS-DAP 计数复核已记录在部署文档。
 - [x] **HIL-09 / P1** Windows COM14 连续监听 5.027 秒收到 1004 个 CRC 正确的 43 字节状态帧（199.73 Hz），同期固件状态帧提交 +1006、USB busy 丢帧不变。WSL HIL 活跃中段 SWD 采样约 200 Hz，busy 计数保持不变；程序退出且无读取者后 busy 计数继续增长，已记录为无人读取时的待优化现象。
-- [ ] **HIL-10** [bug] [needs-info] 历史记录显示长时间 OpenOCD 会话出现 CMSIS-DAP USB I/O 错误，短时重连后 RX=0、TX=1；目前没有原始命令、完整错误日志或可重现反馈循环，复位原因未确认。验收：短时 SWD 快照脚本连续读取且不复位、不停核；报告区分探针 I/O 错误、目标复位和计数清零原因。继续前需补充出错会话的 OpenOCD/GDB 命令与原始日志。
+- [ ] **HIL-10** [bug] [needs-info] 历史记录显示长时间 OpenOCD 会话出现 CMSIS-DAP USB I/O 错误，短时重连后 RX=0、TX=1；目前没有原始命令、完整错误日志或可重现反馈循环，复位原因未确认。验收：短时 SWD 快照脚本连续读取且不复位、不停核；报告区分探针 I/O 错误、目标复位和计数清零原因。新增 `tools/probe_snapshot_live.py` 与 `tools/openocd_running_inspection.cfg`，主机测试已验证命令不含 halt/reset、附加／断开事件为空、进程有硬超时；实际连接 CMSIS-DAP 验收及历史错误根因仍待原始日志与硬件报告。
 
 ## 工程与教学工作流
 
-2026-10-04 对 **HIL-10** 的补充证据：`tools/probe_snapshot.py` 明确使用 `halt`，且探针进程无超时／恢复兜底；它不能作为带主供加热时的不停车观察工具。先使用经验证的无加热供电配置，再建立不停车／不复位、具有超时的快照路径；原 USB I/O 错误与 RX／TX 清零原因仍需原始日志，不因本次代码证据被认定为同一个已复现故障。关联 **MC02-0034** 和 [6S 审查](../docs/6S上电安全审查_2026-10-04.md)。
+2026-10-04 对 **HIL-10** 的补充证据：旧 `tools/probe_snapshot.py` 明确使用 `halt`，且探针进程无超时／恢复兜底；它不能作为不停车观察工具。
+
+2026-10-05 软件补充：新增 `tools/probe_snapshot_live.py` 和 `tools/openocd_running_inspection.cfg`，由 `gdb-attach`／`gdb-detach` 空处理器及关闭 GDB memory map 支持运行态 RAM 读取；GDB 只发起 extended-remote 与只读表达式，无 halt/reset/resume/写寄存器命令。样本数、间隔及单次 GDB 进程均设上限；快照包含 `uwTick`、视觉模式与 RX/TX/CRC 计数、IWDG 复位标志，可区分连接错误、目标复位和计数器清零。Python 主机回归覆盖命令、超时和计数变化分类。此工具尚未接探针实测；OpenOCD 的不停车内存检查还要求目标支持运行态后台内存访问。历史 USB I/O 错误与 RX／TX 清零原因仍需原始日志，不能认定已复现。关联 **MC02-0034** 和 [6S 审查](../docs/6S上电安全审查_2026-10-04.md)。
 
 规格：[工程与教学工作流](../docs/workflow/specs/engineering-learning-workflow.md)。
 

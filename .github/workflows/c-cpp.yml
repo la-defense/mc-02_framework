@@ -23,6 +23,9 @@ jobs:
       - name: Check firmware TODO contract
         run: python3 tools/workflow/check_todo.py .Doc/TODO.md
 
+      - name: Test bounded live probe snapshot tool
+        run: python3 -m unittest discover -s tests/tools -p 'test_*.py'
+
       - name: Build and run host safety tests
         run: |
           cmake -S tests/host -B build/host-tests -G Ninja -DCMAKE_BUILD_TYPE=Debug

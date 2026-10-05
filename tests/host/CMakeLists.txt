@@ -58,3 +58,12 @@ add_executable(
 target_include_directories(task_monitor_shutdown_test BEFORE PRIVATE fakes)
 target_include_directories(task_monitor_shutdown_test PRIVATE ../../modules/task_monitor ../../bsp/safety)
 add_test(NAME task_monitor_fault_shutdown_order COMMAND task_monitor_shutdown_test)
+
+add_executable(
+  watchdog_debug_safety_test
+  watchdog_debug_safety_test.c
+  ../../bsp/watchdog/bsp_watchdog.c)
+target_include_directories(watchdog_debug_safety_test BEFORE PRIVATE watchdog_fakes fakes)
+target_include_directories(watchdog_debug_safety_test PRIVATE ../../bsp/watchdog ../../bsp/dwt)
+add_test(NAME watchdog_debug_freeze_and_bounded_wait COMMAND watchdog_debug_safety_test)
+set_tests_properties(watchdog_debug_freeze_and_bounded_wait PROPERTIES TIMEOUT 2)
