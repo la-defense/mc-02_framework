@@ -2,17 +2,39 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "configure bench-safe profile",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-S",
+                ".",
+                "-B",
+                "build/bench-safe",
+                "-G",
+                "Ninja",
+                "-DCMAKE_BUILD_TYPE=Debug",
+                "-DMC02_PROFILE=bench_safe",
+                "-DMC02_ENABLE_HEATER=OFF"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "build task",
             "type": "shell",
             "command": "cmake",
             "args": [
                 "--build",
-                "build"
+                "build/bench-safe"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
             },
             "problemMatcher": [],
+            "dependsOn": "configure bench-safe profile",
+            "dependsOrder": "sequence",
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -42,7 +64,7 @@
                 "-f",
                 "openocd_dap.cfg",
                 "-c",
-                "program build/Basic_Framework_MC02.elf verify reset exit"
+                "program build/bench-safe/Basic_Framework_MC02_bench_safe.elf verify reset exit"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -62,7 +84,7 @@
                 "-f",
                 "openocd_jlink.cfg",
                 "-c",
-                "program build/Basic_Framework_MC02.elf verify reset exit"
+                "program build/bench-safe/Basic_Framework_MC02_bench_safe.elf verify reset exit"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

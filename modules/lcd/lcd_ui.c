@@ -29,7 +29,9 @@ extern volatile uint16_t lcd_key_raw_min;
 #define COL_VALUE_X 80u
 #define ROW_Y(n) (28u + (uint16_t)(n) * 20u)
 
+#if !defined(MC02_PROFILE_BENCH_SAFE)
 static const Lcd_CnChar_e L_SYS[] = LCD_LABEL_SYS;
+#endif
 static const Lcd_CnChar_e L_STATE[] = LCD_LABEL_STATE;
 static const Lcd_CnChar_e L_FAULT[] = LCD_LABEL_FAULT;
 static const Lcd_CnChar_e L_ESTOP[] = LCD_LABEL_ESTOP;
@@ -157,7 +159,11 @@ static void draw_page_title(uint8_t page)
     switch (page)
     {
     case 0u:
+#if defined(MC02_PROFILE_BENCH_SAFE)
+        draw_title(NULL, "SAFE BENCH");
+#else
         draw_title(L_SYS, NULL);
+#endif
         break;
     case 1u:
         draw_title(NULL, "IMU");

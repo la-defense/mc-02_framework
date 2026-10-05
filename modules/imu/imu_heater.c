@@ -58,9 +58,13 @@ static uint8_t supply_missing_logged = 0;
 
 static void IMUHeaterApplyDuty(uint16_t duty)
 {
+#if !MC02_HEATER_ENABLED
+    duty = 0;
+#else
     /* 无论调用方传入什么, 都不允许超过 5% 硬上限 */
     if (duty > IMU_HEATER_DUTY_NORMAL)
         duty = IMU_HEATER_DUTY_NORMAL;
+#endif
 
     heater_duty = duty;
     if (heater_initialized)
@@ -101,7 +105,9 @@ void IMUHeaterInit(void)
 
     /* 先确保比较值为0, 再启动PWM, 避免任何形式的开机满功率 */
     __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, 0);
+#if MC02_HEATER_ENABLED
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+#endif
 
     LOGINFO("[imu_heat] init safe(VCC_IN 24V): target=%d.%dC max_duty=%u/%u power_cap=%d.%dW",
             (int)heater_target, (int)(heater_target * 10.0f) % 10,
@@ -178,6 +184,13 @@ void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
         last_valid_sample_ms = now;
     }
     last_sensor_valid = temp_ok;
+
+#if !MC02_HEATER_ENABLED
+    (void)force_off;
+    IMUHeaterForceOff();
+    IMUHeaterLogStatus(temperature, temp_ok);
+    return;
+#endif
 
     /* 加热电阻接 VCC_IN(24V). 只有输入电压在合理范围内才允许加热.
        这样 USB-only 供电时 VCC_IN=0, 加热会被禁止, 不会再出现 PID 饱和后

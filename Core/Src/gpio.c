@@ -54,8 +54,13 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+#if defined(MC02_PROFILE_BENCH_SAFE)
+  HAL_GPIO_WritePin(GPIOC, POWER_24V_2_Pin|POWER_24V_1_Pin|POWER_5V_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, CS2_ACCEL_Pin|CS2_GYRO_Pin|DCMI_PWDN_Pin, GPIO_PIN_SET);
+#else
   HAL_GPIO_WritePin(GPIOC, POWER_24V_2_Pin|POWER_24V_1_Pin|POWER_5V_Pin|CS2_ACCEL_Pin
                           |CS2_GYRO_Pin|DCMI_PWDN_Pin, GPIO_PIN_SET);
+#endif
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_RESET);

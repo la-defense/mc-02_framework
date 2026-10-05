@@ -5,6 +5,7 @@
 #include "robot_safety.h"
 #include "task_monitor.h"
 #include "bsp_watchdog.h"
+#include "master_process.h"
 
 // 编译warning,提醒开发者修改机器人参数
 #ifndef ROBOT_DEF_PARAM_WARNING
@@ -40,6 +41,10 @@ void RobotInit()
     ShootInit();
 #endif
 
+#if defined(MC02_PROFILE_BENCH_SAFE)
+    VisionInit(&huart9);
+#endif
+
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     ChassisInit();
 #endif
@@ -55,6 +60,10 @@ void RobotInit()
 
 void RobotTask()
 {
+#if defined(MC02_PROFILE_BENCH_SAFE)
+    RobotSafetyUpdate();
+    VisionSend();
+#else
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     RobotCMDTask();
     GimbalTask();
@@ -63,6 +72,7 @@ void RobotTask()
 
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     ChassisTask();
+#endif
 #endif
 
 }

@@ -61,8 +61,10 @@ void OSTaskInit()
     osThreadDef(robottask, StartROBOTTASK, osPriorityNormal, 0, 1024);
     robotTaskHandle = osThreadCreate(osThread(robottask), NULL);
 
+#if !defined(MC02_PROFILE_BENCH_SAFE)
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
+#endif
 
     osThreadDef(lcdtask, StartLCDTASK, osPriorityLow, 0, 1024);
     lcdTaskHandle = osThreadCreate(osThread(lcdtask), NULL);
@@ -73,7 +75,9 @@ void OSTaskInit()
     if (motorTaskHandle == NULL)
         LOGERROR("[freeRTOS] MOTOR 任务创建失败");
 
+#if !defined(MC02_PROFILE_BENCH_SAFE)
     HTMotorControlInit(); // 没有注册HT电机则不会执行
+#endif
 }
 
 __attribute__((noreturn)) void StartINSTASK(void const *argument)

@@ -32,6 +32,7 @@ void MotorControlTask()
     VCPProcessRx();
 
     probe_seg = DWT_ProbeStart();
+#if !defined(MC02_PROFILE_BENCH_SAFE)
     DJIMotorControl();
     DWT_ProbeDone(&motor_prof_dji, probe_seg);
 
@@ -39,6 +40,9 @@ void MotorControlTask()
     probe_seg = DWT_ProbeStart();
     LKMotorControl();
     DWT_ProbeDone(&motor_prof_lk, probe_seg);
+#else
+    (void)probe_seg;
+#endif
 
     // XMMotorControl();
 

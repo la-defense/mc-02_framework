@@ -158,6 +158,8 @@ void Gimbal_GetMotorSummary(Gimbal_Motor_Summary_t *summary)
     if (summary == NULL)
         return;
 
+    *summary = (Gimbal_Motor_Summary_t){0};
+
     DJIMotorGetSummary(yaw_motor, &summary->yaw);
     DJIMotorGetSummary(pitch_motor, &summary->pitch);
 }

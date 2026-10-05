@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -12,7 +11,7 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-22.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +32,37 @@ jobs:
       - name: Validate and run learning exercises
         run: python3 tools/workflow/check_exercises.py --build --generator Ninja
 
-      - name: Build STM32H723 firmware
+      - name: Reject heater-enabled bench profile
         run: |
-          cmake -S . -B build/firmware -G Ninja -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build/firmware --parallel 2
+          if cmake -S . -B build/profile-invalid -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMC02_PROFILE=bench_safe -DMC02_ENABLE_HEATER=ON; then
+            echo "bench_safe unexpectedly accepted an enabled heater"
+            exit 1
+          fi
+
+      - name: Build bench-safe firmware (Debug)
+        run: |
+          cmake -S . -B build/firmware-bench-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMC02_PROFILE=bench_safe -DMC02_ENABLE_HEATER=OFF
+          cmake --build build/firmware-bench-debug --parallel 2
+          if arm-none-eabi-nm -C build/firmware-bench-debug/Basic_Framework_MC02_bench_safe.elf | grep -Eq ' [Tt] (ChassisInit|GimbalInit|ShootInit)$'; then
+            echo "bench_safe unexpectedly linked an actuator application initializer"
+            exit 1
+          fi
+          arm-none-eabi-nm -C build/firmware-bench-debug/Basic_Framework_MC02_bench_safe.elf | grep -q ' mc02_build_profile$'
+
+      - name: Build robot firmware (Debug, heater disabled)
+        run: |
+          cmake -S . -B build/firmware-robot-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMC02_PROFILE=robot -DMC02_ENABLE_HEATER=OFF
+          cmake --build build/firmware-robot-debug --parallel 2
+          arm-none-eabi-nm -C build/firmware-robot-debug/Basic_Framework_MC02_robot.elf | grep -Eq ' [Tt] ChassisInit$'
+          arm-none-eabi-nm -C build/firmware-robot-debug/Basic_Framework_MC02_robot.elf | grep -Eq ' [Tt] GimbalInit$'
+          arm-none-eabi-nm -C build/firmware-robot-debug/Basic_Framework_MC02_robot.elf | grep -Eq ' [Tt] ShootInit$'
+
+      - name: Build bench-safe firmware (RelWithDebInfo)
+        run: |
+          cmake -S . -B build/firmware-bench-optimized -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMC02_PROFILE=bench_safe -DMC02_ENABLE_HEATER=OFF
+          cmake --build build/firmware-bench-optimized --parallel 2
+
+      - name: Build robot firmware (RelWithDebInfo, heater disabled)
+        run: |
+          cmake -S . -B build/firmware-robot-optimized -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMC02_PROFILE=robot -DMC02_ENABLE_HEATER=OFF
+          cmake --build build/firmware-robot-optimized --parallel 2

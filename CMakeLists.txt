@@ -19,6 +19,27 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # 指定工程名称和语言类型
 project(Basic_Framework_MC02 C ASM)
 
+set(MC02_PROFILE "bench_safe" CACHE STRING "固件运行配置")
+set_property(CACHE MC02_PROFILE PROPERTY STRINGS bench_safe robot)
+option(MC02_ENABLE_HEATER "显式允许机器人配置使用 IMU 加热器" OFF)
+
+if (MC02_PROFILE STREQUAL "bench_safe")
+    if (MC02_ENABLE_HEATER)
+        message(FATAL_ERROR "bench_safe 配置不允许启用 IMU 加热器")
+    endif ()
+    add_compile_definitions(MC02_PROFILE_BENCH_SAFE=1 MC02_HEATER_ENABLED=0)
+elseif (MC02_PROFILE STREQUAL "robot")
+    if (MC02_ENABLE_HEATER)
+        add_compile_definitions(MC02_PROFILE_ROBOT=1 MC02_HEATER_ENABLED=1)
+    else ()
+        add_compile_definitions(MC02_PROFILE_ROBOT=1 MC02_HEATER_ENABLED=0)
+    endif ()
+else ()
+    message(FATAL_ERROR "MC02_PROFILE 必须是 bench_safe 或 robot")
+endif ()
+
+set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_${MC02_PROFILE}")
+
 # 选择构建类型(允许命令行覆盖: -DCMAKE_BUILD_TYPE=RelWithDebInfo)
 #   Debug        : -Og -g   —— 日常开发/单步调试
 #   RelWithDebInfo: -O2 -g   —— 性能构建(测性能、上车), 见 docs/学习笔记/01
@@ -61,7 +82,7 @@ add_link_options(-pipe ${MCU_FLAGS} -T${LINKER_SCRIPT} ${MC02_LINKER_OPTIONS}
                  # 不要加 -lnosys/-specs=nosys.specs:
                  # Core/Src/syscalls.c 与 Core/Src/sysmem.c 已实现 _exit/_sbrk 等,
                  # 再链 libnosys.a 会产生 multiple definition 链接错误。
-                 -Wl,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map -Wl,--cref -Wl,--print-memory-usage # map options
+                 -Wl,-Map=${PROJECT_BINARY_DIR}/${MC02_OUTPUT_BASENAME}.map -Wl,--cref -Wl,--print-memory-usage # map options
                  )
 
 if (ENABLE_PRINTF_FLOAT)
@@ -213,13 +234,13 @@ else ()
 endif ()
 
 # build binary and hex file
-add_executable(${PROJECT_NAME}.elf  ${SOURCES} ${ASM_SOURCES} ${LINKER_SCRIPT})
-target_link_libraries(${PROJECT_NAME}.elf ${DSP_NAME} m) # link DSP lib and math lib
+add_executable(${MC02_OUTPUT_BASENAME}.elf  ${SOURCES} ${ASM_SOURCES} ${LINKER_SCRIPT})
+target_link_libraries(${MC02_OUTPUT_BASENAME}.elf ${DSP_NAME} m) # link DSP lib and math lib
 
 add_custom_command(
-  TARGET ${PROJECT_NAME}.elf POST_BUILD
+  TARGET ${MC02_OUTPUT_BASENAME}.elf POST_BUILD
   COMMENT "Building hex & bin file and printing size..."
-  COMMAND ${CMAKE_OBJCOPY} -Oihex $<TARGET_FILE:${PROJECT_NAME}.elf> ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.hex
-  COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${PROJECT_NAME}.elf> ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.bin
-  COMMAND ${SIZE} $<TARGET_FILE:${PROJECT_NAME}.elf>
+  COMMAND ${CMAKE_OBJCOPY} -Oihex $<TARGET_FILE:${MC02_OUTPUT_BASENAME}.elf> ${PROJECT_BINARY_DIR}/${MC02_OUTPUT_BASENAME}.hex
+  COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${MC02_OUTPUT_BASENAME}.elf> ${PROJECT_BINARY_DIR}/${MC02_OUTPUT_BASENAME}.bin
+  COMMAND ${SIZE} $<TARGET_FILE:${MC02_OUTPUT_BASENAME}.elf>
 )

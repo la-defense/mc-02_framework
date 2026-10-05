@@ -21,12 +21,25 @@ __attribute__((section(".noinit"))) static CrashLog_t g_crash_log;
    敏感 —— 对我们来说足够了, 改动代码通常都会重编到它(而且还有 crc32 兜底)。 */
 static const char kCrashBuildStamp[] = __DATE__ " " __TIME__;
 
+/* 当前构建配置保留为可查询字符串，并纳入崩溃构建指纹。 */
+#if defined(MC02_PROFILE_BENCH_SAFE)
+const char mc02_build_profile[] = "bench_safe";
+#else
+const char mc02_build_profile[] = "robot";
+#endif
+
 /* FNV-1a(32bit)。写成**宏**而不是函数: 异常上下文里要保持
    "纯内存写、不调用任何函数"的约束(见 bsp_crash.h 顶部说明)。 */
 #define CRASH_FW_ID_COMPUTE(out)                                          \
     do {                                                                  \
-        const char *_cs = kCrashBuildStamp;                               \
+        const char *_cs = mc02_build_profile;                             \
         (out) = 2166136261u;                                              \
+        while (*_cs != '\0')                                              \
+        {                                                                 \
+            (out) = ((out) ^ (uint32_t)(uint8_t)(*_cs)) * 16777619u;      \
+            _cs++;                                                        \
+        }                                                                 \
+        _cs = kCrashBuildStamp;                                           \
         while (*_cs != '\0')                                              \
         {                                                                 \
             (out) = ((out) ^ (uint32_t)(uint8_t)(*_cs)) * 16777619u;      \

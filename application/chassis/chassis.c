@@ -266,6 +266,8 @@ void Chassis_GetMotorSummary(Chassis_Motor_Summary_t *summary)
     if (summary == NULL)
         return;
 
+    *summary = (Chassis_Motor_Summary_t){0};
+
     DJIMotorGetSummary(motor_lf, &summary->lf);
     DJIMotorGetSummary(motor_rf, &summary->rf);
     DJIMotorGetSummary(motor_lb, &summary->lb);

@@ -13,7 +13,7 @@
 ######################################
 # target
 ######################################
-TARGET = Basic_Framework_MC02
+TARGET = Basic_Framework_MC02_bench_safe
 
 
 ######################################
@@ -210,7 +210,9 @@ AS_DEFS =
 C_DEFS =  \
 -DUSE_HAL_DRIVER \
 -DSTM32H723xx \
--DARM_MATH_CM7
+-DARM_MATH_CM7 \
+-DMC02_PROFILE_BENCH_SAFE=1 \
+-DMC02_HEATER_ENABLED=0
 
 
 # AS includes

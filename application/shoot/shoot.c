@@ -234,6 +234,8 @@ void Shoot_GetMotorSummary(Shoot_Motor_Summary_t *summary)
     if (summary == NULL)
         return;
 
+    *summary = (Shoot_Motor_Summary_t){0};
+
     DJIMotorGetSummary(friction_l, &summary->friction_l);
     DJIMotorGetSummary(friction_r, &summary->friction_r);
     DJIMotorGetSummary(loader, &summary->loader);

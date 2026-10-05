@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#ifndef MC02_HEATER_ENABLED
+#define MC02_HEATER_ENABLED 0
+#endif
+
 typedef struct
 {
     float target_temp;
