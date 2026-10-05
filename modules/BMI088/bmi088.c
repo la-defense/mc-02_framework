@@ -1,5 +1,6 @@
 #include "bmi088_regNdef.h"
 #include "bmi088.h"
+#include "bmi088_temperature.h"
 #include "user_lib.h"
 #include "daemon.h"
 #include "bsp_log.h"
@@ -288,7 +289,7 @@ uint8_t BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data_store)
         for (uint8_t i = 0; i < 3; i++)
             data_store->gyro[i] = bmi088->BMI088_GYRO_SEN * (float)(int16_t)(((buf[2 * i + 1]) << 8) | buf[2 * i]);
         BMI088AccelRead(bmi088, BMI088_TEMP_M, buf, 2); // 读温度,温度传感器在accel上
-        data_store->temperature = (float)(int16_t)(((buf[0] << 3) | (buf[1] >> 5))) * BMI088_TEMP_FACTOR + BMI088_TEMP_OFFSET;
+        data_store->temperature = BMI088DecodeTemperature(buf[0], buf[1]);
 
         return 1;
     }
@@ -457,8 +458,8 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
             _bmi088->gNorm /= (float)CaliTimes; // 加速度范数重力
             for (uint8_t i = 0; i < 3; ++i)
                 _bmi088->gyro_offset[i] /= (float)CaliTimes; // 三轴零飘
-            // 这里直接存到temperature,可以另外增加BMI088Instance的成员变量TempWhenCalib
-            _bmi088->temperature = raw_data.temperature * BMI088_TEMP_FACTOR + BMI088_TEMP_OFFSET; // 保存标定时的温度,如果已知温度和零飘的关系
+            /* BMI088Acquire 已将 11 位原始温度换算为摄氏度,标定只保存该值。 */
+            _bmi088->temperature = raw_data.temperature;
             // caliTryOutCount++; 保存已经尝试的标定次数?由你.
         } while ((gNormDiff > 0.5f ||
                   fabsf(_bmi088->gNorm - 9.8f) > 0.5f ||

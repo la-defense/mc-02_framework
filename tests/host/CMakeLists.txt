@@ -67,3 +67,7 @@ target_include_directories(watchdog_debug_safety_test BEFORE PRIVATE watchdog_fa
 target_include_directories(watchdog_debug_safety_test PRIVATE ../../bsp/watchdog ../../bsp/dwt)
 add_test(NAME watchdog_debug_freeze_and_bounded_wait COMMAND watchdog_debug_safety_test)
 set_tests_properties(watchdog_debug_freeze_and_bounded_wait PROPERTIES TIMEOUT 2)
+
+add_executable(bmi088_temperature_test bmi088_temperature_test.c)
+target_include_directories(bmi088_temperature_test PRIVATE ../../modules/BMI088)
+add_test(NAME bmi088_temperature_signed_decode COMMAND bmi088_temperature_test)
