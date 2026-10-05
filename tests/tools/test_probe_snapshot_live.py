@@ -10,22 +10,38 @@ sys.path.insert(0, str(ROOT / "tools"))
 import probe_snapshot_live
 
 
+EXPECTED_EXPRESSIONS = {
+    "tick_ms": "uwTick",
+    "vision_mode": "recv_data.mode",
+    "vision_rx_count": "vision_rx_count",
+    "vision_tx_count": "vision_tx_count",
+    "vision_crc_error_count": "vision_crc_error_count",
+    "iwdg_reset_flag": "iwdg_reset_flag",
+}
+
+
 class ProbeSnapshotLiveTests(unittest.TestCase):
     def test_gdb_commands_only_attach_and_read(self):
         command = probe_snapshot_live.build_gdb_command(
             "arm-none-eabi-gdb", "firmware.elf", "127.0.0.1", 3333
         )
         gdb_commands = [command[index + 1] for index, arg in enumerate(command[:-1]) if arg == "--ex"]
-        command_names = [line.strip().split()[0] for line in gdb_commands]
 
-        self.assertIn("target", command_names)
-        self.assertIn("printf", command_names)
-        self.assertNotIn("halt", command_names)
-        self.assertNotIn("reset", command_names)
-        self.assertNotIn("resume", command_names)
-        self.assertNotIn("continue", command_names)
-        self.assertNotIn("step", command_names)
-        self.assertNotIn("next", command_names)
+        expected_reads = [
+            f'printf "{key}=%u\\n", (unsigned int)({expression})'
+            for key, expression in EXPECTED_EXPRESSIONS.items()
+        ]
+        self.assertEqual(probe_snapshot_live.EXPRESSIONS, EXPECTED_EXPRESSIONS)
+        self.assertEqual(
+            gdb_commands,
+            [
+                "set pagination off",
+                "set confirm off",
+                "set remote interrupt-on-connect off",
+                "target extended-remote 127.0.0.1:3333",
+                *expected_reads,
+            ],
+        )
         self.assertIn("--nx", command)
         self.assertIn("--return-child-result", command)
 
