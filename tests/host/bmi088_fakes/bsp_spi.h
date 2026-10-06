@@ -6,6 +6,14 @@
 
 typedef enum
 {
+    HAL_OK = 0,
+    HAL_ERROR,
+    HAL_BUSY,
+    HAL_TIMEOUT
+} HAL_StatusTypeDef;
+
+typedef enum
+{
     SPI_BLOCK_MODE = 0,
     SPI_IT_MODE,
     SPI_DMA_MODE
@@ -29,6 +37,6 @@ typedef struct
 
 SPIInstance *SPIRegister(SPI_Init_Config_s *config);
 void SPITransmit(SPIInstance *spi, uint8_t *tx, uint8_t len);
-void SPITransRecv(SPIInstance *spi, uint8_t *rx, uint8_t *tx, uint8_t len);
+HAL_StatusTypeDef SPITransRecv(SPIInstance *spi, uint8_t *rx, uint8_t *tx, uint8_t len);
 
 #endif

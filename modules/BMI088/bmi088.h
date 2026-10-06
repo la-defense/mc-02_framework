@@ -2,6 +2,7 @@
 #define __BMI088_H__
 
 #include "bsp_spi.h"
+#include "bmi088_data.h"
 #include "bsp_gpio.h"
 #include "controller.h"
 #include "bsp_pwm.h"
@@ -23,18 +24,15 @@ typedef enum
     BMI088_LOAD_PRE_CALI_MODE,        // 使用预设标定参数,
 } BMI088_Calibrate_Mode_e;
 
-#pragma pack(1) // 1字节对齐
-/* BMI088数据*/
-typedef struct
+typedef enum
 {
-    float gyro[3];     // 陀螺仪数据,xyz
-    float acc[3];      // 加速度计数据,xyz
-    float temperature; // 温度
-
-    // float timestamp; // 时间戳,单位为ms,用于计算两次采样的时间间隔,同时给视觉提供timeline
-    // uint32_t count;  // 第count次采样,用于对齐时间戳
-} BMI088_Data_t;
-#pragma pack() // 恢复默认对齐,需要传输的结构体务必开启1字节对齐
+    BMI088_ACQUIRE_NO_DATA = 0,
+    BMI088_ACQUIRE_OK = 1,
+    BMI088_ACQUIRE_SPI_ERROR,
+    BMI088_ACQUIRE_SPI_BUSY,
+    BMI088_ACQUIRE_SPI_TIMEOUT,
+    BMI088_ACQUIRE_INVALID_DATA
+} BMI088_AcquireStatus_e;
 
 /* BMI088实例结构体定义 */
 typedef struct
@@ -62,6 +60,10 @@ typedef struct
     // 传感器灵敏度,用于计算实际值(regNdef.h中定义)
     float BMI088_ACCEL_SEN;
     float BMI088_GYRO_SEN;
+    uint32_t sample_sequence;
+    uint32_t acc_sample_timestamp_ms;
+    uint32_t gyro_sample_timestamp_ms;
+    BMI088_AcquireStatus_e last_acquire_status;
     // 用于计算两次采样的时间间隔
     uint32_t bias_dwt_cnt;
     // 数据更新标志位
@@ -103,9 +105,10 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config);
 /**
  * @brief 读取BMI088数据
  * @param bmi088 BMI088实例指针
- * @return BMI088_Data_t 读取到的数据
+ * @param data_store 读取成功后接收完整样本；失败时保持不变
+ * @return BMI088_AcquireStatus_e 采样状态
  */
-uint8_t BMI088Acquire(BMI088Instance *bmi088,BMI088_Data_t* data_store);
+BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data_store);
 
 /**
  * @brief 标定传感器.BMI088在初始化的时候会调用此函数. 提供接口方便标定离线数据

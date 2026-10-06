@@ -3,6 +3,7 @@
 #include "stdlib.h"
 #include "bsp_dwt.h"
 #include "bsp_log.h"
+#include "bsp_hal_tick.h"
 
 /* 所有的spi instance保存于此,用于callback时判断中断来源*/
 static SPIInstance *spi_instance[SPI_DEVICE_CNT] = {NULL};
@@ -11,31 +12,120 @@ static uint8_t idx = 0;                         // 配合中断以及初始化
    @attention 必须 volatile: 它在 SPI 完成中断里被写、在任务里被轮询。
    之前漏了 volatile, -Og 下"碰巧"能跑, 换 -O2 后轮询被优化成死循环(BMI088 初始化卡死)。 */
 volatile uint8_t SPIDeviceOnGoing[SPI_DEVICE_CNT] = {[0 ... SPI_DEVICE_CNT - 1] = 1};
+static SPIInstance *spi_bus_owner[SPI_DEVICE_CNT] = {NULL};
+
+static uint32_t SPIBusEnterCritical(void)
+{
+    uint32_t previous_primask = __get_PRIMASK();
+    __disable_irq();
+    return previous_primask;
+}
+
+static void SPIBusExitCritical(uint32_t previous_primask)
+{
+    __set_PRIMASK(previous_primask);
+}
 
 /* SPI 总线忙等待超时(us): 正常一次传输是个位数微秒~百微秒量级, 1ms 足够;
    超时说明完成中断没来(总线/中断异常), 不能永久卡死在这里。 */
 #define SPI_BUSY_TIMEOUT_US 1000u
 volatile uint32_t spi_bus_timeout_cnt[SPI_DEVICE_CNT] = {0};
 
-/* 等待总线空闲: 带超时, 超时就计数 + 限速告警 + 强制放行(否则会永久卡死) */
-static void SPIWaitIdle(volatile uint8_t *busy_flag, uint32_t timeout_us)
+static int8_t SPIBusIndexFromHandle(const SPI_HandleTypeDef *spi_handle)
+{
+    if (spi_handle == NULL)
+        return -1;
+    if (spi_handle->Instance == SPI1)
+        return 0;
+    if (spi_handle->Instance == SPI2)
+        return 1;
+    return -1;
+}
+
+static int8_t SPIBusIndex(const SPIInstance *spi_ins)
+{
+    return spi_ins == NULL ? -1 : SPIBusIndexFromHandle(spi_ins->spi_handle);
+}
+
+/* Claim the bus flag and owner pointer together so a preempting caller cannot
+   observe idle and overwrite the ownership of an active transfer. */
+static uint8_t SPIBusTryAcquire(SPIInstance *spi_ins, uint8_t bus_idx)
+{
+    uint32_t previous_primask = SPIBusEnterCritical();
+    uint8_t acquired = (uint8_t)(SPIDeviceOnGoing[bus_idx] && spi_bus_owner[bus_idx] == NULL);
+    if (acquired)
+    {
+        SPIDeviceOnGoing[bus_idx] = 0u;
+        spi_bus_owner[bus_idx] = spi_ins;
+    }
+    SPIBusExitCritical(previous_primask);
+    return acquired;
+}
+
+static void SPIBusRelease(SPIInstance *spi_ins)
+{
+    int8_t bus_idx = SPIBusIndex(spi_ins);
+    if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
+        return;
+
+    uint32_t previous_primask = SPIBusEnterCritical();
+    if (spi_bus_owner[(uint8_t)bus_idx] == spi_ins)
+    {
+        spi_bus_owner[(uint8_t)bus_idx] = NULL;
+        SPIDeviceOnGoing[(uint8_t)bus_idx] = 1u;
+    }
+    SPIBusExitCritical(previous_primask);
+}
+
+static SPIInstance *SPIBusAbortOwner(SPI_HandleTypeDef *hspi)
+{
+    int8_t bus_idx = SPIBusIndexFromHandle(hspi);
+    if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
+        return NULL;
+
+    uint32_t previous_primask = SPIBusEnterCritical();
+    SPIInstance *owner = spi_bus_owner[(uint8_t)bus_idx];
+    if (owner != NULL && owner->spi_handle == hspi)
+    {
+        HAL_GPIO_WritePin(owner->GPIOx, owner->cs_pin, GPIO_PIN_SET);
+        owner->CS_State = GPIO_PIN_SET;
+        spi_bus_owner[(uint8_t)bus_idx] = NULL;
+        SPIDeviceOnGoing[(uint8_t)bus_idx] = 1u;
+    }
+    else
+    {
+        owner = NULL;
+    }
+    SPIBusExitCritical(previous_primask);
+    return owner;
+}
+
+/* Wait for and atomically claim the bus; timeout never changes another owner's state. */
+static HAL_StatusTypeDef SPIBusAcquire(SPIInstance *spi_ins, uint8_t bus_idx, uint32_t timeout_us)
 {
     uint32_t t0 = DWT_ProbeStart();
-    while (!(*busy_flag))
+    while (!SPIBusTryAcquire(spi_ins, bus_idx))
     {
-        if (DWT_ProbeElapsedUs(t0) > timeout_us)
+        if (DWT_ProbeElapsedUs(t0) >= timeout_us)
         {
             static LogRateLimit_t rl_spi_busy = {0};
-            uint8_t bus_idx = (uint8_t)(busy_flag - &SPIDeviceOnGoing[0]);
-            if (bus_idx < SPI_DEVICE_CNT)
-                spi_bus_timeout_cnt[bus_idx]++;
+            spi_bus_timeout_cnt[bus_idx]++;
             if (LogRateLimitAllow(&rl_spi_busy, 1000u))
-                LOGERROR("[bsp_spi] 总线忙等待超时, 强制放行 (累计 %lu 次, 期间限速 %lu 条)",
-                         (unsigned long)rl_spi_busy.total, (unsigned long)rl_spi_busy.dropped);
-            *busy_flag = 1u; /* 认为上一次传输已经死掉, 释放总线避免永久卡死 */
-            break;
+                LOGERROR("[bsp_spi] bus busy wait timed out; keeping ownership with active transfer");
+            return HAL_TIMEOUT;
         }
     }
+    return HAL_OK;
+}
+
+/* HAL's blocking SPI timeout depends on HAL tick progress. Refuse contexts that
+   can mask the tick so a nominal timeout cannot become an unbounded wait. */
+static uint8_t SPIBlockingContextCanWait(void)
+{
+    return (__get_IPSR() == 0u &&
+            __get_PRIMASK() == 0u &&
+            __get_BASEPRI() == 0u &&
+            __get_FAULTMASK() == 0u) ? 1u : 0u;
 }
 
 SPIInstance *SPIRegister(SPI_Init_Config_s *conf)
@@ -120,47 +210,68 @@ void SPIRecv(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len)
     }
 }
 
-void SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len)
+HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len)
 {
+    if (spi_ins == NULL || spi_ins->spi_handle == NULL || spi_ins->GPIOx == NULL ||
+        spi_ins->cs_pin_state == NULL || ptr_data_rx == NULL || ptr_data_tx == NULL || len == 0u)
+        return HAL_ERROR;
 
-    // 用于稍后回调使用,请保证ptr_data_rx在回调函数被调用之前仍然在作用域内,否则析构之后的行为是未定义的!!!
+    int8_t bus_idx = SPIBusIndex(spi_ins);
+    if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
+        return HAL_ERROR;
+
+    SPI_TXRX_MODE_e work_mode = spi_ins->spi_work_mode;
+    if (work_mode == SPI_BLOCK_MODE && !SPIBlockingContextCanWait())
+        return HAL_BUSY;
+
+    HAL_StatusTypeDef status = SPIBusAcquire(spi_ins, (uint8_t)bus_idx, SPI_BUSY_TIMEOUT_US);
+    if (status != HAL_OK)
+        return status;
+
+    uint8_t tick_wait_acquired = 0u;
+    if (work_mode == SPI_BLOCK_MODE)
+    {
+        if (!BSP_HALTickTryAcquireBlockingWait())
+        {
+            SPIBusRelease(spi_ins);
+            return HAL_BUSY;
+        }
+        tick_wait_acquired = 1u;
+    }
+
     spi_ins->rx_size = len;
     spi_ins->rx_buffer = ptr_data_rx;
-    // 等待上一次传输完成(带超时): 没有超时保护的话, 一旦完成中断没来就会永久卡死
-    if (spi_ins->spi_handle->Instance == SPI1)
-    {
-        SPIWaitIdle(&SPIDeviceOnGoing[0], SPI_BUSY_TIMEOUT_US);
-    }
-    else if (spi_ins->spi_handle->Instance == SPI2)
-    {
-        SPIWaitIdle(&SPIDeviceOnGoing[1], SPI_BUSY_TIMEOUT_US);
-    }
-    // 拉低片选,开始传输
     HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_RESET);
-    *spi_ins->cs_pin_state =
-        spi_ins->CS_State =
-            HAL_GPIO_ReadPin(spi_ins->GPIOx, spi_ins->cs_pin);
-    switch (spi_ins->spi_work_mode)
+    spi_ins->CS_State = GPIO_PIN_RESET;
+
+    switch (work_mode)
     {
     case SPI_DMA_MODE:
-        HAL_SPI_TransmitReceive_DMA(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
+        status = HAL_SPI_TransmitReceive_DMA(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
         break;
     case SPI_IT_MODE:
-        HAL_SPI_TransmitReceive_IT(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
+        status = HAL_SPI_TransmitReceive_IT(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
         break;
     case SPI_BLOCK_MODE:
-        HAL_SPI_TransmitReceive(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len, 1000); // 默认50ms超时
-        // 阻塞模式不会调用回调函数,传输完成后直接拉高片选结束
+        status = HAL_SPI_TransmitReceive(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len, 2u);
+        if (tick_wait_acquired)
+            BSP_HALTickReleaseBlockingWait();
         HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
-        *spi_ins->cs_pin_state =
-            spi_ins->CS_State =
-                HAL_GPIO_ReadPin(spi_ins->GPIOx, spi_ins->cs_pin);
-        break;
+        SPIBusRelease(spi_ins);
+        spi_ins->CS_State = GPIO_PIN_SET;
+        return status;
     default:
-        while (1)
-            ; // error mode! 请查看是否正确设置模式，或出现指针越界导致模式被异常修改的情况
+        status = HAL_ERROR;
         break;
     }
+
+    if (status != HAL_OK)
+    {
+        HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
+        SPIBusRelease(spi_ins);
+        spi_ins->CS_State = GPIO_PIN_SET;
+    }
+    return status;
 }
 
 void SPISetMode(SPIInstance *spi_ins, SPI_TXRX_MODE_e spi_mode)
@@ -190,9 +301,8 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
         {
             // 先拉高片选,结束传输,在判断是否有回调函数,如果有则调用回调函数
             HAL_GPIO_WritePin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin, GPIO_PIN_SET);
-            *spi_instance[i]->cs_pin_state =
-                spi_instance[i]->CS_State =
-                    HAL_GPIO_ReadPin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin);
+            spi_instance[i]->CS_State = HAL_GPIO_ReadPin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin);
+            SPIBusRelease(spi_instance[i]);
             // @todo 后续添加holdon模式,由用户自行决定何时释放片选,允许进行连续传输
             if (spi_instance[i]->callback != NULL) // 回调函数不为空, 则调用回调函数
                 spi_instance[i]->callback(spi_instance[i]);
@@ -228,12 +338,27 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
  */
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
 {
+    SPIInstance *owner = SPIBusAbortOwner(hspi);
+    if (owner != NULL)
+    {
+        for (size_t i = 0; i < idx; ++i)
+        {
+            if (spi_instance[i] == owner)
+            {
+                LOGERROR("[bsp_spi] SPI 传输出错, 已释放总线 (idx %u)", (unsigned)i);
+                return;
+            }
+        }
+        return;
+    }
+
+    /* Legacy SPITransmit/SPIRecv paths do not claim the synchronous bus owner. */
     for (size_t i = 0; i < idx; i++)
     {
-        if (spi_instance[i]->spi_handle == hspi)
+        if (spi_instance[i]->spi_handle == hspi &&
+            HAL_GPIO_ReadPin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin) == GPIO_PIN_RESET)
         {
             HAL_GPIO_WritePin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin, GPIO_PIN_SET);
-            *spi_instance[i]->cs_pin_state = 1u; /* 释放总线 */
             spi_instance[i]->CS_State = 1u;
             LOGERROR("[bsp_spi] SPI 传输出错, 已释放总线 (idx %u)", (unsigned)i);
             return;

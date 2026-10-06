@@ -77,15 +77,17 @@ void SPIRecv(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len);
 
 /**
  * @brief 通过spi利用移位寄存器同时收发数据
- * @todo  后续加入阻塞模式下的timeout参数
  * @attention 特别注意:请保证ptr_data_rx在回调函数被调用之前仍然在作用域内,否则析构之后的行为是未定义的!!!
  * 
  * @param spi_ins spi实例指针
  * @param ptr_data_rx 接收数据地址
  * @param ptr_data_tx 发送数据地址
  * @param len 接收&发送的长度
+ * @return HAL_OK 表示传输完成或成功启动; HAL_BUSY 表示当前上下文不允许阻塞等待;
+ *         HAL_TIMEOUT 表示总线等待超时; 其他 HAL 状态表示参数或传输错误
  */
-void SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len);
+/* Blocking mode requires HAL tick progress and holds a tick lease through the transfer. */
+HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len);
 
 /**
  * @brief 设定spi收发的工作模式
