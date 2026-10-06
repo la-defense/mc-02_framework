@@ -120,9 +120,9 @@ attitude_t *INS_Init(void)
         INS.init = 1;
     else
         return (attitude_t *)&INS.Gyro;
-
-    // 上电默认关闭加热, 等BMI088初始化成功后再由IMUHeaterInit启动PWM(初始占空比0)
+    /* Initialize heater PWM at zero before sensor calibration or Flash work. */
     IMUHeaterForceOff();
+    IMUHeaterInit();
 
     BMI088_Init_Config_s imu_cfg = {
         .work_mode = BMI088_BLOCK_PERIODIC_MODE,
@@ -159,9 +159,6 @@ attitude_t *INS_Init(void)
     float init_quaternion[4] = {0};
     InitQuaternion(init_quaternion);
     IMU_QuaternionEKF_Init(init_quaternion, 10, 0.001, 1000000, 1, 0);
-    // 温控安全初始化: 默认目标40°C, 平时5%占空比, 仅允许3s的10%预热
-    IMUHeaterInit();
-
     // noise of accel is relatively big and of high freq,thus lpf is used
     INS.AccelLPF = 0.0085;
     DWT_GetDeltaT(&INS_DWT_Count);

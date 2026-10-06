@@ -20,9 +20,18 @@ typedef struct
     uint8_t heating;        // 当前是否在加热
 } IMUHeaterStatus_t;
 
+typedef enum
+{
+    IMU_HEATER_LONG_OPERATION_CALIBRATION = 0,
+    IMU_HEATER_LONG_OPERATION_FLASH,
+    IMU_HEATER_LONG_OPERATION_COUNT
+} IMUHeater_LongOperation_e;
+
 void IMUHeaterInit(void);
 void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off);
 void IMUHeaterForceOff(void);
+uint8_t IMUHeaterBeginLongOperation(IMUHeater_LongOperation_e operation);
+void IMUHeaterEndLongOperation(IMUHeater_LongOperation_e operation, uint8_t success);
 void IMUHeaterClearFault(void);
 void IMUHeaterGetStatus(IMUHeaterStatus_t *status);
 void IMUHeaterSetTarget(float target_temp);

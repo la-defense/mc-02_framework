@@ -3,6 +3,15 @@
 
 #include <stdint.h>
 
+typedef uint8_t (*ParamLongOperationBeginFn)(void);
+typedef uint8_t (*ParamLongOperationEndFn)(uint8_t success);
+
+typedef struct
+{
+    ParamLongOperationBeginFn begin;
+    ParamLongOperationEndFn end;
+} ParamLongOperationGuard_t;
+
 /* ============================================================================
    通用内部 Flash 参数存储 (2026-09 新增)
    ----------------------------------------------------------------------------
@@ -55,6 +64,9 @@ _Static_assert(sizeof(ParamImuCalibMeta_t) == 12, "标定元数据必须是 12 �
  * @return 1=载入到有效记录; 0=两个区都没有有效记录(参数为空, 调用方应使用默认值)
  */
 uint8_t ParamInit(void);
+/* Register the safety monitor/heater guard before any Flash mutation.
+   Passing NULL disables ParamCommit/ParamReset (fail-closed). */
+void ParamSetLongOperationGuard(const ParamLongOperationGuard_t *guard);
 
 /** @brief 读取一个参数; 返回 1=存在且长度匹配 */
 uint8_t ParamGet(uint16_t key, void *buf, uint16_t len);
@@ -62,8 +74,8 @@ uint8_t ParamGet(uint16_t key, void *buf, uint16_t len);
 uint8_t ParamSet(uint16_t key, const void *buf, uint16_t len);
 /** @brief 把 RAM 缓存提交到 Flash(A/B 交替); 返回 1=成功 */
 uint8_t ParamCommit(void);
-/** @brief 擦除 A/B 两个区并清空 RAM 缓存 */
-void ParamReset(void);
+/** @brief 擦除 A/B 两个区并清空 RAM 缓存; 1=擦除及限时保护成功, 0=拒绝或失败 */
+uint8_t ParamReset(void);
 /** @brief 通过 RTT 打印当前所有参数(调试用) */
 void ParamDumpToLog(void);
 

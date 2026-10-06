@@ -49,35 +49,59 @@ int main(void)
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("a fresh valid sample should exercise the enabled heater control path");
 
+    if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION))
+        fail("calibration should acquire the heater inhibit before blocking work");
+    IMUHeaterUpdate(&sample, 0u);
+    if (compare_value != 0u) fail("heater output must be forced off throughout calibration");
+    IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION, 1u);
+    IMUHeaterUpdate(&sample, 0u);
+    if (compare_value != 0u) fail("successful maintenance must not restore PWM from the pre-operation sample");
+
+    sample.sequence = 2u;
+    sample.timestamp_ms = 101u;
+    now_ms = 101u;
+    IMUHeaterUpdate(&sample, 0u);
+    if (compare_value == 0u) fail("a new fresh post-operation sample may re-enable normal heater control");
+
     now_ms = 104u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("re-reading a still-fresh snapshot should not turn off before its age limit");
 
-    now_ms = 106u;
+    now_ms = 107u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value != 0u) fail("a snapshot older than 5ms must turn the production heater output off");
     IMUHeaterStatus_t status = {0};
     IMUHeaterGetStatus(&status);
     if (status.sensor_valid) fail("stale samples must be reported invalid");
 
-    now_ms = 601u;
+    now_ms = 602u;
     IMUHeaterUpdate(&sample, 0u);
     IMUHeaterGetStatus(&status);
     if (!status.fault) fail("replaying one old sequence must not refresh the 500ms sensor timeout");
 
-    sample.sequence = 2u;
-    sample.timestamp_ms = 602u;
-    now_ms = 602u;
+    sample.sequence = 3u;
+    sample.timestamp_ms = 603u;
+    now_ms = 603u;
     IMUHeaterUpdate(&sample, 0u);
     IMUHeaterGetStatus(&status);
     if (!status.fault || compare_value != 0u)
         fail("a new sample must not silently clear the latched sensor timeout");
 
-    sample.sequence = 3u;
-    sample.timestamp_ms = 603u;
+    sample.sequence = 4u;
+    sample.timestamp_ms = 604u;
     sample.temperature = NAN;
-    now_ms = 603u;
+    now_ms = 604u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value != 0u) fail("non-finite temperature must never enable heater output");
+
+    if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_FLASH))
+        fail("flash operation should be able to acquire its independent heater inhibit");
+    IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_FLASH, 0u);
+    sample.sequence = 5u;
+    sample.timestamp_ms = 605u;
+    sample.temperature = 20.0f;
+    now_ms = 605u;
+    IMUHeaterUpdate(&sample, 0u);
+    if (compare_value != 0u) fail("failed flash work must leave the heater inhibited");
     return EXIT_SUCCESS;
 }

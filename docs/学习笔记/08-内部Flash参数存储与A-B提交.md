@@ -247,62 +247,52 @@ if (memcmp((const void *)sector_addr, buf, total) != 0) {
 
 ---
 
-## 6. 提交期间的看门狗窗口（重要）
+## 6. 长操作期间如何保持看门狗有意义（2026-10 更新）
 
-这一节和《07-看门狗与复位系统入门》配套看。
+运行期 IWDG 是 **200ms**，由 daemon 的 `TaskMonitorTick()` 喂。加热器安全和任务监控必须先于耗时步骤建立保护；“把看门狗放长”本身不表示操作安全。
 
-### 6.1 冲突从哪来
+### 6.1 标定：只豁免 INS，其他任务仍要健康
 
-- 运行期 IWDG = **200ms**，由 `TaskMonitorTick()` 在 daemon 任务里喂；
-- 擦一个扇区最坏要 **~1.7s**（两块一起擦实测 1.66s）；
-- 擦写期间 CPU 停摆 → daemon 也停 → **200ms 的看门狗必然先超时复位**。
+标定在 INS 任务中同步读取传感器。标定循环会周期性 `osDelay()`，让 daemon、LCD 和其他任务继续运行。`TaskMonitorBeginLongOperation(INS, CALIBRATION)` 先确认任务状态，再允许最多 **15s** 的 INS 监控窗口；其他任务照常超时检查。只有所有受监控任务健康时，daemon 才能喂 IWDG。标定代码不直接喂狗，所以卡死或窗口超时时会停止喂狗并最终复位。
 
-### 6.2 处理办法：临时放长，做完恢复
+加热器在进入标定前先清 PWM 并锁定。标定只有成功且没有超出监控窗口时才结束监控窗口；随后加热器仍要求一份结束时刻之后的新鲜 IMU 样本，再经过普通供电、温度和故障检查才可能重新加热。失败和超时会保持锁定。
 
-```c
-uint32_t prev_timeout = BSP_WatchdogGetTimeout();
-BSP_WatchdogSetTimeout(8000);   /* 8s > 最坏擦写时间(实测 ~1.7s, 留 4 倍余量) */
-BSP_WatchdogFeed();
+### 6.2 Flash：全任务有界窗口
 
-... 擦除 + 写入 + 回读 ...
+H723 是单 bank。擦写期间 CPU 停顿，所有 RTOS 任务都暂停，所以不能把标定用的“仅豁免 INS”规则套到 Flash 上。`ParamCommit()` 与 `ParamReset()` 使用单独 **8s** 窗口：入口先检查全部任务健康，然后先关热，再将 IWDG 改为 8s 并喂一次。窗口结束后恢复进入操作前的 IWDG 超时；只有擦写成功且未超时，才结束保护。
 
-BSP_WatchdogSetTimeout(prev_timeout);  /* 恢复 200ms(或启动期的 4s) */
-BSP_WatchdogFeed();
-```
+因为擦写期间任务确实无法执行，成功的 Flash 窗口结束后会把各任务的监控时间戳置为当前时刻，让调度器有机会重新运行。这个处理只发生在入口健康、擦写在期限内的前提下；已有任务故障会让入口拒绝，超过 8s 会锁存监控故障并停止后续喂狗。结束后没有绕过 `TaskMonitorTick()` 的额外喂狗。
 
-三个细节：
+Flash 回调由 `RobotInit()` 在 `TaskMonitorInit()` 后注册到参数层。未注册保护时，`ParamCommit()` 和 `ParamReset()` 直接拒绝，避免其他调用路径绕过加热器和监控保护。
 
-1. **必须保存并恢复原值**，不能写死 200ms——因为启动期看门狗是 4s，
-   首次自动标定保存参数时如果恢复成 200ms，启动流程会立刻被复位；
-2. 放长之后**马上喂一次**，避免"刚放长又超时"；
-3. IWDG 的 `PR/RLR` 寄存器有更新等待位（`PVU/RVU`），写之前要等它们清零，
-   否则新值可能没生效——本工程 `bsp_watchdog.c` 里有 `IWDG_WaitForUpdateFlags()` 处理。
+`ParamReset()` 只有在擦除和保护窗口都成功结束后才清空 RAM 缓存并报告成功。如果 Flash 已擦除、但保护窗口结束检查失败，函数仍返回失败并保留当前 RAM 缓存，避免让调用方把失败误认为“参数已安全清空”。此时 Flash 确实已经被擦除；若随后复位，RAM 缓存会丢失，因此必须把返回值当作失败处理。
 
-### 6.3 还可以再严格一点的做法（本项目没做，留作后续）
+### 6.3 IWDG 配置自身仍需有界
 
-- 提前"预擦"非活动区（在 SAFE 状态、电机失能时后台擦），真正提交时只剩写入（~1ms），
-  这样连放长看门狗都不需要；
-- 或者把参数放到外部 Flash / FRAM，彻底避开"擦写停 CPU"。
+`BSP_WatchdogSetTimeout()` 修改 IWDG 前后等待 `PVU/RVU` 等更新标志，DWT 周期计数器限制等待时间，不依赖可能停滞的 HAL tick。修改超时会重新装载 IWDG；正常窗口结束后，daemon 必须在恢复后的 200ms 内再次通过健康检查并喂狗。
 
 ---
 
 ## 7. 代码走读（按调用顺序）
 
 ```
-BSPInit()                        ← 启动早期（DWT→看门狗 4s→日志→ADC→复位原因）
-  └─ ParamInit()                 ← 扫 A/B、校验、把更新的那份读进 RAM 缓存
+RobotInit()
+  ├─ TaskMonitorInit()
+  ├─ ParamSetLongOperationGuard(begin, end)
+  └─ 创建任务并启动运行期 IWDG
 
-GimbalInit/ChassisInit → INS_Init → BMI088Register
-  └─ BMI088CalibInit()
-       ├─ ParamInit()            ← 幂等：已经扫过就直接返回，不会覆盖 RAM 缓存
-       ├─ BMI088CalibLoad()      ← ParamGetFloats/ParamGetFloat(+语义校验)
-       │    成功 → 用 Flash 值, RobotSafetySetCalibValid(1)
-       └─ 失败 → 首次自动标定 → BMI088CalibSave()
-                                  └─ ParamSet×3 → ParamCommit()
+INS_Init() → 初始化 PWM 比较值为 0 → BMI088Register()
+  └─ BMI088CalibInit() 首次自动标定
+       ├─ 加热器锁定 → INS 15s 监控窗口
+       ├─ 标定时让出 CPU；daemon 仍监控其他任务并负责喂狗
+       └─ 成功后可调用 ParamCommit()
+            ├─ 加热器再次锁定 → 全任务健康检查 → Flash 8s 窗口
+            ├─ IWDG 放长 → 擦除、写入、回读校验
+            └─ 恢复 IWDG → 结束窗口；超时或失败则保持加热锁定
 
 运行期（LCD 长按 3s）
-  └─ BMI088CalibRequest() → INS_Task 里 BMI088CalibService()
-       └─ 标定成功 → BMI088CalibSave() → ParamCommit()
+  └─ BMI088CalibRequest() → INS 任务里的 BMI088CalibService()
+       └─ 同样使用 15s 标定窗口；成功保存时再嵌套 8s Flash 窗口
 ```
 
 ### 7.1 `ParamSet()` 的两种路径

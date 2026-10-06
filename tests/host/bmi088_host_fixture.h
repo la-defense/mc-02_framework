@@ -14,6 +14,13 @@ typedef struct
     HAL_StatusTypeDef param_init_failure_status;
     ParamImuCalibMeta_t committed_calibration_meta;
     uint8_t calibration_meta_committed;
+    uint32_t calibration_monitor_begin_count;
+    uint32_t calibration_monitor_end_count;
+    uint32_t calibration_heater_begin_count;
+    uint32_t calibration_heater_end_count;
+    uint8_t calibration_monitor_end_success;
+    uint8_t calibration_heater_end_success;
+    uint8_t calibration_monitor_allow;
 } BMI088HostFixture_t;
 
 extern BMI088HostFixture_t bmi088_host_fixture;
