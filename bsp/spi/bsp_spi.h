@@ -86,6 +86,7 @@ void SPIRecv(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len);
  * @return HAL_OK 表示传输完成或成功启动; HAL_BUSY 表示当前上下文不允许阻塞等待;
  *         HAL_TIMEOUT 表示总线等待超时; 其他 HAL 状态表示参数或传输错误
  */
+/* Blocking mode requires HAL tick progress and holds a tick lease through the transfer. */
 HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len);
 
 /**

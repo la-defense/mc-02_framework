@@ -75,6 +75,16 @@ add_test(NAME bmi088_temperature_signed_decode COMMAND bmi088_temperature_test)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   find_package(Threads REQUIRED)
   add_executable(
+    hal_tick_suspend_test
+    hal_tick_suspend_test.c
+    ../../Core/Src/stm32h7xx_hal_timebase_tim.c)
+  target_include_directories(hal_tick_suspend_test BEFORE PRIVATE hal_timebase_fakes)
+  target_include_directories(hal_tick_suspend_test PRIVATE ../../Core/Inc)
+  target_compile_options(hal_tick_suspend_test PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(hal_tick_suspend_test PRIVATE -Wl,--gc-sections)
+  add_test(NAME production_hal_tick_suspend_and_spi_wait_lease COMMAND hal_tick_suspend_test)
+
+  add_executable(
     bsp_spi_status_test
     bsp_spi_status_test.c
     ../../bsp/spi/bsp_spi.c)

@@ -3,6 +3,7 @@
 #include "stdlib.h"
 #include "bsp_dwt.h"
 #include "bsp_log.h"
+#include "bsp_hal_tick.h"
 
 /* 所有的spi instance保存于此,用于callback时判断中断来源*/
 static SPIInstance *spi_instance[SPI_DEVICE_CNT] = {NULL};
@@ -18,15 +19,20 @@ static SPIInstance *spi_bus_owner[SPI_DEVICE_CNT] = {NULL};
 #define SPI_BUSY_TIMEOUT_US 1000u
 volatile uint32_t spi_bus_timeout_cnt[SPI_DEVICE_CNT] = {0};
 
-static int8_t SPIBusIndex(const SPIInstance *spi_ins)
+static int8_t SPIBusIndexFromHandle(const SPI_HandleTypeDef *spi_handle)
 {
-    if (spi_ins == NULL || spi_ins->spi_handle == NULL)
+    if (spi_handle == NULL)
         return -1;
-    if (spi_ins->spi_handle->Instance == SPI1)
+    if (spi_handle->Instance == SPI1)
         return 0;
-    if (spi_ins->spi_handle->Instance == SPI2)
+    if (spi_handle->Instance == SPI2)
         return 1;
     return -1;
+}
+
+static int8_t SPIBusIndex(const SPIInstance *spi_ins)
+{
+    return spi_ins == NULL ? -1 : SPIBusIndexFromHandle(spi_ins->spi_handle);
 }
 
 /* Claim the bus flag and owner pointer together so a preempting caller cannot
@@ -63,11 +69,7 @@ static void SPIBusRelease(SPIInstance *spi_ins)
 
 static SPIInstance *SPIBusAbortOwner(SPI_HandleTypeDef *hspi)
 {
-    int8_t bus_idx = -1;
-    if (hspi != NULL && hspi->Instance == SPI1)
-        bus_idx = 0;
-    else if (hspi != NULL && hspi->Instance == SPI2)
-        bus_idx = 1;
+    int8_t bus_idx = SPIBusIndexFromHandle(hspi);
     if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
         return NULL;
 
@@ -209,19 +211,31 @@ HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8
     if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
         return HAL_ERROR;
 
-    if (spi_ins->spi_work_mode == SPI_BLOCK_MODE && !SPIBlockingContextCanWait())
+    SPI_TXRX_MODE_e work_mode = spi_ins->spi_work_mode;
+    if (work_mode == SPI_BLOCK_MODE && !SPIBlockingContextCanWait())
         return HAL_BUSY;
 
     HAL_StatusTypeDef status = SPIBusAcquire(spi_ins, (uint8_t)bus_idx, SPI_BUSY_TIMEOUT_US);
     if (status != HAL_OK)
         return status;
 
+    uint8_t tick_wait_acquired = 0u;
+    if (work_mode == SPI_BLOCK_MODE)
+    {
+        if (!BSP_HALTickTryAcquireBlockingWait())
+        {
+            SPIBusRelease(spi_ins);
+            return HAL_BUSY;
+        }
+        tick_wait_acquired = 1u;
+    }
+
     spi_ins->rx_size = len;
     spi_ins->rx_buffer = ptr_data_rx;
     HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_RESET);
     spi_ins->CS_State = GPIO_PIN_RESET;
 
-    switch (spi_ins->spi_work_mode)
+    switch (work_mode)
     {
     case SPI_DMA_MODE:
         status = HAL_SPI_TransmitReceive_DMA(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
@@ -231,6 +245,8 @@ HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8
         break;
     case SPI_BLOCK_MODE:
         status = HAL_SPI_TransmitReceive(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len, 2u);
+        if (tick_wait_acquired)
+            BSP_HALTickReleaseBlockingWait();
         HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
         SPIBusRelease(spi_ins);
         spi_ins->CS_State = GPIO_PIN_SET;

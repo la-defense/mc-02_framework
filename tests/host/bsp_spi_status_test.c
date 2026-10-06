@@ -16,6 +16,9 @@ static HAL_StatusTypeDef transfer_result = HAL_OK;
 static uint32_t transfer_calls;
 static uint32_t transfer_timeout_ms;
 static atomic_uint synthetic_us;
+static uint8_t tick_wait_allowed = 1u;
+static uint32_t tick_wait_attempts;
+static uint32_t tick_wait_releases;
 uint32_t mc02_test_ipsr;
 _Thread_local uint32_t mc02_test_primask;
 uint32_t mc02_test_basepri;
@@ -60,6 +63,15 @@ HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *handle, uint8_t *tx
     transfer_timeout_ms = timeout;
     return transfer_result;
 }
+uint8_t BSP_HALTickTryAcquireBlockingWait(void)
+{
+    tick_wait_attempts++;
+    return tick_wait_allowed;
+}
+void BSP_HALTickReleaseBlockingWait(void)
+{
+    tick_wait_releases++;
+}
 HAL_StatusTypeDef HAL_SPI_TransmitReceive_IT(SPI_HandleTypeDef *handle, uint8_t *tx, uint8_t *rx, uint16_t len)
 { (void)handle; (void)tx; (void)rx; (void)len; transfer_calls++; return transfer_result; }
 HAL_StatusTypeDef HAL_SPI_TransmitReceive_DMA(SPI_HandleTypeDef *handle, uint8_t *tx, uint8_t *rx, uint16_t len)
@@ -100,9 +112,12 @@ int main(void)
     const HAL_StatusTypeDef statuses[] = {HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT};
     for (size_t i = 0; i < sizeof(statuses) / sizeof(statuses[0]); ++i)
     {
+        uint32_t releases_before_transfer = tick_wait_releases;
         transfer_result = statuses[i];
         HAL_StatusTypeDef actual = SPITransRecv(&instance, rx, tx, sizeof(rx));
         if (actual != statuses[i]) fail("SPITransRecv must propagate the blocking HAL result");
+        if (tick_wait_releases != releases_before_transfer + 1u)
+            fail("blocking SPI must release its HAL tick lease for every transfer result");
         if (pin_state != GPIO_PIN_SET || cs_state != GPIO_PIN_SET || SPIDeviceOnGoing[0] != 1u)
             fail("SPI block transfer must release chip select and bus after every HAL result");
         if (transfer_timeout_ms != 2u) fail("blocking SPI transfer must use the bounded 2ms timeout");
@@ -141,6 +156,28 @@ int main(void)
     if (SPIDeviceOnGoing[0] != 1u || pin_state != GPIO_PIN_SET)
         fail("context rejection must leave the SPI bus and chip select untouched");
 
+    uint32_t calls_before_suspended_tick = transfer_calls;
+    uint32_t attempts_before_suspended_tick = tick_wait_attempts;
+    uint32_t releases_before_suspended_tick = tick_wait_releases;
+    tick_wait_allowed = 0u;
+    if (SPITransRecv(&instance, rx, tx, sizeof(rx)) != HAL_BUSY)
+        fail("blocking SPI must be rejected while the HAL tick is suspended");
+    tick_wait_allowed = 1u;
+    if (transfer_calls != calls_before_suspended_tick)
+        fail("HAL SPI must not start while its timeout tick is suspended");
+    if (tick_wait_attempts != attempts_before_suspended_tick + 1u)
+        fail("blocking SPI must acquire a HAL tick lease before transfer");
+    if (tick_wait_releases != releases_before_suspended_tick)
+        fail("a rejected HAL tick lease must not be released");
+    if (SPIDeviceOnGoing[0] != 1u || pin_state != GPIO_PIN_SET)
+        fail("suspended-tick rejection must release the bus without selecting a device");
+
+    uint32_t releases_before_transfer = tick_wait_releases;
+    if (SPITransRecv(&instance, rx, tx, sizeof(rx)) != transfer_result)
+        fail("blocking SPI must preserve the HAL transfer status with a tick lease");
+    if (tick_wait_releases != releases_before_transfer + 1u)
+        fail("blocking SPI must release its HAL tick lease after transfer");
+
     SPI_Init_Config_s first_config = {
         .spi_handle = &spi_handle,
         .GPIOx = &gpio,
@@ -154,8 +191,11 @@ int main(void)
     uint8_t async_rx[4] = {0};
     uint8_t async_tx[4] = {0};
     transfer_result = HAL_OK;
+    uint32_t tick_attempts_before_async = tick_wait_attempts;
     if (SPITransRecv(second_instance, async_rx, async_tx, sizeof(async_rx)) != HAL_OK)
         fail("registered asynchronous transfer should start successfully");
+    if (tick_wait_attempts != tick_attempts_before_async)
+        fail("asynchronous SPI modes must not reserve the HAL tick");
     if (SPIDeviceOnGoing[0] != 0u)
         fail("asynchronous transfer must retain bus ownership until completion or error");
     HAL_SPI_ErrorCallback(&spi_handle);

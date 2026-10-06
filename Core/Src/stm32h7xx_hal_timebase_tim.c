@@ -20,12 +20,28 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32h7xx_hal.h"
 #include "stm32h7xx_hal_tim.h"
+#include "bsp_hal_tick.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef        htim23;
+static volatile uint8_t hal_tick_running;
+static volatile uint8_t hal_tick_suspend_pending;
+static volatile uint16_t hal_tick_blocking_wait_leases;
+
+static uint32_t HAL_TickEnterCritical(void)
+{
+  uint32_t previous_primask = __get_PRIMASK();
+  __disable_irq();
+  return previous_primask;
+}
+
+static void HAL_TickExitCritical(uint32_t previous_primask)
+{
+  __set_PRIMASK(previous_primask);
+}
 /* Private function prototypes -----------------------------------------------*/
 /* Private functions ---------------------------------------------------------*/
 
@@ -89,7 +105,15 @@ HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
   if(HAL_TIM_Base_Init(&htim23) == HAL_OK)
   {
     /* Start the TIM time Base generation in interrupt mode */
-    return HAL_TIM_Base_Start_IT(&htim23);
+    uint32_t previous_primask = HAL_TickEnterCritical();
+    HAL_StatusTypeDef status = HAL_TIM_Base_Start_IT(&htim23);
+    if (status == HAL_OK)
+    {
+      hal_tick_running = 1u;
+      hal_tick_suspend_pending = 0u;
+    }
+    HAL_TickExitCritical(previous_primask);
+    return status;
   }
 
   /* Return function status */
@@ -104,8 +128,19 @@ HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
   */
 void HAL_SuspendTick(void)
 {
-  /* Disable TIM23 update Interrupt */
-  __HAL_TIM_DISABLE_IT(&htim23, TIM_IT_UPDATE);
+  uint32_t previous_primask = HAL_TickEnterCritical();
+  if (hal_tick_blocking_wait_leases != 0u)
+  {
+    /* Apply suspension after HAL blocking transfers that rely on this tick. */
+    hal_tick_suspend_pending = 1u;
+  }
+  else
+  {
+    hal_tick_suspend_pending = 0u;
+    hal_tick_running = 0u;
+    __HAL_TIM_DISABLE_IT(&htim23, TIM_IT_UPDATE);
+  }
+  HAL_TickExitCritical(previous_primask);
 }
 
 /**
@@ -116,7 +151,38 @@ void HAL_SuspendTick(void)
   */
 void HAL_ResumeTick(void)
 {
-  /* Enable TIM23 Update interrupt */
+  uint32_t previous_primask = HAL_TickEnterCritical();
+  hal_tick_suspend_pending = 0u;
+  hal_tick_running = 1u;
   __HAL_TIM_ENABLE_IT(&htim23, TIM_IT_UPDATE);
+  HAL_TickExitCritical(previous_primask);
+}
+
+uint8_t BSP_HALTickTryAcquireBlockingWait(void)
+{
+  uint32_t previous_primask = HAL_TickEnterCritical();
+  uint8_t acquired = (uint8_t)(hal_tick_running != 0u &&
+                               hal_tick_suspend_pending == 0u &&
+                               hal_tick_blocking_wait_leases != UINT16_MAX);
+  if (acquired)
+    hal_tick_blocking_wait_leases++;
+  HAL_TickExitCritical(previous_primask);
+  return acquired;
+}
+
+void BSP_HALTickReleaseBlockingWait(void)
+{
+  uint32_t previous_primask = HAL_TickEnterCritical();
+  if (hal_tick_blocking_wait_leases != 0u)
+  {
+    hal_tick_blocking_wait_leases--;
+    if (hal_tick_blocking_wait_leases == 0u && hal_tick_suspend_pending != 0u)
+    {
+      hal_tick_suspend_pending = 0u;
+      hal_tick_running = 0u;
+      __HAL_TIM_DISABLE_IT(&htim23, TIM_IT_UPDATE);
+    }
+  }
+  HAL_TickExitCritical(previous_primask);
 }
 

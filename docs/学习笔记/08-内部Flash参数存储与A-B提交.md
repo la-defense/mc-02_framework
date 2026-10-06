@@ -192,7 +192,9 @@ INS 只有在本轮采样成功且快照仍新鲜时才更新 EKF。失败时将
 
 底层 SPITransRecv() 现在返回 HAL 状态。总线仍被其他传输占用并达到等待期限时，函数返回超时且保留原忙状态，不能擅自把总线标成空闲。申请时在短临界区里同时检查空闲标志并登记持有者；释放时核对持有者身份，防止并发调用覆盖对方的所有权。阻塞传输使用 2ms 超时，并在每种结果下释放片选；它只允许在线程模式且 PRIMASK、BASEPRI、FAULTMASK 均未屏蔽时调用，因为这些上下文可能让 HAL tick 停止推进。BMI088 的异步触发模式依赖 DMA 完成回调才能安全处理缓冲区；当前快照接口是同步接口，因此注册阶段拒绝异步模式，避免读取尚未完成的 DMA 缓冲区。
 
-生产路径回归见 bmi088_sample_status_test.c、bsp_spi_status_test.c 和 imu_heater_sample_test.c：覆盖部分读取不发布、SPI 错误类别、tick 回绕、过期快照关热、重复序号不延长有效期，以及在线标定跳过失败样本。
+HAL 的阻塞 SPI 超时依赖 `HAL_GetTick()` 推进。只检查 PRIMASK 等中断屏蔽状态还不够：`HAL_SuspendTick()` 可以在普通线程上下文关闭 TIM23 更新中断，让 HAL 的毫秒超时永远达不到。现在阻塞 SPI 传输前会取得 tick 租约；tick 已暂停或正等待暂停时拒绝新传输，租约持有期间的暂停请求延后到 SPI 返回后生效。异步 SPI 不使用 HAL 阻塞超时，因此不取得租约。回归测试直接编译生产时基文件，覆盖暂停、恢复及传输期间延迟暂停；SPI 接口测试还确认暂停 tick 时不会启动 HAL 传输，并在每种 HAL 返回状态后归还租约。
+
+生产路径回归见 bmi088_sample_status_test.c、bsp_spi_status_test.c、hal_tick_suspend_test.c 和 imu_heater_sample_test.c：覆盖部分读取不发布、SPI 错误类别、tick 暂停和回绕、过期快照关热、重复序号不延长有效期，以及在线标定跳过失败样本。
 
 
 ## 5. A/B 双区：为什么"坏一份还能活"
