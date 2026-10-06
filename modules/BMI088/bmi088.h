@@ -105,7 +105,8 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config);
 /**
  * @brief 读取BMI088数据
  * @param bmi088 BMI088实例指针
- * @return BMI088_Data_t 读取到的数据
+ * @param data_store 读取成功后接收完整样本；失败时保持不变
+ * @return BMI088_AcquireStatus_e 采样状态
  */
 BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data_store);
 

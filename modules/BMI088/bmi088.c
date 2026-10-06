@@ -265,13 +265,7 @@ static void BMI088GyroINTCallback(GPIOInstance *gpio)
 
 // -------------------------以下为公有函数,用于注册BMI088,标定和数据读取--------------------------------//
 
-/**
- * @brief
- * @todo 现在要考虑一下数据返回的方式,指针还是结构体?
- *
- * @param bmi088
- * @return BMI088_Data_t
- */
+/* Reject non-finite values before they cross the published sample boundary. */
 static uint8_t BMI088SampleValuesAreFinite(const BMI088_Data_t *sample)
 {
     if (sample == NULL || !isfinite(sample->temperature))
@@ -284,6 +278,12 @@ static uint8_t BMI088SampleValuesAreFinite(const BMI088_Data_t *sample)
     return 1u;
 }
 
+/**
+ * @brief Read and publish one complete, finite BMI088 sample.
+ * @param bmi088 BMI088 sensor instance.
+ * @param data_store Receives the sample only when acquisition succeeds.
+ * @return BMI088_AcquireStatus_e Acquisition status; output remains unchanged on failure.
+ */
 BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data_store)
 {
     if (bmi088 == NULL || data_store == NULL)
