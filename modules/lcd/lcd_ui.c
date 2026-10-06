@@ -630,8 +630,13 @@ static void draw_page3_values(void)
     /* 五向按键原始 ADC 值: 用于把摇杆方向与阈值对上(按一下即可读出)。
        min 是"上电以来见过的最小原始值" —— 摇杆中键按下时 ADC 会趋近 0,
        所以按住中键看一眼 min 就知道中键的实际档位值(即使识别失败也能据此调阈值)。 */
-    snprintf(buf, sizeof(buf), "raw:%u min:%u", (unsigned)BSP_ADCGetRawKey(),
-             (unsigned)lcd_key_raw_min);
+    BSP_ADC_Sample_t adc_sample;
+    BSP_ADC_Status_e adc_status = BSP_ADCGetSample(&adc_sample);
+    if (adc_status == BSP_ADC_STATUS_VALID)
+        snprintf(buf, sizeof(buf), "raw:%u min:%u", (unsigned)adc_sample.raw_key,
+                 (unsigned)lcd_key_raw_min);
+    else
+        snprintf(buf, sizeof(buf), "raw:-- min:%u", (unsigned)lcd_key_raw_min);
     draw_value_ascii(7, buf);
 }
 
