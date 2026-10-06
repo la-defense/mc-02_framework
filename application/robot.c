@@ -6,6 +6,29 @@
 #include "task_monitor.h"
 #include "bsp_watchdog.h"
 #include "master_process.h"
+#include "bsp_param.h"
+#include "imu_heater.h"
+
+static uint8_t RobotParamFlashOperationBegin(void)
+{
+    if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_FLASH))
+        return 0u;
+    if (!TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH))
+    {
+        IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_FLASH, 0u);
+        return 0u;
+    }
+    return 1u;
+}
+
+static uint8_t RobotParamFlashOperationEnd(uint8_t success)
+{
+    uint8_t within_window = TaskMonitorEndLongOperation(TASK_MONITOR_INS,
+                                                        TASK_MONITOR_LONG_OPERATION_FLASH);
+    uint8_t operation_success = (uint8_t)(success && within_window);
+    IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_FLASH, operation_success);
+    return operation_success;
+}
 
 // 编译warning,提醒开发者修改机器人参数
 #ifndef ROBOT_DEF_PARAM_WARNING
@@ -34,6 +57,11 @@ void RobotInit()
     BSPInit();
     RobotSafetyInit();
     TaskMonitorInit();
+    const ParamLongOperationGuard_t param_guard = {
+        .begin = RobotParamFlashOperationBegin,
+        .end = RobotParamFlashOperationEnd,
+    };
+    ParamSetLongOperationGuard(&param_guard);
 
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     RobotCMDInit();

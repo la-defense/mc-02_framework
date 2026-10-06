@@ -27,6 +27,37 @@ _Static_assert(sizeof(ParamHeader_t) == PARAM_FLASHWORD, "记录头必须正好 
 static uint8_t s_payload[PARAM_MAX_PAYLOAD];
 static uint16_t s_payload_len = 0;
 static uint8_t s_dirty = 0;
+static ParamLongOperationGuard_t s_long_operation_guard;
+
+void ParamSetLongOperationGuard(const ParamLongOperationGuard_t *guard)
+{
+    if (guard == NULL)
+    {
+        s_long_operation_guard.begin = NULL;
+        s_long_operation_guard.end = NULL;
+        return;
+    }
+
+    s_long_operation_guard = *guard;
+}
+
+static uint8_t ParamFlashOperationBegin(uint32_t *previous_timeout_ms)
+{
+    if (previous_timeout_ms == NULL || s_long_operation_guard.begin == NULL ||
+        s_long_operation_guard.end == NULL || !s_long_operation_guard.begin())
+        return 0u;
+
+    *previous_timeout_ms = BSP_WatchdogGetTimeout();
+    BSP_WatchdogSetTimeout(8000u);
+    BSP_WatchdogFeed();
+    return 1u;
+}
+
+static uint8_t ParamFlashOperationEnd(uint32_t previous_timeout_ms, uint8_t flash_success)
+{
+    BSP_WatchdogSetTimeout(previous_timeout_ms);
+    return s_long_operation_guard.end(flash_success);
+}
 
 volatile uint32_t param_commit_count = 0;
 volatile uint32_t param_commit_fail = 0;
@@ -270,15 +301,21 @@ uint8_t ParamInit(void)
 
 uint8_t ParamCommit(void)
 {
+    uint32_t operation_previous_timeout_ms = 0u;
+    if (!ParamFlashOperationBegin(&operation_previous_timeout_ms))
+    {
+        param_commit_fail++;
+        LOGERROR("[param] Flash commit refused: heater or task monitor guard unavailable");
+        return 0u;
+    }
+
     uint32_t target = (param_active_region == 0) ? PARAM_SECTOR_B_ADDR : PARAM_SECTOR_A_ADDR;
     uint8_t target_region = (param_active_region == 0) ? 1u : 0u;
 
     /* 擦/写期间 CPU 停摆, 先把看门狗窗口放长(默认 8s > 最坏扇区擦除 ~4s) */
-    uint32_t prev_timeout = BSP_WatchdogGetTimeout();
-    BSP_WatchdogSetTimeout(8000);
-    BSP_WatchdogFeed();
 
     uint8_t ok = ParamWriteSector(target);
+    uint8_t operation_ok = ParamFlashOperationEnd(operation_previous_timeout_ms, ok);
     if (ok)
     {
         param_active_region = target_region;
@@ -294,41 +331,47 @@ uint8_t ParamCommit(void)
         param_commit_fail++;
         LOGERROR("[param] 提交失败, 继续使用旧记录(区=%c)", (param_active_region == 0) ? 'A' : 'B');
     }
-
-    BSP_WatchdogSetTimeout(prev_timeout); /* 恢复原来的超时(启动期 4s / 运行期 200ms) */
-    BSP_WatchdogFeed();
-    return ok;
+    return (uint8_t)(ok && operation_ok);
 }
 
-void ParamReset(void)
+uint8_t ParamReset(void)
 {
-    uint32_t prev_timeout = BSP_WatchdogGetTimeout();
-    BSP_WatchdogSetTimeout(8000);
-    BSP_WatchdogFeed();
+    uint32_t operation_previous_timeout_ms = 0u;
+    if (!ParamFlashOperationBegin(&operation_previous_timeout_ms))
+    {
+        LOGERROR("[param] Flash reset refused: heater or task monitor guard unavailable");
+        return 0u;
+    }
 
     FLASH_EraseInitTypeDef erase = {0};
-    uint32_t sector_error = 0;
-    HAL_FLASH_Unlock();
-    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS_BANK1);
-    erase.TypeErase = FLASH_TYPEERASE_SECTORS;
-    erase.Banks = FLASH_BANK_1;
-    erase.Sector = FLASH_SECTOR_6;
-    erase.NbSectors = 2; /* 扇区 6+7 一起擦 */
-    erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;
-    HAL_StatusTypeDef ret = HAL_FLASHEx_Erase(&erase, &sector_error);
-    HAL_FLASH_Lock();
+    uint32_t sector_error = 0u;
+    HAL_StatusTypeDef ret = HAL_FLASH_Unlock();
+    if (ret == HAL_OK)
+    {
+        __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS_BANK1);
+        erase.TypeErase = FLASH_TYPEERASE_SECTORS;
+        erase.Banks = FLASH_BANK_1;
+        erase.Sector = FLASH_SECTOR_6;
+        erase.NbSectors = 2u;
+        erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+        ret = HAL_FLASHEx_Erase(&erase, &sector_error);
+        HAL_FLASH_Lock();
+    }
 
-    BSP_WatchdogSetTimeout(prev_timeout);
-    BSP_WatchdogFeed();
-
-    s_payload_len = 0;
-    s_dirty = 0;
-    param_seq = 0;
-    param_loaded = 0;
+    uint8_t operation_ok = ParamFlashOperationEnd(operation_previous_timeout_ms,
+                                                   (uint8_t)(ret == HAL_OK));
     if (ret != HAL_OK)
-        LOGERROR("[param] 擦除参数区失败(err=%lu)", (unsigned long)sector_error);
-    else
-        LOGWARNING("[param] 参数区已清空(恢复默认值)");
+    {
+        LOGERROR("[param] Flash reset failed, error=%lu", (unsigned long)sector_error);
+        return 0u;
+    }
+
+    s_payload_len = 0u;
+    s_dirty = 0u;
+    param_seq = 0u;
+    param_loaded = 0u;
+    LOGWARNING("[param] Flash parameter sectors erased");
+    return operation_ok;
 }
 
 void ParamDumpToLog(void)

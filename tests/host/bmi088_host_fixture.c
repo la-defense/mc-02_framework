@@ -1,5 +1,7 @@
 #include "bmi088_host_fixture.h"
 #include "bmi088_regNdef.h"
+#include "imu_heater.h"
+#include "task_monitor.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -24,6 +26,7 @@ void BMI088HostReset(void)
     memset(gyroscope_registers, 0, sizeof(gyroscope_registers));
     accelerometer_spi.is_accelerometer = 1u;
     spi_register_count = 0u;
+    bmi088_host_fixture.calibration_monitor_allow = 1u;
 }
 
 BMI088Instance *BMI088HostCreateAcquireInstance(void)
@@ -138,8 +141,35 @@ GPIOInstance *GPIORegister(GPIO_Init_Config_s *config) { (void)config; return NU
 void GPIOSet(GPIOInstance *instance) { (void)instance; }
 void GPIOReset(GPIOInstance *instance) { (void)instance; }
 void RobotSafetySetCalibValid(uint8_t valid) { (void)valid; }
-void TaskMonitorPause(void) {}
-void TaskMonitorResume(void) {}
+uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperation_e operation)
+{
+    if (id == TASK_MONITOR_INS && operation == TASK_MONITOR_LONG_OPERATION_CALIBRATION)
+        bmi088_host_fixture.calibration_monitor_begin_count++;
+    return bmi088_host_fixture.calibration_monitor_allow;
+}
+uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperation_e operation)
+{
+    if (id == TASK_MONITOR_INS && operation == TASK_MONITOR_LONG_OPERATION_CALIBRATION)
+    {
+        bmi088_host_fixture.calibration_monitor_end_count++;
+        bmi088_host_fixture.calibration_monitor_end_success = 1u;
+    }
+    return 1u;
+}
+uint8_t IMUHeaterBeginLongOperation(IMUHeater_LongOperation_e operation)
+{
+    if (operation == IMU_HEATER_LONG_OPERATION_CALIBRATION)
+        bmi088_host_fixture.calibration_heater_begin_count++;
+    return 1u;
+}
+void IMUHeaterEndLongOperation(IMUHeater_LongOperation_e operation, uint8_t success)
+{
+    if (operation == IMU_HEATER_LONG_OPERATION_CALIBRATION)
+    {
+        bmi088_host_fixture.calibration_heater_end_count++;
+        bmi088_host_fixture.calibration_heater_end_success = success;
+    }
+}
 
 uint8_t ParamInit(void)
 {

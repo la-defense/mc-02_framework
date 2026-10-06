@@ -106,6 +106,16 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   add_test(NAME production_heater_rejects_stale_imu_sample COMMAND imu_heater_sample_test)
 
   add_executable(
+    param_operation_test
+    param_operation_test.c
+    ../../bsp/param/bsp_param.c)
+  target_include_directories(param_operation_test BEFORE PRIVATE param_operation_fakes)
+  target_include_directories(param_operation_test PRIVATE ../../bsp/param)
+  target_compile_options(param_operation_test PRIVATE -fno-pie)
+  target_link_options(param_operation_test PRIVATE -no-pie)
+  add_test(NAME production_parameter_flash_is_guarded COMMAND param_operation_test)
+
+  add_executable(
     bmi088_calibration_temperature_test
     bmi088_calibration_temperature_test.c
     bmi088_host_fixture.c

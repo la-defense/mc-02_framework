@@ -4,10 +4,10 @@
 #include "user_lib.h"
 #include "daemon.h"
 #include "bsp_log.h"
-#include "bsp_watchdog.h"
 #include "bsp_param.h"
 #include "robot_safety.h"
 #include "task_monitor.h"
+#include "imu_heater.h"
 #include "cmsis_os.h"
 #include <math.h>
 
@@ -398,7 +398,7 @@ spi_failure:
 /**
  * @brief BMI088 acc gyro 标定
  * @note 标定后的数据存储在bmi088->bias和gNorm中,用于后续数据消噪和单位转换归一化
- * @attention 不管工作模式是blocking还是IT,标定时都是blocking模式,所以不用担心中断关闭后无法标定(RobotInit关闭了全局中断)
+ * @attention 标定使用阻塞采样路径，必须由 INS 任务独占 BMI088 SPI；系统中断保持开启以支持 HAL 超时和 RTOS 调度。
  * @attention 标定精度和等待时间有关,目前使用线性回归.后续考虑引入非线性回归
  * @todo 将标定次数(等待时间)变为参数供设定
  * @section 整体流程为1.累加加速度数据计算gNrom() 2.累加陀螺仪数据计算零飘
@@ -464,15 +464,9 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
                     timed_out = 1u;
                     break;
                 }
-                /* 标定是启动期最长的步骤(6000 次采样), 期间没人喂狗 → 主动报进度。
-                   这里选择"逐轮喂"(代价约 0.1us/次), 既保证启动不会被看门狗打断,
-                   也让"是否仍有复位"成为判断复位源的干净实验:
-                   若逐轮喂狗后仍复位, 就说明复位不是看门狗引起的。 */
-                BSP_WatchdogFeed();
-                /* 标定在 INS 任务(AboveNormal)里跑, 且这里是忙等 → 低优先级的
-                   daemon/LCD 任务会被饿死几秒。运行期定期让出 CPU 一小会儿,
-                   让 daemon 继续喂狗、LCD 能显示"标定中"。
-                   启动期调度器还没跑, 只能纯忙等(osDelay 会失败)。 */
+                /* 标定在 INS 任务中运行，只临时豁免 INS 的普通任务期限；其他任务仍须
+                   正常运行，TaskMonitor 才会继续喂狗。周期性让出 CPU 让 daemon/LCD
+                   获得调度；标定没有直接喂狗路径，整体期限由 15s 监控窗口限制。 */
                 if (((valid_samples % BMI088_CALI_YIELD_INTERVAL) == 0u) && osKernelRunning())
                     osDelay(BMI088_CALI_YIELD_MS);
                 uint32_t diag_acq = DWT_ProbeStart();
@@ -638,6 +632,27 @@ static void BMI088ApplyCalib(BMI088Instance *b, const float *off, float gNorm)
     b->acc_coef = BMI088_ACCEL_6G_SEN * (9.805f / gNorm);
 }
 
+static uint8_t BMI088CalibrationOperationBegin(void)
+{
+    if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION))
+        return 0u;
+    if (!TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION))
+    {
+        IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION, 0u);
+        return 0u;
+    }
+    return 1u;
+}
+
+static uint8_t BMI088CalibrationOperationEnd(uint8_t success)
+{
+    uint8_t within_limit = TaskMonitorEndLongOperation(TASK_MONITOR_INS,
+                                                       TASK_MONITOR_LONG_OPERATION_CALIBRATION);
+    IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION,
+                              (uint8_t)(success && within_limit));
+    return within_limit;
+}
+
 /**
  * @brief 标定值合理性检查
  * @note  CRC32 只能证明"写进去的字节没坏", 证不了"数值合理"
@@ -733,6 +748,16 @@ static void BMI088CalibInit(BMI088Instance *b, BMI088_Calibrate_Mode_e cfg_mode)
 
     /* 没有有效记录: 首次自动标定(最多 3 轮), 成功即写参数区 */
     LOGWARNING("[bmi088] 无 Flash 标定记录, 首次自动标定(请保持静止)...");
+    if (!BMI088CalibrationOperationBegin())
+    {
+        BMI088ApplyCalib(b, default_off, BMI088_PRE_CALI_G_NORM);
+        bmi088_calib_source = BMI088_CALIB_SRC_DEFAULT;
+        s_calib_ok = 0u;
+        RobotSafetySetCalibValid(0u);
+        LOGERROR("[bmi088] startup calibration refused: monitor or heater guard unavailable");
+        return;
+    }
+
     BMI088_Calibrate_Mode_e saved_mode = b->cali_mode;
     b->cali_mode = BMI088_CALIBRATE_ONLINE_MODE;
     bmi088_calib_attempts = 0;
@@ -757,6 +782,14 @@ static void BMI088CalibInit(BMI088Instance *b, BMI088_Calibrate_Mode_e cfg_mode)
         RobotSafetySetCalibValid(0); /* → ROBOT_FAULT_CALIB_INVALID, 不阻塞启动 */
         LOGERROR("[bmi088] 首次自动标定失败(rounds=%u), 使用默认值并置 CALIB_INVALID",
                  (unsigned)bmi088_calib_attempts);
+    }
+    if (!BMI088CalibrationOperationEnd(ok))
+    {
+        BMI088ApplyCalib(b, default_off, BMI088_PRE_CALI_G_NORM);
+        bmi088_calib_source = BMI088_CALIB_SRC_DEFAULT;
+        s_calib_ok = 0u;
+        RobotSafetySetCalibValid(0u);
+        LOGERROR("[bmi088] startup calibration exceeded bounded monitoring window");
     }
 }
 
@@ -787,18 +820,19 @@ uint8_t BMI088CalibService(void)
     }
 
     LOGWARNING("[bmi088] 按需标定开始, 请保持静止...");
-    /* 标定要独占 INS 任务 3~4s: 先暂停任务监控, 否则 INS/MOTOR 会被判超时 →
-       状态被推到 FAULT(虽然标定循环自己喂狗不会复位, 但状态跳来跳去很难看)。
-       暂停期间 TaskMonitorTick 无条件喂狗, 标定循环里也逐轮喂。 */
-    TaskMonitorPause();
+    if (!BMI088CalibrationOperationBegin())
+    {
+        s_calib_ok = 0u;
+        RobotSafetySetCalibValid(0u);
+        s_recalib_state = BMI088_RECALIB_FAIL;
+        return 1u;
+    }
 
     BMI088_Calibrate_Mode_e saved_mode = b->cali_mode;
     b->cali_mode = BMI088_CALIBRATE_ONLINE_MODE;
     bmi088_calib_attempts = 0;
     uint8_t ok = BMI088CalibrateIMU(b);
     b->cali_mode = saved_mode;
-
-    TaskMonitorResume(); /* 重置所有任务的喂狗时间戳, 避免刚恢复就判超时 */
 
     if (ok)
     {
@@ -817,6 +851,13 @@ uint8_t BMI088CalibService(void)
         RobotSafetySetCalibValid(0);
         LOGERROR("[bmi088] 按需标定失败(rounds=%u), 保留旧值并置 CALIB_INVALID",
                  (unsigned)bmi088_calib_attempts);
+    }
+
+    if (!BMI088CalibrationOperationEnd(ok))
+    {
+        ok = 0u;
+        s_calib_ok = 0u;
+        RobotSafetySetCalibValid(0u);
     }
 
     s_recalib_state = ok ? BMI088_RECALIB_OK : BMI088_RECALIB_FAIL;

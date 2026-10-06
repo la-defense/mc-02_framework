@@ -12,6 +12,13 @@ typedef enum
     TASK_MONITOR_COUNT
 } TaskMonitor_Id_e;
 
+typedef enum
+{
+    TASK_MONITOR_LONG_OPERATION_CALIBRATION = 0,
+    TASK_MONITOR_LONG_OPERATION_FLASH,
+    TASK_MONITOR_LONG_OPERATION_COUNT
+} TaskMonitor_LongOperation_e;
+
 typedef struct
 {
     const char *name;
@@ -23,8 +30,9 @@ typedef struct
 void TaskMonitorInit(void);
 void TaskMonitorFeed(TaskMonitor_Id_e id);
 void TaskMonitorTick(void);
-void TaskMonitorPause(void);
-void TaskMonitorResume(void);
+/* Only INS may use these bounded windows. Other tasks remain monitored. */
+uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperation_e operation);
+uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperation_e operation);
 uint8_t TaskMonitorAllAlive(void);
 void TaskMonitorGetStatus(TaskMonitor_Id_e id, TaskMonitorStatus_t *status);
 

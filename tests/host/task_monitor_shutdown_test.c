@@ -81,6 +81,170 @@ int main(void)
     CHECK(reported_task_health == 0u);
     CHECK(watchdog_feed_count == 0u);
     CHECK(TaskMonitorAllAlive() == 0u);
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 0u);
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 0u);
+
+    /* Calibration may exceed INS's normal deadline while other tasks stay
+       monitored, and an operation overrun must permanently stop watchdog feeds. */
+    mc02_test_gpiob = (GPIO_TypeDef){0};
+    mc02_test_gpioc = (GPIO_TypeDef){0};
+    mc02_test_tim3 = (TIM_TypeDef){0};
+    mc02_test_rcc = (RCC_TypeDef){0};
+    mc02_test_tick = 200u;
+    watchdog_feed_count = 0u;
+    logged_after_shutdown = 0u;
+    log_count = 0u;
+    reported_task_health = 1u;
+    mc02_test_irq_disabled = 0u;
+    mc02_test_primask = 0u;
+    TaskMonitorInit();
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
+    mc02_test_tick += 6u;
+    TaskMonitorFeed(TASK_MONITOR_MOTOR);
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorTick();
+
+    CHECK(reported_task_health == 1u);
+    CHECK(watchdog_feed_count == 1u);
+    CHECK(log_count == 0u);
+    CHECK(TaskMonitorAllAlive() == 1u);
+
+    mc02_test_tick += 6u;
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorTick();
+
+    CHECK(reported_task_health == 0u);
+    CHECK(watchdog_feed_count == 1u);
+    CHECK(log_count >= 1u);
+    CHECK(TaskMonitorAllAlive() == 0u);
+    CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 0u);
+
+    /* A calibration deadline remains wrap-safe and latched after a late return. */
+    mc02_test_gpiob = (GPIO_TypeDef){0};
+    mc02_test_gpioc = (GPIO_TypeDef){0};
+    mc02_test_tim3 = (TIM_TypeDef){0};
+    mc02_test_rcc = (RCC_TypeDef){0};
+    mc02_test_tick = UINT32_MAX - 100u;
+    watchdog_feed_count = 0u;
+    logged_after_shutdown = 0u;
+    log_count = 0u;
+    reported_task_health = 1u;
+    mc02_test_irq_disabled = 0u;
+    mc02_test_primask = 0u;
+    TaskMonitorInit();
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
+    mc02_test_tick += 15000u;
+    TaskMonitorFeed(TASK_MONITOR_MOTOR);
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorTick();
+
+    CHECK(reported_task_health == 0u);
+    CHECK(watchdog_feed_count == 0u);
+    CHECK(log_count >= 1u);
+    CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 0u);
+    TaskMonitorFeed(TASK_MONITOR_INS);
+    TaskMonitorFeed(TASK_MONITOR_MOTOR);
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorTick();
+    CHECK(watchdog_feed_count == 0u);
+    CHECK(TaskMonitorAllAlive() == 0u);
+
+    /* Startup grace is only for calibration before the first monitor tick;
+       Flash must never use it to bypass the all-task health check. */
+    mc02_test_tick = 450u;
+    watchdog_feed_count = 0u;
+    reported_task_health = 1u;
+    mc02_test_irq_disabled = 0u;
+    mc02_test_primask = 0u;
+    TaskMonitorInit();
+    mc02_test_tick += 40u;
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 0u);
+    CHECK(reported_task_health == 0u);
+
+    /* Calibration may begin during startup before other tasks have first fed;
+       their first monitor sample still requires every task to have fed. */
+    mc02_test_tick = 500u;
+    watchdog_feed_count = 0u;
+    reported_task_health = 1u;
+    mc02_test_irq_disabled = 0u;
+    mc02_test_primask = 0u;
+    TaskMonitorInit();
+    TaskMonitorFeed(TASK_MONITOR_INS);
+    mc02_test_tick += 100u;
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
+    TaskMonitorFeed(TASK_MONITOR_MOTOR);
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorTick();
+    CHECK(reported_task_health == 1u);
+    CHECK(watchdog_feed_count == 1u);
+    CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
+
+    /* Flash stalls the whole H723 core, so a bounded window covers all task
+       deadlines only after the begin call has verified them healthy. */
+    mc02_test_tick = 1000u;
+    watchdog_feed_count = 0u;
+    reported_task_health = 1u;
+    mc02_test_irq_disabled = 0u;
+    mc02_test_primask = 0u;
+    TaskMonitorInit();
+    TaskMonitorFeed(TASK_MONITOR_INS);
+    TaskMonitorFeed(TASK_MONITOR_MOTOR);
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 1u);
+    mc02_test_tick += 40u;
+    TaskMonitorTick();
+    CHECK(reported_task_health == 1u);
+    CHECK(watchdog_feed_count == 1u);
+    CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 1u);
+    CHECK(mc02_test_primask == 0u);
+    CHECK(TaskMonitorAllAlive() == 1u);
+
+    /* The shorter Flash window cannot reset the enclosing calibration budget. */
+    mc02_test_tick = 2000u;
+    watchdog_feed_count = 0u;
+    reported_task_health = 1u;
+    mc02_test_irq_disabled = 0u;
+    mc02_test_primask = 0u;
+    TaskMonitorInit();
+    TaskMonitorFeed(TASK_MONITOR_INS);
+    TaskMonitorFeed(TASK_MONITOR_MOTOR);
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
+    mc02_test_tick += 14900u;
+    TaskMonitorFeed(TASK_MONITOR_MOTOR);
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 1u);
+    mc02_test_tick += 200u;
+    CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 0u);
+    CHECK(TaskMonitorAllAlive() == 0u);
+
+    /* An overlong Flash stall latches the task monitor and stops watchdog feeds. */
+    mc02_test_tick = 3000u;
+    watchdog_feed_count = 0u;
+    reported_task_health = 1u;
+    mc02_test_irq_disabled = 0u;
+    mc02_test_primask = 0u;
+    TaskMonitorInit();
+    TaskMonitorFeed(TASK_MONITOR_INS);
+    TaskMonitorFeed(TASK_MONITOR_MOTOR);
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 1u);
+    mc02_test_tick += 8000u;
+    TaskMonitorTick();
+    CHECK(reported_task_health == 0u);
+    CHECK(watchdog_feed_count == 0u);
+    CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 0u);
+    CHECK(TaskMonitorAllAlive() == 0u);
+
     puts("PASS: task-monitor fault latches outputs off before logging and watchdog reset");
     return 0;
 }

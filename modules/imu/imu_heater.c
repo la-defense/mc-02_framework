@@ -57,6 +57,18 @@ static float last_temperature = 0.0f;
 static uint8_t last_sensor_valid = 0;
 static float last_vcc_in = 0.0f;
 static uint8_t supply_missing_logged = 0;
+static uint32_t heater_long_operation_active_mask = 0u;
+static uint32_t heater_long_operation_failed_mask = 0u;
+static uint8_t heater_require_post_operation_sample = 0u;
+static uint32_t heater_post_operation_sample_sequence = 0u;
+static uint32_t heater_operation_end_ms = 0u;
+
+static uint32_t IMUHeaterLongOperationMask(IMUHeater_LongOperation_e operation)
+{
+    if ((uint32_t)operation >= IMU_HEATER_LONG_OPERATION_COUNT)
+        return 0u;
+    return 1u << (uint32_t)operation;
+}
 
 static void IMUHeaterApplyDuty(uint16_t duty)
 {
@@ -131,6 +143,37 @@ void IMUHeaterForceOff(void)
     heat_start_ms = 0;
 }
 
+uint8_t IMUHeaterBeginLongOperation(IMUHeater_LongOperation_e operation)
+{
+    uint32_t mask = IMUHeaterLongOperationMask(operation);
+    if (mask == 0u || ((heater_long_operation_active_mask | heater_long_operation_failed_mask) & mask) != 0u)
+        return 0u;
+
+    heater_long_operation_active_mask |= mask;
+    IMUHeaterForceOff();
+    return 1u;
+}
+
+void IMUHeaterEndLongOperation(IMUHeater_LongOperation_e operation, uint8_t success)
+{
+    uint32_t mask = IMUHeaterLongOperationMask(operation);
+    if (mask == 0u || (heater_long_operation_active_mask & mask) == 0u)
+        return;
+
+    heater_long_operation_active_mask &= ~mask;
+    if (!success)
+    {
+        heater_long_operation_failed_mask |= mask;
+        heater_fault = 1u;
+        IMUHeaterForceOff();
+        return;
+    }
+
+    heater_post_operation_sample_sequence = last_seen_sample_sequence;
+    heater_operation_end_ms = HAL_GetTick();
+    heater_require_post_operation_sample = 1u;
+}
+
 void IMUHeaterClearFault(void)
 {
     heater_fault = 0;
@@ -171,8 +214,26 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
     if (!heater_initialized)
         return;
 
+    if ((heater_long_operation_active_mask | heater_long_operation_failed_mask) != 0u)
+    {
+        last_sensor_valid = 0u;
+        IMUHeaterForceOff();
+        IMUHeaterLogStatus(last_temperature, 0u);
+        return;
+    }
+
     uint32_t now = HAL_GetTick();
     uint8_t sample_fresh = BMI088SampleIsFresh(sample, now);
+    if (sample_fresh && heater_require_post_operation_sample)
+    {
+        sample_fresh = (sample->sequence != heater_post_operation_sample_sequence &&
+                        (int32_t)(sample->timestamp_ms - heater_operation_end_ms) >= 0) ? 1u : 0u;
+        if (sample_fresh)
+        {
+            heater_require_post_operation_sample = 0u;
+            heater_post_operation_sample_sequence = sample->sequence;
+        }
+    }
     uint8_t temp_ok = (sample_fresh && isfinite(sample->temperature) &&
                        sample->temperature >= IMU_HEATER_TEMP_VALID_MIN &&
                        sample->temperature <= IMU_HEATER_TEMP_VALID_MAX) ? 1u : 0u;
