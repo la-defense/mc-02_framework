@@ -74,8 +74,29 @@ add_test(NAME bmi088_temperature_signed_decode COMMAND bmi088_temperature_test)
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   add_executable(
+    bsp_spi_status_test
+    bsp_spi_status_test.c
+    ../../bsp/spi/bsp_spi.c)
+  target_include_directories(bsp_spi_status_test BEFORE PRIVATE bsp_spi_fakes)
+  target_include_directories(bsp_spi_status_test PRIVATE ../../bsp/spi)
+  target_compile_options(bsp_spi_status_test PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(bsp_spi_status_test PRIVATE -Wl,--gc-sections)
+  add_test(NAME production_spi_status_and_bus_ownership COMMAND bsp_spi_status_test)
+
+  add_executable(
+    imu_heater_sample_test
+    imu_heater_sample_test.c
+    ../../modules/imu/imu_heater.c)
+  target_include_directories(imu_heater_sample_test BEFORE PRIVATE imu_heater_fakes)
+  target_include_directories(imu_heater_sample_test PRIVATE ../../modules/imu ../../modules/BMI088)
+  target_compile_definitions(imu_heater_sample_test PRIVATE MC02_HEATER_ENABLED=1)
+  target_link_libraries(imu_heater_sample_test PRIVATE m)
+  add_test(NAME production_heater_rejects_stale_imu_sample COMMAND imu_heater_sample_test)
+
+  add_executable(
     bmi088_calibration_temperature_test
     bmi088_calibration_temperature_test.c
+    bmi088_host_fixture.c
     ../../modules/BMI088/bmi088.c)
   target_include_directories(
     bmi088_calibration_temperature_test
@@ -87,4 +108,16 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   target_link_options(bmi088_calibration_temperature_test PRIVATE -Wl,--gc-sections)
   target_link_libraries(bmi088_calibration_temperature_test PRIVATE m)
   add_test(NAME bmi088_calibration_preserves_celsius COMMAND bmi088_calibration_temperature_test)
+
+  add_executable(
+    bmi088_sample_status_test
+    bmi088_sample_status_test.c
+    bmi088_host_fixture.c
+    ../../modules/BMI088/bmi088.c)
+  target_include_directories(bmi088_sample_status_test BEFORE PRIVATE bmi088_fakes)
+  target_include_directories(bmi088_sample_status_test PRIVATE . ../../modules/BMI088)
+  target_compile_options(bmi088_sample_status_test PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(bmi088_sample_status_test PRIVATE -Wl,--gc-sections)
+  target_link_libraries(bmi088_sample_status_test PRIVATE m)
+  add_test(NAME bmi088_partial_transfer_is_not_published COMMAND bmi088_sample_status_test)
 endif()

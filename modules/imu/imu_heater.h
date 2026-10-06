@@ -2,6 +2,7 @@
 #define IMU_HEATER_H
 
 #include <stdint.h>
+#include "bmi088_data.h"
 
 #ifndef MC02_HEATER_ENABLED
 #define MC02_HEATER_ENABLED 0
@@ -20,7 +21,7 @@ typedef struct
 } IMUHeaterStatus_t;
 
 void IMUHeaterInit(void);
-void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off);
+void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off);
 void IMUHeaterForceOff(void);
 void IMUHeaterClearFault(void);
 void IMUHeaterGetStatus(IMUHeaterStatus_t *status);

@@ -49,16 +49,30 @@ static void InitQuaternion(float *init_q4)
     float gravity_norm[3] = {0, 0, 1}; // 导航系重力加速度矢量,归一化后为(0,0,1)
     float axis_rot[3] = {0};           // 旋转轴
     // 读取100次加速度计数据,取平均值作为初始值
-    for (uint8_t i = 0; i < 100; ++i)
+    uint8_t successful_samples = 0u;
+    for (uint16_t attempt = 0; attempt < 200u && successful_samples < 100u; ++attempt)
     {
-        BMI088Acquire(bmi088_ins, &bmi088_data);
+        if (BMI088Acquire(bmi088_ins, &bmi088_data) != BMI088_ACQUIRE_OK ||
+            !BMI088SampleIsFresh(&bmi088_data, HAL_GetTick()))
+        {
+            DWT_Delay(0.001);
+            continue;
+        }
         acc_init[X] += bmi088_data.acc[X];
         acc_init[Y] += bmi088_data.acc[Y];
         acc_init[Z] += bmi088_data.acc[Z];
+        successful_samples++;
         DWT_Delay(0.001);
     }
-    for (uint8_t i = 0; i < 3; ++i)
-        acc_init[i] /= 100;
+    if (successful_samples == 100u)
+        for (uint8_t i = 0; i < 3; ++i)
+            acc_init[i] /= successful_samples;
+    else
+    {
+        acc_init[X] = 0.0f;
+        acc_init[Y] = 0.0f;
+        acc_init[Z] = 1.0f;
+    }
     // 加速度数据异常(模长≈0)时兜底为水平姿态, 避免 Norm3d 除零
     if (NormOf3d(acc_init) < 1e-6f)
     {
@@ -198,6 +212,20 @@ void INS_Task(void)
         uint8_t acq_ok = BMI088Acquire(bmi088_ins, &bmi088_data);
         DWT_ProbeDone(&ins_prof_read, probe_seg);
 
+        uint8_t sample_valid = (acq_ok == BMI088_ACQUIRE_OK) &&
+                               BMI088SampleIsFresh(&bmi088_data, HAL_GetTick());
+        if (!sample_valid)
+        {
+            bmi088_data.valid = 0u;
+            RobotSafetySetImuValid(0u);
+            VisionUpdateTx(0u, 0.0f, 0.0f, 0.0f, 0.0f,
+                           0.0f, 0.0f, 0.0f, 0.0f,
+                           VISION_BULLET_SPEED_DEFAULT, 0u);
+            Robot_Status_e state = RobotSafetyGetState();
+            uint8_t force_off = (state == ROBOT_ESTOP || state == ROBOT_FAULT) ? 1u : 0u;
+            IMUHeaterUpdate(NULL, force_off);
+            goto ins_sample_processed;
+        }
         INS.Accel[X] = bmi088_data.acc[X];
         INS.Accel[Y] = bmi088_data.acc[Y];
         INS.Accel[Z] = bmi088_data.acc[Z];
@@ -239,7 +267,7 @@ void INS_Task(void)
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
 
         // 姿态有效性检查: 任何 NaN/Inf 都视为IMU失效, 停止向视觉发送姿态
-        uint8_t imu_valid = acq_ok && isfinite(INS.q[0]) && isfinite(INS.q[1]) && isfinite(INS.q[2]) && isfinite(INS.q[3]) &&
+        uint8_t imu_valid = sample_valid && isfinite(INS.q[0]) && isfinite(INS.q[1]) && isfinite(INS.q[2]) && isfinite(INS.q[3]) &&
                             isfinite(INS.Gyro[X]) && isfinite(INS.Gyro[Y]) && isfinite(INS.Gyro[Z]) &&
                             isfinite(INS.Yaw) && isfinite(INS.Pitch);
         RobotSafetySetImuValid(imu_valid);
@@ -254,6 +282,7 @@ void INS_Task(void)
                            INS.Pitch * DEG_2_RAD, INS.Gyro[Y],
                            VISION_BULLET_SPEED_DEFAULT, 0);
         }
+        ins_sample_processed:;
     }
 
     // temperature control: 500Hz; 急停/故障时强制关闭加热
@@ -262,10 +291,7 @@ void INS_Task(void)
         probe_seg = DWT_ProbeStart();
         Robot_Status_e state = RobotSafetyGetState();
         uint8_t force_off = (state == ROBOT_ESTOP || state == ROBOT_FAULT) ? 1 : 0;
-        uint8_t sensor_valid = isfinite(bmi088_data.temperature) &&
-                               bmi088_data.temperature > -20.0f &&
-                               bmi088_data.temperature < 80.0f;
-        IMUHeaterUpdate(bmi088_data.temperature, sensor_valid, force_off);
+        IMUHeaterUpdate(&bmi088_data, force_off);
         DWT_ProbeDone(&ins_prof_temp, probe_seg);
     }
 

@@ -85,7 +85,7 @@ void SPIRecv(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len);
  * @param ptr_data_tx 发送数据地址
  * @param len 接收&发送的长度
  */
-void SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len);
+HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len);
 
 /**
  * @brief 设定spi收发的工作模式

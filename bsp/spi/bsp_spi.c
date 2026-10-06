@@ -17,25 +17,34 @@ volatile uint8_t SPIDeviceOnGoing[SPI_DEVICE_CNT] = {[0 ... SPI_DEVICE_CNT - 1] 
 #define SPI_BUSY_TIMEOUT_US 1000u
 volatile uint32_t spi_bus_timeout_cnt[SPI_DEVICE_CNT] = {0};
 
-/* 等待总线空闲: 带超时, 超时就计数 + 限速告警 + 强制放行(否则会永久卡死) */
-static void SPIWaitIdle(volatile uint8_t *busy_flag, uint32_t timeout_us)
+/* 等待总线空闲: 超时返回给调用方，保留正在传输的总线所有权。 */
+static HAL_StatusTypeDef SPIWaitIdle(volatile uint8_t *busy_flag, uint32_t timeout_us)
 {
     uint32_t t0 = DWT_ProbeStart();
     while (!(*busy_flag))
     {
-        if (DWT_ProbeElapsedUs(t0) > timeout_us)
+        if (DWT_ProbeElapsedUs(t0) >= timeout_us)
         {
             static LogRateLimit_t rl_spi_busy = {0};
             uint8_t bus_idx = (uint8_t)(busy_flag - &SPIDeviceOnGoing[0]);
             if (bus_idx < SPI_DEVICE_CNT)
                 spi_bus_timeout_cnt[bus_idx]++;
             if (LogRateLimitAllow(&rl_spi_busy, 1000u))
-                LOGERROR("[bsp_spi] 总线忙等待超时, 强制放行 (累计 %lu 次, 期间限速 %lu 条)",
-                         (unsigned long)rl_spi_busy.total, (unsigned long)rl_spi_busy.dropped);
-            *busy_flag = 1u; /* 认为上一次传输已经死掉, 释放总线避免永久卡死 */
-            break;
+                LOGERROR("[bsp_spi] bus busy wait timed out; keeping ownership with active transfer");
+            return HAL_TIMEOUT;
         }
     }
+    return HAL_OK;
+}
+
+/* HAL's blocking SPI timeout depends on HAL tick progress. Refuse contexts that
+   can mask the tick so a nominal timeout cannot become an unbounded wait. */
+static uint8_t SPIBlockingContextCanWait(void)
+{
+    return (__get_IPSR() == 0u &&
+            __get_PRIMASK() == 0u &&
+            __get_BASEPRI() == 0u &&
+            __get_FAULTMASK() == 0u) ? 1u : 0u;
 }
 
 SPIInstance *SPIRegister(SPI_Init_Config_s *conf)
@@ -120,47 +129,59 @@ void SPIRecv(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len)
     }
 }
 
-void SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len)
+HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len)
 {
+    if (spi_ins == NULL || spi_ins->spi_handle == NULL || spi_ins->GPIOx == NULL ||
+        spi_ins->cs_pin_state == NULL || ptr_data_rx == NULL || ptr_data_tx == NULL || len == 0u)
+        return HAL_ERROR;
 
-    // 用于稍后回调使用,请保证ptr_data_rx在回调函数被调用之前仍然在作用域内,否则析构之后的行为是未定义的!!!
+    volatile uint8_t *busy_flag = NULL;
+    if (spi_ins->spi_handle->Instance == SPI1)
+        busy_flag = &SPIDeviceOnGoing[0];
+    else if (spi_ins->spi_handle->Instance == SPI2)
+        busy_flag = &SPIDeviceOnGoing[1];
+    else
+        return HAL_ERROR;
+
+    if (spi_ins->spi_work_mode == SPI_BLOCK_MODE && !SPIBlockingContextCanWait())
+        return HAL_BUSY;
+
+    HAL_StatusTypeDef status = SPIWaitIdle(busy_flag, SPI_BUSY_TIMEOUT_US);
+    if (status != HAL_OK)
+        return status;
+
+    *busy_flag = 0u;
     spi_ins->rx_size = len;
     spi_ins->rx_buffer = ptr_data_rx;
-    // 等待上一次传输完成(带超时): 没有超时保护的话, 一旦完成中断没来就会永久卡死
-    if (spi_ins->spi_handle->Instance == SPI1)
-    {
-        SPIWaitIdle(&SPIDeviceOnGoing[0], SPI_BUSY_TIMEOUT_US);
-    }
-    else if (spi_ins->spi_handle->Instance == SPI2)
-    {
-        SPIWaitIdle(&SPIDeviceOnGoing[1], SPI_BUSY_TIMEOUT_US);
-    }
-    // 拉低片选,开始传输
     HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_RESET);
-    *spi_ins->cs_pin_state =
-        spi_ins->CS_State =
-            HAL_GPIO_ReadPin(spi_ins->GPIOx, spi_ins->cs_pin);
+    spi_ins->CS_State = GPIO_PIN_RESET;
+
     switch (spi_ins->spi_work_mode)
     {
     case SPI_DMA_MODE:
-        HAL_SPI_TransmitReceive_DMA(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
+        status = HAL_SPI_TransmitReceive_DMA(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
         break;
     case SPI_IT_MODE:
-        HAL_SPI_TransmitReceive_IT(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
+        status = HAL_SPI_TransmitReceive_IT(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
         break;
     case SPI_BLOCK_MODE:
-        HAL_SPI_TransmitReceive(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len, 1000); // 默认50ms超时
-        // 阻塞模式不会调用回调函数,传输完成后直接拉高片选结束
+        status = HAL_SPI_TransmitReceive(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len, 2u);
         HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
-        *spi_ins->cs_pin_state =
-            spi_ins->CS_State =
-                HAL_GPIO_ReadPin(spi_ins->GPIOx, spi_ins->cs_pin);
-        break;
+        *busy_flag = 1u;
+        spi_ins->CS_State = GPIO_PIN_SET;
+        return status;
     default:
-        while (1)
-            ; // error mode! 请查看是否正确设置模式，或出现指针越界导致模式被异常修改的情况
+        status = HAL_ERROR;
         break;
     }
+
+    if (status != HAL_OK)
+    {
+        HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
+        *busy_flag = 1u;
+        spi_ins->CS_State = GPIO_PIN_SET;
+    }
+    return status;
 }
 
 void SPISetMode(SPIInstance *spi_ins, SPI_TXRX_MODE_e spi_mode)

@@ -5,6 +5,7 @@
 #include "bsp_log.h"
 #include "bsp_adc.h"
 #include <math.h>
+#include <stddef.h>
 
 /*
  * IMU 加热安全策略(2026-09 起火事故后重构):
@@ -49,6 +50,7 @@ static uint8_t heater_fault = 0;
 static uint8_t heater_overtemp = 0;
 static uint8_t heater_timeout_fault = 0;
 static uint32_t last_valid_sample_ms = 0;
+static uint32_t last_seen_sample_sequence = 0;
 static uint32_t heat_start_ms = 0;
 static uint32_t last_log_ms = 0;
 static float last_temperature = 0.0f;
@@ -90,6 +92,7 @@ void IMUHeaterInit(void)
     heater_overtemp = 0;
     heater_timeout_fault = 0;
     last_valid_sample_ms = HAL_GetTick();
+    last_seen_sample_sequence = 0u;
     heat_start_ms = 0;
     last_log_ms = 0;
     last_vcc_in = 0.0f;
@@ -163,27 +166,43 @@ static void IMUHeaterLogStatus(float temperature, uint8_t sensor_valid)
     }
 }
 
-void IMUHeaterUpdate(float temperature, uint8_t sensor_valid, uint8_t force_off)
+void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
 {
     if (!heater_initialized)
         return;
 
     uint32_t now = HAL_GetTick();
+    uint8_t sample_fresh = BMI088SampleIsFresh(sample, now);
+    uint8_t temp_ok = (sample_fresh && isfinite(sample->temperature) &&
+                       sample->temperature >= IMU_HEATER_TEMP_VALID_MIN &&
+                       sample->temperature <= IMU_HEATER_TEMP_VALID_MAX) ? 1u : 0u;
+    float temperature = temp_ok ? sample->temperature : last_temperature;
+    uint8_t sensor_valid = temp_ok;
 
-    /* 先记录本次采样: 温度显示/监控与"当前是否允许加热"无关。
-       之前这段在供电检查之后, USB-only(VCC_IN 过低)时会提前 return,
-       导致 IMUHeaterGetStatus() 一直返回初值 0.0C、传感器显示"无效"。 */
-    uint8_t temp_ok = (sensor_valid && isfinite(temperature) &&
-                       temperature >= IMU_HEATER_TEMP_VALID_MIN &&
-                       temperature <= IMU_HEATER_TEMP_VALID_MAX)
-                          ? 1u
-                          : 0u;
-    if (temp_ok)
+    if (temp_ok && sample->sequence != last_seen_sample_sequence)
     {
-        last_temperature = temperature;
-        last_valid_sample_ms = now;
+        last_seen_sample_sequence = sample->sequence;
+        last_valid_sample_ms = sample->timestamp_ms;
+        last_temperature = sample->temperature;
     }
     last_sensor_valid = temp_ok;
+
+    if (force_off)
+    {
+        IMUHeaterForceOff();
+        return;
+    }
+
+    if (!temp_ok)
+    {
+        IMUHeaterForceOff();
+        if ((uint32_t)(now - last_valid_sample_ms) > IMU_HEATER_SENSOR_TIMEOUT_MS)
+        {
+            heater_fault = 1u;
+            LOGERROR("[imu_heat] sensor invalid/timeout, heater latched off");
+        }
+        return;
+    }
 
 #if !MC02_HEATER_ENABLED
     (void)force_off;
