@@ -272,6 +272,18 @@ static void BMI088GyroINTCallback(GPIOInstance *gpio)
  * @param bmi088
  * @return BMI088_Data_t
  */
+static uint8_t BMI088SampleValuesAreFinite(const BMI088_Data_t *sample)
+{
+    if (sample == NULL || !isfinite(sample->temperature))
+        return 0u;
+    for (uint8_t axis = 0; axis < 3u; ++axis)
+    {
+        if (!isfinite(sample->acc[axis]) || !isfinite(sample->gyro[axis]))
+            return 0u;
+    }
+    return 1u;
+}
+
 BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data_store)
 {
     if (bmi088 == NULL || data_store == NULL)
@@ -331,6 +343,12 @@ BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data
     {
         bmi088->last_acquire_status = BMI088_ACQUIRE_NO_DATA;
         return BMI088_ACQUIRE_NO_DATA;
+    }
+
+    if (!BMI088SampleValuesAreFinite(&staged))
+    {
+        bmi088->last_acquire_status = BMI088_ACQUIRE_INVALID_DATA;
+        return BMI088_ACQUIRE_INVALID_DATA;
     }
 
     staged.sequence = bmi088->sample_sequence + 1u;

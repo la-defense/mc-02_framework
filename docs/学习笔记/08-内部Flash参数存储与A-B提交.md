@@ -194,7 +194,7 @@ INS 只有在本轮采样成功且快照仍新鲜时才更新 EKF。失败时将
 
 HAL 的阻塞 SPI 超时依赖 `HAL_GetTick()` 推进。只检查 PRIMASK 等中断屏蔽状态还不够：`HAL_SuspendTick()` 可以在普通线程上下文关闭 TIM23 更新中断，让 HAL 的毫秒超时永远达不到。现在阻塞 SPI 传输前会取得 tick 租约；tick 已暂停或正等待暂停时拒绝新传输，租约持有期间的暂停请求延后到 SPI 返回后生效。异步 SPI 不使用 HAL 阻塞超时，因此不取得租约。回归测试直接编译生产时基文件，覆盖暂停、恢复及传输期间延迟暂停；SPI 接口测试还确认暂停 tick 时不会启动 HAL 传输，并在每种 HAL 返回状态后归还租约。
 
-生产路径回归见 bmi088_sample_status_test.c、bsp_spi_status_test.c、hal_tick_suspend_test.c 和 imu_heater_sample_test.c：覆盖部分读取不发布、SPI 错误类别、tick 暂停和回绕、过期快照关热、重复序号不延长有效期，以及在线标定跳过失败样本。
+采样入口还会在发布前检查加速度、陀螺仪和温度是否为有限数。原始寄存器是有限整数，但乘以已损坏的 NaN/Inf 灵敏度系数后，浮点样本仍可能失真；这种样本返回 `BMI088_ACQUIRE_INVALID_DATA`，不覆盖上次完整快照，也不递增序号，因此 INS 会走统一的失效关热和视觉撤销路径。生产路径回归见 bmi088_sample_status_test.c、bsp_spi_status_test.c、hal_tick_suspend_test.c 和 imu_heater_sample_test.c：覆盖部分读取和非有限样本不发布、SPI 错误类别、tick 暂停和回绕、过期快照关热、重复序号不延长有效期，以及在线标定跳过失败样本。
 
 
 ## 5. A/B 双区：为什么"坏一份还能活"
