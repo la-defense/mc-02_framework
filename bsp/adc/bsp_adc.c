@@ -157,18 +157,6 @@ BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample)
     return BSP_ADC_STATUS_VALID;
 }
 
-uint16_t BSP_ADCGetRawVccIn(void)
-{
-    BSP_ADC_Sample_t sample;
-    return (BSP_ADCGetSample(&sample) == BSP_ADC_STATUS_VALID) ? sample.raw_vcc_in : 0u;
-}
-
-uint16_t BSP_ADCGetRawKey(void)
-{
-    BSP_ADC_Sample_t sample;
-    return (BSP_ADCGetSample(&sample) == BSP_ADC_STATUS_VALID) ? sample.raw_key : 0u;
-}
-
 float BSP_ADCGetVccIn(void)
 {
     BSP_ADC_Sample_t sample;

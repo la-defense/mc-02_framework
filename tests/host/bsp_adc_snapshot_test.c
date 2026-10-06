@@ -97,6 +97,7 @@ int main(void)
     CHECK(sample.sequence == 1u);
     CHECK(sample.error_flags == 0u);
     CHECK(sample.voltage_config_valid == 0u);
+    CHECK(sample.vcc_in_volts == 0.0f);
     CHECK(BSP_ADCGetVccIn() == 0.0f);
     return EXIT_SUCCESS;
 }
@@ -150,7 +151,6 @@ int main(void)
     now_ms = 121u;
     CHECK(BSP_ADCGetSample(&sample) == BSP_ADC_STATUS_STALE);
     CHECK(sample.sequence == 1u);
-    CHECK(BSP_ADCGetRawKey() == 0u);
     CHECK(BSP_ADCGetVccIn() == 0.0f);
 
     fill_pairs(EXPECTED_DMA_HALF_WORD_COUNT, 43690u, 32000u);
