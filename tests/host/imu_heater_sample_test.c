@@ -9,7 +9,6 @@
 #include <stdlib.h>
 
 static uint32_t now_ms;
-static float vcc_in = 24.0f;
 static uint32_t compare_value;
 static BSP_ADC_Sample_t adc_sample = {
     .sequence = 1u,
@@ -27,7 +26,6 @@ static void fail(const char *message)
 }
 
 uint32_t HAL_GetTick(void) { return now_ms; }
-float BSP_ADCGetVccIn(void) { return vcc_in; }
 BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample)
 {
     if (sample == NULL)

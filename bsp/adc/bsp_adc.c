@@ -157,14 +157,6 @@ BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample)
     return BSP_ADC_STATUS_VALID;
 }
 
-float BSP_ADCGetVccIn(void)
-{
-    BSP_ADC_Sample_t sample;
-    if (BSP_ADCGetSample(&sample) != BSP_ADC_STATUS_VALID || !sample.voltage_config_valid)
-        return 0.0f;
-    return sample.vcc_in_volts;
-}
-
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
 {
     if (hadc == &hadc1)

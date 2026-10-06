@@ -51,6 +51,5 @@ typedef struct
 void BSP_ADCInit(void);
 /* Reads the latest completed VIN/key batch and validates its age and ADC error state. */
 BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample);
-float BSP_ADCGetVccIn(void);
 
 #endif // !BSP_ADC_H

@@ -391,7 +391,12 @@ static void draw_page0_values(void)
         snprintf(buf, sizeof(buf), "NO");
     draw_value_ascii(2, buf);
 
-    draw_value_float_unit(3, BSP_ADCGetVccIn(), 1, "V");
+    BSP_ADC_Sample_t adc_sample;
+    BSP_ADC_Status_e adc_status = BSP_ADCGetSample(&adc_sample);
+    if (adc_status == BSP_ADC_STATUS_VALID && adc_sample.voltage_config_valid)
+        draw_value_float_unit(3, adc_sample.vcc_in_volts, 1, "V");
+    else
+        draw_value_ascii(3, "-- V");
 
     TaskMonitorStatus_t st;
     char t[8][4];
