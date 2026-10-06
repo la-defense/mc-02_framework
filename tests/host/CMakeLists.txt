@@ -73,6 +73,7 @@ target_include_directories(bmi088_temperature_test PRIVATE ../../modules/BMI088)
 add_test(NAME bmi088_temperature_signed_decode COMMAND bmi088_temperature_test)
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
+  find_package(Threads REQUIRED)
   add_executable(
     bsp_spi_status_test
     bsp_spi_status_test.c
@@ -81,6 +82,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   target_include_directories(bsp_spi_status_test PRIVATE ../../bsp/spi)
   target_compile_options(bsp_spi_status_test PRIVATE -ffunction-sections -fdata-sections)
   target_link_options(bsp_spi_status_test PRIVATE -Wl,--gc-sections)
+  target_link_libraries(bsp_spi_status_test PRIVATE Threads::Threads)
   add_test(NAME production_spi_status_and_bus_ownership COMMAND bsp_spi_status_test)
 
   add_executable(

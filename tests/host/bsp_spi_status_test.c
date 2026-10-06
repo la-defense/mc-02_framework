@@ -2,9 +2,12 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 extern volatile uint8_t SPIDeviceOnGoing[SPI_DEVICE_CNT];
 extern volatile uint32_t spi_bus_timeout_cnt[SPI_DEVICE_CNT];
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi);
 
 static SPI_HandleTypeDef spi_handle = {.Instance = SPI1};
 static GPIO_TypeDef gpio;
@@ -12,11 +15,36 @@ static GPIO_PinState pin_state = GPIO_PIN_SET;
 static HAL_StatusTypeDef transfer_result = HAL_OK;
 static uint32_t transfer_calls;
 static uint32_t transfer_timeout_ms;
-static uint32_t synthetic_us;
+static atomic_uint synthetic_us;
 uint32_t mc02_test_ipsr;
-uint32_t mc02_test_primask;
+_Thread_local uint32_t mc02_test_primask;
 uint32_t mc02_test_basepri;
 uint32_t mc02_test_faultmask;
+static pthread_mutex_t irq_mask_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t start_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t start_condition = PTHREAD_COND_INITIALIZER;
+static uint8_t start_ready_count;
+static uint8_t start_contenders;
+
+typedef struct
+{
+    SPIInstance *instance;
+    uint8_t rx[4];
+    uint8_t tx[4];
+    HAL_StatusTypeDef result;
+} SPIThreadCall;
+
+void mc02_test_disable_irq(void)
+{
+    pthread_mutex_lock(&irq_mask_mutex);
+    mc02_test_primask = 1u;
+}
+
+void mc02_test_set_primask(uint32_t value)
+{
+    mc02_test_primask = value;
+    pthread_mutex_unlock(&irq_mask_mutex);
+}
 
 static void fail(const char *message)
 {
@@ -40,8 +68,22 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint16_t pin, GPIO_PinState state)
 { (void)port; (void)pin; pin_state = state; }
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin)
 { (void)port; (void)pin; return pin_state; }
-uint32_t DWT_ProbeStart(void) { return synthetic_us; }
-uint32_t DWT_ProbeElapsedUs(uint32_t start) { return synthetic_us++ - start; }
+uint32_t DWT_ProbeStart(void) { return atomic_fetch_add(&synthetic_us, 1u); }
+uint32_t DWT_ProbeElapsedUs(uint32_t start) { return atomic_fetch_add(&synthetic_us, 1u) - start; }
+
+static void *SPIThreadContender(void *argument)
+{
+    SPIThreadCall *call = (SPIThreadCall *)argument;
+    pthread_mutex_lock(&start_mutex);
+    start_ready_count++;
+    pthread_cond_broadcast(&start_condition);
+    while (!start_contenders)
+        pthread_cond_wait(&start_condition, &start_mutex);
+    pthread_mutex_unlock(&start_mutex);
+
+    call->result = SPITransRecv(call->instance, call->rx, call->tx, sizeof(call->rx));
+    return NULL;
+}
 
 int main(void)
 {
@@ -98,5 +140,66 @@ int main(void)
         fail("HAL SPI must not start from a context where its timeout tick may be masked");
     if (SPIDeviceOnGoing[0] != 1u || pin_state != GPIO_PIN_SET)
         fail("context rejection must leave the SPI bus and chip select untouched");
+
+    SPI_Init_Config_s first_config = {
+        .spi_handle = &spi_handle,
+        .GPIOx = &gpio,
+        .cs_pin = 2u,
+        .spi_work_mode = SPI_DMA_MODE,
+    };
+    SPI_Init_Config_s second_config = first_config;
+    second_config.cs_pin = 3u;
+    SPIInstance *first_instance = SPIRegister(&first_config);
+    SPIInstance *second_instance = SPIRegister(&second_config);
+    uint8_t async_rx[4] = {0};
+    uint8_t async_tx[4] = {0};
+    transfer_result = HAL_OK;
+    if (SPITransRecv(second_instance, async_rx, async_tx, sizeof(async_rx)) != HAL_OK)
+        fail("registered asynchronous transfer should start successfully");
+    if (SPIDeviceOnGoing[0] != 0u)
+        fail("asynchronous transfer must retain bus ownership until completion or error");
+    HAL_SPI_ErrorCallback(&spi_handle);
+    if (SPIDeviceOnGoing[0] != 1u || second_instance->CS_State != GPIO_PIN_SET)
+        fail("SPI error callback must release the active owner, not the first device on the bus");
+    if (first_instance == second_instance)
+        fail("SPI registration must keep distinct owner instances for one bus");
+
+    SPI_HandleTypeDef concurrent_handle = {.Instance = SPI1};
+    GPIO_TypeDef concurrent_gpio[2] = {{0}, {0}};
+    volatile uint8_t bus_state[2] = {1u, 1u};
+    SPIInstance concurrent_instances[2] = {0};
+    SPIThreadCall calls[2] = {0};
+    pthread_t threads[2];
+    for (size_t i = 0; i < 2u; ++i)
+    {
+        concurrent_instances[i].spi_handle = &concurrent_handle;
+        concurrent_instances[i].GPIOx = &concurrent_gpio[i];
+        concurrent_instances[i].cs_pin = (uint16_t)(i + 2u);
+        concurrent_instances[i].cs_pin_state = &bus_state[i];
+        concurrent_instances[i].spi_work_mode = SPI_DMA_MODE;
+        calls[i].instance = &concurrent_instances[i];
+        if (pthread_create(&threads[i], NULL, SPIThreadContender, &calls[i]) != 0)
+            fail("unable to create concurrent SPI claimant");
+    }
+    pthread_mutex_lock(&start_mutex);
+    while (start_ready_count < 2u)
+        pthread_cond_wait(&start_condition, &start_mutex);
+    uint32_t calls_before_concurrent = transfer_calls;
+    transfer_result = HAL_OK;
+    start_contenders = 1u;
+    pthread_cond_broadcast(&start_condition);
+    pthread_mutex_unlock(&start_mutex);
+    for (size_t i = 0; i < 2u; ++i)
+        if (pthread_join(threads[i], NULL) != 0)
+            fail("unable to join concurrent SPI claimant");
+
+    uint8_t successful_claims = (uint8_t)((calls[0].result == HAL_OK) + (calls[1].result == HAL_OK));
+    uint8_t timed_out_claims = (uint8_t)((calls[0].result == HAL_TIMEOUT) + (calls[1].result == HAL_TIMEOUT));
+    if (successful_claims != 1u || timed_out_claims != 1u)
+        fail("simultaneous SPI claimants must produce one owner and one timeout");
+    if (transfer_calls != calls_before_concurrent + 1u)
+        fail("only the atomic bus owner may start an SPI transfer");
+    if (SPIDeviceOnGoing[0] != 0u)
+        fail("the successful asynchronous transfer must retain bus ownership");
     return EXIT_SUCCESS;
 }

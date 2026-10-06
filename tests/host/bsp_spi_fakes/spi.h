@@ -9,13 +9,17 @@ typedef struct { void *Instance; } SPI_HandleTypeDef;
 #define SPI2 ((void *)2)
 
 extern uint32_t mc02_test_ipsr;
-extern uint32_t mc02_test_primask;
+extern _Thread_local uint32_t mc02_test_primask;
 extern uint32_t mc02_test_basepri;
 extern uint32_t mc02_test_faultmask;
+void mc02_test_disable_irq(void);
+void mc02_test_set_primask(uint32_t value);
 #define __get_IPSR() (mc02_test_ipsr)
 #define __get_PRIMASK() (mc02_test_primask)
 #define __get_BASEPRI() (mc02_test_basepri)
 #define __get_FAULTMASK() (mc02_test_faultmask)
+#define __disable_irq() mc02_test_disable_irq()
+#define __set_PRIMASK(value) mc02_test_set_primask(value)
 
 HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *, uint8_t *, uint8_t *, uint16_t, uint32_t);
 HAL_StatusTypeDef HAL_SPI_TransmitReceive_IT(SPI_HandleTypeDef *, uint8_t *, uint8_t *, uint16_t);

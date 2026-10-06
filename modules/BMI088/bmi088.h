@@ -24,6 +24,15 @@ typedef enum
     BMI088_LOAD_PRE_CALI_MODE,        // 使用预设标定参数,
 } BMI088_Calibrate_Mode_e;
 
+typedef enum
+{
+    BMI088_ACQUIRE_NO_DATA = 0,
+    BMI088_ACQUIRE_OK = 1,
+    BMI088_ACQUIRE_SPI_ERROR,
+    BMI088_ACQUIRE_SPI_BUSY,
+    BMI088_ACQUIRE_SPI_TIMEOUT
+} BMI088_AcquireStatus_e;
+
 /* BMI088实例结构体定义 */
 typedef struct
 {
@@ -53,7 +62,7 @@ typedef struct
     uint32_t sample_sequence;
     uint32_t acc_sample_timestamp_ms;
     uint32_t gyro_sample_timestamp_ms;
-    uint8_t last_acquire_status;
+    BMI088_AcquireStatus_e last_acquire_status;
     // 用于计算两次采样的时间间隔
     uint32_t bias_dwt_cnt;
     // 数据更新标志位
@@ -69,15 +78,6 @@ typedef struct
         // 后续可添加其他标志位,不够用可以扩充16or32,太多可以删
     } update_flag;
 } BMI088Instance;
-
-typedef enum
-{
-    BMI088_ACQUIRE_NO_DATA = 0,
-    BMI088_ACQUIRE_OK = 1,
-    BMI088_ACQUIRE_SPI_ERROR,
-    BMI088_ACQUIRE_SPI_BUSY,
-    BMI088_ACQUIRE_SPI_TIMEOUT
-} BMI088_AcquireStatus_e;
 
 /* BMI088初始化配置 */
 typedef struct

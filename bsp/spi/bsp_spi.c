@@ -11,24 +11,94 @@ static uint8_t idx = 0;                         // 配合中断以及初始化
    @attention 必须 volatile: 它在 SPI 完成中断里被写、在任务里被轮询。
    之前漏了 volatile, -Og 下"碰巧"能跑, 换 -O2 后轮询被优化成死循环(BMI088 初始化卡死)。 */
 volatile uint8_t SPIDeviceOnGoing[SPI_DEVICE_CNT] = {[0 ... SPI_DEVICE_CNT - 1] = 1};
+static SPIInstance *spi_bus_owner[SPI_DEVICE_CNT] = {NULL};
 
 /* SPI 总线忙等待超时(us): 正常一次传输是个位数微秒~百微秒量级, 1ms 足够;
    超时说明完成中断没来(总线/中断异常), 不能永久卡死在这里。 */
 #define SPI_BUSY_TIMEOUT_US 1000u
 volatile uint32_t spi_bus_timeout_cnt[SPI_DEVICE_CNT] = {0};
 
-/* 等待总线空闲: 超时返回给调用方，保留正在传输的总线所有权。 */
-static HAL_StatusTypeDef SPIWaitIdle(volatile uint8_t *busy_flag, uint32_t timeout_us)
+static int8_t SPIBusIndex(const SPIInstance *spi_ins)
+{
+    if (spi_ins == NULL || spi_ins->spi_handle == NULL)
+        return -1;
+    if (spi_ins->spi_handle->Instance == SPI1)
+        return 0;
+    if (spi_ins->spi_handle->Instance == SPI2)
+        return 1;
+    return -1;
+}
+
+/* Claim the bus flag and owner pointer together so a preempting caller cannot
+   observe idle and overwrite the ownership of an active transfer. */
+static uint8_t SPIBusTryAcquire(SPIInstance *spi_ins, uint8_t bus_idx)
+{
+    uint32_t previous_primask = __get_PRIMASK();
+    __disable_irq();
+    uint8_t acquired = (uint8_t)(SPIDeviceOnGoing[bus_idx] && spi_bus_owner[bus_idx] == NULL);
+    if (acquired)
+    {
+        SPIDeviceOnGoing[bus_idx] = 0u;
+        spi_bus_owner[bus_idx] = spi_ins;
+    }
+    __set_PRIMASK(previous_primask);
+    return acquired;
+}
+
+static void SPIBusRelease(SPIInstance *spi_ins)
+{
+    int8_t bus_idx = SPIBusIndex(spi_ins);
+    if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
+        return;
+
+    uint32_t previous_primask = __get_PRIMASK();
+    __disable_irq();
+    if (spi_bus_owner[(uint8_t)bus_idx] == spi_ins)
+    {
+        spi_bus_owner[(uint8_t)bus_idx] = NULL;
+        SPIDeviceOnGoing[(uint8_t)bus_idx] = 1u;
+    }
+    __set_PRIMASK(previous_primask);
+}
+
+static SPIInstance *SPIBusAbortOwner(SPI_HandleTypeDef *hspi)
+{
+    int8_t bus_idx = -1;
+    if (hspi != NULL && hspi->Instance == SPI1)
+        bus_idx = 0;
+    else if (hspi != NULL && hspi->Instance == SPI2)
+        bus_idx = 1;
+    if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
+        return NULL;
+
+    uint32_t previous_primask = __get_PRIMASK();
+    __disable_irq();
+    SPIInstance *owner = spi_bus_owner[(uint8_t)bus_idx];
+    if (owner != NULL && owner->spi_handle == hspi)
+    {
+        HAL_GPIO_WritePin(owner->GPIOx, owner->cs_pin, GPIO_PIN_SET);
+        owner->CS_State = GPIO_PIN_SET;
+        spi_bus_owner[(uint8_t)bus_idx] = NULL;
+        SPIDeviceOnGoing[(uint8_t)bus_idx] = 1u;
+    }
+    else
+    {
+        owner = NULL;
+    }
+    __set_PRIMASK(previous_primask);
+    return owner;
+}
+
+/* Wait for and atomically claim the bus; timeout never changes another owner's state. */
+static HAL_StatusTypeDef SPIBusAcquire(SPIInstance *spi_ins, uint8_t bus_idx, uint32_t timeout_us)
 {
     uint32_t t0 = DWT_ProbeStart();
-    while (!(*busy_flag))
+    while (!SPIBusTryAcquire(spi_ins, bus_idx))
     {
         if (DWT_ProbeElapsedUs(t0) >= timeout_us)
         {
             static LogRateLimit_t rl_spi_busy = {0};
-            uint8_t bus_idx = (uint8_t)(busy_flag - &SPIDeviceOnGoing[0]);
-            if (bus_idx < SPI_DEVICE_CNT)
-                spi_bus_timeout_cnt[bus_idx]++;
+            spi_bus_timeout_cnt[bus_idx]++;
             if (LogRateLimitAllow(&rl_spi_busy, 1000u))
                 LOGERROR("[bsp_spi] bus busy wait timed out; keeping ownership with active transfer");
             return HAL_TIMEOUT;
@@ -135,22 +205,17 @@ HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8
         spi_ins->cs_pin_state == NULL || ptr_data_rx == NULL || ptr_data_tx == NULL || len == 0u)
         return HAL_ERROR;
 
-    volatile uint8_t *busy_flag = NULL;
-    if (spi_ins->spi_handle->Instance == SPI1)
-        busy_flag = &SPIDeviceOnGoing[0];
-    else if (spi_ins->spi_handle->Instance == SPI2)
-        busy_flag = &SPIDeviceOnGoing[1];
-    else
+    int8_t bus_idx = SPIBusIndex(spi_ins);
+    if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
         return HAL_ERROR;
 
     if (spi_ins->spi_work_mode == SPI_BLOCK_MODE && !SPIBlockingContextCanWait())
         return HAL_BUSY;
 
-    HAL_StatusTypeDef status = SPIWaitIdle(busy_flag, SPI_BUSY_TIMEOUT_US);
+    HAL_StatusTypeDef status = SPIBusAcquire(spi_ins, (uint8_t)bus_idx, SPI_BUSY_TIMEOUT_US);
     if (status != HAL_OK)
         return status;
 
-    *busy_flag = 0u;
     spi_ins->rx_size = len;
     spi_ins->rx_buffer = ptr_data_rx;
     HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_RESET);
@@ -167,7 +232,7 @@ HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8
     case SPI_BLOCK_MODE:
         status = HAL_SPI_TransmitReceive(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len, 2u);
         HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
-        *busy_flag = 1u;
+        SPIBusRelease(spi_ins);
         spi_ins->CS_State = GPIO_PIN_SET;
         return status;
     default:
@@ -178,7 +243,7 @@ HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8
     if (status != HAL_OK)
     {
         HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
-        *busy_flag = 1u;
+        SPIBusRelease(spi_ins);
         spi_ins->CS_State = GPIO_PIN_SET;
     }
     return status;
@@ -211,9 +276,8 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
         {
             // 先拉高片选,结束传输,在判断是否有回调函数,如果有则调用回调函数
             HAL_GPIO_WritePin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin, GPIO_PIN_SET);
-            *spi_instance[i]->cs_pin_state =
-                spi_instance[i]->CS_State =
-                    HAL_GPIO_ReadPin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin);
+            spi_instance[i]->CS_State = HAL_GPIO_ReadPin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin);
+            SPIBusRelease(spi_instance[i]);
             // @todo 后续添加holdon模式,由用户自行决定何时释放片选,允许进行连续传输
             if (spi_instance[i]->callback != NULL) // 回调函数不为空, 则调用回调函数
                 spi_instance[i]->callback(spi_instance[i]);
@@ -249,12 +313,27 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
  */
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
 {
+    SPIInstance *owner = SPIBusAbortOwner(hspi);
+    if (owner != NULL)
+    {
+        for (size_t i = 0; i < idx; ++i)
+        {
+            if (spi_instance[i] == owner)
+            {
+                LOGERROR("[bsp_spi] SPI 传输出错, 已释放总线 (idx %u)", (unsigned)i);
+                return;
+            }
+        }
+        return;
+    }
+
+    /* Legacy SPITransmit/SPIRecv paths do not claim the synchronous bus owner. */
     for (size_t i = 0; i < idx; i++)
     {
-        if (spi_instance[i]->spi_handle == hspi)
+        if (spi_instance[i]->spi_handle == hspi &&
+            HAL_GPIO_ReadPin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin) == GPIO_PIN_RESET)
         {
             HAL_GPIO_WritePin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin, GPIO_PIN_SET);
-            *spi_instance[i]->cs_pin_state = 1u; /* 释放总线 */
             spi_instance[i]->CS_State = 1u;
             LOGERROR("[bsp_spi] SPI 传输出错, 已释放总线 (idx %u)", (unsigned)i);
             return;
