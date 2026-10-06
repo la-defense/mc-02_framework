@@ -14,6 +14,18 @@ static uint8_t idx = 0;                         // 配合中断以及初始化
 volatile uint8_t SPIDeviceOnGoing[SPI_DEVICE_CNT] = {[0 ... SPI_DEVICE_CNT - 1] = 1};
 static SPIInstance *spi_bus_owner[SPI_DEVICE_CNT] = {NULL};
 
+static uint32_t SPIBusEnterCritical(void)
+{
+    uint32_t previous_primask = __get_PRIMASK();
+    __disable_irq();
+    return previous_primask;
+}
+
+static void SPIBusExitCritical(uint32_t previous_primask)
+{
+    __set_PRIMASK(previous_primask);
+}
+
 /* SPI 总线忙等待超时(us): 正常一次传输是个位数微秒~百微秒量级, 1ms 足够;
    超时说明完成中断没来(总线/中断异常), 不能永久卡死在这里。 */
 #define SPI_BUSY_TIMEOUT_US 1000u
@@ -39,15 +51,14 @@ static int8_t SPIBusIndex(const SPIInstance *spi_ins)
    observe idle and overwrite the ownership of an active transfer. */
 static uint8_t SPIBusTryAcquire(SPIInstance *spi_ins, uint8_t bus_idx)
 {
-    uint32_t previous_primask = __get_PRIMASK();
-    __disable_irq();
+    uint32_t previous_primask = SPIBusEnterCritical();
     uint8_t acquired = (uint8_t)(SPIDeviceOnGoing[bus_idx] && spi_bus_owner[bus_idx] == NULL);
     if (acquired)
     {
         SPIDeviceOnGoing[bus_idx] = 0u;
         spi_bus_owner[bus_idx] = spi_ins;
     }
-    __set_PRIMASK(previous_primask);
+    SPIBusExitCritical(previous_primask);
     return acquired;
 }
 
@@ -57,14 +68,13 @@ static void SPIBusRelease(SPIInstance *spi_ins)
     if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
         return;
 
-    uint32_t previous_primask = __get_PRIMASK();
-    __disable_irq();
+    uint32_t previous_primask = SPIBusEnterCritical();
     if (spi_bus_owner[(uint8_t)bus_idx] == spi_ins)
     {
         spi_bus_owner[(uint8_t)bus_idx] = NULL;
         SPIDeviceOnGoing[(uint8_t)bus_idx] = 1u;
     }
-    __set_PRIMASK(previous_primask);
+    SPIBusExitCritical(previous_primask);
 }
 
 static SPIInstance *SPIBusAbortOwner(SPI_HandleTypeDef *hspi)
@@ -73,8 +83,7 @@ static SPIInstance *SPIBusAbortOwner(SPI_HandleTypeDef *hspi)
     if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
         return NULL;
 
-    uint32_t previous_primask = __get_PRIMASK();
-    __disable_irq();
+    uint32_t previous_primask = SPIBusEnterCritical();
     SPIInstance *owner = spi_bus_owner[(uint8_t)bus_idx];
     if (owner != NULL && owner->spi_handle == hspi)
     {
@@ -87,7 +96,7 @@ static SPIInstance *SPIBusAbortOwner(SPI_HandleTypeDef *hspi)
     {
         owner = NULL;
     }
-    __set_PRIMASK(previous_primask);
+    SPIBusExitCritical(previous_primask);
     return owner;
 }
 
