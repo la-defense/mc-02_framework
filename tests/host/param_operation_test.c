@@ -226,8 +226,26 @@ int main(void)
     for (uint32_t i = 0u; i < FLASH_BYTES; ++i)
         CHECK(((const uint8_t *)flash)[i] == 0xffu);
 
+    /* If erase succeeds but the safety window cannot close cleanly, report
+       failure while retaining the live RAM cache for the caller. */
+    const uint32_t cached_parameter = 0x12345678u;
+    uint32_t cached_readback = 0u;
+    CHECK(ParamSetU32(PARAM_KEY_IMU_G_NORM, cached_parameter) == 1u);
+    param_loaded = 1u;
+    param_seq = 23u;
+    param_active_region = 1u;
+    monitor_end_success = 0u;
+    erase_status = HAL_OK;
+    reset_events();
+    CHECK(ParamReset() == 0u);
+    CHECK(heater_inhibited == 1u);
+    CHECK(param_loaded == 1u && param_seq == 23u && param_active_region == 1u);
+    CHECK(ParamGetU32(PARAM_KEY_IMU_G_NORM, &cached_readback) == 1u);
+    CHECK(cached_readback == cached_parameter);
+
     reset_events();
     erase_status = HAL_ERROR;
+    monitor_end_success = 1u;
     CHECK(ParamCommit() == 0u);
     CHECK(heater_inhibited == 1u);
     CHECK(watchdog_timeout_ms == 200u);

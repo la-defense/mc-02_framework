@@ -24,6 +24,7 @@ static TaskMonitorItem_t monitor_items[TASK_MONITOR_COUNT] = {
 
 static uint8_t monitor_initialized = 0u;
 static uint8_t long_operation_timeout_latched = 0u;
+static uint8_t long_operation_fault_latched = 0u;
 static uint32_t monitor_tick_count = 0u;
 
 typedef struct
@@ -71,6 +72,19 @@ static uint8_t TaskMonitorHasActiveLongOperation(TaskMonitor_Id_e id, uint32_t n
     return (active && !long_operation_timeout_latched) ? 1u : 0u;
 }
 
+static uint8_t TaskMonitorHasAnyActiveLongOperation(void)
+{
+    for (uint32_t id = 0u; id < TASK_MONITOR_COUNT; ++id)
+    {
+        for (uint32_t operation = 0u; operation < TASK_MONITOR_LONG_OPERATION_COUNT; ++operation)
+        {
+            if (long_operation_windows[id][operation].active)
+                return 1u;
+        }
+    }
+    return 0u;
+}
+
 void TaskMonitorInit(void)
 {
     uint32_t now = HAL_GetTick();
@@ -82,6 +96,7 @@ void TaskMonitorInit(void)
     }
     memset(long_operation_windows, 0, sizeof(long_operation_windows));
     long_operation_timeout_latched = 0u;
+    long_operation_fault_latched = 0u;
     monitor_tick_count = 0u;
     monitor_initialized = 1u;
 }
@@ -99,7 +114,9 @@ void TaskMonitorTick(void)
 {
     monitor_tick_count++;
     uint32_t now = HAL_GetTick();
-    uint8_t all_alive = (long_operation_timeout_latched == 0u) ? 1u : 0u;
+    uint8_t all_alive = (long_operation_timeout_latched == 0u && long_operation_fault_latched == 0u)
+                            ? 1u
+                            : 0u;
 
     for (uint32_t i = 0; i < TASK_MONITOR_COUNT; ++i)
     {
@@ -109,6 +126,8 @@ void TaskMonitorTick(void)
         {
             item->alive = 0;
             all_alive = 0;
+            if (TaskMonitorHasAnyActiveLongOperation())
+                long_operation_fault_latched = 1u;
             if (!item->fault_logged)
             {
                 BSP_SafetyLatchOutputsOff();
@@ -127,7 +146,7 @@ void TaskMonitorTick(void)
         }
     }
 
-    if (long_operation_timeout_latched)
+    if (long_operation_timeout_latched || long_operation_fault_latched)
         all_alive = 0u;
 
     RobotSafetySetTaskHealthy(all_alive);
@@ -141,7 +160,7 @@ uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOpera
 {
     if (!monitor_initialized || id != TASK_MONITOR_INS || id >= TASK_MONITOR_COUNT ||
         operation >= TASK_MONITOR_LONG_OPERATION_COUNT || TaskMonitorLongOperationLimitMs(operation) == 0u ||
-        long_operation_timeout_latched)
+        long_operation_timeout_latched || long_operation_fault_latched)
         return 0u;
 
     uint32_t now = HAL_GetTick();
@@ -205,7 +224,8 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperati
     for (uint32_t i = 0u; i < TASK_MONITOR_COUNT; ++i)
         (void)TaskMonitorHasActiveLongOperation((TaskMonitor_Id_e)i, now);
 
-    if (within_limit && !long_operation_timeout_latched)
+    uint8_t operation_fault_latched = (uint8_t)(long_operation_timeout_latched || long_operation_fault_latched);
+    if (within_limit && !operation_fault_latched)
     {
         uint32_t first_task = (operation == TASK_MONITOR_LONG_OPERATION_FLASH) ? 0u : (uint32_t)id;
         uint32_t end_task = (operation == TASK_MONITOR_LONG_OPERATION_FLASH)
@@ -219,13 +239,13 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperati
         }
     }
     window->active = 0u;
-    uint8_t deadline_latched = long_operation_timeout_latched;
+    operation_fault_latched = (uint8_t)(long_operation_timeout_latched || long_operation_fault_latched);
     __set_PRIMASK(previous_primask);
 
-    uint8_t all_tasks_healthy = (deadline_latched == 0u) ? 1u : 0u;
+    uint8_t all_tasks_healthy = (operation_fault_latched == 0u) ? 1u : 0u;
     for (uint32_t i = 0u; i < TASK_MONITOR_COUNT; ++i)
     {
-        if (operation == TASK_MONITOR_LONG_OPERATION_FLASH && within_limit && !deadline_latched)
+        if (operation == TASK_MONITOR_LONG_OPERATION_FLASH && within_limit && !operation_fault_latched)
             continue; /* Begin verified every task; the CPU stall itself prevents task execution. */
         uint8_t active = TaskMonitorHasActiveLongOperation((TaskMonitor_Id_e)i, now);
         if (!monitor_items[i].alive ||
@@ -241,7 +261,7 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperati
         if ((!within_limit || !all_tasks_healthy) && !item->fault_logged)
         {
             BSP_SafetyLatchOutputsOff();
-            if (!within_limit || deadline_latched)
+            if (!within_limit || operation_fault_latched)
                 LOGERROR("[monitor] bounded long operation exceeded its deadline or another monitor fault occurred");
             else
                 LOGERROR("[monitor] another task faulted during bounded long operation");
@@ -258,7 +278,7 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperati
 
 uint8_t TaskMonitorAllAlive(void)
 {
-    if (long_operation_timeout_latched)
+    if (long_operation_timeout_latched || long_operation_fault_latched)
         return 0u;
     for (uint32_t i = 0; i < TASK_MONITOR_COUNT; ++i)
     {

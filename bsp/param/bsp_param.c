@@ -360,9 +360,12 @@ uint8_t ParamReset(void)
 
     uint8_t operation_ok = ParamFlashOperationEnd(operation_previous_timeout_ms,
                                                    (uint8_t)(ret == HAL_OK));
-    if (ret != HAL_OK)
+    if (ret != HAL_OK || !operation_ok)
     {
-        LOGERROR("[param] Flash reset failed, error=%lu", (unsigned long)sector_error);
+        if (ret != HAL_OK)
+            LOGERROR("[param] Flash reset failed, error=%lu", (unsigned long)sector_error);
+        else
+            LOGERROR("[param] Flash reset completed but safety guard failed; retaining RAM cache");
         return 0u;
     }
 

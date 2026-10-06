@@ -265,6 +265,8 @@ H723 是单 bank。擦写期间 CPU 停顿，所有 RTOS 任务都暂停，所�
 
 Flash 回调由 `RobotInit()` 在 `TaskMonitorInit()` 后注册到参数层。未注册保护时，`ParamCommit()` 和 `ParamReset()` 直接拒绝，避免其他调用路径绕过加热器和监控保护。
 
+`ParamReset()` 只有在擦除和保护窗口都成功结束后才清空 RAM 缓存并报告成功。如果 Flash 已擦除、但保护窗口结束检查失败，函数仍返回失败并保留当前 RAM 缓存，避免让调用方把失败误认为“参数已安全清空”。此时 Flash 确实已经被擦除；若随后复位，RAM 缓存会丢失，因此必须把返回值当作失败处理。
+
 ### 6.3 IWDG 配置自身仍需有界
 
 `BSP_WatchdogSetTimeout()` 修改 IWDG 前后等待 `PVU/RVU` 等更新标志，DWT 周期计数器限制等待时间，不依赖可能停滞的 HAL tick。修改超时会重新装载 IWDG；正常窗口结束后，daemon 必须在恢复后的 200ms 内再次通过健康检查并喂狗。

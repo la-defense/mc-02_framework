@@ -30,7 +30,8 @@ typedef struct
 void TaskMonitorInit(void);
 void TaskMonitorFeed(TaskMonitor_Id_e id);
 void TaskMonitorTick(void);
-/* Only INS may use these bounded windows. Other tasks remain monitored. */
+/* Only INS may use these bounded windows. Other tasks remain monitored.
+   A task fault observed during an active window remains latched until reset. */
 uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperation_e operation);
 uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperation_e operation);
 uint8_t TaskMonitorAllAlive(void);

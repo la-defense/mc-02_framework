@@ -184,6 +184,31 @@ int main(void)
     CHECK(watchdog_feed_count == 1u);
     CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
 
+    /* A task fault observed during calibration stays latched even if the task
+       feeds again before the operation ends. */
+    mc02_test_tick = 700u;
+    watchdog_feed_count = 0u;
+    reported_task_health = 1u;
+    mc02_test_irq_disabled = 0u;
+    mc02_test_primask = 0u;
+    TaskMonitorInit();
+    CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
+    mc02_test_tick += 6u;
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorTick();
+    CHECK(reported_task_health == 0u);
+    CHECK(watchdog_feed_count == 0u);
+    TaskMonitorFeed(TASK_MONITOR_INS);
+    TaskMonitorFeed(TASK_MONITOR_MOTOR);
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorTick();
+    CHECK(reported_task_health == 0u);
+    CHECK(watchdog_feed_count == 0u);
+    CHECK(TaskMonitorAllAlive() == 0u);
+    CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 0u);
+
     /* Flash stalls the whole H723 core, so a bounded window covers all task
        deadlines only after the begin call has verified them healthy. */
     mc02_test_tick = 1000u;
