@@ -116,6 +116,32 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   add_test(NAME production_parameter_flash_is_guarded COMMAND param_operation_test)
 
   add_executable(
+    bsp_adc_snapshot_test
+    bsp_adc_snapshot_test.c
+    ../../bsp/adc/bsp_adc.c)
+  target_include_directories(bsp_adc_snapshot_test BEFORE PRIVATE bsp_adc_fakes)
+  target_include_directories(bsp_adc_snapshot_test PRIVATE ../../bsp/adc)
+  add_test(NAME production_adc_snapshot_age_and_error COMMAND bsp_adc_snapshot_test)
+
+  add_executable(
+    bsp_adc_invalid_config_test
+    bsp_adc_snapshot_test.c
+    ../../bsp/adc/bsp_adc.c)
+  target_include_directories(bsp_adc_invalid_config_test BEFORE PRIVATE bsp_adc_fakes)
+  target_include_directories(bsp_adc_invalid_config_test PRIVATE ../../bsp/adc)
+  target_compile_definitions(bsp_adc_invalid_config_test PRIVATE
+    BSP_ADC_EXPECT_INVALID_CONFIG
+    BSP_ADC_VREF_MV=0u)
+  add_test(NAME production_adc_rejects_invalid_voltage_config COMMAND bsp_adc_invalid_config_test)
+
+  add_executable(
+    lcd_key_input_test
+    lcd_key_input_test.c
+    ../../modules/lcd/lcd_key_input.c)
+  target_include_directories(lcd_key_input_test PRIVATE ../../modules/lcd)
+  add_test(NAME production_lcd_invalid_sample_cancels_key COMMAND lcd_key_input_test)
+
+  add_executable(
     bmi088_calibration_temperature_test
     bmi088_calibration_temperature_test.c
     bmi088_host_fixture.c

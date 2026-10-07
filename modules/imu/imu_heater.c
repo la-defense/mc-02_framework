@@ -85,6 +85,23 @@ static void IMUHeaterApplyDuty(uint16_t duty)
         __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, heater_duty);
 }
 
+static uint8_t IMUHeaterReadFreshSupply(float *vcc_in)
+{
+    if (vcc_in == NULL)
+        return 0u;
+
+    BSP_ADC_Sample_t sample;
+    if (BSP_ADCGetSample(&sample) != BSP_ADC_STATUS_VALID ||
+        !sample.voltage_config_valid || !isfinite(sample.vcc_in_volts))
+    {
+        *vcc_in = 0.0f;
+        return 0u;
+    }
+
+    *vcc_in = sample.vcc_in_volts;
+    return 1u;
+}
+
 void IMUHeaterInit(void)
 {
     PID_Init_Config_s config = {
@@ -111,8 +128,8 @@ void IMUHeaterInit(void)
     supply_missing_logged = 0;
     heater_initialized = 1;
 
-    last_vcc_in = BSP_ADCGetVccIn();
-    if (last_vcc_in < IMU_HEATER_MIN_SUPPLY_V || last_vcc_in > IMU_HEATER_MAX_SUPPLY_V)
+    if (!IMUHeaterReadFreshSupply(&last_vcc_in) ||
+        last_vcc_in < IMU_HEATER_MIN_SUPPLY_V || last_vcc_in > IMU_HEATER_MAX_SUPPLY_V)
     {
         LOGWARNING("[imu_heat] VCC_IN not ready (%d.%dV), heater disabled until 24V present",
                    (int)last_vcc_in, (int)(last_vcc_in * 10.0f) % 10);
@@ -276,7 +293,17 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
        这样 USB-only 供电时 VCC_IN=0, 加热会被禁止, 不会再出现 PID 饱和后
        接上24V瞬间满功率的情况.
        注意: 先读VCC_IN再处理force_off, 保证EST时也能看到低压/过压日志. */
-    last_vcc_in = BSP_ADCGetVccIn();
+    if (!IMUHeaterReadFreshSupply(&last_vcc_in))
+    {
+        IMUHeaterForceOff();
+        if (!supply_missing_logged)
+        {
+            LOGWARNING("[imu_heat] VCC_IN sample invalid or stale, heater disabled");
+            supply_missing_logged = 1u;
+        }
+        return;
+    }
+
     if (last_vcc_in < IMU_HEATER_MIN_SUPPLY_V)
     {
         IMUHeaterForceOff();
