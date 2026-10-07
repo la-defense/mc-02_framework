@@ -4,6 +4,8 @@
 #include "bsp_log.h"
 #include "main.h"
 #include "bsp_safety.h"
+#include "bsp_dwt.h"
+#include "cmsis_os.h"
 #include <string.h>
 
 typedef struct
@@ -108,6 +110,25 @@ void TaskMonitorFeed(TaskMonitor_Id_e id)
 
     monitor_items[id].last_feed_ms = HAL_GetTick();
     monitor_items[id].alive = 1;
+}
+
+void TaskMonitorDelayMs(TaskMonitor_Id_e id, uint32_t milliseconds)
+{
+    if (id >= TASK_MONITOR_COUNT || milliseconds == 0u)
+        return;
+
+    if (!osKernelRunning())
+    {
+        DWT_Delay((float)milliseconds / 1000.0f);
+        return;
+    }
+
+    while (milliseconds > 0u)
+    {
+        osDelay(1u);
+        TaskMonitorFeed(id);
+        milliseconds--;
+    }
 }
 
 void TaskMonitorTick(void)

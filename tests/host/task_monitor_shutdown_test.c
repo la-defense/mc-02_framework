@@ -26,6 +26,28 @@ static uint32_t watchdog_feed_count;
 static uint32_t logged_after_shutdown;
 static uint32_t log_count;
 static uint8_t reported_task_health = 1u;
+static uint8_t scheduler_running;
+static uint32_t rtos_delay_count;
+static uint32_t dwt_delay_count;
+static float last_dwt_delay_seconds;
+
+uint8_t osKernelRunning(void)
+{
+    return scheduler_running;
+}
+
+void osDelay(uint32_t milliseconds)
+{
+    rtos_delay_count++;
+    mc02_test_tick += milliseconds;
+}
+
+void DWT_Delay(float seconds)
+{
+    dwt_delay_count++;
+    last_dwt_delay_seconds = seconds;
+    mc02_test_tick += (uint32_t)(seconds * 1000.0f);
+}
 
 void BSP_WatchdogFeed(void)
 {
@@ -65,6 +87,33 @@ int main(void)
     mc02_test_rcc = (RCC_TypeDef){0};
     mc02_test_irq_disabled = 0u;
     mc02_test_tick = 100u;
+    scheduler_running = 1u;
+    rtos_delay_count = 0u;
+    dwt_delay_count = 0u;
+    last_dwt_delay_seconds = 0.0f;
+
+    TaskMonitorInit();
+    TaskMonitorFeed(TASK_MONITOR_MOTOR);
+    TaskMonitorFeed(TASK_MONITOR_ROBOT);
+    TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorDelayMs(TASK_MONITOR_INS, 3u);
+    CHECK(rtos_delay_count == 3u);
+    CHECK(dwt_delay_count == 0u);
+    CHECK(mc02_test_tick == 103u);
+    TaskMonitorTick();
+    CHECK(reported_task_health == 1u);
+    CHECK(watchdog_feed_count == 1u);
+
+    scheduler_running = 0u;
+    TaskMonitorDelayMs(TASK_MONITOR_INS, 4u);
+    CHECK(rtos_delay_count == 3u);
+    CHECK(dwt_delay_count == 1u);
+    CHECK(last_dwt_delay_seconds > 0.0039f && last_dwt_delay_seconds < 0.0041f);
+
+    watchdog_feed_count = 0u;
+    logged_after_shutdown = 0u;
+    log_count = 0u;
+    reported_task_health = 1u;
 
     mc02_test_gpiob.ODR = 1u << 1u;
     mc02_test_gpioc.ODR = POWER_24V_1_Pin | POWER_24V_2_Pin | POWER_5V_Pin;

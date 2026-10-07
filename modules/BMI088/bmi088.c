@@ -12,6 +12,12 @@
 #include <math.h>
 
 static DaemonInstance *bmi088_daemon_instance;
+volatile uint32_t bmi088_init_error = BMI088_NO_ERROR;
+volatile uint32_t bmi088_init_retry_count = 0u;
+volatile uint32_t bmi088_init_acc_status = HAL_OK;
+volatile uint32_t bmi088_init_gyro_status = HAL_OK;
+volatile uint32_t bmi088_init_acc_chip_id = 0u;
+volatile uint32_t bmi088_init_gyro_chip_id = 0u;
 
 /* ---------------- 在线标定诊断量(2026-09-22, 排查 -O2 启动卡死) ----------------
    标定循环"卡住"时, 光看 PC 只能知道卡在哪, 看不出"为什么出不来"。这几个量把循环
@@ -142,17 +148,23 @@ static uint8_t BMI088AccelInit(BMI088Instance *bmi088)
     uint8_t whoami_check = 0;
 
     // 加速度计以I2C模式启动,需要一次上升沿来切换到SPI模式,因此进行一次fake write
-    BMI088AccelRead(bmi088, BMI088_ACC_CHIP_ID, &whoami_check, 1);
-    DWT_Delay(0.001);
+    HAL_StatusTypeDef status = BMI088AccelRead(bmi088, BMI088_ACC_CHIP_ID, &whoami_check, 1);
+    bmi088_init_acc_status = (uint32_t)status;
+    if (status != HAL_OK)
+        return BMI088_NO_SENSOR;
+    TaskMonitorDelayMs(TASK_MONITOR_INS, 1u);
 
     BMI088AccelWriteSingleReg(bmi088, BMI088_ACC_SOFTRESET, BMI088_ACC_SOFTRESET_VALUE); // 软复位
-    DWT_Delay(BMI088_COM_WAIT_SENSOR_TIME / 1000);
+    TaskMonitorDelayMs(TASK_MONITOR_INS, BMI088_COM_WAIT_SENSOR_TIME);
 
     // 检查ID,如果不是0x1E(bmi088 whoami寄存器值),则返回错误
-    BMI088AccelRead(bmi088, BMI088_ACC_CHIP_ID, &whoami_check, 1);
-    if (whoami_check != BMI088_ACC_CHIP_ID_VALUE)
+    whoami_check = 0u;
+    status = BMI088AccelRead(bmi088, BMI088_ACC_CHIP_ID, &whoami_check, 1);
+    bmi088_init_acc_status = (uint32_t)status;
+    bmi088_init_acc_chip_id = whoami_check;
+    if (status != HAL_OK || whoami_check != BMI088_ACC_CHIP_ID_VALUE)
         return BMI088_NO_SENSOR;
-    DWT_Delay(0.001);
+    TaskMonitorDelayMs(TASK_MONITOR_INS, 1u);
     // 初始化寄存器,提高可读性
     uint8_t reg = 0, data = 0;
     BMI088_ERORR_CODE_e error = 0;
@@ -162,9 +174,12 @@ static uint8_t BMI088AccelInit(BMI088Instance *bmi088)
         reg = BMI088_Accel_Init_Table[i][BMI088REG];
         data = BMI088_Accel_Init_Table[i][BMI088DATA];
         BMI088AccelWriteSingleReg(bmi088, reg, data); // 写入寄存器
-        DWT_Delay(0.01);
-        BMI088AccelRead(bmi088, reg, &data, 1); // 写完之后立刻读回检查
-        DWT_Delay(0.01);
+        TaskMonitorDelayMs(TASK_MONITOR_INS, 10u);
+        status = BMI088AccelRead(bmi088, reg, &data, 1); // 写完之后立刻读回检查
+        bmi088_init_acc_status = (uint32_t)status;
+        TaskMonitorDelayMs(TASK_MONITOR_INS, 10u);
+        if (status != HAL_OK)
+            return BMI088_NO_SENSOR;
         if (data != BMI088_Accel_Init_Table[i][BMI088DATA])
             error |= BMI088_Accel_Init_Table[i][BMI088ERROR];
         //{i--;} 可以设置retry次数,如果retry次数用完了,则返回error
@@ -183,14 +198,16 @@ static uint8_t BMI088GyroInit(BMI088Instance *bmi088)
     // 后续添加reset和通信检查?
     // code to go here ...
     BMI088GyroWriteSingleReg(bmi088, BMI088_GYRO_SOFTRESET, BMI088_GYRO_SOFTRESET_VALUE); // 软复位
-    DWT_Delay(0.08);
+    TaskMonitorDelayMs(TASK_MONITOR_INS, BMI088_LONG_DELAY_TIME);
 
     // 检查ID,如果不是0x0F(bmi088 whoami寄存器值),则返回错误
     uint8_t whoami_check = 0;
-    BMI088GyroRead(bmi088, BMI088_GYRO_CHIP_ID, &whoami_check, 1);
-    if (whoami_check != BMI088_GYRO_CHIP_ID_VALUE)
+    HAL_StatusTypeDef status = BMI088GyroRead(bmi088, BMI088_GYRO_CHIP_ID, &whoami_check, 1);
+    bmi088_init_gyro_status = (uint32_t)status;
+    bmi088_init_gyro_chip_id = whoami_check;
+    if (status != HAL_OK || whoami_check != BMI088_GYRO_CHIP_ID_VALUE)
         return BMI088_NO_SENSOR;
-    DWT_Delay(0.001);
+    TaskMonitorDelayMs(TASK_MONITOR_INS, 1u);
 
     // 初始化寄存器,提高可读性
     uint8_t reg = 0, data = 0;
@@ -201,9 +218,12 @@ static uint8_t BMI088GyroInit(BMI088Instance *bmi088)
         reg = BMI088_Gyro_Init_Table[i][BMI088REG];
         data = BMI088_Gyro_Init_Table[i][BMI088DATA];
         BMI088GyroWriteSingleReg(bmi088, reg, data); // 写入寄存器
-        DWT_Delay(0.001);
-        BMI088GyroRead(bmi088, reg, &data, 1); // 写完之后立刻读回对应寄存器检查是否写入成功
-        DWT_Delay(0.001);
+        TaskMonitorDelayMs(TASK_MONITOR_INS, 1u);
+        status = BMI088GyroRead(bmi088, reg, &data, 1); // 写完之后立刻读回对应寄存器检查是否写入成功
+        bmi088_init_gyro_status = (uint32_t)status;
+        TaskMonitorDelayMs(TASK_MONITOR_INS, 1u);
+        if (status != HAL_OK)
+            return BMI088_NO_SENSOR;
         if (data != BMI088_Gyro_Init_Table[i][BMI088DATA])
             error |= BMI088_Gyro_Init_Table[i][BMI088ERROR];
         //{i--;} 可以设置retry次数,尝试重新写入.如果retry次数用完了,则返回error
@@ -393,8 +413,8 @@ spi_failure:
    原来是 12s 超时前无限重试; -O2 下超时判据失效就变成无限重标定 → 启动卡死。 */
 #define BMI088_CALI_MAX_ATTEMPTS 3u
 /* 标定循环里每隔多少次采样让出一次 CPU(给 daemon 喂狗、给 LCD 显示"标定中") */
-#define BMI088_CALI_YIELD_INTERVAL 512u
-#define BMI088_CALI_YIELD_MS 10u
+#define BMI088_CALI_YIELD_INTERVAL 4u
+#define BMI088_CALI_YIELD_MS 1u
 /**
  * @brief BMI088 acc gyro 标定
  * @note 标定后的数据存储在bmi088->bias和gNorm中,用于后续数据消噪和单位转换归一化
@@ -888,14 +908,27 @@ uint8_t BMI088CalibIsValid(void)
 
 BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
 {
+    bmi088_init_error = BMI088_NO_ERROR;
+    bmi088_init_retry_count = 0u;
+    bmi088_init_acc_status = HAL_OK;
+    bmi088_init_gyro_status = HAL_OK;
+    bmi088_init_acc_chip_id = 0u;
+    bmi088_init_gyro_chip_id = 0u;
+
     if (config == NULL || config->work_mode != BMI088_BLOCK_PERIODIC_MODE)
     {
+        bmi088_init_error = BMI088_NO_SENSOR;
         LOGERROR("[bmi088] asynchronous trigger sampling is not supported by the synchronous snapshot API");
         return NULL;
     }
 
     // 申请内存
     BMI088Instance *bmi088_instance = (BMI088Instance *)zmalloc(sizeof(BMI088Instance));
+    if (bmi088_instance == NULL)
+    {
+        bmi088_init_error = BMI088_NO_SENSOR;
+        return NULL;
+    }
     // 从右向左赋值,让bsp instance保存指向bmi088_instance的指针(父指针),便于在底层中断中访问bmi088_instance
     config->acc_int_config.id =
         config->gyro_int_config.id =
@@ -936,11 +969,16 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         error |= BMI088AccelInit(bmi088_instance);
         error |= BMI088GyroInit(bmi088_instance);
         init_retry++;
+        bmi088_init_retry_count = init_retry;
+        bmi088_init_error = (uint32_t)error;
     } while (error != 0 && init_retry < BMI088_INIT_MAX_RETRY);
 
     if (error != 0)
     {
-        LOGERROR("[bmi088] init failed after %u retries, error=0x%02X", init_retry, error);
+        LOGERROR("[bmi088] init failed after %u retries, error=0x%02X acc_id=0x%02X acc_status=%u gyro_id=0x%02X gyro_status=%u",
+                 (unsigned)init_retry, (unsigned)error,
+                 (unsigned)bmi088_init_acc_chip_id, (unsigned)bmi088_init_acc_status,
+                 (unsigned)bmi088_init_gyro_chip_id, (unsigned)bmi088_init_gyro_status);
         return NULL;
     }
 

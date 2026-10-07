@@ -158,6 +158,18 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   add_test(NAME bmi088_calibration_preserves_celsius COMMAND bmi088_calibration_temperature_test)
 
   add_executable(
+    bmi088_init_failure_test
+    bmi088_init_failure_test.c
+    bmi088_host_fixture.c
+    ../../modules/BMI088/bmi088.c)
+  target_include_directories(bmi088_init_failure_test BEFORE PRIVATE bmi088_fakes)
+  target_include_directories(bmi088_init_failure_test PRIVATE . ../../modules/BMI088)
+  target_compile_options(bmi088_init_failure_test PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(bmi088_init_failure_test PRIVATE -Wl,--gc-sections)
+  target_link_libraries(bmi088_init_failure_test PRIVATE m)
+  add_test(NAME bmi088_startup_failure_diagnostics COMMAND bmi088_init_failure_test)
+
+  add_executable(
     bmi088_sample_status_test
     bmi088_sample_status_test.c
     bmi088_host_fixture.c

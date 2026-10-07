@@ -7,6 +7,10 @@
 typedef struct
 {
     uint32_t synthetic_time_us;
+    uint32_t unyielded_busy_wait_us;
+    uint32_t max_unyielded_busy_wait_us;
+    uint32_t os_delay_call_count;
+    uint32_t ins_monitor_feed_count;
     uint32_t transfer_count;
     uint32_t fail_transfer_number;
     HAL_StatusTypeDef fail_status;
@@ -21,11 +25,15 @@ typedef struct
     uint8_t calibration_monitor_end_success;
     uint8_t calibration_heater_end_success;
     uint8_t calibration_monitor_allow;
+    uint8_t scheduler_running;
+    uint8_t accel_chip_id;
 } BMI088HostFixture_t;
 
 extern BMI088HostFixture_t bmi088_host_fixture;
 
 void BMI088HostReset(void);
+void BMI088HostSetKernelRunning(uint8_t running);
+void BMI088HostSetAccelChipId(uint8_t chip_id);
 void BMI088HostFailTransferAfter(uint32_t transfer_offset, HAL_StatusTypeDef status);
 void BMI088HostFailNextTransferAfterParamInit(HAL_StatusTypeDef status);
 BMI088Instance *BMI088HostCreateAcquireInstance(void);
