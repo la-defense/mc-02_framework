@@ -24,12 +24,12 @@ EXPECTED_EXPRESSIONS = {
 }
 
 EXPECTED_FIELD_SPECS = {
-    "tick_ms": ("uwTick", "mdw", 32),
-    "vision_mode": ("recv_data.mode", "mdb", 8),
-    "vision_rx_count": ("vision_rx_count", "mdw", 32),
-    "vision_tx_count": ("vision_tx_count", "mdw", 32),
-    "vision_crc_error_count": ("vision_crc_error_count", "mdw", 32),
-    "iwdg_reset_flag": ("iwdg_reset_flag", "mdb", 8),
+    "tick_ms": ("uwTick", "mdw", 32, 4),
+    "vision_mode": ("recv_data.mode", "mdb", 8, 1),
+    "vision_rx_count": ("vision_rx_count", "mdw", 32, 4),
+    "vision_tx_count": ("vision_tx_count", "mdw", 32, 4),
+    "vision_crc_error_count": ("vision_crc_error_count", "mdw", 32, 4),
+    "iwdg_reset_flag": ("iwdg_reset_flag", "mdb", 8, 1),
 }
 
 TEST_ADDRESSES = {
@@ -119,7 +119,7 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
 
         self.assertEqual(
             {
-                key: (field.expression, field.command, field.width_bits)
+                key: (field.expression, field.command, field.width_bits, field.alignment_bytes)
                 for key, field in probe_snapshot_live.SNAPSHOT_FIELDS.items()
             },
             EXPECTED_FIELD_SPECS,

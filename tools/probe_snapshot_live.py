@@ -45,6 +45,10 @@ class SnapshotField:
     command: str
     width_bits: int
 
+    @property
+    def alignment_bytes(self) -> int:
+        return self.width_bits // 8
+
 
 SNAPSHOT_FIELDS = {
     "tick_ms": SnapshotField("uwTick", "mdw", 32),
@@ -143,9 +147,8 @@ def _validate_snapshot_addresses(addresses: dict[str, int]) -> None:
         raise ProbeIOError("snapshot addresses do not match the approved fields (" + "; ".join(details) + ")")
 
     for key, field in SNAPSHOT_FIELDS.items():
-        alignment = 4 if field.command == "mdw" else 1
         try:
-            _validated_address(addresses[key], alignment)
+            _validated_address(addresses[key], field.alignment_bytes)
         except ValueError as error:
             raise ProbeIOError(f"ELF symbol {key} has an invalid address: {error}") from error
 
@@ -154,8 +157,7 @@ def _build_read_command(key: str, address: int) -> str:
     if key not in SNAPSHOT_FIELDS:
         raise ValueError(f"unsupported snapshot field: {key}")
     field = SNAPSHOT_FIELDS[key]
-    alignment = 4 if field.command == "mdw" else 1
-    validated = _validated_address(address, alignment)
+    validated = _validated_address(address, field.alignment_bytes)
     return f"{field.command} 0x{validated:08x} 1"
 
 
