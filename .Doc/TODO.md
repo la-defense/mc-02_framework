@@ -250,8 +250,10 @@ Unicom
 - [x] **HIL-07 / P0** 重插 CMSIS-DAP 后经 OpenOCD/SWD 读取 HIL 前后固件计数：RX 1243→1545（+302），CRC 错误维持 0；增加量与 268 个瞄准帧、32 个中立帧及退出中立帧一致，证明下位机解析成功。断链后视觉超时清零已由固件验证。
 - [x] **HIL-08 / P1** 已记录 WSL 依赖、CMake 构建、demo/相机运行、USB/IP 与 MVS 桥命令及测试结果；遗留 CMSIS-DAP 计数复核已记录在部署文档。
 - [x] **HIL-09 / P1** Windows COM14 连续监听 5.027 秒收到 1004 个 CRC 正确的 43 字节状态帧（199.73 Hz），同期固件状态帧提交 +1006、USB busy 丢帧不变。WSL HIL 活跃中段 SWD 采样约 200 Hz，busy 计数保持不变；程序退出且无读取者后 busy 计数继续增长，已记录为无人读取时的待优化现象。
-- [x] **HIL-10** [bug] 运行态 SWD 快照已改为离线 GDB 解析 ELF 符号、本机 OpenOCD Telnet 白名单读取；GDB/Tcl 端口禁用，STM32H7 examine-end 回调清空，SWD 400 kHz。验收：主机回归 11/11 通过；CMSIS-DAP 实测 5 次快照，每次内存读取前后检查 mc02.cpu0 为 running，uwTick 递增，IWDG=0、视觉 CRC 计数保持 8；同期 COM14 被动收到 1000 个 43 字节 SP 状态帧，CRC 全部通过，mode=0。没有发送串口帧、复位或烧录。历史长时 USB I/O 错误缺原始日志，未归因。
+- [x] **HIL-10** [bug] 运行态 SWD 快照已改为离线 GDB 解析 ELF 符号、本机 OpenOCD Telnet 白名单读取；地址限于链接脚本 RAM，命令与符号地址及读取宽度精确匹配；GDB/Tcl 端口禁用，STM32H7 examine-end 回调清空，SWD 400 kHz。验收：主机回归 14/14 通过；CMSIS-DAP 首轮 5 次、加固后 3 次快照，每次内存读取前后检查 mc02.cpu0 为 running，uwTick 递增，IWDG=0、视觉 CRC 计数保持 8；同期 COM14 被动收到 1000 个 43 字节 SP 状态帧，CRC 全部通过，mode=0。没有发送串口帧、复位或烧录。历史长时 USB I/O 错误缺原始日志，未归因。详见[HIL-10 票据](../docs/workflow/tickets/HIL-10.md)。
 2026-10-07 实机验证及原因：旧 GDB extended-remote 路径即使配置空的 gdb-attach/gdb-detach 回调，也曾使核心报告 halted；未执行恢复命令，随后查询为 running。新路径在 CMSIS-DAP 上实测 5 次快照，每次读前后均为 running；同期 COM14 收到 1000 个 CRC 正确的状态帧。历史 USB I/O 错误仍需原始日志才能归因。
+
+2026-10-07 安全加固复测：工具现拒绝链接脚本 RAM 区域以外的地址，并将 Telnet 读取限制到 ELF 符号清单中的准确地址／宽度组合；14 项工具回归全部通过。CMSIS-DAP 新增 3 次快照，`uwTick` 从 1434371 连续增至 1435020，IWDG=0、视觉 CRC=8，每个 RAM 读取前后目标均为 running。未执行烧录、停核、复位、写 RAM 或串口发送。
 
 ## 工程与教学工作流
 

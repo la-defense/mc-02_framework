@@ -23,6 +23,15 @@ EXPECTED_EXPRESSIONS = {
     "iwdg_reset_flag": "iwdg_reset_flag",
 }
 
+EXPECTED_FIELD_SPECS = {
+    "tick_ms": ("uwTick", "mdw", 32),
+    "vision_mode": ("recv_data.mode", "mdb", 8),
+    "vision_rx_count": ("vision_rx_count", "mdw", 32),
+    "vision_tx_count": ("vision_tx_count", "mdw", 32),
+    "vision_crc_error_count": ("vision_crc_error_count", "mdw", 32),
+    "iwdg_reset_flag": ("iwdg_reset_flag", "mdb", 8),
+}
+
 TEST_ADDRESSES = {
     "tick_ms": 0x2400AC30,
     "vision_mode": 0x2400E5DE,
@@ -108,7 +117,13 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
         command = probe_snapshot_live.build_symbol_command("arm-none-eabi-gdb", "firmware.elf")
         gdb_commands = [command[index + 1] for index, arg in enumerate(command[:-1]) if arg == "--ex"]
 
-        self.assertEqual(probe_snapshot_live.EXPRESSIONS, EXPECTED_EXPRESSIONS)
+        self.assertEqual(
+            {
+                key: (field.expression, field.command, field.width_bits)
+                for key, field in probe_snapshot_live.SNAPSHOT_FIELDS.items()
+            },
+            EXPECTED_FIELD_SPECS,
+        )
         self.assertEqual(len(gdb_commands), len(EXPECTED_EXPRESSIONS) + 2)
         self.assertEqual(gdb_commands[:2], ["set pagination off", "set confirm off"])
         for key, expression in EXPECTED_EXPRESSIONS.items():
@@ -125,6 +140,14 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
         self.assertEqual(probe_snapshot_live.parse_addresses(output), TEST_ADDRESSES)
         with self.assertRaises(probe_snapshot_live.ProbeIOError):
             probe_snapshot_live.parse_addresses("tick_ms=0x2400ac30")
+
+    def test_symbol_address_parser_rejects_addresses_outside_linker_ram(self):
+        invalid = dict(TEST_ADDRESSES)
+        invalid["vision_rx_count"] = 0x40000000
+        output = "\n".join(f"{key}=0x{address:x}" for key, address in invalid.items())
+
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.parse_addresses(output)
 
     def test_offline_symbol_lookup_has_a_hard_timeout(self):
         with patch.object(
@@ -200,14 +223,45 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
         self.assertEqual(server.commands[-1], "targets")
         self.assertFalse(any(command in {"halt", "reset", "resume"} for command in server.commands))
 
+    def test_snapshot_rejects_addresses_outside_linker_ram_before_connecting(self):
+        server = FakeOpenOCDServer()
+        invalid = dict(TEST_ADDRESSES)
+        invalid["vision_rx_count"] = 0x40000000
+        try:
+            with self.assertRaises(probe_snapshot_live.ProbeIOError):
+                probe_snapshot_live.read_snapshot(
+                    invalid, "127.0.0.1", server.port, timeout=1.0
+                )
+        finally:
+            server.close()
+
+        self.assertEqual(server.commands, [])
+
     def test_telnet_command_whitelist_rejects_run_control(self):
         server = FakeOpenOCDServer()
         try:
             with probe_snapshot_live.OpenOCDTelnetClient(
-                "127.0.0.1", server.port, timeout=1.0
+                "127.0.0.1", server.port, timeout=1.0,
+                allowed_addresses=TEST_ADDRESSES,
             ) as client:
                 with self.assertRaises(ValueError):
                     client.command("halt")
+        finally:
+            server.close()
+
+        self.assertEqual(server.commands, [])
+
+    def test_telnet_memory_command_must_use_a_resolved_elf_symbol_address(self):
+        server = FakeOpenOCDServer()
+        try:
+            with probe_snapshot_live.OpenOCDTelnetClient(
+                "127.0.0.1", server.port, timeout=1.0,
+                allowed_addresses=TEST_ADDRESSES,
+            ) as client:
+                with self.assertRaises(ValueError):
+                    client.command("mdw 0x24000000 1")
+                with self.assertRaises(ValueError):
+                    client.command(f"mdb 0x{TEST_ADDRESSES['tick_ms']:08x} 1")
         finally:
             server.close()
 
@@ -218,7 +272,8 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
         try:
             with self.assertRaises(probe_snapshot_live.ProbeIOError):
                 with probe_snapshot_live.OpenOCDTelnetClient(
-                    "127.0.0.1", server.port, timeout=0.05
+                    "127.0.0.1", server.port, timeout=0.05,
+                    allowed_addresses=TEST_ADDRESSES,
                 ):
                     self.fail("delayed prompt unexpectedly connected")
         finally:
@@ -227,7 +282,9 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
     def test_telnet_client_rejects_non_loopback_hosts(self):
         for host in ("192.0.2.1", "localhost"):
             with self.subTest(host=host), self.assertRaises(ValueError):
-                probe_snapshot_live.OpenOCDTelnetClient(host, 4444, timeout=1.0)
+                probe_snapshot_live.OpenOCDTelnetClient(
+                    host, 4444, timeout=1.0, allowed_addresses=TEST_ADDRESSES
+                )
 
     def test_snapshot_change_classification_distinguishes_reset_and_counter_decrease(self):
         before = {
@@ -243,6 +300,20 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
             "vision_tx_count": 0,
             "vision_crc_error_count": 0,
             "iwdg_reset_flag": 1,
+        }
+        watchdog_flag_without_tick_rollback = {
+            "tick_ms": 1200,
+            "vision_rx_count": 25,
+            "vision_tx_count": 50,
+            "vision_crc_error_count": 1,
+            "iwdg_reset_flag": 1,
+        }
+        tick_rollback_without_watchdog_flag = {
+            "tick_ms": 20,
+            "vision_rx_count": 25,
+            "vision_tx_count": 50,
+            "vision_crc_error_count": 1,
+            "iwdg_reset_flag": 0,
         }
         counter_decrease_without_reset_evidence = {
             "tick_ms": 1200,
@@ -267,6 +338,14 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
         }
 
         self.assertEqual(probe_snapshot_live.classify_change(before, watchdog_reset), "target-reset-iwdg")
+        self.assertEqual(
+            probe_snapshot_live.classify_change(before, watchdog_flag_without_tick_rollback),
+            "target-reset-iwdg",
+        )
+        self.assertEqual(
+            probe_snapshot_live.classify_change(before, tick_rollback_without_watchdog_flag),
+            "target-reset-other-or-unknown",
+        )
         self.assertEqual(
             probe_snapshot_live.classify_change(before, counter_decrease_without_reset_evidence),
             "counter-decrease-unclassified",

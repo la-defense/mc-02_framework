@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -23,31 +24,36 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ELF = ROOT / "build" / "bench-safe" / "Basic_Framework_MC02_bench_safe.elf"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_TELNET_PORT = 4444
-EXPRESSIONS = {
-    "tick_ms": "uwTick",
-    "vision_mode": "recv_data.mode",
-    "vision_rx_count": "vision_rx_count",
-    "vision_tx_count": "vision_tx_count",
-    "vision_crc_error_count": "vision_crc_error_count",
-    "iwdg_reset_flag": "iwdg_reset_flag",
-}
 COUNTERS = ("vision_rx_count", "vision_tx_count", "vision_crc_error_count")
-READ_COMMANDS = {
-    "tick_ms": "mdw",
-    "vision_mode": "mdb",
-    "vision_rx_count": "mdw",
-    "vision_tx_count": "mdw",
-    "vision_crc_error_count": "mdw",
-    "iwdg_reset_flag": "mdb",
-}
+# STM32H723VGTx_FLASH.ld defines RAM at 0x24000000 with length 128 KiB.
+# Live inspection is intentionally limited to this linker RAM region.
+SNAPSHOT_RAM_START = 0x24000000
+SNAPSHOT_RAM_END = 0x24020000  # exclusive
 SYMBOL_VALUE_PATTERN = re.compile(r"^(?P<key>[a-z_]+)=0x(?P<value>[0-9a-fA-F]+)$")
 MEMORY_VALUE_PATTERN = re.compile(
     r"^\s*0x(?P<address>[0-9a-fA-F]+):\s*(?:0x)?(?P<value>[0-9a-fA-F]+)\b"
 )
-MEMORY_COMMAND_PATTERN = re.compile(r"(?:mdb|mdw) 0x[0-9a-f]{1,8} 1\Z")
+MEMORY_COMMAND_PATTERN = re.compile(r"(?P<command>mdb|mdw) 0x(?P<address>[0-9a-f]{1,8}) 1\Z")
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 MAX_RESPONSE_BYTES = 65536
 UINT32_MAX = 0xFFFFFFFF
+
+
+@dataclass(frozen=True)
+class SnapshotField:
+    expression: str
+    command: str
+    width_bits: int
+
+
+SNAPSHOT_FIELDS = {
+    "tick_ms": SnapshotField("uwTick", "mdw", 32),
+    "vision_mode": SnapshotField("recv_data.mode", "mdb", 8),
+    "vision_rx_count": SnapshotField("vision_rx_count", "mdw", 32),
+    "vision_tx_count": SnapshotField("vision_tx_count", "mdw", 32),
+    "vision_crc_error_count": SnapshotField("vision_crc_error_count", "mdw", 32),
+    "iwdg_reset_flag": SnapshotField("iwdg_reset_flag", "mdb", 8),
+}
 
 
 class ProbeIOError(RuntimeError):
@@ -58,8 +64,8 @@ def build_symbol_command(gdb: str, elf: str) -> list[str]:
     """Build an offline GDB invocation; it must never connect to a target."""
     commands = ["set pagination off", "set confirm off"]
     commands.extend(
-        f'printf "{key}=0x%x\\n", (unsigned int)&({expression})'
-        for key, expression in EXPRESSIONS.items()
+        f'printf "{key}=0x%x\\n", (unsigned int)&({field.expression})'
+        for key, field in SNAPSHOT_FIELDS.items()
     )
     argv = [gdb, "--nx", "--quiet", "--batch", "--symbols", elf]
     for command in commands:
@@ -71,15 +77,10 @@ def parse_addresses(output: str) -> dict[str, int]:
     addresses: dict[str, int] = {}
     for line in output.splitlines():
         match = SYMBOL_VALUE_PATTERN.fullmatch(line.strip())
-        if match and match.group("key") in EXPRESSIONS:
+        if match and match.group("key") in SNAPSHOT_FIELDS:
             addresses[match.group("key")] = int(match.group("value"), 16)
 
-    missing = set(EXPRESSIONS) - addresses.keys()
-    if missing:
-        raise ProbeIOError(f"ELF symbol lookup is incomplete; missing: {', '.join(sorted(missing))}")
-    for key, address in addresses.items():
-        if not 0 < address <= UINT32_MAX:
-            raise ProbeIOError(f"ELF symbol {key} has an invalid address: 0x{address:x}")
+    _validate_snapshot_addresses(addresses)
     return addresses
 
 
@@ -121,19 +122,41 @@ def _validate_port(port: int) -> None:
 def _validated_address(address: int, alignment: int) -> int:
     if isinstance(address, bool) or not isinstance(address, int):
         raise ValueError("symbol addresses must be integers")
-    if not 0 < address <= UINT32_MAX:
-        raise ValueError("symbol address is outside the 32-bit address space")
+    if not SNAPSHOT_RAM_START <= address < SNAPSHOT_RAM_END or address > UINT32_MAX:
+        raise ValueError("symbol address is outside the approved linker RAM region")
     if address % alignment:
         raise ValueError(f"symbol address 0x{address:x} is not {alignment}-byte aligned")
     return address
 
 
+def _validate_snapshot_addresses(addresses: dict[str, int]) -> None:
+    expected = set(SNAPSHOT_FIELDS)
+    supplied = set(addresses)
+    missing = expected - supplied
+    extra = supplied - expected
+    if missing or extra:
+        details = []
+        if missing:
+            details.append(f"missing: {', '.join(sorted(missing))}")
+        if extra:
+            details.append(f"unexpected: {', '.join(sorted(extra))}")
+        raise ProbeIOError("snapshot addresses do not match the approved fields (" + "; ".join(details) + ")")
+
+    for key, field in SNAPSHOT_FIELDS.items():
+        alignment = 4 if field.command == "mdw" else 1
+        try:
+            _validated_address(addresses[key], alignment)
+        except ValueError as error:
+            raise ProbeIOError(f"ELF symbol {key} has an invalid address: {error}") from error
+
+
 def _build_read_command(key: str, address: int) -> str:
-    if key not in READ_COMMANDS:
+    if key not in SNAPSHOT_FIELDS:
         raise ValueError(f"unsupported snapshot field: {key}")
-    alignment = 4 if READ_COMMANDS[key] == "mdw" else 1
+    field = SNAPSHOT_FIELDS[key]
+    alignment = 4 if field.command == "mdw" else 1
     validated = _validated_address(address, alignment)
-    return f"{READ_COMMANDS[key]} 0x{validated:08x} 1"
+    return f"{field.command} 0x{validated:08x} 1"
 
 
 def _parse_memory_value(output: str, expected_address: int, width_bits: int) -> int:
@@ -164,7 +187,7 @@ def _require_running(output: str, when: str) -> None:
 class OpenOCDTelnetClient:
     """Minimal bounded Telnet client with a strict OpenOCD command allowlist."""
 
-    def __init__(self, host: str, port: int, timeout: float):
+    def __init__(self, host: str, port: int, timeout: float, allowed_addresses: dict[str, int]):
         _validate_loopback_host(host)
         _validate_port(port)
         if not 0 < timeout <= 5.0:
@@ -172,6 +195,11 @@ class OpenOCDTelnetClient:
         self.host = host
         self.port = port
         self.timeout = timeout
+        _validate_snapshot_addresses(allowed_addresses)
+        self.allowed_reads = frozenset(
+            (field.command, allowed_addresses[key])
+            for key, field in SNAPSHOT_FIELDS.items()
+        )
         self._socket: socket.socket | None = None
         self._wire = bytearray()
         self._deadline = 0.0
@@ -200,8 +228,15 @@ class OpenOCDTelnetClient:
                 self._socket = None
 
     def command(self, command: str) -> str:
-        if command != "targets" and not MEMORY_COMMAND_PATTERN.fullmatch(command):
-            raise ValueError("only targets, mdb, and mdw single-value reads are allowed")
+        if command == "targets":
+            pass
+        else:
+            match = MEMORY_COMMAND_PATTERN.fullmatch(command)
+            if match is None:
+                raise ValueError("only targets, mdb, and mdw single-value reads are allowed")
+            read = (match.group("command"), int(match.group("address"), 16))
+            if read not in self.allowed_reads:
+                raise ValueError("memory reads must match an ELF-resolved symbol address and width")
         if self._socket is None:
             raise ProbeIOError("OpenOCD Telnet connection is closed")
         try:
@@ -271,19 +306,20 @@ class OpenOCDTelnetClient:
 
 
 def read_snapshot(addresses: dict[str, int], host: str, port: int, timeout: float) -> dict[str, int]:
-    missing = set(EXPRESSIONS) - addresses.keys()
-    if missing:
-        raise ProbeIOError(f"snapshot addresses are incomplete; missing: {', '.join(sorted(missing))}")
+    _validate_snapshot_addresses(addresses)
 
     snapshot: dict[str, int] = {}
     try:
-        with OpenOCDTelnetClient(host, port, timeout) as client:
+        with OpenOCDTelnetClient(
+            host, port, timeout, allowed_addresses=addresses
+        ) as client:
             _require_running(client.command("targets"), "before the snapshot")
             for key, address in addresses.items():
                 command = _build_read_command(key, address)
                 output = client.command(command)
-                width = 32 if READ_COMMANDS[key] == "mdw" else 8
-                snapshot[key] = _parse_memory_value(output, address, width)
+                snapshot[key] = _parse_memory_value(
+                    output, address, SNAPSHOT_FIELDS[key].width_bits
+                )
                 _require_running(client.command("targets"), f"after reading {key}")
     except (OSError, ValueError) as error:
         if isinstance(error, ProbeIOError):
