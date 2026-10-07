@@ -29,6 +29,8 @@ typedef struct
 
 void TaskMonitorInit(void);
 void TaskMonitorFeed(TaskMonitor_Id_e id);
+/* Delay cooperatively in a running scheduler and refresh only the owner's heartbeat. */
+void TaskMonitorDelayMs(TaskMonitor_Id_e id, uint32_t milliseconds);
 void TaskMonitorTick(void);
 /* Only INS may use these bounded windows. Other tasks remain monitored.
    A task fault observed during an active window remains latched until reset. */

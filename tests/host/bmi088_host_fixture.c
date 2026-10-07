@@ -27,6 +27,17 @@ void BMI088HostReset(void)
     accelerometer_spi.is_accelerometer = 1u;
     spi_register_count = 0u;
     bmi088_host_fixture.calibration_monitor_allow = 1u;
+    bmi088_host_fixture.accel_chip_id = BMI088_ACC_CHIP_ID_VALUE;
+}
+
+void BMI088HostSetKernelRunning(uint8_t running)
+{
+    bmi088_host_fixture.scheduler_running = running;
+}
+
+void BMI088HostSetAccelChipId(uint8_t chip_id)
+{
+    bmi088_host_fixture.accel_chip_id = chip_id;
 }
 
 BMI088Instance *BMI088HostCreateAcquireInstance(void)
@@ -66,7 +77,7 @@ SPIInstance *SPIRegister(SPI_Init_Config_s *config)
     {
         accelerometer_spi.spi_work_mode = config->spi_work_mode;
         accelerometer_spi.id = config->id;
-        accelerometer_registers[BMI088_ACC_CHIP_ID] = BMI088_ACC_CHIP_ID_VALUE;
+        accelerometer_registers[BMI088_ACC_CHIP_ID] = bmi088_host_fixture.accel_chip_id;
         return &accelerometer_spi;
     }
 
@@ -122,12 +133,46 @@ void SPITransmit(SPIInstance *spi, uint8_t *tx, uint8_t len)
 
 uint32_t DWT_ProbeStart(void) { return bmi088_host_fixture.synthetic_time_us; }
 uint32_t DWT_ProbeElapsedUs(uint32_t start) { return bmi088_host_fixture.synthetic_time_us - start; }
-void DWT_Delay(float seconds) { bmi088_host_fixture.synthetic_time_us += (uint32_t)(seconds * 1000000.0f); }
+void DWT_Delay(float seconds)
+{
+    uint32_t elapsed_us = (uint32_t)(seconds * 1000000.0f);
+    bmi088_host_fixture.synthetic_time_us += elapsed_us;
+    bmi088_host_fixture.unyielded_busy_wait_us += elapsed_us;
+    if (bmi088_host_fixture.unyielded_busy_wait_us > bmi088_host_fixture.max_unyielded_busy_wait_us)
+        bmi088_host_fixture.max_unyielded_busy_wait_us = bmi088_host_fixture.unyielded_busy_wait_us;
+}
 uint32_t HAL_GetTick(void) { return bmi088_host_fixture.synthetic_time_us / 1000u; }
 float DWT_GetTimeline_s(void) { return (float)bmi088_host_fixture.synthetic_time_us / 1000000.0f; }
 void BSP_WatchdogFeed(void) {}
-uint8_t osKernelRunning(void) { return 0u; }
-void osDelay(uint32_t milliseconds) { bmi088_host_fixture.synthetic_time_us += milliseconds * 1000u; }
+uint8_t osKernelRunning(void) { return bmi088_host_fixture.scheduler_running; }
+void osDelay(uint32_t milliseconds)
+{
+    bmi088_host_fixture.synthetic_time_us += milliseconds * 1000u;
+    bmi088_host_fixture.os_delay_call_count++;
+    bmi088_host_fixture.unyielded_busy_wait_us = 0u;
+}
+void TaskMonitorFeed(TaskMonitor_Id_e id)
+{
+    if (id == TASK_MONITOR_INS)
+        bmi088_host_fixture.ins_monitor_feed_count++;
+}
+
+void TaskMonitorDelayMs(TaskMonitor_Id_e id, uint32_t milliseconds)
+{
+    if (bmi088_host_fixture.scheduler_running)
+    {
+        while (milliseconds > 0u)
+        {
+            osDelay(1u);
+            TaskMonitorFeed(id);
+            milliseconds--;
+        }
+    }
+    else
+    {
+        DWT_Delay((float)milliseconds / 1000.0f);
+    }
+}
 
 float NormOf3d(float vector[3])
 {

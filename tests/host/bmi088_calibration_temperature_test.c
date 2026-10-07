@@ -16,10 +16,16 @@ static void fail(const char *message)
 int main(void)
 {
     BMI088HostReset();
+    BMI088HostSetKernelRunning(1u);
     BMI088HostFailNextTransferAfterParamInit(HAL_ERROR);
     BMI088Instance *instance = BMI088HostRegisterOnline();
     if (instance == NULL)
         fail("BMI088Register should initialize and calibrate stable synthetic samples");
+    if (bmi088_host_fixture.max_unyielded_busy_wait_us > 5000u)
+        fail("BMI088 startup initialization and calibration must yield within the INS monitor deadline");
+    if (bmi088_host_fixture.os_delay_call_count == 0u ||
+        bmi088_host_fixture.ins_monitor_feed_count == 0u)
+        fail("BMI088 startup initialization must yield to RTOS tasks and keep INS health monitoring alive");
     if (cali_diag_acq_fail != 1u || cali_diag_acq_ok != 6000u)
         fail("startup calibration must skip a failed partial transfer and collect 6000 successful samples");
 

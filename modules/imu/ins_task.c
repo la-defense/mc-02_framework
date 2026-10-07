@@ -23,6 +23,7 @@
 #include "bmi088.h"
 #include "robot_safety.h"
 #include "imu_heater.h"
+#include "task_monitor.h"
 #include <math.h>
 
 #define DEG_2_RAD (1.0f / RAD_2_DEGREE) // 角度转弧度, sp_vision_25 协议为弧度制
@@ -55,14 +56,14 @@ static void InitQuaternion(float *init_q4)
         if (BMI088Acquire(bmi088_ins, &bmi088_data) != BMI088_ACQUIRE_OK ||
             !BMI088SampleIsFresh(&bmi088_data, HAL_GetTick()))
         {
-            DWT_Delay(0.001);
+            TaskMonitorDelayMs(TASK_MONITOR_INS, 1u);
             continue;
         }
         acc_init[X] += bmi088_data.acc[X];
         acc_init[Y] += bmi088_data.acc[Y];
         acc_init[Z] += bmi088_data.acc[Z];
         successful_samples++;
-        DWT_Delay(0.001);
+        TaskMonitorDelayMs(TASK_MONITOR_INS, 1u);
     }
     if (successful_samples == 100u)
         for (uint8_t i = 0; i < 3; ++i)
@@ -145,8 +146,17 @@ attitude_t *INS_Init(void)
     if (bmi088_ins == NULL)
     {
         IMUHeaterForceOff();
-        while (1)
-            ;
+        RobotSafetySetImuValid(0u);
+        RobotSafetySetCalibValid(0u);
+        INS.q[0] = 1.0f;
+        INS.q[1] = 0.0f;
+        INS.q[2] = 0.0f;
+        INS.q[3] = 0.0f;
+        INS.AccelLPF = 0.0085f;
+        DWT_GetDeltaT(&INS_DWT_Count);
+        LOGERROR("[INS] BMI088 unavailable; remaining in safe sensor-invalid mode (error=0x%02X retries=%u)",
+                 (unsigned)bmi088_init_error, (unsigned)bmi088_init_retry_count);
+        return (attitude_t *)&INS.Gyro;
     }
     IMU_Param.scale[X] = 1;
     IMU_Param.scale[Y] = 1;

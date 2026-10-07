@@ -10,6 +10,14 @@
 
 #define BMI088_INIT_MAX_RETRY 5u // 初始化重试上限, 传感器异常时避免开机死循环
 
+/* Last BMI088 startup result; readable through SWD when the sensor is unavailable. */
+extern volatile uint32_t bmi088_init_error;
+extern volatile uint32_t bmi088_init_retry_count;
+extern volatile uint32_t bmi088_init_acc_status;
+extern volatile uint32_t bmi088_init_gyro_status;
+extern volatile uint32_t bmi088_init_acc_chip_id;
+extern volatile uint32_t bmi088_init_gyro_chip_id;
+
 // bmi088工作模式枚举
 typedef enum
 {
