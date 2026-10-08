@@ -125,13 +125,20 @@ int main(void)
     sample.timestamp_ms = 128u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value != 0u) fail("an out-of-range high supply must reject heating");
-    IMUHeaterClearFault();
 
     adc_sample.vcc_in_volts = 24.2f;
     adc_sample.timestamp_ms = 129u;
     now_ms = 129u;
     sample.sequence = 9u;
     sample.timestamp_ms = 129u;
+    IMUHeaterUpdate(&sample, 0u);
+    if (compare_value != 0u) fail("a high-supply fault must remain latched after voltage recovers");
+    if (!IMUHeaterClearFault()) fail("a fresh cool sample and valid VIN should clear the high-supply fault");
+
+    adc_sample.timestamp_ms = 130u;
+    now_ms = 130u;
+    sample.sequence = 10u;
+    sample.timestamp_ms = 130u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("valid in-range supply may resume after manual fault clear");
 
@@ -143,18 +150,18 @@ int main(void)
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value != 0u) fail("successful maintenance must not restore PWM from the pre-operation sample");
 
-    sample.sequence = 10u;
-    sample.timestamp_ms = 130u;
-    adc_sample.timestamp_ms = 130u;
-    now_ms = 130u;
+    sample.sequence = 11u;
+    sample.timestamp_ms = 131u;
+    adc_sample.timestamp_ms = 131u;
+    now_ms = 131u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("a new fresh post-operation sample may re-enable normal heater control");
 
-    now_ms = 130u;
+    now_ms = 132u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("re-reading a still-fresh snapshot should not turn off before its age limit");
 
-    now_ms = 136u;
+    now_ms = 137u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value != 0u) fail("a snapshot older than 5ms must turn the production heater output off");
     IMUHeaterStatus_t status = {0};
@@ -166,7 +173,7 @@ int main(void)
     IMUHeaterGetStatus(&status);
     if (!status.fault) fail("replaying one old sequence must not refresh the 500ms sensor timeout");
 
-    sample.sequence = 11u;
+    sample.sequence = 12u;
     sample.timestamp_ms = 632u;
     now_ms = 632u;
     adc_sample.timestamp_ms = 632u;
@@ -175,7 +182,7 @@ int main(void)
     if (!status.fault || compare_value != 0u)
         fail("a new sample must not silently clear the latched sensor timeout");
 
-    sample.sequence = 12u;
+    sample.sequence = 13u;
     sample.timestamp_ms = 633u;
     sample.temperature = NAN;
     now_ms = 633u;
@@ -186,7 +193,7 @@ int main(void)
     if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_FLASH))
         fail("flash operation should be able to acquire its independent heater inhibit");
     IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_FLASH, 0u);
-    sample.sequence = 13u;
+    sample.sequence = 14u;
     sample.timestamp_ms = 634u;
     sample.temperature = 20.0f;
     now_ms = 634u;

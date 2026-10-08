@@ -105,6 +105,34 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   target_link_libraries(imu_heater_sample_test PRIVATE m)
   add_test(NAME production_heater_rejects_stale_imu_sample COMMAND imu_heater_sample_test)
 
+  foreach(heater_profile IN ITEMS enabled disabled)
+    set(heater_recovery_target imu_heater_fault_recovery_${heater_profile})
+    add_executable(
+      ${heater_recovery_target}
+      imu_heater_fault_recovery_test.c
+      ../../modules/imu/imu_heater.c
+      ../../modules/algorithm/controller.c)
+    target_include_directories(${heater_recovery_target} BEFORE PRIVATE imu_heater_recovery_fakes)
+    target_include_directories(
+      ${heater_recovery_target}
+      PRIVATE ../../modules/imu ../../modules/BMI088 ../../modules/algorithm)
+    if(heater_profile STREQUAL "enabled")
+      target_compile_definitions(${heater_recovery_target} PRIVATE MC02_HEATER_ENABLED=1)
+    else()
+      target_compile_definitions(${heater_recovery_target} PRIVATE MC02_HEATER_ENABLED=0)
+    endif()
+    target_link_libraries(${heater_recovery_target} PRIVATE m)
+    foreach(recovery_scenario IN ITEMS
+        recovery invalid-temperature imu-age-5 imu-age-6 sequence adc-invalid adc-age-21
+        sensor-timeout sensor-timeout-wrap heat-timeout heat-timeout-wrap heat-timeout-at-target
+        heat-timeout-restarts-after-zero force-off-reinit long-operation post-operation-sample
+        initialized-state)
+      add_test(
+        NAME production_heater_${heater_profile}_${recovery_scenario}
+        COMMAND ${heater_recovery_target} ${recovery_scenario})
+    endforeach()
+  endforeach()
+
   add_executable(
     param_operation_test
     param_operation_test.c

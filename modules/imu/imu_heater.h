@@ -34,7 +34,8 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off);
 void IMUHeaterForceOff(void);
 uint8_t IMUHeaterBeginLongOperation(IMUHeater_LongOperation_e operation);
 void IMUHeaterEndLongOperation(IMUHeater_LongOperation_e operation, uint8_t success);
-void IMUHeaterClearFault(void);
+/* 恢复检查通过时返回 1；成功当次仍保持零输出，并等待清除后的新样本。 */
+uint8_t IMUHeaterClearFault(void);
 void IMUHeaterGetStatus(IMUHeaterStatus_t *status);
 void IMUHeaterSetTarget(float target_temp);
 
