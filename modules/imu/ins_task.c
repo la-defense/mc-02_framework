@@ -33,6 +33,11 @@ static IMU_Param_t IMU_Param;
 static BMI088Instance *bmi088_ins;
 static BMI088_Data_t bmi088_data;
 
+/* Fixed-width symbols used by the bounded, read-only SWD diagnostic tool. */
+volatile uint32_t bmi088_sample_sequence_diag = 0u;
+volatile uint32_t bmi088_sample_timestamp_ms_diag = 0u;
+volatile uint32_t imu_sample_valid_diag = 0u;
+
 const float xb[3] = {1, 0, 0};
 const float yb[3] = {0, 1, 0};
 const float zb[3] = {0, 0, 1};
@@ -124,6 +129,9 @@ attitude_t *INS_Init(void)
     /* Initialize heater PWM at zero before sensor calibration or Flash work. */
     IMUHeaterForceOff();
     IMUHeaterInit();
+    bmi088_sample_sequence_diag = 0u;
+    bmi088_sample_timestamp_ms_diag = 0u;
+    imu_sample_valid_diag = 0u;
 
     BMI088_Init_Config_s imu_cfg = {
         .work_mode = BMI088_BLOCK_PERIODIC_MODE,
@@ -223,6 +231,7 @@ void INS_Task(void)
                                BMI088SampleIsFresh(&bmi088_data, HAL_GetTick());
         if (!sample_valid)
         {
+            imu_sample_valid_diag = 0u;
             bmi088_data.valid = 0u;
             RobotSafetySetImuValid(0u);
             VisionUpdateTx(0u, 0.0f, 0.0f, 0.0f, 0.0f,
@@ -233,6 +242,8 @@ void INS_Task(void)
             IMUHeaterUpdate(NULL, force_off);
             goto ins_sample_processed;
         }
+        bmi088_sample_sequence_diag = bmi088_data.sequence;
+        bmi088_sample_timestamp_ms_diag = bmi088_data.timestamp_ms;
         INS.Accel[X] = bmi088_data.acc[X];
         INS.Accel[Y] = bmi088_data.acc[Y];
         INS.Accel[Z] = bmi088_data.acc[Z];
@@ -278,6 +289,7 @@ void INS_Task(void)
                             isfinite(INS.Gyro[X]) && isfinite(INS.Gyro[Y]) && isfinite(INS.Gyro[Z]) &&
                             isfinite(INS.Yaw) && isfinite(INS.Pitch);
         RobotSafetySetImuValid(imu_valid);
+        imu_sample_valid_diag = imu_valid;
 
         if (imu_valid)
         {

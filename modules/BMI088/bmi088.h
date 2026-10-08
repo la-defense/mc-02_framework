@@ -13,10 +13,26 @@
 /* Last BMI088 startup result; readable through SWD when the sensor is unavailable. */
 extern volatile uint32_t bmi088_init_error;
 extern volatile uint32_t bmi088_init_retry_count;
+extern volatile uint32_t bmi088_init_stage;
+extern volatile uint32_t bmi088_init_failure_stage;
 extern volatile uint32_t bmi088_init_acc_status;
 extern volatile uint32_t bmi088_init_gyro_status;
 extern volatile uint32_t bmi088_init_acc_chip_id;
 extern volatile uint32_t bmi088_init_gyro_chip_id;
+
+typedef enum
+{
+    BMI088_INIT_STAGE_IDLE = 0u,
+    BMI088_INIT_STAGE_ACCEL_INTERFACE_PROBE,
+    BMI088_INIT_STAGE_ACCEL_SOFT_RESET,
+    BMI088_INIT_STAGE_ACCEL_DUMMY_READ,
+    BMI088_INIT_STAGE_ACCEL_ID_CHECK,
+    BMI088_INIT_STAGE_ACCEL_CONFIG,
+    BMI088_INIT_STAGE_GYRO_SOFT_RESET,
+    BMI088_INIT_STAGE_GYRO_ID_CHECK,
+    BMI088_INIT_STAGE_GYRO_CONFIG,
+    BMI088_INIT_STAGE_READY
+} BMI088_Init_Stage_e;
 
 // bmi088工作模式枚举
 typedef enum

@@ -20,6 +20,8 @@ int main(void)
         fail("BMI088Register must reject an invalid accelerometer chip ID");
     if (bmi088_init_error != BMI088_NO_SENSOR)
         fail("BMI088 startup diagnostics must expose the final sensor initialization error");
+    if (bmi088_init_failure_stage != BMI088_INIT_STAGE_ACCEL_ID_CHECK)
+        fail("BMI088 startup diagnostics must identify the failed initialization phase");
     if (bmi088_init_retry_count != BMI088_INIT_MAX_RETRY)
         fail("BMI088 startup diagnostics must expose the retry count");
     if (bmi088_init_acc_status != HAL_OK || bmi088_init_gyro_status != HAL_OK ||

@@ -8,6 +8,8 @@
 #define MC02_HEATER_ENABLED 0
 #endif
 
+extern volatile uint32_t imu_heater_duty_diag;
+
 typedef struct
 {
     float target_temp;

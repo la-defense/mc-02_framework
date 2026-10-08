@@ -50,16 +50,26 @@ TEST_VALUES = {
     "iwdg_reset_flag": 0,
 }
 
+TEST_IMU_ADDRESSES = {
+    key: 0x24001000 + index * 4
+    for index, key in enumerate(probe_snapshot_live.IMU_SNAPSHOT_FIELDS)
+}
+TEST_IMU_VALUES = {
+    key: index + 1 for index, key in enumerate(probe_snapshot_live.IMU_SNAPSHOT_FIELDS)
+}
+
 
 class FakeOpenOCDServer:
-    def __init__(self, state_responses=None, initial_delay=0.0):
+    def __init__(self, state_responses=None, initial_delay=0.0, addresses=None, values=None):
         self.commands = []
         self.initial_delay = initial_delay
+        self.addresses = addresses if addresses is not None else TEST_ADDRESSES
+        self.values = values if values is not None else TEST_VALUES
         self.state_responses = list(
-            state_responses if state_responses is not None else ["running"] * (len(TEST_ADDRESSES) + 1)
+            state_responses if state_responses is not None else ["running"] * (len(self.addresses) + 1)
         )
         self.memory_by_address = {
-            address: TEST_VALUES[key] for key, address in TEST_ADDRESSES.items()
+            address: self.values[key] for key, address in self.addresses.items()
         }
 
         owner = self
@@ -132,6 +142,64 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
         self.assertNotIn("target ", joined)
         self.assertNotIn("remote", joined)
         self.assertNotIn("x/", joined)
+
+    def test_imu_profile_resolves_only_fixed_diagnostic_symbols(self):
+        fields = probe_snapshot_live.IMU_SNAPSHOT_FIELDS
+        command = probe_snapshot_live.build_symbol_command(
+            "arm-none-eabi-gdb", "firmware.elf", fields
+        )
+        gdb_commands = [command[index + 1] for index, arg in enumerate(command[:-1]) if arg == "--ex"]
+        joined = " ".join(gdb_commands)
+
+        self.assertEqual(len(gdb_commands), len(fields) + 2)
+        for key, field in fields.items():
+            self.assertIn(f'printf "{key}=0x%x\\n", (unsigned int)&({field.expression})', gdb_commands)
+        self.assertIn("bmi088_init_stage", joined)
+        self.assertIn("bmi088_sample_sequence_diag", joined)
+        self.assertIn("imu_heater_duty_diag", joined)
+        self.assertNotIn("vision_", joined)
+        self.assertNotIn("target ", joined.lower())
+
+    def test_imu_profile_reads_only_approved_aligned_symbols_while_running(self):
+        fields = probe_snapshot_live.IMU_SNAPSHOT_FIELDS
+        server = FakeOpenOCDServer(
+            addresses=TEST_IMU_ADDRESSES,
+            values=TEST_IMU_VALUES,
+        )
+        try:
+            snapshot = probe_snapshot_live.read_snapshot(
+                TEST_IMU_ADDRESSES,
+                "127.0.0.1",
+                server.port,
+                timeout=1.0,
+                fields=fields,
+            )
+        finally:
+            server.close()
+
+        self.assertEqual(snapshot, TEST_IMU_VALUES)
+        reads = [command for command in server.commands if command != "targets"]
+        self.assertEqual(len(reads), len(fields))
+        self.assertTrue(all(command.startswith("mdw ") for command in reads))
+        self.assertFalse(any(command in {"halt", "reset", "resume"} for command in server.commands))
+
+    def test_imu_profile_rejects_unlisted_symbol_before_connecting(self):
+        server = FakeOpenOCDServer()
+        invalid = dict(TEST_IMU_ADDRESSES)
+        invalid["vision_rx_count"] = TEST_ADDRESSES["vision_rx_count"]
+        try:
+            with self.assertRaises(probe_snapshot_live.ProbeIOError):
+                probe_snapshot_live.read_snapshot(
+                    invalid,
+                    "127.0.0.1",
+                    server.port,
+                    timeout=1.0,
+                    fields=probe_snapshot_live.IMU_SNAPSHOT_FIELDS,
+                )
+        finally:
+            server.close()
+
+        self.assertEqual(server.commands, [])
 
     def test_symbol_address_parser_requires_all_addresses(self):
         output = "\n".join(

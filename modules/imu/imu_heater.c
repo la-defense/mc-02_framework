@@ -45,6 +45,7 @@
 static PIDInstance heater_pid;
 static float heater_target = IMU_HEATER_TARGET_DEFAULT;
 static uint16_t heater_duty = 0;
+volatile uint32_t imu_heater_duty_diag = 0u;
 static uint8_t heater_initialized = 0;
 static uint8_t heater_fault = 0;
 static uint8_t heater_overtemp = 0;
@@ -81,6 +82,7 @@ static void IMUHeaterApplyDuty(uint16_t duty)
 #endif
 
     heater_duty = duty;
+    imu_heater_duty_diag = duty;
     if (heater_initialized)
         __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, heater_duty);
 }
@@ -117,6 +119,7 @@ void IMUHeaterInit(void)
 
     heater_target = IMU_HEATER_TARGET_DEFAULT;
     heater_duty = 0;
+    imu_heater_duty_diag = 0u;
     heater_fault = 0;
     heater_overtemp = 0;
     heater_timeout_fault = 0;

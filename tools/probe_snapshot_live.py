@@ -59,17 +59,35 @@ SNAPSHOT_FIELDS = {
     "iwdg_reset_flag": SnapshotField("iwdg_reset_flag", "mdb", 8),
 }
 
+IMU_SNAPSHOT_FIELDS = {
+    "tick_ms": SnapshotField("uwTick", "mdw", 32),
+    "init_stage": SnapshotField("bmi088_init_stage", "mdw", 32),
+    "init_failure_stage": SnapshotField("bmi088_init_failure_stage", "mdw", 32),
+    "init_error": SnapshotField("bmi088_init_error", "mdw", 32),
+    "init_retry_count": SnapshotField("bmi088_init_retry_count", "mdw", 32),
+    "init_acc_status": SnapshotField("bmi088_init_acc_status", "mdw", 32),
+    "init_gyro_status": SnapshotField("bmi088_init_gyro_status", "mdw", 32),
+    "init_acc_chip_id": SnapshotField("bmi088_init_acc_chip_id", "mdw", 32),
+    "init_gyro_chip_id": SnapshotField("bmi088_init_gyro_chip_id", "mdw", 32),
+    "imu_sample_sequence": SnapshotField("bmi088_sample_sequence_diag", "mdw", 32),
+    "imu_sample_timestamp_ms": SnapshotField("bmi088_sample_timestamp_ms_diag", "mdw", 32),
+    "imu_sample_valid": SnapshotField("imu_sample_valid_diag", "mdw", 32),
+    "imu_heater_duty": SnapshotField("imu_heater_duty_diag", "mdw", 32),
+}
+
 
 class ProbeIOError(RuntimeError):
     """The OpenOCD connection, state check, or bounded memory read failed."""
 
 
-def build_symbol_command(gdb: str, elf: str) -> list[str]:
+def build_symbol_command(
+    gdb: str, elf: str, fields: dict[str, SnapshotField] = SNAPSHOT_FIELDS
+) -> list[str]:
     """Build an offline GDB invocation; it must never connect to a target."""
     commands = ["set pagination off", "set confirm off"]
     commands.extend(
         f'printf "{key}=0x%x\\n", (unsigned int)&({field.expression})'
-        for key, field in SNAPSHOT_FIELDS.items()
+        for key, field in fields.items()
     )
     argv = [gdb, "--nx", "--quiet", "--batch", "--symbols", elf]
     for command in commands:
@@ -77,21 +95,28 @@ def build_symbol_command(gdb: str, elf: str) -> list[str]:
     return argv
 
 
-def parse_addresses(output: str) -> dict[str, int]:
+def parse_addresses(
+    output: str, fields: dict[str, SnapshotField] = SNAPSHOT_FIELDS
+) -> dict[str, int]:
     addresses: dict[str, int] = {}
     for line in output.splitlines():
         match = SYMBOL_VALUE_PATTERN.fullmatch(line.strip())
-        if match and match.group("key") in SNAPSHOT_FIELDS:
+        if match and match.group("key") in fields:
             addresses[match.group("key")] = int(match.group("value"), 16)
 
-    _validate_snapshot_addresses(addresses)
+    _validate_snapshot_addresses(addresses, fields)
     return addresses
 
 
-def resolve_symbol_addresses(gdb: str, elf: str, timeout: float) -> dict[str, int]:
+def resolve_symbol_addresses(
+    gdb: str,
+    elf: str,
+    timeout: float,
+    fields: dict[str, SnapshotField] = SNAPSHOT_FIELDS,
+) -> dict[str, int]:
     try:
         result = subprocess.run(
-            build_symbol_command(gdb, elf),
+            build_symbol_command(gdb, elf, fields),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -106,7 +131,7 @@ def resolve_symbol_addresses(gdb: str, elf: str, timeout: float) -> dict[str, in
         detail = (result.stderr or result.stdout).strip().splitlines()
         message = detail[-1] if detail else f"GDB exited with status {result.returncode}"
         raise ProbeIOError(f"offline ELF symbol lookup failed: {message}")
-    return parse_addresses(result.stdout + "\n" + result.stderr)
+    return parse_addresses(result.stdout + "\n" + result.stderr, fields)
 
 
 def _validate_loopback_host(host: str) -> None:
@@ -133,8 +158,10 @@ def _validated_address(address: int, alignment: int) -> int:
     return address
 
 
-def _validate_snapshot_addresses(addresses: dict[str, int]) -> None:
-    expected = set(SNAPSHOT_FIELDS)
+def _validate_snapshot_addresses(
+    addresses: dict[str, int], fields: dict[str, SnapshotField] = SNAPSHOT_FIELDS
+) -> None:
+    expected = set(fields)
     supplied = set(addresses)
     missing = expected - supplied
     extra = supplied - expected
@@ -146,17 +173,19 @@ def _validate_snapshot_addresses(addresses: dict[str, int]) -> None:
             details.append(f"unexpected: {', '.join(sorted(extra))}")
         raise ProbeIOError("snapshot addresses do not match the approved fields (" + "; ".join(details) + ")")
 
-    for key, field in SNAPSHOT_FIELDS.items():
+    for key, field in fields.items():
         try:
             _validated_address(addresses[key], field.alignment_bytes)
         except ValueError as error:
             raise ProbeIOError(f"ELF symbol {key} has an invalid address: {error}") from error
 
 
-def _build_read_command(key: str, address: int) -> str:
-    if key not in SNAPSHOT_FIELDS:
+def _build_read_command(
+    key: str, address: int, fields: dict[str, SnapshotField] = SNAPSHOT_FIELDS
+) -> str:
+    if key not in fields:
         raise ValueError(f"unsupported snapshot field: {key}")
-    field = SNAPSHOT_FIELDS[key]
+    field = fields[key]
     validated = _validated_address(address, field.alignment_bytes)
     return f"{field.command} 0x{validated:08x} 1"
 
@@ -189,7 +218,14 @@ def _require_running(output: str, when: str) -> None:
 class OpenOCDTelnetClient:
     """Minimal bounded Telnet client with a strict OpenOCD command allowlist."""
 
-    def __init__(self, host: str, port: int, timeout: float, allowed_addresses: dict[str, int]):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        timeout: float,
+        allowed_addresses: dict[str, int],
+        fields: dict[str, SnapshotField] = SNAPSHOT_FIELDS,
+    ):
         _validate_loopback_host(host)
         _validate_port(port)
         if not 0 < timeout <= 5.0:
@@ -197,10 +233,10 @@ class OpenOCDTelnetClient:
         self.host = host
         self.port = port
         self.timeout = timeout
-        _validate_snapshot_addresses(allowed_addresses)
+        _validate_snapshot_addresses(allowed_addresses, fields)
         self.allowed_reads = frozenset(
             (field.command, allowed_addresses[key])
-            for key, field in SNAPSHOT_FIELDS.items()
+            for key, field in fields.items()
         )
         self._socket: socket.socket | None = None
         self._wire = bytearray()
@@ -307,20 +343,26 @@ class OpenOCDTelnetClient:
                 return text
 
 
-def read_snapshot(addresses: dict[str, int], host: str, port: int, timeout: float) -> dict[str, int]:
-    _validate_snapshot_addresses(addresses)
+def read_snapshot(
+    addresses: dict[str, int],
+    host: str,
+    port: int,
+    timeout: float,
+    fields: dict[str, SnapshotField] = SNAPSHOT_FIELDS,
+) -> dict[str, int]:
+    _validate_snapshot_addresses(addresses, fields)
 
     snapshot: dict[str, int] = {}
     try:
         with OpenOCDTelnetClient(
-            host, port, timeout, allowed_addresses=addresses
+            host, port, timeout, allowed_addresses=addresses, fields=fields
         ) as client:
             _require_running(client.command("targets"), "before the snapshot")
             for key, address in addresses.items():
-                command = _build_read_command(key, address)
+                command = _build_read_command(key, address, fields)
                 output = client.command(command)
                 snapshot[key] = _parse_memory_value(
-                    output, address, SNAPSHOT_FIELDS[key].width_bits
+                    output, address, fields[key].width_bits
                 )
                 _require_running(client.command("targets"), f"after reading {key}")
     except (OSError, ValueError) as error:
@@ -335,13 +377,21 @@ def _small_decrease(old: int, new: int) -> bool:
 
 
 def classify_change(previous: dict[str, int], current: dict[str, int]) -> str:
-    if not previous["iwdg_reset_flag"] and current["iwdg_reset_flag"]:
+    if (
+        "iwdg_reset_flag" in previous
+        and "iwdg_reset_flag" in current
+        and not previous["iwdg_reset_flag"]
+        and current["iwdg_reset_flag"]
+    ):
         return "target-reset-iwdg"
     if _small_decrease(previous["tick_ms"], current["tick_ms"]):
-        if current["iwdg_reset_flag"]:
+        if current.get("iwdg_reset_flag", 0):
             return "target-reset-iwdg"
         return "target-reset-other-or-unknown"
-    if any(_small_decrease(previous[key], current[key]) for key in COUNTERS):
+    if any(
+        key in previous and key in current and _small_decrease(previous[key], current[key])
+        for key in COUNTERS
+    ):
         return "counter-decrease-unclassified"
     return "running"
 
@@ -360,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--samples", type=int, default=5, help="2..8 snapshots")
     parser.add_argument("--interval", type=float, default=1.0, help="seconds between reads, 0..2")
     parser.add_argument("--timeout", type=float, default=5.0, help="per snapshot timeout, >0..5 seconds")
+    parser.add_argument("--imu", action="store_true", help="read the fixed BMI088/INS/heater diagnostic profile")
     args = parser.parse_args(argv)
 
     if not 2 <= args.samples <= 8:
@@ -375,7 +426,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"ELF file does not exist: {args.elf}")
 
     try:
-        addresses = resolve_symbol_addresses(args.gdb, str(args.elf), args.timeout)
+        fields = IMU_SNAPSHOT_FIELDS if args.imu else SNAPSHOT_FIELDS
+        addresses = resolve_symbol_addresses(args.gdb, str(args.elf), args.timeout, fields)
     except ProbeIOError as error:
         print(f"probe_io_error: {error}", file=sys.stderr)
         return 2
@@ -383,7 +435,7 @@ def main(argv: list[str] | None = None) -> int:
     previous = None
     try:
         for index in range(args.samples):
-            current = read_snapshot(addresses, args.host, args.telnet_port, args.timeout)
+            current = read_snapshot(addresses, args.host, args.telnet_port, args.timeout, fields)
             status = "baseline" if previous is None else classify_change(previous, current)
             print(json.dumps({"sample": index + 1, "status": status, **current}, sort_keys=True))
             previous = current

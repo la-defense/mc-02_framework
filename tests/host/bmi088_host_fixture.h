@@ -12,7 +12,10 @@ typedef struct
     uint32_t os_delay_call_count;
     uint32_t ins_monitor_feed_count;
     uint32_t transfer_count;
+    uint32_t failed_spi_transfer_count;
     uint32_t fail_transfer_number;
+    uint32_t spi_write_transfer_count;
+    uint32_t failed_spi_write_transfer_count;
     HAL_StatusTypeDef fail_status;
     uint8_t fail_next_transfer_after_param_init;
     HAL_StatusTypeDef param_init_failure_status;
@@ -27,6 +30,10 @@ typedef struct
     uint8_t calibration_monitor_allow;
     uint8_t scheduler_running;
     uint8_t accel_chip_id;
+    uint8_t post_reset_dummy_reads;
+    uint8_t post_reset_dummy_reads_remaining;
+    uint32_t accel_soft_reset_count;
+    uint32_t accel_chip_id_reads_after_reset;
 } BMI088HostFixture_t;
 
 extern BMI088HostFixture_t bmi088_host_fixture;
@@ -34,6 +41,7 @@ extern BMI088HostFixture_t bmi088_host_fixture;
 void BMI088HostReset(void);
 void BMI088HostSetKernelRunning(uint8_t running);
 void BMI088HostSetAccelChipId(uint8_t chip_id);
+void BMI088HostModelPostResetDummyRead(uint8_t enabled);
 void BMI088HostFailTransferAfter(uint32_t transfer_offset, HAL_StatusTypeDef status);
 void BMI088HostFailNextTransferAfterParamInit(HAL_StatusTypeDef status);
 BMI088Instance *BMI088HostCreateAcquireInstance(void);

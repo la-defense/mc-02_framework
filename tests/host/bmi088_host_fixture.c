@@ -40,6 +40,11 @@ void BMI088HostSetAccelChipId(uint8_t chip_id)
     bmi088_host_fixture.accel_chip_id = chip_id;
 }
 
+void BMI088HostModelPostResetDummyRead(uint8_t enabled)
+{
+    bmi088_host_fixture.post_reset_dummy_reads = enabled ? 1u : 0u;
+}
+
 BMI088Instance *BMI088HostCreateAcquireInstance(void)
 {
     acquire_instance.work_mode = BMI088_BLOCK_PERIODIC_MODE;
@@ -90,17 +95,54 @@ SPIInstance *SPIRegister(SPI_Init_Config_s *config)
 HAL_StatusTypeDef SPITransRecv(SPIInstance *spi, uint8_t *rx, uint8_t *tx, uint8_t len)
 {
     uint32_t transfer_number = ++bmi088_host_fixture.transfer_count;
+    uint8_t is_read = (uint8_t)(tx[0] & 0x80u) != 0u;
+    if (!is_read)
+        bmi088_host_fixture.spi_write_transfer_count++;
     if (transfer_number == bmi088_host_fixture.fail_transfer_number)
     {
+        bmi088_host_fixture.failed_spi_transfer_count++;
+        if (!is_read)
+            bmi088_host_fixture.failed_spi_write_transfer_count++;
         if (len > 0u)
             rx[0] = 0xa5u; /* Model a HAL failure after a partial receive. */
         return bmi088_host_fixture.fail_status;
+    }
+
+    if (!is_read)
+    {
+        if (len >= 2u)
+        {
+            uint8_t reg = tx[0];
+            uint8_t *registers = spi->is_accelerometer ? accelerometer_registers : gyroscope_registers;
+            registers[reg] = tx[1];
+            if (spi->is_accelerometer && reg == BMI088_ACC_SOFTRESET)
+            {
+                bmi088_host_fixture.accel_soft_reset_count++;
+                bmi088_host_fixture.post_reset_dummy_reads_remaining =
+                    bmi088_host_fixture.post_reset_dummy_reads;
+            }
+        }
+        return HAL_OK;
     }
 
     memset(rx, 0, len);
     uint8_t reg = (uint8_t)(tx[0] & 0x7fu);
     uint8_t *registers = spi->is_accelerometer ? accelerometer_registers : gyroscope_registers;
     uint8_t data_offset = spi->is_accelerometer ? 2u : 1u;
+
+    if (spi->is_accelerometer && reg == BMI088_ACC_CHIP_ID &&
+        bmi088_host_fixture.accel_soft_reset_count > 0u)
+        bmi088_host_fixture.accel_chip_id_reads_after_reset++;
+
+    if (spi->is_accelerometer && reg == BMI088_ACC_CHIP_ID &&
+        bmi088_host_fixture.post_reset_dummy_reads_remaining > 0u)
+    {
+        memset(rx, 0, len);
+        rx[data_offset] = 0u;
+        bmi088_host_fixture.post_reset_dummy_reads_remaining--;
+        return HAL_OK;
+    }
+
     for (uint8_t i = data_offset; i < len; ++i)
         rx[i] = registers[(uint8_t)(reg + i - data_offset)];
 
@@ -128,6 +170,12 @@ void SPITransmit(SPIInstance *spi, uint8_t *tx, uint8_t len)
     {
         uint8_t *registers = spi->is_accelerometer ? accelerometer_registers : gyroscope_registers;
         registers[tx[0]] = tx[1];
+        if (spi->is_accelerometer && tx[0] == BMI088_ACC_SOFTRESET)
+        {
+            bmi088_host_fixture.accel_soft_reset_count++;
+            bmi088_host_fixture.post_reset_dummy_reads_remaining =
+                bmi088_host_fixture.post_reset_dummy_reads;
+        }
     }
 }
 
