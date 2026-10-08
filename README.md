@@ -41,7 +41,9 @@
 
 联系方式：QQ 2609008122
 
-以下是原来的框架说明：
+以下内容是从上游 basic_framework 继承的历史说明：
+
+> 本节中的 2022—2023 年机器人配置、STM32F407 示例和旧 Makefile 操作不适用于当前 MC-02（STM32H723）工程。当前构建、硬件和联调资料见[文档导航](docs/README.md)，任务状态只更新 [.Doc/TODO.md](.Doc/TODO.md)。
 
 ------
 
@@ -69,7 +71,7 @@
 
 [TOC]
 
-***==别忘了仓库根目录下的`.Doc`文件夹中有关于配置环境和开发更详尽的说明！==***
+> 当前任务状态、开发流程和学习资料入口见 [文档导航](docs/README.md)；唯一待办清单位于 `.Doc/TODO.md`。
 
 - 若无法访问github，戳[gitee仓库](https://gitee.com/hnuyuelurm/basic_framework)
 - 若gitee内容被屏蔽，戳[github仓库](https://github.com/HNUYueLuRM/basic_framework)
@@ -261,7 +263,7 @@ app、module和bsp都有相应的rtos任务。其中bsp为创建任务提供了�
 
 ### IDE?
 
-使用**VSCode**作为“IDE”，也支持Clion/Visual Studio等现代化IDE（需要自行配置）。需要的插件支持均已经在[VSCode+Ozone使用方法.md](.Doc/VSCode+Ozone使用方法.md)中给出。通过VSCode强大的插件系统、language server以及代码补全高亮助力效率倍增。编译则使用集成的task进行，还可以将开发环境终端加入VSCode进一步提升体验。基本的调试如变量&寄存器查看均已在插件中提供支持，`launch.json`可以进行高自由度的自定义。
+使用**VSCode**作为“IDE”，也支持 Clion/Visual Studio 等工具（需要自行配置）。工具链与调试参考[VSCode 与 Ozone 调试指南](docs/development/VSCode与Ozone调试指南.md)；具体构建和调试目标以本仓库 CMake、Makefile、`.vscode/` 配置为准。
 
 `Git`集成与gitlens/gitgraph/githistory额外插件补充让版本管理和协作从未如此简单，`live share`把你的伙伴们聚在一起集思广益，一同对抗困难的bug。更多好用的插件、特性和开发技巧请参考"**如何使用本框架**"章节。
 
@@ -291,7 +293,7 @@ app、module和bsp都有相应的rtos任务。其中bsp为创建任务提供了�
 
 首先在`app/robot_def.h`中根据注释修改开发板和机器人配置，再在各个app中修改初始化配置（如电机id，上位机通信波特率/使用串口或VCP，imu速率，超级电容id等）。
 
-接着根据[VSCode+Ozone使用方法.md](.Doc/VSCode+Ozone使用方法.md)配置好编译下载环境之后（***再次建议使用Msys2+mingw64/ucrt64/clang64的方式配置环境！***），在VSCode中打开项目，点击上方tab页的终端（terminal）->运行构建任务（run build task)，便启动编译，若没有问题，最终会在终端中输出如下信息：
+接着按当前仓库的构建配置准备工具链。上游文档中的 MSYS2、F407 下载步骤仅作历史参考，当前操作请按[文档导航](docs/README.md)和 `.vscode/` 配置执行。
 
 ![image-20230725154910307](.assets/image-20230725154910307.png)
 
@@ -301,24 +303,15 @@ app、module和bsp都有相应的rtos任务。其中bsp为创建任务提供了�
 
 想要调试，在左侧tab页选择合适的调试选项，按F5或图形界面的绿色小三角形按钮，开始调试。当然，调试器的设置也请参考配置文档，主要是将可执行文件路劲加入环境变量的PATH。
 
-**更详细的开发流程和本仓库工作流的最佳实践，请参照`.Doc/VSCode+Ozone使用方法.md`**，里面介绍了开发所需的前置知识、环境配置，以及工具链原理、使用方法等。
+工作流、构建配置和文档入口见[文档导航](docs/README.md)。Ozone 的历史操作说明见[VSCode 与 Ozone 调试指南](docs/development/VSCode与Ozone调试指南.md)，执行前请核对当前 H723 配置。
 
-要对本仓库进行开发，务必先阅读`.Doc/架构介绍与开发指南.md`，内含本仓库组织结构的**文件树**。若你希望使用其他工具链或IDE，里面也有相关说明。
+本仓库当前的模块结构以根目录和 CMake 源码清单为准；设计术语见 [GLOSSARY.md](GLOSSARY.md)，代理工作约定见 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)。
 
-### 基本文档
+### 工程文档
 
-根目录下的README.md即本说明文档，帮助开发者速览本项目。
+任务清单、开发约定、课程、供电审查、硬件依据和历史复审统一从[文档导航](docs/README.md)进入。代码中的任务状态只以 [.Doc/TODO.md](.Doc/TODO.md) 为准。
 
-`.Doc`目录下有**8**个markdown文档，分别为：
-
-- [Bug_Report](.Doc/Bug_Report.md) ：提供了一些提交issues的模板范例，若在使用中出现问题请按照模板提供信息。
-- [TODO](.Doc/TODO.md) ：框架后续开发计划和维护说明
-- **[VSCode+Ozone使用方法](.Doc/VSCode+Ozone使用方法.md)** ：**重要**，上手必看。介绍了当前开发工作流和传统KEIL开发的不同，先讲解一些与工具链有关的基础知识，然后说明了如何配置开发环境，安装必要的软件和一些”操作“。还涉及了VSCode编辑调试和Ozone示波器&trace功能的使用指南。
-- [合理地进行PID参数整定](.Doc/合理地进行PID参数整定.md) ：介绍了如何为PID控制器进行参数整定，包括简单的经验准则和基于模型的前馈控制、扰动消除等方法。
-- [如何定位bug](.Doc/如何定位bug.md) ：当嵌入式开发出现bug时，以更高效地方法进行错误定位和复现。简单的调试器使用技巧。
-- [必须做&禁止做](.Doc/必须做&禁止做.md) ：字如其名
-- **[架构介绍与开发指南](.Doc/架构介绍与开发指南.md)** ： **重要**，开发必看。若你希望为bsp或module增添新的模块，组装新的app，请参照此文档的编码和命名规范进行。阅读该文档有助于理解并写出和框架代码风格一致的程序。内含该项目的**文件树**，以框架的工作目录。
-- [让VSCode成为更称手的IDE](.Doc/让VSCode成为更称手的IDE.md) ：安装好用的插件，对编辑器进行个性化配置，提升开发效率
+学习资料从[学习笔记索引](docs/学习笔记/README.md)进入；历史问题定位案例见[嵌入式固件问题定位](docs/学习笔记/24-嵌入式固件问题定位.md)，PID 调试原理见[Ozone 辅助 PID 调参](docs/学习笔记/23-Ozone辅助PID调参.md)。
 
 ### 阅读代码
 
@@ -341,7 +334,7 @@ app、module和bsp都有相应的rtos任务。其中bsp为创建任务提供了�
 
 ### VSCode集成工具
 
-我们在`.vscode`下提供了编写好的一些任务，包括编译，烧录，启动RTT终端（LOG），启动Ozone调试等。有些功能需要配置vscode的插件设置或将一些可执行文件加入环境变量，这些步骤已经在[VSCode+Ozone使用方法.md](.Doc/VSCode+Ozone使用方法.md)中给出；`launch.json`里包含了最常见的四种调试任务：使用jlink-server/openocd，启动或附加调试。
+我们在`.vscode`下提供了构建和调试任务。工具说明见[VSCode 与 Ozone 调试指南](docs/development/VSCode与Ozone调试指南.md)；其中旧下载配置只适用于历史环境，使用前应核对当前 `launch.json`、OpenOCD 配置和固件产物。
 
 ### for pro-user
 
