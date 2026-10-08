@@ -9,6 +9,8 @@ TDD is the red → green loop. This skill is the reference that makes that loop 
 
 When exploring the codebase, read `GLOSSARY.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
 
+In this project, TDD is an optional method inside the shared validation phase defined in `docs/agents/issue-tracker.md`. Use it for safety logic, protocol behavior, or complex faults that need a production-interface regression. Reuse existing tests for simple refactoring; new tests must protect observable behavior rather than internal field layouts or helper structure.
+
 ## What a good test is
 
 Tests verify behavior through public interfaces, not implementation details. Code can change entirely; tests shouldn't. A good test reads like a specification: "user can checkout with valid cart" tells you exactly what capability exists, and it survives refactors because it doesn't care about internal structure.
@@ -19,7 +21,7 @@ See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking g
 
 A **seam** is the public boundary you test at: the interface where you observe behavior without reaching inside. Tests live at seams, never against internals.
 
-**Test only at pre-agreed seams.** Before writing any test, write down the seams under test and confirm them with the user. No test is written at an unconfirmed seam. You can't test everything, so agreeing the seams up front is how testing effort lands on the critical paths and complex logic instead of every edge case.
+**Test at agreed production interfaces.** Reuse the interfaces and acceptance scope already authorized in the task or specification. Ask only when choosing a new interface would change public behavior or the task's scope; routine test design does not need repeated confirmation.
 
 Ask: "What's the public interface, and which seams should we test?"
 
@@ -35,4 +37,4 @@ When the shape of that interface is itself in question (how deep the module is, 
 
 - **Red before green.** Write the failing test first, then only enough code to pass it. Don't anticipate future tests or add speculative features.
 - **One slice at a time.** One seam, one test, one minimal implementation per cycle.
-- **Refactoring is not part of the loop.** It belongs to the review stage (see the `code-review` skill), not the red → green implementation cycle.
+- Refactoring uses the existing behavior tests in the same implementation/validation phase; it does not introduce a separate review stage.

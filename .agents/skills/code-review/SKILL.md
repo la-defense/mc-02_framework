@@ -1,9 +1,12 @@
 ---
 name: code-review
-description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\"."
+description: "Review a committed diff only when explicitly requested by the user."
+disable-model-invocation: true
 ---
 
-Two-axis review of the **committed** diff on the current task branch. Default the fixed point to `main` (or the configured base branch when different); review every commit since that merge base. Do not use an unstaged working diff as the final task review.
+This is an explicitly user-invoked standalone tool. The default development workflow in `docs/agents/issue-tracker.md` has no review or re-review stage; implementation and retrospective skills must not invoke this skill automatically.
+
+When explicitly requested, perform a two-axis review of the **committed** diff on the current branch. Default the fixed point to `main` (or the configured base branch when different); review every commit since that merge base.
 
 - **Standards**: does the code conform to this repo's documented coding standards?
 - **Spec**: does the code faithfully implement the originating issue / spec?

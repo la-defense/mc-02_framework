@@ -4,7 +4,7 @@ description: Use for a short just-in-time lesson when a new technical concept ch
 argument-hint: "What would you like to learn about?"
 ---
 
-The user has asked you to teach them something. This is a stateful request - they intend to learn the topic over multiple sessions.
+Use this skill for on-demand lessons when the user requests teaching, signals confusion, or a concept affects a current design decision. Every change still requires a new or substantively updated teaching document under `docs/学习笔记/`, whether or not this skill is used; follow `docs/agents/issue-tracker.md` for delivery.
 
 ## Teaching Workspace
 

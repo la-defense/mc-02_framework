@@ -21,4 +21,4 @@ Task status lives only in the repository TODO: `.Doc/TODO.md` in MC-02 and `TODO
 5. Update the map with decision rationale and links to TODO IDs. Keep implementation tasks in TODO as soon as the answers make them specifiable.
 6. When the route is clear, link the resulting specification and dependency-ordered tasks; the map then becomes a navigation aid, not a task tracker.
 
-For cross-repository decisions, create a reciprocal item in both TODO files. Do not post external issues or comments. Each independently deliverable task uses its task branch, is committed before code review, and is delivered through a PR when remote access is available.
+For cross-repository decisions, create a reciprocal item in both TODO files. Do not post external issues or comments. Follow `docs/agents/issue-tracker.md`: related changes share a branch, complete local/necessary board validation, include teaching material, and finish with local commits and brief delivery. Review, push, and PR are not automatic steps.

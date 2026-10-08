@@ -263,6 +263,8 @@ Unicom
 
 规格：[工程与教学工作流](../docs/workflow/specs/engineering-learning-workflow.md)。
 
+- [x] **MC02-0043** [enhancement] 按用户 2026-10-08 决策简化开发流程。验收完成：相关改动共用分支；测试、构建、回归与必要的上板调试合并验证；每次改动提交教学文档且 teach 按需使用；Git 类型前缀保留原文，摘要和正文用中文；实现、路由及复盘入口取消自动审查、推送和 PR。验证：TODO 约定通过，4 组课程结构及离线链接有效，本次修改中的 59 条本地链接和 11 份 skill frontmatter 检查通过，差异空白检查通过。教学资料：[第 21 篇](../docs/学习笔记/21-从TODO到可重复验证的工程闭环.md)；分支：`workflow/simplify-development`。
+
 - [x] **MC02-0030** [enhancement] 把本地 skills、TODO、教学工作区及 C/C++ 练习统一到可验证流程。验收：skill 指引不再写入 `.scratch`，TODO 为唯一状态源，四组离线练习、链接检查和 CMake/CTest 均通过；视觉侧对应 **VIS25-0013**（[视觉工作流 PR #1](https://github.com/la-defense/sp_vision_25/pull/1)）。验证：TODO contract、课程离线链接和四组 CMake/CTest 主机练习通过；完整实现见[固件 PR #1](https://github.com/la-defense/mc-02_framework/pull/1)。
 - [ ] **MC02-0031** [enhancement] [ready-for-human] 建立公开视觉 fork、私有 HIL 仓库和受限 Windows runner，并配置手动双 SHA 联调。验收：runner 只运行仓库内受信任工作流，报告记录固件/视觉 SHA、构建烧录结果、禁止开火帧、RX/CRC 计数和复位状态；视觉侧对应 **VIS25-0014**（[视觉 HIL PR #1](https://github.com/la-defense/sp_vision_25/pull/1)）。已创建 [公开视觉 fork](https://github.com/la-defense/sp_vision_25) 和 [私有 HIL 仓库](https://github.com/la-defense/mc-02-hil)；runner、手动工作流与报告尚待配置。固件侧实施追踪：[固件 PR #1](https://github.com/la-defense/mc-02_framework/pull/1)。
 

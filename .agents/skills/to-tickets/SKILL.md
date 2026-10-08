@@ -1,12 +1,12 @@
 ---
 name: to-tickets
-description: Break a reviewed specification into dependency-ordered TODO tasks with concrete acceptance conditions and optional local detail files.
+description: Break an agreed large-feature specification into dependency-ordered TODO tasks with concrete acceptance conditions.
 disable-model-invocation: true
 ---
 
 # To Tickets
 
-Read the spec, the target repository TODO, `GLOSSARY.md`, and related ADRs. Split the work into independently verifiable vertical slices. Prefer one task per branch and PR; cross-repository work gets one linked TODO item in each repository.
+Read `docs/agents/issue-tracker.md`, the spec, the target repository TODO, `GLOSSARY.md`, and related ADRs. Use this flow for large features or cross-module changes; simple fixes use TODO acceptance directly. Split work into independently verifiable slices. Related changes share a branch; cross-repository work gets one linked TODO item in each repository.
 
 ## Process
 

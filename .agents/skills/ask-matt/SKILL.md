@@ -14,26 +14,18 @@ A **flow** is a path through the skills. Most paths run along one **main flow**,
 
 The route most work travels. You have an idea and want it built.
 
-1. **`/grill-with-docs`** sharpens the idea by interview. Start here whenever you are **working in a working directory**: it's stateful, retaining what it learns in `GLOSSARY.md` and ADRs. (No working directory? Use `/grill-me` instead, covered under Standalone. Both run the same `/grilling` primitive; `grill-with-docs` is the one that leaves a paper trail, which makes it the better of the two whenever a repo is there to leave it in.)
+1. Read `docs/agents/issue-tracker.md`, the task acceptance, and relevant code. Carry settled requirements forward. Use **`/grill-with-docs`** only when a design decision needs discussion; a simple fix can proceed from its TODO acceptance.
 2. **Branch: can you settle every question in conversation?** If a question needs a runnable answer (state, business logic, a UI you have to see), detour through a prototype, bridged by **`/handoff`** in both directions (a prototype lives in its own directory, which is exactly what `/handoff` is for; see Phase boundaries):
    - **`/handoff`** out, then open a fresh session against that file,
    - **`/prototype`** to answer the question with throwaway code,
    - **`/handoff`** back what you learned, and reference it from the original idea thread.
-3. **Branch: is this a multi-session build?**
-   - **Yes** → **`/to-spec`** (turn the thread into a spec), then **`/to-tickets`** to split it into tracer-bullet tickets, each declaring its **blocking edges**. Then work the tickets one of two ways:
-     - **`/implement`** per TODO item on its task branch. TODO is the only task-status source; optional detail lives in `docs/workflow/tickets/<ID>.md` and lists blockers.
-     - **`/implement-spec`** for a multi-ticket feature. It reads TODO items and ticket details as a **task graph**, works the ready **frontier**, and lands the feature on one task branch and PR.
-   - **No** → **`/implement`** right here, in the same context window.
+3. Large features or cross-module changes use **`/to-spec → /to-tickets`**, then **`/implement`** or **`/implement-spec`**. Simple changes use **`/implement`** directly. Related TODO items share a branch. Tests, builds, regressions, and necessary board debugging form one validation phase: pure software is checked locally, and hardware is connected only when acceptance needs board behavior. **`/tdd`** is optional for meaningful production-interface regressions.
 
-   Either way, the code gets built by driving **`/tdd`** (one red-green slice at a time) and closes out with **`/code-review`**, a two-axis review (Standards + Spec) of the committed diff. `/implement` reviews each TODO task after its task commit; `/implement-spec` reviews the committed task branch against its merge base. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/code-review`** on its own whenever you want to review a branch or PR.
-
-   When the work goes up as a pull request, **`/pr`** shapes the body: the smallest visual that shows the change, before/after evidence that it works, and a one-way or two-way door call. It's model-invoked, so the agent reaches for it whenever it writes a PR.
-
-4. **`/retro`** closes the loop. After a build, and especially one that went sideways, it looks back over the agent's environment: navigation pointers, automated checks, coding standards, steering files, and tooling. Mechanical mistakes become deterministic checks; judgement calls become coding standards. Update the task's learning note during delivery.
+4. Every change includes a new or substantively updated teaching document and its index entry. Update TODO, make a local Git commit with an original type prefix and Chinese summary/body, then deliver its SHA, verification, teaching link, remaining issues, and a brief reflection. Use a formal **`/retro`** for major failures, phase completion, or an explicit request. The default route has no code-review, agent re-review, push, or PR stage; those standalone tools require a separate explicit user request.
 
 ### Context hygiene
 
-Keep steps 1–3 in **one unbroken context window** (don't compact or clear until after `/to-tickets`) so the grilling, spec, and tickets all build on the same thinking. Each `/implement` then starts fresh, working from the ticket. Run `/retro` in the session it's looking back on, before you clear; after clearing, point it at that session's log instead.
+Carry the task IDs, settled decisions, acceptance conditions, current commit SHA, and verification evidence across sessions or compaction. Related changes can stay in one implementation session; a new session is not required for each TODO item. Run a formal `/retro` against the session being reflected on, using its log if necessary.
 
 The limit on this is the **[smart zone](https://www.aihero.dev/ai-coding-dictionary/smart-zone)**: the window (~150k tokens on state-of-the-art models) within which the model still reasons sharply. If a session approaches it before `/to-tickets`, don't push on degraded; `/compact` at the nearest phase boundary and carry on (see Phase boundaries).
 

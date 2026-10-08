@@ -1,6 +1,7 @@
 ---
 name: pr
-description: "Use when writing a PR body."
+description: "Write a PR body only when explicitly requested by the user."
+disable-model-invocation: true
 metadata:
   credits:
     skill: show-me
@@ -9,7 +10,7 @@ metadata:
     url: "https://github.com/humanlayer/skills/blob/main/plugins/show-me/skills/show-me/SKILL.md"
 ---
 
-Use this template for writing the PR body:
+This is a user-invoked standalone tool. The default project workflow in `docs/agents/issue-tracker.md` ends with a local commit and delivery; it has no automatic push or PR stage. Use this template only when the user explicitly requests a PR body:
 
 ```markdown
 ## Summary
