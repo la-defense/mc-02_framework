@@ -43,9 +43,12 @@ void MX_SPI1_Init(void)
   hspi1.Init.Direction = SPI_DIRECTION_2LINES_TXONLY;
   hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  /* !! 手工改动(2026-09-26, LCD-08): CubeMX 重新生成会覆盖这里 !!
+  /* MC02-0046: ST7789V2 samples MOSI on rising SCL; with idle-high SCL,
+     use Mode 3 (second edge), launching MOSI on falling edges.
+     CLKPhase is also recorded in Basic_Framework_MC02.ioc.
+     !! 手工改动(2026-09-26, LCD-08): CubeMX 重新生成会覆盖这里 !!
      SPI1 的时钟源是 PLL1Q = 120MHz(main.c 没配 PeriphClkInit, 用的是默认),
      所以分频 8 → 15MHz, 分频 4 → **30MHz**。LCD(ST7789V2) 在 30MHz 下的写周期
      余量足够, 把刷新一帧的 SPI 传输时间砍掉一半。
