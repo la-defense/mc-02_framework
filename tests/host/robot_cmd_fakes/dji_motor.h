@@ -1,0 +1,1 @@
+#define ECD_ANGLE_COEF_DJI 0.043945f

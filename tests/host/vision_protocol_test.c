@@ -6,6 +6,13 @@
 #include "vision_control.h"
 #include "vision_protocol.h"
 
+/* Simulation only; never supplies production mechanical configuration. */
+static const VisionControlLimits_s test_limits = {
+    .configured=1, .yaw_constraint=VISION_YAW_BOUNDED,
+    .pitch_min_deg=-20.0f, .pitch_max_deg=30.0f, .pitch_zero_offset_deg=5.0f,
+    .yaw_min_deg=-180.0f, .yaw_max_deg=180.0f,
+};
+
 #define CHECK(condition)                                      \
     do                                                        \
     {                                                         \
@@ -68,6 +75,7 @@ static int TestProtocol(void)
 static int TestVisionControlValidity(void)
 {
     VisionControlInput_s input = {
+        .limits = &test_limits,
         .online = 1u,
         .mode = 1u,
         .last_rx_ms = 100u,
@@ -113,6 +121,7 @@ static int TestVisionControlValidity(void)
 static int TestVisionControlRevokesStaleShootCommand(void)
 {
     VisionControlInput_s input = {
+        .limits = &test_limits,
         .online = 1u,
         .mode = 2u,
         .last_rx_ms = 100u,
@@ -165,6 +174,7 @@ static int TestVisionControlRevokesStaleShootCommand(void)
 static int TestVisionControlPreservesManualShootCommand(void)
 {
     VisionControlInput_s input = {
+        .limits = &test_limits,
         .online = 1u,
         .mode = 2u,
         .last_rx_ms = 100u,

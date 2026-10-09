@@ -31,8 +31,29 @@
 #define YAW_CHASSIS_ALIGN_ECD 2711  // 云台和底盘对齐指向相同方向时的电机编码器值,若对云台有机械改动需要修改
 #define YAW_ECD_GREATER_THAN_4096 0 // ALIGN_ECD值是否大于4096,是为1,否为0;用于计算云台偏转角度
 #define PITCH_HORIZON_ECD 3412      // 云台处于水平位置时编码器值,若对云台有机械改动需要修改
-#define PITCH_MAX_ANGLE 0           // 云台竖直方向最大角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
-#define PITCH_MIN_ANGLE 0           // 云台竖直方向最小角度 (注意反馈如果是陀螺仪，则填写陀螺仪的角度)
+#ifndef PITCH_MAX_ANGLE
+#define PITCH_MAX_ANGLE 0           // 未实测配置；不能据此启用视觉接管
+#endif
+#ifndef PITCH_MIN_ANGLE
+#define PITCH_MIN_ANGLE 0
+#endif
+/* Vision limits use final gimbal command degrees. Leave unconfigured until measured.
+   Overrides are used by host fixtures; no simulated limits enter a real image. */
+#ifndef VISION_LIMITS_CONFIGURED
+#define VISION_LIMITS_CONFIGURED 0u
+#endif
+#ifndef VISION_YAW_CONSTRAINT
+#define VISION_YAW_CONSTRAINT VISION_YAW_UNCONFIGURED
+#endif
+#ifndef VISION_YAW_MIN_DEG
+#define VISION_YAW_MIN_DEG 0.0f
+#endif
+#ifndef VISION_YAW_MAX_DEG
+#define VISION_YAW_MAX_DEG 0.0f
+#endif
+#ifndef VISION_PITCH_ZERO_OFFSET_DEG
+#define VISION_PITCH_ZERO_OFFSET_DEG 0.0f
+#endif
 // 发射参数
 // 机器人底盘修改的参数,单位为mm(毫米)
 #define WHEEL_BASE 350              // 纵向轴距(前进后退方向)

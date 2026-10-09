@@ -3,6 +3,27 @@
 
 #include <stdint.h>
 
+typedef enum
+{
+    VISION_YAW_UNCONFIGURED = 0,
+    VISION_YAW_CONTINUOUS,
+    VISION_YAW_BOUNDED
+} VisionYawConstraint_e;
+
+/* Limits are degrees in the final gimbal command frame, not wire radians. */
+typedef struct
+{
+    uint8_t configured;
+    VisionYawConstraint_e yaw_constraint;
+    float pitch_min_deg;
+    float pitch_max_deg;
+    float pitch_zero_offset_deg;
+    float yaw_min_deg;
+    float yaw_max_deg;
+} VisionControlLimits_s;
+
+#define VISION_CONTROL_MAX_AGE_MS 50u
+
 typedef struct
 {
     uint8_t online;
@@ -16,7 +37,14 @@ typedef struct
     float pitch;
     float pitch_vel;
     float pitch_acc;
+    const VisionControlLimits_s *limits;
 } VisionControlInput_s;
+
+typedef struct
+{
+    float yaw, pitch;
+    float yaw_vel, yaw_acc, pitch_vel, pitch_acc;
+} VisionControlGimbalCommand_s;
 
 typedef struct
 {
@@ -36,8 +64,12 @@ enum
     VISION_CONTROL_LOAD_BURSTFIRE = 4u
 };
 
-/* Mechanical angle limits must be checked by the caller using robot config. */
+/* Missing configuration, stale data or out-of-range commands are unusable. */
 uint8_t VisionControlInputIsUsable(const VisionControlInput_s *input);
+
+/* Returns a fully zeroed output on rejection. Wire values remain radians. */
+uint8_t VisionControlBuildGimbalCommand(const VisionControlInput_s *input,
+                                      VisionControlGimbalCommand_s *command);
 
 /* Builds the vision policy, returning a neutral command when vision is unusable. */
 uint8_t VisionControlBuildShootCommand(const VisionControlInput_s *input,

@@ -19,6 +19,38 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(CTest)
+add_executable(vision_limits_test vision_limits_test.c ../../modules/master_machine/vision_control.c)
+target_include_directories(vision_limits_test PRIVATE ../../modules/master_machine)
+if(UNIX)
+  target_link_libraries(vision_limits_test PRIVATE m)
+endif()
+add_test(NAME vision_mechanical_limits_and_conversion COMMAND vision_limits_test)
+add_executable(robot_cmd_task_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
+  ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
+  ../../modules/master_machine/vision_control.c)
+target_include_directories(robot_cmd_task_test BEFORE PRIVATE robot_cmd_fakes)
+target_include_directories(robot_cmd_task_test PRIVATE ../../application ../../application/cmd ../../application/config
+  ../../modules ../../modules/remote ../../modules/imu ../../modules/master_machine ../../modules/message_center
+  ../../modules/safety ../../bsp/usart)
+if(UNIX)
+  target_link_libraries(robot_cmd_task_test PRIVATE m)
+endif()
+add_test(NAME production_command_task_source_revocation COMMAND robot_cmd_task_test)
+add_executable(robot_cmd_vision_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
+  ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
+  ../../modules/master_machine/vision_control.c)
+target_include_directories(robot_cmd_vision_test BEFORE PRIVATE robot_cmd_fakes)
+target_include_directories(robot_cmd_vision_test PRIVATE ../../application ../../application/cmd ../../application/config
+  ../../modules ../../modules/remote ../../modules/imu ../../modules/master_machine ../../modules/message_center
+  ../../modules/safety ../../bsp/usart)
+# These mechanical values belong to this simulation executable only.
+target_compile_definitions(robot_cmd_vision_test PRIVATE VISION_LIMITS_CONFIGURED=1
+  VISION_YAW_CONSTRAINT=VISION_YAW_BOUNDED VISION_YAW_MIN_DEG=-180.0f VISION_YAW_MAX_DEG=180.0f
+  PITCH_MIN_ANGLE=-20.0f PITCH_MAX_ANGLE=30.0f VISION_PITCH_ZERO_OFFSET_DEG=5.0f)
+if(UNIX)
+  target_link_libraries(robot_cmd_vision_test PRIVATE m)
+endif()
+add_test(NAME production_command_task_vision_handoff COMMAND robot_cmd_vision_test)
 if(UNIX AND NOT APPLE)
   foreach(profile IN ITEMS bench_safe robot)
     set(target motor_profile_${profile})
