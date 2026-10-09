@@ -75,3 +75,10 @@ jobs:
         run: |
           cmake -S . -B build/firmware-robot-optimized -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMC02_PROFILE=robot -DMC02_ENABLE_HEATER=OFF
           cmake --build build/firmware-robot-optimized --parallel 2
+
+      - name: Check linked profiles in both optimization levels
+        run: |
+          for level in debug optimized; do
+            python3 tools/workflow/check_firmware_profile.py --profile bench_safe build/firmware-bench-${level}/Basic_Framework_MC02_bench_safe.elf
+            python3 tools/workflow/check_firmware_profile.py --profile robot build/firmware-robot-${level}/Basic_Framework_MC02_robot.elf
+          done
