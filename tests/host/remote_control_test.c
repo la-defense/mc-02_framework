@@ -55,6 +55,14 @@ int main(int argc, char **argv)
         RobotSafetyRequestEnable(); receive(frame,18); RemoteBenchTask(); DaemonTask();
         CHECK(!RobotSafetyIsReady());
     }
+    const Robot_Fault_e faults[]={ROBOT_FAULT_MOTOR_OFFLINE,ROBOT_FAULT_CAN_BUSOFF,ROBOT_FAULT_TILT};
+    for(unsigned i=0;i<3;++i) {
+        RobotSafetyRequestEnable(); RobotFaultReport(faults[i]);
+        now+=10; receive(frame,18); RemoteBenchTask(); DaemonTask();
+        CHECK(RobotSafetyGetState()==ROBOT_FAULT && !RobotSafetyIsReady());
+        RobotFaultClear(faults[i]); now+=10; receive(frame,18); RemoteBenchTask(); DaemonTask();
+        CHECK(RobotSafetyGetState()==ROBOT_SAFE && !RobotSafetyIsReady());
+    }
     for(unsigned i=0;i<11;++i) { now+=10; DaemonTask(); RemoteBenchTask(); }
     CHECK(!RemoteControlIsOnline() && EstopIsLatched());
     receive(frame,18); RemoteBenchTask(); CHECK(RemoteControlIsOnline() && EstopIsLatched());

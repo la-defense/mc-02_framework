@@ -207,8 +207,9 @@ const char *RobotSafetyStateName(Robot_Status_e state)
 
 void RobotSafetyUpdate(void)
 {
+    const uint32_t active_faults = fault_flags;
     /* 遥控器离线是唯一会锁存急停的故障 */
-    if (!rc_online)
+    if (!rc_online || (active_faults & ROBOT_FAULT_RC_OFFLINE))
         EstopRequest(ESTOP_REASON_RC_OFFLINE);
 
     if (estop_latched)
@@ -218,7 +219,7 @@ void RobotSafetyUpdate(void)
         return;
     }
 
-    if (!task_healthy)
+    if (!task_healthy || (active_faults & ROBOT_FAULT_TASK_TIMEOUT))
     {
         enable_requested = 0;
         RobotSafetySetState(ROBOT_FAULT);
@@ -231,19 +232,17 @@ void RobotSafetyUpdate(void)
         return;
     }
 
+    /* These faults disable control without consuming the user's enable request.
+       CALIB remains available with actuators disabled. */
+    if (active_faults & (ROBOT_FAULT_MOTOR_OFFLINE | ROBOT_FAULT_CAN_BUSOFF | ROBOT_FAULT_TILT))
+    {
+        RobotSafetySetState(ROBOT_FAULT);
+        return;
+    }
+
     if (enable_requested)
     {
-        if (!rc_online)
-        {
-            RobotSafetySetState(ROBOT_SAFE);
-            return;
-        }
-        if (!imu_valid)
-        {
-            RobotSafetySetState(ROBOT_SAFE);
-            return;
-        }
-        if (!calib_valid)
+        if (active_faults != ROBOT_FAULT_NONE || !rc_online || !imu_valid || !calib_valid)
         {
             RobotSafetySetState(ROBOT_SAFE);
             return;

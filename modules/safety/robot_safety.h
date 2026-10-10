@@ -37,6 +37,10 @@ void RobotSafetyRequestEnable(void);
 void RobotSafetyRequestDisable(void);
 void RobotSafetyRequestCalib(uint8_t enable);
 
+/* Reporting a fault does not update state until RobotSafetyUpdate(). All pending
+   faults block READY. MOTOR_OFFLINE/CAN_BUSOFF/TILT keep the enable request;
+   RC_OFFLINE latches ESTOP and TASK_TIMEOUT cancels the request. CALIB remains
+   available for the former three faults, with actuator commands disabled. */
 void RobotFaultReport(Robot_Fault_e fault);
 void RobotFaultClear(Robot_Fault_e fault);
 

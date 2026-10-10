@@ -42,6 +42,47 @@ int main(int argc, char **argv)
     Gimbal_Upload_Data_s pose={0}; pose.gimbal_imu_data.YawTotalAngle=12; pose.gimbal_imu_data.Pitch=3;
     Gimbal_Ctrl_Cmd_s command; Shoot_Ctrl_Cmd_s shooting;
     remote[0].rc.switch_left=RC_SW_DOWN; remote[0].rc.switch_right=RC_SW_MID;
+    if (argc > 1 && !strcmp(argv[1], "faults")) {
+        Subscriber_t *chassis=SubRegister("chassis_cmd",sizeof(Chassis_Ctrl_Cmd_s));
+        Chassis_Ctrl_Cmd_s driving;
+        const Robot_Fault_e faults[]={ROBOT_FAULT_MOTOR_OFFLINE,ROBOT_FAULT_CAN_BUSOFF,ROBOT_FAULT_TILT};
+        remote[0].rc.dial=-600;
+        remote[0].rc.rocker_l_=100; remote[0].rc.rocker_l1=-100;
+        remote[0].rc.rocker_r_=50; remote[0].rc.rocker_r1=-50;
+        for (unsigned i=0;i<3;++i) {
+            wire.mode=2; wire.yaw=.25f; wire.pitch=.1f;
+            wire.yaw_vel=.2f; wire.yaw_acc=.3f; wire.pitch_vel=-.2f; wire.pitch_acc=-.3f;
+            status.online=1; tick+=5; status.last_rx_ms=tick;
+            PubPushMessage(feedback,&pose); RobotCMDTask();
+            CHECK(SubGetMessage(gimbal,&command) && SubGetMessage(shoot,&shooting) && SubGetMessage(chassis,&driving));
+            CHECK(RobotSafetyIsReady() && command.gimbal_mode==GIMBAL_GYRO_MODE);
+            CHECK(driving.vx!=0 && driving.vy!=0 && shooting.load_mode==LOAD_BURSTFIRE);
+#if VISION_LIMITS_CONFIGURED
+            CHECK(command.yaw_vel>0 && shooting.shoot_rate==10);
+#else
+            CHECK(command.yaw_vel==0 && shooting.shoot_rate==8);
+#endif
+            RobotFaultReport(faults[i]); tick+=5; status.last_rx_ms=tick;
+            PubPushMessage(feedback,&pose); RobotCMDTask();
+            CHECK(RobotSafetyGetState()==ROBOT_FAULT);
+            CHECK(SubGetMessage(gimbal,&command) && SubGetMessage(shoot,&shooting) && SubGetMessage(chassis,&driving));
+            CHECK(command.gimbal_mode==GIMBAL_ZERO_FORCE && command.yaw==0 && command.pitch==0);
+            CHECK(command.yaw_vel==0 && command.yaw_acc==0 && command.pitch_vel==0 && command.pitch_acc==0);
+            CHECK(driving.chassis_mode==CHASSIS_ZERO_FORCE && driving.vx==0 && driving.vy==0 && driving.wz==0 && driving.offset_angle==0);
+            CHECK(shooting.shoot_mode==SHOOT_OFF && shooting.friction_mode==FRICTION_OFF && shooting.load_mode==LOAD_STOP && shooting.shoot_rate==0);
+            /* Recovery anchors to this cycle's pose and current manual inputs. */
+            pose.gimbal_imu_data.YawTotalAngle=20+i; pose.gimbal_imu_data.Pitch=4;
+            wire.mode=0; remote[0].rc.rocker_r_=60+i;
+            RobotFaultClear(faults[i]); tick+=5;
+            PubPushMessage(feedback,&pose); RobotCMDTask();
+            CHECK(RobotSafetyIsReady());
+            CHECK(SubGetMessage(gimbal,&command) && SubGetMessage(shoot,&shooting) && SubGetMessage(chassis,&driving));
+            CHECK(fabsf(command.yaw-(20.2f+i))<.0001f && fabsf(command.pitch-3.9f)<.0001f);
+            CHECK(command.yaw_vel==0 && command.yaw_acc==0 && command.pitch_vel==0 && command.pitch_acc==0);
+            CHECK(driving.vx==10*(60+i) && shooting.load_mode==LOAD_BURSTFIRE && shooting.shoot_rate==8);
+        }
+        return 0;
+    }
     PubPushMessage(feedback,&pose); RobotCMDTask();
     CHECK(SubGetMessage(gimbal,&command)); CHECK(command.gimbal_mode==GIMBAL_GYRO_MODE);
     remote[0].rc.switch_left=RC_SW_MID; tick+=5;

@@ -26,6 +26,12 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(CTest)
+add_executable(robot_safety_test robot_safety_test.c ../../modules/safety/robot_safety.c)
+target_include_directories(robot_safety_test BEFORE PRIVATE robot_cmd_fakes)
+target_include_directories(robot_safety_test PRIVATE ../../application ../../modules/imu
+  ../../modules/master_machine ../../modules/safety ../../bsp/usart)
+add_test(NAME production_safety_reported_faults COMMAND robot_safety_test)
+add_test(NAME production_safety_fault_recovery_priority COMMAND robot_safety_test recovery)
 add_executable(remote_control_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ../../modules/remote/remote_safety.c
   ../../modules/remote/remote_control.c ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c)
@@ -80,6 +86,7 @@ if(UNIX)
   target_link_libraries(robot_cmd_task_test PRIVATE m)
 endif()
 add_test(NAME production_command_task_source_revocation COMMAND robot_cmd_task_test)
+add_test(NAME production_command_task_fault_revocation COMMAND robot_cmd_task_test faults)
 add_test(NAME production_remote_gesture_tick_zero COMMAND robot_cmd_task_test gesture-zero)
 add_executable(robot_cmd_vision_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c
@@ -97,6 +104,7 @@ if(UNIX)
   target_link_libraries(robot_cmd_vision_test PRIVATE m)
 endif()
 add_test(NAME production_command_task_vision_handoff COMMAND robot_cmd_vision_test)
+add_test(NAME production_command_task_vision_fault_recovery COMMAND robot_cmd_vision_test faults)
 if(UNIX AND NOT APPLE)
   foreach(profile IN ITEMS bench_safe robot)
     set(target motor_profile_${profile})

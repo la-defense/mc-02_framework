@@ -86,6 +86,7 @@ RC_SNAPSHOT_FIELDS = {
     "estop_latched": SnapshotField("estop_latched", "mdb", 8),
     "enable_requested": SnapshotField("enable_requested", "mdb", 8),
     "safety_state": SnapshotField("robot_state", "mdb", 8),
+    "fault_flags": SnapshotField("fault_flags", "mdw", 32),
     "iwdg_reset_flag": SnapshotField("iwdg_reset_flag", "mdb", 8),
 }
 

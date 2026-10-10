@@ -64,7 +64,7 @@ class RemoteProfileTests(unittest.TestCase):
         fields = probe_snapshot_live.RC_SNAPSHOT_FIELDS
         addresses = {key: 0x24001000 + i * 4 for i, key in enumerate(fields)}
         values = {key: 0 for key in fields}
-        values.update(accepted_frames=200, online=1, estop_latched=1)
+        values.update(accepted_frames=200, online=1, estop_latched=1, fault_flags=28)
         server = FakeOpenOCDServer(addresses=addresses, values=values)
         try:
             actual = probe_snapshot_live.read_snapshot(addresses, "127.0.0.1", server.port, 2, fields)
