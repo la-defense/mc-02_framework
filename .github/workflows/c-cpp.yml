@@ -82,3 +82,17 @@ jobs:
             python3 tools/workflow/check_firmware_profile.py --profile bench_safe build/firmware-bench-${level}/Basic_Framework_MC02_bench_safe.elf
             python3 tools/workflow/check_firmware_profile.py --profile robot build/firmware-robot-${level}/Basic_Framework_MC02_robot.elf
           done
+
+      - name: Reject robot remote-diagnostic profile
+        run: |
+          if cmake -S . -B build/rcdiag-invalid -G Ninja -DMC02_PROFILE=robot -DMC02_BENCH_RC_DIAGNOSTICS=ON; then
+            exit 1
+          fi
+
+      - name: Build and check isolated remote diagnostics
+        run: |
+          for level in Debug RelWithDebInfo; do
+            cmake -S . -B build/rcdiag-$level -G Ninja -DCMAKE_BUILD_TYPE=$level -DMC02_PROFILE=bench_safe -DMC02_BENCH_RC_DIAGNOSTICS=ON -DMC02_ENABLE_HEATER=OFF
+            cmake --build build/rcdiag-$level --parallel 2
+            python3 tools/workflow/check_firmware_profile.py build/rcdiag-$level/Basic_Framework_MC02_rcdiag_bench_safe.elf --profile bench_safe --rc-diagnostics
+          done

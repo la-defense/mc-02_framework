@@ -21,12 +21,21 @@ uint8_t RemoteControlIsOnline(void) { return remote_online; }
 Vision_Recv_s *VisionInit(UART_HandleTypeDef *h) { (void)h; return &wire; }
 void VisionSend(void) {}
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link) { *frame=wire; *link=status; ++snapshots; }
-int main(void)
+int main(int argc, char **argv)
 {
     RobotSafetyInit(); RobotSafetySetRcOnline(1); RobotSafetySetImuValid(1);
     RobotSafetySetCalibValid(1); RobotSafetyRequestEnable(); RobotSafetyUpdate();
     CHECK(RobotSafetyIsReady());
     RobotCMDInit();
+    if (argc > 1 && !strcmp(argv[1], "gesture-zero")) {
+        EstopRequest(ESTOP_REASON_MANUAL);
+        remote[0].rc.switch_left=remote[0].rc.switch_right=RC_SW_MID;
+        tick=0; RobotCMDTask();
+        tick=999; RobotCMDTask(); CHECK(EstopIsLatched());
+        tick=1000; RobotCMDTask(); CHECK(!EstopIsLatched());
+        CHECK(RobotSafetyGetState()==ROBOT_SAFE);
+        return 0;
+    }
     Publisher_t *feedback=PubRegister("gimbal_feed",sizeof(Gimbal_Upload_Data_s));
     Subscriber_t *gimbal=SubRegister("gimbal_cmd",sizeof(Gimbal_Ctrl_Cmd_s));
     Subscriber_t *shoot=SubRegister("shoot_cmd",sizeof(Shoot_Ctrl_Cmd_s));

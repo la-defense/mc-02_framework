@@ -8,6 +8,9 @@
 #include "master_process.h"
 #include "bsp_param.h"
 #include "imu_heater.h"
+#if MC02_BENCH_RC_DIAGNOSTICS
+#include "remote_bench.h"
+#endif
 
 static uint8_t RobotParamFlashOperationBegin(void)
 {
@@ -71,6 +74,9 @@ void RobotInit()
 
 #if defined(MC02_PROFILE_BENCH_SAFE)
     VisionInit(&huart9);
+#if MC02_BENCH_RC_DIAGNOSTICS
+    RemoteBenchInit(&huart5);
+#endif
 #endif
 
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
@@ -89,7 +95,11 @@ void RobotInit()
 void RobotTask()
 {
 #if defined(MC02_PROFILE_BENCH_SAFE)
+#if MC02_BENCH_RC_DIAGNOSTICS
+    RemoteBenchTask();
+#else
     RobotSafetyUpdate();
+#endif
     VisionSend();
 #else
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)

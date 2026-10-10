@@ -26,7 +26,9 @@ static volatile uint32_t g_crash_handler_active;
 static const char kCrashBuildStamp[] = __DATE__ " " __TIME__;
 
 /* 当前构建配置保留为可查询字符串，并纳入崩溃构建指纹。 */
-#if defined(MC02_PROFILE_BENCH_SAFE)
+#if MC02_BENCH_RC_DIAGNOSTICS
+const char mc02_build_profile[] = "rcdiag_bench_safe";
+#elif defined(MC02_PROFILE_BENCH_SAFE)
 const char mc02_build_profile[] = "bench_safe";
 #else
 const char mc02_build_profile[] = "robot";

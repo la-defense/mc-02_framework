@@ -28,6 +28,7 @@ typedef struct
     uint16_t last_recv_size;               // 最近一次回调收到的实际字节数(HAL RxEvent 的 Size)
     UART_HandleTypeDef *usart_handle;      // 实例对应的usart_handle
     usart_module_callback module_callback; // 解析收到的数据的回调函数
+    const uint8_t *current_rx_data; /* Queue snapshot; callback lifetime only. */
 } USARTInstance;
 
 /* usart 初始化配置结构体 */
@@ -80,5 +81,8 @@ uint8_t USARTIsReady(USARTInstance *_instance);
  *        放在"用数据之前"调用即可, 解析延迟就是一个任务周期。
  */
 void USARTProcessRx(void);
+
+/* NULL outside callback. Read last_recv_size before accessing this immutable frame. */
+const uint8_t *USARTGetCurrentRxData(const USARTInstance *instance);
 
 #endif

@@ -26,6 +26,42 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(CTest)
+add_executable(remote_control_test remote_control_test.c ../../bsp/usart/bsp_usart.c
+  ../../modules/remote/remote_safety.c
+  ../../modules/remote/remote_control.c ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c)
+target_include_directories(remote_control_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
+target_include_directories(remote_control_test PRIVATE ../../bsp/usart ../../modules/remote
+  ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../application)
+add_test(NAME production_remote_startup_offline COMMAND remote_control_test)
+add_test(NAME production_remote_complete_frame COMMAND remote_control_test length)
+add_test(NAME production_remote_fields_and_lease COMMAND remote_control_test fields)
+add_test(NAME production_remote_queue_and_key_history COMMAND remote_control_test queue-keys)
+add_test(NAME production_remote_shared_gestures COMMAND remote_control_test gestures)
+add_executable(usart_snapshot_test usart_snapshot_test.c ../../bsp/usart/bsp_usart.c)
+target_include_directories(usart_snapshot_test BEFORE PRIVATE remote_fakes)
+target_include_directories(usart_snapshot_test PRIVATE ../../bsp/usart)
+add_test(NAME production_uart_immutable_dispatch COMMAND usart_snapshot_test)
+add_executable(remote_bench_test remote_control_test.c ../../bsp/usart/bsp_usart.c
+  ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
+  ../../modules/remote/remote_bench.c ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c)
+target_include_directories(remote_bench_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
+target_include_directories(remote_bench_test PRIVATE ../../bsp/usart ../../modules/remote
+  ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../application)
+target_compile_definitions(remote_bench_test PRIVATE MC02_PROFILE_BENCH_SAFE=1 MC02_BENCH_RC_DIAGNOSTICS=1)
+add_test(NAME production_remote_bench_never_ready COMMAND remote_bench_test)
+add_executable(remote_command_integration_test remote_command_integration_test.c
+  ../../bsp/usart/bsp_usart.c ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
+  ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
+  ../../modules/message_center/message_center.c ../../modules/master_machine/vision_control.c)
+target_include_directories(remote_command_integration_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
+target_include_directories(remote_command_integration_test PRIVATE ../../application ../../application/cmd
+  ../../modules
+  ../../application/config ../../modules/remote ../../modules/daemon ../../modules/safety ../../bsp/usart
+  ../../modules/imu ../../modules/master_machine ../../modules/message_center)
+if(UNIX)
+  target_link_libraries(remote_command_integration_test PRIVATE m)
+endif()
+add_test(NAME production_remote_to_command_safety COMMAND remote_command_integration_test)
 add_executable(vision_limits_test vision_limits_test.c ../../modules/master_machine/vision_control.c)
 target_include_directories(vision_limits_test PRIVATE ../../modules/master_machine)
 if(UNIX)
@@ -33,6 +69,7 @@ if(UNIX)
 endif()
 add_test(NAME vision_mechanical_limits_and_conversion COMMAND vision_limits_test)
 add_executable(robot_cmd_task_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
+  ../../modules/remote/remote_safety.c
   ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
   ../../modules/master_machine/vision_control.c)
 target_include_directories(robot_cmd_task_test BEFORE PRIVATE robot_cmd_fakes)
@@ -43,7 +80,9 @@ if(UNIX)
   target_link_libraries(robot_cmd_task_test PRIVATE m)
 endif()
 add_test(NAME production_command_task_source_revocation COMMAND robot_cmd_task_test)
+add_test(NAME production_remote_gesture_tick_zero COMMAND robot_cmd_task_test gesture-zero)
 add_executable(robot_cmd_vision_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
+  ../../modules/remote/remote_safety.c
   ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
   ../../modules/master_machine/vision_control.c)
 target_include_directories(robot_cmd_vision_test BEFORE PRIVATE robot_cmd_fakes)

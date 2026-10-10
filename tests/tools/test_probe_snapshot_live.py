@@ -59,6 +59,34 @@ TEST_IMU_VALUES = {
 }
 
 
+class RemoteProfileTests(unittest.TestCase):
+    def test_rc_reads_only_fixed_addresses_and_checks_running(self):
+        fields = probe_snapshot_live.RC_SNAPSHOT_FIELDS
+        addresses = {key: 0x24001000 + i * 4 for i, key in enumerate(fields)}
+        values = {key: 0 for key in fields}
+        values.update(accepted_frames=200, online=1, estop_latched=1)
+        server = FakeOpenOCDServer(addresses=addresses, values=values)
+        try:
+            actual = probe_snapshot_live.read_snapshot(addresses, "127.0.0.1", server.port, 2, fields)
+        finally:
+            server.close()
+        self.assertEqual(actual, values)
+        self.assertEqual(len(server.commands), 2 * len(fields) + 1)
+        self.assertFalse(any(c in {"halt", "resume", "reset"} for c in server.commands))
+
+    def test_rc_aborts_on_stop_without_run_control(self):
+        fields = probe_snapshot_live.RC_SNAPSHOT_FIELDS
+        addresses = {key: 0x24002000 + i * 4 for i, key in enumerate(fields)}
+        values = {key: 0 for key in fields}
+        server = FakeOpenOCDServer(["running", "halted"], addresses=addresses, values=values)
+        try:
+            with self.assertRaises(probe_snapshot_live.ProbeIOError):
+                probe_snapshot_live.read_snapshot(addresses, "127.0.0.1", server.port, 2, fields)
+        finally:
+            server.close()
+        self.assertEqual(len(server.commands), 3)
+
+
 class FakeOpenOCDServer:
     def __init__(self, state_responses=None, initial_delay=0.0, addresses=None, values=None):
         self.commands = []

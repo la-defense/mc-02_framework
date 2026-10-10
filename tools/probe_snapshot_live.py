@@ -75,6 +75,20 @@ IMU_SNAPSHOT_FIELDS = {
     "imu_heater_duty": SnapshotField("imu_heater_duty_diag", "mdw", 32),
 }
 
+RC_SNAPSHOT_FIELDS = {
+    "tick_ms": SnapshotField("uwTick", "mdw", 32),
+    **{key: SnapshotField(f"remote_control_diag.{key}", "mdw", 32) for key in (
+        "accepted_frames", "rejected_length", "rejected_fields", "last_valid_tick",
+        "offline_tick", "offline_last_valid_tick", "offline_events", "has_valid_frame", "online")},
+    "uart_oversize": SnapshotField("usart_rx_oversize_total", "mdw", 32),
+    "switch_left": SnapshotField("rc_ctrl[0].rc.switch_left", "mdb", 8),
+    "switch_right": SnapshotField("rc_ctrl[0].rc.switch_right", "mdb", 8),
+    "estop_latched": SnapshotField("estop_latched", "mdb", 8),
+    "enable_requested": SnapshotField("enable_requested", "mdb", 8),
+    "safety_state": SnapshotField("robot_state", "mdb", 8),
+    "iwdg_reset_flag": SnapshotField("iwdg_reset_flag", "mdb", 8),
+}
+
 
 class ProbeIOError(RuntimeError):
     """The OpenOCD connection, state check, or bounded memory read failed."""
@@ -410,7 +424,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--samples", type=int, default=5, help="2..8 snapshots")
     parser.add_argument("--interval", type=float, default=1.0, help="seconds between reads, 0..2")
     parser.add_argument("--timeout", type=float, default=5.0, help="per snapshot timeout, >0..5 seconds")
-    parser.add_argument("--imu", action="store_true", help="read the fixed BMI088/INS/heater diagnostic profile")
+    profile = parser.add_mutually_exclusive_group()
+    profile.add_argument("--imu", action="store_true", help="read the fixed BMI088/INS/heater diagnostic profile")
+    profile.add_argument("--rc", action="store_true", help="read the fixed remote/safety diagnostic profile")
     args = parser.parse_args(argv)
 
     if not 2 <= args.samples <= 8:
@@ -426,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"ELF file does not exist: {args.elf}")
 
     try:
-        fields = IMU_SNAPSHOT_FIELDS if args.imu else SNAPSHOT_FIELDS
+        fields = RC_SNAPSHOT_FIELDS if args.rc else IMU_SNAPSHOT_FIELDS if args.imu else SNAPSHOT_FIELDS
         addresses = resolve_symbol_addresses(args.gdb, str(args.elf), args.timeout, fields)
     except ProbeIOError as error:
         print(f"probe_io_error: {error}", file=sys.stderr)

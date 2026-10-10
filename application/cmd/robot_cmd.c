@@ -1,3 +1,5 @@
+#include "remote_safety.h"
+static RemoteSafetyGestures_s remote_gestures;
 // app
 #include "robot_def.h"
 #include "robot_cmd.h"
@@ -76,6 +78,7 @@ BMI088Instance *bmi088_test; // 云台IMU
 BMI088_Data_t bmi088_data;
 void RobotCMDInit()
 {
+    RemoteSafetyGesturesInit(&remote_gestures);
     rc_data = RemoteControlInit(&huart5);   // 修改为对应串口,注意如果是自研板dbus协议串口需选用添加了反相器的那个
     VisionInit(&huart9); // 正式链路为板载 USB CDC 虚拟串口
 
@@ -322,77 +325,10 @@ static void ApplySafeCommands(void)
  */
 static void EmergencyHandler(uint8_t remote_online)
 {
-    static uint32_t enable_combo_tick = 0;
-    static uint32_t disable_combo_tick = 0;
-    static uint32_t reset_combo_tick = 0;
-    uint32_t now = HAL_GetTick();
-    if (!remote_online)
-    {
-        enable_combo_tick = disable_combo_tick = reset_combo_tick = 0u;
-        RobotSafetyUpdate();
-        ApplySafeCommands();
-        return;
-    }
-
-    uint8_t enable_combo = switch_is_down(rc_data[TEMP].rc.switch_left) && switch_is_down(rc_data[TEMP].rc.switch_right);
-    uint8_t disable_combo = switch_is_up(rc_data[TEMP].rc.switch_left) && switch_is_up(rc_data[TEMP].rc.switch_right);
-    uint8_t reset_combo = switch_is_mid(rc_data[TEMP].rc.switch_left) && switch_is_mid(rc_data[TEMP].rc.switch_right);
-
-    if (enable_combo)
-    {
-        if (enable_combo_tick == 0)
-            enable_combo_tick = now;
-        else if ((uint32_t)(now - enable_combo_tick) >= 1000)
-        {
-            RobotSafetyRequestEnable();
-            LOGINFO("[CMD] enable request");
-            enable_combo_tick = 0;
-        }
-    }
-    else
-        enable_combo_tick = 0;
-
-    if (disable_combo)
-    {
-        if (disable_combo_tick == 0)
-            disable_combo_tick = now;
-        else if ((uint32_t)(now - disable_combo_tick) >= 1000)
-        {
-            RobotSafetyRequestDisable();
-            LOGWARNING("[CMD] disable request");
-            disable_combo_tick = 0;
-        }
-    }
-    else
-        disable_combo_tick = 0;
-
-    if (reset_combo)
-    {
-        if (reset_combo_tick == 0)
-            reset_combo_tick = now;
-        else if ((uint32_t)(now - reset_combo_tick) >= 1000)
-        {
-            if (EstopIsLatched())
-            {
-                if (EstopClear())
-                    LOGINFO("[CMD] estop reset");
-                else
-                    LOGWARNING("[CMD] estop reset rejected: fault still active");
-            }
-            reset_combo_tick = 0;
-        }
-    }
-    else
-        reset_combo_tick = 0;
-
-    // 拨轮向下打满: 手动急停锁存
-    if (rc_data[TEMP].rc.dial > 300)
-        EstopRequest(ESTOP_REASON_MANUAL);
-
+    RemoteSafetyGesturesUpdate(&remote_gestures, rc_data != NULL ? &rc_data[TEMP] : NULL,
+                               remote_online, HAL_GetTick(), 1u);
     RobotSafetyUpdate();
-
-    if (!RobotSafetyIsReady())
-        ApplySafeCommands();
+    if (!RobotSafetyIsReady()) ApplySafeCommands();
 }
 
 /* 机器人核心控制任务,200Hz频率运行(必须高于视觉发送频率) */

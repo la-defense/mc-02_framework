@@ -130,4 +130,19 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle);
  */
 uint8_t RemoteControlIsOnline();
 
+/* Read-only diagnostic evidence; timestamps use HAL tick and unsigned subtraction. */
+typedef struct
+{
+    uint32_t accepted_frames;
+    uint32_t rejected_length;
+    uint32_t rejected_fields;
+    uint32_t last_valid_tick;
+    uint32_t offline_tick;
+    uint32_t offline_last_valid_tick;
+    uint32_t offline_events;
+    uint32_t has_valid_frame;
+    uint32_t online;
+} RemoteControlDiagnostics_s;
+extern volatile RemoteControlDiagnostics_s remote_control_diag;
+
 #endif

@@ -19,7 +19,10 @@ def main():
     parser.add_argument("elf", type=Path)
     parser.add_argument("--profile", choices=("bench_safe", "robot"), required=True)
     parser.add_argument("--nm", default="arm-none-eabi-nm")
+    parser.add_argument("--rc-diagnostics", action="store_true")
     args = parser.parse_args()
+    if args.rc_diagnostics and (args.profile != "bench_safe" or "_rcdiag_" not in args.elf.name):
+        parser.error("remote diagnostics require the named bench_safe diagnostic artifact")
     if not args.elf.name.endswith("_" + args.profile + ".elf"):
         parser.error("ELF output name does not match the requested profile")
     result = subprocess.run([args.nm, "-C", str(args.elf)], capture_output=True, text=True, check=True, timeout=15)
@@ -30,6 +33,9 @@ def main():
         missing.add("mc02_build_profile")
     if args.profile == "robot":
         missing |= ROBOT_INITIALIZERS - functions
+    if args.rc_diagnostics:
+        missing |= {"RemoteControlInit", "RemoteBenchInit", "RemoteBenchTask", "RemoteSafetyGesturesUpdate"} - functions
+        missing |= {"remote_control_diag", "usart_rx_oversize_total"} - symbols
     forbidden = ACTUATORS & functions if args.profile == "bench_safe" else set()
     if missing or forbidden:
         raise SystemExit(f"profile check failed: missing={sorted(missing)}, forbidden={sorted(forbidden)}")

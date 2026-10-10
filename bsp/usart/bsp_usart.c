@@ -66,6 +66,7 @@ volatile DWT_Probe_t usart_prof_dispatch = {0};
 volatile uint32_t usart_rxq_drop_total = 0;
 volatile uint32_t usart_err_total = 0;
 volatile uint32_t usart_recover_total = 0;
+volatile uint32_t usart_rx_oversize_total = 0;
 
 static uint32_t USARTQueueItemSize(USARTInstance *ins)
 {
@@ -172,7 +173,11 @@ static void USARTQueuePush(uint8_t slot, USARTInstance *ins, uint16_t len)
     if (usart_q[slot].data == NULL)
         return;
     if (len > ins->recv_buff_size)
-        len = ins->recv_buff_size;
+    {
+        usart_q[slot].drop++;
+        usart_rx_oversize_total++;
+        return;
+    }
 
     uint16_t head = usart_q[slot].head;
     uint16_t next = (uint16_t)((head + 1u) % USART_RXQ_DEPTH);
@@ -258,14 +263,15 @@ void USARTProcessRx(void)
             uint8_t *item = USARTQueueItem(ins, slot, usart_q[slot].tail);
             uint16_t len = *(uint16_t *)item;
             if (len > ins->recv_buff_size)
-                len = ins->recv_buff_size;
-
-            if (len > 0u)
+                usart_q[slot].drop++;
+            else if (len > 0u)
             {
                 memcpy(ins->recv_buff, item + USART_RXQ_HDR, len);
                 ins->last_recv_size = len;
+                ins->current_rx_data = item + USART_RXQ_HDR;
                 if (ins->module_callback != NULL)
                     ins->module_callback();
+                ins->current_rx_data = NULL;
             }
 
             __DMB();
@@ -306,6 +312,11 @@ void USARTProcessRx(void)
  * @param huart 发生中断的串口
  * @param Size 此次接收到的实际字节数,会记录到 instance->last_recv_size 供模块使用
  */
+const uint8_t *USARTGetCurrentRxData(const USARTInstance *instance)
+{
+    return instance != NULL ? instance->current_rx_data : NULL;
+}
+
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
     uint32_t probe = DWT_ProbeStart();
