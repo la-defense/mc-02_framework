@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import re
 import socketserver
 import subprocess
@@ -60,6 +63,50 @@ TEST_IMU_VALUES = {
 
 
 class RemoteProfileTests(unittest.TestCase):
+    def test_rc_input_cli_selects_profile_and_keeps_raw_evidence(self):
+        fields = probe_snapshot_live.RC_INPUT_SNAPSHOT_FIELDS
+        values = {key: 0 for key in fields}
+        values.update(mouse_x_lo=0xfe, mouse_x_hi=0xff, key_bitmap_hi=2)
+        output = io.StringIO()
+        with patch.object(probe_snapshot_live, "resolve_symbol_addresses", return_value={}) as resolve, \
+             patch.object(probe_snapshot_live, "read_snapshot", return_value=values) as read, \
+             contextlib.redirect_stdout(output):
+            result = probe_snapshot_live.main(["--rc-input", "--elf", __file__, "--samples", "2", "--interval", "0"])
+        self.assertEqual(result, 0)
+        self.assertIs(resolve.call_args.args[3], fields)
+        self.assertIs(read.call_args.args[4], fields)
+        rows = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([row["status"] for row in rows], ["baseline", "running"])
+        self.assertEqual(rows[0]["key_bitmap"], 512)
+        self.assertEqual(rows[0]["mouse_x"], -2)
+        self.assertEqual(rows[0]["mouse_x_hi"], 255)
+
+    def test_rc_input_reads_byte_pairs_and_decodes_signed_mouse(self):
+        fields = probe_snapshot_live.RC_INPUT_SNAPSHOT_FIELDS
+        addresses = {key: 0x24003000 + i * 4 for i, key in enumerate(fields)}
+        values = {key: 0 for key in fields}
+        values.update(key_bitmap_lo=0x81, key_bitmap_hi=0x02,
+                      mouse_x_lo=0xff, mouse_x_hi=0xff,
+                      mouse_y_lo=0x00, mouse_y_hi=0x80,
+                      mouse_left=1, mouse_right=0, e_edges=3, f_edges=2)
+        server = FakeOpenOCDServer(addresses=addresses, values=values)
+        try:
+            raw = probe_snapshot_live.read_snapshot(addresses, "127.0.0.1", server.port, 2, fields)
+            actual = probe_snapshot_live.decode_rc_input(raw)
+        finally:
+            server.close()
+        self.assertEqual(actual["key_bitmap"], 0x0281)
+        self.assertEqual(actual["mouse_x"], -1)
+        self.assertEqual(actual["mouse_y"], -32768)
+        self.assertEqual((actual["mouse_left"], actual["e_edges"], actual["f_edges"]), (1, 3, 2))
+        self.assertEqual(raw, values)
+        byte_fields = ("key_bitmap_lo", "key_bitmap_hi", "mouse_x_lo", "mouse_x_hi",
+                       "mouse_y_lo", "mouse_y_hi", "mouse_left", "mouse_right", "e_edges", "f_edges")
+        for key in byte_fields:
+            self.assertIn(f"mdb 0x{addresses[key]:08x} 1", server.commands)
+        self.assertEqual(len(server.commands), 2 * len(fields) + 1)
+        self.assertFalse(any(c in {"halt", "resume", "reset"} for c in server.commands))
+
     def test_rc_reads_only_fixed_addresses_and_checks_running(self):
         fields = probe_snapshot_live.RC_SNAPSHOT_FIELDS
         addresses = {key: 0x24001000 + i * 4 for i, key in enumerate(fields)}

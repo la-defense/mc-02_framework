@@ -21,6 +21,99 @@ uint8_t RemoteControlIsOnline(void) { return remote_online; }
 Vision_Recv_s *VisionInit(UART_HandleTypeDef *h) { (void)h; return &wire; }
 void VisionSend(void) {}
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link) { *frame=wire; *link=status; ++snapshots; }
+/* Subscribe to production messages rather than inspecting task-private state. */
+static int shoot_cycle(Publisher_t *feedback, Subscriber_t *gimbal, Subscriber_t *shoot,
+                       Gimbal_Upload_Data_s *pose, shoot_mode_e enabled,
+                       friction_mode_e friction, loader_mode_e load, float rate, int vision)
+{
+    Gimbal_Ctrl_Cmd_s command; Shoot_Ctrl_Cmd_s shooting;
+    unsigned before=snapshots;
+    PubPushMessage(feedback,pose); RobotCMDTask();
+    CHECK(snapshots==before+1);
+    CHECK(SubGetMessage(gimbal,&command) && SubGetMessage(shoot,&shooting));
+    CHECK(shooting.shoot_mode==enabled && shooting.friction_mode==friction);
+    CHECK(shooting.load_mode==load && shooting.shoot_rate==rate);
+    if (vision) CHECK(command.yaw_vel>0 && command.pitch_acc<0);
+    else CHECK(command.yaw_vel==0 && command.yaw_acc==0 && command.pitch_vel==0 && command.pitch_acc==0);
+    return 0;
+}
+
+static int shoot_switches(Publisher_t *feedback, Subscriber_t *gimbal, Subscriber_t *shoot,
+                          Gimbal_Upload_Data_s *pose)
+{
+#define CYCLE(on, friction, load, rate, vision) CHECK(!shoot_cycle(feedback,gimbal,shoot,pose,on,friction,load,rate,vision))
+    /* RC -> keyboard -> RC, including changes to the inactive source. */
+    remote[0].rc.dial=-600;
+    CYCLE(SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,8,0);
+    remote[0].rc.switch_left=RC_SW_UP;
+    remote[0].key_count[KEY_PRESS][Key_E]=1;
+    remote[0].key_count[KEY_PRESS][Key_F]=0;
+    CYCLE(SHOOT_ON,FRICTION_OFF,LOAD_1_BULLET,8,0);
+    remote[0].rc.dial=0;
+    remote[0].rc.switch_left=RC_SW_DOWN;
+    CYCLE(SHOOT_OFF,FRICTION_OFF,LOAD_STOP,8,0);
+#if VISION_LIMITS_CONFIGURED
+    wire=(Vision_Recv_s){.mode=2,.yaw=.25f,.pitch=.1f,.yaw_vel=.2f,.pitch_acc=-.3f};
+    status.online=1; status.last_rx_ms=tick;
+    CYCLE(SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,10,1);
+    /* Changing the dial while vision owns shooting must not leak into it. */
+    remote[0].rc.dial=-600;
+    CYCLE(SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,10,1);
+    wire.mode=1;
+    CYCLE(SHOOT_ON,FRICTION_ON,LOAD_STOP,0,1);
+    wire.mode=0;
+    CYCLE(SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,8,0);
+    remote[0].rc.switch_left=RC_SW_UP;
+    remote[0].key_count[KEY_PRESS][Key_E]=0;
+    CYCLE(SHOOT_OFF,FRICTION_OFF,LOAD_STOP,8,0);
+    wire.mode=2;
+    CYCLE(SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,10,1);
+    /* E/F edges received during takeover select the current manual command. */
+    remote[0].key_count[KEY_PRESS][Key_E]=2;
+    remote[0].key_count[KEY_PRESS][Key_F]=1;
+    CYCLE(SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,10,1);
+    wire.mode=0;
+    CYCLE(SHOOT_ON,FRICTION_ON,LOAD_3_BULLET,8,0);
+    /* Unsigned frame age: 50ms allowed, 51ms revoked, including wrap. */
+    for (unsigned wrap=0;wrap<2;++wrap) {
+        tick=wrap ? UINT32_MAX-20 : 200;
+        wire.mode=2; status.last_rx_ms=tick;
+        CYCLE(SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,10,1);
+        tick+=50;
+        CYCLE(SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,10,1);
+        ++tick;
+        CYCLE(SHOOT_ON,FRICTION_ON,LOAD_3_BULLET,8,0);
+    }
+    /* Reject each non-finite field after a valid takeover, not just pitch. */
+    for (unsigned field=0;field<6;++field) for (unsigned inf=0;inf<2;++inf) {
+        wire=(Vision_Recv_s){.mode=2,.yaw=.25f,.pitch=.1f,.yaw_vel=.2f,.pitch_acc=-.3f};
+        status.last_rx_ms=tick;
+        CYCLE(SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,10,1);
+        float bad=inf ? INFINITY : NAN;
+        switch (field) {
+        case 0: wire.yaw=bad; break; case 1: wire.pitch=bad; break;
+        case 2: wire.yaw_vel=bad; break; case 3: wire.yaw_acc=bad; break;
+        case 4: wire.pitch_vel=bad; break; default: wire.pitch_acc=bad; break;
+        }
+        CYCLE(SHOOT_ON,FRICTION_ON,LOAD_3_BULLET,8,0);
+    }
+    wire=(Vision_Recv_s){.mode=2,.yaw=.25f,.pitch=.1f,.yaw_vel=.2f,.pitch_acc=-.3f};
+    status.last_rx_ms=tick;
+    CYCLE(SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,10,1);
+    status.online=0;
+    CYCLE(SHOOT_ON,FRICTION_ON,LOAD_3_BULLET,8,0);
+#else
+    /* A real default (unconfigured) limit cannot grant a shooting takeover. */
+    wire=(Vision_Recv_s){.mode=2,.yaw=.25f,.pitch=.1f};
+    status.online=1; status.last_rx_ms=tick;
+    CYCLE(SHOOT_OFF,FRICTION_OFF,LOAD_STOP,8,0);
+#endif
+    wire.mode=0; remote[0].rc.switch_left=RC_SW_MID;
+    CYCLE(SHOOT_OFF,FRICTION_OFF,LOAD_STOP,0,0);
+    puts("PASS: production shooting selects current source and revokes stale vision");
+    return 0;
+#undef CYCLE
+}
 int main(int argc, char **argv)
 {
     RobotSafetyInit(); RobotSafetySetRcOnline(1); RobotSafetySetImuValid(1);
@@ -42,6 +135,8 @@ int main(int argc, char **argv)
     Gimbal_Upload_Data_s pose={0}; pose.gimbal_imu_data.YawTotalAngle=12; pose.gimbal_imu_data.Pitch=3;
     Gimbal_Ctrl_Cmd_s command; Shoot_Ctrl_Cmd_s shooting;
     remote[0].rc.switch_left=RC_SW_DOWN; remote[0].rc.switch_right=RC_SW_MID;
+    if (argc > 1 && !strcmp(argv[1], "shoot-switches"))
+        return shoot_switches(feedback,gimbal,shoot,&pose);
     if (argc > 1 && !strcmp(argv[1], "faults")) {
         Subscriber_t *chassis=SubRegister("chassis_cmd",sizeof(Chassis_Ctrl_Cmd_s));
         Chassis_Ctrl_Cmd_s driving;

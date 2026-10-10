@@ -90,6 +90,34 @@ RC_SNAPSHOT_FIELDS = {
     "iwdg_reset_flag": SnapshotField("iwdg_reset_flag", "mdb", 8),
 }
 
+# Halfword reads are deliberately excluded from the live command whitelist.
+# Read the little-endian storage as two bytes; the target keeps running, so
+# these diagnostic pairs are not an atomic input snapshot.
+RC_INPUT_SNAPSHOT_FIELDS = {
+    **RC_SNAPSHOT_FIELDS,
+    **{f"{name}_{part}": SnapshotField(
+        f"((unsigned char *)&({expression}))[{offset}]", "mdb", 8)
+       for name, expression in (
+           ("key_bitmap", "rc_ctrl[0].key[0].keys"),
+           ("mouse_x", "rc_ctrl[0].mouse.x"),
+           ("mouse_y", "rc_ctrl[0].mouse.y"))
+       for part, offset in (("lo", 0), ("hi", 1))},
+    "mouse_left": SnapshotField("rc_ctrl[0].mouse.press_l", "mdb", 8),
+    "mouse_right": SnapshotField("rc_ctrl[0].mouse.press_r", "mdb", 8),
+    # KEY_PRESS=0, Key_E=7, Key_F=9 in the current firmware header.
+    "e_edges": SnapshotField("rc_ctrl[0].key_count[0][7]", "mdb", 8),
+    "f_edges": SnapshotField("rc_ctrl[0].key_count[0][9]", "mdb", 8),
+}
+
+
+def decode_rc_input(raw: dict[str, int]) -> dict[str, int]:
+    """Keep raw byte evidence and add interpreted keyboard/signed mouse fields."""
+    result = dict(raw)
+    for name in ("key_bitmap", "mouse_x", "mouse_y"):
+        word = raw[f"{name}_lo"] | (raw[f"{name}_hi"] << 8)
+        result[name] = word - 0x10000 if name != "key_bitmap" and word & 0x8000 else word
+    return result
+
 
 class ProbeIOError(RuntimeError):
     """The OpenOCD connection, state check, or bounded memory read failed."""
@@ -428,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
     profile = parser.add_mutually_exclusive_group()
     profile.add_argument("--imu", action="store_true", help="read the fixed BMI088/INS/heater diagnostic profile")
     profile.add_argument("--rc", action="store_true", help="read the fixed remote/safety diagnostic profile")
+    profile.add_argument("--rc-input", action="store_true", help="read fixed remote/safety plus keyboard and mouse fields (non-atomic)")
     args = parser.parse_args(argv)
 
     if not 2 <= args.samples <= 8:
@@ -443,7 +472,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"ELF file does not exist: {args.elf}")
 
     try:
-        fields = RC_SNAPSHOT_FIELDS if args.rc else IMU_SNAPSHOT_FIELDS if args.imu else SNAPSHOT_FIELDS
+        fields = (RC_INPUT_SNAPSHOT_FIELDS if args.rc_input else RC_SNAPSHOT_FIELDS if args.rc
+                  else IMU_SNAPSHOT_FIELDS if args.imu else SNAPSHOT_FIELDS)
         addresses = resolve_symbol_addresses(args.gdb, str(args.elf), args.timeout, fields)
     except ProbeIOError as error:
         print(f"probe_io_error: {error}", file=sys.stderr)
@@ -453,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         for index in range(args.samples):
             current = read_snapshot(addresses, args.host, args.telnet_port, args.timeout, fields)
+            if args.rc_input:
+                current = decode_rc_input(current)
             status = "baseline" if previous is None else classify_change(previous, current)
             print(json.dumps({"sample": index + 1, "status": status, **current}, sort_keys=True))
             previous = current
