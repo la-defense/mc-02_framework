@@ -75,6 +75,18 @@ int main(int argc, char **argv)
     RobotSafetyUpdate();
     CHECK(EstopIsLatched());
     CHECK(RobotSafetyGetState() == ROBOT_ESTOP);
+    if (argc > 1 && !strcmp(argv[1], "keyboard-map")) {
+        /* Official 5.0.2.37 sender and DT7 hardware: A=0x0004, D=0x0008. */
+        uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
+        encode(b,ch,1,3); b[14]=0x04; receive(b,18);
+        CHECK(rc[0].key[KEY_PRESS].a && !rc[0].key[KEY_PRESS].d);
+        CHECK(rc[0].key_count[KEY_PRESS][Key_A]==1);
+        b[14]=0; receive(b,18); b[14]=0x08; receive(b,18);
+        CHECK(rc[0].key[KEY_PRESS].d && !rc[0].key[KEY_PRESS].a);
+        CHECK(rc[0].key_count[KEY_PRESS][Key_D]==1);
+        b[14]=0; receive(b,18);
+        CHECK(!rc[0].key[KEY_PRESS].keys);
+    }
     if (argc > 1 && !strcmp(argv[1], "length"))
     {
         uint8_t b[18]; const uint16_t center[5] = {1024,1024,1024,1024,1024};

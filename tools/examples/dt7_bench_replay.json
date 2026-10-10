@@ -1,0 +1,23 @@
+{
+  "duration_s": 18,
+  "actions": [
+    {"at": 0, "type": "release"},
+    {"at": 1, "type": "key", "key": "W", "down": true},
+    {"at": 2, "type": "key", "key": "W", "down": false},
+    {"at": 3, "type": "key", "key": "E", "down": true},
+    {"at": 4, "type": "key", "key": "E", "down": false},
+    {"at": 5, "type": "key", "key": "F", "down": true},
+    {"at": 6, "type": "key", "key": "F", "down": false},
+    {"at": 7, "type": "button", "button": "left", "down": true},
+    {"at": 8, "type": "button", "button": "left", "down": false},
+    {"at": 9, "type": "button", "button": "right", "down": true},
+    {"at": 10, "type": "button", "button": "right", "down": false},
+    {"at": 11, "type": "mouse", "x": 120, "y": -40},
+    {"at": 12, "type": "mouse", "x": -120, "y": 40},
+    {"at": 13, "type": "key", "key": "A", "down": true},
+    {"at": 14, "type": "key", "key": "A", "down": false},
+    {"at": 15, "type": "key", "key": "D", "down": true},
+    {"at": 16, "type": "key", "key": "D", "down": false},
+    {"at": 17, "type": "release"}
+  ]
+}
