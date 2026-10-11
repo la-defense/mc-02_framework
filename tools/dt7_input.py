@@ -33,7 +33,7 @@ def _crc(data: bytes, seed: int, poly: int) -> int:
     return result
 
 def encode(*, keys=0, x=0, y=0, z=0, left=0, right=0) -> bytes:
-    """Official frame layout; nonzero Z is only for the finite passthrough probe."""
+    """Official layout; Z heartbeat is an MC-02 convention verified over DT7/DR16."""
     keys = _integer(keys, 0, 65535, "keys")
     x = _integer(x, -32768, 32767, "x")
     y = _integer(y, -32768, 32767, "y")
@@ -63,8 +63,8 @@ class InputState:
         new_y = _integer(self.y + y, -32768, 32767, "accumulated mouse y")
         self.x, self.y = new_x, new_y
 
-    def packet(self) -> bytes:
-        return encode(keys=self.keys, x=self.x, y=self.y, left=self.left, right=self.right)
+    def packet(self, z=0) -> bytes:
+        return encode(keys=self.keys, x=self.x, y=self.y, z=z, left=self.left, right=self.right)
 
     def sent(self):
         self.x = self.y = 0
@@ -81,11 +81,13 @@ class Sender:
         self.transport, self.record = transport, record
         self.failed = False
         self.closed = False
+        self.sequence = 0
 
-    def send(self, state: InputState):
+    def send(self, state: InputState, *, active=True):
         if self.failed or self.closed:
             raise SendError("sender stopped")
-        payload = state.packet()
+        sequence = (self.sequence % 65535 + 1) if active else 0
+        payload = state.packet(sequence - 65536 if sequence & 0x8000 else sequence)
         try:
             count = self.transport.write(payload)
             if count != len(payload):
@@ -94,7 +96,8 @@ class Sender:
             self.failed = True
             self.record({"event":"write-failed", "hex":payload.hex(), "error":str(error)})
             raise SendError(str(error)) from error
-        self.record({"event":"write", "hex":payload.hex(), "bytes":count})
+        if active: self.sequence = sequence
+        self.record({"event":"write", "hex":payload.hex(), "bytes":count,"heartbeat":sequence})
         state.sent()
 
     def release(self, state: InputState) -> bool:
@@ -103,7 +106,7 @@ class Sender:
             self.record({"event":"release-unconfirmed", "reason":"sender stopped; no firmware acknowledgement"})
             return False
         try:
-            self.send(state)
+            self.send(state, active=False)
         except SendError:
             self.record({"event":"release-unconfirmed", "reason":"release write failed"})
             return False
@@ -124,39 +127,65 @@ class LiveInput:
         self.sender = sender
         self.state = InputState()
         self.active = False
+        self.starting = False
+        self.handshake_remaining = 0
+        self.down_keys = set()
+        self.down_buttons = set()
+        self.blocked_keys = set()
+        self.blocked_buttons = set()
 
     def start(self):
+        self.active = self.starting = False
+        self.blocked_keys = set(self.down_keys)
+        self.blocked_buttons = set(self.down_buttons)
         if not self.sender.release(self.state):
             raise SendError("cannot start a stopped sender")
-        self.active = True
+        self.handshake_remaining = 2
+        self.starting = True
 
     def pause(self):
-        self.active = False
+        self.active = self.starting = False
+        self.handshake_remaining = 0
         self.sender.release(self.state)
 
     def key(self, name, down):
-        if self.active:
-            self.state.key(name, down)
+        name = name.upper()
+        if down: self.down_keys.add(name)
+        else: self.down_keys.discard(name); self.blocked_keys.discard(name)
+        if not self.active:
+            if down: self.blocked_keys.add(name)
+            return
+        if name not in self.blocked_keys: self.state.key(name, down)
 
     def button(self, name, down):
-        if self.active:
-            self.state.button(name, down)
+        if down: self.down_buttons.add(name)
+        else: self.down_buttons.discard(name); self.blocked_buttons.discard(name)
+        if not self.active:
+            if down: self.blocked_buttons.add(name)
+            return
+        if name not in self.blocked_buttons: self.state.button(name, down)
 
     def mouse(self, x, y):
         if self.active:
             self.state.mouse(x, y)
 
     def tick(self):
-        if self.active:
+        if self.active or self.starting:
             try:
+                if self.starting: self.state.release()
                 self.sender.send(self.state)
+                if self.starting:
+                    self.handshake_remaining -= 1
+                    if self.handshake_remaining == 0:
+                        self.starting = False
+                        self.active = True
             except SendError:
-                self.active = False
+                self.active = self.starting = False
                 self.state.release()
                 raise
 
     def close(self):
-        self.active = False
+        self.active = self.starting = False
         self.sender.close(self.state)
 
 def validate_replay(data):
@@ -198,23 +227,40 @@ class Replay:
         self.index = 0
         self.next_send = 0.0
         self.finished = False
+        self.handshake_remaining = 2
+        self.action_start = None
+        self.handshake_last = None
+
+    @property
+    def end_time(self):
+        return min(MAX_DURATION, self.duration + (self.action_start or 2 * PERIOD))
 
     def tick(self, elapsed: float) -> bool:
         if self.finished:
             return False
-        if elapsed >= self.duration:
+        if elapsed >= self.end_time:
             self.close()
             return False
         if elapsed < self.next_send:
             return True
-        while self.index < len(self.actions) and self.actions[self.index]["at"] <= elapsed:
+        if self.handshake_remaining:
+            if self.handshake_last is not None and elapsed-self.handshake_last > .150:
+                self.handshake_remaining = 2
+            self.state.release(); self.sender.send(self.state)
+            self.handshake_remaining -= 1; self.handshake_last = elapsed
+            self.next_send = elapsed + PERIOD
+            if not self.handshake_remaining: self.action_start = self.next_send
+            return True
+        action_elapsed = elapsed-self.action_start
+        while self.index < len(self.actions) and self.actions[self.index]["at"] <= action_elapsed:
             action = self.actions[self.index]
             kind = action["type"]
             if kind == "key": self.state.key(action["key"],action["down"])
             elif kind == "button": self.state.button(action["button"],action["down"])
             elif kind == "mouse": self.state.mouse(action["x"],action["y"])
             else: self.state.release()
-            self.sender.record({"event":"action", "scheduled_s":action["at"], "elapsed_s":elapsed, "action":action})
+            self.sender.record({"event":"action", "scheduled_s":action["at"], "elapsed_s":elapsed,
+                                "action_elapsed_s":action_elapsed,"action":action})
             self.index += 1
         self.sender.send(self.state)
         # One current state per due tick. Do not emit backlog packets.
@@ -284,7 +330,7 @@ def run_replay(data, sender, dry_run):
             start = time.monotonic()
             while replay.tick(time.monotonic()-start):
                 # Also wake at the bounded end, rather than holding past it.
-                delay = min(replay.next_send,replay.duration)-(time.monotonic()-start)
+                delay = min(replay.next_send,replay.end_time)-(time.monotonic()-start)
                 if delay > 0: time.sleep(delay)
     finally:
         replay.close()
@@ -317,9 +363,9 @@ def run_live(sender):
         def start():
             nonlocal previous
             try:
-                held.clear(); previous = None
+                previous = None
                 live.start(); area.focus_set()
-                status.set("转发中（33ms 周期）。窗口失焦会释放并暂停。")
+                status.set("握手中：先发送两份全松开心跳，暂不接收输入。")
                 sender.record({"event":"start"})
             except SendError as error: status.set(f"发送已停止：{error}")
 
@@ -330,12 +376,15 @@ def run_live(sender):
             return "break"
 
         def key(event, down):
-            if not live.active: return
             symbol = event.keysym.upper()
             canonical = {"SHIFT_L":"SHIFT","SHIFT_R":"SHIFT","CONTROL_L":"CTRL","CONTROL_R":"CTRL"}.get(symbol,symbol)
-            if down and canonical in KEYS: held[event.keycode] = canonical
+            if canonical not in KEYS: return
+            if down: held[event.keycode] = canonical
             if not down: held.pop(event.keycode,None)
-            for name in KEYS: live.key(name,name in held.values())
+            if not live.active:
+                live.key(canonical,canonical in held.values())
+                return
+            live.key(canonical,canonical in held.values())
             if canonical in KEYS:
                 sender.record({"event":"key", "key":canonical,"down":down})
 
@@ -354,7 +403,7 @@ def run_live(sender):
             if live.active: sender.record({"event":"button", "button":name,"down":down})
 
         def lost_focus():
-            if not stopped and root.focus_get() is None and live.active: pause("窗口失焦，已释放暂停。请点击开始。")
+            if not stopped and root.focus_get() is None and (live.active or live.starting): pause("窗口失焦，已释放暂停。请点击开始。")
 
         def clear_mouse_anchor(event):
             nonlocal previous
@@ -365,7 +414,11 @@ def run_live(sender):
             if stopped: return
             now = time.monotonic()
             if now >= next_due:
-                try: live.tick()
+                try:
+                    was_starting = live.starting
+                    live.tick()
+                    if was_starting and live.active:
+                        status.set("转发中（33ms 周期）。窗口失焦会释放并暂停。")
                 except SendError as error: pause(f"发送失败，已停止；释放未确认：{error}")
                 next_due = now + PERIOD
             root.after(max(1,math.ceil((next_due-time.monotonic())*1000)),pump)

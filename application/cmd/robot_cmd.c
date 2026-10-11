@@ -60,7 +60,9 @@ static Subscriber_t *chassis_feed_sub; // 底盘反馈信息订阅者
 static Chassis_Ctrl_Cmd_s chassis_cmd_send;      // 发送给底盘应用的信息,包括控制信息和UI绘制相关
 static Chassis_Upload_Data_s chassis_fetch_data; // 从底盘应用接收的反馈信息信息,底盘功率枪口热量与底盘运动状态等
 
-static RC_ctrl_t *rc_data;              // 遥控器数据,初始化时返回
+static RemoteControlSnapshot_s remote_snapshot;
+static RC_ctrl_t *const rc_data = &remote_snapshot.input;
+static uint8_t remote_initialized;
 static Vision_Recv_s vision_recv_snapshot;
 static Vision_Status_t vision_status_snapshot;
 
@@ -79,7 +81,7 @@ BMI088_Data_t bmi088_data;
 void RobotCMDInit()
 {
     RemoteSafetyGesturesInit(&remote_gestures);
-    rc_data = RemoteControlInit(&huart5);   // 修改为对应串口,注意如果是自研板dbus协议串口需选用添加了反相器的那个
+    remote_initialized = (uint8_t)(RemoteControlInit(&huart5) != NULL);
     VisionInit(&huart9); // 正式链路为板载 USB CDC 虚拟串口
 
     gimbal_cmd_pub = PubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
@@ -325,7 +327,7 @@ static void ApplySafeCommands(void)
  */
 static void EmergencyHandler(uint8_t remote_online)
 {
-    RemoteSafetyGesturesUpdate(&remote_gestures, rc_data != NULL ? &rc_data[TEMP] : NULL,
+    RemoteSafetyGesturesUpdate(&remote_gestures, remote_initialized ? &rc_data[TEMP] : NULL,
                                remote_online, HAL_GetTick(), 1u);
     RobotSafetyUpdate();
     if (!RobotSafetyIsReady()) ApplySafeCommands();
@@ -345,6 +347,10 @@ void RobotCMDTask()
     SubGetMessage(shoot_feed_sub, &shoot_fetch_data);
     const uint8_t feedback_received = SubGetMessage(gimbal_feed_sub, &gimbal_fetch_data);
 
+    /* One authorized snapshot per cycle also expires PC input without new frames. */
+    if (remote_initialized) RemoteControlGetSnapshot(&remote_snapshot);
+    else memset(&remote_snapshot, 0, sizeof(remote_snapshot));
+
     /* Copy frame and link status together so a partial ISR update cannot mix generations. */
     VisionGetSnapshot(&vision_recv_snapshot, &vision_status_snapshot);
 
@@ -353,11 +359,11 @@ void RobotCMDTask()
     const VisionControlInput_s vision_input = GetVisionControlInput();
     VisionControlGimbalCommand_s vision_gimbal;
     const uint8_t vision_active = VisionControlBuildGimbalCommand(&vision_input, &vision_gimbal);
-    const uint8_t remote_online = (uint8_t)(rc_data != NULL && RemoteControlIsOnline());
+    const uint8_t remote_online = remote_snapshot.remote_online;
     RobotSafetySetRcOnline(remote_online);
     const uint8_t manual_control_active =
         (uint8_t)(remote_online && (switch_is_down(rc_data[TEMP].rc.switch_left) ||
-                                   switch_is_up(rc_data[TEMP].rc.switch_left)));
+                                   (switch_is_up(rc_data[TEMP].rc.switch_left) && remote_snapshot.pc_valid)));
     gimbal_cmd_send.yaw_vel = gimbal_cmd_send.yaw_acc = 0.0f;
     gimbal_cmd_send.pitch_vel = gimbal_cmd_send.pitch_acc = 0.0f;
     uint8_t manual_allowed = manual_control_active;

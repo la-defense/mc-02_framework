@@ -5,18 +5,19 @@
 #error "Remote diagnostics require bench_safe"
 #endif
 #if MC02_BENCH_RC_DIAGNOSTICS
-static RC_ctrl_t *remote;
+static RemoteControlSnapshot_s snapshot;
 static RemoteSafetyGestures_s gestures;
 void RemoteBenchInit(UART_HandleTypeDef *uart)
 {
     RemoteSafetyGesturesInit(&gestures);
-    remote = RemoteControlInit(uart);
+    (void)RemoteControlInit(uart);
 }
 void RemoteBenchTask(void)
 {
-    const uint8_t online = RemoteControlIsOnline();
+    RemoteControlGetSnapshot(&snapshot);
+    const uint8_t online = snapshot.remote_online;
     RobotSafetySetRcOnline(online);
-    RemoteSafetyGesturesUpdate(&gestures, remote != NULL ? &remote[TEMP] : NULL,
+    RemoteSafetyGesturesUpdate(&gestures, &snapshot.input,
                                online, HAL_GetTick(), 0u);
     RobotSafetyRequestDisable();
     RobotSafetyUpdate();

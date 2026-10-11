@@ -18,6 +18,8 @@ static unsigned snapshots;
 uint32_t HAL_GetTick(void) { return tick; }
 RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *h) { (void)h; return remote; }
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
+void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
+{ snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; }
 Vision_Recv_s *VisionInit(UART_HandleTypeDef *h) { (void)h; return &wire; }
 void VisionSend(void) {}
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link) { *frame=wire; *link=status; ++snapshots; }

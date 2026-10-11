@@ -97,6 +97,10 @@ RC_INPUT_SNAPSHOT_FIELDS = {
     **RC_SNAPSHOT_FIELDS,
     # A zero-extended 32-bit diagnostic word preserves the 16-bit wire pattern.
     "raw_mouse_z": SnapshotField("remote_control_diag.raw_mouse_z", "mdw", 32),
+    **{name: SnapshotField(f"remote_control_diag.{name}", "mdw", 32) for name in (
+        "raw_key_bitmap", "raw_mouse_x", "raw_mouse_y", "raw_mouse_left", "raw_mouse_right",
+        "pc_authorized", "pc_heartbeat", "pc_recovery_count", "pc_last_advance_tick",
+        "pc_expire_tick", "pc_expirations", "pc_revoke_tick", "pc_revoke_reason")},
     **{f"{name}_{part}": SnapshotField(
         f"((unsigned char *)&({expression}))[{offset}]", "mdb", 8)
        for name, expression in (

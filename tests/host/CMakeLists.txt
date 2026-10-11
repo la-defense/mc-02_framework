@@ -45,6 +45,10 @@ add_test(NAME production_remote_queue_and_key_history COMMAND remote_control_tes
 add_test(NAME production_remote_shared_gestures COMMAND remote_control_test gestures)
 add_test(NAME production_remote_keyboard_ad_mapping COMMAND remote_control_test keyboard-map)
 add_test(NAME production_remote_mouse_z_wire_bits COMMAND remote_control_test mouse-z)
+add_test(NAME production_pc_zero_heartbeat_denied COMMAND remote_control_test pc-startup)
+add_test(NAME production_pc_released_handshake COMMAND remote_control_test pc-handshake)
+add_test(NAME production_pc_lease_age_and_tick_wrap COMMAND remote_control_test pc-age)
+add_test(NAME production_pc_sequence_and_invalid_frames COMMAND remote_control_test pc-boundaries)
 add_executable(usart_snapshot_test usart_snapshot_test.c ../../bsp/usart/bsp_usart.c)
 target_include_directories(usart_snapshot_test BEFORE PRIVATE remote_fakes)
 target_include_directories(usart_snapshot_test PRIVATE ../../bsp/usart)
@@ -70,6 +74,22 @@ if(UNIX)
   target_link_libraries(remote_command_integration_test PRIVATE m)
 endif()
 add_test(NAME production_remote_to_command_safety COMMAND remote_command_integration_test)
+add_test(NAME production_pc_command_expiry_and_remote_handoff COMMAND remote_command_integration_test pc-command)
+add_executable(pc_vision_integration_test remote_command_integration_test.c
+  ../../bsp/usart/bsp_usart.c ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
+  ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
+  ../../modules/message_center/message_center.c ../../modules/master_machine/vision_control.c)
+target_include_directories(pc_vision_integration_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
+target_include_directories(pc_vision_integration_test PRIVATE ../../application ../../application/cmd
+  ../../modules ../../application/config ../../modules/remote ../../modules/daemon ../../modules/safety
+  ../../bsp/usart ../../modules/imu ../../modules/master_machine ../../modules/message_center)
+target_compile_definitions(pc_vision_integration_test PRIVATE VISION_LIMITS_CONFIGURED=1
+  VISION_YAW_CONSTRAINT=VISION_YAW_BOUNDED VISION_YAW_MIN_DEG=-180.0f VISION_YAW_MAX_DEG=180.0f
+  PITCH_MIN_ANGLE=-20.0f PITCH_MAX_ANGLE=30.0f VISION_PITCH_ZERO_OFFSET_DEG=5.0f)
+if(UNIX)
+  target_link_libraries(pc_vision_integration_test PRIVATE m)
+endif()
+add_test(NAME production_pc_expiry_preserves_vision COMMAND pc_vision_integration_test pc-vision)
 add_executable(vision_limits_test vision_limits_test.c ../../modules/master_machine/vision_control.c)
 target_include_directories(vision_limits_test PRIVATE ../../modules/master_machine)
 if(UNIX)

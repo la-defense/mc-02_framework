@@ -131,6 +131,23 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle);
  */
 uint8_t RemoteControlIsOnline();
 
+#define REMOTE_PC_LEASE_MS 150u
+typedef enum
+{
+    REMOTE_PC_REVOKE_NONE = 0,
+    REMOTE_PC_REVOKE_INACTIVE = 1,
+    REMOTE_PC_REVOKE_TIMEOUT = 2,
+    REMOTE_PC_REVOKE_RADIO_LOST = 3,
+} RemotePcRevokeReason_e;
+typedef struct
+{
+    RC_ctrl_t input;
+    uint8_t remote_online;
+    uint8_t pc_valid;
+} RemoteControlSnapshot_s;
+/* Atomic authorized input; call every command cycle, including without new DBUS. */
+void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot);
+
 /* Read-only diagnostic evidence; timestamps use HAL tick and unsigned subtraction. */
 typedef struct
 {
@@ -145,6 +162,19 @@ typedef struct
     uint32_t online;
     /* Zero-extended DBUS bytes 10/11, captured only after full-frame validation. */
     uint32_t raw_mouse_z;
+    uint32_t raw_key_bitmap;
+    uint32_t raw_mouse_x;
+    uint32_t raw_mouse_y;
+    uint32_t raw_mouse_left;
+    uint32_t raw_mouse_right;
+    uint32_t pc_authorized;
+    uint32_t pc_heartbeat;
+    uint32_t pc_recovery_count;
+    uint32_t pc_last_advance_tick;
+    uint32_t pc_expire_tick;
+    uint32_t pc_expirations;
+    uint32_t pc_revoke_tick;
+    uint32_t pc_revoke_reason;
 } RemoteControlDiagnostics_s;
 extern volatile RemoteControlDiagnostics_s remote_control_diag;
 

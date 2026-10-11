@@ -11,6 +11,67 @@ static uint8_t rc_init_flag;
 static USARTInstance *rc_usart_instance;
 static DaemonInstance *rc_daemon_instance;
 volatile RemoteControlDiagnostics_s remote_control_diag;
+static uint16_t pc_sequence;
+static uint8_t pc_have_sequence, pc_authorized;
+
+static void ClearPC(RC_ctrl_t *input)
+{
+    memset(&input->mouse, 0, sizeof(input->mouse));
+    memset(input->key, 0, sizeof(input->key));
+    memset(input->key_count, 0, sizeof(input->key_count));
+}
+
+static void RevokePC(uint32_t now, RemotePcRevokeReason_e reason)
+{
+    if (pc_authorized)
+    {
+        remote_control_diag.pc_revoke_tick = now;
+        remote_control_diag.pc_revoke_reason = reason;
+    }
+    pc_sequence = 0u; pc_have_sequence = pc_authorized = 0u;
+    remote_control_diag.pc_authorized = remote_control_diag.pc_recovery_count = 0u;
+    ClearPC(&rc_ctrl[TEMP]); ClearPC(&rc_ctrl[LAST]);
+}
+
+static uint8_t PCReleased(const RC_ctrl_t *input)
+{
+    return (uint8_t)(input->key[0].keys == 0u && input->mouse.x == 0 && input->mouse.y == 0 &&
+                     input->mouse.press_l == 0u && input->mouse.press_r == 0u);
+}
+
+static void ExpirePC(uint32_t now)
+{
+    if (pc_have_sequence && (uint32_t)(now - remote_control_diag.pc_last_advance_tick) > REMOTE_PC_LEASE_MS)
+    {
+        if (pc_authorized)
+        {
+            remote_control_diag.pc_expirations++;
+            remote_control_diag.pc_expire_tick = now;
+        }
+        RevokePC(now, REMOTE_PC_REVOKE_TIMEOUT);
+    }
+}
+
+/* Called with interrupts masked. Only an advancing heartbeat may publish PC data. */
+static uint8_t AcceptPC(const RC_ctrl_t *candidate, uint16_t heartbeat, uint32_t now)
+{
+    ExpirePC(now);
+    if (heartbeat == 0u) { RevokePC(now, REMOTE_PC_REVOKE_INACTIVE); return 0u; }
+    if (!pc_authorized && !PCReleased(candidate)) { RevokePC(now, REMOTE_PC_REVOKE_INACTIVE); return 0u; }
+    const uint16_t advance = (uint16_t)(heartbeat - pc_sequence);
+    if (pc_have_sequence && (advance == 0u || advance >= 0x8000u)) return 0u;
+    pc_sequence = heartbeat; pc_have_sequence = 1u;
+    remote_control_diag.pc_heartbeat = heartbeat;
+    remote_control_diag.pc_last_advance_tick = now;
+    if (!pc_authorized)
+    {
+        remote_control_diag.pc_recovery_count++;
+        if (remote_control_diag.pc_recovery_count >= 2u)
+            pc_authorized = 1u;
+    }
+    remote_control_diag.pc_authorized = pc_authorized;
+    return pc_authorized;
+}
 
 /* Decode into a private candidate. Rejected data must not touch edge history. */
 static uint8_t DecodeCandidate(const uint8_t *b, RC_ctrl_t *c)
@@ -43,6 +104,11 @@ static uint8_t DecodeCandidate(const uint8_t *b, RC_ctrl_t *c)
         c->key[KEY_PRESS_WITH_CTRL] = c->key[KEY_PRESS];
     if (c->key[KEY_PRESS].shift)
         c->key[KEY_PRESS_WITH_SHIFT] = c->key[KEY_PRESS];
+    return 1u;
+}
+
+static void UpdateKeyEdges(RC_ctrl_t *c)
+{
     memcpy(c->key_count, rc_ctrl[TEMP].key_count, sizeof(c->key_count));
     for (unsigned i = 0; i < 16; ++i)
     {
@@ -55,7 +121,6 @@ static uint8_t DecodeCandidate(const uint8_t *b, RC_ctrl_t *c)
             if ((c->key[kind].keys & bit) && !(rc_ctrl[LAST].key[kind].keys & bit))
                 c->key_count[kind][i]++;
     }
-    return 1u;
 }
 
 static void RemoteControlRxCallback(void)
@@ -72,25 +137,46 @@ static void RemoteControlRxCallback(void)
         remote_control_diag.rejected_fields++;
         return;
     }
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    const uint32_t now = HAL_GetTick();
+    const uint16_t heartbeat = (uint16_t)(frame[10] | ((uint16_t)frame[11] << 8));
+    remote_control_diag.raw_mouse_z = heartbeat;
+    remote_control_diag.raw_key_bitmap = candidate.key[0].keys;
+    remote_control_diag.raw_mouse_x = (uint16_t)candidate.mouse.x;
+    remote_control_diag.raw_mouse_y = (uint16_t)candidate.mouse.y;
+    remote_control_diag.raw_mouse_left = candidate.mouse.press_l;
+    remote_control_diag.raw_mouse_right = candidate.mouse.press_r;
+    if (AcceptPC(&candidate, heartbeat, now)) UpdateKeyEdges(&candidate);
+    else
+    {
+        candidate.mouse = rc_ctrl[TEMP].mouse;
+        memcpy(candidate.key, rc_ctrl[TEMP].key, sizeof(candidate.key));
+        memcpy(candidate.key_count, rc_ctrl[TEMP].key_count, sizeof(candidate.key_count));
+    }
     rc_ctrl[TEMP] = candidate;
     rc_ctrl[LAST] = candidate;
-    remote_control_diag.raw_mouse_z = (uint16_t)(frame[10] | ((uint16_t)frame[11] << 8));
     remote_control_diag.accepted_frames++;
-    remote_control_diag.last_valid_tick = HAL_GetTick();
+    remote_control_diag.last_valid_tick = now;
     remote_control_diag.has_valid_frame = 1u;
     DaemonReload(rc_daemon_instance);
     remote_control_diag.online = 1u;
+    __set_PRIMASK(primask);
     RobotSafetySetRcOnline(1u);
 }
 
 static void RCLostCallback(void *id)
 {
     (void)id;
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    RevokePC(HAL_GetTick(), REMOTE_PC_REVOKE_RADIO_LOST);
     remote_control_diag.offline_tick = HAL_GetTick();
     remote_control_diag.offline_last_valid_tick = remote_control_diag.last_valid_tick;
     remote_control_diag.offline_events++;
     remote_control_diag.has_valid_frame = remote_control_diag.online = 0u;
     memset(rc_ctrl, 0, sizeof(rc_ctrl));
+    __set_PRIMASK(primask);
     RobotSafetySetRcOnline(0u);
     EstopRequest(ESTOP_REASON_RC_OFFLINE);
     USARTServiceInit(rc_usart_instance);
@@ -106,6 +192,8 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
     };
     memset(rc_ctrl, 0, sizeof(rc_ctrl));
     memset((void *)&remote_control_diag, 0, sizeof(remote_control_diag));
+    pc_authorized = 0u;
+    RevokePC(HAL_GetTick(), REMOTE_PC_REVOKE_NONE);
     rc_usart_instance = USARTRegister(&conf);
     Daemon_Init_Config_s daemon_conf = {
         .reload_count = 10,
@@ -124,4 +212,16 @@ uint8_t RemoteControlIsOnline(void)
                                    DaemonIsOnline(rc_daemon_instance));
     remote_control_diag.online = online;
     return online;
+}
+
+void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
+{
+    if (snapshot == NULL) return;
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    ExpirePC(HAL_GetTick());
+    snapshot->input = rc_ctrl[TEMP];
+    snapshot->remote_online = RemoteControlIsOnline();
+    snapshot->pc_valid = (uint8_t)(snapshot->remote_online && pc_authorized);
+    __set_PRIMASK(primask);
 }

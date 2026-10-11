@@ -39,6 +39,14 @@ static void receive(const uint8_t b[18], uint16_t size)
     HAL_UARTEx_RxEventCallback(&huart5, size);
     USARTProcessRx();
 }
+static void pc_frame(uint16_t heartbeat, uint16_t keys)
+{
+    uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
+    encode(b,ch,1,3); b[10]=(uint8_t)heartbeat; b[11]=(uint8_t)(heartbeat>>8);
+    b[14]=(uint8_t)keys; b[15]=(uint8_t)(keys>>8); receive(b,18);
+}
+static void set_heartbeat(uint8_t b[18], uint16_t heartbeat)
+{ b[10]=(uint8_t)heartbeat; b[11]=(uint8_t)(heartbeat>>8); }
 int main(int argc, char **argv)
 {
     RobotSafetyInit();
@@ -75,6 +83,66 @@ int main(int argc, char **argv)
     RobotSafetyUpdate();
     CHECK(EstopIsLatched());
     CHECK(RobotSafetyGetState() == ROBOT_ESTOP);
+    if (argc > 1 && !strcmp(argv[1], "pc-boundaries")) {
+        RemoteControlSnapshot_s s;
+        pc_frame(65534,0); pc_frame(65535,0); pc_frame(1,1);
+        RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.input.key[0].w);
+        pc_frame(0x8001,0); RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.input.key[0].w);
+        uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
+        encode(b,ch,1,3); set_heartbeat(b,2); b[12]=2; now=100; receive(b,18);
+        CHECK(remote_control_diag.pc_last_advance_tick==0 && remote_control_diag.raw_mouse_z==0x8001);
+        now=150; RemoteControlGetSnapshot(&s); CHECK(s.pc_valid);
+        now=151; RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
+        b[12]=0; b[6]=1; set_heartbeat(b,3); receive(b,18);
+        b[6]=0; set_heartbeat(b,4); receive(b,18); RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
+        now+=151; set_heartbeat(b,5); receive(b,18); RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
+        set_heartbeat(b,6); receive(b,18); RemoteControlGetSnapshot(&s); CHECK(s.pc_valid);
+        for(unsigned i=0;i<12;++i) { now+=10; DaemonTask(); }
+        RemoteControlGetSnapshot(&s); CHECK(!s.remote_online && !s.pc_valid && EstopIsLatched());
+        pc_frame(7,1); RemoteControlGetSnapshot(&s); CHECK(s.remote_online && !s.pc_valid && EstopIsLatched());
+        pc_frame(8,0); pc_frame(9,0); RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && EstopIsLatched());
+    }
+    if (argc > 1 && !strcmp(argv[1], "pc-age")) {
+        const uint32_t starts[]={0u,UINT32_MAX-50u};
+        for (unsigned i=0;i<2;++i) {
+            now=starts[i]; pc_frame(0,0); pc_frame(1,0);
+            now+=33u; pc_frame(2,0);
+            now+=33u; pc_frame(3,(1u<<Key_E)|(1u<<Key_F));
+            const uint32_t last=now;
+            RemoteControlSnapshot_s s; RemoteControlGetSnapshot(&s);
+            CHECK(s.pc_valid && s.input.key_count[0][Key_E]==1);
+            for(unsigned age=10;age<=150;age+=10) {
+                now=last+age; pc_frame(3,(1u<<Key_E)|(1u<<Key_F));
+                RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.remote_online);
+            }
+            now=last+151u; RemoteControlGetSnapshot(&s);
+            CHECK(!s.pc_valid && s.remote_online);
+            CHECK(!s.input.key[0].keys && !s.input.key_count[0][Key_E] && !s.input.key_count[0][Key_F]);
+            CHECK(remote_control_diag.pc_expire_tick==now && remote_control_diag.pc_last_advance_tick==last);
+            pc_frame(4,1); RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
+            pc_frame(5,0); pc_frame(6,0); pc_frame(7,1);
+            RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.input.key[0].keys==1);
+        }
+    }
+    if (argc > 1 && !strcmp(argv[1], "pc-handshake")) {
+        pc_frame(1,1); CHECK(rc[0].key[0].keys==0);
+        pc_frame(2,0); pc_frame(3,1); CHECK(rc[0].key[0].keys==0);
+        pc_frame(4,0); pc_frame(4,0); CHECK(rc[0].key[0].keys==0);
+        pc_frame(5,0); pc_frame(6,1); CHECK(rc[0].key[0].keys==1);
+        CHECK(rc[0].key_count[0][Key_W]==1);
+        pc_frame(6,0); CHECK(rc[0].key[0].keys==1); /* Repeated seq cannot change input. */
+        pc_frame(5,0); CHECK(rc[0].key[0].keys==1);
+        pc_frame(7,0); CHECK(rc[0].key[0].keys==0);
+        pc_frame(8,1); CHECK(rc[0].key_count[0][Key_W]==2);
+        pc_frame(0,1); CHECK(rc[0].key[0].keys==0 && rc[0].key_count[0][Key_W]==0);
+    }
+    if (argc > 1 && !strcmp(argv[1], "pc-startup")) {
+        uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
+        encode(b,ch,1,3); b[14]=1; b[12]=1; receive(b,18);
+        CHECK(RemoteControlIsOnline());
+        CHECK(rc[0].key[0].keys==0 && rc[0].mouse.press_l==0);
+        CHECK(rc[0].key_count[KEY_PRESS][Key_W]==0);
+    }
     if (argc > 1 && !strcmp(argv[1], "mouse-z")) {
         /* DBUS byte offsets 10/11; compare literal wire bit patterns. */
         uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
@@ -98,13 +166,14 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "keyboard-map")) {
         /* Official 5.0.2.37 sender and DT7 hardware: A=0x0004, D=0x0008. */
         uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
-        encode(b,ch,1,3); b[14]=0x04; receive(b,18);
+        pc_frame(1,0); pc_frame(2,0);
+        encode(b,ch,1,3); set_heartbeat(b,3); b[14]=0x04; receive(b,18);
         CHECK(rc[0].key[KEY_PRESS].a && !rc[0].key[KEY_PRESS].d);
         CHECK(rc[0].key_count[KEY_PRESS][Key_A]==1);
-        b[14]=0; receive(b,18); b[14]=0x08; receive(b,18);
+        b[14]=0; set_heartbeat(b,4); receive(b,18); b[14]=0x08; set_heartbeat(b,5); receive(b,18);
         CHECK(rc[0].key[KEY_PRESS].d && !rc[0].key[KEY_PRESS].a);
         CHECK(rc[0].key_count[KEY_PRESS][Key_D]==1);
-        b[14]=0; receive(b,18);
+        b[14]=0; set_heartbeat(b,6); receive(b,18);
         CHECK(!rc[0].key[KEY_PRESS].keys);
     }
     if (argc > 1 && !strcmp(argv[1], "length"))
@@ -158,8 +227,10 @@ int main(int argc, char **argv)
         }
     }
     if (argc > 1 && !strcmp(argv[1], "queue-keys")) {
+        pc_frame(1,0); pc_frame(2,0);
         uint8_t b[18]; uint16_t ch[5]={1100,900,1200,800,1024};
         encode(b,ch,1,2); b[6]=0xfe; b[7]=0xff; b[8]=0x23; b[9]=1; b[12]=b[13]=1;
+        set_heartbeat(b,3);
         b[14]=1; memcpy(dma_buffer,b,18); HAL_UARTEx_RxEventCallback(&huart5,18);
         memset(dma_buffer,0xff,18); USARTProcessRx();
         CHECK(RemoteControlIsOnline()); CHECK(rc[0].rc.rocker_r_==76);
@@ -169,11 +240,11 @@ int main(int argc, char **argv)
         receive(b,18); CHECK(rc[0].key_count[KEY_PRESS][Key_W]==1);
         b[14]=0; b[12]=2; receive(b,18); /* Invalid release doesn't alter edges. */
         b[14]=1; b[12]=1; receive(b,18); CHECK(rc[0].key_count[KEY_PRESS][Key_W]==1);
-        b[14]=0; receive(b,18); b[14]=1|(1<<Key_Ctrl); receive(b,18);
+        b[14]=0; set_heartbeat(b,4); receive(b,18); b[14]=1|(1<<Key_Ctrl); set_heartbeat(b,5); receive(b,18);
         CHECK(rc[0].key_count[KEY_PRESS_WITH_CTRL][Key_W]==1);
-        b[14]=0; receive(b,18); b[14]=1|(1<<Key_Shift); receive(b,18);
+        b[14]=0; set_heartbeat(b,6); receive(b,18); b[14]=1|(1<<Key_Shift); set_heartbeat(b,7); receive(b,18);
         CHECK(rc[0].key_count[KEY_PRESS_WITH_SHIFT][Key_W]==1);
-        CHECK(remote_control_diag.accepted_frames==7 && remote_control_diag.rejected_fields==1);
+        CHECK(remote_control_diag.accepted_frames==9 && remote_control_diag.rejected_fields==1);
     }
     if (argc > 1 && !strcmp(argv[1], "gestures")) {
         RemoteSafetyGestures_s holds; RemoteSafetyGesturesInit(&holds);
