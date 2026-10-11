@@ -63,6 +63,22 @@ TEST_IMU_VALUES = {
 
 
 class RemoteProfileTests(unittest.TestCase):
+    def test_rc_input_preserves_raw_z_and_decodes_signed_boundary(self):
+        fields = probe_snapshot_live.RC_INPUT_SNAPSHOT_FIELDS
+        addresses = {key: 0x24003000 + i * 4 for i, key in enumerate(fields)}
+        values = {key: 0 for key in fields}
+        values['raw_mouse_z'] = 0x8000
+        server = FakeOpenOCDServer(addresses=addresses, values=values)
+        try:
+            raw = probe_snapshot_live.read_snapshot(addresses, '127.0.0.1', server.port, 2, fields)
+            actual = probe_snapshot_live.decode_rc_input(raw)
+        finally:
+            server.close()
+        self.assertEqual(actual['raw_mouse_z'], 0x8000)
+        self.assertEqual(actual['mouse_z'], -32768)
+        self.assertIn(f"mdw 0x{addresses['raw_mouse_z']:08x} 1", server.commands)
+        self.assertFalse(any(c in {'halt', 'resume', 'reset'} for c in server.commands))
+
     def test_rc_input_cli_selects_profile_and_keeps_raw_evidence(self):
         fields = probe_snapshot_live.RC_INPUT_SNAPSHOT_FIELDS
         values = {key: 0 for key in fields}

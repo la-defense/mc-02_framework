@@ -95,6 +95,8 @@ RC_SNAPSHOT_FIELDS = {
 # these diagnostic pairs are not an atomic input snapshot.
 RC_INPUT_SNAPSHOT_FIELDS = {
     **RC_SNAPSHOT_FIELDS,
+    # A zero-extended 32-bit diagnostic word preserves the 16-bit wire pattern.
+    "raw_mouse_z": SnapshotField("remote_control_diag.raw_mouse_z", "mdw", 32),
     **{f"{name}_{part}": SnapshotField(
         f"((unsigned char *)&({expression}))[{offset}]", "mdb", 8)
        for name, expression in (
@@ -116,6 +118,9 @@ def decode_rc_input(raw: dict[str, int]) -> dict[str, int]:
     for name in ("key_bitmap", "mouse_x", "mouse_y"):
         word = raw[f"{name}_lo"] | (raw[f"{name}_hi"] << 8)
         result[name] = word - 0x10000 if name != "key_bitmap" and word & 0x8000 else word
+    if "raw_mouse_z" in raw:
+        word = raw["raw_mouse_z"]
+        result["mouse_z"] = word - 0x10000 if word & 0x8000 else word
     return result
 
 

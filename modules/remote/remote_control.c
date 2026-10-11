@@ -74,6 +74,7 @@ static void RemoteControlRxCallback(void)
     }
     rc_ctrl[TEMP] = candidate;
     rc_ctrl[LAST] = candidate;
+    remote_control_diag.raw_mouse_z = (uint16_t)(frame[10] | ((uint16_t)frame[11] << 8));
     remote_control_diag.accepted_frames++;
     remote_control_diag.last_valid_tick = HAL_GetTick();
     remote_control_diag.has_valid_frame = 1u;

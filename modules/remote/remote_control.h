@@ -143,6 +143,8 @@ typedef struct
     uint32_t offline_events;
     uint32_t has_valid_frame;
     uint32_t online;
+    /* Zero-extended DBUS bytes 10/11, captured only after full-frame validation. */
+    uint32_t raw_mouse_z;
 } RemoteControlDiagnostics_s;
 extern volatile RemoteControlDiagnostics_s remote_control_diag;
 

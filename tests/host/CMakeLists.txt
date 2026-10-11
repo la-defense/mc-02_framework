@@ -44,6 +44,7 @@ add_test(NAME production_remote_fields_and_lease COMMAND remote_control_test fie
 add_test(NAME production_remote_queue_and_key_history COMMAND remote_control_test queue-keys)
 add_test(NAME production_remote_shared_gestures COMMAND remote_control_test gestures)
 add_test(NAME production_remote_keyboard_ad_mapping COMMAND remote_control_test keyboard-map)
+add_test(NAME production_remote_mouse_z_wire_bits COMMAND remote_control_test mouse-z)
 add_executable(usart_snapshot_test usart_snapshot_test.c ../../bsp/usart/bsp_usart.c)
 target_include_directories(usart_snapshot_test BEFORE PRIVATE remote_fakes)
 target_include_directories(usart_snapshot_test PRIVATE ../../bsp/usart)

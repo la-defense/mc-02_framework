@@ -11,6 +11,19 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"tools"))
 import dt7_input
 
 class CodecTests(unittest.TestCase):
+    def test_z_vectors_from_official_crc_table(self):
+        # Offline reconstruction with the published DLL's extracted CRC table.
+        cases=[(0,'5a100136000000200000000000000000000000004aea'),
+               (1,'5a10013600000020000000000100000000000000f56b'),
+               (256,'5a100136000000200000000000010000000000009f75'),
+               (32767,'5a1001360000002000000000ff7f000000000000db10'),
+               (-32768,'5a10013600000020000000000080000000000000576c'),
+               (-1,'5a1001360000002000000000ffff000000000000c696')]
+        for z,expected in cases:
+            with self.subTest(z=z):self.assertEqual(dt7_input.encode(z=z).hex(),expected)
+        for z in (32768,-32769,float('nan')):
+            with self.subTest(z=z),self.assertRaises(ValueError):dt7_input.encode(z=z)
+
     def test_official_vectors(self):
         cases = [
             ({}, "5a100136000000200000000000000000000000004aea"),

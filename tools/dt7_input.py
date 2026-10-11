@@ -32,16 +32,17 @@ def _crc(data: bytes, seed: int, poly: int) -> int:
             result = (result >> 1) ^ poly if result & 1 else result >> 1
     return result
 
-def encode(*, keys=0, x=0, y=0, left=0, right=0) -> bytes:
-    """Official 5.0.2.37 frame; little endian, sequence/reserved/mouse Z zero."""
+def encode(*, keys=0, x=0, y=0, z=0, left=0, right=0) -> bytes:
+    """Official frame layout; nonzero Z is only for the finite passthrough probe."""
     keys = _integer(keys, 0, 65535, "keys")
     x = _integer(x, -32768, 32767, "x")
     y = _integer(y, -32768, 32767, "y")
+    z = _integer(z, -32768, 32767, "z")
     left = _integer(left, 0, 1, "left")
     right = _integer(right, 0, 1, "right")
     header = bytes((0x5a, 16, 1))
     body = header + bytes((_crc(header, 0x77, 0x8c),))
-    body += struct.pack("<HHhhhBBHH", 0, 0x2000, x, y, 0, left, right, keys, 0)
+    body += struct.pack("<HHhhhBBHH", 0, 0x2000, x, y, z, left, right, keys, 0)
     return body + struct.pack("<H", _crc(body, 0x1862, 0x8408))
 
 class InputState:

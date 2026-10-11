@@ -75,6 +75,26 @@ int main(int argc, char **argv)
     RobotSafetyUpdate();
     CHECK(EstopIsLatched());
     CHECK(RobotSafetyGetState() == ROBOT_ESTOP);
+    if (argc > 1 && !strcmp(argv[1], "mouse-z")) {
+        /* DBUS byte offsets 10/11; compare literal wire bit patterns. */
+        uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
+        const uint16_t words[]={0,1,256,0x7fff,0x8000,0xffff};
+        for (unsigned i=0;i<sizeof(words)/sizeof(words[0]);++i) {
+            encode(b,ch,1,3); b[10]=(uint8_t)words[i]; b[11]=(uint8_t)(words[i]>>8);
+            memcpy(dma_buffer,b,18); HAL_UARTEx_RxEventCallback(&huart5,18);
+            memset(dma_buffer,0xee,18); USARTProcessRx();
+            CHECK(remote_control_diag.raw_mouse_z==words[i]);
+            CHECK(!rc[0].key[0].keys && !rc[0].mouse.x && !rc[0].mouse.y);
+            CHECK(RemoteControlIsOnline());
+            receive(b,18); CHECK(remote_control_diag.raw_mouse_z==words[i]);
+        }
+        b[10]=0; b[11]=0; receive(b,17);
+        CHECK(remote_control_diag.raw_mouse_z==0xffff);
+        b[12]=2; receive(b,18); CHECK(remote_control_diag.raw_mouse_z==0xffff);
+        CHECK(remote_control_diag.accepted_frames==12);
+        now=1000; /* No new frame: diagnostics retain the last accepted bits. */
+        CHECK(remote_control_diag.raw_mouse_z==0xffff);
+    }
     if (argc > 1 && !strcmp(argv[1], "keyboard-map")) {
         /* Official 5.0.2.37 sender and DT7 hardware: A=0x0004, D=0x0008. */
         uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
