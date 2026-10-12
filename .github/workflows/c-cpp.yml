@@ -38,6 +38,9 @@ jobs:
           cmake --build build/host-tests-release --parallel 2
           ctest --test-dir build/host-tests-release --output-on-failure
 
+      - name: Check incremental CMake source discovery
+        run: python3 tools/workflow/check_cmake_regeneration.py --work-dir build/cmake-regeneration --generator Ninja --build-type Debug --jobs 2
+
       - name: Validate and run learning exercises
         run: python3 tools/workflow/check_exercises.py --build --generator Ninja
 

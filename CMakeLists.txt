@@ -118,7 +118,7 @@ function(include_sub_directories_recursively root_dir)
         include_directories(${root_dir})
     endif()
 
-    file(GLOB ALL_SUB RELATIVE ${root_dir} ${root_dir}/*) # 获得当前目录下的所有文件，让如ALL_SUB列表中
+    file(GLOB ALL_SUB CONFIGURE_DEPENDS RELATIVE ${root_dir} ${root_dir}/*) # 获得当前目录下的所有文件，让如ALL_SUB列表中
     foreach(sub ${ALL_SUB})
         if (IS_DIRECTORY ${root_dir}/${sub})
             include_sub_directories_recursively(${root_dir}/${sub}) # 对子目录递归调用，包含
@@ -156,7 +156,7 @@ include_sub_directories_recursively(${CMAKE_SOURCE_DIR}/application)
 # add source, only surfix .c
 # 只收集实际参与编译的源文件, 避免把 CMSIS DSP/NN 的示例与测试代码
 # (Drivers/CMSIS/DSP 下约 500 个 .c) 全部编进工程。
-file(GLOB SOURCES
+file(GLOB SOURCES CONFIGURE_DEPENDS
     "Core/Src/*.c"
     "USB_DEVICE/App/*.c"
     "USB_DEVICE/Target/*.c"
@@ -205,7 +205,7 @@ set(HAL_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c
 )
 list(APPEND SOURCES ${HAL_SOURCES})
-file(GLOB_RECURSE SOURCES_APP
+file(GLOB_RECURSE SOURCES_APP CONFIGURE_DEPENDS
     "bsp/*.c"
     "modules/*.c"
     "application/*.c"

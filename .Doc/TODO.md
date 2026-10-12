@@ -57,7 +57,7 @@
 - [ ] **R25-13** [enhancement] [ready-for-agent] CI 增加断链、短帧、越界角度、发射模式切换和运动学主机测试，并清理本轮 Debug 构建告警。验收：GitHub Actions 在 main 与 PR 上构建固件并运行全部新增主机测试。验证记录：CI 首次全固件构建发现 `servo_motor.h` 依赖 GCC 私有头 `stdint-gcc.h`，已改用标准头 `<stdint.h>`；本机 Windows xPack ARM GCC 15.2.1 全量重编译通过，并修复了 `robot_cmd.c` 中 5 条枚举比较告警；全量编译仍报告 LCD 字模初始化缺少花括号、多个 `DWT_ProbeDone` 调用丢弃 `volatile` 限定符、`power_manager.c` 的 `RLS` 未使用、BMI088 的校准变量可能未初始化以及其他未使用变量。GitHub Actions run 36913234046 的公开状态页显示固件构建步骤失败；本会话匿名读取详细日志请求返回 403。使用与 CI 一致的 Ubuntu apt ARM GCC 10.3.1/GNU ld 2.38 在 WSL 复现失败原因为 ld 不支持 `--no-warn-rwx-segments`；CMake 已改为仅当配置的链接器帮助列出该选项时传入，WSL CMake/Ninja 固件构建通过；修复提交的 GitHub Actions run 36916166214 中 TODO 检查、主机安全测试、4 个练习和固件构建全部成功。仍缺机械角度范围拒绝和底盘运动学主机测试。 2026-10-10 R25-03 补齐生产 UART→遥控→daemon→RobotSafety→命令任务联编回归、裸板禁止 READY、主机 Debug/Release 与六种禁热固件构建；新增 CI 诊断配置/非法配置及 ELF 隔离检查。本地验证已通过，当前改动未推送，远端执行及其余运动学/告警清理不因此完成。
   2026-10-04 供电审查补充验收范围：CI 还需使用生产逻辑验证 MC02-0034～0040 的加热关断、BMI088 成功／新鲜度、ADC 停更、CALIB／Flash 入口、异常出口和锁存恢复；课程模拟与现有 SP 主机测试不能代替这些回归。证据见 [6S 审查](../docs/6S上电安全审查_2026-10-04.md)。
 - [ ] **R25-14** [bug] [ready-for-agent] 审核跨任务共享的命令、传感器状态和消息中心队列，按生产者/消费者选择临界区、队列或双缓冲，并覆盖既有并发检查条目。验收：共享数据清单逐项有同步策略，主机或台架测试验证抢占时读写一致。
-- [ ] **MC02-0032** [enhancement] [ready-for-agent] CMake 业务源文件使用 `GLOB_RECURSE` 但未启用 `CONFIGURE_DEPENDS`；在源码清单变化后，已有构建目录可能继续使用旧清单，遗漏新模块并在链接时报未定义引用。验收：在已有构建目录新增或移除业务 `.c` 文件后，直接运行构建即可触发重新配置并得到与干净构建一致的源文件集合。
+- [ ] **MC02-0032** [enhancement] [ready-for-human] 修复 CMake 源文件和头文件目录 glob 在已有 Ninja 构建目录中漏检变化的问题。验收：Windows/WSL 增量回归、主机 Debug/Release、六种禁热固件及 ELF 检查通过；GitHub Actions 在新提交上通过后关闭。本机证据见 [MC02-0032 票据](../docs/workflow/tickets/MC02-0032.md)，远端 CI 尚未触发。
 
 ## 2026-10-08：旧代码审查清单归并
 
