@@ -75,6 +75,22 @@ IMU_SNAPSHOT_FIELDS = {
     "imu_heater_duty": SnapshotField("imu_heater_duty_diag", "mdw", 32),
 }
 
+INIT_SNAPSHOT_FIELDS = {
+    "tick_ms": SnapshotField("uwTick", "mdw", 32),
+    "init_failed": SnapshotField("init_diagnostic_snapshot.failed", "mdb", 8),
+    "init_stage": SnapshotField("init_diagnostic_snapshot.stage", "mdb", 8),
+    "init_module": SnapshotField("init_diagnostic_snapshot.module", "mdb", 8),
+    "init_reason": SnapshotField("init_diagnostic_snapshot.reason", "mdb", 8),
+    "init_resource_id_lo": SnapshotField(
+        "((unsigned char *)&(init_diagnostic_snapshot.resource_id))[0]", "mdb", 8
+    ),
+    "init_resource_id_hi": SnapshotField(
+        "((unsigned char *)&(init_diagnostic_snapshot.resource_id))[1]", "mdb", 8
+    ),
+    "init_failure_count": SnapshotField("init_diagnostic_snapshot.failure_count", "mdw", 32),
+    "init_heartbeat": SnapshotField("init_diagnostic_snapshot.heartbeat", "mdw", 32),
+}
+
 RC_SNAPSHOT_FIELDS = {
     "tick_ms": SnapshotField("uwTick", "mdw", 32),
     **{key: SnapshotField(f"remote_control_diag.{key}", "mdw", 32) for key in (
@@ -464,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=5.0, help="per snapshot timeout, >0..5 seconds")
     profile = parser.add_mutually_exclusive_group()
     profile.add_argument("--imu", action="store_true", help="read the fixed BMI088/INS/heater diagnostic profile")
+    profile.add_argument("--init", action="store_true", help="read the fixed startup-failure diagnostic profile")
     profile.add_argument("--rc", action="store_true", help="read the fixed remote/safety diagnostic profile")
     profile.add_argument("--rc-input", action="store_true", help="read fixed remote/safety plus keyboard and mouse fields (non-atomic)")
     args = parser.parse_args(argv)
@@ -482,7 +499,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         fields = (RC_INPUT_SNAPSHOT_FIELDS if args.rc_input else RC_SNAPSHOT_FIELDS if args.rc
-                  else IMU_SNAPSHOT_FIELDS if args.imu else SNAPSHOT_FIELDS)
+                  else INIT_SNAPSHOT_FIELDS if args.init else IMU_SNAPSHOT_FIELDS if args.imu
+                  else SNAPSHOT_FIELDS)
         addresses = resolve_symbol_addresses(args.gdb, str(args.elf), args.timeout, fields)
     except ProbeIOError as error:
         print(f"probe_io_error: {error}", file=sys.stderr)

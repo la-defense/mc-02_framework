@@ -36,6 +36,7 @@ typedef struct
 } SPI_Init_Config_s;
 
 SPIInstance *SPIRegister(SPI_Init_Config_s *config);
+uint8_t SPIUnregister(SPIInstance *instance);
 void SPITransmit(SPIInstance *spi, uint8_t *tx, uint8_t len);
 HAL_StatusTypeDef SPITransRecv(SPIInstance *spi, uint8_t *rx, uint8_t *tx, uint8_t len);
 

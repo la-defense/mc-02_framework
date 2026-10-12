@@ -60,6 +60,21 @@ TEST_IMU_ADDRESSES = {
 TEST_IMU_VALUES = {
     key: index + 1 for index, key in enumerate(probe_snapshot_live.IMU_SNAPSHOT_FIELDS)
 }
+TEST_INIT_ADDRESSES = {
+    key: 0x24004000 + index * 4
+    for index, key in enumerate(probe_snapshot_live.INIT_SNAPSHOT_FIELDS)
+}
+TEST_INIT_VALUES = {
+    "tick_ms": 10,
+    "init_failed": 1,
+    "init_stage": 2,
+    "init_module": 6,
+    "init_reason": 1,
+    "init_resource_id_lo": 0x34,
+    "init_resource_id_hi": 0x12,
+    "init_failure_count": 3,
+    "init_heartbeat": 99,
+}
 
 
 class RemoteProfileTests(unittest.TestCase):
@@ -214,6 +229,44 @@ class FakeOpenOCDServer:
 
 
 class ProbeSnapshotLiveTests(unittest.TestCase):
+    def test_init_profile_resolves_fixed_startup_diagnostics(self):
+        fields = probe_snapshot_live.INIT_SNAPSHOT_FIELDS
+        command = probe_snapshot_live.build_symbol_command("arm-none-eabi-gdb", "firmware.elf", fields)
+        joined = " ".join(command).lower()
+        self.assertEqual(len([arg for arg in command if arg.startswith("printf ")]), len(fields))
+        self.assertIn("init_diagnostic_snapshot.failure_count", joined)
+        self.assertIn("init_diagnostic_snapshot.heartbeat", joined)
+        self.assertNotIn("target ", joined)
+
+    def test_init_profile_reads_only_fixed_fields_while_running(self):
+        fields = probe_snapshot_live.INIT_SNAPSHOT_FIELDS
+        server = FakeOpenOCDServer(addresses=TEST_INIT_ADDRESSES, values=TEST_INIT_VALUES)
+        try:
+            actual = probe_snapshot_live.read_snapshot(
+                TEST_INIT_ADDRESSES, "127.0.0.1", server.port, 1.0, fields
+            )
+        finally:
+            server.close()
+        self.assertEqual(actual, TEST_INIT_VALUES)
+        self.assertEqual(len(server.commands), 2 * len(fields) + 1)
+        reads = [command for command in server.commands if command != "targets"]
+        self.assertTrue(all(command.startswith("mdb ") or command.startswith("mdw ") for command in reads))
+        self.assertFalse(any(command in {"halt", "reset", "resume"} for command in server.commands))
+
+    def test_init_cli_selects_fixed_profile(self):
+        fields = probe_snapshot_live.INIT_SNAPSHOT_FIELDS
+        output = io.StringIO()
+        with patch.object(probe_snapshot_live, "resolve_symbol_addresses", return_value=TEST_INIT_ADDRESSES) as resolve, \
+             patch.object(probe_snapshot_live, "read_snapshot", return_value=TEST_INIT_VALUES) as read, \
+             contextlib.redirect_stdout(output):
+            result = probe_snapshot_live.main(["--init", "--elf", __file__, "--samples", "2", "--interval", "0"])
+        self.assertEqual(result, 0)
+        self.assertIs(resolve.call_args.args[3], fields)
+        self.assertIs(read.call_args.args[4], fields)
+        rows = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(rows[-1]["init_failure_count"], 3)
+        self.assertEqual(rows[-1]["status"], "running")
+
     def test_gdb_command_resolves_addresses_offline_without_target_connection(self):
         command = probe_snapshot_live.build_symbol_command("arm-none-eabi-gdb", "firmware.elf")
         gdb_commands = [command[index + 1] for index, arg in enumerate(command[:-1]) if arg == "--ex"]

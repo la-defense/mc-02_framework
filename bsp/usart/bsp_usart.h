@@ -51,7 +51,7 @@ USARTInstance *USARTRegister(USART_Init_Config_s *init_config);
  *
  * @param _instance
  */
-void USARTServiceInit(USARTInstance *_instance);
+uint8_t USARTServiceInit(USARTInstance *_instance);
 
 
 /**

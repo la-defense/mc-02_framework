@@ -82,27 +82,45 @@ static void CANCommLostCallback(void *cancomm)
 
 CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config)
 {
-    CANCommInstance *ins = (CANCommInstance *)malloc(sizeof(CANCommInstance));
-    memset(ins, 0, sizeof(CANCommInstance));
+    if (comm_config == NULL || comm_config->send_data_len > CAN_COMM_MAX_BUFFSIZE ||
+        comm_config->recv_data_len > CAN_COMM_MAX_BUFFSIZE)
+        return NULL;
+
+    CANCommInstance *ins = (CANCommInstance *)malloc(sizeof(*ins));
+    if (ins == NULL)
+        return NULL;
+    memset(ins, 0, sizeof(*ins));
 
     ins->recv_data_len = comm_config->recv_data_len;
-    ins->recv_buf_len = comm_config->recv_data_len + CAN_COMM_OFFSET_BYTES; // head + datalen + crc8 + tail
+    ins->recv_buf_len = (uint8_t)(comm_config->recv_data_len + CAN_COMM_OFFSET_BYTES);
     ins->send_data_len = comm_config->send_data_len;
-    ins->send_buf_len = comm_config->send_data_len + CAN_COMM_OFFSET_BYTES;
-    ins->raw_sendbuf[0] = CAN_COMM_HEADER;            // head,直接设置避免每次发送都要重新赋值,下面的tail同理
-    ins->raw_sendbuf[1] = comm_config->send_data_len; // datalen
-    ins->raw_sendbuf[comm_config->send_data_len + CAN_COMM_OFFSET_BYTES - 1] = CAN_COMM_TAIL;
-    // can instance的设置
-    comm_config->can_config.id = ins; // CANComm的实例指针作为CANInstance的id,回调函数中会用到
-    comm_config->can_config.can_module_callback = CANCommRxCallback;
-    ins->can_ins = CANRegister(&comm_config->can_config);
+    ins->send_buf_len = (uint8_t)(comm_config->send_data_len + CAN_COMM_OFFSET_BYTES);
+    ins->raw_sendbuf[0] = CAN_COMM_HEADER;
+    ins->raw_sendbuf[1] = comm_config->send_data_len;
+    ins->raw_sendbuf[ins->send_buf_len - 1u] = CAN_COMM_TAIL;
 
     Daemon_Init_Config_s daemon_config = {
         .callback = CANCommLostCallback,
-        .owner_id = (void *)ins,
+        .owner_id = ins,
         .reload_count = comm_config->daemon_count,
     };
     ins->comm_daemon = DaemonRegister(&daemon_config);
+    if (ins->comm_daemon == NULL)
+    {
+        free(ins);
+        return NULL;
+    }
+
+    CAN_Init_Config_s can_config = comm_config->can_config;
+    can_config.id = ins;
+    can_config.can_module_callback = CANCommRxCallback;
+    ins->can_ins = CANRegister(&can_config);
+    if (ins->can_ins == NULL)
+    {
+        (void)DaemonUnregister(ins->comm_daemon);
+        free(ins);
+        return NULL;
+    }
     return ins;
 }
 

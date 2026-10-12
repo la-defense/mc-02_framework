@@ -26,12 +26,36 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(CTest)
+add_executable(init_resource_test init_resource_test.c
+  ../../modules/daemon/daemon.c ../../modules/message_center/message_center.c)
+target_include_directories(init_resource_test BEFORE PRIVATE init_resource_fakes)
+target_include_directories(init_resource_test PRIVATE ../../bsp/dwt ../../modules/daemon
+  ../../modules/message_center ../../modules/alarm)
+if(UNIX AND NOT APPLE)
+  target_compile_options(init_resource_test PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(init_resource_test PRIVATE -Wl,--gc-sections -Wl,--wrap=malloc -Wl,--wrap=free)
+endif()
+add_test(NAME production_init_resource_failures COMMAND init_resource_test)
+add_executable(init_diagnostic_test init_diagnostic_test.c ../../application/init_diagnostic.c)
+target_include_directories(init_diagnostic_test BEFORE PRIVATE init_diagnostic_fakes)
+target_include_directories(init_diagnostic_test PRIVATE ../../application)
+add_test(NAME production_init_diagnostic_preserves_first_failure COMMAND init_diagnostic_test)
+add_executable(kalman_filter_init_test kalman_filter_init_test.c ../../modules/algorithm/kalman_filter.c)
+target_include_directories(kalman_filter_init_test BEFORE PRIVATE kalman_fakes)
+target_include_directories(kalman_filter_init_test PRIVATE ../../modules/algorithm)
+if(UNIX AND NOT APPLE)
+  target_compile_options(kalman_filter_init_test PRIVATE -ffunction-sections -fdata-sections -fno-pie)
+  target_link_options(kalman_filter_init_test PRIVATE -Wl,--gc-sections -no-pie
+    -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
+endif()
+add_test(NAME production_kalman_allocation_failure_rolls_back COMMAND kalman_filter_init_test)
 add_executable(robot_safety_test robot_safety_test.c ../../modules/safety/robot_safety.c)
 target_include_directories(robot_safety_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_safety_test PRIVATE ../../application ../../modules/imu
   ../../modules/master_machine ../../modules/safety ../../bsp/usart)
 add_test(NAME production_safety_reported_faults COMMAND robot_safety_test)
 add_test(NAME production_safety_fault_recovery_priority COMMAND robot_safety_test recovery)
+add_test(NAME production_safety_init_failure_sticky COMMAND robot_safety_test init-failure)
 add_executable(remote_control_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ../../modules/remote/remote_safety.c
   ../../modules/remote/remote_control.c ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c)
@@ -52,6 +76,9 @@ add_test(NAME production_pc_sequence_and_invalid_frames COMMAND remote_control_t
 add_executable(usart_snapshot_test usart_snapshot_test.c ../../bsp/usart/bsp_usart.c)
 target_include_directories(usart_snapshot_test BEFORE PRIVATE remote_fakes)
 target_include_directories(usart_snapshot_test PRIVATE ../../bsp/usart)
+if(UNIX AND NOT APPLE)
+  target_link_options(usart_snapshot_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
+endif()
 add_test(NAME production_uart_immutable_dispatch COMMAND usart_snapshot_test)
 add_executable(remote_bench_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c

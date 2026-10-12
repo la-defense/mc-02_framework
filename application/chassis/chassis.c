@@ -39,7 +39,7 @@ static Referee_Interactive_info_t ui_data; // UI数据，将底盘中的数据�
 static SuperCapInstance *cap;                                       // 超级电容
 static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left right forward back
 
-void ChassisInit()
+uint8_t ChassisInit(void)
 {
     // 四个轮子的参数一样,改tx_id和反转标志位即可
     Motor_Init_Config_s chassis_motor_config = {
@@ -99,7 +99,7 @@ void ChassisInit()
 
     // 发布订阅初始化,如果为双板,则需要can comm来传递消息
 #ifdef CHASSIS_BOARD
-    Chassis_IMU_data = INS_Init(); // 底盘IMU初始化
+    Chassis_IMU_data = INS_GetStorage(); // INS 由调度器启动后的专属任务初始化
 
     CANComm_Init_Config_s comm_conf = {
         .can_config = {
@@ -117,6 +117,18 @@ void ChassisInit()
     chassis_sub = SubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
     chassis_pub = PubRegister("chassis_feed", sizeof(Chassis_Upload_Data_s));
 #endif // ONE_BOARD
+    if (motor_lf == NULL || motor_rf == NULL || motor_lb == NULL || motor_rb == NULL ||
+        referee_data == NULL || cap == NULL)
+        return 0u;
+#ifdef ONE_BOARD
+    if (chassis_sub == NULL || chassis_pub == NULL)
+        return 0u;
+#endif
+#ifdef CHASSIS_BOARD
+    if (Chassis_IMU_data == NULL || chasiss_can_comm == NULL)
+        return 0u;
+#endif
+    return 1u;
 }
 
 /**

@@ -100,6 +100,9 @@ void INS_Task(void);
  */
 attitude_t *INS_GetAttitude(void);
 
+/** Stable storage pointer for consumers that are initialized before INS task. */
+attitude_t *INS_GetStorage(void);
+
 /**
  * @brief 四元数更新函数,即实现dq/dt=0.5Ωq
  *

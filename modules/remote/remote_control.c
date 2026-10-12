@@ -185,6 +185,8 @@ static void RCLostCallback(void *id)
 
 RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
 {
+    if (handle == NULL)
+        return NULL;
     USART_Init_Config_s conf = {
         .module_callback = RemoteControlRxCallback,
         .usart_handle = handle,
@@ -194,13 +196,21 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
     memset((void *)&remote_control_diag, 0, sizeof(remote_control_diag));
     pc_authorized = 0u;
     RevokePC(HAL_GetTick(), REMOTE_PC_REVOKE_NONE);
-    rc_usart_instance = USARTRegister(&conf);
     Daemon_Init_Config_s daemon_conf = {
         .reload_count = 10,
         .callback = RCLostCallback,
         .owner_id = NULL,
     };
     rc_daemon_instance = DaemonRegister(&daemon_conf);
+    if (rc_daemon_instance == NULL)
+        return NULL;
+    rc_usart_instance = USARTRegister(&conf);
+    if (rc_usart_instance == NULL)
+    {
+        (void)DaemonUnregister(rc_daemon_instance);
+        rc_daemon_instance = NULL;
+        return NULL;
+    }
     RobotSafetySetRcOnline(0u);
     rc_init_flag = 1u;
     return rc_ctrl;

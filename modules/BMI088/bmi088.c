@@ -10,6 +10,7 @@
 #include "imu_heater.h"
 #include "cmsis_os.h"
 #include <math.h>
+#include <stdlib.h>
 
 static DaemonInstance *bmi088_daemon_instance;
 volatile uint32_t bmi088_init_error = BMI088_NO_ERROR;
@@ -1002,6 +1003,10 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         return NULL;
     }
 
+    /* Registration owns a private config copy: failures must not rewrite caller state. */
+    BMI088_Init_Config_s local_config = *config;
+    config = &local_config;
+
     // 申请内存
     BMI088Instance *bmi088_instance = (BMI088Instance *)zmalloc(sizeof(BMI088Instance));
     if (bmi088_instance == NULL)
@@ -1034,9 +1039,25 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     // 根据参数选择工作模式
     bmi088_instance->spi_acc = SPIRegister(&config->spi_acc_config);
     bmi088_instance->spi_gyro = SPIRegister(&config->spi_gyro_config);
+    if (bmi088_instance->spi_acc == NULL || bmi088_instance->spi_gyro == NULL)
+    {
+        bmi088_init_error = BMI088_RESOURCE_ERROR;
+        (void)SPIUnregister(bmi088_instance->spi_acc);
+        (void)SPIUnregister(bmi088_instance->spi_gyro);
+        free(bmi088_instance);
+        return NULL;
+    }
     if (config->heat_pwm_config.htim != NULL) // 温控 PWM 可选: 未配置 htim 时不注册, 由上层自行控温
     {
         bmi088_instance->heat_pwm = PWMRegister(&config->heat_pwm_config);
+        if (bmi088_instance->heat_pwm == NULL)
+        {
+            bmi088_init_error = BMI088_RESOURCE_ERROR;
+            (void)SPIUnregister(bmi088_instance->spi_acc);
+            (void)SPIUnregister(bmi088_instance->spi_gyro);
+            free(bmi088_instance);
+            return NULL;
+        }
     }
     PIDInit(&bmi088_instance->heat_pid, &config->heat_pid_config);
 
@@ -1060,6 +1081,10 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
                  (unsigned)init_retry, (unsigned)error,
                  (unsigned)bmi088_init_acc_chip_id, (unsigned)bmi088_init_acc_status,
                  (unsigned)bmi088_init_gyro_chip_id, (unsigned)bmi088_init_gyro_status);
+        (void)PWMUnregister(bmi088_instance->heat_pwm);
+        (void)SPIUnregister(bmi088_instance->spi_acc);
+        (void)SPIUnregister(bmi088_instance->spi_gyro);
+        free(bmi088_instance);
         return NULL;
     }
 

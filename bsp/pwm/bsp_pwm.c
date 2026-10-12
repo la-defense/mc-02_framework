@@ -1,6 +1,8 @@
 #include "bsp_pwm.h"
 #include "stdlib.h"
 #include "memory.h"
+#include <math.h>
+#include <stdint.h>
 
 // 配合中断以及初始化
 static uint8_t idx;
@@ -26,10 +28,19 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 
 PWMInstance *PWMRegister(PWM_Init_Config_s *config)
 {
-    if (idx >= PWM_DEVICE_CNT) // 超过最大实例数,考虑增加或查看是否有内存泄漏
-        while (1)
-            ;
+    if (config == NULL || config->htim == NULL || config->htim->Instance == NULL ||
+        idx >= PWM_DEVICE_CNT || !isfinite(config->period) || config->period <= 0.0f ||
+        !isfinite(config->dutyratio) || config->dutyratio < 0.0f || config->dutyratio > 1.0f ||
+        (config->channel != TIM_CHANNEL_1 && config->channel != TIM_CHANNEL_2 &&
+         config->channel != TIM_CHANNEL_3 && config->channel != TIM_CHANNEL_4))
+        return NULL;
+    for (uint8_t i = 0u; i < idx; ++i)
+        if (pwm_instance[i]->htim == config->htim && pwm_instance[i]->channel == config->channel)
+            return NULL;
+
     PWMInstance *pwm = (PWMInstance *)malloc(sizeof(PWMInstance));
+    if (pwm == NULL)
+        return NULL;
     memset(pwm, 0, sizeof(PWMInstance));
 
     pwm->htim = config->htim;
@@ -39,12 +50,43 @@ PWMInstance *PWMRegister(PWM_Init_Config_s *config)
     pwm->callback = config->callback;
     pwm->id = config->id;
     pwm->tclk = PWMSelectTclk(pwm->htim);
-    // 启动PWM
-    HAL_TIM_PWM_Start(pwm->htim, pwm->channel);
+    const double period_ticks = (double)pwm->period * (double)pwm->tclk /
+                                ((double)pwm->htim->Init.Prescaler + 1.0);
+    if (pwm->tclk == 0u || !isfinite(period_ticks) || period_ticks < 1.0 || period_ticks > UINT32_MAX)
+    {
+        free(pwm);
+        return NULL;
+    }
     PWMSetPeriod(pwm, pwm->period);
+    PWMSetDutyRatio(pwm, 0.0f);
+    if (HAL_TIM_PWM_Start(pwm->htim, pwm->channel) != HAL_OK)
+    {
+        (void)HAL_TIM_PWM_Stop(pwm->htim, pwm->channel);
+        free(pwm);
+        return NULL;
+    }
     PWMSetDutyRatio(pwm, pwm->dutyratio);
     pwm_instance[idx++] = pwm;
     return pwm;
+}
+
+uint8_t PWMUnregister(PWMInstance *pwm)
+{
+    if (pwm == NULL)
+        return 0u;
+    for (uint8_t i = 0u; i < idx; ++i)
+    {
+        if (pwm_instance[i] != pwm)
+            continue;
+        PWMSetDutyRatio(pwm, 0.0f);
+        (void)HAL_TIM_PWM_Stop(pwm->htim, pwm->channel);
+        for (uint8_t j = (uint8_t)(i + 1u); j < idx; ++j)
+            pwm_instance[j - 1u] = pwm_instance[j];
+        pwm_instance[--idx] = NULL;
+        free(pwm);
+        return 1u;
+    }
+    return 0u;
 }
 
 /* 只是对HAL的函数进行了形式上的封装 */

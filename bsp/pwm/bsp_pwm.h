@@ -47,6 +47,7 @@ typedef struct
  * @return PWMInstance*
  */
 PWMInstance *PWMRegister(PWM_Init_Config_s *config);
+uint8_t PWMUnregister(PWMInstance *pwm);
 
 /**
  * @brief 启动pwm

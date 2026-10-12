@@ -3,6 +3,7 @@
 #include "bsp_dwt.h"
 #include "string.h"
 #include "stdlib.h"
+#include <math.h>
 
 static PWMInstance *buzzer;
 // static uint8_t idx;
@@ -13,44 +14,58 @@ static BuzzzerInstance *buzzer_default;
  * @brief 蜂鸣器初始化
  *
  */
-void BuzzerInit()
+uint8_t BuzzerInit(void)
 {
-    PWM_Init_Config_s buzzer_config = {
+    if (buzzer != NULL && buzzer_default != NULL)
+        return 1u;
+
+    PWM_Init_Config_s pwm_config = {
         .htim = &htim12,
         .channel = TIM_CHANNEL_2,
-        .dutyratio = 0,
-        .period = 0.001,
+        .dutyratio = 0.0f,
+        .period = 0.001f,
     };
-    buzzer = PWMRegister(&buzzer_config);
+    PWMInstance *pwm = PWMRegister(&pwm_config);
+    if (pwm == NULL)
+        return 0u;
 
-    /* 注册一个默认蜂鸣器实例，避免 BuzzerTask 遍历空指针，并供上层报警逻辑调用/测试 */
     Buzzer_config_s default_config = {
         .alarm_level = ALARM_LEVEL_HIGH,
         .octave = OCTAVE_1,
         .loudness = 0.4f,
     };
-    buzzer_default = BuzzerRegister(&default_config);
+    BuzzzerInstance *default_instance = BuzzerRegister(&default_config);
+    if (default_instance == NULL)
+    {
+        (void)PWMUnregister(pwm);
+        return 0u;
+    }
+
+    buzzer = pwm;
+    buzzer_default = default_instance;
+    return 1u;
 }
 
 BuzzzerInstance *BuzzerRegister(Buzzer_config_s *config)
 {
-    if (config == NULL)
+    if (config == NULL || config->alarm_level < 0 ||
+        config->alarm_level >= BUZZER_DEVICE_CNT ||
+        config->octave < OCTAVE_1 || config->octave > OCTAVE_8 ||
+        !isfinite(config->loudness) || config->loudness < 0.0f || config->loudness > 1.0f)
         return NULL;
-    if (config->alarm_level >= BUZZER_DEVICE_CNT) // 超过最大实例数,考虑增加或查看是否有内存泄漏
-        while (1)
-            ;
-    BuzzzerInstance *buzzer_temp = (BuzzzerInstance *)malloc(sizeof(BuzzzerInstance));
-    if (buzzer_temp == NULL)
+    if (buzzer_list[config->alarm_level] != NULL)
         return NULL;
-    memset(buzzer_temp, 0, sizeof(BuzzzerInstance));
 
-    buzzer_temp->alarm_level = config->alarm_level;
-    buzzer_temp->loudness = config->loudness;
-    buzzer_temp->octave = config->octave;
-    buzzer_temp->alarm_state = ALARM_OFF;
-
-    buzzer_list[config->alarm_level] = buzzer_temp;
-    return buzzer_temp;
+    BuzzzerInstance *instance = (BuzzzerInstance *)malloc(sizeof(*instance));
+    if (instance == NULL)
+        return NULL;
+    memset(instance, 0, sizeof(*instance));
+    instance->alarm_level = config->alarm_level;
+    instance->loudness = config->loudness;
+    instance->octave = config->octave;
+    instance->alarm_state = ALARM_OFF;
+    buzzer_list[config->alarm_level] = instance;
+    return instance;
 }
 
 BuzzzerInstance *BuzzerGetInstance(void)

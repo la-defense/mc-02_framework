@@ -15,6 +15,7 @@ typedef enum
     ROBOT_FAULT_TILT = 1u << 4,
     ROBOT_FAULT_CALIB_INVALID = 1u << 5,
     ROBOT_FAULT_TASK_TIMEOUT = 1u << 6,
+    ROBOT_FAULT_INIT_FAILURE = 1u << 7,
 } Robot_Fault_e;
 
 /* 急停原因 */

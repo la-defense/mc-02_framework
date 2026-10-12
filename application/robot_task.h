@@ -18,6 +18,10 @@
 #include "task_monitor.h"
 #include "lcd_task.h"
 #include "bsp_crash.h"
+#include "bsp_safety.h"
+#include "imu_heater.h"
+#include "init_diagnostic.h"
+#include "robot_safety.h"
 
 #include "bsp_log.h"
 
@@ -38,7 +42,7 @@ void StartUITASK(void const *argument);
  * @brief 初始化机器人任务,所有持续运行的任务都在这里初始化
  *
  */
-void OSTaskInit()
+uint8_t OSTaskInit(void)
 {
     osThreadDef(instask, StartINSTASK, osPriorityAboveNormal, 0, 1024);
     insTaskHandle = osThreadCreate(osThread(instask), NULL); // 由于是阻塞读取传感器,为姿态解算设置较高优先级,确保以1khz的频率执行
@@ -68,16 +72,53 @@ void OSTaskInit()
 
     osThreadDef(lcdtask, StartLCDTASK, osPriorityLow, 0, 1024);
     lcdTaskHandle = osThreadCreate(osThread(lcdtask), NULL);
-    if (lcdTaskHandle == NULL) /* 创建失败返回 NULL(通常是 FreeRTOS 堆不够) */
-        LOGERROR("[freeRTOS] LCD 任务创建失败: 检查 configTOTAL_HEAP_SIZE / 栈大小");
+    uint8_t all_created = 1u;
     if (insTaskHandle == NULL)
-        LOGERROR("[freeRTOS] INS 任务创建失败");
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_INS);
+        all_created = 0u;
+    }
     if (motorTaskHandle == NULL)
-        LOGERROR("[freeRTOS] MOTOR 任务创建失败");
-
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_MOTOR);
+        all_created = 0u;
+    }
+    if (daemonTaskHandle == NULL)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_DAEMON);
+        all_created = 0u;
+    }
+    if (robotTaskHandle == NULL)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_ROBOT);
+        all_created = 0u;
+    }
 #if !defined(MC02_PROFILE_BENCH_SAFE)
-    HTMotorControlInit(); // 没有注册HT电机则不会执行
+    if (uiTaskHandle == NULL)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
+        all_created = 0u;
+    }
 #endif
+    if (lcdTaskHandle == NULL)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
+        all_created = 0u;
+    }
+
+    if (all_created)
+    {
+#if !defined(MC02_PROFILE_BENCH_SAFE)
+        HTMotorControlInit(); // 没有注册HT电机则不会执行
+#endif
+    }
+    return all_created;
 }
 
 __attribute__((noreturn)) void StartINSTASK(void const *argument)
@@ -85,7 +126,21 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
     static float ins_start;
     static float ins_dt;
     TaskMonitorFeed(TASK_MONITOR_INS);
-    INS_Init(); // 确保BMI088被正确初始化.
+    if (INS_Init() == NULL)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_INS,
+                                    INIT_FAILURE_ALGORITHM_MEMORY, 0u);
+        RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+        IMUHeaterForceOff();
+        BSP_SafetyStartupLatchOutputsOff();
+        for (;;)
+        {
+            InitDiagnosticHeartbeat();
+            TaskMonitorFeed(TASK_MONITOR_INS);
+            osDelay(100u);
+        }
+    }
+    InitDiagnosticMarkReady();
     LOGINFO("[freeRTOS] INS Task Start");
     for (;;)
     {
@@ -144,7 +199,15 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 {
     static float daemon_dt;
     static float daemon_start;
-    BuzzerInit();
+    uint8_t buzzer_ready = BuzzerInit();
+    if (!buzzer_ready)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_BUZZER,
+                                    INIT_FAILURE_RESOURCE, 0u);
+        RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+        IMUHeaterForceOff();
+        BSP_SafetyStartupLatchOutputsOff();
+    }
     LOGINFO("[freeRTOS] Daemon Task Start");
 #if LOG_TEST
     /* 日志格式串安全自测(默认关闭): 见 bsp_log.h 的 LOG_TEST / bsp_log.c 的 LogSelfTest()
@@ -178,7 +241,8 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         }
 #endif
         DaemonTask();
-        BuzzerTask();
+        if (buzzer_ready)
+            BuzzerTask();
         CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */
         TaskMonitorTick();
 #if CRASH_TEST

@@ -11,6 +11,7 @@
 #endif
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "line %d: %s\n", __LINE__, #c); exit(1); } } while (0)
 UART_HandleTypeDef huart5, huart9;
+static DMA_HandleTypeDef huart5_dma, huart9_dma;
 static uint32_t now;
 static uint8_t *dma_buffer;
 extern volatile uint32_t usart_rx_oversize_total;
@@ -49,6 +50,8 @@ static void set_heartbeat(uint8_t b[18], uint16_t heartbeat)
 { b[10]=(uint8_t)heartbeat; b[11]=(uint8_t)(heartbeat>>8); }
 int main(int argc, char **argv)
 {
+    huart5.hdmarx = &huart5_dma;
+    huart9.hdmarx = &huart9_dma;
     RobotSafetyInit();
 #if MC02_BENCH_RC_DIAGNOSTICS
     RemoteBenchInit(&huart5);

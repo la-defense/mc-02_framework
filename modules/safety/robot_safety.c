@@ -103,6 +103,8 @@ void RobotSafetySetTaskHealthy(uint8_t healthy)
 
 void RobotSafetyRequestEnable(void)
 {
+    if ((fault_flags & ROBOT_FAULT_INIT_FAILURE) != 0u)
+        return;
     enable_requested = 1;
     calib_requested = 0;
 }
@@ -115,6 +117,8 @@ void RobotSafetyRequestDisable(void)
 
 void RobotSafetyRequestCalib(uint8_t enable)
 {
+    if (enable && (fault_flags & ROBOT_FAULT_INIT_FAILURE) != 0u)
+        return;
     calib_requested = enable ? 1 : 0;
     if (calib_requested)
         enable_requested = 0;
@@ -127,6 +131,8 @@ void RobotFaultReport(Robot_Fault_e fault)
 
 void RobotFaultClear(Robot_Fault_e fault)
 {
+    if ((fault & ROBOT_FAULT_INIT_FAILURE) != 0)
+        fault = (Robot_Fault_e)((uint32_t)fault & ~(uint32_t)ROBOT_FAULT_INIT_FAILURE);
     fault_flags &= ~(uint32_t)fault;
 }
 
@@ -144,7 +150,7 @@ void EstopRequest(Estop_Reason_e reason)
 uint8_t EstopClear(void)
 {
     /* 故障未清除时不允许复位; 遥控离线必须等遥控重新上线 */
-    if (fault_flags & (ROBOT_FAULT_RC_OFFLINE | ROBOT_FAULT_TASK_TIMEOUT))
+    if (fault_flags & (ROBOT_FAULT_RC_OFFLINE | ROBOT_FAULT_TASK_TIMEOUT | ROBOT_FAULT_INIT_FAILURE))
         return 0;
 
     if (!estop_latched)
@@ -208,6 +214,13 @@ const char *RobotSafetyStateName(Robot_Status_e state)
 void RobotSafetyUpdate(void)
 {
     const uint32_t active_faults = fault_flags;
+    if ((active_faults & ROBOT_FAULT_INIT_FAILURE) != 0u)
+    {
+        enable_requested = 0u;
+        calib_requested = 0u;
+        RobotSafetySetState(ROBOT_FAULT);
+        return;
+    }
     /* 遥控器离线是唯一会锁存急停的故障 */
     if (!rc_online || (active_faults & ROBOT_FAULT_RC_OFFLINE))
         EstopRequest(ESTOP_REASON_RC_OFFLINE);

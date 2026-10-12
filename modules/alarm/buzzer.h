@@ -40,7 +40,7 @@ typedef struct
 }BuzzzerInstance;
 
 
-void BuzzerInit();
+uint8_t BuzzerInit(void);
 void BuzzerTask();
 BuzzzerInstance *BuzzerRegister(Buzzer_config_s *config);
 BuzzzerInstance *BuzzerGetInstance(void);

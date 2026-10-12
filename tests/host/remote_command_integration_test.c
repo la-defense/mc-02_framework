@@ -9,6 +9,7 @@
 #include "message_center.h"
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"line %d: %s\n",__LINE__,#c); exit(1); } } while(0)
 UART_HandleTypeDef huart5,huart9;
+static DMA_HandleTypeDef huart5_dma, huart9_dma;
 static uint32_t now;
 static uint8_t *dma;
 static Vision_Recv_s vision;
@@ -59,6 +60,7 @@ static void cycle(uint8_t neutral)
 }
 int main(int argc,char **argv)
 {
+    huart5.hdmarx=&huart5_dma; huart9.hdmarx=&huart9_dma;
     RobotSafetyInit(); RobotCMDInit();
     feedback=PubRegister("gimbal_feed",sizeof(Gimbal_Upload_Data_s));
     gimbal=SubRegister("gimbal_cmd",sizeof(Gimbal_Ctrl_Cmd_s));

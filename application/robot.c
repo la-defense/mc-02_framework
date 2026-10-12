@@ -1,4 +1,5 @@
 #include "bsp_init.h"
+#include "main.h"
 #include "robot.h"
 #include "robot_def.h"
 #include "robot_task.h"
@@ -8,6 +9,8 @@
 #include "master_process.h"
 #include "bsp_param.h"
 #include "imu_heater.h"
+#include "init_diagnostic.h"
+#include "bsp_safety.h"
 #if MC02_BENCH_RC_DIAGNOSTICS
 #include "remote_bench.h"
 #endif
@@ -50,12 +53,14 @@ static uint8_t RobotParamFlashOperationEnd(uint8_t success)
 #endif
 
 
-void RobotInit()
+uint8_t RobotInit(void)
 {  
     // 关闭中断,防止在初始化过程中发生中断
     // 请不要在初始化过程中使用中断和延时函数！
     // 若必须,则只允许使用DWT_Delay()
+    const uint32_t previous_primask = __get_PRIMASK();
     __disable_irq();
+    InitDiagnosticBegin(INIT_STAGE_BSP);
     
     BSPInit();
     RobotSafetyInit();
@@ -66,34 +71,74 @@ void RobotInit()
     };
     ParamSetLongOperationGuard(&param_guard);
 
+#define ROBOT_INIT_CHECK(condition, stage, module, reason, resource)              \
+    do                                                                            \
+    {                                                                             \
+        if (!(condition))                                                         \
+        {                                                                         \
+            if (!InitDiagnosticIsFailed())                                        \
+                InitDiagnosticReportFailure((stage), (module), (reason), (resource)); \
+            goto init_failed;                                                    \
+        }                                                                         \
+    } while (0)
+
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
-    RobotCMDInit();
-    GimbalInit();
-    ShootInit();
+    InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
+    ROBOT_INIT_CHECK(RobotCMDInit(), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                     INIT_FAILURE_DEPENDENCY, 1u);
+    ROBOT_INIT_CHECK(GimbalInit(), INIT_STAGE_APPLICATION, INIT_MODULE_GIMBAL,
+                     INIT_FAILURE_DEPENDENCY, 0u);
+    ROBOT_INIT_CHECK(ShootInit(), INIT_STAGE_APPLICATION, INIT_MODULE_SHOOTER,
+                     INIT_FAILURE_DEPENDENCY, 0u);
 #endif
 
 #if defined(MC02_PROFILE_BENCH_SAFE)
-    VisionInit(&huart9);
+    InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
+    ROBOT_INIT_CHECK(VisionInit(&huart9) != NULL, INIT_STAGE_APPLICATION, INIT_MODULE_VISION,
+                     INIT_FAILURE_DEPENDENCY, 0u);
 #if MC02_BENCH_RC_DIAGNOSTICS
-    RemoteBenchInit(&huart5);
+    ROBOT_INIT_CHECK(RemoteBenchInit(&huart5), INIT_STAGE_APPLICATION, INIT_MODULE_REMOTE,
+                     INIT_FAILURE_DEPENDENCY, 0u);
 #endif
 #endif
 
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
-    ChassisInit();
+    InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
+    ROBOT_INIT_CHECK(ChassisInit(), INIT_STAGE_APPLICATION, INIT_MODULE_CHASSIS,
+                     INIT_FAILURE_DEPENDENCY, 0u);
 #endif
 
-    OSTaskInit(); // 创建基础任务
+    InitDiagnosticSetStage(INIT_STAGE_TASKS);
+    ROBOT_INIT_CHECK(OSTaskInit(), INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                     INIT_FAILURE_TASK_CREATE, 0u);
 
     // 所有任务创建完成后再启动IWDG, 由Daemon任务中的TaskMonitorTick统一喂狗
     BSP_WatchdogInit(200);
 
-    // 初始化完成,开启中断
-    __enable_irq();
+    InitDiagnosticSetStage(INIT_STAGE_FREERTOS);
+#undef ROBOT_INIT_CHECK
+    __set_PRIMASK(previous_primask);
+    return 1u;
+
+init_failed:
+#undef ROBOT_INIT_CHECK
+    RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+    RobotSafetyRequestDisable();
+    BSP_SafetyStartupLatchOutputsOff();
+    __set_PRIMASK(previous_primask);
+    return 0u;
 }
 
 void RobotTask()
 {
+    if (InitDiagnosticIsFailed())
+    {
+        InitDiagnosticHeartbeat();
+        RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+        RobotSafetyRequestDisable();
+        RobotSafetyUpdate();
+        return;
+    }
 #if defined(MC02_PROFILE_BENCH_SAFE)
 #if MC02_BENCH_RC_DIAGNOSTICS
     RemoteBenchTask();

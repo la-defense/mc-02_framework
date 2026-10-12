@@ -54,6 +54,7 @@ typedef struct
  * @return SPIInstance* 返回一个spi实例指针,之后通过该指针操作spi外设
  */
 SPIInstance *SPIRegister(SPI_Init_Config_s *conf);
+uint8_t SPIUnregister(SPIInstance *instance);
 
 /**
  * @brief 通过spi向对应从机发送数据

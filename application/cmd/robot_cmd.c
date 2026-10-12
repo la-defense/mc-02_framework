@@ -78,11 +78,12 @@ static Shoot_Upload_Data_s shoot_fetch_data; // 从发射获取的反馈信息
 
 BMI088Instance *bmi088_test; // 云台IMU
 BMI088_Data_t bmi088_data;
-void RobotCMDInit()
+uint8_t RobotCMDInit(void)
 {
     RemoteSafetyGesturesInit(&remote_gestures);
     remote_initialized = (uint8_t)(RemoteControlInit(&huart5) != NULL);
-    VisionInit(&huart9); // 正式链路为板载 USB CDC 虚拟串口
+    if (!remote_initialized || VisionInit(&huart9) == NULL)
+        return 0u;
 
     gimbal_cmd_pub = PubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
     gimbal_feed_sub = SubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
@@ -104,6 +105,8 @@ void RobotCMDInit()
         .send_data_len = sizeof(Chassis_Ctrl_Cmd_s),
     };
     cmd_can_comm = CANCommInit(&comm_conf);
+    if (cmd_can_comm == NULL)
+        return 0u;
 #endif // GIMBAL_BOARD
     gimbal_cmd_send.pitch = 0;
 
@@ -118,6 +121,14 @@ void RobotCMDInit()
     shoot_cmd_send.load_mode = LOAD_STOP;
     previous_vision_active = 0u;
     manual_reference_ready = 0u;
+    if (gimbal_cmd_pub == NULL || gimbal_feed_sub == NULL || shoot_cmd_pub == NULL ||
+        shoot_feed_sub == NULL)
+        return 0u;
+#ifdef ONE_BOARD
+    if (chassis_cmd_pub == NULL || chassis_feed_sub == NULL)
+        return 0u;
+#endif
+    return 1u;
 }
 
 /**

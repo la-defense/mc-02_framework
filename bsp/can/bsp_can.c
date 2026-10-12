@@ -10,7 +10,12 @@
 // 在CAN产生接收中断会遍历数组,选出hcan和rxid与发生中断的实例相同的那个,调用其回调函数
 // @todo: 后续为每个CAN总线单独添加一个can_instance指针数组,提高回调查找的性能
 static CANInstance *can_instance[CAN_MX_REGISTER_CNT] = {NULL};
-static uint8_t idx; // 全局CAN实例索引,每次有新的模块注册会自增
+static uint8_t idx;
+static uint8_t can_service_started;
+#ifdef BXCAN
+static uint8_t can1_filter_idx;
+static uint8_t can2_filter_idx = 14u;
+#endif
 
 /* ---------------- 总线状态与接收查表(2026-09 CAN 重构) ----------------
    - 每条总线一份统计: 发送丢帧/完成、BusOff、错误计数;
@@ -255,95 +260,109 @@ static void CANLogRateLimited(CANBusState_t *bus, const char *tag, uint32_t valu
  *
  * @param _instance can instance owned by specific module
  */
-static void CANAddFilter(CANInstance *_instance)
+static uint8_t CANAddFilter(CANInstance *_instance)
 {
-
+    if (_instance == NULL || _instance->can_handle == NULL || _instance->rx_id > 0x7ffu)
+        return 0u;
 #ifdef FDCAN
-	/* 滤镜下标改为按总线存放(文件作用域), 这样自测结束后可以整体重装滤镜 */
-	uint8_t bus_idx = CANBusIndexFromHandle(_instance->can_handle);
-	if (bus_idx == 0xFFu)
-	{
-		LOGERROR("[bsp_can] 未知的 CAN 句柄, 无法添加滤镜");
-		return;
-	}
-	/* 检查是否超出过滤器设定数量上限(启动期配置错误: 打印后跳过, 不再死循环) */
-	if (can_filter_idx[bus_idx] >= (uint8_t)CANFilterLimit(bus_idx))
-	{
-		LOGERROR("[bsp_can] 总线 %u 滤镜数量超限(>=%lu), 请减少该总线上的注册设备",
-		         (unsigned)(bus_idx + 1), (unsigned long)CANFilterLimit(bus_idx));
-		return;
-	}
-	uint8_t *filter_idx_p = &can_filter_idx[bus_idx];
-
-	FDCAN_FilterTypeDef fdcan_filter_conf;
-	fdcan_filter_conf.FilterIndex=(*filter_idx_p)++;
-	//使用单个ID模式
-	fdcan_filter_conf.FilterType=FDCAN_FILTER_DUAL;
-	fdcan_filter_conf.FilterConfig=(_instance->tx_id & 1) ? FDCAN_FILTER_TO_RXFIFO0 : FDCAN_FILTER_TO_RXFIFO1;//奇数id的模块会被分配到FIFO0,偶数id的模块会被分配到FIFO1
-	fdcan_filter_conf.FilterID1=_instance->rx_id;
-	fdcan_filter_conf.FilterID2=_instance->rx_id;
-	fdcan_filter_conf.IdType=FDCAN_STANDARD_ID;
-	fdcan_filter_conf.IsCalibrationMsg=0;
-	//fdcan_filter_conf.RxBufferIndex=0;
-
-	HAL_FDCAN_ConfigFilter(_instance->can_handle, &fdcan_filter_conf);
-
+    uint8_t bus_idx = CANBusIndexFromHandle(_instance->can_handle);
+    if (bus_idx == 0xFFu || can_filter_idx[bus_idx] >= CANFilterLimit(bus_idx))
+        return 0u;
+    FDCAN_FilterTypeDef filter = {0};
+    filter.FilterIndex = can_filter_idx[bus_idx];
+    filter.FilterType = FDCAN_FILTER_DUAL;
+    filter.FilterConfig = (_instance->tx_id & 1u) ? FDCAN_FILTER_TO_RXFIFO0 : FDCAN_FILTER_TO_RXFIFO1;
+    filter.FilterID1 = _instance->rx_id;
+    filter.FilterID2 = _instance->rx_id;
+    filter.IdType = FDCAN_STANDARD_ID;
+    filter.IsCalibrationMsg = 0u;
+    if (HAL_FDCAN_ConfigFilter(_instance->can_handle, &filter) != HAL_OK)
+        return 0u;
+    can_filter_idx[bus_idx]++;
 #else
-	CAN_FilterTypeDef can_filter_conf;
-	static uint8_t can1_filter_idx = 0, can2_filter_idx = 14; // 0-13给can1用,14-27给can2用
-
-	can_filter_conf.FilterMode = CAN_FILTERMODE_IDLIST;                                                       // 使用id list模式,即只有将rxid添加到过滤器中才会接收到,其他报文会被过滤
-	can_filter_conf.FilterScale = CAN_FILTERSCALE_16BIT;                                                      // 使用16位id模式,即只有低16位有效
-	can_filter_conf.FilterFIFOAssignment = (_instance->tx_id & 1) ? CAN_RX_FIFO0 : CAN_RX_FIFO1;              // 奇数id的模块会被分配到FIFO0,偶数id的模块会被分配到FIFO1
-	can_filter_conf.SlaveStartFilterBank = 14;                                                                // 从第14个过滤器开始配置从机过滤器(在STM32的BxCAN控制器中CAN2是CAN1的从机)
-	can_filter_conf.FilterIdLow = _instance->rx_id << 5;                                                      // 过滤器寄存器的低16位,因为使用STDID,所以只有低11位有效,高5位要填0
-	can_filter_conf.FilterBank = _instance->can_handle == &hcan1 ? (can1_filter_idx++) : (can2_filter_idx++); // 根据can_handle判断是CAN1还是CAN2,然后自增
-	can_filter_conf.FilterActivation = CAN_FILTER_ENABLE;                                                     // 启用过滤器
-
-	HAL_CAN_ConfigFilter(_instance->can_handle, &can_filter_conf);
+    CAN_FilterTypeDef filter = {0};
+    uint8_t *filter_idx = NULL;
+    if (_instance->can_handle == &hcan1)
+        filter_idx = &can1_filter_idx;
+    else if (_instance->can_handle == &hcan2)
+        filter_idx = &can2_filter_idx;
+    if (filter_idx == NULL || *filter_idx >= 28u)
+        return 0u;
+    filter.FilterMode = CAN_FILTERMODE_IDLIST;
+    filter.FilterScale = CAN_FILTERSCALE_16BIT;
+    filter.FilterFIFOAssignment = (_instance->tx_id & 1u) ? CAN_RX_FIFO0 : CAN_RX_FIFO1;
+    filter.SlaveStartFilterBank = 14u;
+    filter.FilterIdLow = (uint16_t)(_instance->rx_id << 5);
+    filter.FilterBank = *filter_idx;
+    filter.FilterActivation = CAN_FILTER_ENABLE;
+    if (HAL_CAN_ConfigFilter(_instance->can_handle, &filter) != HAL_OK)
+        return 0u;
+    (*filter_idx)++;
 #endif
-
+    return 1u;
 }
 
-/**
- * @brief 在第一个CAN实例初始化的时候会自动调用此函数,启动CAN服务
- *
- * @note 此函数会启动CAN1并开启中断
- *       FDCAN的情况下，我们采用FIFO接收方式（而不是buffer），FIFO和buffer还有queue接收方式请自行查阅H723手册
- *       FDCAN比bxCAN多了一个全局过滤器，这里配置为全部拒绝，只接受指定ID。
- *       
- */
-/* 单条总线的通用配置: 全局滤镜(拒收未匹配) + FIFO 溢出策略 + 启动 + 开接收中断
-   (自测切换模式后也需要重新调用它) */
-static void CANBusConfigure(FDCAN_HandleTypeDef *h)
+static uint8_t CANBusConfigure(FDCAN_HandleTypeDef *h)
 {
-	HAL_FDCAN_ConfigRxFifoOverwrite(h, FDCAN_RX_FIFO0, FDCAN_RX_FIFO_OVERWRITE);
-	HAL_FDCAN_ConfigRxFifoOverwrite(h, FDCAN_RX_FIFO1, FDCAN_RX_FIFO_OVERWRITE);
-	HAL_FDCAN_ConfigGlobalFilter(h, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
-	can_diag_start_ret = (uint32_t)HAL_FDCAN_Start(h);
-	can_diag_state = (uint32_t)h->State;
-	can_diag_act_ret = (uint32_t)HAL_FDCAN_ActivateNotification(h, FDCAN_RX_ACTIVE_ITS, 0);
-	can_diag_ie = h->Instance->IE;
-	can_diag_ile = h->Instance->ILE;
-	can_diag_ils = h->Instance->ILS;
-	/* TX 完成/队列空中断默认不开: 实测每秒会进 2 万多次中断, 信息与 tx_ok 重复 */
+    if (h == NULL ||
+        HAL_FDCAN_ConfigRxFifoOverwrite(h, FDCAN_RX_FIFO0, FDCAN_RX_FIFO_OVERWRITE) != HAL_OK ||
+        HAL_FDCAN_ConfigRxFifoOverwrite(h, FDCAN_RX_FIFO1, FDCAN_RX_FIFO_OVERWRITE) != HAL_OK ||
+        HAL_FDCAN_ConfigGlobalFilter(h, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE) != HAL_OK)
+        return 0u;
+    can_diag_start_ret = (uint32_t)HAL_FDCAN_Start(h);
+    can_diag_state = (uint32_t)h->State;
+    if (can_diag_start_ret != (uint32_t)HAL_OK)
+        return 0u;
+    can_diag_act_ret = (uint32_t)HAL_FDCAN_ActivateNotification(h, FDCAN_RX_ACTIVE_ITS, 0u);
+    can_diag_ie = h->Instance->IE;
+    can_diag_ile = h->Instance->ILE;
+    can_diag_ils = h->Instance->ILS;
+    if (can_diag_act_ret != (uint32_t)HAL_OK)
+    {
+        (void)HAL_FDCAN_Stop(h);
+        return 0u;
+    }
+    return 1u;
 }
 
-void CANServiceInit()
+static void CANServiceStop(void)
 {
 #ifdef FDCAN
-	for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
-		CANBusConfigure(can_bus[i].handle);
-
+    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+        (void)HAL_FDCAN_Stop(can_bus[i].handle);
+    memset(can_filter_idx, 0, sizeof(can_filter_idx));
 #else
-	HAL_CAN_Start(&hcan1);
-	HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
-	HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO1_MSG_PENDING);
-	HAL_CAN_Start(&hcan2);
-	HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO0_MSG_PENDING);
-	HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO1_MSG_PENDING);
+    (void)HAL_CAN_Stop(&hcan1);
+    (void)HAL_CAN_Stop(&hcan2);
+    can1_filter_idx = 0u;
+    can2_filter_idx = 14u;
 #endif
+    can_service_started = 0u;
+}
 
+static uint8_t CANServiceInit(void)
+{
+#ifdef FDCAN
+    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+    {
+        if (!CANBusConfigure(can_bus[i].handle))
+        {
+            CANServiceStop();
+            return 0u;
+        }
+    }
+#else
+    if (HAL_CAN_Start(&hcan1) != HAL_OK ||
+        HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING) != HAL_OK ||
+        HAL_CAN_Start(&hcan2) != HAL_OK ||
+        HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING) != HAL_OK)
+    {
+        CANServiceStop();
+        return 0u;
+    }
+#endif
+    can_service_started = 1u;
+    return 1u;
 }
 
 /* ----------------------- two extern callable function -----------------------*/
@@ -400,7 +419,8 @@ uint8_t CANForceMode(FDCAN_HandleTypeDef *h, uint32_t mode, uint8_t accept_all)
         return 0u;
 
     (void)accept_all; /* 预留: 需要"不过滤接收全部"时可在此切换 */
-    CANBusConfigure(h);
+    if (!CANBusConfigure(h))
+        return 0u;
     if ((h->Instance->CCCR & FDCAN_CCCR_INIT) != 0u) /* Start 没生效, 再对齐一次 */
     {
         h->State = HAL_FDCAN_STATE_READY;
@@ -577,69 +597,72 @@ uint8_t CANRunLoopbackSelfTest(void)
 
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
-    if (!idx)
+    if (config == NULL || config->can_handle == NULL ||
+        config->can_module_callback == NULL || config->tx_id > 0x7ffu || config->rx_id > 0x7ffu)
+        return NULL;
+#ifdef FDCAN
+    uint8_t bus_idx = CANBusIndexFromHandle(config->can_handle);
+    if (bus_idx == 0xFFu)
+        return NULL;
+    uint16_t lookup_idx = (uint16_t)(config->rx_id & (CAN_RX_LOOKUP_SIZE - 1u));
+#else
+    if (config->can_handle != &hcan1 && config->can_handle != &hcan2)
+        return NULL;
+#endif
+    if (idx >= CAN_MX_REGISTER_CNT)
+        return NULL;
+    for (uint8_t i = 0u; i < idx; ++i)
     {
-        CANServiceInit(); // 第一次注册,先进行硬件初始化
-        LOGINFO("[bsp_can] CAN Service Init");
-    }
-    if (idx >= CAN_MX_REGISTER_CNT) // 超过最大实例数
-    {
-        while (1)
-        {
-        	/* 这类错误属于"启动期配置错误", 保持不继续注册, 但限速打印 + 让出 CPU,
-        	   避免刷爆日志/把整机拖死(排查完应修正注册数量) */
-        	LOGERROR("[bsp_can] CAN instance exceeded MAX num (%d), 请减少注册数量或分摊总线", CAN_MX_REGISTER_CNT);
-        	osDelay(1000);
-        }
-    }
-    for (size_t i = 0; i < idx; i++)
-    { // 重复注册 | id重复
-        if (can_instance[i]->rx_id == config->rx_id && can_instance[i]->can_handle == config->can_handle)
-        {
-            while (1)
-            {
-            	LOGERROR("[bsp_can] CAN rx_id 冲突: rx_id=%lu 已在同一条总线上注册, 请检查设备 ID 配置",
-            	         (unsigned long)config->rx_id);
-            	osDelay(1000);
-            }
-        }
+        if (can_instance[i] != NULL && can_instance[i]->can_handle == config->can_handle &&
+            can_instance[i]->rx_id == config->rx_id)
+            return NULL;
     }
 
-    CANInstance *instance = (CANInstance *)malloc(sizeof(CANInstance)); // 分配空间
-    memset(instance, 0, sizeof(CANInstance));                           // 分配的空间未必是0,所以要先清空
-    // 进行发送报文的配置
+    CANInstance *instance = (CANInstance *)malloc(sizeof(*instance));
+    if (instance == NULL)
+        return NULL;
+    memset(instance, 0, sizeof(*instance));
 #ifdef FDCAN
-    instance->txconf.Identifier = config->tx_id; 				// 发送id
-    instance->txconf.IdType = FDCAN_STANDARD_ID;  				// 使用标准id,扩展id则使用CAN_ID_EXT(目前没有需求)
-    instance->txconf.TxFrameType = FDCAN_DATA_FRAME,    		// 发送数据帧
-    instance->txconf.DataLength = FDCAN_DLC_BYTES_8,    		// 数据长度为8字节
-	instance->txconf.ErrorStateIndicator = FDCAN_ESI_ACTIVE,	// 兼容CAN2.0,错误状态指示器设为主动
-	instance->txconf.BitRateSwitch = FDCAN_BRS_OFF,         	// 兼容CAN2.0禁用位速率切换
-	instance->txconf.FDFormat = FDCAN_CLASSIC_CAN,          	// 使用经典CAN格式
-	instance->txconf.TxEventFifoControl = FDCAN_NO_TX_EVENTS,	// 不需要，禁用事件FIFO
-	instance->txconf.MessageMarker = 0;                     	// 不使用消息标记
+    instance->txconf.Identifier = config->tx_id;
+    instance->txconf.IdType = FDCAN_STANDARD_ID;
+    instance->txconf.TxFrameType = FDCAN_DATA_FRAME;
+    instance->txconf.DataLength = FDCAN_DLC_BYTES_8;
+    instance->txconf.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    instance->txconf.BitRateSwitch = FDCAN_BRS_OFF;
+    instance->txconf.FDFormat = FDCAN_CLASSIC_CAN;
+    instance->txconf.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    instance->txconf.MessageMarker = 0u;
 #else
-    instance->txconf.StdId = config->tx_id; // 发送id
-    instance->txconf.IDE = CAN_ID_STD;      // 使用标准id,扩展id则使用CAN_ID_EXT(目前没有需求)
-    instance->txconf.RTR = CAN_RTR_DATA;    // 发送数据帧
-    instance->txconf.DLC = 0x08;            // 默认发送长度为8
+    instance->txconf.StdId = config->tx_id;
+    instance->txconf.IDE = CAN_ID_STD;
+    instance->txconf.RTR = CAN_RTR_DATA;
+    instance->txconf.DLC = 0x08u;
 #endif
-    // 设置回调函数和接收发送id
     instance->can_handle = config->can_handle;
-    instance->tx_id = config->tx_id; // 好像没用,可以删掉
+    instance->tx_id = config->tx_id;
     instance->rx_id = config->rx_id;
     instance->can_module_callback = config->can_module_callback;
     instance->id = config->id;
 
-    CANAddFilter(instance);         // 添加CAN过滤器规则
-    can_instance[idx++] = instance; // 将实例保存到can_instance中
+    uint8_t started_here = (uint8_t)!can_service_started;
+    if (started_here && !CANServiceInit())
+    {
+        free(instance);
+        return NULL;
+    }
+    if (!CANAddFilter(instance))
+    {
+        if (started_here)
+            CANServiceStop();
+        free(instance);
+        return NULL;
+    }
 
-    /* 建立 O(1) 接收派发表: rx_lookup[总线][rx_id & 0x1FF] */
-    uint8_t bus_idx = CANBusIndexFromHandle(config->can_handle);
-    if (bus_idx != 0xFFu)
-        rx_lookup[bus_idx][config->rx_id & (CAN_RX_LOOKUP_SIZE - 1u)] = instance;
-
-    return instance; // 返回can实例指针
+    can_instance[idx++] = instance;
+#ifdef FDCAN
+    rx_lookup[bus_idx][lookup_idx] = instance;
+#endif
+    return instance;
 }
 
 /* @todo 目前似乎封装过度,应该添加一个指向tx_buff的指针,tx_buff不应该由CAN instance保存 */

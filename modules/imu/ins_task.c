@@ -32,6 +32,7 @@ static INS_t INS;
 static IMU_Param_t IMU_Param;
 static BMI088Instance *bmi088_ins;
 static BMI088_Data_t bmi088_data;
+static uint8_t ins_init_result;
 
 /* Fixed-width symbols used by the bounded, read-only SWD diagnostic tool. */
 volatile uint32_t bmi088_sample_sequence_diag = 0u;
@@ -122,10 +123,9 @@ static void InitQuaternion(float *init_q4)
 
 attitude_t *INS_Init(void)
 {
-    if (!INS.init)
-        INS.init = 1;
-    else
-        return (attitude_t *)&INS.Gyro;
+    if (ins_init_result != 0u)
+        return (ins_init_result == 3u) ? NULL : (attitude_t *)&INS.Gyro;
+    INS.init = 1u;
     /* Initialize heater PWM at zero before sensor calibration or Flash work. */
     IMUHeaterForceOff();
     IMUHeaterInit();
@@ -164,6 +164,7 @@ attitude_t *INS_Init(void)
         DWT_GetDeltaT(&INS_DWT_Count);
         LOGERROR("[INS] BMI088 unavailable; remaining in safe sensor-invalid mode (error=0x%02X retries=%u)",
                  (unsigned)bmi088_init_error, (unsigned)bmi088_init_retry_count);
+        ins_init_result = 1u; /* Keep the established MC02-0042 sensor-invalid downgrade. */
         return (attitude_t *)&INS.Gyro;
     }
     IMU_Param.scale[X] = 1;
@@ -176,10 +177,18 @@ attitude_t *INS_Init(void)
 
     float init_quaternion[4] = {0};
     InitQuaternion(init_quaternion);
-    IMU_QuaternionEKF_Init(init_quaternion, 10, 0.001, 1000000, 1, 0);
+    if (!IMU_QuaternionEKF_Init(init_quaternion, 10, 0.001, 1000000, 1, 0))
+    {
+        IMUHeaterForceOff();
+        RobotSafetySetImuValid(0u);
+        RobotSafetySetCalibValid(0u);
+        ins_init_result = 3u;
+        return NULL;
+    }
     // noise of accel is relatively big and of high freq,thus lpf is used
     INS.AccelLPF = 0.0085;
     DWT_GetDeltaT(&INS_DWT_Count);
+    ins_init_result = 2u;
     return (attitude_t *)&INS.Gyro; // @todo: 这里偷懒了,不要这样做! 修改INT_t结构体可能会导致异常,待修复.
 }
 
@@ -187,6 +196,11 @@ attitude_t *INS_GetAttitude(void)
 {
     if (!INS.init)
         return NULL;
+    return (attitude_t *)&INS.Gyro;
+}
+
+attitude_t *INS_GetStorage(void)
+{
     return (attitude_t *)&INS.Gyro;
 }
 

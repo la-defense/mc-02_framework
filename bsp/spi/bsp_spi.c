@@ -130,10 +130,19 @@ static uint8_t SPIBlockingContextCanWait(void)
 
 SPIInstance *SPIRegister(SPI_Init_Config_s *conf)
 {
-    if (idx >= MX_SPI_BUS_SLAVE_CNT) // 超过最大实例数
-        while (1)
-            ;
+    if (conf == NULL || conf->spi_handle == NULL || conf->GPIOx == NULL || conf->cs_pin == 0u ||
+        idx >= MX_SPI_BUS_SLAVE_CNT ||
+        (conf->spi_work_mode != SPI_DMA_MODE && conf->spi_work_mode != SPI_IT_MODE &&
+         conf->spi_work_mode != SPI_BLOCK_MODE))
+        return NULL;
+    if (conf->spi_handle->Instance != SPI1 && conf->spi_handle->Instance != SPI2)
+        return NULL;
+    for (uint8_t i = 0u; i < idx; ++i)
+        if (spi_instance[i]->spi_handle == conf->spi_handle && spi_instance[i]->cs_pin == conf->cs_pin)
+            return NULL;
     SPIInstance *instance = (SPIInstance *)malloc(sizeof(SPIInstance));
+    if (instance == NULL)
+        return NULL;
     memset(instance, 0, sizeof(SPIInstance));
 
     instance->spi_handle = conf->spi_handle;
@@ -150,13 +159,26 @@ SPIInstance *SPIRegister(SPI_Init_Config_s *conf)
     {
         instance->cs_pin_state = &SPIDeviceOnGoing[1];
     }
-    else
-    {
-        while (1)
-            ;
-    }
     spi_instance[idx++] = instance;
     return instance;
+}
+
+uint8_t SPIUnregister(SPIInstance *instance)
+{
+    if (instance == NULL)
+        return 0u;
+    for (uint8_t i = 0u; i < idx; ++i)
+    {
+        if (spi_instance[i] != instance)
+            continue;
+        HAL_GPIO_WritePin(instance->GPIOx, instance->cs_pin, GPIO_PIN_SET);
+        for (uint8_t j = (uint8_t)(i + 1u); j < idx; ++j)
+            spi_instance[j - 1u] = spi_instance[j];
+        spi_instance[--idx] = NULL;
+        free(instance);
+        return 1u;
+    }
+    return 0u;
 }
 
 void SPITransmit(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len)

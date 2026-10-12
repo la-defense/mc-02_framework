@@ -22,5 +22,6 @@ typedef struct
     void *id;
 } PWM_Init_Config_s;
 PWMInstance *PWMRegister(PWM_Init_Config_s *config);
+uint8_t PWMUnregister(PWMInstance *instance);
 
 #endif

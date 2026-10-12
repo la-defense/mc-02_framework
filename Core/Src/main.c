@@ -35,6 +35,9 @@
 /* USER CODE BEGIN Includes */
 #include "robot.h"
 #include "bsp_log.h"
+#include "bsp_watchdog.h"
+#include "init_diagnostic.h"
+#include "robot_safety.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -65,13 +68,24 @@ uint8_t  W25Qxx_ReadBuffer[W25Qxx_NumByteToTest];		//	读数据数组
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-void MX_FREERTOS_Init(void);
+uint8_t MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static __attribute__((noreturn)) void StartupDiagnosticLoop(void)
+{
+  for (;;)
+  {
+    BSP_SafetyStartupLatchOutputsOff();
+    BSP_WatchdogFeed();
+    InitDiagnosticHeartbeat();
+    for (volatile uint32_t spin = 0u; spin < 200000u; ++spin)
+      __NOP();
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -126,21 +140,37 @@ int main(void)
   MX_UART9_Init();
   /* PB10/PB11 released from I2C2: used as LCD_BLK/LCD_RES */
   /* USER CODE BEGIN 2 */
-  RobotInit(); // 唯一的初始化函数
+  if (!RobotInit())
+    StartupDiagnosticLoop(); // 唯一的初始化函数
   LOGINFO("[main] SystemInit() and RobotInit() done");
   /* USER CODE END 2 */
 
   /* Call init function for freertos objects (in freertos.c) */
-  MX_FREERTOS_Init();
+  if (!MX_FREERTOS_Init())
+  {
+    InitDiagnosticReportFailure(INIT_STAGE_FREERTOS, INIT_MODULE_FREERTOS,
+                                INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_DEFAULT);
+    RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+    RobotSafetyRequestDisable();
+    StartupDiagnosticLoop();
+  }
 
   /* Start scheduler */
-  osKernelStart();
+  if (osKernelStart() != osOK)
+  {
+    InitDiagnosticReportFailure(INIT_STAGE_FREERTOS, INIT_MODULE_FREERTOS,
+                                INIT_FAILURE_SCHEDULER_RETURNED, 0u);
+    RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+    RobotSafetyRequestDisable();
+    StartupDiagnosticLoop();
+  }
 
   /* We should never get here as control is now taken by the scheduler */
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    StartupDiagnosticLoop();
 //	  vofa_start();
 
     /* USER CODE END WHILE */

@@ -186,20 +186,30 @@ static void RefereeLostCallback(void *arg)
 /* 裁判系统通信初始化 */
 referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle)
 {
-	USART_Init_Config_s conf;
-	conf.module_callback = RefereeRxCallback;
-	conf.usart_handle = referee_usart_handle;
-	conf.recv_buff_size = RE_RX_BUFFER_SIZE; // mx 255(u8)
-	referee_usart_instance = USARTRegister(&conf);
+    if (referee_usart_handle == NULL || referee_usart_instance != NULL || referee_daemon != NULL)
+        return NULL;
 
-	Daemon_Init_Config_s daemon_conf = {
-		.callback = RefereeLostCallback,
-		.owner_id = referee_usart_instance,
-		.reload_count = 30, // 0.3s没有收到数据,则认为丢失,重启串口接收
-	};
-	referee_daemon = DaemonRegister(&daemon_conf);
+    Daemon_Init_Config_s daemon_conf = {
+        .callback = RefereeLostCallback,
+        .owner_id = &referee_info,
+        .reload_count = 30,
+    };
+    referee_daemon = DaemonRegister(&daemon_conf);
+    if (referee_daemon == NULL)
+        return NULL;
 
-	return &referee_info;
+    USART_Init_Config_s conf = {0};
+    conf.module_callback = RefereeRxCallback;
+    conf.usart_handle = referee_usart_handle;
+    conf.recv_buff_size = RE_RX_BUFFER_SIZE;
+    referee_usart_instance = USARTRegister(&conf);
+    if (referee_usart_instance == NULL)
+    {
+        (void)DaemonUnregister(referee_daemon);
+        referee_daemon = NULL;
+        return NULL;
+    }
+    return &referee_info;
 }
 
 /**

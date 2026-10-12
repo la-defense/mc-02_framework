@@ -23,7 +23,7 @@ static Shoot_Upload_Data_s shoot_feedback_data; // 来自cmd的发射控制信�
 // dwt定时,计算冷却用
 static float hibernate_time = 0, dead_time = 0;
 
-void ShootInit()
+uint8_t ShootInit(void)
 {
     // 左摩擦轮
     Motor_Init_Config_s friction_config = {
@@ -109,6 +109,8 @@ void ShootInit()
 
     shoot_pub = PubRegister("shoot_feed", sizeof(Shoot_Upload_Data_s));
     shoot_sub = SubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
+    return (uint8_t)(friction_l != NULL && friction_r != NULL && loader != NULL &&
+                     shoot_config != NULL && shoot_pub != NULL && shoot_sub != NULL);
 }
 
 /* 机器人发射机构控制核心任务 */

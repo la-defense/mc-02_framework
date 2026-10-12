@@ -1,0 +1,3 @@
+#ifndef INIT_RESOURCE_TEST_BSP_DWT_H
+#define INIT_RESOURCE_TEST_BSP_DWT_H
+#endif

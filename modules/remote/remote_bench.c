@@ -7,10 +7,10 @@
 #if MC02_BENCH_RC_DIAGNOSTICS
 static RemoteControlSnapshot_s snapshot;
 static RemoteSafetyGestures_s gestures;
-void RemoteBenchInit(UART_HandleTypeDef *uart)
+uint8_t RemoteBenchInit(UART_HandleTypeDef *uart)
 {
     RemoteSafetyGesturesInit(&gestures);
-    (void)RemoteControlInit(uart);
+    return (uint8_t)(RemoteControlInit(uart) != NULL);
 }
 void RemoteBenchTask(void)
 {

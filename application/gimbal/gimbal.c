@@ -15,9 +15,9 @@ static Gimbal_Upload_Data_s gimbal_feedback_data; // 回传给cmd的云台状态
 static Gimbal_Ctrl_Cmd_s gimbal_cmd_recv;         // 来自cmd的控制信息
 
 static BMI088Instance *bmi088; // 云台IMU
-void GimbalInit()
+uint8_t GimbalInit(void)
 {   
-    gimba_IMU_data = INS_Init(); // IMU先初始化,获取姿态数据指针赋给yaw电机的其他数据来源
+    gimba_IMU_data = INS_GetStorage(); // INS 由调度器启动后的专属任务初始化
     // YAW
     Motor_Init_Config_s yaw_config = {
         .can_init_config = {
@@ -97,6 +97,8 @@ void GimbalInit()
 
     gimbal_pub = PubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
     gimbal_sub = SubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
+    return (uint8_t)(gimba_IMU_data != NULL && yaw_motor != NULL && pitch_motor != NULL &&
+                     gimbal_pub != NULL && gimbal_sub != NULL);
 }
 
 /* 机器人云台控制核心任务,后续考虑只保留IMU控制,不再需要电机的反馈 */

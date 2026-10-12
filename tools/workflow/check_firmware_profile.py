@@ -13,6 +13,10 @@ ACTUATORS = {
 }
 CONSUMERS = {"CANProcessRx", "USARTProcessRx", "VCPProcessRx", "MotorControlTask"}
 ROBOT_INITIALIZERS = {"ChassisInit", "GimbalInit", "ShootInit"}
+STARTUP_DIAGNOSTICS = {
+    "RobotInit", "InitDiagnosticReportFailure", "InitDiagnosticHeartbeat",
+    "init_diagnostic_snapshot",
+}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -31,6 +35,7 @@ def main():
     missing = CONSUMERS - functions
     if "mc02_build_profile" not in symbols:
         missing.add("mc02_build_profile")
+    missing |= STARTUP_DIAGNOSTICS - symbols
     if args.profile == "robot":
         missing |= ROBOT_INITIALIZERS - functions
     if args.rc_diagnostics:

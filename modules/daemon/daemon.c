@@ -10,7 +10,12 @@ static uint8_t idx; // 用于记录当前的daemon instance数量,配合回调�
 
 DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
 {
+    if (config == NULL || idx >= DAEMON_MX_CNT)
+        return NULL;
+
     DaemonInstance *instance = (DaemonInstance *)malloc(sizeof(DaemonInstance));
+    if (instance == NULL)
+        return NULL;
     memset(instance, 0, sizeof(DaemonInstance));
 
     instance->owner_id = config->owner_id;
@@ -18,20 +23,41 @@ DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
     instance->callback = config->callback;
     instance->temp_count = config->init_count == 0 ? 100 : config->init_count; // 默认值为100,初始计数
 
-    daemon_instances[idx++] = instance;
+    /* Publish only after the instance is fully initialized. */
+    daemon_instances[idx] = instance;
+    idx++;
     return instance;
+}
+
+uint8_t DaemonUnregister(DaemonInstance *instance)
+{
+    if (instance == NULL)
+        return 0u;
+    for (uint8_t i = 0u; i < idx; ++i)
+    {
+        if (daemon_instances[i] != instance)
+            continue;
+        for (uint8_t j = (uint8_t)(i + 1u); j < idx; ++j)
+            daemon_instances[j - 1u] = daemon_instances[j];
+        daemon_instances[--idx] = NULL;
+        free(instance);
+        return 1u;
+    }
+    return 0u;
 }
 
 /* "喂狗"函数 */
 void DaemonReload(DaemonInstance *instance)
 {
+    if (instance == NULL)
+        return;
     instance->temp_count = instance->reload_count;
     instance->offline_flag = 0; // 重新上线, 允许下次离线时再次告警
 }
 
 uint8_t DaemonIsOnline(DaemonInstance *instance)
 {
-    return instance->temp_count > 0;
+    return (uint8_t)(instance != NULL && instance->temp_count > 0u);
 }
 
 void DaemonTask()

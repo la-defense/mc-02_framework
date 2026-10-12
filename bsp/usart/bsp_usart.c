@@ -89,27 +89,37 @@ static uint8_t *USARTQueueItem(USARTInstance *ins, uint8_t slot, uint16_t slot_i
  *
  * @param _instance instance owned by module,模块拥有的串口实例
  */
-void USARTServiceInit(USARTInstance *_instance)
+uint8_t USARTServiceInit(USARTInstance *_instance)
 {
-    HAL_UARTEx_ReceiveToIdle_DMA(_instance->usart_handle, _instance->recv_buff, _instance->recv_buff_size);
+    if (_instance == NULL || _instance->usart_handle == NULL || _instance->recv_buff_size == 0u ||
+        _instance->usart_handle->hdmarx == NULL)
+        return 0u;
+    HAL_StatusTypeDef status = HAL_UARTEx_ReceiveToIdle_DMA(_instance->usart_handle,
+                                                            _instance->recv_buff,
+                                                            _instance->recv_buff_size);
+    if (status != HAL_OK)
+        return 0u;
     // 关闭dma half transfer中断防止两次进入HAL_UARTEx_RxEventCallback()
     // 这是HAL库的一个设计失误,发生DMA传输完成/半完成以及串口IDLE中断都会触发HAL_UARTEx_RxEventCallback()
     // 我们只希望处理第一种和第三种情况,因此直接关闭DMA半传输中断
     __HAL_DMA_DISABLE_IT(_instance->usart_handle->hdmarx, DMA_IT_HT);
+    return 1u;
 }
 
 USARTInstance *USARTRegister(USART_Init_Config_s *init_config)
 {
-    if (idx >= DEVICE_USART_CNT) // 超过最大实例数
-        while (1)
-            LOGERROR("[bsp_usart] USART exceed max instance count!");
+    if (init_config == NULL || init_config->usart_handle == NULL ||
+        init_config->module_callback == NULL || init_config->recv_buff_size == 0u ||
+        idx >= DEVICE_USART_CNT)
+        return NULL;
 
-    for (uint8_t i = 0; i < idx; i++) // 检查是否已经注册过
+    for (uint8_t i = 0; i < idx; i++)
         if (usart_instance[i]->usart_handle == init_config->usart_handle)
-            while (1)
-                LOGERROR("[bsp_usart] USART instance already registered!");
+            return NULL;
 
     USARTInstance *instance = (USARTInstance *)malloc(sizeof(USARTInstance));
+    if (instance == NULL)
+        return NULL;
     memset(instance, 0, sizeof(USARTInstance));
 
     instance->usart_handle = init_config->usart_handle;
@@ -119,19 +129,23 @@ USARTInstance *USARTRegister(USART_Init_Config_s *init_config)
     /* 接收队列内存: 从静态池里按本实例的 recv_buff_size 切一块
        (裁判 255 / 遥控 18 / 视觉 40, 比统一按 USART_RXBUFF_LIMIT 省很多)。
        池子不够说明配置有问题, 启动阶段就报错暴露出来。 */
+    uint32_t need = USART_RXQ_DEPTH * USARTQueueItemSize(instance);
+    if ((uint32_t)usart_rxq_used + need > USART_RXQ_POOL_SIZE)
     {
-        uint32_t need = USART_RXQ_DEPTH * USARTQueueItemSize(instance);
-        if ((uint32_t)usart_rxq_used + need > USART_RXQ_POOL_SIZE)
-            while (1)
-                LOGERROR("[bsp_usart] 接收队列内存池不足: 需要 %u, 池大小 %u",
-                         (unsigned)need, (unsigned)USART_RXQ_POOL_SIZE);
-        usart_q[idx].data = &usart_rxq_pool[usart_rxq_used];
-        usart_rxq_used = (uint16_t)(usart_rxq_used + need);
-        memset(usart_q[idx].data, 0, need);
+        free(instance);
+        return NULL;
+    }
+    if (!USARTServiceInit(instance))
+    {
+        (void)HAL_UART_AbortReceive(instance->usart_handle);
+        free(instance);
+        return NULL;
     }
 
+    usart_q[idx].data = &usart_rxq_pool[usart_rxq_used];
+    memset(usart_q[idx].data, 0, need);
+    usart_rxq_used = (uint16_t)(usart_rxq_used + need);
     usart_instance[idx++] = instance;
-    USARTServiceInit(instance);
     return instance;
 }
 

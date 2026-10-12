@@ -58,9 +58,29 @@ static int RecoveryAndPriority(void)
     return 0;
 }
 
+static int InitializationFailureIsSticky(void)
+{
+    HealthyInputs();
+    RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+    RobotSafetyRequestEnable();
+    RobotSafetyRequestCalib(1u);
+    RobotSafetyUpdate();
+    CHECK(RobotSafetyGetState() == ROBOT_FAULT);
+    CHECK(!RobotSafetyIsReady());
+    RobotFaultClear(ROBOT_FAULT_INIT_FAILURE);
+    CHECK(!EstopClear());
+    RobotSafetyRequestEnable();
+    RobotSafetyRequestCalib(1u);
+    RobotSafetyUpdate();
+    CHECK(RobotSafetyGetState() == ROBOT_FAULT);
+    CHECK((RobotSafetyGetFaults() & ROBOT_FAULT_INIT_FAILURE) != 0u);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "recovery")) return RecoveryAndPriority();
+    if (argc > 1 && !strcmp(argv[1], "init-failure")) return InitializationFailureIsSticky();
     const struct {
         Robot_Fault_e fault;
         Robot_Status_e state;

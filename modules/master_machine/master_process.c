@@ -106,21 +106,44 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
         .reload_count = 5, // 50ms
     };
     vision_daemon_instance = DaemonRegister(&daemon_conf);
+    if (vision_daemon_instance == NULL)
+        return NULL;
 
 #ifdef VISION_USE_VCP
     UNUSED(_handle);
     USB_Init_Config_s conf = {.rx_cbk = DecodeVision};
     vis_recv_buff = USBInit(conf);
+    if (vis_recv_buff == NULL)
+    {
+        (void)DaemonUnregister(vision_daemon_instance);
+        vision_daemon_instance = NULL;
+        return NULL;
+    }
 #elif defined(VISION_USE_UART)
+    if (_handle == NULL)
+    {
+        (void)DaemonUnregister(vision_daemon_instance);
+        vision_daemon_instance = NULL;
+        return NULL;
+    }
     USART_Init_Config_s conf;
     conf.module_callback = VisionUartRxCallback;
     conf.recv_buff_size = VISION_RECV_SIZE * 2;
     conf.usart_handle = _handle;
     vision_usart_instance = USARTRegister(&conf);
+    if (vision_usart_instance == NULL)
+    {
+        (void)DaemonUnregister(vision_daemon_instance);
+        vision_daemon_instance = NULL;
+        return NULL;
+    }
     vis_recv_buff = vision_usart_instance->recv_buff;
 #else
     UNUSED(_handle);
     LOGWARNING("[vision] neither VISION_USE_VCP nor VISION_USE_UART defined");
+    (void)DaemonUnregister(vision_daemon_instance);
+    vision_daemon_instance = NULL;
+    return NULL;
 #endif
 
     return &recv_data;

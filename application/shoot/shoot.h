@@ -14,7 +14,7 @@ typedef struct
  * @brief 发射初始化,会被RobotInit()调用
  * 
  */
-void ShootInit();
+uint8_t ShootInit(void);
 
 /**
  * @brief 发射任务

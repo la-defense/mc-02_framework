@@ -92,6 +92,16 @@ SPIInstance *SPIRegister(SPI_Init_Config_s *config)
     return &gyroscope_spi;
 }
 
+uint8_t SPIUnregister(SPIInstance *instance)
+{
+    return (uint8_t)(instance != NULL);
+}
+
+uint8_t PWMUnregister(PWMInstance *instance)
+{
+    return (uint8_t)(instance != NULL);
+}
+
 HAL_StatusTypeDef SPITransRecv(SPIInstance *spi, uint8_t *rx, uint8_t *tx, uint8_t len)
 {
     uint32_t transfer_number = ++bmi088_host_fixture.transfer_count;

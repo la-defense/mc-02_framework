@@ -4,6 +4,7 @@
 #include "bsp_log.h"
 #include "bsp_can.h"
 #include <math.h>
+#include <stdlib.h>
 
 static uint8_t idx = 0; // register idx,是该文件的全局电机索引,在注册时使用
 
@@ -67,8 +68,11 @@ static uint8_t sender_enable_flag[9] = {0};
  * @brief 根据电调/拨码开关上的ID,根据说明书的默认id分配方式计算发送ID和接收ID,
  *        并对电机进行分组以便处理多电机控制命令
  */
-static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *config)
+static uint8_t MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *config)
 {
+    if (motor == NULL || config == NULL || config->can_handle == NULL ||
+        config->tx_id == 0u || config->tx_id > 8u)
+        return 0u;
     uint8_t motor_id = config->tx_id - 1; // 下标从零开始,先减一方便赋值
     uint8_t motor_send_num;
     uint8_t motor_grouping;
@@ -85,7 +89,18 @@ static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *conf
     }
     else
     {
-        grouping_offset=6;
+#ifdef FDCAN
+        if (config->can_handle == &hfdcan1)
+            grouping_offset = 0u;
+        else if (config->can_handle == &hfdcan2)
+            grouping_offset = 3u;
+        else if (config->can_handle == &hfdcan3)
+            grouping_offset = 6u;
+        else
+            return 0u;
+#else
+        return 0u;
+#endif
     }
 
     switch (motor->motor_type)
@@ -106,7 +121,6 @@ static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *conf
 
         // 计算接收id并设置分组发送id
         config->rx_id = 0x200 + motor_id + 1;   // 把ID+1,进行分组设置
-        sender_enable_flag[motor_grouping] = 1; // 设置发送标志位,防止发送空帧
         motor->message_num = motor_send_num;
         motor->sender_group = motor_grouping;
 
@@ -116,13 +130,7 @@ static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *conf
             if (dji_motor_instance[i]->motor_can_instance->can_handle == config->can_handle && dji_motor_instance[i]->motor_can_instance->rx_id == config->rx_id)
             {
                 LOGERROR("[dji_motor] ID crash. Check in debug mode, add dji_motor_instance to watch to get more information.");
-                uint16_t can_bus = config->can_handle == &hcan1 ? 1 : 2;
-                while (1) // 6020的id 1-4和2006/3508的id 5-8会发生冲突(若有注册,即1!5,2!6,3!7,4!8) (1!5!,LTC! (((不是)
-                    /* rx_id 是 uint32_t(在 arm-none-eabi 上是 unsigned long), can_bus 是
-                       uint16_t: 用 %d 打它们属于格式符与实参类型不符(新日志机制启用 GCC 的
-                       格式检查后暴露)。 */
-                    LOGERROR("[dji_motor] id [%lu], can_bus [%u]",
-                             (unsigned long)config->rx_id, (unsigned)can_bus);
+                return 0u;
             }
         }
         break;
@@ -140,7 +148,6 @@ static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *conf
         }
 
         config->rx_id = 0x204 + motor_id + 1;   // 把ID+1,进行分组设置
-        sender_enable_flag[motor_grouping] = 1; // 只要有电机注册到这个分组,置为1;在发送函数中会通过此标志判断是否有电机注册
         motor->message_num = motor_send_num;
         motor->sender_group = motor_grouping;
 
@@ -149,18 +156,17 @@ static void MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *conf
             if (dji_motor_instance[i]->motor_can_instance->can_handle == config->can_handle && dji_motor_instance[i]->motor_can_instance->rx_id == config->rx_id)
             {
                 LOGERROR("[dji_motor] ID crash. Check in debug mode, add dji_motor_instance to watch to get more information.");
-                uint16_t can_bus = config->can_handle == &hcan1 ? 1 : 2;
-                while (1) // 6020的id 1-4和2006/3508的id 5-8会发生冲突(若有注册,即1!5,2!6,3!7,4!8) (1!5!,LTC! (((不是)
-                    LOGERROR("[dji_motor] id [%lu], can_bus [%u]",
-                             (unsigned long)config->rx_id, (unsigned)can_bus);
+                return 0u;
             }
         }
         break;
 
     default: // other motors should not be registered here
-        while (1)
-            LOGERROR("[dji_motor]You must not register other motors using the API of DJI motor."); // 其他电机不应该在这里注册
+        return 0u;
     }
+    if (motor_grouping >= (sizeof(sender_enable_flag) / sizeof(sender_enable_flag[0])))
+        return 0u;
+    return 1u;
 }
 
 /**
@@ -213,7 +219,11 @@ static void DJIMotorLostCallback(void *motor_ptr)
 // 电机初始化,返回一个电机实例
 DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
 {
+    if (config == NULL || idx >= DJI_MOTOR_CNT)
+        return NULL;
     DJIMotorInstance *instance = (DJIMotorInstance *)malloc(sizeof(DJIMotorInstance));
+    if (instance == NULL)
+        return NULL;
     memset(instance, 0, sizeof(DJIMotorInstance));
 
     // motor basic setting 电机基本设置
@@ -231,12 +241,12 @@ DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
     // 后续增加电机前馈控制器(速度和电流)
 
     // 电机分组,因为至多4个电机可以共用一帧CAN控制报文
-    MotorSenderGrouping(instance, &config->can_init_config);
-
-    // 注册电机到CAN总线
-    config->can_init_config.can_module_callback = DecodeDJIMotor; // set callback
-    config->can_init_config.id = instance;                        // set id,eq to address(it is identity)
-    instance->motor_can_instance = CANRegister(&config->can_init_config);
+    CAN_Init_Config_s can_config = config->can_init_config;
+    if (!MotorSenderGrouping(instance, &can_config))
+    {
+        free(instance);
+        return NULL;
+    }
 
     // 注册守护线程
     Daemon_Init_Config_s daemon_config = {
@@ -245,11 +255,28 @@ DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
         .reload_count = 2, // 20ms未收到数据则丢失
     };
     instance->daemon = DaemonRegister(&daemon_config);
+    if (instance->daemon == NULL)
+    {
+        free(instance);
+        return NULL;
+    }
+
+    /* Register CAN last: if it fails, the preceding daemon can be rolled back. */
+    can_config.can_module_callback = DecodeDJIMotor;
+    can_config.id = instance;
+    instance->motor_can_instance = CANRegister(&can_config);
+    if (instance->motor_can_instance == NULL)
+    {
+        (void)DaemonUnregister(instance->daemon);
+        free(instance);
+        return NULL;
+    }
 
     // 安全默认态: 初始化后保持失能, 由上层状态机在确认IMU/标定/使能条件后
     // 通过 DJIMotorEnable() 显式恢复输出
     DJIMotorStop(instance);
     dji_motor_instance[idx++] = instance;
+    sender_enable_flag[instance->sender_group] = 1u;
     return instance;
 }
 
