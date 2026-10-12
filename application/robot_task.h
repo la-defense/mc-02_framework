@@ -123,7 +123,7 @@ uint8_t OSTaskInit(void)
 
 __attribute__((noreturn)) void StartINSTASK(void const *argument)
 {
-    static float ins_start;
+    static volatile float ins_start;
     static float ins_dt;
     TaskMonitorFeed(TASK_MONITOR_INS);
     if (INS_Init() == NULL)
@@ -157,7 +157,8 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
             static LogRateLimit_t rl_ins_overrun = {0};
             if (LogRateLimitAllow(&rl_ins_overrun, 1000u))
             {
-                ins_start = DWT_GetTimeline_ms(); /* 保留: 便于 Live Watch 看最近一次时刻 */
+                ins_start = DWT_GetTimeline_ms(); /* 便于 Live Watch 看最近一次超时刻 */
+                (void)ins_start;
                 LOGERROR("[freeRTOS] INS Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
                          (unsigned long)(uint32_t)ins_dt,
                          (unsigned long)rl_ins_overrun.total, (unsigned long)rl_ins_overrun.dropped);
@@ -172,7 +173,6 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
 __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 {
     static float motor_dt;
-    static float motor_start;
     LOGINFO("[freeRTOS] MOTOR Task Start");
     for (;;)
     {
@@ -185,7 +185,6 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
             static LogRateLimit_t rl_motor_overrun = {0};
             if (LogRateLimitAllow(&rl_motor_overrun, 1000u))
             {
-                motor_start = DWT_GetTimeline_ms();
                 LOGERROR("[freeRTOS] MOTOR Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
                          (unsigned long)(uint32_t)motor_dt,
                          (unsigned long)rl_motor_overrun.total, (unsigned long)rl_motor_overrun.dropped);
@@ -198,7 +197,6 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 {
     static float daemon_dt;
-    static float daemon_start;
     uint8_t buzzer_ready = BuzzerInit();
     if (!buzzer_ready)
     {
@@ -263,7 +261,6 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
             static LogRateLimit_t rl_daemon_overrun = {0};
             if (LogRateLimitAllow(&rl_daemon_overrun, 1000u))
             {
-                daemon_start = DWT_GetTimeline_ms();
                 LOGERROR("[freeRTOS] Daemon Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
                          (unsigned long)(uint32_t)daemon_dt,
                          (unsigned long)rl_daemon_overrun.total, (unsigned long)rl_daemon_overrun.dropped);
@@ -276,7 +273,6 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
 {
     static float robot_dt;
-    static float robot_start;
     LOGINFO("[freeRTOS] ROBOT core Task Start");
     // 200Hz-500Hz,若有额外的控制任务如平衡步兵可能需要提升至1kHz
     for (;;)
@@ -290,7 +286,6 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
             static LogRateLimit_t rl_robot_overrun = {0};
             if (LogRateLimitAllow(&rl_robot_overrun, 1000u))
             {
-                robot_start = DWT_GetTimeline_ms();
                 LOGERROR("[freeRTOS] ROBOT core Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
                          (unsigned long)(uint32_t)robot_dt,
                          (unsigned long)rl_robot_overrun.total, (unsigned long)rl_robot_overrun.dropped);

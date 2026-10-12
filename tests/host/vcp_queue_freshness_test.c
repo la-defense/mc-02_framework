@@ -1,4 +1,4 @@
-#include <assert.h>
+#include "test_check.h"
 #include <stdint.h>
 #include <string.h>
 #include "bsp_usb.h"
@@ -22,32 +22,33 @@ uint8_t CDC_Transmit_HS(uint8_t *buffer, uint16_t len)
 static void receive_callback(uint16_t len)
 {
     const uint8_t *frame=VCPGetCurrentRxData();
-    assert(frame != NULL && frame != endpoint_buffer && len == 4u);
-    assert(frame[0] == 0x53u && frame[3] == 0x50u);
-    assert(VCPGetCurrentRxTimestamp() == expected_timestamp);
+    TEST_CHECK(frame != NULL && frame != endpoint_buffer && len == 4u);
+    TEST_CHECK(frame[0] == 0x53u && frame[3] == 0x50u);
+    TEST_CHECK(VCPGetCurrentRxTimestamp() == expected_timestamp);
     memset(endpoint_buffer, 0xff, 4u); /* Re-armed endpoint cannot alter queued bytes. */
-    assert(frame[0] == 0x53u && frame[3] == 0x50u);
+    TEST_CHECK(frame[0] == 0x53u && frame[3] == 0x50u);
     callback_count++;
 }
 
 int main(void)
 {
-    assert(USBInit((USB_Init_Config_s){.rx_cbk=receive_callback}) == endpoint_buffer);
-    assert(registered_rx == receive_callback);
+    uint8_t *rx_buffer = USBInit((USB_Init_Config_s){.rx_cbk=receive_callback});
+    TEST_CHECK(rx_buffer == endpoint_buffer);
+    TEST_CHECK(registered_rx == receive_callback);
     const uint8_t packet[4]={0x53u,0x50u,0x01u,0x50u};
 
     now_ms=0u;
     VCPQueuePush(packet,sizeof(packet));
     now_ms=51u;
     VCPProcessRx();
-    assert(callback_count==0u && VCPGetCurrentRxData()==NULL);
+    TEST_CHECK(callback_count==0u && VCPGetCurrentRxData()==NULL);
 
     now_ms=100u;
     expected_timestamp=now_ms;
     VCPQueuePush(packet,sizeof(packet));
     now_ms=150u;
     VCPProcessRx();
-    assert(callback_count==1u && VCPGetCurrentRxData()==NULL);
-    assert(VCPGetCurrentRxTimestamp()==0u);
+    TEST_CHECK(callback_count==1u && VCPGetCurrentRxData()==NULL);
+    TEST_CHECK(VCPGetCurrentRxTimestamp()==0u);
     return 0;
 }

@@ -249,9 +249,16 @@ static void value_mark_drawn(uint8_t row, uint8_t kind, const void *data, uint8_
     switch (kind)
     {
     case VALUE_KIND_ASCII:
-        strncpy(s_last_text[lcd_page][row], (const char *)data, LCD_TEXT_MAX - 1u);
-        s_last_text[lcd_page][row][LCD_TEXT_MAX - 1u] = '\0';
+    {
+        char *destination = s_last_text[lcd_page][row];
+        const char *source = (const char *)data;
+        size_t length = 0u;
+        while (length < LCD_TEXT_MAX - 1u && source[length] != '\0')
+            ++length;
+        memcpy(destination, source, length);
+        memset(destination + length, '\0', LCD_TEXT_MAX - length);
         break;
+    }
     case VALUE_KIND_CN:
         s_last_cn[lcd_page][row] = (const Lcd_CnChar_e *)data;
         break;

@@ -220,8 +220,8 @@ static uint8_t ParamWriteSector(uint32_t sector_addr)
     HAL_FLASH_Lock();
 
     /* 回读校验 */
-    SCB_InvalidateDCache_by_Addr((uint32_t *)sector_addr, (int32_t)total);
-    if (memcmp((const void *)sector_addr, buf, total) != 0)
+    SCB_InvalidateDCache_by_Addr((uint32_t *)(uintptr_t)sector_addr, (int32_t)total);
+    if (memcmp((const void *)(uintptr_t)sector_addr, buf, total) != 0)
     {
         LOGERROR("[param] 回读校验失败(0x%08lX)", (unsigned long)sector_addr);
         return 0;
@@ -233,16 +233,16 @@ static uint8_t ParamWriteSector(uint32_t sector_addr)
 static uint8_t ParamReadSector(uint32_t sector_addr, uint8_t *out, ParamHeader_t *out_hdr)
 {
     ParamHeader_t hdr;
-    SCB_InvalidateDCache_by_Addr((uint32_t *)sector_addr, PARAM_FLASHWORD);
-    memcpy(&hdr, (const void *)sector_addr, sizeof(hdr));
+    SCB_InvalidateDCache_by_Addr((uint32_t *)(uintptr_t)sector_addr, PARAM_FLASHWORD);
+    memcpy(&hdr, (const void *)(uintptr_t)sector_addr, sizeof(hdr));
 
     if (hdr.magic != PARAM_MAGIC || hdr.version != PARAM_VERSION ||
         hdr.payload_len > PARAM_MAX_PAYLOAD)
         return 0;
 
-    SCB_InvalidateDCache_by_Addr((uint32_t *)(sector_addr + PARAM_FLASHWORD),
+    SCB_InvalidateDCache_by_Addr((uint32_t *)(uintptr_t)(sector_addr + PARAM_FLASHWORD),
                                  (int32_t)ParamRoundUp4(hdr.payload_len));
-    const uint8_t *payload = (const uint8_t *)(sector_addr + PARAM_FLASHWORD);
+    const uint8_t *payload = (const uint8_t *)(uintptr_t)(sector_addr + PARAM_FLASHWORD);
     if (ParamCrc32(payload, hdr.payload_len) != hdr.crc32)
         return 0;
 

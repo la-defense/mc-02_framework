@@ -59,7 +59,7 @@ static inline uint32_t DWT_ProbeElapsedUs(uint32_t start)
     return DWT_ProbeElapsedCycles(start) / f;
 }
 
-static inline void DWT_ProbeDone(DWT_Probe_t *probe, uint32_t start)
+static inline void DWT_ProbeDone(volatile DWT_Probe_t *probe, uint32_t start)
 {
     uint32_t dt = DWT_ProbeElapsedUs(start);
     probe->last_us = dt;

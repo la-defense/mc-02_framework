@@ -15,6 +15,15 @@
  ******************************************************************************
  */
 #include "QuaternionEKF.h"
+#include <float.h>
+#include <stdint.h>
+#include <string.h>
+
+#if FLT_RADIX != 2 || FLT_MANT_DIG != 24 || FLT_MAX_EXP != 128
+#error "QuaternionEKF invSqrt requires IEEE-754 binary32 float"
+#endif
+
+_Static_assert(sizeof(float) == sizeof(uint32_t), "invSqrt requires 32-bit float");
 
 QEKF_INS_t QEKF_INS;
 
@@ -500,9 +509,10 @@ static float invSqrt(float x)
 {
     float halfx = 0.5f * x;
     float y = x;
-    long i = *(long *)&y;
-    i = 0x5f375a86 - (i >> 1);
-    y = *(float *)&i;
+    uint32_t bits;
+    memcpy(&bits, &y, sizeof(bits));
+    bits = UINT32_C(0x5f375a86) - (bits >> 1u);
+    memcpy(&y, &bits, sizeof(y));
     y = y * (1.5f - (halfx * y * y));
     return y;
 }

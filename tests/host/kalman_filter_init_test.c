@@ -1,8 +1,5 @@
+#include "test_check.h"
 #include "kalman_filter.h"
-#ifdef NDEBUG
-#undef NDEBUG
-#endif
-#include <assert.h>
 #include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -41,7 +38,7 @@ void __wrap_free(void *pointer)
 {
     if (pointer != NULL)
     {
-        assert(live_allocations > 0u);
+        TEST_CHECK(live_allocations > 0u);
         live_allocations--;
     }
     __real_free(pointer);
@@ -73,9 +70,11 @@ int main(void)
     KalmanFilter_t filter;
     memset(&filter, 0xA5, sizeof(filter));
     KalmanFilter_t untouched = filter;
-    assert(!Kalman_Filter_Init(NULL, 6u, 0u, 3u));
-    assert(!Kalman_Filter_Init(&filter, 0u, 0u, 3u));
-    assert(memcmp(&filter, &untouched, sizeof(filter)) == 0);
+    uint8_t init_result = Kalman_Filter_Init(NULL, 6u, 0u, 3u);
+    TEST_CHECK(init_result == 0u);
+    init_result = Kalman_Filter_Init(&filter, 0u, 0u, 3u);
+    TEST_CHECK(init_result == 0u);
+    TEST_CHECK(memcmp(&filter, &untouched, sizeof(filter)) == 0);
 
     for (long fail_after = 0; fail_after < 24; ++fail_after)
     {
@@ -87,24 +86,26 @@ int main(void)
             return 1;
         }
         allocation_countdown = -1;
-        assert(live_allocations == before);
-        assert(memcmp(&filter, &untouched, sizeof(filter)) == 0);
+        TEST_CHECK(live_allocations == before);
+        TEST_CHECK(memcmp(&filter, &untouched, sizeof(filter)) == 0);
     }
 
     for (int fail_matrix = 0; fail_matrix < 17; ++fail_matrix)
     {
         matrix_init_countdown = fail_matrix;
         size_t before = live_allocations;
-        assert(!Kalman_Filter_Init(&filter, 6u, 0u, 3u));
+        init_result = Kalman_Filter_Init(&filter, 6u, 0u, 3u);
+        TEST_CHECK(init_result == 0u);
         matrix_init_countdown = -1;
-        assert(live_allocations == before);
-        assert(memcmp(&filter, &untouched, sizeof(filter)) == 0);
+        TEST_CHECK(live_allocations == before);
+        TEST_CHECK(memcmp(&filter, &untouched, sizeof(filter)) == 0);
     }
 
-    assert(Kalman_Filter_Init(&filter, 6u, 0u, 3u));
-    assert(filter.uSize == 0u && filter.ControlVector == NULL && filter.u_data == NULL);
-    assert(live_allocations > 0u);
+    init_result = Kalman_Filter_Init(&filter, 6u, 0u, 3u);
+    TEST_CHECK(init_result == 1u);
+    TEST_CHECK(filter.uSize == 0u && filter.ControlVector == NULL && filter.u_data == NULL);
+    TEST_CHECK(live_allocations > 0u);
     Kalman_Filter_Release(&filter);
-    assert(live_allocations == 0u);
+    TEST_CHECK(live_allocations == 0u);
     return 0;
 }

@@ -12,7 +12,6 @@
 #include <math.h>
 #include <stdlib.h>
 
-static DaemonInstance *bmi088_daemon_instance;
 volatile uint32_t bmi088_init_error = BMI088_NO_ERROR;
 volatile uint32_t bmi088_init_retry_count = 0u;
 volatile uint32_t bmi088_init_stage = BMI088_INIT_STAGE_IDLE;

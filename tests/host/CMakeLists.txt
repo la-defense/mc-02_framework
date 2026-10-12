@@ -26,6 +26,27 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(CTest)
+add_executable(host_test_check_test test_check_test.c)
+target_include_directories(host_test_check_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME host_test_check_positive_control COMMAND host_test_check_test)
+add_test(NAME host_test_check_negative_control
+  COMMAND ${CMAKE_COMMAND}
+    -DTEST_PROGRAM=$<TARGET_FILE:host_test_check_test>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_check_failure.cmake)
+
+add_executable(quaternion_ekf_inv_sqrt_test quaternion_ekf_inv_sqrt_test.c
+  quaternion_ekf_fakes/arm_math.c
+  ../../modules/algorithm/QuaternionEKF.c
+  ../../modules/algorithm/kalman_filter.c)
+target_include_directories(quaternion_ekf_inv_sqrt_test BEFORE PRIVATE kalman_fakes)
+target_include_directories(quaternion_ekf_inv_sqrt_test PRIVATE ../../modules/algorithm)
+if(UNIX)
+  target_compile_options(quaternion_ekf_inv_sqrt_test PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(quaternion_ekf_inv_sqrt_test PRIVATE -Wl,--gc-sections)
+  target_link_libraries(quaternion_ekf_inv_sqrt_test PRIVATE m)
+endif()
+add_test(NAME production_quaternion_inverse_sqrt_accuracy COMMAND quaternion_ekf_inv_sqrt_test)
+
 add_executable(message_freshness_test message_freshness_test.c ../../modules/message_center/message_center.c)
 target_include_directories(message_freshness_test BEFORE PRIVATE init_resource_fakes)
 target_include_directories(message_freshness_test PRIVATE ../../modules/message_center)
@@ -45,7 +66,8 @@ target_include_directories(init_resource_test PRIVATE ../../bsp/dwt ../../module
   ../../modules/message_center ../../modules/alarm)
 if(UNIX AND NOT APPLE)
   target_compile_options(init_resource_test PRIVATE -ffunction-sections -fdata-sections)
-  target_link_options(init_resource_test PRIVATE -Wl,--gc-sections -Wl,--wrap=malloc -Wl,--wrap=free)
+  target_link_options(init_resource_test PRIVATE -Wl,--gc-sections
+    -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
 endif()
 add_test(NAME production_init_resource_failures COMMAND init_resource_test)
 add_executable(init_diagnostic_test init_diagnostic_test.c ../../application/init_diagnostic.c)

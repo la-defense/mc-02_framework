@@ -1,13 +1,10 @@
 #include "power_manager.h"
-#include "RLS.h"
 #include "string.h"
 #include "stdlib.h"
 
 float k[2] = {100.2f, 1.2f};
 
 static PowerManagerInstance *power_control_instance = NULL;
-
-static RLS_t RLS;
 
 PowerManagerInstance *PowerControlInit(PowerManager_Init_Config_s *power_manager_config)
 {

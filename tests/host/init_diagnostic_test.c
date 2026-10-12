@@ -1,5 +1,5 @@
+#include "test_check.h"
 #include "init_diagnostic.h"
-#include <assert.h>
 #include <stdint.h>
 
 static uint32_t primask;
@@ -12,20 +12,20 @@ int main(void)
     InitDiagnosticSnapshot_s snapshot = {0};
     primask = 0u;
     InitDiagnosticBegin(INIT_STAGE_BSP);
-    assert(primask == 0u);
+    TEST_CHECK(primask == 0u);
     InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_GIMBAL, INIT_FAILURE_RESOURCE, 23u);
     InitDiagnosticReportFailure(INIT_STAGE_TASKS, 2u, INIT_FAILURE_TASK_CREATE, 1u);
     InitDiagnosticMarkReady();
     InitDiagnosticHeartbeat();
     InitDiagnosticGetSnapshot(&snapshot);
-    assert(primask == 0u);
-    assert(snapshot.failed == 1u);
-    assert(snapshot.stage == INIT_STAGE_APPLICATION);
-    assert(snapshot.module == INIT_MODULE_GIMBAL);
-    assert(snapshot.reason == INIT_FAILURE_RESOURCE);
-    assert(snapshot.resource_id == 23u);
-    assert(snapshot.failure_count == 2u);
-    assert(snapshot.heartbeat == 1u);
-    assert(InitDiagnosticIsFailed() == 1u);
+    TEST_CHECK(primask == 0u);
+    TEST_CHECK(snapshot.failed == 1u);
+    TEST_CHECK(snapshot.stage == INIT_STAGE_APPLICATION);
+    TEST_CHECK(snapshot.module == INIT_MODULE_GIMBAL);
+    TEST_CHECK(snapshot.reason == INIT_FAILURE_RESOURCE);
+    TEST_CHECK(snapshot.resource_id == 23u);
+    TEST_CHECK(snapshot.failure_count == 2u);
+    TEST_CHECK(snapshot.heartbeat == 1u);
+    TEST_CHECK(InitDiagnosticIsFailed() == 1u);
     return 0;
 }
