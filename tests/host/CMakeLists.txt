@@ -96,6 +96,37 @@ if(UNIX)
   target_link_libraries(vision_limits_test PRIVATE m)
 endif()
 add_test(NAME vision_mechanical_limits_and_conversion COMMAND vision_limits_test)
+add_executable(chassis_motion_test chassis_motion_test.c ../../application/chassis/chassis_motion.c)
+target_include_directories(chassis_motion_test BEFORE PRIVATE chassis_fakes)
+target_include_directories(chassis_motion_test PRIVATE ../../application/chassis)
+if(UNIX)
+  target_link_libraries(chassis_motion_test PRIVATE m)
+endif()
+add_test(NAME production_chassis_motion_limits COMMAND chassis_motion_test)
+foreach(chassis_limits_profile IN ITEMS configured unconfigured)
+  set(target chassis_task_${chassis_limits_profile}_test)
+  add_executable(${target} chassis_task_test.c
+    ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
+    ../../modules/message_center/message_center.c)
+  target_include_directories(${target} BEFORE PRIVATE chassis_fakes)
+  target_include_directories(${target} PRIVATE ../../application ../../application/chassis
+    ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine)
+  if(UNIX)
+    target_link_libraries(${target} PRIVATE m)
+  endif()
+  if(chassis_limits_profile STREQUAL "configured")
+    target_compile_definitions(${target} PRIVATE CHASSIS_TASK_EXPECT_CONFIGURED=1
+      CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=10.0f
+      CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
+  else()
+    target_compile_definitions(${target} PRIVATE CHASSIS_TASK_EXPECT_CONFIGURED=0)
+  endif()
+  target_compile_options(${target} PRIVATE -ffunction-sections -fdata-sections)
+  if(UNIX)
+    target_link_options(${target} PRIVATE -Wl,--gc-sections)
+  endif()
+  add_test(NAME production_chassis_task_${chassis_limits_profile} COMMAND ${target})
+endforeach()
 add_executable(robot_cmd_task_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c
   ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c

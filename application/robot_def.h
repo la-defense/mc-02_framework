@@ -62,6 +62,19 @@
 #define CENTER_GIMBAL_OFFSET_Y 0    // 云台旋转中心距底盘几何中心的距离,左右方向,云台位于正中心时默认设为0
 #define RADIUS_WHEEL 60             // 轮子半径
 #define REDUCTION_RATIO_WHEEL 19.0f // 电机减速比,因为编码器量测的是转子的速度而不是输出轴的速度故需进行转换
+/* 底盘输出限值须由实车参数确认后配置；角速度与电机轴转速单位均为 deg/s。 */
+#ifndef CHASSIS_MOTION_LIMITS_CONFIGURED
+#define CHASSIS_MOTION_LIMITS_CONFIGURED 0u
+#endif
+#ifndef CHASSIS_MAX_WZ_DEG_S
+#define CHASSIS_MAX_WZ_DEG_S 0.0f
+#endif
+#ifndef CHASSIS_ROTATE_WZ_DEG_S
+#define CHASSIS_ROTATE_WZ_DEG_S 0.0f
+#endif
+#ifndef CHASSIS_MAX_MOTOR_SPEED_DEG_S
+#define CHASSIS_MAX_MOTOR_SPEED_DEG_S 0.0f
+#endif
 
 #define GYRO2GIMBAL_DIR_YAW 1   // 陀螺仪数据相较于云台的yaw的方向,1为相同,-1为相反
 #define GYRO2GIMBAL_DIR_PITCH 1 // 陀螺仪数据相较于云台的pitch的方向,1为相同,-1为相反

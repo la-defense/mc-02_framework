@@ -12,21 +12,12 @@
  */
 
 #include "chassis.h"
+#include "chassis_motion.h"
 #include "robot_def.h"
 #include "dji_motor.h"
 #include "super_cap.h"
 #include "message_center.h"
 #include "referee_task.h"
-
-#include "general_def.h"
-#include "bsp_dwt.h"
-#include "referee_UI.h"
-#include "arm_math.h"
-
-/* 根据robot_def.h中的macro自动计算的参数 */
-#define HALF_WHEEL_BASE (WHEEL_BASE / 2.0f)     // 半轴距
-#define HALF_TRACK_WIDTH (TRACK_WIDTH / 2.0f)   // 半轮距
-#define PERIMETER_WHEEL (RADIUS_WHEEL * 2 * PI) // 轮子周长
 
 /* 底盘应用包含的模块和信息存储,底盘是单例模式,因此不需要为底盘建立单独的结构体 */
 #ifdef CHASSIS_BOARD // 如果是底盘板,使用板载IMU获取底盘转动角速度
@@ -47,13 +38,6 @@ static Referee_Interactive_info_t ui_data; // UI数据，将底盘中的数据�
 
 static SuperCapInstance *cap;                                       // 超级电容
 static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left right forward back
-
-/* 用于自旋变速策略的时间变量 */
-// static float t;
-
-/* 私有函数计算的中介变量,设为静态避免参数传递的开销 */
-static float chassis_vx, chassis_vy;     // 将云台系的速度投影到底盘
-static float vt_lf, vt_rf, vt_lb, vt_rb; // 底盘速度解算后的临时输出,待进行限幅
 
 void ChassisInit()
 {
@@ -135,42 +119,19 @@ void ChassisInit()
 #endif // ONE_BOARD
 }
 
-#define LF_CENTER ((HALF_TRACK_WIDTH + CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE - CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
-#define RF_CENTER ((HALF_TRACK_WIDTH - CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE - CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
-#define LB_CENTER ((HALF_TRACK_WIDTH + CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE + CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
-#define RB_CENTER ((HALF_TRACK_WIDTH - CENTER_GIMBAL_OFFSET_X + HALF_WHEEL_BASE + CENTER_GIMBAL_OFFSET_Y) * DEGREE_2_RAD)
 /**
- * @brief 计算每个轮毂电机的输出,正运动学解算
- *        用宏进行预替换减小开销,运动解算具体过程参考教程
+ * @brief 停止四个底盘电机并清除可能遗留的速度参考值
  */
-static void MecanumCalculate()
+static void ChassisStopAndClear(void)
 {
-    vt_lf = -chassis_vx - chassis_vy - chassis_cmd_recv.wz * LF_CENTER;
-    vt_rf = -chassis_vx + chassis_vy - chassis_cmd_recv.wz * RF_CENTER;
-    vt_lb = chassis_vx - chassis_vy - chassis_cmd_recv.wz * LB_CENTER;
-    vt_rb = chassis_vx + chassis_vy - chassis_cmd_recv.wz * RB_CENTER;
-}
-
-/**
- * @brief 根据裁判系统和电容剩余容量对输出进行限制并设置电机参考值
- *
- */
-static void LimitChassisOutput()
-{
-    // 功率限制待添加
-    // referee_data->PowerHeatData.chassis_power;
-    // referee_data->PowerHeatData.chassis_power_buffer;
-
-    // 轮子线速度(mm/s) -> 电机轴角速度(deg/s):
-    //   v/R 得到轮子角速度(rad/s), *RAD_2_DEGREE 转 deg/s, *REDUCTION_RATIO_WHEEL 换算到电机轴
-    // 注: 当前尚无底盘实物, 换算系数与 robot_def.h 中的轮径/减速比需上实车标定验证
-    const float mm_s_to_motor_deg_s = RAD_2_DEGREE * REDUCTION_RATIO_WHEEL / RADIUS_WHEEL;
-
-    // 完成功率限制后进行电机参考输入设定
-    DJIMotorSetRef(motor_lf, vt_lf * mm_s_to_motor_deg_s);
-    DJIMotorSetRef(motor_rf, vt_rf * mm_s_to_motor_deg_s);
-    DJIMotorSetRef(motor_lb, vt_lb * mm_s_to_motor_deg_s);
-    DJIMotorSetRef(motor_rb, vt_rb * mm_s_to_motor_deg_s);
+    DJIMotorStop(motor_lf);
+    DJIMotorStop(motor_rf);
+    DJIMotorStop(motor_lb);
+    DJIMotorStop(motor_rb);
+    DJIMotorSetRef(motor_lf, 0.0f);
+    DJIMotorSetRef(motor_rf, 0.0f);
+    DJIMotorSetRef(motor_lb, 0.0f);
+    DJIMotorSetRef(motor_rb, 0.0f);
 }
 
 /**
@@ -197,50 +158,63 @@ void ChassisTask()
     chassis_cmd_recv = *(Chassis_Ctrl_Cmd_s *)CANCommGet(chasiss_can_comm);
 #endif // CHASSIS_BOARD
 
-    if (chassis_cmd_recv.chassis_mode == CHASSIS_ZERO_FORCE)
-    { // 如果出现重要模块离线或遥控器设置为急停,让电机停止
-        DJIMotorStop(motor_lf);
-        DJIMotorStop(motor_rf);
-        DJIMotorStop(motor_lb);
-        DJIMotorStop(motor_rb);
-    }
-    else
-    { // 正常工作
-        DJIMotorEnable(motor_lf);
-        DJIMotorEnable(motor_rf);
-        DJIMotorEnable(motor_lb);
-        DJIMotorEnable(motor_rb);
-    }
-
-    // 根据控制模式设定旋转速度
+    ChassisMotionMode_e motion_mode = CHASSIS_MOTION_MODE_INVALID;
     switch (chassis_cmd_recv.chassis_mode)
     {
-    case CHASSIS_NO_FOLLOW: // 底盘不旋转,但维持全向机动,一般用于调整云台姿态
-        chassis_cmd_recv.wz = 0;
+    case CHASSIS_NO_FOLLOW:
+        motion_mode = CHASSIS_MOTION_MODE_NO_FOLLOW;
         break;
-    case CHASSIS_FOLLOW_GIMBAL_YAW: // 跟随云台,不单独设置pid,以误差角度平方为速度输出
-        chassis_cmd_recv.wz = -1.5f * chassis_cmd_recv.offset_angle * abs(chassis_cmd_recv.offset_angle);
+    case CHASSIS_FOLLOW_GIMBAL_YAW:
+        motion_mode = CHASSIS_MOTION_MODE_FOLLOW;
         break;
-    case CHASSIS_ROTATE: // 自旋,同时保持全向机动;当前wz维持定值,后续增加不规则的变速策略
-        chassis_cmd_recv.wz = 4000;
+    case CHASSIS_ROTATE:
+        motion_mode = CHASSIS_MOTION_MODE_ROTATE;
         break;
     default:
         break;
     }
 
-    // 根据云台和底盘的角度offset将控制量映射到底盘坐标系上
-    // 底盘逆时针旋转为角度正方向;云台命令的方向以云台指向的方向为x,采用右手系(x指向正北时y在正东)
-    static float sin_theta, cos_theta;
-    cos_theta = arm_cos_f32(chassis_cmd_recv.offset_angle * DEGREE_2_RAD);
-    sin_theta = arm_sin_f32(chassis_cmd_recv.offset_angle * DEGREE_2_RAD);
-    chassis_vx = chassis_cmd_recv.vx * cos_theta - chassis_cmd_recv.vy * sin_theta;
-    chassis_vy = chassis_cmd_recv.vx * sin_theta + chassis_cmd_recv.vy * cos_theta;
-
-    // 根据控制模式进行正运动学解算,计算底盘输出
-    MecanumCalculate();
-
-    // 根据裁判系统的反馈数据和电容数据对输出限幅并设定闭环参考值
-    LimitChassisOutput();
+    const ChassisMotionInput_s motion_input = {
+        .vx_mm_s = chassis_cmd_recv.vx,
+        .vy_mm_s = chassis_cmd_recv.vy,
+        .requested_wz_deg_s = chassis_cmd_recv.wz,
+        .offset_angle_deg = chassis_cmd_recv.offset_angle,
+        .mode = motion_mode,
+    };
+    const ChassisMotionGeometry_s geometry = {
+        .wheel_base_mm = WHEEL_BASE,
+        .track_width_mm = TRACK_WIDTH,
+        .center_gimbal_offset_x_mm = CENTER_GIMBAL_OFFSET_X,
+        .center_gimbal_offset_y_mm = CENTER_GIMBAL_OFFSET_Y,
+        .wheel_radius_mm = RADIUS_WHEEL,
+        .reduction_ratio = REDUCTION_RATIO_WHEEL,
+    };
+    const ChassisMotionLimits_s limits = {
+        .configured = CHASSIS_MOTION_LIMITS_CONFIGURED,
+        .max_wz_deg_s = CHASSIS_MAX_WZ_DEG_S,
+        .rotate_wz_deg_s = CHASSIS_ROTATE_WZ_DEG_S,
+        .max_motor_speed_deg_s = CHASSIS_MAX_MOTOR_SPEED_DEG_S,
+    };
+    ChassisMotionOutput_s motion_output;
+    const uint8_t command_allowed = chassis_cmd_recv.chassis_mode != CHASSIS_ZERO_FORCE &&
+                                    ChassisMotionCalculate(&motion_input, &geometry, &limits,
+                                                           &motion_output);
+    if (!command_allowed)
+    {
+        ChassisStopAndClear();
+    }
+    else
+    {
+        DJIMotorSetRef(motor_lf, motion_output.motor_speed_deg_s[0]);
+        DJIMotorSetRef(motor_rf, motion_output.motor_speed_deg_s[1]);
+        DJIMotorSetRef(motor_lb, motion_output.motor_speed_deg_s[2]);
+        DJIMotorSetRef(motor_rb, motion_output.motor_speed_deg_s[3]);
+        DJIMotorEnable(motor_lf);
+        DJIMotorEnable(motor_rf);
+        DJIMotorEnable(motor_lb);
+        DJIMotorEnable(motor_rb);
+        chassis_cmd_recv.wz = motion_output.wz_deg_s;
+    }
 
     // 根据电机的反馈速度和IMU(如果有)计算真实速度
     EstimateSpeed();
