@@ -6,6 +6,8 @@
 #include "message_center.h"
 #include "bsp_dwt.h"
 #include "general_def.h"
+#include <stddef.h>
+#include <string.h>
 
 #define LOADER_REVERSE_SPEED_DEGS 500 // reverse unload speed (deg/s), TBD on bench
 
@@ -14,11 +16,11 @@ static DJIMotorInstance *friction_l, *friction_r, *loader; // 拨盘电机
 // static servo_instance *lid; 需要增加弹舱盖
 
 static Shoot_Config_s *shoot_config; // loader slot count / motor->disk ratio from config
-static loader_mode_e last_load_mode = LOAD_STOP; // last load mode, for edge-trigger
-static Publisher_t *shoot_pub;
+static loader_mode_e last_load_mode = LOAD_STOP;
+static uint8_t require_load_stop = 1u; // last load mode, for edge-trigger
+
 static Shoot_Ctrl_Cmd_s shoot_cmd_recv; // 来自cmd的发射控制信息
 static Subscriber_t *shoot_sub;
-static Shoot_Upload_Data_s shoot_feedback_data; // 来自cmd的发射控制信息
 
 // dwt定时,计算冷却用
 static float hibernate_time = 0, dead_time = 0;
@@ -106,18 +108,33 @@ uint8_t ShootInit(void)
     loader = DJIMotorInit(&loader_config);
 
     shoot_config = ShootConfigFeed(); // load shooter config (slots / reduction ratio)
-
-    shoot_pub = PubRegister("shoot_feed", sizeof(Shoot_Upload_Data_s));
     shoot_sub = SubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
     return (uint8_t)(friction_l != NULL && friction_r != NULL && loader != NULL &&
-                     shoot_config != NULL && shoot_pub != NULL && shoot_sub != NULL);
+                     shoot_config != NULL && shoot_sub != NULL);
 }
 
 /* 机器人发射机构控制核心任务 */
 void ShootTask()
 {
     // 从cmd获取控制数据
-    SubGetMessage(shoot_sub, &shoot_cmd_recv);
+    const uint8_t command_fresh = SubGetSnapshot(shoot_sub, &shoot_cmd_recv,
+        sizeof(shoot_cmd_recv), HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL);
+    if (!command_fresh)
+    {
+        memset(&shoot_cmd_recv, 0, sizeof(shoot_cmd_recv));
+        shoot_cmd_recv.shoot_mode = SHOOT_OFF;
+        shoot_cmd_recv.friction_mode = FRICTION_OFF;
+        shoot_cmd_recv.load_mode = LOAD_STOP;
+        require_load_stop = 1u;
+    }
+    else if (require_load_stop != 0u)
+    {
+        if (shoot_cmd_recv.load_mode == LOAD_STOP)
+            require_load_stop = 0u;
+        else if (shoot_cmd_recv.load_mode == LOAD_1_BULLET ||
+                 shoot_cmd_recv.load_mode == LOAD_3_BULLET)
+            shoot_cmd_recv.load_mode = LOAD_STOP;
+    }
 
     // 对shoot mode等于SHOOT_STOP的情况特殊处理,直接停止所有电机(紧急停止)
     if (shoot_cmd_recv.shoot_mode == SHOOT_OFF)
@@ -228,7 +245,6 @@ void ShootTask()
     }
 
     // 反馈数据,目前暂时没有要设定的反馈数据,后续可能增加应用离线监测以及卡弹反馈
-    PubPushMessage(shoot_pub, (void *)&shoot_feedback_data);
 }
 
 void Shoot_GetMotorSummary(Shoot_Motor_Summary_t *summary)

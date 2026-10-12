@@ -1,0 +1,3 @@
+#ifndef MC02_CAN_COMM_TEST_TASK_H
+#define MC02_CAN_COMM_TEST_TASK_H
+#endif

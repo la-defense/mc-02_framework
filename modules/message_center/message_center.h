@@ -13,6 +13,7 @@
 #define PUBSUB_H
 
 #include "stdint.h"
+#include "message_freshness.h"
 
 #define MAX_TOPIC_NAME_LEN 32 // 最大的话题名长度,每个话题都有字符串来命名
 #define MAX_TOPIC_COUNT 12    // 最多支持的话题数量
@@ -26,6 +27,7 @@ typedef struct mqt
     uint8_t front_idx;
     uint8_t back_idx;
     uint8_t temp_size; // 当前队列长度
+    MessageFreshness_t freshness;
 
     /* 指向下一个订阅了相同的话题的订阅者的指针 */
     struct mqt *next_subs_queue; // 使得发布者可以通过链表访问所有订阅了相同话题的订阅者
@@ -73,6 +75,11 @@ Publisher_t *PubRegister(char *name, uint8_t data_len);
  */
 uint8_t SubGetMessage(Subscriber_t *sub, void *data_ptr);
 
+/* Read the most recently published value without consuming or renewing it. */
+uint8_t SubGetSnapshot(Subscriber_t *sub, void *data_ptr, uint8_t data_len,
+                       uint32_t now_ms, uint32_t max_age_ms,
+                       MessageFreshness_t *freshness);
+
 /**
  * @brief 发布者给所有订阅了话题的订阅者推送消息
  *
@@ -81,5 +88,6 @@ uint8_t SubGetMessage(Subscriber_t *sub, void *data_ptr);
  * @return uint8_t 新消息成功推送给几个订阅者
  */
 uint8_t PubPushMessage(Publisher_t *pub, void *data_ptr);
+uint8_t PubPushMessageAt(Publisher_t *pub, void *data_ptr, uint32_t timestamp_ms);
 
 #endif // !PUBSUB_H

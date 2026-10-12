@@ -18,6 +18,7 @@
 #include "super_cap.h"
 #include "message_center.h"
 #include "referee_task.h"
+#include <string.h>
 
 /* 底盘应用包含的模块和信息存储,底盘是单例模式,因此不需要为底盘建立单独的结构体 */
 #ifdef CHASSIS_BOARD // 如果是底盘板,使用板载IMU获取底盘转动角速度
@@ -163,12 +164,18 @@ void ChassisTask()
 {
     // 后续增加没收到消息的处理(双板的情况)
     // 获取新的控制信息
+    uint8_t command_fresh = 0u;
 #ifdef ONE_BOARD
-    SubGetMessage(chassis_sub, &chassis_cmd_recv);
+    command_fresh = SubGetSnapshot(chassis_sub, &chassis_cmd_recv, sizeof(chassis_cmd_recv),
+                                   HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL);
 #endif
 #ifdef CHASSIS_BOARD
-    chassis_cmd_recv = *(Chassis_Ctrl_Cmd_s *)CANCommGet(chasiss_can_comm);
-#endif // CHASSIS_BOARD
+    command_fresh = CANCommGetSnapshot(chasiss_can_comm, &chassis_cmd_recv,
+                                       sizeof(chassis_cmd_recv), HAL_GetTick(),
+                                       MESSAGE_DEFAULT_MAX_AGE_MS, NULL);
+#endif
+    if (!command_fresh)
+        memset(&chassis_cmd_recv, 0, sizeof(chassis_cmd_recv));
 
     ChassisMotionMode_e motion_mode = CHASSIS_MOTION_MODE_INVALID;
     switch (chassis_cmd_recv.chassis_mode)

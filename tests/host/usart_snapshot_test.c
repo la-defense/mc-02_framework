@@ -8,6 +8,7 @@ static unsigned callbacks;
 static HAL_StatusTypeDef receive_start_status = HAL_OK;
 static unsigned receive_start_count;
 static unsigned abort_receive_count;
+static uint32_t now_ms;
 #if defined(__linux__)
 static long allocation_countdown = -1;
 void *__real_malloc(size_t size);
@@ -31,7 +32,7 @@ void *__wrap_calloc(size_t count, size_t size)
 }
 void __wrap_free(void *pointer) { __real_free(pointer); }
 #endif
-uint32_t HAL_GetTick(void) { return 0; }
+uint32_t HAL_GetTick(void) { return now_ms; }
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h,uint8_t *p,uint16_t n)
 { (void)h;(void)p;(void)n;++receive_start_count;return receive_start_status; }
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h) { (void)h;++abort_receive_count;return HAL_OK; }
@@ -43,6 +44,7 @@ static void callback(void)
 {
     const uint8_t *frame=USARTGetCurrentRxData(instance);
     CHECK(frame && frame!=instance->recv_buff && instance->last_recv_size==18);
+    CHECK(USARTGetCurrentRxTimestamp(instance)==now_ms-50u);
     CHECK(frame[0]==0x25);
     memset(instance->recv_buff,0xff,18); /* DMA writes during parsing. */
     CHECK(frame[0]==0x25 && frame[17]==0x25);
@@ -78,9 +80,15 @@ int main(void)
     CHECK(instance!=NULL && receive_start_count==2u);
     CHECK(USARTRegister(&config)==NULL); /* Duplicate UART must not consume registry or DMA. */
     CHECK(USARTGetCurrentRxData(instance)==NULL && USARTGetCurrentRxData(NULL)==NULL);
+    now_ms=0u;
     memset(instance->recv_buff,0x25,18); HAL_UARTEx_RxEventCallback(&uart,18);
-    memset(instance->recv_buff,0,18); USARTProcessRx();
-    CHECK(callbacks==1 && USARTGetCurrentRxData(instance)==NULL);
+    memset(instance->recv_buff,0,18); now_ms=51u; USARTProcessRx();
+    CHECK(callbacks==0u && USARTGetCurrentRxData(instance)==NULL);
+    now_ms=100u;
+    memset(instance->recv_buff,0x25,18); HAL_UARTEx_RxEventCallback(&uart,18);
+    memset(instance->recv_buff,0,18); now_ms=150u; USARTProcessRx();
+    CHECK(callbacks==1u && USARTGetCurrentRxData(instance)==NULL);
+    CHECK(USARTGetCurrentRxTimestamp(instance)==0u);
 
     UART_HandleTypeDef extra_uart[DEVICE_USART_CNT-1u]={0};
     DMA_HandleTypeDef extra_dma[DEVICE_USART_CNT-1u]={0};

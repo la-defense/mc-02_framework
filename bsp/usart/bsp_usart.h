@@ -29,6 +29,7 @@ typedef struct
     UART_HandleTypeDef *usart_handle;      // 实例对应的usart_handle
     usart_module_callback module_callback; // 解析收到的数据的回调函数
     const uint8_t *current_rx_data; /* Queue snapshot; callback lifetime only. */
+    uint32_t current_rx_timestamp_ms;
 } USARTInstance;
 
 /* usart 初始化配置结构体 */
@@ -84,5 +85,6 @@ void USARTProcessRx(void);
 
 /* NULL outside callback. Read last_recv_size before accessing this immutable frame. */
 const uint8_t *USARTGetCurrentRxData(const USARTInstance *instance);
+uint32_t USARTGetCurrentRxTimestamp(const USARTInstance *instance);
 
 #endif

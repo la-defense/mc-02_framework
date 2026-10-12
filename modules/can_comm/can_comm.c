@@ -1,4 +1,7 @@
 #include "can_comm.h"
+#include "main.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include "memory.h"
 #include "stdlib.h"
 #include "crc8.h"
@@ -25,14 +28,24 @@ static void CANCommResetRx(CANCommInstance *ins)
  */
 static void CANCommRxCallback(CANInstance *_instance)
 {
-    CANCommInstance *comm = (CANCommInstance *)_instance->id; // 注意写法,将can instance的id强制转换为CANCommInstance*类型
+    CANCommInstance *comm = (CANCommInstance *)_instance->id;
+    const uint32_t rx_timestamp_ms = _instance->rx_timestamp_ms;
+    if ((uint32_t)(HAL_GetTick() - rx_timestamp_ms) > MESSAGE_DEFAULT_MAX_AGE_MS)
+    {
+        CANCommResetRx(comm);
+        return;
+    }
+    if (comm->recv_state != 0u &&
+        (uint32_t)(rx_timestamp_ms - comm->assembly_timestamp_ms) > MESSAGE_DEFAULT_MAX_AGE_MS)
+        CANCommResetRx(comm); // 注意写法,将can instance的id强制转换为CANCommInstance*类型
 
     /* 当前接收状态判断 */
     if (_instance->rx_buff[0] == CAN_COMM_HEADER && comm->recv_state == 0) // 之前尚未开始接收且此次包里第一个位置是帧头
     {
         if (_instance->rx_buff[1] == comm->recv_data_len) // 如果这一包里的datalen也等于我们设定接收长度(这是因为暂时不支持动态包长)
         {
-            comm->recv_state = 1; // 设置接收状态为1,说明已经开始接收
+            comm->recv_state = 1;
+            comm->assembly_timestamp_ms = rx_timestamp_ms; // 设置接收状态为1,说明已经开始接收
         }
         else
             return; // 直接跳过即可
@@ -59,8 +72,13 @@ static void CANCommRxCallback(CANInstance *_instance)
             { // 通过校验,复制数据到unpack_data中
                 if (comm->raw_recvbuf[comm->recv_buf_len - 2] == crc_8(comm->raw_recvbuf + 2, comm->recv_data_len))
                 { // 数据量大的话考虑使用DMA
+                    taskENTER_CRITICAL();
                     memcpy(comm->unpacked_recv_data, comm->raw_recvbuf + 2, comm->recv_data_len);
-                    comm->update_flag = 1;           // 数据更新flag置为1
+                    comm->update_flag = 1;
+                    comm->freshness.valid = 1u;
+                    comm->freshness.timestamp_ms = rx_timestamp_ms;
+                    comm->freshness.sequence++;
+                    taskEXIT_CRITICAL();           // 数据更新flag置为1
                     DaemonReload(comm->comm_daemon); // 重载daemon,避免数据更新后一直不被读取而导致数据更新不及时
                 }
             }
@@ -149,7 +167,34 @@ void *CANCommGet(CANCommInstance *instance)
     return instance->unpacked_recv_data;
 }
 
+uint8_t CANCommGetSnapshot(CANCommInstance *instance, void *data, uint8_t data_len,
+                           uint32_t now_ms, uint32_t max_age_ms,
+                           MessageFreshness_t *freshness)
+{
+    if (freshness != NULL) memset(freshness, 0, sizeof(*freshness));
+    if (data == NULL || data_len == 0u) return 0u;
+    memset(data, 0, data_len);
+    if (instance == NULL || instance->recv_data_len != data_len) return 0u;
+    taskENTER_CRITICAL();
+    if (MessageFreshnessIsValid(&instance->freshness, now_ms, max_age_ms))
+    {
+        memcpy(data, instance->unpacked_recv_data, data_len);
+        if (freshness != NULL) *freshness = instance->freshness;
+        taskEXIT_CRITICAL();
+        return 1u;
+    }
+    taskEXIT_CRITICAL();
+    return 0u;
+}
+
 uint8_t CANCommIsOnline(CANCommInstance *instance)
 {
-    return DaemonIsOnline(instance->comm_daemon);
+    if (instance == NULL) return 0u;
+    MessageFreshness_t freshness;
+    taskENTER_CRITICAL();
+    freshness = instance->freshness;
+    taskEXIT_CRITICAL();
+    return (uint8_t)(MessageFreshnessIsValid(
+        &freshness, HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS) &&
+        DaemonIsOnline(instance->comm_daemon));
 }

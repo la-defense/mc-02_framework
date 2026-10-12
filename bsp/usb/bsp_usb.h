@@ -40,3 +40,5 @@ void VCPQueuePush(const uint8_t *buf, uint16_t len);
  * @brief 逐包派发 VCP 收到的数据(必须在任务上下文调用, 全工程只允许一个调用者)
  */
 void VCPProcessRx(void);
+const uint8_t *VCPGetCurrentRxData(void);
+uint32_t VCPGetCurrentRxTimestamp(void);

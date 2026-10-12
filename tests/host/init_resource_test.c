@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+uint32_t HAL_GetTick(void) { return 0u; }
+
 static int allocation_countdown = -1;
 static size_t live_allocations;
 

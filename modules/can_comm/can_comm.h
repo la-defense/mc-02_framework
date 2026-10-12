@@ -13,6 +13,7 @@
 
 #include "bsp_can.h"
 #include "daemon.h"
+#include "message_freshness.h"
 
 #define MX_CAN_COMM_COUNT 4 // 注意均衡负载,一条总线上不要挂载过多的外设
 
@@ -21,7 +22,6 @@
 #define CAN_COMM_TAIL 'e'        // 帧尾
 #define CAN_COMM_OFFSET_BYTES 4  // 's'+ datalen + 'e' + crc8
 
-#pragma pack(1)
 /* CAN comm 结构体, 拥有CAN comm的app应该包含一个CAN comm指针 */
 typedef struct
 {
@@ -38,11 +38,12 @@ typedef struct
     /* 接收和更新标志位*/
     uint8_t recv_state;   // 接收状态,
     uint8_t cur_recv_len; // 当前已经接收到的数据长度(包括帧头帧尾datalen和校验和)
-    uint8_t update_flag;  // 数据更新标志位,当接收到新数据时,会将此标志位置1,调用CANCommGet()后会将此标志位置0
+    uint8_t update_flag;
+    MessageFreshness_t freshness;
+    uint32_t assembly_timestamp_ms;  // 数据更新标志位,当接收到新数据时,会将此标志位置1,调用CANCommGet()后会将此标志位置0
 
     DaemonInstance* comm_daemon;
 } CANCommInstance;
-#pragma pack()
 
 /* CAN comm 初始化结构体 */
 typedef struct
@@ -80,6 +81,9 @@ void CANCommSend(CANCommInstance *instance, uint8_t *data);
  *            强烈建议通过CANComm传输的数据使用pack(1)
  */
 void *CANCommGet(CANCommInstance *instance);
+uint8_t CANCommGetSnapshot(CANCommInstance *instance, void *data, uint8_t data_len,
+                           uint32_t now_ms, uint32_t max_age_ms,
+                           MessageFreshness_t *freshness);
 
 /**
  * @brief 检查CANComm是否在线

@@ -7,14 +7,31 @@
 #include "remote_control.h"
 #include "message_center.h"
 #include "vision_control.h"
+#ifdef GIMBAL_BOARD
+#include "can_comm.h"
+#endif
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"FAIL:%d %s\n",__LINE__,#c); return 1; } } while(0)
 UART_HandleTypeDef huart5, huart9;
+CAN_HandleTypeDef hcan1;
 static RC_ctrl_t remote[2];
 static uint8_t remote_online=1;
 static uint32_t tick=100;
 static Vision_Recv_s wire;
 static Vision_Status_t status;
 static unsigned snapshots;
+#ifdef GIMBAL_BOARD
+static CANCommInstance dual_comm;
+static CANComm_Init_Config_s dual_init_config;
+static Chassis_Ctrl_Cmd_s dual_sent_chassis;
+static unsigned dual_snapshot_calls, dual_send_calls, dual_init_calls;
+CANCommInstance *CANCommInit(CANComm_Init_Config_s *config)
+{ dual_init_config=*config; ++dual_init_calls; return &dual_comm; }
+uint8_t CANCommGetSnapshot(CANCommInstance *instance, void *data, uint8_t len,
+                           uint32_t now, uint32_t max_age, MessageFreshness_t *freshness)
+{ (void)instance; (void)now; (void)max_age; (void)freshness; ++dual_snapshot_calls; memset(data,0,len); return 0u; }
+void CANCommSend(CANCommInstance *instance, uint8_t *data)
+{ (void)instance; memcpy(&dual_sent_chassis,data,sizeof(dual_sent_chassis)); ++dual_send_calls; }
+#endif
 uint32_t HAL_GetTick(void) { return tick; }
 RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *h) { (void)h; return remote; }
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
@@ -121,7 +138,20 @@ int main(int argc, char **argv)
     RobotSafetyInit(); RobotSafetySetRcOnline(1); RobotSafetySetImuValid(1);
     RobotSafetySetCalibValid(1); RobotSafetyRequestEnable(); RobotSafetyUpdate();
     CHECK(RobotSafetyIsReady());
-    RobotCMDInit();
+    CHECK(RobotCMDInit());
+#ifdef GIMBAL_BOARD
+    if (argc > 1 && !strcmp(argv[1], "dual-board")) {
+        CHECK(dual_init_calls == 1u);
+        CHECK(dual_init_config.send_data_len == sizeof(Chassis_Ctrl_Cmd_s));
+        CHECK(dual_init_config.recv_data_len == sizeof(Chassis_Upload_Data_s));
+        RobotCMDTask(); /* No gimbal feedback: the production task must publish safe CAN output. */
+        CHECK(dual_snapshot_calls == 1u && dual_send_calls == 1u);
+        CHECK(dual_sent_chassis.chassis_mode == CHASSIS_ZERO_FORCE);
+        CHECK(dual_sent_chassis.vx == 0.0f && dual_sent_chassis.vy == 0.0f && dual_sent_chassis.wz == 0.0f);
+        puts("PASS: production dual-board command path reads snapshot and sends fail-safe output");
+        return 0;
+    }
+#endif
     if (argc > 1 && !strcmp(argv[1], "gesture-zero")) {
         EstopRequest(ESTOP_REASON_MANUAL);
         remote[0].rc.switch_left=remote[0].rc.switch_right=RC_SW_MID;
@@ -248,9 +278,16 @@ int main(int argc, char **argv)
         if (reason) PubPushMessage(feedback,&invalid);
         RobotCMDTask();
         CHECK(SubGetMessage(gimbal,&command) && SubGetMessage(shoot,&shooting));
-        CHECK(command.gimbal_mode==GIMBAL_ZERO_FORCE && command.yaw==0 && command.pitch==0);
+        if (reason == 0u)
+            CHECK(command.gimbal_mode==GIMBAL_GYRO_MODE && command.yaw==12 && command.pitch==3);
+        else
+            CHECK(command.gimbal_mode==GIMBAL_ZERO_FORCE && command.yaw==0 && command.pitch==0);
         CHECK(command.yaw_vel==0 && command.pitch_acc==0);
-        CHECK(shooting.shoot_mode==SHOOT_OFF && shooting.friction_mode==FRICTION_OFF && shooting.load_mode==LOAD_STOP);
+        if (reason == 0u)
+            CHECK(shooting.load_mode==LOAD_BURSTFIRE && shooting.shoot_rate==8);
+        else
+            CHECK(shooting.shoot_mode==SHOOT_OFF && shooting.friction_mode==FRICTION_OFF &&
+                  shooting.load_mode==LOAD_STOP);
     }
     /* Keyboard mappings remain current after vision is revoked. */
     remote[0].rc.switch_left=RC_SW_UP;
@@ -299,6 +336,14 @@ int main(int argc, char **argv)
     PubPushMessage(feedback,&pose); RobotCMDTask();
     CHECK(SubGetMessage(gimbal,&command) && SubGetMessage(shoot,&shooting));
     CHECK(command.gimbal_mode==GIMBAL_ZERO_FORCE && shooting.shoot_mode==SHOOT_OFF);
-    puts("PASS: production command task revokes outputs without a source");
+    /* Expired gimbal feedback fails closed and clears the manual handoff base. */
+    tick += 51u;
+    RobotCMDTask();
+    CHECK(SubGetMessage(gimbal,&command) && SubGetMessage(shoot,&shooting));
+    CHECK(command.gimbal_mode==GIMBAL_ZERO_FORCE && command.yaw==0 && command.pitch==0);
+    CHECK(command.yaw_vel==0 && command.yaw_acc==0 && command.pitch_vel==0 && command.pitch_acc==0);
+    CHECK(shooting.shoot_mode==SHOOT_OFF && shooting.friction_mode==FRICTION_OFF &&
+          shooting.load_mode==LOAD_STOP && shooting.shoot_rate==0);
+    puts("PASS: production command task revokes outputs without a fresh feedback snapshot");
     return 0;
 }

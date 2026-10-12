@@ -4,6 +4,7 @@
  *        支持 USB VCP(VISION_USE_VCP) 和 UART(VISION_USE_UART) 两种传输, 宏切换
  */
 #include "master_process.h"
+#include "message_freshness.h"
 #include "daemon.h"
 #include "bsp_log.h"
 #include "robot_def.h"
@@ -19,6 +20,7 @@ static uint32_t vision_tx_count = 0;
 static uint32_t vision_tx_drop_count = 0;
 static uint32_t vision_crc_error_count = 0;
 static uint32_t vision_last_rx_ms = 0;
+static uint8_t vision_has_valid_frame;
 
 #ifdef VISION_USE_UART
 #include "bsp_usart.h"
@@ -32,12 +34,14 @@ static uint8_t *vis_recv_buff;
 #endif
 
 /* 从接收缓冲中滑动寻找 SP 帧并解码 */
-static void DecodeVision(uint16_t recv_len)
+static void DecodeVision(const uint8_t *rx_data, uint16_t recv_len, uint32_t rx_timestamp_ms)
 {
+    if (rx_data == NULL || (uint32_t)(HAL_GetTick() - rx_timestamp_ms) > MESSAGE_DEFAULT_MAX_AGE_MS)
+        return;
     Vision_Recv_s packet;
     uint32_t crc_errors = 0u;
     const uint8_t found = VisionProtocolFindCommandFrame(
-        vis_recv_buff, recv_len, &packet, &crc_errors);
+        rx_data, recv_len, &packet, &crc_errors);
 
     taskENTER_CRITICAL();
     vision_crc_error_count += crc_errors;
@@ -45,7 +49,8 @@ static void DecodeVision(uint16_t recv_len)
     {
         recv_data = packet;
         vision_rx_count++;
-        vision_last_rx_ms = HAL_GetTick();
+        vision_last_rx_ms = rx_timestamp_ms;
+        vision_has_valid_frame = 1u;
         DaemonReload(vision_daemon_instance);
     }
     taskEXIT_CRITICAL();
@@ -55,7 +60,9 @@ static void DecodeVision(uint16_t recv_len)
 /* bsp_usart 回调(无参): 数据到达后调用 DecodeVision */
 static void VisionUartRxCallback(void)
 {
-    DecodeVision(vision_usart_instance->last_recv_size);
+    DecodeVision(USARTGetCurrentRxData(vision_usart_instance),
+                 vision_usart_instance->last_recv_size,
+                 USARTGetCurrentRxTimestamp(vision_usart_instance));
 }
 #endif
 
@@ -65,6 +72,7 @@ static void VisionOfflineCallback(void *id)
     taskENTER_CRITICAL();
     memset(&recv_data, 0, sizeof(recv_data));
     vision_last_rx_ms = 0u;
+    vision_has_valid_frame = 0u;
     taskEXIT_CRITICAL();
 #ifdef VISION_USE_UART
     USARTServiceInit(vision_usart_instance);
@@ -95,10 +103,19 @@ void VisionUpdateTx(uint8_t mode,
     send_data.bullet_count = bullet_count;
 }
 
+#ifdef VISION_USE_VCP
+static void VisionVcpRxCallback(uint16_t recv_len)
+{
+    DecodeVision(VCPGetCurrentRxData(), recv_len, VCPGetCurrentRxTimestamp());
+}
+#endif
+
 Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
 {
     memset(&recv_data, 0, sizeof(recv_data));
     memset(&send_data, 0, sizeof(send_data));
+    vision_last_rx_ms = 0u;
+    vision_has_valid_frame = 0u;
 
     Daemon_Init_Config_s daemon_conf = {
         .callback = VisionOfflineCallback,
@@ -111,7 +128,7 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
 
 #ifdef VISION_USE_VCP
     UNUSED(_handle);
-    USB_Init_Config_s conf = {.rx_cbk = DecodeVision};
+    USB_Init_Config_s conf = {.rx_cbk = VisionVcpRxCallback};
     vis_recv_buff = USBInit(conf);
     if (vis_recv_buff == NULL)
     {
@@ -149,8 +166,21 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
     return &recv_data;
 }
 
+static void VisionExpireIfStale(uint32_t now_ms)
+{
+    taskENTER_CRITICAL();
+    if (vision_has_valid_frame != 0u &&
+        (uint32_t)(now_ms - vision_last_rx_ms) > MESSAGE_DEFAULT_MAX_AGE_MS)
+    {
+        memset(&recv_data, 0, sizeof(recv_data));
+        vision_has_valid_frame = 0u;
+    }
+    taskEXIT_CRITICAL();
+}
+
 void VisionSend(void)
 {
+    VisionExpireIfStale(HAL_GetTick());
     /* DMA 异步发送需要持久缓冲区, 不能用栈局部变量(函数返回后帧数据会被覆盖) */
     static Vision_Send_s tx_pkt;
 
@@ -181,12 +211,15 @@ void VisionGetStatus(Vision_Status_t *status)
 
 void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status)
 {
+    VisionExpireIfStale(HAL_GetTick());
     taskENTER_CRITICAL();
     if (frame != NULL)
         *frame = recv_data;
     if (status != NULL)
     {
-        status->online = (vision_daemon_instance != NULL && DaemonIsOnline(vision_daemon_instance) > 0) ? 1 : 0;
+        status->has_valid_frame = vision_has_valid_frame;
+        status->online = (vision_has_valid_frame != 0u && vision_daemon_instance != NULL &&
+                          DaemonIsOnline(vision_daemon_instance) > 0) ? 1 : 0;
         status->mode = recv_data.mode;
         status->last_rx_ms = vision_last_rx_ms;
         status->rx_count = vision_rx_count;

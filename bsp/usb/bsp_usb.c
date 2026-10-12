@@ -10,6 +10,7 @@
  */
 
 #include "bsp_usb.h"
+#include "message_freshness.h"
 #include "bsp_log.h"
 #include "bsp_dwt.h"
 #include <string.h>
@@ -32,6 +33,9 @@ static USBCallback s_rx_cbk = NULL;
 
 static uint8_t vcp_rxq[VCP_RXQ_DEPTH][VCP_RXQ_ITEM] __attribute__((aligned(4)));
 static volatile uint16_t vcp_rxq_len[VCP_RXQ_DEPTH];
+static volatile uint32_t vcp_rxq_timestamp_ms[VCP_RXQ_DEPTH];
+static const uint8_t *vcp_current_rx_data;
+static uint32_t vcp_current_rx_timestamp_ms;
 static volatile uint16_t vcp_head = 0u; /* 生产者(中断)写 */
 static volatile uint16_t vcp_tail = 0u; /* 消费者(任务)写 */
 static volatile uint32_t vcp_drop = 0u; /* 队列满丢弃帧数 */
@@ -63,6 +67,7 @@ void VCPQueuePush(const uint8_t *buf, uint16_t len)
         {
             memcpy(vcp_rxq[vcp_head], buf, len);
             vcp_rxq_len[vcp_head] = len;
+            vcp_rxq_timestamp_ms[vcp_head] = HAL_GetTick();
             __DMB();
             vcp_head = next;
 
@@ -99,12 +104,16 @@ void VCPProcessRx(void)
     while (vcp_tail != vcp_head)
     {
         uint16_t len = vcp_rxq_len[vcp_tail];
-        if (bsp_usb_rx_buffer != NULL && s_rx_cbk != NULL && len > 0u)
+        if (bsp_usb_rx_buffer != NULL && s_rx_cbk != NULL && len > 0u &&
+            (uint32_t)(HAL_GetTick() - vcp_rxq_timestamp_ms[vcp_tail]) <= MESSAGE_DEFAULT_MAX_AGE_MS)
         {
             /* 拷回端点缓冲再回调: 模块回调(DecodeVision)仍按原约定从
                bsp_usb_rx_buffer 读数据, 模块侧零改动 */
             memcpy(bsp_usb_rx_buffer, vcp_rxq[vcp_tail], len);
+            vcp_current_rx_data = vcp_rxq[vcp_tail];
+            vcp_current_rx_timestamp_ms = vcp_rxq_timestamp_ms[vcp_tail];
             s_rx_cbk(len);
+            vcp_current_rx_data = NULL;
         }
         __DMB();
         vcp_tail = (uint16_t)((vcp_tail + 1u) % VCP_RXQ_DEPTH);
@@ -118,6 +127,9 @@ void VCPProcessRx(void)
     processing = 0u;
 }
 // 注意usb单个数据包(Full speed模式下)最大为64byte,超出可能会出现丢包情况
+
+const uint8_t *VCPGetCurrentRxData(void) { return vcp_current_rx_data; }
+uint32_t VCPGetCurrentRxTimestamp(void) { return vcp_current_rx_data != NULL ? vcp_current_rx_timestamp_ms : 0u; }
 
 uint8_t *USBInit(USB_Init_Config_s usb_conf)
 {

@@ -17,10 +17,8 @@
 #include "stdint.h"
 
 /* 开发板类型定义,烧录时注意不要弄错对应功能;修改定义后需要重新编译,只能存在一个定义! */
-#if !defined(MC02_PROFILE_BENCH_SAFE)
-#define ONE_BOARD // 单板控制整车
-// #define CHASSIS_BOARD //底盘板
-// #define GIMBAL_BOARD  //云台板
+#if !defined(MC02_PROFILE_BENCH_SAFE) && !defined(ONE_BOARD) && !defined(CHASSIS_BOARD) && !defined(GIMBAL_BOARD)
+#define ONE_BOARD
 #endif
 
 #define VISION_USE_VCP // 正式链路: 板载 USB CDC 虚拟串口(USB-A2C)与上位机通信

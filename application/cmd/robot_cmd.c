@@ -72,9 +72,7 @@ static Gimbal_Ctrl_Cmd_s gimbal_cmd_send;      // 传递给云台的控制信息
 static Gimbal_Upload_Data_s gimbal_fetch_data; // 从云台获取的反馈信息
 
 static Publisher_t *shoot_cmd_pub;           // 发射控制消息发布者
-static Subscriber_t *shoot_feed_sub;         // 发射反馈信息订阅者
 static Shoot_Ctrl_Cmd_s shoot_cmd_send;      // 传递给发射的控制信息
-static Shoot_Upload_Data_s shoot_fetch_data; // 从发射获取的反馈信息
 
 BMI088Instance *bmi088_test; // 云台IMU
 BMI088_Data_t bmi088_data;
@@ -88,8 +86,6 @@ uint8_t RobotCMDInit(void)
     gimbal_cmd_pub = PubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
     gimbal_feed_sub = SubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
     shoot_cmd_pub = PubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
-    shoot_feed_sub = SubRegister("shoot_feed", sizeof(Shoot_Upload_Data_s));
-
 #ifdef ONE_BOARD // 双板兼容
     chassis_cmd_pub = PubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
     chassis_feed_sub = SubRegister("chassis_feed", sizeof(Chassis_Upload_Data_s));
@@ -121,8 +117,7 @@ uint8_t RobotCMDInit(void)
     shoot_cmd_send.load_mode = LOAD_STOP;
     previous_vision_active = 0u;
     manual_reference_ready = 0u;
-    if (gimbal_cmd_pub == NULL || gimbal_feed_sub == NULL || shoot_cmd_pub == NULL ||
-        shoot_feed_sub == NULL)
+    if (gimbal_cmd_pub == NULL || gimbal_feed_sub == NULL || shoot_cmd_pub == NULL)
         return 0u;
 #ifdef ONE_BOARD
     if (chassis_cmd_pub == NULL || chassis_feed_sub == NULL)
@@ -350,13 +345,17 @@ void RobotCMDTask()
    // BMI088Acquire(bmi088_test,&bmi088_data) ;
     // 从其他应用获取回传数据
 #ifdef ONE_BOARD
-    SubGetMessage(chassis_feed_sub, (void *)&chassis_fetch_data);
+    if (!SubGetSnapshot(chassis_feed_sub, &chassis_fetch_data, sizeof(chassis_fetch_data),
+                        HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL))
+        memset(&chassis_fetch_data, 0, sizeof(chassis_fetch_data));
 #endif // ONE_BOARD
 #ifdef GIMBAL_BOARD
-    chassis_fetch_data = *(Chassis_Upload_Data_s *)CANCommGet(cmd_can_comm);
+    if (!CANCommGetSnapshot(cmd_can_comm, &chassis_fetch_data, sizeof(chassis_fetch_data),
+                            HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL))
+        memset(&chassis_fetch_data, 0, sizeof(chassis_fetch_data));
 #endif // GIMBAL_BOARD
-    SubGetMessage(shoot_feed_sub, &shoot_fetch_data);
-    const uint8_t feedback_received = SubGetMessage(gimbal_feed_sub, &gimbal_fetch_data);
+    const uint8_t feedback_received = SubGetSnapshot(gimbal_feed_sub, &gimbal_fetch_data,
+        sizeof(gimbal_fetch_data), HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL);
 
     /* One authorized snapshot per cycle also expires PC input without new frames. */
     if (remote_initialized) RemoteControlGetSnapshot(&remote_snapshot);
@@ -364,6 +363,25 @@ void RobotCMDTask()
 
     /* Copy frame and link status together so a partial ISR update cannot mix generations. */
     VisionGetSnapshot(&vision_recv_snapshot, &vision_status_snapshot);
+    if (!feedback_received || !isfinite(gimbal_fetch_data.gimbal_imu_data.YawTotalAngle) ||
+        !isfinite(gimbal_fetch_data.gimbal_imu_data.Pitch))
+    {
+        manual_reference_ready = 0u;
+        previous_vision_active = 0u;
+        RobotSafetySetRcOnline(remote_snapshot.remote_online);
+        EmergencyHandler(remote_snapshot.remote_online);
+        ApplySafeCommands();
+        VisionSend();
+#ifdef ONE_BOARD
+        PubPushMessage(chassis_cmd_pub, (void *)&chassis_cmd_send);
+#endif
+#ifdef GIMBAL_BOARD
+        CANCommSend(cmd_can_comm, (void *)&chassis_cmd_send);
+#endif
+        PubPushMessage(shoot_cmd_pub, (void *)&shoot_cmd_send);
+        PubPushMessage(gimbal_cmd_pub, (void *)&gimbal_cmd_send);
+        return;
+    }
 
     // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
     CalcOffsetAngle();

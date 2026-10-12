@@ -1,4 +1,5 @@
 #include "bsp_can.h"
+#include "message_freshness.h"
 #include "main.h"
 #include "memory.h"
 #include "stdlib.h"
@@ -40,6 +41,7 @@ typedef struct
     CANInstance *instance; /* 已由 rx_lookup 查好的归属实例 */
     uint8_t len;           /* 数据长度 0~8 */
     uint8_t data[8];       /* 帧数据 */
+    uint32_t timestamp_ms;
 } CANRxItem_t;
 
 /* 接收中断只保留"有新帧"和"丢帧诊断"两种:
@@ -152,6 +154,7 @@ static void CANRxQueuePush(CANBusState_t *bus, CANInstance *ins, uint8_t len, co
     it->instance = ins;
     it->len = len;
     memcpy(it->data, data, len);
+    it->timestamp_ms = HAL_GetTick();
 
     __DMB();
     bus->rxq_head = next;
@@ -195,9 +198,11 @@ void CANProcessRx(void)
         {
             CANRxItem_t *it = &bus->rxq[bus->rxq_tail];
             CANInstance *ins = it->instance;
-            if (ins != NULL && ins->can_module_callback != NULL)
+            if (ins != NULL && ins->can_module_callback != NULL &&
+                (uint32_t)(HAL_GetTick() - it->timestamp_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS)
             {
                 ins->rx_len = it->len;
+                ins->rx_timestamp_ms = it->timestamp_ms;
                 memcpy(ins->rx_buff, it->data, it->len);
                 ins->can_module_callback(ins);
             }

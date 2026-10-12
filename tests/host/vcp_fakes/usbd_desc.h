@@ -1,0 +1,3 @@
+#ifndef MC02_VCP_FAKE_USBD_DESC_H
+#define MC02_VCP_FAKE_USBD_DESC_H
+#endif

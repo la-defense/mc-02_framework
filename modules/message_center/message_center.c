@@ -1,6 +1,9 @@
 #include "message_center.h"
 #include <stdlib.h>
 #include <string.h>
+#include "main.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 /* The sentinel is not counted against MAX_TOPIC_COUNT. */
 static Publisher_t message_center = {
@@ -147,10 +150,42 @@ uint8_t SubGetMessage(Subscriber_t *sub, void *data_ptr)
     return 1u;
 }
 
+uint8_t SubGetSnapshot(Subscriber_t *sub, void *data_ptr, uint8_t data_len,
+                       uint32_t now_ms, uint32_t max_age_ms,
+                       MessageFreshness_t *freshness)
+{
+    if (freshness != NULL)
+        memset(freshness, 0, sizeof(*freshness));
+    if (data_ptr == NULL || data_len == 0u)
+        return 0u;
+    memset(data_ptr, 0, data_len);
+    if (sub == NULL || sub->data_len != data_len)
+        return 0u;
+
+    taskENTER_CRITICAL();
+    const MessageFreshness_t snapshot = sub->freshness;
+    if (MessageFreshnessIsValid(&snapshot, now_ms, max_age_ms))
+    {
+        memcpy(data_ptr, sub->queue[0], data_len);
+        if (freshness != NULL)
+            *freshness = snapshot;
+        taskEXIT_CRITICAL();
+        return 1u;
+    }
+    taskEXIT_CRITICAL();
+    return 0u;
+}
+
 uint8_t PubPushMessage(Publisher_t *pub, void *data_ptr)
+{
+    return PubPushMessageAt(pub, data_ptr, HAL_GetTick());
+}
+
+uint8_t PubPushMessageAt(Publisher_t *pub, void *data_ptr, uint32_t timestamp_ms)
 {
     if (pub == NULL || data_ptr == NULL)
         return 0u;
+    taskENTER_CRITICAL();
     Subscriber_t *iter = pub->first_subs;
     while (iter != NULL)
     {
@@ -160,9 +195,13 @@ uint8_t PubPushMessage(Publisher_t *pub, void *data_ptr)
             iter->temp_size--;
         }
         memcpy(iter->queue[iter->back_idx], data_ptr, pub->data_len);
+        iter->freshness.valid = 1u;
+        iter->freshness.timestamp_ms = timestamp_ms;
+        iter->freshness.sequence++;
         iter->back_idx = (uint8_t)((iter->back_idx + 1u) % QUEUE_SIZE);
         iter->temp_size++;
         iter = iter->next_subs_queue;
     }
+    taskEXIT_CRITICAL();
     return 1u;
 }

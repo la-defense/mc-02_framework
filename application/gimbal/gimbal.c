@@ -106,7 +106,9 @@ void GimbalTask()
 {
     // 获取云台控制数据
     // 后续增加未收到数据的处理
-    SubGetMessage(gimbal_sub, &gimbal_cmd_recv);
+    if (!SubGetSnapshot(gimbal_sub, &gimbal_cmd_recv, sizeof(gimbal_cmd_recv),
+                        HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL))
+        memset(&gimbal_cmd_recv, 0, sizeof(gimbal_cmd_recv));
 
     // @todo:现在已不再需要电机反馈,实际上可以始终使用IMU的姿态数据来作为云台的反馈,yaw电机的offset只是用来跟随底盘
     // 根据控制模式进行电机反馈切换和过渡,视觉模式在robot_cmd模块就已经设置好,gimbal只看yaw_ref和pitch_ref
@@ -116,6 +118,8 @@ void GimbalTask()
     case GIMBAL_ZERO_FORCE:
         DJIMotorStop(yaw_motor);
         DJIMotorStop(pitch_motor);
+        DJIMotorSetRef(yaw_motor, 0.0f);
+        DJIMotorSetRef(pitch_motor, 0.0f);
         break;
     // 使用陀螺仪的反馈,底盘根据yaw电机的offset跟随云台或视觉模式采用
     case GIMBAL_GYRO_MODE: // 后续只保留此模式
@@ -140,6 +144,10 @@ void GimbalTask()
         DJIMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch);
         break;
     default:
+        DJIMotorStop(yaw_motor);
+        DJIMotorStop(pitch_motor);
+        DJIMotorSetRef(yaw_motor, 0.0f);
+        DJIMotorSetRef(pitch_motor, 0.0f);
         break;
     }
 

@@ -64,6 +64,7 @@ typedef enum
 typedef struct
 {
 	uint8_t online;
+	uint8_t has_valid_frame;
 	uint8_t mode;
 	uint32_t last_rx_ms;
 	uint32_t rx_count;

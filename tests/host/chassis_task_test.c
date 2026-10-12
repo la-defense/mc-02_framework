@@ -10,6 +10,8 @@
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "FAIL:%d %s\n", __LINE__, #condition); return 1; } } while (0)
 
+static uint32_t test_tick;
+uint32_t HAL_GetTick(void) { return test_tick; }
 CAN_HandleTypeDef hcan1, hcan2;
 UART_HandleTypeDef huart1;
 static DJIMotorInstance motors[4];
@@ -101,6 +103,28 @@ int main(void)
     ChassisTask();
     for (unsigned i = 0; i < 4; ++i)
         CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+#endif
+
+    /* The 50 ms edge remains valid and the following millisecond revokes output. */
+    test_tick = 100u;
+    command = (Chassis_Ctrl_Cmd_s){.vx = 100.0f, .chassis_mode = CHASSIS_NO_FOLLOW};
+    PubPushMessage(commands, &command);
+    test_tick = 150u;
+    ChassisTask();
+#if CHASSIS_TASK_EXPECT_CONFIGURED
+    CHECK(motors[0].enabled && motors[0].ref != 0.0f);
+#endif
+    test_tick = 151u;
+    ChassisTask();
+    for (unsigned i = 0; i < 4; ++i)
+        CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+    test_tick = 152u;
+    PubPushMessage(commands, &command);
+    ChassisTask();
+#if CHASSIS_TASK_EXPECT_CONFIGURED
+    CHECK(motors[0].enabled && motors[0].ref != 0.0f);
+#else
+    for (unsigned i = 0; i < 4; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
 #endif
 
     puts("chassis task checks passed");

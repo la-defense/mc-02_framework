@@ -9,6 +9,7 @@
  *
  */
 #include "bsp_usart.h"
+#include "message_freshness.h"
 #include "bsp_log.h"
 #include "bsp_dwt.h"
 #include "stdlib.h"
@@ -32,7 +33,7 @@ static USARTInstance *usart_instance[DEVICE_USART_CNT] = {NULL};
    并发模型: 单生产者(该串口的 RxEvent 中断) / 单消费者(USARTProcessRx)。
    ========================================================================== */
 #define USART_RXQ_DEPTH 4u    /* 每实例队列深度(裁判几十 Hz、视觉 200Hz, 1kHz 消费足够) */
-#define USART_RXQ_HDR 4u      /* 每项前 4 字节: 2 字节长度 + 2 字节填充(保证 data 四字节对齐) */
+#define USART_RXQ_HDR 8u      /* 每项前 8 字节: 长度、填充和入队 tick；数据保持四字节对齐 */
 #define USART_RECOVER_RETRY 3u
 
 typedef struct
@@ -202,7 +203,8 @@ static void USARTQueuePush(uint8_t slot, USARTInstance *ins, uint16_t len)
     }
 
     uint8_t *item = USARTQueueItem(ins, slot, head);
-    *(uint16_t *)item = len;                                  /* 前 2 字节: 长度 */
+    *(uint16_t *)item = len;
+    *(uint32_t *)(item + 4u) = HAL_GetTick();                                  /* 前 2 字节: 长度 */
     memcpy(item + USART_RXQ_HDR, ins->recv_buff, len);        /* 后面: 数据 */
 
     __DMB();
@@ -278,11 +280,12 @@ void USARTProcessRx(void)
             uint16_t len = *(uint16_t *)item;
             if (len > ins->recv_buff_size)
                 usart_q[slot].drop++;
-            else if (len > 0u)
+            else if (len > 0u && (uint32_t)(HAL_GetTick() - *(uint32_t *)(item + 4u)) <= MESSAGE_DEFAULT_MAX_AGE_MS)
             {
                 memcpy(ins->recv_buff, item + USART_RXQ_HDR, len);
                 ins->last_recv_size = len;
                 ins->current_rx_data = item + USART_RXQ_HDR;
+                ins->current_rx_timestamp_ms = *(uint32_t *)(item + 4u);
                 if (ins->module_callback != NULL)
                     ins->module_callback();
                 ins->current_rx_data = NULL;
@@ -329,6 +332,11 @@ void USARTProcessRx(void)
 const uint8_t *USARTGetCurrentRxData(const USARTInstance *instance)
 {
     return instance != NULL ? instance->current_rx_data : NULL;
+}
+
+uint32_t USARTGetCurrentRxTimestamp(const USARTInstance *instance)
+{
+    return instance != NULL && instance->current_rx_data != NULL ? instance->current_rx_timestamp_ms : 0u;
 }
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
