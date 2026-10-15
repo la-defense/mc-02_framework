@@ -16,27 +16,27 @@
 
 以下是功能实施任务，本次登记不代表固件已实现。依赖暂缓主题的内容先适配现有接口；能力或参数不足时保持待补信息，不把暂缓模块暗中加入实施范围。
 
-- [ ] **MC02-0054** [enhancement] [ready-for-agent] 建立车型配置、功能依赖与编译选择（R01）。验收：每兵种一套当前配置，首台单板哨兵四轮全向轮；声明五种底盘并按配置筛选源码。未实现车型／DR／步进／半舵选用时明确报错，无默认车型回退；核心失败失能，辅助按依赖降级，非法配置和编译组合回归通过。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0055** [enhancement] [ready-for-agent] 配置独立任务及分阶段启动（R02）。验收：底盘、云台、发射独立任务，电机计算／发送周期分别配置，启动读取、运行固定、修改重启；初始化按依赖及 IRQ／DMA／等待条件分阶段，逐项反馈。创建失败、非法周期、带宽和端到端时限有检查，关联 R25-12。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0056** [enhancement] [ready-for-agent] 统一整车模式、分功能许可与立即禁止通道（R03）。验收：单一管理者发布一致许可；手动／视觉辅助／全自主来源明确，辅助模式人工击发，健康切换保持使能并平滑接管。调试遥控离线急停，配置启用的正式自主无需逐场预授权但要求新鲜裁判阶段及核心正常；视觉／USB 失效按规格撤销旧命令并降级，恢复只用新输入。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0057** [enhancement] [needs-info] 统一底盘运动接口、参考系和反馈（R04）。验收：运动使用 m/s、rad/s、前左上坐标并显式转换旧单位；配置允许底盘／大 yaw／枪口／场地参考系，缺姿态撤销依赖命令。输出实际速度与可选本地里程计，场地导航在上位机；电容及额外传感器可选，电容故障按普通供电限制。实车几何、反馈来源和其他构型实施范围补齐后验证，关联 APP-10。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0054** [enhancement] [ready-for-agent] 建立车型配置、功能依赖与编译选择（R01）。验收：每兵种一套当前配置，首台单板哨兵四轮全向轮；声明五种底盘并按配置筛选源码。未实现车型／DR／步进／半舵选用时明确报错，无默认车型回退；核心失败失能，辅助按依赖降级，非法配置和编译组合回归通过。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 追加 B2／B6／S1：平台／板级／RTOS 与车型分离；Seasky 退出构建并保留参考，删除旧 BMI088Middleware.c/.h、BMI088reg.h 及引用，保留现行 BMI088 和 Git 来源；接口解耦关联0086／0087，不恢复 R27。
+- [ ] **MC02-0055** [enhancement] [ready-for-agent] 配置独立任务及分阶段启动（R02）。验收：底盘、云台、发射独立任务，电机计算／发送周期分别配置，启动读取、运行固定、修改重启；初始化按依赖及 IRQ／DMA／等待条件分阶段，逐项反馈。创建失败、非法周期、带宽和端到端时限有检查，关联 R25-12。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 追加 S2：框架 OS 接口支持平台定时唤醒亚毫秒任务，计算留在任务中，不静默取整；分辨率与预算启动校验，关联0087／0088，不新增 R11。
+- [ ] **MC02-0056** [enhancement] [ready-for-agent] 统一整车模式、分功能许可与立即禁止通道（R03）。验收：单一管理者发布一致许可；手动／视觉辅助／全自主来源明确，辅助模式人工击发，健康切换保持使能并平滑接管。调试遥控离线急停，配置启用的正式自主无需逐场预授权但要求新鲜裁判阶段及核心正常；视觉／USB 失效按规格撤销旧命令并降级，恢复只用新输入。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 追加 B2／B5／B6：瞄准与移动独立有效；人工急停未明确解除始终禁止，持续供电复位不得绕过，正式自主明确解除后有效条件自动恢复、调试仅 SAFE。首台姿态／标定可信且无温控故障时，未温稳只提示，等待温稳可配置；USB 无强制握手不替代许可。
+- [ ] **MC02-0057** [enhancement] [needs-info] 统一底盘运动接口、参考系和反馈（R04）。验收：运动使用 m/s、rad/s、前左上坐标并显式转换旧单位；配置允许底盘／大 yaw／枪口／场地参考系，缺姿态撤销依赖命令。输出实际速度与可选本地里程计，场地导航在上位机；电容及额外传感器可选，电容故障按普通供电限制。实车几何、反馈来源和其他构型实施范围补齐后验证，关联 APP-10。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 追加 B4：缓冲数据过期而裁判上限／供电许可有效时只用配置保守余量，停用缓冲额外功率；上限／许可过期不得沿用该降级授权。
 - [ ] **MC02-0058** [enhancement] [needs-info] 实现哨兵自旋与三轴云台协同（R05）。验收：按配置支持同向偏置正弦自旋、移动减自旋优先平移；大 yaw 补偿实际底盘转速并扫描，小 yaw 左右扫、pitch 点头；锁定后持续回中，丢目标先局部重捕获再全局扫描，饱和可请求降自旋且哨兵默认启用。补齐机械范围／参考变换／速率来源／扫描参数后验证状态切换和能力不足路径。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0059** [enhancement] [needs-info] 建立配置化发射机构与摩擦轮就绪门槛（R06）。验收：一套发射机构的摩擦轮数量、型号、目标转速和稳定时间可配置；所有启用轮反馈有效且稳定到速才供弹。未就绪单发／三连发拒绝并反馈原因，需新请求；连续发射只使用当前授权，不重放旧请求。视觉决定自动击发时机，下位机检查基础许可、核心反馈、裁判与机构约束，关联 R25-15、MC02-0027。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0060** [enhancement] [ready-for-agent] 实现经典 CAN 分用途发送调度（R07）。验收：标准／扩展 ID、最多 8 字节；周期目标只保留最新值，一次性命令有界排队与重试，优先级／期限配置，提交与完成状态分开。按总线组装，忙／错误／过期／取消不重放旧目标，容量和带宽验证，长 CAN FD 帧不在本轮范围。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0061** [enhancement] [ready-for-agent] 实现每串口有界复制发送队列（R08）。验收：提交时复制数据，每串口独立容量及事务结果；完成、错误、超时反馈，确认 DMA／中断传输终止后释放。忙、排队、缓冲复用与并发回归通过，接收接口复用 BSPUART-03U1。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0062** [enhancement] [needs-info] 整理 USB 上下位机业务接入与重新生成保护（R08）。验收：USB 用于上下位机业务，调参／诊断独立串口；任务解析、持久发送缓冲及结果反馈符合实际协议。正式自主全链路失效撤销旧命令、停平移／禁发射但保留原地自旋与本地三轴索敌，恢复仅用新命令；补齐移动／瞄准消息约定，CubeMX 重新生成验证可复现，保留 R25-09 已完成保护。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0062** [enhancement] [ready-for-agent] 整理 USB 传输、生命周期与重新生成保护。验收：USB 专用于上下位机，诊断独立串口，ST／HAL 类型只在后端。保留 ISR 复制、任务解析、原接收时间和持久 TX 缓冲；容量、预算、单消费者、丢块／忙／完成／错误结果可验证。失联撤销旧队列／拼帧／命令和 USB 击发授权；首份合法未过期新命令恢复对应业务，无预先握手，仍受模式／safety 约束。业务格式归0089、对时归0090；CubeMX 人工核对，保留 R25-09。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0063** [enhancement] [ready-for-agent] 重写 H723 分区 Flash 驱动并统一维护准入（R13）。验收：分区＋偏移寻址，校验链接布局、范围、对齐和擦写粒度，程序区默认只读，bsp_param 复用。所有擦写共用有效维护授权、失能确认及事务总期限；保护缺失／失败／超时拒绝，结果准确，不降低 MC02-0036 的已有保护。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0064** [enhancement] [ready-for-agent] 建立参数描述、约束及参数组事务（R13）。验收：类型、单位、范围、默认值、版本、生效方式统一描述；模块补关联约束，整体暂存／校验／接受，失败保留整组旧值，区分生效和 Flash 保存。按重启生效等既定规则执行，读写／掉电回退及关联参数回归通过，复用 PARAM-03。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0065** [enhancement] [ready-for-agent] 发布统一整车健康与初始化事件快照（R14）。验收：复用模块状态，报告车型、启用／可用／降级、启动与安全结果、恢复额度；有限 RAM 记录初始化时间／模块／原因／严重程度，支持只读查询与独立诊断串口导出，跨任务读取一致。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0066** [enhancement] [ready-for-agent] 实现有界异步日志与关键记录保留（R14）。验收：实时路径提交事件，日志任务格式化发送，文本有界复制；关键故障／状态变化预留容量，重复聚合，普通日志限速／过滤／丢弃并统计损失。提交不阻塞核心，日志不可用辅助降级；正式默认关键日志，等级策略复用 MC02-0004。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0067** [enhancement] [needs-info] 统一静态关断、看门狗窗口与有限复位恢复（R15）。验收：静态板级关断清单校验车型覆盖，异常仅寄存器操作；看门狗启动／正常／维护窗口配置并报告实际结果。各运行故障复位统一有限恢复，正式自主重验初始化／核心／裁判，调试失能；连续额度跨复位累计，恢复控制并稳定到配置时长清零，超限失能，清诊断不改额度。补齐直接输出边界、硬件窗口和稳定时长，保留当前启动核心初始化失败锁存。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0068** [enhancement] [ready-for-agent] 统一崩溃布局、构建身份与现场解析（R15）。验收：可读内存边界由链接布局提供并验证一致性；解析报告失败原因和实际长度。记录整固件构建标识、车型／配置版本并归档匹配 ELF／map，用原产物解析旧现场；异常读取有界，关联 LOG-06，保留已完成重入和 RAM 记录保护。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0065** [enhancement] [ready-for-agent] 发布统一整车健康与初始化事件快照（R14）。验收：复用模块状态，报告车型、启用／可用／降级、启动与安全结果、恢复额度；有限 RAM 记录初始化时间／模块／原因／严重程度，支持只读查询与独立诊断串口导出，跨任务读取一致。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 追加 B6／B7：区分温度有效、加热启用／实际输出、温稳和故障，复用裁判及通信分组有效状态；LCD／诊断仅只读消费。
+- [ ] **MC02-0066** [enhancement] [ready-for-agent] 实现有界异步日志与关键记录保留（R14）。验收：实时路径提交事件，日志任务格式化发送，文本有界复制；关键故障／状态变化预留容量，重复聚合，普通日志限速／过滤／丢弃并统计损失。提交不阻塞核心，日志不可用辅助降级；正式默认关键日志，等级策略复用 MC02-0004。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 追加 S2／S7：标准输出及旧 fputc 接入同一有界出口并反馈失败；标准输入不交互，使用诊断协议；RTT 非阻塞辅助输出，后端负责同步及启用 Cache 时的可见性。
+- [ ] **MC02-0067** [enhancement] [needs-info] 统一静态关断、看门狗窗口与有限复位恢复（R15）。验收：静态板级关断清单校验车型覆盖，异常仅寄存器操作；看门狗启动／正常／维护窗口配置并报告实际结果。各运行故障复位统一有限恢复，正式自主重验初始化／核心／裁判，调试失能；连续额度跨复位累计，恢复控制并稳定到配置时长清零，超限失能，清诊断不改额度。补齐直接输出边界、硬件窗口和稳定时长，保留当前启动核心初始化失败锁存。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 追加 B5：持续供电期间人工急停跨 MCU 复位保留，未明确解除不可恢复；不等同于断电持久化，不在急停路径引入 Flash 擦写。
+- [ ] **MC02-0068** [enhancement] [ready-for-agent] 统一崩溃布局、构建身份与现场解析（R15）。验收：可读内存边界由链接布局提供并验证一致性；解析报告失败原因和实际长度。记录整固件构建标识、车型／配置版本并归档匹配 ELF／map，用原产物解析旧现场；异常读取有界，关联 LOG-06，保留已完成重入和 RAM 记录保护。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 追加 S6：CI 可下载和本地同格式包由0103提供，VSCode／OpenOCD／可选 Ozone 匹配构建产物，个人会话／路径／探针配置分离。
 - [ ] **MC02-0069** [enhancement] [ready-for-agent] 扩展启用任务监控、完成进度与有界等待（R16）。验收：配置周期／事件任务、核心／辅助、期限与启动宽限，记录开始／完成、等待原因和总期限；正常事件空闲不误报，反复续期不掩盖卡死，来源离线与任务推进分开。核心超期关断并进入有限恢复，辅助按依赖降级；生产路径回归通过。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0070** [enhancement] [ready-for-agent] 统一类型话题、最新快照与事件 FIFO（R17）。验收：启动校验类型／大小／发布订阅关系，运行固定注册；话题声明容量、期限和溢出规则。区分源时间和发布时间，读取／转发不续期，跨设备时钟经适配；过期事件不执行。统计复用 MC02-0012，跨任务同步复用 R25-14，时基先适配现有实现。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0070** [enhancement] [ready-for-agent] 统一类型话题、最新快照与事件 FIFO（R17）。验收：启动校验类型／大小／发布订阅关系，运行固定注册；话题声明容量、期限和溢出规则。区分源时间和发布时间，读取／转发不续期，跨设备时钟经适配；过期事件不执行。统计复用 MC02-0012，跨任务同步复用 R25-14，时基先适配现有实现。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 追加 B2／B5：配置显式跨板话题，由0092桥接、0093适配时间；业务不建单双板分支，输入连续快照与有期限操作事件分别交付。
 - [ ] **MC02-0071** [enhancement] [ready-for-agent] 统一任务事件与来源在线／有效／恢复验证（R17）。验收：支持绑定任务或配置创建独立事件任务，按来源区分有序队列、计数和可合并状态。来源监控用现有时基适配绝对期限，区分首帧等待／合法在线／离线，通信在线与数据有效分开；离线只发事件，恢复由对应模块有限异步执行，任务创建／溢出／过期有反馈。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0072** [enhancement] [ready-for-agent] 统一电机能力、反馈快照与 DJI 多圈可信度（R18）。验收：输出轴位置／速度使用 rad、rad/s，配置减速比与方向，电流／力矩／电压分开，能力不符拒绝配置；外部反馈／前馈只读一致快照携带时间／单位／参考／有效性。DJI 首帧建基准，反馈间断无法可信补圈时禁止依赖多圈的控制，重建参考才恢复；滤波复用 MC02-0017。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0073** [enhancement] [needs-info] 扩展 DM／HT 控制模式并共用 MIT 编解码（R19）。验收：参数化共用位打包／量化／数值校验，保留型号范围、格式、物理量与特殊命令。DM 注册失能、显式使能、写零独立标定，支持完整 MIT／位置＋速度／速度；HT 支持 MCU 闭环与完整 MIT，同一环唯一计算者。确认型号／固件及电流或力矩量纲后验证，关联 MOTOR-02、MOTOR-03。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0074** [enhancement] [needs-info] 实现 LK 协议模式、原生闭环与设备参数管理（R20）。验收：配置选择单电机或每总线多电机组，同一电机不混用；MCU 电流目标或驱动器速度／位置闭环唯一归属。设备参数只读核对及失能维护写入，临时／保存结果分开且读回验证；明确型号／固件／编码器量程后验证，复用 MOTOR-01、MOTOR-04、MOTOR-05、MC02-0018。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0073** [enhancement] [needs-info] 扩展 DM／HT 控制模式并共用 MIT 编解码（R19）。验收：参数化共用位打包／量化／数值校验，保留型号范围、格式、物理量与特殊命令。DM 注册失能、显式使能、写零独立标定，支持完整 MIT／位置＋速度／速度；HT 支持 MCU 闭环与完整 MIT，同一环唯一计算者。确认型号／固件及电流或力矩量纲后验证，关联 MOTOR-02、MOTOR-03。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 配套资料电流／力矩表述有冲突，须匹配真实型号／固件，不能据截图默认前馈量纲。
+- [ ] **MC02-0074** [enhancement] [needs-info] 实现 LK 协议模式、原生闭环与设备参数管理（R20）。验收：配置选择单电机或每总线多电机组，同一电机不混用；MCU 电流目标或驱动器速度／位置闭环唯一归属。设备参数只读核对及失能维护写入，临时／保存结果分开且读回验证；明确型号／固件／编码器量程后验证，复用 MOTOR-01、MOTOR-04、MOTOR-05、MC02-0018。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 附带 V2.3 文档／截图仅作核对依据，实际型号／固件、编码器和电流量程确认后使用。
 - [ ] **MC02-0075** [enhancement] [needs-info] 补齐 Xiaomi CyberGear 的 H723 驱动（R21）。验收：先确认具体型号／固件及官方协议范围，完成经典 CAN 扩展帧、反馈／故障解析、模式命令与统一电机接口；编解码边界、无效反馈和发送结果可验证，未实现骨架不得伪注册成功。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0076** [enhancement] [ready-for-agent] 重构纯数值工具的分类接口与错误结果（R23）。验收：按角度／向量、滤波、矩阵分类，纯计算移除 HAL／RTOS；零向量、零宽范围、非有限值、空缓冲等内部校验，计算有界且失败不改原有效输出。多实例／别名／边界回归通过，复用 BSPMISC-03；PID 存储与 dt 复用 MC02-0015。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0077** [enhancement] [ready-for-agent] 建立独立状态的公共滤波库（R24）。验收：一阶低通、有界滑动平均、二阶低通及陷波按实例／用途配置，容量固定，使用真实采样间隔，缺样和重建状态明确；验证稳定性、响应和延迟，滤波不延长源有效期。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
@@ -47,8 +47,34 @@
 - [ ] **MC02-0082** [enhancement] [ready-for-agent] 适配 Fusion 为可配置姿态算法后端（R28）。验收：锁定官方版本并保留 MIT 许可，经统一接口与 QuaternionEKF 二选一；转换单位／坐标／源时间，独立状态与工作区，质量门控／有限预测／参考版本符合公共契约，不照搬强制量测恢复。基于现有完整样本入口，验证输出、异常输入、切换和耗时，不要求本轮实现 R27 驱动扩展。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0083** [enhancement] [needs-info] 实现姿态量测质量与运动加速度补偿（R28）。验收：QuaternionEKF 完善质量门控、拒绝和有限预测；按安装几何及可信运动反馈补偿平移／旋转加速度，明确坐标和时间对齐。缺条件回退门控／有限预测，最后有效量测时间保留；补齐几何／来源／误差预算后验证，Fusion 接收同一公共预处理契约。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0084** [enhancement] [ready-for-agent] 将 RGB 与蜂鸣器接入统一 safety 告警（R29，第140–144项）。验收：只读 safety 许可／故障／恢复快照，持续表达最高优先级故障，清除后显示下一项，完整故障集仍可查询；无更高优先级告警时按 INIT／SAFE／CALIB／READY 等状态显示车型配置灯效。支持段数／单轮总时长受限的分段灯效，保留常亮／普通闪烁／呼吸，按实际时间推进；灯声共用告警起点、各自配置节奏，切换撤销旧模式。临时静音的允许等级和最长时限按车型配置，只影响声音，不清故障、不改许可或灯光。任务中有界异步输出，通道初始化／运行失败仅辅助降级；覆盖优先级／清除／状态／节奏／静音与超限／切换／输出失败回归，修正音调枚举与播放分支不一致，底层单灯复用 MC02-0025。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0085** [enhancement] [ready-for-agent] 同步模块接入和 CubeMX 重新生成验收说明（R29，含第145项）。验收：已纳入模块的配置、单位、错误结果、数据归属和任务接入示例与实现一致；告警文档修正函数名，给出故障／整车状态映射、最高优先级仲裁、有界分段灯效、灯声共同起点与独立节奏、受限静音及辅助降级说明，配置示例与可复现验证流程对应。USB 重新生成后解析、发送寿命和断联策略有验证流程；裸板独立调试入口复用 MC02-0026，资料区分接口检查与实际波形证据，不把生成代码通过当功能验收。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0085** [enhancement] [ready-for-agent] 同步已选模块、平台接入及工程支撑说明（R29、B2–B9、S1–S8）。验收：配置／单位／时间／有效性／数据归属／错误／任务接入与相应实现一致，保留全部告警约定。README 聚焦当前架构／入口，上游长教程留来源移历史；同步图示、资料索引、未接入说明、退役工具及教学链接。提供 Core／RTOS／USB／链接布局／CMake 的人工 CubeMX 核对流程，新增自动化后置；本次登记不冒称功能／实物验收。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
+
+## 2026-10-16：剩余业务与工程支撑讨论登记
+
+第146–218项及 B2–B9、S1–S8 结论均经用户批准。本次只更新 TODO 与配套文档，不修改固件、脚本、测试、构建或 CI 代码；以下仍是未来实施任务，登记不代表功能完成。业务目录6份配套资源及独立资料／模拟器按用途补记，论坛收藏页未读取。
+
+已有任务在原位置更新，新增 MC02-0086–MC02-0104。R09、R10、R11、R12、R22、R27 继续暂缓；平台解耦、对时或高频唤醒不恢复这些平台扩展，原完成记录及设备／机械／介质待补项保留。
+
+- [ ] **MC02-0086** [enhancement] [ready-for-agent] 自有C平台接口与逻辑资源绑定。验收：自有 C 接口覆盖已选业务当前依赖，逻辑资源／能力明确，平台／板级／RTOS 与车型配置分开；业务不暴露或继承 HAL／RTOS 原生类型、寄存器及头路径。核心能力不足拒绝，辅助按依赖降级；异常立即关断不依赖 HAL／OS／堆／队列。仅借鉴 LibXR／XRobot 分层思路，不导入 C++ 实现或恢复暂缓平台。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0087** [enhancement] [ready-for-agent] STM32H723平台后端与分阶段初始化。验收：H723 后端承接 Core／USB_DEVICE、现有时基／存储／故障接口，分阶段初始化、等待有界、逐项返回结果；核对真实 IRQ／DMA、扩展 CAN 过滤器、局部 EXTI 派发与退出清理。保留共享时钟及禁热保护，验证六种既有禁热配置，不把 OSPI 初始化当器件驱动。依赖0086，关联0054／0055／0062。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0088** [enhancement] [ready-for-agent] FreeRTOS适配与亚毫秒任务唤醒。验收：业务经自有任务／等待／通知／同步／临界区接口，先适配 FreeRTOS。周期启动读取后固定，亚毫秒由平台定时唤醒任务，启动校验实际分辨率、预算及资源；不把控制计算放 ISR 或默默取整。创建失败、非法周期、进度和时限有验证，已有统计只读适配，依赖0086／0087，关联0055／0069，不新增 R11。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0089** [enhancement] [ready-for-agent] 新版上下位机业务协议与分组状态。验收：车型选择 SP29／43固定帧或带版本的新协议；有界拼帧／拆帧／多帧、真实 CRC 和线上兼容可验证。瞄准、导航、姿态及结构化裁判摘要明确单位／参考系／源时间／有效性，各业务独立失效。只做下位机、说明及校验样例，上位机代码后置；首合法新命令恢复，无强制握手。关联0006／0007／0009／0062。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0090** [enhancement] [ready-for-agent] 上下位机对时与时间映射。验收：新版协议完成下位机对时交互，提供偏差、时间映射及同步有效状态；回绕、异常、超期、失同步及恢复有主机测试，不因对时或转发延长源期限。旧 SP 不虚构源时刻，上位机代码后置；局部映射契约供0093复用，依赖0089，不恢复 R11 全局时基。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0091** [enhancement] [ready-for-agent] 视觉前馈与有界延迟补偿。验收：角速度／角加速度前馈分别配置启用、系数及限幅，匹配轴系和实际电机物理量，不能直接把角加速度当电流／力矩。同步有效、参考时刻明确且未过期才有限外推，补偿上限可配置，不续期、不代替视觉弹道／击发时机；启停、失同步及越界有验证，关联0058／0072／0089／0090。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0092** [enhancement] [ready-for-agent] 新版CAN分片协议与话题桥接。验收：经典 CAN 每帧最多8字节，新版本／消息序号／分片编号，两端同步升级且不维护旧格式；有界识别丢片、重复、乱序、混片和超时，完整合法才发布。配置显式跨板话题，业务不建单双板分支；容量、发送结果、总线预算及源期限可验证，关联0014／0060／0070／0093，保留 R25-11。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0093** [enhancement] [ready-for-agent] CAN板间对时与同步状态。验收：在新版 CAN 上实现板间对时、源时刻映射和同步状态，复用0090局部契约而分别验证传输交互；失同步不直接比较本地计时，重组／转发不续期。回绕、失效、恢复及话题期限回归通过，依赖0092，关联0014／0070，不恢复 R11。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0094** [enhancement] [ready-for-agent] 裁判接收与一致分组快照。验收：唯一基线为2026 V2.0.0（2026-06-26），核对命令／长度／字段／位域，合法帧才更新相应组期限；跨块拼帧并发布一致只读分组快照。接收与可选 UI 分开，摘要归0089；坏帧、分组过期及恢复可验证，保留已完成协议适配记录，关联 BSPUART-03U1、0056／0065。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0095** [enhancement] [ready-for-agent] 配置化裁判UI与分批重绘。验收：车型配置位置、样式和只读数据来源，统一增量更新及低频有界分批重绘，支持链路恢复／人工触发；与机器人交互共用 REF-03 限额。字符串、计数、边界及序号正确，本机发送不冒称实际显示；拥塞、重绘中断及恢复有验证，关联 REF-04、0094。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0096** [enhancement] [ready-for-agent] 配置化遥控手感与有期限操作事件。验收：配置摇杆中位／端点／死区／可选曲线并校验，默认线性，标定不放宽非法协议帧；连续快照与有期限事件分开，不重发续期或依赖 uint8 次数取模。保留键鼠租约、两帧全松开及统一安全手势，裸板观察原始／处理后输入，关联0003／0064／0070、MSG-05／06，不新增遥控协议。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0097** [enhancement] [ready-for-agent] 有界LCD绘图与刷新结果。验收：保留单显示任务和静态行缓冲，初始化、字符串、字模、坐标、数值及发送有界校验并反馈结果，绘图成功才确认缓存，失败辅助降级；按任务预算验证。保留 LCD-06／07 实物待验和0046历史，不新增趋势、GUI、全屏缓存、多屏或全局 SPI 平台。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0098** [enhancement] [ready-for-agent] LCD只读故障页面与标定确认。验收：复用健康／姿态／裁判只读快照及有效性，单一所有者管理页面／冻结，新严重故障解除冻结并跳故障页。运行可进入标定确认页，确认后框架失能并检查既定静止／关热／维护条件，由 IMU 任务执行，分别反馈请求／执行／结果；不自行授权，参数编辑仍诊断串口。关联0065、LCD-14、0097。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0099** [enhancement] [ready-for-agent] 同源CMSIS-DSP最小源码构建。验收：固定 CMSIS_5 5.7.0 commit a65b7c9a3e6502127fdb80eb288d8cbdf251a6f4 的 DSP1.7.0，同源头、所用9个 C 文件及必要表替代实际构建的不明 .a／重复头。固件浮点 ABI 匹配、无 fast-math，DSP 目标启用矩阵检查；Linux／WSL 真实运算验证矩阵／三角函数，求逆独立工作区、成功提交，失败不改旧结果。关联0020／0076／0078／0080，非整体系统库升级。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0100** [enhancement] [ready-for-agent] 只读观测整合与旧探针脚本退役。验收：将已有性能／任务／CAN／LCD查询合入 probe_snapshot_live.py，保持运行中有限读取、白名单与匹配 ELF／布局，不扩大写入或运行控制权限；删除 probe_snapshot.py，退役 rtt_dump.py 并用标准 RTT 客户端。迁移文档及回归通过，保留 HIL-10 历史，不新增 R11 统计。关联0065／0068／0085。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0101** [enhancement] [ready-for-agent] 双协议禁火测试帧与输入工具对齐。验收：vision_sim.py 支持 SP 和新协议最小测试帧且始终禁火，明确端口、单位／转换、参数和发送时限，忙／短写／错误反馈并停止。保留 DT7 身份、输入租约及两帧全松开规则，UI 显示真实端口，不虚构 live 的180秒上限；不改生产上位机或建整车回放。关联0026／0062／0089及现有工具测试。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0102** [enhancement] [ready-for-agent] 设备监听与字模生成工具维护。验收：USB-CAN 监听仅维护已核对私有格式，校验类型／长度／DLC／ID，读取有界、异常有结果，不冒称通用 CAN 或主动收发。字模工具支持明确字体／输出路径，先校验再交付整组，字符／枚举／字节可重复核对并保留来源；不扩无用字库，保留 LCD-10，关联0026／0085／0097。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0103** [enhancement] [ready-for-agent] CI及本地同格式构建归档。验收：CI 可下载与本地同格式构建包，含 ELF／HEX／BIN／map、构建／车型／平台／配置身份、工具链和校验信息，可匹配旧现场；保留 Debug／Release、非法配置及禁热隔离检查。VSCode／OpenOCD／可选 Ozone 指向匹配产物，个人路径／探针／会话分离，失败不伪装成功，不自动上硬件。关联0020／0068、BUILD-02。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0104** [enhancement] [ready-for-agent] 独立裁判模拟器的固件对齐验证。验收：与独立 tools/referee_sim 的 [REFSIM-0001](../tools/referee_sim/TODO.md) 关联，各仓库自管状态；锁定2026 V2.0.0，修正文档旧固件描述，建立已核对字节向量、错误帧、分组失联／恢复、功率／热量及 UI 场景与裸板流程；模拟器修复必要串口写时限／短写结果，两端按 SHA 关联。只登记不运行串口／GUI／MQTT，不新增 GUI／CLI／MQTT 功能，关联0022／0026／0079／0094／0095。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
 ## 2026-10-04：TB47S／6S 裸板供电安全审查
 
@@ -88,7 +114,7 @@
 - [x] **MC02-0050** [enhancement] 完成 DT7 键鼠客户端独立私有 GitHub 仓库发布。验收完成：从 `5efa845` 提取明确文件清单，运行逻辑 AST 不变，测试只调整导入路径；全新虚拟环境安装、15/15 独立测试、示例 dry-run 和 12 个本地文档链接检查通过。独立代码提交 `6dc0388cbac1007fcc36761064d263823b9c3059` 已上传，GitHub API 与 Git 远端 SHA 核对一致、private=true；Windows/Ubuntu × Python 3.11/3.13 四组 CI 成功。客户端包含中文说明、协议/固件对接及教学资料、示例、MIT 许可和测试；没有上传固件、参数备份或板上原始日志。客户端仓库为 [la-defense/dt7-keymouse-client](https://github.com/la-defense/dt7-keymouse-client)，关联其 DT7-0001；现有 tools 快照保留兼容，不推送固件仓库。记录见 [票据](../docs/workflow/tickets/MC02-0050.md)、[教学 22](../docs/学习笔记/22-失联安全与有界等待.md)。
 - [x] **R25-07** [bug] 修复底盘跟随计算与速度限幅。验收完成：跟随使用浮点绝对值，显式配置的底盘角速度与四轮电机轴转速限幅通过生产计算和任务测试；配置缺失、非法模式/参数及非有限数据均停止四轮并清零目标。WSL 主机 Debug/Release 各 90/90；bench_safe、robot、rcdiag 的 Debug/RelWithDebInfo 六种禁热固件构建和 ELF 隔离检查通过；两种非法配置均拒绝。未烧录。真实底盘模型、几何和速度参数确认转 APP-10。实施与教学见 [R25-07 票据](../docs/workflow/tickets/R25-07.md) 和 [学习笔记 22](../docs/学习笔记/22-失联安全与有界等待.md)；关联 R25-11、R25-15、APP-10。 代码提交：6896a520a63fdb8520b0a42050aa4eba890f7527。
 - [ ] **R25-08** [bug] [ready-for-human] 从实车配置加载俯仰机械限位并执行钳位，拒绝非法视觉角度（与既有 APP-10 合并）。验收：配置边界、超界、缺失配置均有测试，台架角度不越机械限位。
-- [ ] **R25-15** [bug] [needs-info] 接入裁判功率、热量、冷却与弹速限制，落实发射保持请求射速策略。验收：满足新鲜裁判约束及机构能力，热量余量不足或未就绪暂停供弹而非自动降低请求射速；数据缺失使用已确认保守策略，故障／失联／恢复覆盖生产接口回归。补齐限值与机构参数，保留旧 APP-07 归并，关联 MC02-0059、MC02-0081，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **R25-15** [bug] [needs-info] 接入裁判功率、热量、冷却及弹速限制。验收：保持请求射速，热量不足／机构未就绪暂停供弹；缓冲失效但上限／供电许可有效时只用配置保守余量且无缓冲额外功率，上限／许可过期不得沿用该降级授权。失联／故障／恢复覆盖生产回归，限值／机构／模型待补，保留 APP-07 归并，关联0059／0081／0094。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
 ### P2：稳定性与结构
 
@@ -102,7 +128,7 @@
   2026-10-04 供电审查补充验收范围：CI 还需使用生产逻辑验证 MC02-0034～0040 的加热关断、BMI088 成功／新鲜度、ADC 停更、CALIB／Flash 入口、异常出口和锁存恢复；课程模拟与现有 SP 主机测试不能代替这些回归。证据见 [6S 审查](../docs/6S上电安全审查_2026-10-04.md)。
 - [ ] **R25-14** [bug] [ready-for-agent] 审核跨任务共享的命令、传感器状态和消息中心队列，按生产者/消费者选择临界区、队列或双缓冲，并覆盖既有并发检查条目。验收：共享数据清单逐项有同步策略，主机或台架测试验证抢占时读写一致。
 - [ ] **MC02-0032** [enhancement] [ready-for-human] 修复 CMake 源文件和头文件目录 glob 在已有 Ninja 构建目录中漏检变化的问题。验收：Windows/WSL 增量回归、主机 Debug/Release、六种禁热固件及 ELF 检查通过；GitHub Actions 在新提交上通过后关闭。本机证据见 [MC02-0032 票据](../docs/workflow/tickets/MC02-0032.md)，远端 CI 尚未触发。
-- [ ] **MC02-0051** [bug] [needs-triage] 审查 R25-10 未覆盖的可选/未启用驱动初始化路径：IIC、GPIO 中断型 BMI088、TFmini、IST8310、LED、Servo、LK/HT/DM/XM 电机、PowerManager 与 RLS。验收：逐项确认当前是否进入任一固件配置；实际启用项补参数、容量、分配、底层启动和组合回滚检查及主机故障注入；确认未使用项后记录移除或未来启用前置条件。关联 R25-10。
+- [ ] **MC02-0051** [bug] [needs-triage] 审查 R25-10 未覆盖的可选/未启用驱动初始化路径：IIC、GPIO 中断型 BMI088、TFmini、IST8310、LED、Servo、LK/HT/DM/XM 电机、PowerManager 与 RLS。验收：逐项确认当前是否进入任一固件配置；实际启用项补参数、容量、分配、底层启动和组合回滚检查及主机故障注入；确认未使用项后记录移除或未来启用前置条件。关联 R25-10。 本轮实际选中项按对应任务推进；IST8310、TFminiPlus、OLED、HC05 等仅保留未验证和启用前置条件，暂缓主题不因审查而恢复。
 
 ## 2026-10-08：旧代码审查清单归并
 
@@ -118,19 +144,19 @@
 - [ ] **BSPMISC-03** [bug] [needs-triage] 核查 `float_rounding` 对负数、半数边界和静态临时状态的处理。验收：明确舍入规则，并以正负边界和多实例交错调用测试覆盖。
 - [ ] **BSPMISC-06** [bug] [needs-triage] 核查 WS2812 与 ADC 的引脚/外设资源冲突是否仍存在。验收：当前板级映射和初始化配置中不存在同时启用的资源冲突；若冲突存在，互斥配置有构建或测试验证。
 - [ ] **BSPMISC-07** [enhancement] [needs-triage] 核查历史报告提出的 SPI 时序问题是否仍可复现。验收：记录当前配置、目标外设规格及逻辑分析仪波形；确认满足时序，或提交修复和复测结果。
-- [ ] **BUILD-02** [enhancement] [needs-triage] 核查 Makefile 与 CMake 的业务源文件集合是否仍不一致。验收：列出两种构建的源文件差异并统一维护来源；干净构建证明两种入口包含各自预期文件且不会遗漏业务模块。
+- [ ] **BUILD-02** [enhancement] [ready-for-agent] 统一为唯一 CMake 构建入口，替代双入口维护方案。验收：删除旧 Makefile 及对应编辑器任务，按平台／车型显式选择源码和头依赖；干净、增量构建选择一致，非法组合拒绝，未选模块不误编入。适配现有增量及 ELF/profile 检查并保持裸板隔离；CubeMX 先人工核对，不新增再生成自动化。关联 MC02-0020／0054，保留 MC02-0032 的远端 CI 待验状态。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **CORE-03** [bug] [needs-triage] 核查 `BSPInit()` 是否仍在头文件定义并可能产生多重定义。验收：公共头只声明接口、单个源文件提供定义；至少两个独立调用源文件的链接验证通过。
 - [ ] **BSPMISC-08** [bug] [needs-triage] 核查 `Float2Str` 的四舍五入、进位和负数边界。验收：正负数、进位、零值和缓冲区边界均有生产函数测试，输出符合明确的精度规则。
 - [ ] **MOTOR-04** [bug] [needs-triage] 核查 LK9025 注册过程中是否存在重复分配和失败清理缺失。验收：单实例与多实例注册均无重复分配或泄漏，失败注入测试通过。
 - [ ] **MOTOR-05** [bug] [needs-triage] 核查多个 LK9025 实例是否都通过首个实例的 CAN 通道发送。验收：每个实例使用自己的总线与发送 ID；跨总线、多 ID 回归证明报文路由正确。
 - [ ] **MOTOR-06** [bug] [needs-triage] 核查舵机实例注册索引与遍历方式，以及 DMA 发送缓冲区共享问题。验收：稀疏 ID 注册不会解引用空槽，多舵机并发发送不会改写传输中的缓冲区。
 - [ ] **MISC-03** [bug] [needs-triage] 核查 TFmini 接收长度是否超过缓冲区容量。验收：模块启用前缓冲区与协议帧长一致，短帧、满长帧和超长帧均不会越界。
-- [ ] **MISC-04** [bug] [needs-triage] 核查超级电容接收回调是否依赖全局单例并缺少离线检测。验收：每个注册实例只更新自身状态，断连后超时可检测；多实例及超时测试通过。
+- [ ] **MISC-04** [bug] [needs-triage] 核对现有电容容量、状态与未选型边界。验收：回调已有 CAN owner，不按已证伪的全局回调问题修复；核对单例限制、接收长度、发送长度／空参数／结果和在线新鲜度，修正文档2字节变量传固定8字节复制接口示例。设备未选型，具体协议／缩放／多实例实物验证后置；不可用回退普通供电，关联0057／0085。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MISC-06** [bug] [needs-triage] 核查 OLED 斜线端点、字符索引和格式化输出的边界。验收：坐标与字符范围校验有效，格式化写入有界缓冲区；边界和截断测试通过。
-- [ ] **MSG-05** [bug] [needs-triage] 核查遥控器报文布局、位域解释和字段单位是否与接收协议一致。验收：每个字段有偏移、宽度和单位说明；合法帧及边界帧解析结果由固定测试向量验证。MC02-0049 已确认当前 DT7 链路 A=bit2、D=bit3，修正固件反置宏/位域，生产解析回归先失败后通过；其余字段/单位仍待核对，见 [MC02-0049 票据](../docs/workflow/tickets/MC02-0049.md)。
-- [ ] **MSG-06** [bug] [needs-triage] 核查遥控器接收回调与任务间共享数据的并发访问。验收：明确生产者/消费者同步策略，抢占时读取到完整一致的一帧；主机并发测试或台架记录覆盖更新与读取交错。
-- [ ] **REF-03** [enhancement] [needs-triage] 核查裁判系统发送路径是否需要限速或队列。验收：规定允许的发送频率和拥塞行为，突发输入不能阻塞关键任务，丢弃/延迟状态可观测。
-- [ ] **REF-04** [bug] [needs-triage] 核查裁判 UI 字符串格式化是否有界。验收：格式化写入容量受限缓冲区，长输入、截断和格式错误均有回归测试且不会越界。
+- [ ] **MSG-05** [bug] [needs-triage] 核查遥控器报文布局、位域解释和字段单位是否与接收协议一致。验收：每个字段有偏移、宽度和单位说明；合法帧及边界帧解析结果由固定测试向量验证。MC02-0049 已确认当前 DT7 链路 A=bit2、D=bit3，修正固件反置宏/位域，生产解析回归先失败后通过；其余字段/单位仍待核对，见 [MC02-0049 票据](../docs/workflow/tickets/MC02-0049.md)。 本轮同步 remote.md 鼠标／键盘偏移和旧映射，标定不放宽非法帧，关联0096。
+- [ ] **MSG-06** [bug] [needs-triage] 核查遥控器接收回调与任务间共享数据的并发访问。验收：明确生产者/消费者同步策略，抢占时读取到完整一致的一帧；主机并发测试或台架记录覆盖更新与读取交错。 本轮保留来源接收时间，连续快照与有期限事件分开，不依赖 uint8 累计次数取模；保留键鼠租约和两帧全松开，关联 R25-14、0070／0071／0096。
+- [ ] **REF-03** [enhancement] [ready-for-agent] 实现裁判发送共享预算与有界调度。验收：按2026 V2.0.0身份／长度／频率约束，UI 增量／重绘与机器人交互共用限额；容量、期限、序号和拥塞行为明确，关键任务不被阻塞，提交／完成／丢弃／超时可查。本机发送不冒称对端已收到或显示，关联0022／0095。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **REF-04** [bug] [ready-for-agent] 完善裁判 UI 字符串与绘图边界。验收：容量限制格式化，长输入／截断／非法计数／坐标／长度及错误返回有回归，正确构帧后才提交；发送或格式失败不冒充显示成功，重绘与布局归0095。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **APP-09** [enhancement] [needs-triage] 核查云台模式相关注释与实际状态转换是否一致。验收：逐个模式记录进入条件和输出行为，修正文档或代码并用状态转换测试证明一致。
 - [ ] **APP-10** [enhancement] [needs-info] 落实唯一车型配置来源及首台四轮全向轮机械参数。验收：确认真实轴距／轮距／轮径／安装角／减速比、云台偏置和机械限位，配置实际进入实例，消除当前麦轮路径与 sentinel_config 参数差异；缺失／非法配置失能，单位转换及加载回归通过。关联 R25-07、R25-08、PARAM-03、MC02-0054、MC02-0057，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **CAN-05** [enhancement] [needs-triage] 评估是否需要把关键电机分配到 CAN3 以降低 CAN1/CAN2 负载。验收：基于当前实物拓扑和实测帧率计算各总线余量，并提交保留现状或调整拓扑的依据；未验证前不更改实车分配。
@@ -143,7 +169,7 @@
 - [ ] **PARAM-04** [enhancement] [needs-triage] 评估在 SAFE 状态预擦除非活动 Flash 参数区是否有实际收益。验收：测量提交耗时和擦写风险；若实施，证明掉电回退和写入时限不退化，否则记录不实施理由并关闭。
 - [ ] **LOG-04** [enhancement] [needs-triage] 评估是否把格式串与截断告警升级为编译错误。验收：确认 GCC 版本兼容后启用目标告警选项，工程与主机测试构建无格式错误；若会阻断受支持工具链，记录替代门禁。
 - [ ] **LOG-06** [enhancement] [needs-info] 实现有限持久崩溃归档，需求已确认。验收：先落实介质、分区和容量，异常仅记录 RAM，重启后在维护授权与总期限内归档；掉电／CRC／擦写失败有回退和诊断，失败不阻止核心恢复，旧记录使用匹配构建 ELF／map 解析。关联 MC02-0063、MC02-0067、MC02-0068，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **LCD-14** [bug] [needs-triage] 核查 LCD 任务与 UI 是否仍各自维护 `lcd_page`、`lcd_frozen` 状态副本。验收：状态只有一个所有者，页面切换与冻结/恢复回归证明显示和输入状态一致。
+- [ ] **LCD-14** [bug] [ready-for-agent] 统一 LCD 页面和冻结状态所有者。验收：lcd_task／lcd_ui 不维护冲突副本，页面／冻结／重绘一致；新严重故障解除冻结并跳故障页，优先级取自 safety／健康状态；清提示不改许可或触发维护，关联0098。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **LCD-15** [bug] [needs-triage] 核查 LCD 连接和 ADC 按键采样抖动的物理根因。验收：记录接线、供电和 ADC 原始值；根因修复后空闲值波动达到项目定义阈值，且按键不会误触发。
 - [x] **MC02-0046** [bug] [wontfix] LCD 启动黑屏及恢复后显示异常：2026-10-10 按用户要求结束软件排查，后续由用户更换硬件查证，硬件根因尚未确认。`1b668dd` IO 保持候选已完成整片备份、烧录 verify 及参数逐字节保留；主机 Debug/Release 各 64/64、四种禁热构建与隔离检查通过。烧录启动和三次 MCU 复位均获人工确认无需按键正常显示；60.442 秒回归收到 12087 个正确状态帧，准确发送并解析 1000 个中性帧，停发后旧指令清零。600.451 秒被动观察收到 120085 个状态帧，CRC 错误为零、四元数有限、IMU 有效递增、加热及输出隔离正常；用户完成二十次短按翻页并确认显示正常，但恢复计数增长 21，未满足“普通翻页不增加恢复计数”的验收条件。冷启动和单独长按恢复未执行，不记为完整修复验收通过；未验证的在位判定试改已撤回，停止后续烧录、复位及采集。unknown、备份超时及各轮原始证据保留在 [MC02-0046 票据](../docs/workflow/tickets/MC02-0046.md)，教学见[学习笔记 24](../docs/学习笔记/24-嵌入式固件问题定位.md)。关联 LCD-07、LCD-14、LCD-15 的物理验收范围保持原样。
 
@@ -189,7 +215,7 @@
 
 Unicom
 
-- [ ] **MC02-0003** [enhancement] [ready-for-agent] 统一控制输入与三种模式的来源接口。验收：遥控／键鼠／视觉／自主适配同一明确单位和参考系的领域命令；使能／失能／急停统一，其余按车型配置；纯手动不被视觉接管，辅助模式人工击发，模式切换撤销旧授权并平滑接管。关联 MC02-0056，其他输入设备按实际需求接入，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0003** [enhancement] [ready-for-agent] 建立 standard_cmd 输入适配与三种模式来源接口。验收：来源模块解析合法输入后按车型映射 SI 单位、明确参考系与源期限的控制意图，连续目标与离散事件分开，不重发续期；robot_cmd 唯一仲裁模式／来源，safety 唯一计算许可。安全手势统一，其余按车型配置，辅助人工击发，健康切换平滑接管。关联0054／0056／0070，不新增其他输入设备。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
 - [ ] **MC02-0004** [enhancement] [ready-for-agent] 统一编译日志上限与模块运行等级。验收：过滤先于格式化，未编译日志不能运行开启；正式默认关键故障和状态变化，独立诊断串口可临时调整编译上限内等级，有界输出与丢弃可查询。异步管线复用 MC02-0066，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
@@ -224,10 +250,10 @@ Unicom
 
 #### ==master_machine==
 
-- [ ] **MC02-0006** [enhancement] [ready-for-agent] 为 master_machine IMU 数据增加采样时间戳。验收：时间戳随新样本更新，消费者可检测重复、乱序和超期数据。
-- [ ] **MC02-0007** [enhancement] [ready-for-agent] 将加速度计数据纳入 master_machine 数据结构与传输。验收：字段单位、坐标系和更新频率有定义，模拟数据可端到端读取。
-- [ ] **MC02-0008** [enhancement] [needs-triage] 重构 SeaSky protocol 接口。验收：明确兼容范围与目标报文后，协议层可独立解析、校验并通过主机测试。
-- [ ] **MC02-0009** [bug] [ready-for-agent] 为 master_machine 处理数据未更新情况。验收：过期或缺失样本不能继续驱动旧控制，恢复新样本后在线状态正确恢复。
+- [ ] **MC02-0006** [enhancement] [ready-for-agent] 为 master_machine IMU 数据增加采样时间戳。验收：时间戳随新样本更新，消费者可检测重复、乱序和超期数据。 新版协议关联0089／0090，源时间与读取时间如实区分；SP29／43字节保持兼容，不虚构源时刻。
+- [ ] **MC02-0007** [enhancement] [ready-for-agent] 将加速度计数据纳入 master_machine 数据结构与传输。验收：字段单位、坐标系和更新频率有定义，模拟数据可端到端读取。 接入新版协议0089，保留旧 SP 格式；仅下位机／校验样例，本轮不改生产上位机。
+- [ ] **MC02-0008** [enhancement] [ready-for-agent] 保留 SeaSky 参考并移出活动构建，替代原接口重构方案。验收：保留源码／头文件、作者署名及旧格式文档；活动模块不依赖该头，固件不编入；只维护已选 SP 与新版业务协议，不实现第三种兼容路线。关联0054／0085。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0009** [bug] [ready-for-agent] 处理上下位机分组未更新及恢复。验收：瞄准／导航独立按源期限失效，坏帧不续期；瞄准过期但导航有效时按自主许可继续移动并禁发射，USB 全失效停平移。首合法新命令恢复对应业务，无强制握手，不重放旧命令／击发。关联0056／0062／0089，保留 SP 新鲜度回归。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
 需要一个更简单的协议以加快速度。若有必要，可能需要重新编写一个简单的调试上位机UI。
 
@@ -265,7 +291,7 @@ Unicom
 
 #### can_comm
 
-- [ ] **MC02-0014** [bug] [ready-for-agent] 为 CANComm 增加数据未更新处理。验收：超时反馈使对应命令进入安全输出并报告故障；有效帧恢复后按安全状态机恢复。
+- [ ] **MC02-0014** [bug] [ready-for-agent] 处理 CANComm 未更新与跨板新鲜度。验收：完整合法消息才更新相应话题，坏帧／丢片／重复／过期不续期，重组／转发不延长源期限；失效撤销依赖命令，恢复用新有效输入及当前许可。关联0092／0093，保留 R25-11 已完成记录。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
 #### controller
 
@@ -286,9 +312,9 @@ Unicom
 
 ### 待添加
 
-#### unicomm
+#### 构建基线（原 unicomm 占位条目）
 
-- [ ] **MC02-0020** [enhancement] [needs-triage] 明确“初版构建”对应的目标板、配置和交付物并完成构建基线。验收：干净检出后按文档命令生成目标 ELF/HEX/BIN，记录工具链版本及内存占用。
+- [ ] **MC02-0020** [enhancement] [ready-for-agent] 建立 CMake、依赖与主机验证基线。验收：干净检出得到 H723＋FreeRTOS 对应配置的 ELF／HEX／BIN／map，记录工具链、内存、实际第三方版本／来源／指纹／补丁。Linux／WSL 为完整 Debug／Release 基线，Windows 可移植子集明确跳过；测试分层、替身边界和有限超时有说明。关联 BUILD-02、0099／0103；不将 unicomm 占位设想混入此项，保留历史验收。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
 #### step_motor
 
@@ -296,7 +322,7 @@ Unicom
 
 #### referee_communication
 
-- [ ] **MC02-0022** [enhancement] [needs-info] 增加裁判系统多机通信功能。验收：取得比赛协议支持依据与目标拓扑后，模拟器覆盖完整收发和异常帧。
+- [ ] **MC02-0022** [enhancement] [ready-for-agent] 补齐裁判通道机器人间通用收发接口。验收：锁定2026 V2.0.0，内容 ID／对端可配置且符合官方身份／长度／频率约束，报告接受、本机完成、失败／超时；与 UI 共用 REF-03 预算，模拟器覆盖合法／异常帧。具体协同内容和对端 ACK／重试后置，本机发送不等于对方接收或执行，关联0094／0104。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
 #### controller
 
@@ -315,7 +341,7 @@ Unicom
 
 #### all app
 
-- [ ] **MC02-0026** [enhancement] [ready-for-agent] 建立裸板模块独立调试配置和接入说明。验收：按模块选择真实依赖及必要的受控输入，调试配置与正式构建分开；执行器不连接、禁热和生成视觉禁火，生产接口结果／故障可观察。通用主机模拟／回放平台后续补充，关联 MC02-0085，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0026** [enhancement] [ready-for-agent] 建立裸板模块独立调试配置和接入说明。验收：按模块选择真实依赖及必要的受控输入，调试配置与正式构建分开；执行器不连接、禁热和生成视觉禁火，生产接口结果／故障可观察。通用主机模拟／回放平台后续补充，关联 MC02-0085，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 追加 B5／S5／S8：裸板入口禁止 READY，观察原始／归一化输入及租约；0101提供双协议禁火测试帧，0104关联独立裁判模拟器，不授予执行器运行许可。
 
 #### ==shoot==
 
