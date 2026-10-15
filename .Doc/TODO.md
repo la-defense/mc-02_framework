@@ -12,7 +12,7 @@
 
 用户已批准 R01–R08、R13–R21、R23–R26、R28–R29，共 23 个审阅主题。R09（SPI／I²C 事务）、R10（全板资源与 PWM）、R11（统一时基／时序观测）、R12（ADC 通用化与标定）、R22（舵机／机械回零）、R27（多 BMI088／异步采样／标定扩展）本次不新增；历史相关任务保留，不代表永久取消。
 
-[139 个文件讨论记录](../docs/workflow/maps/framework-file-discussion-20261015.md)保留用途和讨论依据，[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)给出主题与稳定编号映射、依赖和验收约定。两份资料不维护任务状态。R29 追加：safety 故障映射 RGB 颜色／闪烁频率并与蜂鸣器配合。已有编号更新见原位置，已完成验收记录保持原状。
+[文件讨论记录](../docs/workflow/maps/framework-file-discussion-20261015.md)保留用途和讨论依据，[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)给出主题与稳定编号映射、依赖和验收约定。两份资料不维护任务状态。R29 追加：safety 故障映射 RGB 颜色／闪烁频率并与蜂鸣器配合；第140–145项告警结论经用户批准，合并 MC02-0084／MC02-0085。已有编号更新见原位置，已完成验收记录保持原状。
 
 以下是功能实施任务，本次登记不代表固件已实现。依赖暂缓主题的内容先适配现有接口；能力或参数不足时保持待补信息，不把暂缓模块暗中加入实施范围。
 
@@ -46,8 +46,8 @@
 - [ ] **MC02-0081** [enhancement] [needs-info] 接入可配置功率模型在线辨识（R26）。验收：取得可信实际功率测量、特征模型和输入时间匹配；按配置约束参数及质量，候选与生效模型分别查询，质量通过后限速渐进应用，异常／缺条件回退已验证固定模型。Flash 保存遵守维护准入，复用 MC02-0080，测量来源未定前不认定模型可用。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0082** [enhancement] [ready-for-agent] 适配 Fusion 为可配置姿态算法后端（R28）。验收：锁定官方版本并保留 MIT 许可，经统一接口与 QuaternionEKF 二选一；转换单位／坐标／源时间，独立状态与工作区，质量门控／有限预测／参考版本符合公共契约，不照搬强制量测恢复。基于现有完整样本入口，验证输出、异常输入、切换和耗时，不要求本轮实现 R27 驱动扩展。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0083** [enhancement] [needs-info] 实现姿态量测质量与运动加速度补偿（R28）。验收：QuaternionEKF 完善质量门控、拒绝和有限预测；按安装几何及可信运动反馈补偿平移／旋转加速度，明确坐标和时间对齐。缺条件回退门控／有限预测，最后有效量测时间保留；补齐几何／来源／误差预算后验证，Fusion 接收同一公共预处理契约。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0084** [enhancement] [ready-for-agent] 将 RGB 与蜂鸣器接入统一 safety 告警（R29）。验收：告警模块只读 safety 许可／故障／恢复快照，配置故障→RGB 颜色、闪烁频率／节奏及蜂鸣器模式，不同故障可区分；多故障有明确优先级／仲裁，恢复按真实状态切换。任务中有界异步输出、不阻塞控制，通道故障仅辅助降级；故障组合／恢复／禁用及输出失败回归通过，底层单灯复用 MC02-0025。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0085** [enhancement] [ready-for-agent] 同步模块接入和 CubeMX 重新生成验收说明（R29）。验收：已纳入模块的配置、单位、错误结果、数据归属和任务接入示例与实现一致；USB 重新生成后解析、发送寿命和断联策略有验证流程。裸板独立调试入口复用 MC02-0026，资料以真实测试／波形证据说明限度，不把生成代码通过当功能验收。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0084** [enhancement] [ready-for-agent] 将 RGB 与蜂鸣器接入统一 safety 告警（R29，第140–144项）。验收：只读 safety 许可／故障／恢复快照，持续表达最高优先级故障，清除后显示下一项，完整故障集仍可查询；无更高优先级告警时按 INIT／SAFE／CALIB／READY 等状态显示车型配置灯效。支持段数／单轮总时长受限的分段灯效，保留常亮／普通闪烁／呼吸，按实际时间推进；灯声共用告警起点、各自配置节奏，切换撤销旧模式。临时静音的允许等级和最长时限按车型配置，只影响声音，不清故障、不改许可或灯光。任务中有界异步输出，通道初始化／运行失败仅辅助降级；覆盖优先级／清除／状态／节奏／静音与超限／切换／输出失败回归，修正音调枚举与播放分支不一致，底层单灯复用 MC02-0025。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0085** [enhancement] [ready-for-agent] 同步模块接入和 CubeMX 重新生成验收说明（R29，含第145项）。验收：已纳入模块的配置、单位、错误结果、数据归属和任务接入示例与实现一致；告警文档修正函数名，给出故障／整车状态映射、最高优先级仲裁、有界分段灯效、灯声共同起点与独立节奏、受限静音及辅助降级说明，配置示例与可复现验证流程对应。USB 重新生成后解析、发送寿命和断联策略有验证流程；裸板独立调试入口复用 MC02-0026，资料区分接口检查与实际波形证据，不把生成代码通过当功能验收。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
 
 ## 2026-10-04：TB47S／6S 裸板供电安全审查
