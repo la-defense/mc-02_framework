@@ -1,0 +1,5 @@
+interface:
+  display_name: "面向学生的代码注释"
+  short_description: "为学生编写简明中文注释，说明文件用途、函数接口和重要分支"
+policy:
+  allow_implicit_invocation: true
