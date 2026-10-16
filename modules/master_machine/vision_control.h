@@ -1,78 +1,85 @@
 /**
  * @file vision_control.h
- * @brief 视觉目标校验、云台单位转换及视觉／手动发射命令选择。
+ * @brief 检查视觉数据，计算云台目标，并选择视觉或手动发射命令。
  *
- * RobotCMDTask 提供本周期输入快照，通过下列接口生成云台与发射命令。
- * 本模块只做计算，不读取硬件或操作电机；最终状态许可由调用方检查。
- * 输入与输出对象须互不重叠，输入及其引用的配置在调用期间须保持有效且不变。
+ * RobotCMDTask 把这次计算使用的视觉数据交给本模块，再取走算好的命令。
+ * 这里只计算命令；真正控制电机前，调用这些函数的代码还要检查当前是否允许动作。
+ * 输入数据、角度设置和输出结果要分开存放，计算期间不要让其他代码修改输入和设置。
  */
 #ifndef VISION_CONTROL_H
 #define VISION_CONTROL_H
 
 #include <stdint.h>
 
-/* 偏航约束作用于转换后的云台命令，不对目标角做归一化或截断。 */
+/* 选择云台左右转动（yaw）的方式，角度范围在换算成度以后检查。 */
 typedef enum
 {
-    VISION_YAW_UNCONFIGURED = 0, /* 未指定约束，拒绝视觉接管。 */
-    VISION_YAW_CONTINUOUS,       /* 连续旋转，不检查偏航角是否落在上下限内。 */
-    VISION_YAW_BOUNDED          /* 有限行程，偏航角须落在闭区间内。 */
+    VISION_YAW_UNCONFIGURED = 0, /* 还没选好转动方式，暂不使用视觉目标。 */
+    VISION_YAW_CONTINUOUS,       /* 可以连续转动，yaw 不受上下限限制。 */
+    VISION_YAW_BOUNDED          /* 只能在上下限之间转动，等于上下限也允许。 */
 } VisionYawConstraint_e;
 
 /**
- * @brief 最终云台命令坐标系中的机械限位，角度单位均为 deg。
- * @note 所有浮点配置均须有限；pitch_min_deg < pitch_max_deg。
- *       有限偏航还要求 yaw_min_deg < yaw_max_deg；连续偏航的上下限仍须为有限值。
+ * @brief 设置云台允许转动的角度范围，单位都是度（deg）。
+ * @note 这里检查的是换算后的云台目标角度。pitch 表示上下转动，yaw 表示左右转动。
+ *       所有角度都要是正常数字，不能填 NaN（无效数值）或 Inf（无穷大）。
+ *       pitch 的下限必须小于上限；选择 VISION_YAW_BOUNDED 时，yaw 也有同样要求。
+ *       即使选择连续转动，yaw 的上下限仍要填正常数字。
  */
 typedef struct
 {
-    uint8_t configured;                  /* 非零表示调用方已提供机械配置。 */
-    VisionYawConstraint_e yaw_constraint; /* 必须明确选择连续旋转或有限行程。 */
-    float pitch_min_deg;
-    float pitch_max_deg;
-    float pitch_zero_offset_deg; /* 输入 pitch 转为 deg 后加此零偏，再检查限位。 */
-    float yaw_min_deg;
-    float yaw_max_deg;
+    uint8_t configured;                  /* 非 0 表示已填好这组设置；为 0 时不使用视觉目标。 */
+    VisionYawConstraint_e yaw_constraint; /* 选择连续转动，或只在指定角度范围内转动。 */
+    float pitch_min_deg;                 /* 上下转动的最小角度。 */
+    float pitch_max_deg;                 /* 上下转动的最大角度。 */
+    float pitch_zero_offset_deg; /* pitch 换算成度后加上的补偿角度。 */
+    float yaw_min_deg;                   /* 左右转动的最小角度。 */
+    float yaw_max_deg;                   /* 左右转动的最大角度。 */
 } VisionControlLimits_s;
 
-/* 视觉输入允许配置的最大年龄；调用方可设更短期限。 */
+/* 收到视觉数据后，最多允许继续使用 50 毫秒；max_age_ms 可以设得更短。 */
 #define VISION_CONTROL_MAX_AGE_MS 50u
 
-/** @brief 本周期视觉输入快照；角度、角速度、角加速度沿用 SP 的 rad、rad/s、rad/s^2。 */
+/**
+ * @brief 保存这次计算使用的视觉数据、接收时间和角度设置。
+ * @note SP 通信中的角度用弧度（rad），例如半圈是 pi rad；输出命令会换算成度。
+ *       last_rx_ms 和 now_ms 要使用同一种毫秒计时方式，计算期间保持这些数据不变。
+ */
 typedef struct
 {
-    uint8_t online;       /* 非零表示通信在线，仍须通过模式、年龄和数值检查。 */
-    uint8_t mode;         /* 1=瞄准并预热，2=瞄准并连续供弹；其余模式拒绝接管。 */
-    uint32_t last_rx_ms;  /* 最近合法帧的接收时刻，与 now_ms 使用同一毫秒计数源。 */
-    uint32_t now_ms;      /* 调用方固定的本周期时刻；按无符号时间差处理计数回绕。 */
-    uint32_t max_age_ms;  /* 有效范围 0～50 ms，年龄等于期限时仍接受。 */
-    float yaw;
-    float yaw_vel;
-    float yaw_acc;
-    float pitch;
-    float pitch_vel;
-    float pitch_acc;
-    const VisionControlLimits_s *limits; /* 借用的只读配置，调用期间须有效；不在模块内保存。 */
+    uint8_t online;       /* 非 0 表示通信在线，还要继续检查模式、时间和各个数字。 */
+    uint8_t mode;         /* 1=瞄准并让摩擦轮转动，2=再加上连续送弹；其他值不使用视觉目标。 */
+    uint32_t last_rx_ms;  /* 最近一次收到合法视觉数据的时刻，单位：毫秒（ms）。 */
+    uint32_t now_ms;      /* 这次计算使用的当前时刻，单位：毫秒（ms）。 */
+    uint32_t max_age_ms;  /* 距收到数据最多能过多久，可设为 0～50 ms，等于这个值也允许。 */
+    float yaw;           /* 左右转动的目标角度，rad。 */
+    float yaw_vel;       /* 左右转动的目标速度，rad/s（弧度/秒）。 */
+    float yaw_acc;       /* yaw_vel 每秒变化多少，单位：rad/s^2。 */
+    float pitch;         /* 上下转动的目标角度，rad。 */
+    float pitch_vel;     /* 上下转动的目标速度，rad/s。 */
+    float pitch_acc;     /* pitch_vel 每秒变化多少，rad/s^2。 */
+    const VisionControlLimits_s *limits; /* 指向外部提供的角度设置，计算结束前不能释放或改写。 */
 } VisionControlInput_s;
 
-/** @brief 转换后的云台目标及前馈，供调用方写入本周期控制命令。 */
+/** @brief 换算成度以后的目标角度、转动速度及速度每秒的变化量，交给云台控制代码使用。 */
 typedef struct
 {
-    float yaw, pitch;                            /* 目标角，deg；pitch 已包含配置零偏。 */
-    float yaw_vel, yaw_acc, pitch_vel, pitch_acc; /* vel 为 deg/s，acc 为 deg/s^2。 */
+    float yaw, pitch;                            /* 目标角度，deg；pitch 已加上补偿角度。 */
+    float yaw_vel, yaw_acc, pitch_vel, pitch_acc; /* vel 表示速度，deg/s；acc 表示速度每秒的变化量，deg/s^2。 */
 } VisionControlGimbalCommand_s;
 
-/** @brief 一份完整的发射命令请求；实际执行还须经过调用方的安全门禁。 */
+/** @brief 保存希望发射机构做什么；真正执行前，还要检查当前是否允许发射。 */
 typedef struct
 {
-    uint8_t shoot_enabled;    /* 发射电机组总使能请求，1=开启，0=关闭。 */
-    uint8_t friction_enabled; /* 摩擦轮使能请求，1=开启，0=关闭。 */
-    /* 与 loader_mode_e 数值一致，用 uint8_t 避免依赖应用层类型。 */
+    uint8_t shoot_enabled;    /* 是否请求发射机构的电机工作：1=开启，0=关闭。 */
+    uint8_t friction_enabled; /* 是否请求摩擦轮转动：1=开启，0=关闭。 */
+    /* 下方供弹模式的编号，与 loader_mode_e 使用相同数字，方便直接转给 robot_cmd.c。
+       用 uint8_t 存编号，避免为了这个类型额外包含 robot_def.h，也方便在电脑上测试。 */
     uint8_t load_mode;
-    float shoot_rate; /* 连续供弹目标射频，单位：发/秒。 */
+    float shoot_rate; /* 连续发射时，每秒希望发多少发，单位：发/秒。 */
 } VisionControlShootCommand_s;
 
-/* 供弹模式数值由 robot_cmd.c 的静态断言与应用层 loader_mode_e 核对。 */
+/* robot_cmd.c 会在编译时检查这些供弹编号是否与 loader_mode_e 一致。 */
 enum
 {
     VISION_CONTROL_LOAD_STOP = 0u,
@@ -83,64 +90,77 @@ enum
 };
 
 /**
- * @brief 判断视觉输入能否生成合法云台命令，检查规则与 VisionControlBuildGimbalCommand() 相同。
- * @param[in] input 本周期输入；允许 NULL，此时返回 0。
- * @return 1=模式、在线状态、年龄、配置和转换后的数值均有效；0=拒绝接管。
+ * @brief 检查这份视觉数据能不能用于控制云台。
+ * @param[in] input 这次计算使用的视觉数据；传 NULL（没有提供数据）时返回 0。
+ * @return 1=通信、模式、时间、角度设置和换算结果都通过检查；0=这份数据不能用。
+ * @note 内部调用 VisionControlBuildGimbalCommand() 完成检查，input 中的内容不会改变。
  */
 uint8_t VisionControlInputIsUsable(const VisionControlInput_s *input);
 
 /**
- * @brief 校验视觉输入，将目标及前馈从弧度制转为角度制，并检查最终角度限位。
- * @param[in] input 本周期输入；NULL、缺配置、离线、过期或非法模式均被拒绝。
- * @param[out] command 云台命令；允许 NULL，此时返回 0 且不写入。
- * @return 1=生成有效命令；0=拒绝，非 NULL 的 command 所有字段均清零。
- * @note 六个输入数值及转换结果须有限。pitch 加零偏后检查闭区间限位，
- *       yaw 按已选约束检查；超限直接拒绝，不截断。输入内容保持不变。
+ * @brief 把视觉给出的角度和速度换算成云台使用的单位，并检查角度是否在允许范围内。
+ * @param[in] input 视觉数据及角度设置；NULL、没填好设置、离线、超时或模式不对时返回 0。
+ * @param[out] command 存放算好的云台命令；传 NULL 时返回 0，不写入结果。
+ * @return 1=计算成功；0=检查未通过。只要 command 不为 NULL，失败时其中各项都会清零。
+ * @note 角度由 rad 换成 deg，速度由 rad/s 换成 deg/s，速度每秒的变化量也按同样比例换算。
+ *       六个输入数值和换算结果都不能是 NaN 或无穷大。input 中的内容不会改变。
+ *       pitch 先加补偿角度再检查范围。例如测试中输入相当于 25 度，补偿 5 度，就检查 30 度。
+ *       角度等于上下限也允许；超过范围就返回 0，不会把目标角改成上限或下限。
+ *       yaw 选择连续转动时不检查角度范围，换算出 720 度就保留 720 度。
+ *       max_age_ms 设为 50 时，距接收过去 50 ms 仍可使用，51 ms 就返回 0；设为 0 时只接受同一毫秒的数据。
  */
 uint8_t VisionControlBuildGimbalCommand(const VisionControlInput_s *input,
                                       VisionControlGimbalCommand_s *command);
 
 /**
- * @brief 按有效视觉模式生成完整发射请求，输入有效性与云台命令使用同一判据。
- * @param[in] input 本周期视觉输入；允许 NULL，此时拒绝。
- * @param[out] command 发射请求；允许 NULL，此时返回 0 且不写入。
- * @return 1=选用视觉策略；0=拒绝，非 NULL 的 command 关闭总使能与摩擦轮，
- *         停止供弹并清零射频。
- * @note mode 1 开启总使能和摩擦轮、停止供弹且射频为 0；mode 2 开启两者，
- *       连续供弹射频为 10 发/秒。请求不代表已获得实际击发许可。
+ * @brief 检查视觉数据能不能用于控制云台，通过后再按 mode 生成发射命令。
+ * @param[in] input 这次使用的视觉数据；传 NULL 时返回 0。
+ * @param[out] command 存放发射命令；传 NULL 时返回 0，不写入结果。
+ * @return 1=已生成视觉发射命令；0=数据不能用，command 不为 NULL 时生成关闭发射的命令。
+ * @note 关闭命令会将 shoot_enabled、friction_enabled 和 shoot_rate 清零，load_mode 设为停止供弹。
+ *       mode 1 把 shoot_enabled 和 friction_enabled 设为 1，停止供弹，shoot_rate 为 0。
+ *       mode 2 保持这两项为 1，并请求以 10 发/秒连续供弹。
+ *       这里先写出希望机构做什么，真正执行前，调用这个函数的代码还要检查当前是否允许发射。
  */
 uint8_t VisionControlBuildShootCommand(const VisionControlInput_s *input,
                                        VisionControlShootCommand_s *command);
 
 /**
- * @brief 优先使用有效视觉发射请求；视觉不可用时回退到调用方提供的手动命令。
- * @param[in] input 本周期视觉输入，允许 NULL。
- * @param[in] manual_command 已由调用方确认来源有效的本周期手动命令；NULL 表示无手动源。
- * @param[out] command 选中的完整命令，允许 NULL；不得与 manual_command 指向同一对象。
- * @return 1=选中视觉；0=回退手动、无来源或 command 为 NULL，不表示输出一定关闭。
- * @note 手动命令按原值复制，不在此校验其来源或数值；无视觉且无手动源时输出
- *       关闭并清零的命令。command 为 NULL 时不写入。
+ * @brief 优先使用视觉发射命令；视觉数据不能用时，改用这次提供的手动命令。
+ * @param[in] input 这次使用的视觉数据，可以传 NULL。
+ * @param[in] manual_command 这次算好的手动命令；传 NULL 表示没有可用的手动命令。
+ * @param[out] command 存放选中的命令；传 NULL 时直接返回 0，不写入结果。
+ * @return 1=选中了视觉命令；0=没有选中视觉，可能已用了手动命令，也可能生成了关闭命令。
+ * @note 例如视觉超时，但手动命令仍要求连续发射，这里会复制手动命令并返回 0。
+ *       手动命令会原样复制，使用它之前需要由外部代码确认遥控或键鼠数据可用、命令数字正确。
+ *       manual_command 和 command 要分开存放，因为本函数会先清零 command，再读取手动命令。
+ *       视觉数据不能用且 manual_command 为 NULL 时，生成关闭发射、摩擦轮和供弹的命令，shoot_rate 也清零。
  */
 uint8_t VisionControlSelectShootCommand(const VisionControlInput_s *input,
                                         const VisionControlShootCommand_s *manual_command,
                                         VisionControlShootCommand_s *command);
 
 /**
- * @brief 将遥控拨轮值映射为完整手动发射请求，射频固定为 8 发/秒。
- * @param[in] dial 遥控通道解码后的有符号拨轮原始值；来源有效性由调用方确认。
- * @param[out] command 发射请求；NULL 时直接返回。
- * @note dial < -100 开启摩擦轮，dial < -500 连续供弹，否则停止供弹；
- *       摩擦轮或供弹任一有请求即开启总使能。此处不检查遥控在线状态。
+ * @brief 根据遥控拨轮的位置，生成摩擦轮和供弹命令。
+ * @param[in] dial 从遥控数据中解出的拨轮数值；调用前先确认遥控数据可用。
+ * @param[out] command 存放发射命令；传 NULL 时直接返回。
+ * @note dial < -100 时请求摩擦轮转动，dial < -500 时请求连续供弹，否则停止供弹。
+ *       两个条件都用小于号，例如 dial 等于 -500 时摩擦轮转动，但仍停止供弹。
+ *       摩擦轮或供弹有一项需要工作，就打开 shoot_enabled；shoot_rate 固定填 8 发/秒。
+ *       此函数只根据拨轮数字计算，遥控是否在线要在调用前检查。
  */
 void VisionControlBuildRemoteShootCommand(int16_t dial,
                                           VisionControlShootCommand_s *command);
 
 /**
- * @brief 将键鼠档位计数映射为完整手动发射请求，射频固定为 8 发/秒。
- * @param[in] load_cycle E 键按下边沿计数；模 4 对应停止、单发、三发、连续供弹。
- * @param[in] friction_cycle F 键按下边沿计数；奇数开启摩擦轮，偶数关闭。
- * @param[out] command 发射请求；NULL 时直接返回。
- * @note 调用方负责按键去重、计数及来源有效性；摩擦轮或供弹任一有请求即开启总使能。
+ * @brief 根据 E、F 键按下的次数，选择供弹方式和摩擦轮开关。
+ * @param[in] load_cycle E 键按下的次数，每四次循环：停止、单发、三发、连续供弹。
+ * @param[in] friction_cycle F 键按下的次数，奇数请求摩擦轮转动，偶数关闭。
+ * @param[out] command 存放发射命令；传 NULL 时直接返回。
+ * @note E 键次数为 0、1、2、3 时依次选择上述四种方式，为 4 时又回到停止。
+ *       外部代码负责记录次数：每次从松开变成按下才加 1，持续按住不能反复加。
+ *       调用前先确认键鼠数据可用。摩擦轮或供弹有一项需要工作，就打开 shoot_enabled。
+ *       shoot_rate 固定填 8 发/秒，不会沿用上一次视觉命令中的每秒发射数量。
  */
 void VisionControlBuildMouseKeyShootCommand(uint8_t load_cycle,
                                             uint8_t friction_cycle,

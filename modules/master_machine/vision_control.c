@@ -1,16 +1,17 @@
 /**
  * @file vision_control.c
- * @brief 实现视觉输入校验、单位转换与发射命令生成，供 robot_cmd.c 选择本周期控制源。
+ * @brief 检查视觉数据、换算云台角度，并计算这次使用的发射命令。
  *
- * 云台与视觉发射共用一套输入有效性判据，避免目标已失效却继续沿用视觉发射请求。
- * 函数调用约定见 vision_control.h；本文件仅计算命令，不保存跨周期状态或操作执行器。
+ * robot_cmd.c 把视觉、遥控或键鼠数据交给这里，取回云台和发射机构将要使用的命令。
+ * 视觉数据要先通过云台的全部检查，才能继续生成视觉发射命令。
+ * 参数和返回值的说明放在 vision_control.h；这里只计算结果，不直接控制电机，也不保存上一次的命令。
  */
 #include "vision_control.h"
 
 #include <math.h>
 #include <stddef.h>
 
-/* 生成完整关闭命令，清除上一周期的供弹模式和射频；command 须已判定非 NULL。 */
+/* 把发射、摩擦轮和供弹都设为关闭，每秒发射数量也清零。调用前要确认 command 不为 NULL。 */
 static void ResetShootCommand(VisionControlShootCommand_s *command)
 {
     command->shoot_enabled = 0u;
@@ -19,7 +20,7 @@ static void ResetShootCommand(VisionControlShootCommand_s *command)
     command->shoot_rate = 0.0f;
 }
 
-/* 摩擦轮或供弹有请求时开启发射总使能；command 须已判定非 NULL。 */
+/* 摩擦轮或供弹有一项需要工作，就打开 shoot_enabled。调用前要确认 command 不为 NULL。 */
 static void EnableManualShootIfRequested(VisionControlShootCommand_s *command)
 {
     command->shoot_enabled = (uint8_t)(command->friction_enabled ||
@@ -28,7 +29,7 @@ static void EnableManualShootIfRequested(VisionControlShootCommand_s *command)
 
 uint8_t VisionControlInputIsUsable(const VisionControlInput_s *input)
 {
-    /* 复用真实转换路径，确保发射判据也覆盖转换溢出与最终机械限位。 */
+    /* 让云台计算函数实际算一次，生成发射命令前也能检查换算后的数字和角度范围。 */
     VisionControlGimbalCommand_s command;
     return VisionControlBuildGimbalCommand(input, &command);
 }
@@ -39,14 +40,16 @@ uint8_t VisionControlBuildGimbalCommand(const VisionControlInput_s *input,
     const float radians_to_degrees = 57.29577951308232f;
     if (command == NULL)
         return 0u;
-    /* 校验失败保留零输出，成功后再复制完整计算结果。 */
+    /* 先清零，后面任何一步失败都不会留下上一次的目标；全部通过后再填入新结果。 */
     *command = (VisionControlGimbalCommand_s){0};
+    /* 先看通信、模式和接收时间。uint32_t 相减能处理计时数字到最大值后从 0 继续的情况。 */
     if (input == NULL || input->limits == NULL || !input->limits->configured || input->online == 0u ||
         (input->mode != 1u && input->mode != 2u) ||
         input->max_age_ms > VISION_CONTROL_MAX_AGE_MS ||
         (uint32_t)(input->now_ms - input->last_rx_ms) > input->max_age_ms)
         return 0u;
 
+    /* 先检查设置里的数字，再按转动方式检查下限是否小于上限。 */
     const VisionControlLimits_s *limits = input->limits;
     if (!isfinite(limits->pitch_min_deg) || !isfinite(limits->pitch_max_deg) ||
         !isfinite(limits->pitch_zero_offset_deg) || limits->pitch_min_deg >= limits->pitch_max_deg ||
@@ -60,7 +63,7 @@ uint8_t VisionControlBuildGimbalCommand(const VisionControlInput_s *input,
         !isfinite(input->pitch) || !isfinite(input->pitch_vel) || !isfinite(input->pitch_acc))
         return 0u;
 
-    /* 先转入最终命令坐标系；pitch 的机械限位必须在加零偏之后检查。 */
+    /* 先把弧度换成度，再给 pitch 加补偿角度。比如 25 度加 5 度后，要检查的是 30 度。 */
     const VisionControlGimbalCommand_s converted = {
         .yaw = input->yaw * radians_to_degrees,
         .pitch = input->pitch * radians_to_degrees + limits->pitch_zero_offset_deg,
@@ -69,6 +72,7 @@ uint8_t VisionControlBuildGimbalCommand(const VisionControlInput_s *input,
         .pitch_vel = input->pitch_vel * radians_to_degrees,
         .pitch_acc = input->pitch_acc * radians_to_degrees,
     };
+    /* 换算可能让过大的数字变成无穷大，所以还要检查结果，以及补偿后的角度是否超出范围。 */
     if (!isfinite(converted.yaw) || !isfinite(converted.pitch) ||
         !isfinite(converted.yaw_vel) || !isfinite(converted.yaw_acc) ||
         !isfinite(converted.pitch_vel) || !isfinite(converted.pitch_acc) ||
@@ -93,7 +97,7 @@ uint8_t VisionControlBuildShootCommand(const VisionControlInput_s *input,
 
     command->shoot_enabled = 1u;
     command->friction_enabled = 1u;
-    /* mode 1 只保留预热；只有 mode 2 才生成连续供弹请求。 */
+    /* mode 1 请求摩擦轮转动，但不送弹；mode 2 再请求每秒 10 发的连续供弹。 */
     if (input->mode == 2u)
     {
         command->load_mode = VISION_CONTROL_LOAD_BURSTFIRE;
@@ -112,7 +116,7 @@ uint8_t VisionControlSelectShootCommand(const VisionControlInput_s *input,
     if (VisionControlBuildShootCommand(input, command))
         return 1u;
 
-    /* 视觉拒绝时输出已关闭；有当前手动源才覆盖，避免恢复上一周期的旧请求。 */
+    /* 走到这里时已生成关闭命令。有这次算好的手动命令，就把它复制过来。 */
     if (manual_command != NULL)
         *command = *manual_command;
     return 0u;
