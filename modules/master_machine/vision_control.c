@@ -1,8 +1,16 @@
+/**
+ * @file vision_control.c
+ * @brief 实现视觉输入校验、单位转换与发射命令生成，供 robot_cmd.c 选择本周期控制源。
+ *
+ * 云台与视觉发射共用一套输入有效性判据，避免目标已失效却继续沿用视觉发射请求。
+ * 函数调用约定见 vision_control.h；本文件仅计算命令，不保存跨周期状态或操作执行器。
+ */
 #include "vision_control.h"
 
 #include <math.h>
 #include <stddef.h>
 
+/* 生成完整关闭命令，清除上一周期的供弹模式和射频；command 须已判定非 NULL。 */
 static void ResetShootCommand(VisionControlShootCommand_s *command)
 {
     command->shoot_enabled = 0u;
@@ -11,6 +19,7 @@ static void ResetShootCommand(VisionControlShootCommand_s *command)
     command->shoot_rate = 0.0f;
 }
 
+/* 摩擦轮或供弹有请求时开启发射总使能；command 须已判定非 NULL。 */
 static void EnableManualShootIfRequested(VisionControlShootCommand_s *command)
 {
     command->shoot_enabled = (uint8_t)(command->friction_enabled ||
@@ -19,6 +28,7 @@ static void EnableManualShootIfRequested(VisionControlShootCommand_s *command)
 
 uint8_t VisionControlInputIsUsable(const VisionControlInput_s *input)
 {
+    /* 复用真实转换路径，确保发射判据也覆盖转换溢出与最终机械限位。 */
     VisionControlGimbalCommand_s command;
     return VisionControlBuildGimbalCommand(input, &command);
 }
@@ -29,6 +39,7 @@ uint8_t VisionControlBuildGimbalCommand(const VisionControlInput_s *input,
     const float radians_to_degrees = 57.29577951308232f;
     if (command == NULL)
         return 0u;
+    /* 校验失败保留零输出，成功后再复制完整计算结果。 */
     *command = (VisionControlGimbalCommand_s){0};
     if (input == NULL || input->limits == NULL || !input->limits->configured || input->online == 0u ||
         (input->mode != 1u && input->mode != 2u) ||
@@ -49,6 +60,7 @@ uint8_t VisionControlBuildGimbalCommand(const VisionControlInput_s *input,
         !isfinite(input->pitch) || !isfinite(input->pitch_vel) || !isfinite(input->pitch_acc))
         return 0u;
 
+    /* 先转入最终命令坐标系；pitch 的机械限位必须在加零偏之后检查。 */
     const VisionControlGimbalCommand_s converted = {
         .yaw = input->yaw * radians_to_degrees,
         .pitch = input->pitch * radians_to_degrees + limits->pitch_zero_offset_deg,
@@ -81,6 +93,7 @@ uint8_t VisionControlBuildShootCommand(const VisionControlInput_s *input,
 
     command->shoot_enabled = 1u;
     command->friction_enabled = 1u;
+    /* mode 1 只保留预热；只有 mode 2 才生成连续供弹请求。 */
     if (input->mode == 2u)
     {
         command->load_mode = VISION_CONTROL_LOAD_BURSTFIRE;
@@ -99,6 +112,7 @@ uint8_t VisionControlSelectShootCommand(const VisionControlInput_s *input,
     if (VisionControlBuildShootCommand(input, command))
         return 1u;
 
+    /* 视觉拒绝时输出已关闭；有当前手动源才覆盖，避免恢复上一周期的旧请求。 */
     if (manual_command != NULL)
         *command = *manual_command;
     return 0u;
