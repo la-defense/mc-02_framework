@@ -1,149 +1,161 @@
+/**
+ * @file bsp_crash.h
+ * @brief 保存异常、断言失败和任务栈溢出的现场，复位后供日志和 LCD 查询。
+ * 异常入口先关闭已知输出，再记录并请求复位；BSPInit() 在日志初始化后调用 CrashLogInit()。
+ * 记录放在 .noinit 中，可跨系统复位保留；掉电后不能保证保留。
+ */
 #ifndef BSP_CRASH_H
 #define BSP_CRASH_H
 
 #include <stdint.h>
 
-/* ============================================================================
-   崩溃现场记录(2026-09-23, LOG-03)
-   ----------------------------------------------------------------------------
-   把所有"会让板子停在那里"的入口接到同一套现场记录上:
-     - Cortex-M 的 5 个异常入口: HardFault / MemManage / BusFault / UsageFault / NMI
-     - FreeRTOS 的 configASSERT 失败
-     - FreeRTOS 的栈溢出钩子 (vApplicationStackOverflowHook)
-   现场存在 **.noinit 段**(链接脚本里新增): 启动代码只清 .bss, 所以它能跨
-   系统复位保留(掉电丢失), 下次启动由 CrashLogInit() 读出来打印 + 供 LCD 显示。
-
-   安全顺序:
-     异常汇编入口先调用 BSP_SafetyLatchOutputsOff(), 以直接寄存器访问关闭已知输出，
-     不依赖 HAL、tick、RTOS 或日志。随后记录过程关闭中断、验证压栈地址与故障状态，
-     只读允许范围内的 SRAM；二次异常通过活动标志走关断并立即复位路径。
-     这里的寄存器关断是软件尽力措施，不代表已测量外部引脚电平或主供电边界。
-
-   记录的可信度(2026-09-26, LOG-05)
-   ----------------------------------------------------------------------------
-   原来只用 4 字节 magic 判断"这份记录是不是我们写的", 于是 .noinit 的地址随
-   布局漂移之后, RAM 里的残留数据会被当成"上次崩溃现场"打印出来(实测出现过
-   "累计第 2261714040 次、任务名空白"这种误导横幅)。现在改成四重判据:
-
-     magic(=OK) + len(=sizeof) + version(=当前格式版本) + fw_id(=本固件构建指纹)
-     + crc32(对 payload 的 CRC32-IEEE)
-
-   任何一个不符 → CrashLogValid() 返回 0 → 启动时**一个字都不打印**(静默忽略)。
-   另外 magic 有两个取值: 开始写记录时先写 BUSY, 整份写完才写 OK ——
-   于是"看到 BUSY"就是一条真线索: 我们写到一半又崩了(见 CrashLogInit)。
-   ========================================================================== */
-
-/* 记录格式版本: 改动 CrashLog_t 的布局时必须 +1 */
+/** @brief 记录格式版本；改变 CrashLog_t 的字段或布局时须增加版本号。 */
 #define CRASH_LOG_VERSION 3u
 
-/* 头部 magic 的两个取值(小端拼写): "BUSY" = 正在写, "CROK" = 写完整 */
+// magic 表示写入状态：BUSY 为正在写，OK 为写完；BUSY 且进度为 4 时还会继续核对整份记录。
 #define CRASH_LOG_MAGIC_BUSY 0x59535542u
 #define CRASH_LOG_MAGIC_OK 0x4B4F5243u
 
-/* 内联保存的任务名长度: 至少要放得下 FreeRTOS 的 configMAX_TASK_NAME_LEN
-   (bsp_crash.c 里有 _Static_assert 兜底) */
+/** @brief 任务名数组的字节数，含结尾的 '\0'；编译时检查能否容纳 FreeRTOS 的任务名。 */
 #define CRASH_TASK_NAME_LEN 16u
 
-/* 崩溃入口类型 */
+/** @brief 触发现场记录的原因。 */
 typedef enum
 {
     CRASH_TYPE_NONE = 0,
-    CRASH_TYPE_HARDFAULT,
-    CRASH_TYPE_MEMMANAGE,
-    CRASH_TYPE_BUSFAULT,
-    CRASH_TYPE_USAGEFAULT,
-    CRASH_TYPE_NMI,
-    CRASH_TYPE_ASSERT,    /* configASSERT 失败 */
-    CRASH_TYPE_STACK_OVF, /* 任务栈溢出 */
+    CRASH_TYPE_HARDFAULT,   ///< HardFault 异常
+    CRASH_TYPE_MEMMANAGE,   ///< 内存访问保护异常
+    CRASH_TYPE_BUSFAULT,    ///< 总线访问异常
+    CRASH_TYPE_USAGEFAULT,  ///< 指令或处理器使用错误
+    CRASH_TYPE_NMI,         ///< 普通关中断操作不会屏蔽的中断
+    CRASH_TYPE_ASSERT,     ///< configASSERT 失败
+    CRASH_TYPE_STACK_OVF,  ///< 任务栈溢出
 } CrashType_e;
 
-/* 保存多少个栈上数据(用于事后手工回溯调用链) */
+/** @brief 最多保存的 uint32_t 个数，每项 4 字节，用于事后查找调用位置。 */
 #define CRASH_STACK_SNAPSHOT_WORDS 32u
 
+/** @brief 崩溃记录；查询成功表示记录通过检查，各寄存器是否读到还要看 frame_status。 */
 typedef struct
 {
-    /* ---- 头部 ---- */
-    uint32_t magic; /* BUSY(开始写) → OK(写完才写它) */
-    uint32_t len;     /* = sizeof(CrashLog_t): 换记录布局后自动失效 */
-    uint32_t version; /* = CRASH_LOG_VERSION */
-    uint32_t fw_id;   /* 本固件的构建指纹(由 __DATE__/__TIME__ 派生): 换固件后自动失效 */
-    uint32_t crc32;   /* 对 payload(下面第 1 个字段起到结构体末尾)的 CRC32-IEEE */
-    uint32_t progress; /* 写入进度: 1=已写头部 2=已写故障寄存器 3=已写栈帧 4=已写栈快照
-                          用来诊断"记录写到一半就死了"(此时 magic 停在 BUSY) */
-    uint32_t count; /* 累计崩溃次数(跨复位累加, 不清零) */
-    uint32_t type;  /* CrashType_e */
-    uint32_t arg0;  /* 附加信息: 断言所在的文件名指针(栈溢出不用它, 见 task_name) */
-    uint32_t arg1;  /* 附加信息: 断言行号 */
+    // 头部用于判断记录格式、编译编号和写入进度。
+    uint32_t magic;        ///< 开始写时设为 BUSY，写完后设为 OK
+    uint32_t len;          ///< 记录字节数，须等于 sizeof(CrashLog_t)
+    uint32_t version;      ///< 保存时的 CRASH_LOG_VERSION
+    uint32_t fw_id;        ///< 由 bsp_crash.c 的编译日期、时间和配置名计算的编号
+    uint32_t crc32;        ///< 从 task_name 到结构体末尾的 CRC32-IEEE 校验值
+    uint32_t progress;     ///< 写入进度：1 头部，2 故障寄存器，3 基本寄存器，4 栈上数据
+    uint32_t count;        ///< 旧 magic 为 OK/BUSY 时加 1，否则从 1 开始；超过 UINT32_MAX 后回到 0
+    uint32_t type;         ///< CrashType_e 中的记录类型
+    uint32_t arg0;         ///< 附加数据；断言入口保存文件名地址，栈溢出入口填 0
+    uint32_t arg1;         ///< 附加数据；断言入口保存行号，栈溢出入口填 0
 
-    /* ---- 以下都是 payload: 全部参与 crc32 ---- */
-
-    /* 栈溢出时的任务名(内联副本)。为什么不再存指针: 任务名在 TCB 里(RAM),
-       下次启动时那块内存可能已被复用, 指针指向的内容早就不是任务名了。 */
+    // 从这里到结构体末尾参与 CRC；任务名直接复制字符，供复位后读取。
     char task_name[CRASH_TASK_NAME_LEN];
 
-    /* ---- 故障状态寄存器(直接读寄存器得到) ---- */
-    uint32_t cfsr;
-    uint32_t hfsr;
-    uint32_t bfar;
-    uint32_t mmfar;
-    uint32_t dfsr;
+    // 直接读取的故障状态；地址寄存器是否可用还要看相应状态位。
+    uint32_t cfsr;         ///< 内存访问、总线和指令相关的故障状态
+    uint32_t hfsr;         ///< HardFault 状态
+    uint32_t bfar;         ///< 总线错误地址，需检查 CFSR 中对应的地址有效位
+    uint32_t mmfar;        ///< 内存访问错误地址，需检查 CFSR 中对应的地址有效位
+    uint32_t dfsr;         ///< 调试相关的故障状态
 
-    /* ---- 出错时的异常栈帧(ARM 硬件压栈的 8 个字) ---- */
+    // 硬件保存的 8 项基本寄存器，每项 4 字节；检查失败时填 0。
+    // 无异常寄存器数据时，PC 使用 caller_pc，其余填 0。
     uint32_t r0, r1, r2, r3, r12, lr, pc, xpsr;
-    uint32_t frame_status; /* 0=无异常帧, 1=有效, 2=地址/压栈状态无效 */
+    uint32_t frame_status; ///< 0：无异常寄存器数据；1：检查通过；2：地址、返回标记或保存状态不合要求
 
-    /* ---- 栈指针 ---- */
-    uint32_t sp;  /* 出错时真正使用的栈指针(MSP 或 PSP) */
-    uint32_t psp;
-    uint32_t msp;
+    // 以下地址均按字节计。
+    uint32_t sp;           ///< 栈上数据的读取起点；无异常寄存器数据时优先取非零 PSP，否则取 MSP
+    uint32_t psp;          ///< 任务使用的栈指针 PSP
+    uint32_t msp;          ///< 异常处理使用的主栈指针 MSP
 
-    /* ---- 栈快照(从 sp 起连续若干字, 便于事后手工回溯) ---- */
+    // 从 sp 起复制的 uint32_t 数据；无法读取的剩余位置填 0。
     uint32_t stack_snapshot[CRASH_STACK_SNAPSHOT_WORDS];
 } CrashLog_t;
 
-/** @brief 启动早期调用: 校验并打印上次崩溃现场(没有记录则什么都不做) */
+/**
+ * @brief 检查上次崩溃记录，通过后打印现场，不清除记录。
+ * @note 在日志初始化后调用。未通过检查时返回；其中 magic 为 BUSY 时会报告已保存的进度。
+ */
 void CrashLogInit(void);
 
-/** @brief 读取上次崩溃现场; 返回 1=有有效记录(供 LCD / 调试读取) */
+/**
+ * @brief 检查记录并复制给 LCD 或其他查询代码，不清除原记录。
+ * @param[out] out 接收完整记录的结构体；为 NULL 时返回 0。
+ * @return 1 表示检查通过且已复制；0 表示空指针或记录未通过检查，out 原有内容保持不变。
+ * @note 复制时没有关闭中断，调用方须避免同时改写或清除记录。
+ */
 uint8_t CrashLogGetLast(CrashLog_t *out);
 
-/** @brief 清空记录(下次启动就不再报告) */
+/**
+ * @brief 将 magic 清零，使后续查询和启动打印忽略这份记录。
+ * @note 其他字段及正在记录的标志保持原样；下一次写记录时，次数从 1 开始。
+ */
 void CrashLogClear(void);
 
-/** @brief 类型名(日志用, 较长) */
+/**
+ * @brief 获取日志用的完整类型名。
+ * @param[in] type CrashType_e 中的类型编号。
+ * @return 程序内的只读字符串，无须释放；未识别的编号返回 "NONE"。
+ */
 const char *CrashLogTypeName(uint32_t type);
-/** @brief 类型短名(≤4 字符, LCD 用) */
+/**
+ * @brief 获取 LCD 用的类型简称，最多 4 个字符。
+ * @param[in] type CrashType_e 中的类型编号。
+ * @return 程序内的只读字符串，无须释放；未识别的编号返回 "---"。
+ */
 const char *CrashLogTypeShort(uint32_t type);
 
-/* ---------------- 以下函数在异常上下文被调用 ----------------
-   frame:     指向异常栈起始位置; FP 扩展帧布局由 EXC_RETURN 标志解析
-   arg0/arg1: 附加信息(断言=文件名指针+行号; 栈溢出=0, 任务名走 task_name 内联副本)
-   caller_pc: 没有异常帧时用作"出错位置"(由调用者用 __builtin_return_address(0) 取得);
-              有异常帧时忽略(帧里的 PC 更准)
-   这些函数记录完现场就主动复位, 不会返回。 */
+/**
+ * @brief 关闭已知输出，保存指定现场后请求系统复位，不返回。
+ * @param[in] type 记录类型，使用 CrashType_e 中的值。
+ * @param[in] frame 8 项基本寄存器数据的起点；为 NULL 时使用当前栈地址及 caller_pc。
+ * @param[in] arg0 随记录保存的附加数据；断言入口用作文件名地址。
+ * @param[in] arg1 随记录保存的附加数据；断言入口用作行号。
+ * @param[in] caller_pc 无异常寄存器数据时保存的调用位置，按字节计；frame 非空时忽略。
+ * @note 本入口按普通的 8 项布局检查 frame；含浮点区域的异常须由汇编入口传递真实返回标记。
+ */
 void CrashLogRecord(uint32_t type, uint32_t *frame, uint32_t arg0, uint32_t arg1,
                     uint32_t caller_pc);
 
-/** @brief FreeRTOS configASSERT 失败时调用 */
+/**
+ * @brief 记录 configASSERT 失败的文件和行号，然后请求复位，不返回。
+ * @param[in] file 文件名字符串的地址，须保持到复位后仍指向同一可读字符串；NULL 时省略文件名输出。
+ * @param[in] line 源码行号。
+ * @note 保存文件名地址，使用 __FILE__ 这样的常量字符串；打印前还会检查内容是否可打印。
+ */
 void CrashLogAssertFail(const char *file, uint32_t line);
-/** @brief FreeRTOS 栈溢出钩子调用 */
+/**
+ * @brief 复制发生栈溢出的任务名，保存现场后请求复位，不返回。
+ * @param[in] task_name 可读的任务名，NULL 时保存为空串；最多复制 15 个字符并补 '\0'。
+ * @note 不可打印的字符替换为 '.'，任务名直接存入记录，复位后无需访问原来的字符数组。
+ */
 void CrashLogStackOverflow(const char *task_name);
 
-/* 异常入口先低层关断，再跳到这里；r0=异常栈指针，r1=异常类型，r2=EXC_RETURN。 */
+/**
+ * @brief 供异常汇编入口保存现场并请求复位，不返回。
+ * @param[in] stack_frame 原始栈起点；为 NULL 时按无异常寄存器数据处理。
+ * @param[in] type 异常类型，使用 CrashType_e 中相应的值。
+ * @param[in] exception_return 进入异常时 LR 中的 EXC_RETURN 标记，用于区分普通及含浮点区域的布局。
+ * @note 汇编入口须先关闭普通中断和已知输出；本函数检查是否重复进入，再记录，避免重复写关断寄存器。
+ */
 void CrashLogHandlerC(uint32_t *stack_frame, uint32_t type, uint32_t exception_return);
 
-/* ---------------- 崩溃自测(默认关闭) ----------------
-   置 1 后: 每次启动依次触发 BusFault / 断言失败 / 栈溢出记录, 用来验证
-   "记录 → 主动复位 → 重启后打印"整条链路。用 .noinit 里一个游标轮流,
-   所以一次烧录能连着验证三种; 量产固件保持 0, 这段代码不参与编译。 */
+/** @brief 崩溃自测的编译开关；默认 0 不编译，设为 1 后轮流触发三种故障。 */
 #ifndef CRASH_TEST
 #define CRASH_TEST 0
 #endif
 #if CRASH_TEST
-/* 自测前先等多少个 daemon 循环(10ms/轮): 300 轮 ≈ 3s, 让启动日志先输出完 */
+/** @brief 调用自测前等待的 daemon 循环次数；当前每次 10ms，默认约 3s，供启动日志先输出。 */
 #ifndef CRASH_TEST_DELAY_LOOPS
 #define CRASH_TEST_DELAY_LOOPS 300u
 #endif
+/**
+ * @brief 按保留的顺序选择 BusFault、断言失败或任务栈溢出记录路径。
+ * @note 故障正常触发后会记录并复位，下次启动选下一项；未触发故障时打印错误并返回。
+ *       仅在 CRASH_TEST 为 1 时编译，由 daemon 等待指定循环次数后调用。
+ */
 void CrashLogSelfTest(void);
 #endif
 
