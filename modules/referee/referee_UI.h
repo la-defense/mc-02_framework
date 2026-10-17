@@ -46,10 +46,10 @@ typedef struct
 
 /**
 * @brief 删除指定图层或全部 UI 图形。
-* @param _id 已确定机器人编号的裁判 ID。
-* @param Del_Operate 使用 UI_Data_Del_Layer 或 UI_Data_Del_ALL。
-* @param Del_Layer 要删除的图层，范围0～9；删除全部时忽略此值。
-* @note 不检查空指针或参数范围。
+* @param[in] _id 已确定机器人编号的裁判 ID。
+* @param[in] Del_Operate 使用 UI_Data_Del_Layer 或 UI_Data_Del_ALL。
+* @param[in] Del_Layer 要删除的图层，范围0～9；删除全部时忽略此值。
+* @note 不检查空指针或参数范围；CRC 计算失败直接返回，不发送，也不增加序号。
 */
 void UIDelete(referee_id_t *_id, uint8_t Del_Operate, uint8_t Del_Layer);
 
@@ -190,13 +190,14 @@ void UICharDraw(String_Data_t *graph, char graphname[3], uint32_t Graph_Operate,
 * @param cnt 图形个数，只支持1、2、5、7。
 * @param ... 按值传入 cnt 个 Graph_Data_t 图形对象，不是指针。
 * @note 调用方须保证参数个数与 cnt 一致；本函数不检查指针或不支持的数量。
+* CRC 计算失败直接返回，不提交发送缓冲区。
 */
 void UIGraphRefresh(referee_id_t *_id, int cnt, ...);
 
 /** @brief 发送一条已准备好的文字图形。
 * @param _id 已确定发送对象编号的裁判 ID。
 * @param string_Data 已由 UICharDraw 填写的文字和图形数据。
-* @note 不检查空指针。
+* @note 不检查空指针；CRC 计算失败直接返回，不发送，也不增加序号。
 */
 void UICharRefresh(referee_id_t *_id, String_Data_t string_Data);
 

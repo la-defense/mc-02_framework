@@ -66,6 +66,7 @@ CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config);
 * @param[in,out] instance 初始化成功的实例，不能为 NULL；共用发送数组，不要并发调用。
 * @param[in] data 至少可读注册发送长度，不能为 NULL，数据会在本次调用中复制。
 * @note 不等待也不报告单帧发送失败，不保证整包到达；接收端通过整包校验判断是否采用。
+* 空参数或 CRC 计算失败时直接返回，不提交任何分片。
  */
 void CANCommSend(CANCommInstance *instance, uint8_t *data);
 

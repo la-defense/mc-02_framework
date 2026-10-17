@@ -4,6 +4,7 @@
  *        支持 USB VCP(VISION_USE_VCP) 和 UART(VISION_USE_UART) 两种传输, 宏切换
  */
 #include "master_process.h"
+#include "crc.h"
 #include "message_freshness.h"
 #include "daemon.h"
 #include "bsp_log.h"
@@ -190,7 +191,12 @@ void VisionSend(void)
     tx_pkt = send_data;
     tx_pkt.head[0] = 'S';
     tx_pkt.head[1] = 'P';
-    tx_pkt.crc16 = VisionProtocolCRC16((const uint8_t *)&tx_pkt, sizeof(Vision_Send_s) - 2u);
+    uint32_t crc;
+    // CRC 失败时不提交本帧，旧缓冲区不能冒充本次有效状态。
+    if (CRCCompute(CRC16_SP_REFEREE, (const uint8_t *)&tx_pkt,
+                   sizeof(Vision_Send_s) - 2u, &crc) != CRC_OK)
+        return;
+    tx_pkt.crc16 = (uint16_t)crc;
 
 #ifdef VISION_USE_VCP
     uint8_t usb_status = USBTransmit((const uint8_t *)&tx_pkt, sizeof(Vision_Send_s));

@@ -4,22 +4,7 @@
 #include "vision_protocol.h"
 
 #include <string.h>
-
-// 沿用双方已使用的逐位算法；每字节先合入 CRC，再处理其中八位。
-uint16_t VisionProtocolCRC16(const uint8_t *data, size_t length)
-{
-    if (data == NULL && length != 0u)
-        return 0u;
-
-    uint16_t crc = 0xffffu;
-    while (length-- != 0u)
-    {
-        crc ^= *data++;
-        for (uint8_t bit = 0; bit < 8u; ++bit)
-            crc = (crc & 1u) ? (uint16_t)((crc >> 1u) ^ 0x8408u) : (uint16_t)(crc >> 1u);
-    }
-    return crc;
-}
+#include "crc.h"
 
 bool VisionProtocolCheckCRC16(const uint8_t *data, size_t length)
 {
@@ -28,7 +13,9 @@ bool VisionProtocolCheckCRC16(const uint8_t *data, size_t length)
 
     const uint16_t received = (uint16_t)data[length - 2u] |
                              ((uint16_t)data[length - 1u] << 8u);
-    return VisionProtocolCRC16(data, length - 2u) == received;
+    uint32_t computed;
+    return CRCCompute(CRC16_SP_REFEREE, data, length - 2u, &computed) == CRC_OK &&
+           computed == received;
 }
 
 bool VisionProtocolFindCommandFrame(const uint8_t *data, size_t length,

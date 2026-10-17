@@ -10,7 +10,7 @@
  */
 #include "referee_UI.h"
 #include "string.h"
-#include "crc_ref.h"
+#include "crc.h"
 #include "stdio.h"
 #include "rm_referee.h"
 
@@ -28,7 +28,11 @@ void UIDelete(referee_id_t *_id, uint8_t Del_Operate, uint8_t Del_Layer)
 	UI_delete_data.FrameHeader.SOF = REFEREE_SOF;
 	UI_delete_data.FrameHeader.DataLength = temp_datalength;
 	UI_delete_data.FrameHeader.Seq = UI_Seq;
-	UI_delete_data.FrameHeader.CRC8 = Get_CRC8_Check_Sum((uint8_t *)&UI_delete_data, LEN_CRC8, 0xFF);
+	uint32_t crc;
+    // 只在 CRC 算出后填写字段，失败不提交报文。
+    if (CRCCompute(CRC8_REFEREE, (const uint8_t *)&UI_delete_data, LEN_CRC8, &crc) != CRC_OK)
+        return;
+    UI_delete_data.FrameHeader.CRC8 = (uint8_t)crc;
 
 	UI_delete_data.CmdID = ID_student_interactive;
 
@@ -40,7 +44,10 @@ void UIDelete(referee_id_t *_id, uint8_t Del_Operate, uint8_t Del_Layer)
 	UI_delete_data.Layer = Del_Layer;
 
 	// 帧尾校验覆盖帧头、命令码和交互数据。
-	UI_delete_data.frametail = Get_CRC16_Check_Sum((uint8_t *)&UI_delete_data, LEN_HEADER + LEN_CMDID + temp_datalength, 0xFFFF);
+	if (CRCCompute(CRC16_SP_REFEREE, (const uint8_t *)&UI_delete_data,
+                   LEN_HEADER + LEN_CMDID + temp_datalength, &crc) != CRC_OK)
+        return;
+    UI_delete_data.frametail = (uint16_t)crc;
 
 	RefereeSend((uint8_t *)&UI_delete_data, LEN_HEADER + LEN_CMDID + temp_datalength + LEN_TAIL);
 
@@ -270,7 +277,11 @@ void UIGraphRefresh(referee_id_t *_id, int cnt, ...)
 	UI_GraphReFresh_data.FrameHeader.SOF = REFEREE_SOF;
 	UI_GraphReFresh_data.FrameHeader.DataLength = Interactive_Data_LEN_Head + cnt * UI_Operate_LEN_PerDraw;
 	UI_GraphReFresh_data.FrameHeader.Seq = UI_Seq;
-	UI_GraphReFresh_data.FrameHeader.CRC8 = Get_CRC8_Check_Sum((uint8_t *)&UI_GraphReFresh_data, LEN_CRC8, 0xFF);
+	uint32_t crc;
+    // 只在 CRC 算出后填写字段，失败不提交报文。
+    if (CRCCompute(CRC8_REFEREE, (const uint8_t *)&UI_GraphReFresh_data, LEN_CRC8, &crc) != CRC_OK)
+        { va_end(ap); return; }
+    UI_GraphReFresh_data.FrameHeader.CRC8 = (uint8_t)crc;
 
 	UI_GraphReFresh_data.CmdID = ID_student_interactive;
 
@@ -301,7 +312,10 @@ void UIGraphRefresh(referee_id_t *_id, int cnt, ...)
 		graphData = va_arg(ap, Graph_Data_t);
 		memcpy(buffer + (LEN_HEADER + LEN_CMDID + Interactive_Data_LEN_Head + UI_Operate_LEN_PerDraw * i), (uint8_t *)&graphData, UI_Operate_LEN_PerDraw);
 	}
-	Append_CRC16_Check_Sum(buffer, temp_datalength);
+	if (CRCCompute(CRC16_SP_REFEREE, buffer, temp_datalength - 2u, &crc) != CRC_OK)
+    { va_end(ap); return; }
+    buffer[temp_datalength - 2u] = (uint8_t)crc;
+    buffer[temp_datalength - 1u] = (uint8_t)(crc >> 8u);
 	RefereeSend(buffer, temp_datalength);
 
 	va_end(ap); // 结束可变参数的获取
@@ -317,7 +331,11 @@ void UICharRefresh(referee_id_t *_id, String_Data_t string_Data)
 	UI_CharReFresh_data.FrameHeader.SOF = REFEREE_SOF;
 	UI_CharReFresh_data.FrameHeader.DataLength = temp_datalength;
 	UI_CharReFresh_data.FrameHeader.Seq = UI_Seq;
-	UI_CharReFresh_data.FrameHeader.CRC8 = Get_CRC8_Check_Sum((uint8_t *)&UI_CharReFresh_data, LEN_CRC8, 0xFF);
+	uint32_t crc;
+    // 只在 CRC 算出后填写字段，失败不提交报文。
+    if (CRCCompute(CRC8_REFEREE, (const uint8_t *)&UI_CharReFresh_data, LEN_CRC8, &crc) != CRC_OK)
+        return;
+    UI_CharReFresh_data.FrameHeader.CRC8 = (uint8_t)crc;
 
 	UI_CharReFresh_data.CmdID = ID_student_interactive;
 
@@ -328,7 +346,10 @@ void UICharRefresh(referee_id_t *_id, String_Data_t string_Data)
 
 	UI_CharReFresh_data.String_Data = string_Data;
 
-	UI_CharReFresh_data.frametail = Get_CRC16_Check_Sum((uint8_t *)&UI_CharReFresh_data, LEN_HEADER + LEN_CMDID + temp_datalength, 0xFFFF);
+	if (CRCCompute(CRC16_SP_REFEREE, (const uint8_t *)&UI_CharReFresh_data,
+                   LEN_HEADER + LEN_CMDID + temp_datalength, &crc) != CRC_OK)
+        return;
+    UI_CharReFresh_data.frametail = (uint16_t)crc;
 
 	RefereeSend((uint8_t *)&UI_CharReFresh_data, LEN_HEADER + LEN_CMDID + temp_datalength + LEN_TAIL); // 发送
 

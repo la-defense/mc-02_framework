@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include "crc.h"
 
 #define PROTOCOL_CMD_ID 0XA5
 #define OFFSET_BYTE 8 // 出数据段外，其他部分所占字节数
@@ -27,12 +28,13 @@ typedef struct
 /** @brief 组装一帧并追加校验，不直接发送。
 * @param[in] send_id 消息编号，按低字节在前写入。
 * @param[in] flags_register 16 位标志值。
-* @param[in] tx_data 至少可读 float_length 个 float，按本机 32 位 float 字节顺序复制。
+* @param[in] tx_data 至少可读 float_length 个 float，按本机 32 位 float 字节顺序复制；个数为0时允许 NULL。
 * @param[in] float_length float 元素个数，不是字节数。
 * @param[out] tx_buf 至少可写 4*float_length+10 字节。
-* @param[out] tx_buf_len 最终帧字节数；所有实际使用的地址须有效，不检查 NULL。
+* @param[out] tx_buf_len 最终帧字节数；失败置0，为 NULL 时直接返回错误。
+* @return CRC_OK 或参数／CRC错误；失败时缓冲区可能已有部分内容，不得发送。
 */
-void get_protocol_send_data(uint16_t send_id,		 // 信号id
+CRCStatus_t get_protocol_send_data(uint16_t send_id,		 // 信号id
 							uint16_t flags_register, // 16位寄存器
 							float *tx_data,			 // 待发送的float数据
 							uint8_t float_length,	 // float的数据长度

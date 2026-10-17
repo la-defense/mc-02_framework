@@ -1,3 +1,8 @@
+/** @file can_comm_freshness_test.c
+ * @brief 用生产 CRC 验证 CAN 拼包和原接收时间，独立运行的主机测试。
+ */
+#include "crc.h"
+#include "crc_injection.h"
 #include "test_check.h"
 #include "can_comm.h"
 #include <stdlib.h>
@@ -5,6 +10,7 @@
 
 static uint32_t now_ms;
 static uint8_t daemon_online;
+static uint32_t sends;
 static CANInstance can_instance;
 static DaemonInstance daemon_instance;
 static void (*rx_callback)(CANInstance *);
@@ -21,14 +27,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     return &can_instance;
 }
 void CANSetDLC(CANInstance *instance, uint8_t length) { (void)instance; (void)length; }
-uint8_t CANTransmit(CANInstance *instance, float timeout) { (void)instance; (void)timeout; return 1u; }
-uint8_t crc_8(const uint8_t *data, uint8_t len)
-{
-    uint8_t crc = 0u;
-    for (uint8_t i = 0u; i < len; ++i) crc = (uint8_t)(crc + data[i]);
-    return crc;
-}
-
+uint8_t CANTransmit(CANInstance *instance, float timeout) { (void)instance; (void)timeout; ++sends; return 1u; }
 static void deliver(uint32_t timestamp_ms, const uint8_t *bytes, uint8_t length)
 {
     now_ms = timestamp_ms;
@@ -46,6 +45,9 @@ int main(void)
     TEST_CHECK(comm != NULL && rx_callback != NULL);
     uint8_t payload[4] = {1u, 2u, 3u, 4u};
     uint8_t frame[8] = {CAN_COMM_HEADER, 4u, 1u, 2u, 3u, 4u, 10u, CAN_COMM_TAIL};
+    uint32_t crc;
+    TEST_CHECK(CRCCompute(CRC8_CAN_A5, payload, sizeof(payload), &crc) == CRC_OK);
+    frame[6] = (uint8_t)crc;
     uint8_t output[4];
     MessageFreshness_t freshness;
 
@@ -68,11 +70,20 @@ int main(void)
     snapshot_valid = CANCommGetSnapshot(comm, output, sizeof(output), 60u, 50u, &freshness);
     TEST_CHECK(snapshot_valid == 0u);
     TEST_CHECK(!freshness.valid);
-    frame[6] = 10u;
+    frame[6] = (uint8_t)crc;
     deliver(61u, frame, sizeof(frame));
     snapshot_valid = CANCommGetSnapshot(comm, output, sizeof(output), 111u, 50u, &freshness);
     TEST_CHECK(snapshot_valid == 1u);
     TEST_CHECK(freshness.sequence == 2u);
+    // CRC 计算失败不刷新上一份接收时间，也不提交任何发送分片。
+    crc_fail_after = 0;
+    deliver(112u, frame, sizeof(frame));
+    TEST_CHECK(comm->freshness.timestamp_ms == 61u && comm->freshness.sequence == 2u);
+    crc_fail_after = 0;
+    CANCommSend(comm, payload);
+    TEST_CHECK(sends == 0u);
+    CANCommSend(comm, payload);
+    TEST_CHECK(sends == 1u);
     free(comm);
     return 0;
 }

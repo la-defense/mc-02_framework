@@ -12,7 +12,7 @@
 
 #include "rm_referee.h"
 #include "string.h"
-#include "crc_ref.h"
+#include "crc.h"
 #include "bsp_usart.h"
 #include "task.h"
 #include "daemon.h"
@@ -28,15 +28,16 @@ static referee_info_t referee_info;			  // 裁判系统数据
 
 /**
 * @brief 在一段串口数据中查找并解析完整的裁判系统帧。
-* @param buff 本次接收到的字节缓冲区。
-* @param recv_len 缓冲区内的字节数。
-* @note 空指针或数据不足一帧时直接返回；本函数不返回解析结果。
+* @param[in] buff 本次接收到的字节缓冲区。
+* @param[in] recv_len 缓冲区内的字节数。
+* @return 至少有一帧通过两次 CRC 检查时返回1，否则返回0。
  */
-static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
+static uint8_t JudgeReadData(uint8_t *buff, uint16_t recv_len)
 {
 	uint16_t offset = 0; // 当前扫描位置
+	uint8_t accepted = 0u;
 	if (buff == NULL || recv_len < LEN_HEADER) // 空指针或不足一帧, 不作处理
-		return;
+		return 0u;
 
 	// 在本次实际接收长度内滑动解析, 一个数据包可能包含多帧
 	// 一段接收缓冲区可能含多帧；扫描位置会移到下一帧或向后找一个字节。
@@ -44,6 +45,7 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 	{
 		uint16_t frame_len;
 		uint16_t data_len;
+		uint32_t crc;
 
 		// 判断帧头是否为 0xA5
 		if (buff[offset + SOF] != REFEREE_SOF)
@@ -53,7 +55,8 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 		}
 
 		// 帧头 CRC8 校验
-		if (Verify_CRC8_Check_Sum(buff + offset, LEN_HEADER) != TRUE)
+		if (CRCCompute(CRC8_REFEREE, buff + offset, LEN_HEADER - 1u, &crc) != CRC_OK ||
+            crc != buff[offset + LEN_HEADER - 1u])
 		{
 			offset++;
 			continue;
@@ -68,13 +71,17 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 			break;
 
 		// 整包 CRC16 校验
-		if (Verify_CRC16_Check_Sum(buff + offset, frame_len) != TRUE)
+		if (CRCCompute(CRC16_SP_REFEREE, buff + offset, frame_len - 2u, &crc) != CRC_OK ||
+            crc != ((uint16_t)buff[offset + frame_len - 2u] |
+                    ((uint16_t)buff[offset + frame_len - 1u] << 8u)))
 		{
 			offset++; // CRC 错误, 继续向后查找
 			continue;
 		}
 
-		// 整帧合法: 记录帧头, 拼接命令码
+		// 整帧合法后才允许刷新接收时间和发布字段。
+		accepted = 1u;
+		// 记录帧头, 拼接命令码。
 		memcpy(&referee_info.FrameHeader, buff + offset, LEN_HEADER);
 		referee_info.CmdID = (uint16_t)buff[offset + CMD_ID_Offset] | ((uint16_t)buff[offset + CMD_ID_Offset + 1] << 8);
 
@@ -169,15 +176,18 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 
 		offset += frame_len; // 跳到下一帧
 	}
+	return accepted;
 }
 
 /*裁判系统串口接收回调函数,解析数据 */
 static void RefereeRxCallback()
 {
-	// 每次串口接收都会更新时间，再把本次字节交给帧解析函数。
-	DaemonReload(referee_daemon);
-	referee_last_rx_ms = HAL_GetTick();
-	JudgeReadData(referee_usart_instance->recv_buff, referee_usart_instance->last_recv_size);
+	// CRC 错误或计算失败不能让坏数据维持在线状态。
+	if (JudgeReadData(referee_usart_instance->recv_buff, referee_usart_instance->last_recv_size))
+	{
+		DaemonReload(referee_daemon);
+		referee_last_rx_ms = HAL_GetTick();
+	}
 }
 // 裁判系统丢失回调函数,重新初始化裁判系统串口
 static void RefereeLostCallback(void *arg)

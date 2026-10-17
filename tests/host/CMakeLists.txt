@@ -1,5 +1,18 @@
+# 主机行为回归入口：CMake 配置后构建，再用 CTest 执行；硬件操作不在此处运行。
 cmake_minimum_required(VERSION 3.16)
 project(mc02_host_tests C)
+
+# 生产 CRC 仅依赖标准 C；协议与参数测试共同使用同一份实现。
+add_library(mc02_software_crc STATIC ../../modules/algorithm/crc.c)
+target_include_directories(mc02_software_crc PUBLIC ../../modules/algorithm)
+add_executable(crc_test crc_test.c)
+target_include_directories(crc_test PRIVATE ../../bsp/crash)
+if(UNIX)
+  find_package(Threads REQUIRED)
+  target_link_libraries(crc_test PRIVATE Threads::Threads)
+  target_compile_definitions(crc_test PRIVATE CRC_TEST_THREADS=1)
+endif()
+
 
 if(UNIX AND NOT APPLE)
   add_executable(lcd_spi_timing_test lcd_spi_timing_test.c ../../Core/Src/spi.c ../../modules/lcd/lcd.c)
@@ -525,4 +538,39 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   target_link_options(bmi088_sample_status_test PRIVATE -Wl,--gc-sections)
   target_link_libraries(bmi088_sample_status_test PRIVATE m)
   add_test(NAME bmi088_partial_and_non_finite_samples_are_not_published COMMAND bmi088_sample_status_test)
+endif()
+
+# 固定向量、错误入口和多实例分别报告，Release 下同样执行全部检查。
+foreach(scenario IN ITEMS vectors failures instances)
+  add_test(NAME production_crc_${scenario} COMMAND crc_test ${scenario})
+  set_tests_properties(production_crc_${scenario} PROPERTIES TIMEOUT 15)
+endforeach()
+add_executable(crc_a5_test crc_a5_test.c ../../modules/master_machine/seasky_protocol.c)
+target_include_directories(crc_a5_test PRIVATE ../../modules/master_machine)
+add_test(NAME production_crc_a5_compatibility COMMAND crc_a5_test)
+
+# 传输替身保留真实协议解析；包装只用于让选定的一次 CRC 调用返回失败。
+add_executable(crc_protocol_test crc_protocol_test.c
+  ../../modules/master_machine/master_process.c ../../modules/master_machine/vision_protocol.c
+  ../../modules/referee/rm_referee.c ../../modules/referee/referee_UI.c)
+target_include_directories(crc_protocol_test BEFORE PRIVATE crc_protocol_fakes can_comm_fakes)
+target_include_directories(crc_protocol_test PRIVATE ../../modules/master_machine ../../modules/referee
+  ../../modules/message_center)
+add_test(NAME production_crc_protocol_failure_and_compatibility COMMAND crc_protocol_test)
+# 只给实际使用 CRC 的测试链接算法，其余测试保持各自依赖。
+foreach(target IN ITEMS crc_test crc_a5_test crc_protocol_test can_comm_freshness_test
+                        vision_protocol_test param_operation_test)
+  if(TARGET ${target})
+    target_link_libraries(${target} PRIVATE mc02_software_crc)
+  endif()
+endforeach()
+foreach(target IN ITEMS crc_a5_test crc_protocol_test can_comm_freshness_test param_operation_test)
+  if(TARGET ${target})
+    target_sources(${target} PRIVATE crc_injection.c)
+    target_link_options(${target} PRIVATE -Wl,--wrap=CRCCompute)
+  endif()
+endforeach()
+if(TARGET param_operation_test)
+  add_test(NAME production_crc_parameter_legacy_read COMMAND param_operation_test legacy-read)
+  add_test(NAME production_crc_parameter_read_failure COMMAND param_operation_test read-failure)
 endif()

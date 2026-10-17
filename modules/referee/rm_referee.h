@@ -114,10 +114,10 @@ referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle);
  */
 void RefereeSend(uint8_t *send, uint16_t tx_len);
 
-/** @brief 查询看门狗是否收到足够新的裁判串口数据；返回1在线，0离线。 */
+/** @brief 查询看门狗是否收到通过 CRC 检查的裁判数据；返回1在线，0离线。 */
 uint8_t RefereeIsOnline(void);
 
-/** @brief 返回最近一次串口接收回调的 HAL 毫秒计数；不代表该帧已通过校验。 */
+/** @brief 返回最近一次通过帧头及整帧 CRC 检查的 HAL 毫秒计数；初始为0。 */
 uint32_t RefereeGetLastRxMs(void);
 
 #endif // !REFEREE_H

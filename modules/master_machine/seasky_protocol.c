@@ -11,51 +11,24 @@
  */
 
 #include "seasky_protocol.h"
-#include "crc8.h"
-#include "crc16.h"
+#include "crc.h"
 #include "memory.h"
 
-/*获取CRC8校验码*/
-/** @brief 计算已有协议 CRC8，接口行为同 crc_8()。
-* @param[in] pchMessage 可读数据地址。
-* @param[in] dwLength 字节数。
-* @return CRC8 结果。
- */
-uint8_t Get_CRC8_Check(uint8_t *pchMessage,uint16_t dwLength)
+// 旧 A5 帧保持原 CRC 参数；失败只拒绝本帧。
+static uint8_t CRC8_Check_Sum(const uint8_t *data, size_t length)
 {
-    return crc_8(pchMessage,dwLength);
-}
-/*检验CRC8数据段*/
-static uint8_t CRC8_Check_Sum(uint8_t *pchMessage, uint16_t dwLength)
-{
-    uint8_t ucExpected = 0;
-    if ((pchMessage == 0) || (dwLength <= 2))
-        return 0;
-    ucExpected = crc_8(pchMessage, dwLength - 1);
-    return (ucExpected == pchMessage[dwLength - 1]);
+    uint32_t crc;
+    return data != NULL && length > 2u &&
+           CRCCompute(CRC8_CAN_A5, data, length - 1u, &crc) == CRC_OK &&
+           crc == data[length - 1u];
 }
 
-/*获取CRC16校验码*/
-/** @brief 计算已有协议 CRC16，接口行为同 crc_16()。
-* @param[in] pchMessage 可读数据地址。
-* @param[in] dwLength 字节数。
-* @return CRC16 结果。
- */
-uint16_t Get_CRC16_Check(uint8_t *pchMessage,uint32_t dwLength)
+static uint8_t CRC16_Check_Sum(const uint8_t *data, size_t length)
 {
-    return crc_16(pchMessage,dwLength);
-}
-
-/*检验CRC16数据段*/
-static uint16_t CRC16_Check_Sum(uint8_t *pchMessage, uint32_t dwLength)
-{
-    uint16_t wExpected = 0;
-    if ((pchMessage == 0) || (dwLength <= 2))
-    {
-        return 0;
-    }
-    wExpected = crc_16(pchMessage, dwLength - 2);
-    return (((wExpected & 0xff) == pchMessage[dwLength - 2]) && (((wExpected >> 8) & 0xff) == pchMessage[dwLength - 1]));
+    uint32_t crc;
+    return data != NULL && length > 2u &&
+           CRCCompute(CRC16_MODBUS_A5, data, length - 2u, &crc) == CRC_OK &&
+           crc == ((uint16_t)data[length - 2u] | ((uint16_t)data[length - 1u] << 8u));
 }
 
 /*检验数据帧头*/
@@ -75,23 +48,31 @@ static uint8_t protocol_heade_Check(protocol_rm_struct *pro, uint8_t *rx_buf)
     return 0;
 }
 
-// 公开用法见头文件；内部静态变量共用，调用方须依次组包。
-void get_protocol_send_data(uint16_t send_id,        // 信号id
+// 公开用法见头文件；失败时长度保持0，调用方不得发送未完成内容。
+CRCStatus_t get_protocol_send_data(uint16_t send_id,        // 信号id
                             uint16_t flags_register, // 16位寄存器
                             float *tx_data,          // 待发送的float数据
                             uint8_t float_length,    // float的数据长度
                             uint8_t *tx_buf,         // 待发送的数据帧
                             uint16_t *tx_buf_len)    // 待发送的数据帧长度
 {
-    static uint16_t crc16;
-    static uint16_t data_len;
+    uint32_t crc16;
+    uint32_t crc8;
+    uint16_t data_len;
+    if (tx_buf_len == NULL) return CRC_ERROR_ARGUMENT;
+    *tx_buf_len = 0u;
+    // 零长度数据允许空地址，其余实际使用的地址必须存在。
+    if (tx_buf == NULL || (tx_data == NULL && float_length != 0u))
+        return CRC_ERROR_ARGUMENT;
 
     data_len = float_length * 4 + 2;
     /*帧头部分*/
     tx_buf[0] = PROTOCOL_CMD_ID;
     tx_buf[1] = data_len & 0xff;        // 低位在前
     tx_buf[2] = (data_len >> 8) & 0xff; // 这里写长度的高字节。
-    tx_buf[3] = crc_8(&tx_buf[0], 3);   // 获取CRC8校验位
+    CRCStatus_t status = CRCCompute(CRC8_CAN_A5, tx_buf, 3u, &crc8);
+    if (status != CRC_OK) return status;
+    tx_buf[3] = (uint8_t)crc8;
 
     /*数据的信号id*/
     tx_buf[4] = send_id & 0xff;
@@ -109,11 +90,13 @@ void get_protocol_send_data(uint16_t send_id,        // 信号id
     }
 
     /*整包校验*/
-    crc16 = crc_16(&tx_buf[0], data_len + 6);
+    status = CRCCompute(CRC16_MODBUS_A5, tx_buf, data_len + 6u, &crc16);
+    if (status != CRC_OK) return status;
     tx_buf[data_len + 6] = crc16 & 0xff;
     tx_buf[data_len + 7] = (crc16 >> 8) & 0xff;
 
     *tx_buf_len = data_len + 8;
+    return CRC_OK;
 }
 // 先检查帧头，再按帧头声明的长度检查整帧；两次都通过才改写调用方输出。
 uint16_t get_protocol_info(uint8_t *rx_buf,          // 接收到的原始数据

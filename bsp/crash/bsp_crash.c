@@ -4,6 +4,7 @@
  * 故障入口先关闭已知输出，按检查结果读取寄存器和栈，再请求复位；日志只在下次启动时输出。
  */
 #include "bsp_crash.h"
+#include "bsp_crash_crc.h"
 #include "bsp_crash_frame.h"
 #include "bsp_crash_guard.h"
 #include "bsp_safety.h"
@@ -50,26 +51,6 @@ const char mc02_build_profile[] = "robot";
             (out) = ((out) ^ (uint32_t)(uint8_t)(*_cs)) * 16777619u;      \
             _cs++;                                                        \
         }                                                                 \
-    } while (0)
-
-// CRC32-IEEE：p 指向数据，n 为 uint32_t 个数，acc 接收校验值。
-// 依次处理每项的 4 个字节，每字节从最低位开始计算 8 次，最后取反。
-#define CRASH_CRC32_WORDS(acc, p, n)                                      \
-    do {                                                                  \
-        (acc) = 0xFFFFFFFFu;                                              \
-        for (uint32_t _ci = 0u; _ci < (n); ++_ci)                         \
-        {                                                                 \
-            uint32_t _cw = (p)[_ci];                                      \
-            for (uint32_t _cb = 0u; _cb < 4u; ++_cb)                       \
-            {                                                             \
-                (acc) ^= (_cw & 0xFFu);                                   \
-                _cw >>= 8;                                                \
-                for (uint32_t _ck = 0u; _ck < 8u; ++_ck)                   \
-                    (acc) = ((acc) & 1u) ? (((acc) >> 1) ^ 0xEDB88320u)    \
-                                         : ((acc) >> 1);                   \
-            }                                                             \
-        }                                                                 \
-        (acc) = ~(acc);                                                   \
     } while (0)
 
 // CRC 从 task_name 算到结构体末尾，前面的头部字段不参与计算。
@@ -144,10 +125,9 @@ static uint8_t CrashLogValid(void)
     if (g_crash_log.fw_id != fw_id)
         return 0u; // 保存时的编译编号与当前编号不匹配
 
-    CRASH_CRC32_WORDS(crc,
-                      (const uint32_t *)((const uint8_t *)&g_crash_log +
-                                         CRASH_PAYLOAD_OFFSET),
-                      CRASH_PAYLOAD_WORDS);
+    if (!CrashCRC32Words((const volatile uint32_t *)((const volatile uint8_t *)&g_crash_log +
+                            CRASH_PAYLOAD_OFFSET), CRASH_PAYLOAD_WORDS, &crc))
+        return 0u;
     return (crc == g_crash_log.crc32) ? 1u : 0u;
 }
 
@@ -256,13 +236,14 @@ static void CrashLogWriteRecord(uint32_t type, uint32_t *frame, uint32_t excepti
     {
         uint32_t crc;
 
-        CRASH_CRC32_WORDS(crc,
-                          (const uint32_t *)((const uint8_t *)&g_crash_log +
-                                             CRASH_PAYLOAD_OFFSET),
-                          CRASH_PAYLOAD_WORDS);
-        g_crash_log.crc32 = crc;
+        if (CrashCRC32Words((const volatile uint32_t *)((const volatile uint8_t *)&g_crash_log +
+                                CRASH_PAYLOAD_OFFSET), CRASH_PAYLOAD_WORDS, &crc))
+        {
+            g_crash_log.crc32 = crc;
+            g_crash_log.magic = CRASH_LOG_MAGIC_OK;
+        }
+        // 未算出 CRC 时保留 BUSY，仍按原路径复位，不发布完成标记。
     }
-    g_crash_log.magic = CRASH_LOG_MAGIC_OK;
 
     // 请求复位前等待固定次数，给最后的写入留出时间；读取时仍兼容 BUSY 且进度为 4 的记录。
     for (volatile uint32_t _drain = 0u; _drain < CRASH_RESET_DRAIN_LOOPS; ++_drain)

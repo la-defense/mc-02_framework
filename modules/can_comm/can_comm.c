@@ -7,7 +7,7 @@
 #include "task.h"
 #include "memory.h"
 #include "stdlib.h"
-#include "crc8.h"
+#include "crc.h"
 #include "bsp_dwt.h"
 #include "bsp_log.h"
 
@@ -74,7 +74,10 @@ static void CANCommRxCallback(CANInstance *_instance)
             // 如果buff里本tail的位置等于CAN_COMM_TAIL
             if (comm->raw_recvbuf[comm->recv_buf_len - 1] == CAN_COMM_TAIL)
             { // 通过校验,复制数据到unpack_data中
-                if (comm->raw_recvbuf[comm->recv_buf_len - 2] == crc_8(comm->raw_recvbuf + 2, comm->recv_data_len))
+                uint32_t crc;
+                // 计算失败与坏 CRC 都不能发布消息或刷新接收时间。
+                if (CRCCompute(CRC8_CAN_A5, comm->raw_recvbuf + 2, comm->recv_data_len, &crc) == CRC_OK &&
+                    comm->raw_recvbuf[comm->recv_buf_len - 2] == crc)
                 { // 数据量大的话考虑使用DMA
                     taskENTER_CRITICAL();
                     memcpy(comm->unpacked_recv_data, comm->raw_recvbuf + 2, comm->recv_data_len);
@@ -148,11 +151,14 @@ CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config)
 
 void CANCommSend(CANCommInstance *instance, uint8_t *data)
 {
-    static uint8_t crc8;
-    static uint8_t send_len;
+    uint32_t crc8;
+    uint8_t send_len;
+    if (instance == NULL || data == NULL) return;
     // 将data copy到raw_sendbuf中,计算crc8
     memcpy(instance->raw_sendbuf + 2, data, instance->send_data_len);
-    crc8 = crc_8(data, instance->send_data_len);
+    // 在发送分片前确认 CRC 已算出，失败时不发送任何分片。
+    if (CRCCompute(CRC8_CAN_A5, data, instance->send_data_len, &crc8) != CRC_OK)
+        return;
     instance->raw_sendbuf[2 + instance->send_data_len] = crc8;
 
     // CAN单次发送最大为8字节,如果超过8字节,需要分包发送

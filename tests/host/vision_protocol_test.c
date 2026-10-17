@@ -1,3 +1,8 @@
+/** @file vision_protocol_test.c
+ * @brief 用生产 CRC 和固定帧检查 SP 解析及控制边界，Release 下也执行检查。
+ */
+#include "crc.h"
+#include "test_check.h"
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,7 +36,9 @@ static void MakeCommandFrame(Vision_Recv_s *frame, uint8_t mode)
     frame->mode = mode;
     frame->yaw = 0.25f;
     frame->pitch = -0.1f;
-    frame->crc16 = VisionProtocolCRC16((const uint8_t *)frame, sizeof(*frame) - 2u);
+    uint32_t crc;
+    TEST_CHECK(CRCCompute(CRC16_SP_REFEREE, (const uint8_t *)frame, sizeof(*frame) - 2u, &crc) == CRC_OK);
+    frame->crc16 = (uint16_t)crc;
 }
 
 static int TestProtocol(void)
@@ -39,7 +46,9 @@ static int TestProtocol(void)
     static const uint8_t check_vector[] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
     CHECK(sizeof(Vision_Recv_s) == 29u);
     CHECK(sizeof(Vision_Send_s) == 43u);
-    CHECK(VisionProtocolCRC16(check_vector, sizeof(check_vector)) == 0x6f91u);
+    uint32_t crc;
+    CHECK(CRCCompute(CRC16_SP_REFEREE, check_vector, sizeof(check_vector), &crc) == CRC_OK);
+    CHECK(crc == 0x6f91u);
 
     Vision_Recv_s expected;
     Vision_Recv_s received;

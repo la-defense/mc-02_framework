@@ -7,6 +7,7 @@
  * 接口用法与失败后的数据说明见 bsp_param.h。
  */
 #include "bsp_param.h"
+#include "crc.h"
 #include "bsp_watchdog.h"
 #include "bsp_log.h"
 #include "main.h"
@@ -76,20 +77,6 @@ volatile uint32_t param_commit_fail = 0;
 volatile uint8_t param_active_region = 0;
 volatile uint32_t param_seq = 0;
 volatile uint8_t param_loaded = 0;
-
-/* 逐字节计算 CRC32，用于写入前生成检查值、读取时检查参数数据。 */
-static uint32_t ParamCrc32(const uint8_t *data, uint32_t len)
-{
-    uint32_t crc = 0xFFFFFFFFu;
-    // 每个字节先与当前结果合并，再逐位计算；8位处理完后继续下一个字节。
-    for (uint32_t i = 0; i < len; ++i)
-    {
-        crc ^= data[i];
-        for (uint8_t bit = 0; bit < 8u; ++bit)
-            crc = (crc & 1u) ? ((crc >> 1) ^ 0xEDB88320u) : (crc >> 1);
-    }
-    return ~crc;
-}
 
 /* 每条参数先保存编号和数据字节数，后面紧跟数据与补齐字节。 */
 typedef struct
@@ -199,7 +186,9 @@ static uint8_t ParamWriteSector(uint32_t sector_addr)
     header.version = PARAM_VERSION;
     header.payload_len = s_payload_len;
     header.seq = (uint32_t)param_seq + 1u;
-    header.crc32 = ParamCrc32(s_payload, s_payload_len);
+    // 计算完成后才能擦写，失败保留当前活动参数区。
+    if (CRCCompute(CRC32_IEEE, s_payload, s_payload_len, &header.crc32) != CRC_OK)
+        return 0u;
     memset(header.reserved, 0, sizeof(header.reserved));
 
     memcpy(buf, &header, sizeof(header));
@@ -266,7 +255,8 @@ static uint8_t ParamReadSector(uint32_t sector_addr, uint8_t *out, ParamHeader_t
                                  (int32_t)ParamRoundUp4(hdr.payload_len));
     const uint8_t *payload = (const uint8_t *)(uintptr_t)(sector_addr + PARAM_FLASHWORD);
     // 参数数据的 CRC 不符时整条记录都不使用；具体数值范围由使用参数的模块检查。
-    if (ParamCrc32(payload, hdr.payload_len) != hdr.crc32)
+    uint32_t crc;
+    if (CRCCompute(CRC32_IEEE, payload, hdr.payload_len, &crc) != CRC_OK || crc != hdr.crc32)
         return 0;
 
     if (out != NULL && hdr.payload_len > 0u)

@@ -50,16 +50,11 @@ _Static_assert(sizeof(Vision_Recv_s) == VISION_COMMAND_FRAME_SIZE,
 _Static_assert(sizeof(Vision_Send_s) == VISION_STATUS_FRAME_SIZE,
                "Vision status frame must stay 43 bytes");
 
-/** @brief 以 0xffff 为初值逐字节计算 CRC16。
-* @param[in] data 可读数据；NULL 且 length 非 0 时返回 0。
-* @param[in] length 参与计算的字节数，不含尚未追加的 CRC。
-* @return 计算结果；length 为 0 时返回初值 0xffff。
-*/
-uint16_t VisionProtocolCRC16(const uint8_t *data, size_t length);
+
 /** @brief 检查数据最后两字节是否等于此前内容的 CRC16。
 * @param[in] data 完整可读数据，NULL 时返回 false。
 * @param[in] length 总字节数，包含末尾两个 CRC 字节，小于 2 时返回 false。
-* @return true 为校验一致，false 为输入不符或校验不一致。
+* @return true 为校验一致，false 为输入不符、计算失败或校验不一致。
 */
 bool VisionProtocolCheckCRC16(const uint8_t *data, size_t length);
 
@@ -67,7 +62,7 @@ bool VisionProtocolCheckCRC16(const uint8_t *data, size_t length);
 * @param[in] data 接收数据，NULL 时失败。
 * @param[in] length 可读字节数；不足一帧时失败。
 * @param[out] frame 成功时复制整帧；NULL 时失败，其他失败保持原内容。
-* @param[out] crc_errors 可选计数，先清零；只统计找到 SP 头但 CRC 错误的候选帧，可为 NULL。
+* @param[out] crc_errors 可选计数，先清零；统计找到 SP 头但 CRC 计算失败或结果错误的候选帧，可为 NULL。
 * @return true 为找到并复制，false 为未找到；不保存未收齐的尾部，也不检查角度或模式含义。
 */
 bool VisionProtocolFindCommandFrame(const uint8_t *data, size_t length,

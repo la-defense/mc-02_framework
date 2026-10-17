@@ -1,5 +1,9 @@
+/** @file param_operation_test.c
+ * @brief 用模拟 Flash 验证生产参数维护流程、旧记录读取及 CRC 失败不擦写。
+ */
 #define _GNU_SOURCE
 #include "bsp_param.h"
+#include "crc_injection.h"
 #include "main.h"
 #include "bsp_watchdog.h"
 #include "task_monitor.h"
@@ -159,7 +163,7 @@ void SCB_InvalidateDCache_by_Addr(uint32_t *address, int32_t size)
     (void)size;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     void *flash = mmap((void *)(uintptr_t)FLASH_BASE, FLASH_BYTES,
                        PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
@@ -171,6 +175,21 @@ int main(void)
     }
     memset(flash, 0xff, FLASH_BYTES);
 
+    // 固定旧格式记录：key=0x0101，4字节值0x12345678，CRC由独立 zlib 核对。
+    if (argc > 1)
+    {
+        const uint8_t legacy[] = {0x4d, 0x30, 0x43, 0x32, 0x01, 0x00, 0x08, 0x00, 0x07, 0x00, 0x00, 0x00, 0x9b, 0xce, 0x47, 0x1a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x04, 0x00, 0x78, 0x56, 0x34, 0x12};
+        memcpy(flash, legacy, sizeof(legacy));
+        uint8_t fail_read = strcmp(argv[1], "read-failure") == 0;
+        if (fail_read) crc_fail_after = 0;
+        CHECK(ParamInit() == (fail_read ? 0u : 1u));
+        uint32_t value = 0xabcdefu;
+        CHECK(ParamGetU32(PARAM_KEY_IMU_G_NORM, &value) == (fail_read ? 0u : 1u));
+        CHECK(value == (fail_read ? 0xabcdefu : 0x12345678u));
+        CHECK(event_count == 0u);
+        munmap(flash, FLASH_BYTES);
+        return EXIT_SUCCESS;
+    }
     ParamSetLongOperationGuard(NULL);
     reset_events();
     CHECK(ParamCommit() == 0u);
@@ -194,6 +213,11 @@ int main(void)
     monitor_end_success = 1u;
     erase_status = HAL_OK;
     program_status = HAL_OK;
+    // 第一次 CRC 失败时，必须在任何擦除或编程事件前退出。
+    crc_fail_after = 0;
+    CHECK(ParamCommit() == 0u);
+    CHECK(memchr(events, 'E', event_count) == NULL && memchr(events, 'P', event_count) == NULL);
+    reset_events();
     CHECK(ParamCommit() == 1u);
     CHECK(events[0] == 'H' && events[1] == 'M');
     CHECK(heater_inhibited == 0u);
