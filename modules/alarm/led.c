@@ -1,3 +1,6 @@
+/** @file led.c
+ * @brief 保存唯一报警灯设置，按任务调用次数变化亮度，并转为 WS2812 RGB 输出。
+ */
 #include "led.h"
 #include "bsp_dwt.h"
 #include "ws2812.h"
@@ -44,13 +47,7 @@ void LEDSetFlashTime(LEDInstance *led, uint8_t flash_count)
     led->flash_count = flash_count;
 }
 
-/**
- * @brief          设置LED灯颜色和频率,通过 WS2812 输出 RGB
- * @param[in]      color: 红色/黄色/蓝色/绿色/粉色，[RED/YELLOW/BLUE/GREEN/PINK]
- * @param[in]      flash: 快闪/慢闪/常亮，[FLASH_HIGH/FLASH_LOW/ALWAYS_ON]
- * @note           粉色为呼吸灯变化
- * @retval         none
- */
+// n、count 跨调用保存；按模式选择计数阈值，设置颜色时不会自动把这些计数清零。
 static void LEDShowFlash(color_e color, flash_e flash)
 {
     static uint16_t time_temp;
@@ -88,7 +85,7 @@ static void LEDShowFlash(color_e color, flash_e flash)
                 temp = 0;
                 alpha += 2;
             }
-            /* 呼吸灯, alpha 在 0~255 间渐变, 映射到 R/B 亮度 */
+            // alpha 是 int8_t，用其绝对值作为红、蓝亮度，不能按完整 0～255 的变化理解。
             r = (uint8_t)abs(alpha);
             g = 0;
             b = (uint8_t)abs(alpha);
@@ -109,6 +106,7 @@ static void LEDShowFlash(color_e color, flash_e flash)
         WS2812_SetRGB(0, 0, 0);
     }
 
+    // 快速模式还参考 flash_count，慢速模式按两倍计数阈值复位；均保留 count 到后续调用。
     if ((count >= led->flash_count && flash == FLASH_HIGH) || n >= 2 * time_temp)
     {
         n = 0;
@@ -123,6 +121,7 @@ static void LEDShowFlash(color_e color, flash_e flash)
 
 void LEDTask()
 {
+    // 关闭报警时保留粉色变化，表示任务仍在更新；开启时才采用用户指定颜色。
     if (led->alarm_state == ALARM_OFF)
     {
         LEDShowFlash(PINK, ALWAYS_ON);

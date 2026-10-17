@@ -1,3 +1,6 @@
+/** @file dmmotor.c
+ * @brief 保留的达妙力矩协议；注册时使能和置零，每个电机独立任务持续发送并接收反馈。
+ */
 #include "dmmotor.h"
 #include "memory.h"
 #include "general_def.h"
@@ -25,6 +28,7 @@ static float uint_to_float(int x_int, float x_min, float x_max, int bits)
     return ((float)x_int) * span / ((float)((1 << bits) - 1)) + offset;
 }
 
+// 前七字节填 0xff，最后一字节为模式命令；不检查是否真正发出。
 static void DMMotorSetMode(DMMotor_Mode_e cmd, DMMotorInstance *motor)
 {
     memset(motor->motor_can_instace->tx_buff, 0xff, 7);  // 发送电机指令的时候前面7bytes都是0xff
@@ -32,6 +36,7 @@ static void DMMotorSetMode(DMMotor_Mode_e cmd, DMMotorInstance *motor)
     CANTransmit(motor->motor_can_instace, 1);
 }
 
+// 按协议位数拆出位置、速度和力矩，更新离线计数；各区间沿用头文件宏。
 static void DMMotorDecode(CANInstance *motor_can)
 {
     uint16_t tmp; // 用于暂存解析值,稍后转换成float数据,避免多次创建临时变量
@@ -55,6 +60,7 @@ static void DMMotorDecode(CANInstance *motor_can)
     measure->T_Rotor = (float)rxbuff[7];
 }
 
+// 离线处理尚未实现，此回调不改变输出。
 static void DMMotorLostCallback(void *motor_ptr)
 {
 }
@@ -117,6 +123,9 @@ void DMMotorOuterLoop(DMMotorInstance *motor, Closeloop_Type_e type)
 
 
 //@Todo: 目前只实现了力控，更多位控PID等请自行添加
+/** @brief 每轮将参考力矩编码进八字节报文，停止时仅把力矩字段改为零。
+ * @param[in] argument 对应有效电机对象，任务持续运行，约每 2 ms 重复。
+ */
 void DMMotorTask(void const *argument)
 {
     float  pid_ref, set;
@@ -137,6 +146,7 @@ void DMMotorTask(void const *argument)
         LIMIT_MIN_MAX(set, DM_T_MIN, DM_T_MAX);
         motor_send_mailbox.position_des = float_to_uint(0, DM_P_MIN, DM_P_MAX, 16);
         motor_send_mailbox.velocity_des = float_to_uint(0, DM_V_MIN, DM_V_MAX, 12);
+        // 当前发送字段仍使用 pid_ref，前面 set 的范围和反向处理没有用于此处。
         motor_send_mailbox.torque_des = float_to_uint(pid_ref, DM_T_MIN, DM_T_MAX, 12);
         motor_send_mailbox.Kp = 0;
         motor_send_mailbox.Kd = 0;

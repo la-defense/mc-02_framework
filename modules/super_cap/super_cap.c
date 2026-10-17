@@ -1,5 +1,5 @@
 /*
- * @Descripttion:
+ * @Descripttion: 保存超级电容原始 CAN 反馈并发送固定八字节控制内容。
  * @version:
  * @Author: Chenfu
  * @Date: 2022-12-02 21:32:47
@@ -11,6 +11,7 @@
 
 static SuperCapInstance *super_cap_instance = NULL; // 可以由app保存此指针
 
+// 按高字节在前组合三项原始整数；此处不检查帧长，也不做设备比例换算。
 static void SuperCapRxCallback(CANInstance *_instance)
 {
     if (_instance == NULL)
@@ -55,6 +56,10 @@ void SuperCapSend(SuperCapInstance *instance, uint8_t *data)
     CANTransmit(instance->can_ins,1);
 }
 
+/** @brief 按值返回最近保存的原始反馈，不检查在线或数据时间。
+ * @param[in] instance 有效实例，不能为 NULL。
+ * @return 电压、电流、功率原始整数，比例见设备协议。
+ */
 SuperCap_Msg_s SuperCapGet(SuperCapInstance *instance)
 {
     return instance->cap_msg;

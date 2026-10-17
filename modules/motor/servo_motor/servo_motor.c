@@ -1,3 +1,6 @@
+/** @file servo_motor.c
+ * @brief 保留的总线固定命令及 PWM 输出选择，公共数组保存移动、查询和卸载命令。
+ */
 #include "servo_motor.h"
 #include "stdlib.h"
 #include "memory.h"
@@ -6,7 +9,7 @@ uint8_t servo_angle_read[6]={0x55 ,0x55 ,0x04, 0x15 ,0x01 ,0x01 ,};
 uint8_t servo_angle_write[16]={0x55 ,0x55, 0x08, 0x03, 0x01 ,0xF4 ,0x01 ,0x01 ,0x20 ,0x03,0x55 ,0x55 ,0x04, 0x15 ,0x01 ,0x01 ,};
 uint8_t servo_unload[6]={0x55,0x55,0x04,0x14,0x01,0x01};
 
-/*第二版*/
+// 本地表按 servo_id 放对象，回调却按注册数量遍历，使用时必须从 0 连续编号。
 static ServoInstance *servo_motor_instance[SERVO_MOTOR_CNT];
 static uint8_t servo_idx = 0; // register servo_idx,是该文件的全局舵机索引,在注册时使用
 static void DecodeServo();
@@ -17,6 +20,7 @@ ServoInstance *ServoInit(Servo_Init_Config_s *Servo_Init_Config)
     memset(servo, 0, sizeof(ServoInstance));
     USART_Init_Config_s config;
     servo->servo_type = Servo_Init_Config->servo_type;
+    // 总线舵机注册串口接收，PWM 舵机注册定时器；未知类型只记录错误。
     switch (Servo_Init_Config->servo_type)
     {
     case Bus_Servo:
@@ -42,6 +46,7 @@ ServoInstance *ServoInit(Servo_Init_Config_s *Servo_Init_Config)
 void ServoSetAngle(ServoInstance *servo, float angle)
 {
 
+    // 总线分支写原始位置字节，PWM 分支把 angle 直接交给占空比接口。
     switch (servo->servo_type)
     {
     case Bus_Servo:
@@ -62,6 +67,7 @@ void ServoSetAngle(ServoInstance *servo, float angle)
 //@todo 只读取了角度 还有电压，动作是否完成等 且只支持一个串口
 static void DecodeServo()
 {
+    // 逐对象检查同一接收数组的帧头和查询命令，只保存返回位置，不换算角度。
     for (uint8_t i = 0; i < servo_idx; i++)
     {
         if (servo_motor_instance[i]->servo_type == Bus_Servo)

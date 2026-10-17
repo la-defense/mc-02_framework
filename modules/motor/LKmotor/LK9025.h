@@ -1,3 +1,6 @@
+/** @file LK9025.h
+ * @brief 保留的 LK 多电机控制，一条总线共用首个实例发送；启用前须核对当前旧控制路径。
+ */
 #ifndef LK9025_H
 #define LK9025_H
 
@@ -56,43 +59,36 @@ typedef struct
 
 } LKMotorInstance;
 
-/**
- * @brief 初始化LK电机
- *
- * @param config 电机配置
- * @return LKMotorInstance* 返回实例指针
+/** @brief 分配 LK 对象，改写 CAN 编号与回调并注册离线计数，初始为运行标记。
+ * @param[in,out] config 有效配置；同组编号应从 1 连续排列，最多四个且位于同一总线。
+ * @return 长期保存对象，当前没有检查空参数、容量、重复分配或底层注册失败，不提供失败保证。
  */
 LKMotorInstance *LKMotorInit(Motor_Init_Config_s *config);
 
-/**
- * @brief 设置参考值
- * @attention 注意此函数设定的ref是最外层闭环的输入,若要设定内层闭环的值请通过前馈数据指针设置
- *
- * @param motor 要设置的电机
- * @param ref 设定值
+/** @brief 保存参考值供下一轮控制使用，不自动换单位。
+ * @param[in,out] motor 有效对象，不能为 NULL。
+ * @param[in] ref 须与所选反馈和 PID 配置使用相同数值单位；电机速度反馈为 rad/s，单圈及总角度为 deg。
+ * @note 当前角度分支默认取 real_current，速度分支也调用 angle_PID，须按实际实现核对后再选用闭环。
  */
 void LKMotorSetRef(LKMotorInstance *motor, float ref);
 
-/**
- * @brief 为所有LK电机计算pid/反转/模式控制,并通过bspcan发送电流值(发送CAN报文)
- *
- */
+/** @brief 遍历已注册对象、填写每电机两字节原始输出，再用首个实例发送一帧；无注册对象时不发送。 */
 void LKMotorControl();
 
-/**
- * @brief 停止LK电机,之后电机不会响应任何指令
- *
- * @param motor
+/** @brief 设置停止标记，下一次控制将对应两字节输出清零；保留目标值。
+ * @param[in,out] motor 有效实例，不能为 NULL。
  */
 void LKMotorStop(LKMotorInstance *motor);
 
-/**
- * @brief 启动LK电机
- *
- * @param motor
+/** @brief 设置运行标记，下一次控制继续使用已保存目标。
+ * @param[in,out] motor 有效实例，不能为 NULL。
  */
 void LKMotorEnable(LKMotorInstance *motor);
 
+/** @brief 读取对应 Daemon 是否仍有剩余计数。
+ * @param[in] motor 有效实例，不能为 NULL。
+ * @return 1 为计数未耗尽，0 为离线；不代表已允许输出。
+ */
 uint8_t LKMotorIsOnline(LKMotorInstance *motor);
 
 #endif // LK9025_H

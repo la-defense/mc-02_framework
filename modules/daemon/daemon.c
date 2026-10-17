@@ -1,3 +1,6 @@
+/** @file daemon.c
+ * @brief 保存模块计数，周期递减并调用一次离线处理，收到新数据后可重新开始下一轮。
+ */
 #include "daemon.h"
 #include "bsp_dwt.h" // 后续通过定时器来计时?
 #include "stdlib.h"
@@ -23,7 +26,7 @@ DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
     instance->callback = config->callback;
     instance->temp_count = config->init_count == 0 ? 100 : config->init_count; // 默认值为100,初始计数
 
-    /* Publish only after the instance is fully initialized. */
+    // 配置全部准备好才加入遍历表，避免任务读到半初始化对象。
     daemon_instances[idx] = instance;
     idx++;
     return instance;
@@ -69,7 +72,7 @@ void DaemonTask()
         dins = daemon_instances[i];
         if (dins->temp_count > 0) // 如果计数器还有值,说明上一次喂狗后还没有超时,则计数器减一
             dins->temp_count--;
-        else if (!dins->offline_flag && dins->callback) // 等于零说明超时了,仅在离线下降沿调用一次回调(如果有的话)
+        else if (!dins->offline_flag && dins->callback) // 本次进入时已为 0，且还没报告过离线，才调用一次回调。
         {
             dins->callback(dins->owner_id); // module内可以将owner_id强制类型转换成自身类型从而调用特定module的offline callback
             dins->offline_flag = 1;          // 本次离线已告警, 避免每个周期重复触发
@@ -77,7 +80,4 @@ void DaemonTask()
         }
     }
 }
-// (需要id的原因是什么?) 下面是copilot的回答!
-// 需要id的原因是因为有些module可能有多个实例,而我们需要知道具体是哪个实例offline
-// 如果只有一个实例,则可以不用id,直接调用callback即可
-// 比如: 有一个module叫做"电机",它有两个实例,分别是"电机1"和"电机2",那么我们调用电机的离线处理函数时就需要知道是哪个电机offline
+// 原文件曾引用 Copilot 说明 owner_id：它用于让同一回调区分多个模块对象。

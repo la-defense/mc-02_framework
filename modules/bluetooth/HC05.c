@@ -1,3 +1,6 @@
+/** @file HC05.c
+ * @brief 处理固定六字节蓝牙帧，只有帧头、帧尾一致时才更新四字节内容。
+ */
 #include "HC05.h"
 #include "bsp_usart.h"
 
@@ -20,6 +23,7 @@ static void HC05RxCallback()
     // 帧头帧尾判断
     if(rxbuff[0] == FRAME_HEAD && rxbuff[HC05_BUFFERSIZE - 1] == FRAME_END)
     {
+        // 跳过帧头，只复制四字节内容；帧头或帧尾不对则保留上一次接收值。
         for(int i = 0; i < HC05_DATASIZE; i++)
             hc05_msg.recv_data[i] = (uint8_t)rxbuff[i+1];
     }
@@ -47,6 +51,7 @@ void HC05_SendData(uint8_t *data, uint8_t data_num)
     // 发送数据中加入帧头和帧尾
     hc05_msg.send_data[0] = FRAME_HEAD;
 
+    // 内容放在帧头后；帧尾仍固定在数组末项，因此当前只支持完整的四字节内容。
     for (int i = 0; i < data_num; i++)
         hc05_msg.send_data[i+1] = data[i];
     

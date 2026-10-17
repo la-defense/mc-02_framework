@@ -1,3 +1,6 @@
+/** @file daemon.h
+ * @brief 按周期调用次数检查模块是否仍在更新，计数耗尽后报告一次离线。
+ */
 #ifndef MONITOR_H
 #define MONITOR_H
 
@@ -16,8 +19,8 @@ typedef struct daemon_ins
     offline_callback callback; // 异常处理函数,当模块发生异常时会被调用
 
     uint16_t temp_count; // 当前值,减为零说明模块离线或异常
-    uint8_t offline_flag; // 离线沿标志: 0=在线/未告警, 1=已触发过离线回调, 保证只告警一次
-    void *owner_id;      // daemon实例的地址,初始化的时候填入
+    uint8_t offline_flag; // 0 表示本次尚未报告离线，1 表示已报告；重新收到数据后清零。
+    void *owner_id;      // 模块地址，离线回调据此找到对应电机或通信对象。
 } DaemonInstance;
 
 /* daemon初始化配置 */
@@ -30,34 +33,31 @@ typedef struct
     void *owner_id;            // id取拥有daemon的实例的地址,如DJIMotorInstance*,cast成void*类型
 } Daemon_Init_Config_s;
 
-/**
- * @brief 注册一个daemon实例
- *
- * @param config 初始化配置
- * @return DaemonInstance* 返回实例指针
+/** @brief 保存模块离线计数配置，启动初始等待。
+ * @param[in] config 有效配置；reload_count 和 init_count 为任务调用次数，为 0 时各用默认 100。
+ * @return 长期有效对象；NULL、超过 64 项或分配失败返回 NULL。
+ * @note 当前 DaemonTask 约每 10 ms 调用一次，初始计数未用完也视为在线，不代表已收过有效数据。
  */
 DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config);
+/** @brief 移出实例表并释放对象。
+ * @param[in] instance 确保没有回调仍在使用的实例，成功后不可再访问。
+ * @return 1 为已释放，0 为 NULL 或未注册。
+ */
 uint8_t DaemonUnregister(DaemonInstance *instance);
 
-/**
- * @brief 当模块收到新的数据或进行其他动作时,调用该函数重载temp_count,相当于"喂狗"
- *
- * @param instance daemon实例指针
+/** @brief 将当前计数恢复为 reload_count，并允许下次离线再次报告。
+ * @param[in,out] instance 模块计数对象，NULL 时不处理。
  */
 void DaemonReload(DaemonInstance *instance);
 
-/**
- * @brief 确认模块是否离线
- *
- * @param instance daemon实例指针
- * @return uint8_t 若在线且工作正常,返回1;否则返回零. 后续根据异常类型和离线状态等进行优化.
+/** @brief 读取模块当前计数是否大于 0，不更新计时。
+ * @param[in] instance 模块计数对象，NULL 返回 0。
+ * @return 1 为计数仍大于 0，0 为已耗尽或指针为空；数据是否有效还须由业务层检查。
  */
 uint8_t DaemonIsOnline(DaemonInstance *instance);
 
-/**
- * @brief 放入rtos中,会给每个daemon实例的temp_count按频率进行递减操作.
- *        模块成功接受数据或成功操作则会重载temp_count的值为reload_count.
- *
+/** @brief 遍历已注册模块，每次将非零计数减一；本次进入时已为 0 且尚未报告时调用一次回调。
+ * @note 由 Daemon 任务约每 10 ms 调用，时间由调用频率决定，不能将次数直接当作毫秒。
  */
 void DaemonTask();
 

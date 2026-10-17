@@ -1,3 +1,6 @@
+/** @file buzzer.c
+ * @brief 管理分级报警配置并共用一个 PWM 输出，第一项正在报警的对象优先发声。
+ */
 #include "bsp_pwm.h"
 #include "buzzer.h"
 #include "bsp_dwt.h"
@@ -37,6 +40,7 @@ uint8_t BuzzerInit(void)
     BuzzzerInstance *default_instance = BuzzerRegister(&default_config);
     if (default_instance == NULL)
     {
+        // 默认报警对象分配失败，撤销本次 PWM 注册，不留下部分初始化的输出。
         (void)PWMUnregister(pwm);
         return 0u;
     }
@@ -88,6 +92,7 @@ void BuzzerTask()
     if (buzzer == NULL)
         return;
     BuzzzerInstance *buzz;
+    // 下标越小等级越高，未注册项跳过；处理首个开启项后立即结束本轮选择。
     for (size_t i = 0; i < BUZZER_DEVICE_CNT; ++i)
     {
         buzz = buzzer_list[i];

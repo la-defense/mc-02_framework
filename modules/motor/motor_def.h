@@ -91,7 +91,7 @@ typedef struct
 } Motor_Control_Setting_s;
 
 /* 电机控制器,包括其他来源的反馈数据指针,3环控制器和电机的参考输入*/
-// 后续增加前馈数据指针
+// 外部反馈及前馈已通过下列指针提供；启用对应功能前须确保指针长期可读且单位与该驱动一致。
 typedef struct
 {
     float *other_angle_feedback_ptr; // 其他反馈来源的反馈数据指针
@@ -103,7 +103,7 @@ typedef struct
     PIDInstance speed_PID;
     PIDInstance angle_PID;
 
-    float pid_ref; // 将会作为每个环的输入和输出顺次通过串级闭环
+    float pid_ref; // 参考值从所选最外层进入，后续计算依次作为内层目标；单位取决于驱动及反馈来源。
 } Motor_Controller_s;
 
 /* 电机类型枚举 */
@@ -126,6 +126,7 @@ typedef enum
  */
 typedef struct
 {
+    // 配置只保存地址，不复制反馈数值；各驱动实际采用哪些字段须结合其初始化实现阅读。
     float *other_angle_feedback_ptr; // 角度反馈数据指针,注意电机使用total_angle
     float *other_speed_feedback_ptr; // 速度反馈数据指针,单位为angle per sec
 

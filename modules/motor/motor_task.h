@@ -12,12 +12,8 @@
 #define MOTOR_TASK_H
 
 
-/**
- * @brief 电机控制闭环任务,在RTOS中应该设定为1Khz运行
- *        舵机控制任务的频率设定为20Hz或更低
- * 
- * @note 好无语,就一个函数罢了,干脆全部放到头文件里好了.
- * 
+/** @brief 先派发 CAN、UART、USB 接收，再在正式配置计算 DJI、LK 输出；裸板配置跳过电机计算。
+ * @note 由 MOTOR 任务约每 1 ms 调用，全工程仅此处周期派发接收；实际延迟仍取决于调度。
  */
 void MotorControlTask();
 

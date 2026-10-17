@@ -1,3 +1,6 @@
+/** @file HT04.c
+ * @brief 解码 HT04 协议，并用每电机独立任务计算所选控制环及发送力矩字段。
+ */
 #include "HT04.h"
 #include "memory.h"
 #include "general_def.h"
@@ -79,7 +82,7 @@ static void HTMotorLostCallback(void *motor_ptr)
         HTMotorSetMode(CMD_MOTOR_MODE, motor); // 尝试重新让电机进入控制模式
 }
 
-/* 海泰电机一生黑,什么垃圾协议! */
+// 先发零控制量再置零，并保存公共报文字段，供之后的模式命令恢复使用。
 void HTMotorCalibEncoder(HTMotorInstance *motor)
 {
     uint16_t p, v, kp, kd, t;
@@ -101,7 +104,7 @@ void HTMotorCalibEncoder(HTMotorInstance *motor)
     memcpy(zero_buff, buf, 6); // 初始化的时候至少调用一次,故将其他指令为0时发送的报文保存一下,详见ht04电机说明
     CANTransmit(motor->motor_can_instace, 1);
     DWT_Delay(0.005);
-    HTMotorSetMode(CMD_ZERO_POSITION, motor); // sb 玩意校准完了编码器也不为0
+    HTMotorSetMode(CMD_ZERO_POSITION, motor); // 发出置零命令；本接口没有读取结果确认零位。
     DWT_Delay(0.005);
     // HTMotorSetMode(CMD_MOTOR_MODE, motor);
 }
@@ -125,7 +128,7 @@ HTMotorInstance *HTMotorInit(Motor_Init_Config_s *config)
     Daemon_Init_Config_s conf = {
         .callback = HTMotorLostCallback,
         .owner_id = motor,
-        .reload_count = 5, // 20ms
+        .reload_count = 5, // 五次 Daemon 调用，按当前 10 ms 周期约为 50 ms。
     };
     motor->motor_daemon = DaemonRegister(&conf);
 
@@ -156,6 +159,7 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
     CANInstance *motor_can = motor->motor_can_instace;
     uint16_t tmp;
 
+    // 持续取目标，依次计算已选角度、速度和当前反馈环；最后停止标记覆盖为零力矩。
     while (1)
     {
         pid_ref = motor->pid_ref;
@@ -216,7 +220,7 @@ void HTMotorControlInit()
     {
         char ht_id_buff[2] = {0};
         __itoa(i, ht_id_buff, 10);
-        strcat(ht_task_name, ht_id_buff); // 似乎没什么吊用,osthreaddef会把第一个变量当作宏字符串传入,作为任务名
+        strcat(ht_task_name, ht_id_buff); // osThreadDef 使用宏参数作为名称，构造文本并不会直接改变其宏名称。
         // @todo 还需要一个更优雅的方案来区分不同的电机任务
         osThreadDef(ht_task_name, HTMotorTask, osPriorityNormal, 0, 128);
         ht_task_handle[i] = osThreadCreate(osThread(ht_task_name), ht_motor_instance[i]);

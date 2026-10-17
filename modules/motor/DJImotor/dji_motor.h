@@ -33,9 +33,9 @@ typedef struct
 {
     uint16_t last_ecd;        // 上一次读取的编码器值
     uint16_t ecd;             // 0-8191,刻度总共有8192格
-    float angle_single_round; // 单圈角度
+    float angle_single_round; // 单圈角度，单位 deg。
     float speed_aps;          // 角速度,单位为:度/秒
-    int16_t real_current;     // 实际电流
+    int16_t real_current;     // 电调原始电流反馈整数，未换算为 A。
     uint8_t temperature;      // 温度 Celsius
 
     float total_angle;   // 总角度,注意方向
@@ -77,84 +77,61 @@ typedef struct
     uint8_t temperature;
 } DJIMotorSummary_t;
 
-/**
- * @brief 调用此函数注册一个DJI智能电机,需要传递较多的初始化参数,请在application初始化的时候调用此函数
- *        推荐传参时像标准库一样构造initStructure然后传入此函数.
- *        recommend: type xxxinitStructure = {.member1=xx,
- *                                            .member2=xx,
- *                                             ....};
- *        请注意不要在一条总线上挂载过多的电机(超过6个),若一定要这么做,请降低每个电机的反馈频率(设为500Hz),
- *        并减小DJIMotorControl()任务的运行频率.
- *
- * @attention M3508和M2006的反馈报文都是0x200+id,而GM6020的反馈是0x204+id,请注意前两者和后者的id不要冲突.
- *            如果产生冲突,在初始化电机的时候会进入IDcrash_Handler(),可以通过debug来判断是否出现冲突.
- *
- * @param config 电机初始化结构体,包含了电机控制设置,电机PID参数设置,电机类型以及电机挂载的CAN设置
- *
- * @return DJIMotorInstance*
+/** @brief 注册 DJI 电机、CAN 接收与离线计数，成功后保持停止输出。
+ * @param[in] config 有效配置；支持 M2006、M3508、GM6020，当前检查设备编号 1～8，按型号分别计算接收 ID。
+ * @return 成功返回长期有效对象，参数、重复 ID、容量或注册分配失败返回 NULL，并清理本次已分配资源。
+ * @note 先配置 BSP，再在应用初始化阶段注册；外部反馈和前馈指针须长期有效，数据单位由调用方匹配。
  */
 DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config);
 
-/**
- * @brief 被application层的应用调用,给电机设定参考值.
- *        对于应用,可以将电机视为传递函数为1的设备,不需要关心底层的闭环
- *
- * @param motor 要设置的电机
- * @param ref 设定参考值
+/** @brief 保存目标，供下一轮 DJIMotorControl() 计算，不直接发送。
+ * @param[in,out] motor 有效实例，不能为 NULL。
+ * @param[in] ref 正常数值；使用电机反馈时，角度目标为 deg、速度目标为 deg/s，直接输出为电调原始数值。
+ * @note 外部反馈不会自动换单位；目标、反馈和 PID 配置须配套，不可直接把原始电调值当作 A。
  */
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
 
-/**
- * @brief 切换反馈的目标来源,如将角速度和角度的来源换为IMU(小陀螺模式常用)
- *
- * @param motor 要切换反馈数据来源的电机
- * @param loop  要切换反馈数据来源的控制闭环
- * @param type  目标反馈模式
+/** @brief 改写角度或速度反馈来源，下一轮控制生效。
+ * @param[in,out] motor 有效实例，不能为 NULL。
+ * @param[in] loop ANGLE_LOOP 或 SPEED_LOOP，其他值只打印错误。
+ * @param[in] type MOTOR_FEED 用电机反馈，OTHER_FEED 用初始化时保存的有效指针。
  */
 void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback_Source_e type);
 
-/**
- * @brief 该函数被motor_task调用运行在rtos上,motor_stask内通过osDelay()确定控制频率
- */
+/** @brief 逐电机计算已选 PID 环，再按四电机一组提交 CAN；由 MotorControlTask() 周期调用。 */
 void DJIMotorControl();
 
-/**
- * @brief 停止电机,注意不是将设定值设为零,而是直接给电机发送的电流值置零
- *
+/** @brief 设置停止标记，下一轮控制将该电机对应的发送字节清零，保留原目标值。
+ * @param[in,out] motor 有效实例，不能为 NULL；需要清目标时另调用 DJIMotorSetRef()。
  */
 void DJIMotorStop(DJIMotorInstance *motor);
 
-/**
- * @brief 启动电机,此时电机会响应设定值
- *        初始化时不需要此函数,因为stop_flag的默认值为0
- *
+/** @brief 设置运行标记，下一轮控制重新使用已保存目标，不负责整车许可检查。
+ * @param[in,out] motor 有效实例，不能为 NULL；初始化成功时默认保持停止。
  */
 void DJIMotorEnable(DJIMotorInstance *motor);
 
-/**
- * @brief 修改电机闭环目标(外层闭环)
- *
- * @param motor  要修改的电机实例指针
- * @param outer_loop 外层闭环类型
+/** @brief 改写从哪个控制环开始使用参考值。
+ * @param[in,out] motor 有效实例，不能为 NULL。
+ * @param[in] outer_loop 目标最外层类型，须与 close_loop_type 和 PID 配置匹配。
  */
 void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop);
 
-/**
- * @brief 判断电机是否离线
- *
+/** @brief 查询 Daemon 并更新实例 online_flag，本函数没有返回值。
+ * @param[in,out] motor 有效实例，不能为 NULL；在线不等于已允许输出。
  */
 void DJIMotorIsOnline(DJIMotorInstance *motor);
 
-/**
- * @brief 修改电机的实际闭环目标(内层闭环)
- *
- * @param motor  要修改的电机实例指针
- * @param outer_loop 闭环类型(用于设置 close_loop_type)
+/** @brief 改写参与计算的控制环组合。
+ * @param[in,out] motor 有效实例，不能为 NULL。
+ * @param[in] outer_loop 实际写入 close_loop_type 的标志组合，可按位或，名称沿用旧接口。
  */
 void DJIMotorCloseLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop);
 
-/**
- * @brief 获取电机只读摘要(供LCD/调试显示)
+/** @brief 复制在线、运行及当前测量值，供显示读取。
+ * @param[in] motor 电机实例，NULL 时不处理。
+ * @param[out] summary 输出对象，NULL 时不处理；失败时保持原值，不自动清零。
+ * @note 角度用 deg，速度用 deg/s，温度用摄氏度，current 为电调原始反馈整数。
  */
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);
 

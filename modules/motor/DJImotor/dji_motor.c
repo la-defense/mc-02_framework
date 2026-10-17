@@ -1,3 +1,6 @@
+/** @file dji_motor.c
+ * @brief 解码 DJI 电调反馈，逐电机计算参考输出，并按总线与设备编号组成四电机 CAN 帧。
+ */
 #include "dji_motor.h"
 #include "general_def.h"
 #include "bsp_dwt.h"
@@ -11,7 +14,7 @@ static uint8_t idx = 0; // register idx,是该文件的全局电机索引,在注
 /* ---------------- 性能探针(2026-09, CPU 占用排查) ----------------
    dji_prof_all : 单次 DJIMotorControl 总耗时
    dji_prof_pid : 串级 PID 计算 + 组帧(不含 CAN 发送)
-   dji_prof_send: CAN 报文发送(含 bsp_can 里的自旋等待) */
+   dji_prof_send: CAN 提交耗时；bsp_can 当前发送空间满即返回，不等待。 */
 volatile DWT_Probe_t dji_prof_all = {0};
 volatile DWT_Probe_t dji_prof_pid = {0};
 volatile DWT_Probe_t dji_prof_send = {0};
@@ -58,10 +61,7 @@ static CANInstance sender_assignment[6] = {
 
 #endif
 
-/**
- * @brief 6个用于确认是否有电机注册到sender_assignment中的标志位,防止发送空帧,此变量将在DJIMotorControl()使用
- *        flag的初始化在 MotorSenderGrouping()中进行
- */
+// 当前 FDCAN 三条总线各有三组发送帧；只给已有电机注册的组提交数据。
 static uint8_t sender_enable_flag[9] = {0};
 
 /**
@@ -196,7 +196,7 @@ static void DecodeDJIMotor(CANInstance *_instance)
                             CURRENT_SMOOTH_COEF * (float)((int16_t)(rxbuff[4] << 8 | rxbuff[5]));
     measure->temperature = rxbuff[6];
 
-    // 多圈角度计算,前提是假设两次采样间电机转过的角度小于180°,自己画个图就清楚计算过程了
+    // 两次采样间转动须小于半圈；单圈读数跨过零点时补减一圈，保持总角度连续。
     if (measure->ecd - measure->last_ecd > 4096)
         measure->total_round--;
     else if (measure->ecd - measure->last_ecd < -4096)
@@ -261,7 +261,7 @@ DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
         return NULL;
     }
 
-    /* Register CAN last: if it fails, the preceding daemon can be rolled back. */
+    // 最后注册 CAN；失败时撤销先前离线计数并释放电机，避免残留回调。
     can_config.can_module_callback = DecodeDJIMotor;
     can_config.id = instance;
     instance->motor_can_instance = CANRegister(&can_config);
@@ -412,9 +412,8 @@ void DJIMotorControl()
             pid_ref *= -1;
 
         // 获取最终输出,功率限制时直接输出电流值
-        /* 先饱和再截断(MOTOR-09): pid_ref 超出 int16 量程时直接强转会**回绕**成
-           反方向的大电流(例如 30000 → -25536, 电机反向猛转)。
-           DJI 电流指令的有效量程是 ±16384(对应 ±20A), 按它做饱和。 */
+        // 先把最终输出限制在本实现采用的 -16384～16384，再转成 int16_t，避免超范围转换。
+// 不同电调的电流或电压比例另按协议确认，这里没有统一换算为 A。
         if (pid_ref > 16384.0f)
         {
             pid_ref = 16384.0f;
@@ -430,10 +429,11 @@ void DJIMotorControl()
         // 分组填入发送数据
         group = motor->sender_group;
         num = motor->message_num;
-        sender_assignment[group].tx_buff[2 * num] = (uint8_t)(set >> 8);         // 低八位
-        sender_assignment[group].tx_buff[2 * num + 1] = (uint8_t)(set & 0x00ff); // 高八位
+        sender_assignment[group].tx_buff[2 * num] = (uint8_t)(set >> 8);         // 高八位。
+        sender_assignment[group].tx_buff[2 * num + 1] = (uint8_t)(set & 0x00ff); // 低八位。
 
         // 若该电机处于停止状态,直接将buff置零
+        // 即使前面完成 PID 计算，停止标记仍覆盖对应的两个发送字节。
         if (motor->stop_flag == MOTOR_STOP)
             memset(sender_assignment[group].tx_buff + 2 * num, 0, sizeof(uint16_t));
     }

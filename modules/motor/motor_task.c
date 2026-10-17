@@ -1,3 +1,6 @@
+/** @file motor_task.c
+ * @brief 统一接收派发顺序和电机周期计算，提供各段耗时记录。
+ */
 #include "motor_task.h"
 #include "LK9025.h"
 #include "HT04.h"
@@ -22,12 +25,9 @@ void MotorControlTask()
     uint32_t probe_all = DWT_ProbeStart();
     uint32_t probe_seg;
 
-    /* 先把本周期到达的 CAN 接收帧派发掉(解码/滤波/多圈累加), 再算控制:
-       这样拿到的仍是最新反馈, 端到端延迟和"在中断里直接解析"相同。
-       注意: 这里是全工程唯一的接收队列消费者, 不要在别处再调用 CANProcessRx()。 */
+    // 先按顺序解码已排队的反馈，再使用这些测量值计算；不要另建并发派发调用者。
     CANProcessRx();
-    /* 串口与 VCP 同理: 中断只入队, 解析(裁判帧/视觉帧)在这里逐帧做。
-       三个消费者都放在 1kHz 任务里, 解析延迟 ≤1ms。 */
+    // UART 和 USB 也在这里运行模块解析，避免将协议计算放在中断里；排队过时的数据由 BSP 跳过。
     USARTProcessRx();
     VCPProcessRx();
 
@@ -36,10 +36,11 @@ void MotorControlTask()
     DJIMotorControl();
     DWT_ProbeDone(&motor_prof_dji, probe_seg);
 
-    /* 如果有对应的电机则取消注释,可以加入条件编译或者register对应的idx判断是否注册了电机 */
+    // 当前 LKMotorControl() 已启用；无注册对象时它不会提交发送。
     probe_seg = DWT_ProbeStart();
     LKMotorControl();
     DWT_ProbeDone(&motor_prof_lk, probe_seg);
+// 裸板配置仅做通信派发，跳过电机控制和指令发送。
 #else
     (void)probe_seg;
 #endif

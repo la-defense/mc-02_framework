@@ -1,3 +1,6 @@
+/** @file LK9025.c
+ * @brief 解析 LK 单圈及速度反馈，累计多圈角度，再按编号填入同一八字节发送数组。
+ */
 #include "LK9025.h"
 #include "stdlib.h"
 #include "general_def.h"
@@ -37,6 +40,7 @@ static void LKMotorDecode(CANInstance *_instance)
 
     measure->temperature = rx_buff[1];
 
+    // 假定两次反馈间转动小于半圈，跨越单圈零点时补减圈数。
     if (measure->ecd - measure->last_ecd > 32768)
         measure->total_round--;
     else if (measure->ecd - measure->last_ecd < -32768)
@@ -109,6 +113,7 @@ void LKMotorControl()
         setting = &motor->motor_settings;
         pid_ref = motor->pid_ref;
 
+        // 保留的旧控制路径：默认角度分支实际使用 real_current，外部反馈由相应指针提供。
         if ((setting->close_loop_type & ANGLE_LOOP) && setting->outer_loop_type == ANGLE_LOOP)
         {
             if (setting->angle_feedback_source == OTHER_FEED)
@@ -120,6 +125,7 @@ void LKMotorControl()
                 pid_ref += *motor->speed_feedforward_ptr;
         }
 
+        // 速度分支当前也使用 angle_PID；这里按现有实现说明，不推断已换成速度 PID。
         if ((setting->close_loop_type & SPEED_LOOP) && setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP))
         {
             if (setting->angle_feedback_source == OTHER_FEED)
@@ -139,7 +145,7 @@ void LKMotorControl()
         set = pid_ref;
         if (setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE)
             set *= -1;
-        // 这里随便写的,为了兼容多电机命令.后续应该将tx_id以更好的方式表达电机id,单独使用一个CANInstance,而不是用第一个电机的CANInstance
+        // 当前以 tx_id 与 0x280 的差值选择两字节位置，首个实例也共用作整组发送。
         memcpy(sender_instance->tx_buff + (motor->motor_can_ins->tx_id - 0x280) * 2, &set, sizeof(uint16_t));
 
         if (motor->stop_flag == MOTOR_STOP)

@@ -1,3 +1,6 @@
+/** @file xmmotor.c
+ * @brief 保存 XM 软件控制结构，扩展帧收发和独立任务仍保留在未启用分支中。
+ */
 #include "xmmotor.h"
 #include "memory.h"
 #include "general_def.h"
@@ -31,6 +34,7 @@ static float uint16_to_float(uint16_t x_int, float x_min, float x_max, int bits)
 
 #ifdef XM_MOTOR_ENABLE
 /* 需要本地 bsp_can 支持扩展帧(CAN_ID_EXT)后才能启用以下硬件访问 */
+// 仅硬件分支使用：模式选择影响扩展帧编号和数据字段，当前依赖待适配的 BSP 类型。
 static void XMMotorSetMode(XMMotor_Mode_e cmd, XMMotorInstance *motor)
 {
     if (cmd == XM_CMD_MOTOR_MODE)
@@ -148,6 +152,10 @@ void XMMotorStop(XMMotorInstance *motor)//不使用使能模式是因为需要�
     motor->stop_flag = MOTOR_STOP;
 }
 
+/** @brief 仅改写最外层控制环，默认没有硬件任务执行。
+ * @param[in,out] motor 有效对象，不能为 NULL。
+ * @param[in] type 保存的控制环类型。
+ */
 void XMMotorOuterLoop(XMMotorInstance *motor, Closeloop_Type_e type)
 {
     motor->motor_settings.outer_loop_type = type;
@@ -155,6 +163,9 @@ void XMMotorOuterLoop(XMMotorInstance *motor, Closeloop_Type_e type)
 
 #ifdef XM_MOTOR_ENABLE
 //@Todo: 目前不使用自带控制模式，通过电流反馈进行PID控制
+/** @brief 硬件分支的独立任务，持续设置模式、计算所选环并发送当前值。
+ * @param[in] argument 有效电机对象；默认不编译此任务，循环末等待 2 ms。
+ */
 void XMMotorTask(void const *argument)
 {
     XMMotorInstance *motor = (XMMotorInstance *)argument;
@@ -162,6 +173,7 @@ void XMMotorTask(void const *argument)
     Motor_Controller_s *motor_controller;   // 电机控制器
     XM_Motor_Measure_s *measure;
     float pid_ref, pid_measure, set;
+    // 持续按当前设置计算；停止标记只把最终数值置零，模式命令仍会发送。
     while (1)
     {
         XMMotorSetMode(XM_CMD_CURRENT_MODE, motor);     // 设置电流环模式
