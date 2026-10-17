@@ -259,7 +259,7 @@ if (memcmp((const void *)sector_addr, buf, total) != 0) {
 
 ### 6.2 Flash：全任务有界窗口
 
-H723 是单 bank。擦写期间 CPU 停顿，所有 RTOS 任务都暂停，所以不能把标定用的“仅豁免 INS”规则套到 Flash 上。`ParamCommit()` 与 `ParamReset()` 使用单独 **8s** 窗口：入口先检查全部任务健康，然后先关热，再将 IWDG 改为 8s 并喂一次。窗口结束后恢复进入操作前的 IWDG 超时；只有擦写成功且未超时，才结束保护。
+H723 是单 bank，擦写期间从同一 Flash 取指会暂停。`ParamCommit()` 与 `ParamReset()` 通过回调安排 **8s** 的等待时间：先关闭并锁定加热，再检查任务状态；允许开始后，将 IWDG 请求时限改为8000ms并喂一次。操作返回后先恢复原时限，再由结束回调检查用时并通知加热器结果。失败或超时会让加热器继续保持关闭。
 
 因为擦写期间任务确实无法执行，成功的 Flash 窗口结束后会把各任务的监控时间戳置为当前时刻，让调度器有机会重新运行。这个处理只发生在入口健康、擦写在期限内的前提下；已有任务故障会让入口拒绝，超过 8s 会锁存监控故障并停止后续喂狗。结束后没有绕过 `TaskMonitorTick()` 的额外喂狗。
 
@@ -309,11 +309,31 @@ memmove(...);   /* 把后面的条目往前挪 */
 注意这里操作的是 **RAM 缓存**，Flash 一个字节都没动——真正落盘只在 `ParamCommit()`。
 这个设计让"连续设 3 个 key 再提交一次"变成一次擦写，而不是三次。
 
-### 7.2 为什么 `ParamInit()` 要做成幂等
+### 7.2 为什么 `ParamInit()` 只在首次调用时读取 Flash
 
 如果把 `ParamInit()` 写成"每次调用都重新扫 Flash 并覆盖 RAM 缓存"，
 那么"先 `ParamSet()` 改了值、还没来得及 `ParamCommit()`，另一个模块又调用 `ParamInit()`"
-就会把刚改的值冲掉。加了 `static uint8_t s_inited` 之后，第二次调用直接返回上次结果。
+就会把刚改的值覆盖掉。加了 `static uint8_t s_inited` 之后，后续调用直接返回当前 `param_loaded`。这个值也会被成功的提交和清除操作更新，因此它不一定等于首次调用的结果。
+
+### 7.3 接口失败后，哪些数据还在（MC02-0117）
+
+阅读 [bsp_param.h](../../bsp/param/bsp_param.h) 和 [bsp_param.c](../../bsp/param/bsp_param.c) 时，先区分 RAM 参数、Flash 记录和函数返回值：
+
+| 接口与条件 | 当前代码的处理 |
+|---|---|
+| `ParamGet()` 找不到编号、长度不符或指针为空 | 返回0，不改写接收空间；调用方需要时自行使用默认值 |
+| `ParamSet()` 改变已有条目的长度 | 先移除旧条目再检查空间；若空间不足返回0，旧条目已从 RAM 移除，Flash 保持原样 |
+| `ParamCommit()` 写入或回读失败 | 返回0，保留 RAM 参数及原活动区、序号；目标区可能已被部分改写 |
+| `ParamCommit()` 写入和回读成功，结束回调失败 | 返回0，但新记录已保存，活动区、序号和成功计数仍更新 |
+| `ParamReset()` 擦除失败或结束回调失败 | 返回0，保留 RAM 参数与记录状态；Flash 可能已被部分或全部擦除 |
+
+`ParamSet()` 的 `len` 以字节计，允许1～508；每条还需4字节保存编号和长度，数据末尾补到4的整数倍。全部条目共用512字节。`ParamGetFloats()` 和 `ParamSetFloats()` 的 `count` 以 float 个数计，内部再换算成字节数。
+
+`ParamSetLongOperationGuard()` 复制回调表，传入的表可在函数返回后释放。缺少任意回调或开始回调拒绝时，不进入擦写；开始回调若已做了一部分准备，应自行处理拒绝后的状态。开始成功后，即使 Flash 操作失败，也会恢复 IWDG 原时限并调用结束回调。
+
+`ParamCommit()` 没有根据 `s_dirty` 跳过保存，每次获准调用都会擦写。`param_commit_count` 只看写入及回读结果；`param_commit_fail` 统计开始被拒绝、写入或回读失败，不统计仅结束回调失败的情况，因此两个计数不能直接当作函数返回1和0的次数。
+
+已有主机回归 [param_operation_test.c](../../tests/host/param_operation_test.c) 直接编译参数实现，检查回调允许与拒绝、擦写顺序、IWDG 原时限恢复，以及擦除成功但收尾失败时保留 RAM。它没有逐一覆盖所有读取、长度和容量情况；本次注释整理另比较修改前后的非注释代码与 ARM GCC 处理结果。
 
 ---
 
@@ -323,10 +343,10 @@ memmove(...);   /* 把后面的条目往前挪 */
 
 | 变量 | 含义 |
 |---|---|
-| `param_loaded` | 1 = 启动时从 Flash 成功加载 |
+| `param_loaded` | 1 = 已载入或写入可用记录；成功清除后变0 |
 | `param_active_region` | 0 = A 区，1 = B 区 |
 | `param_seq` | 当前记录的序号 |
-| `param_commit_count` / `param_commit_fail` | 提交成功 / 失败次数 |
+| `param_commit_count` / `param_commit_fail` | 写入及回读成功 / 开始被拒绝或写入、回读失败次数；见7.3的区别 |
 | `bmi088_calib_source` | 0=未定 1=FLASH 2=首次自动 3=手动 4=默认值 |
 
 **测试 1：首次上电（两个区都是 0xFF）**
