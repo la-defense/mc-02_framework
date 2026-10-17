@@ -41,3 +41,18 @@ CRC16 数值在协议帧尾按低字节、再高字节排列。读回时也按�
 - 对应离线课程：[SP 帧与 CRC](../课程/自瞄链路/lessons/0001-sp-frame-crc.html)、[SP 练习](../课程/自瞄链路/exercises/01-sp-frame-crc/problem/readme.md)
 
 主机测试证明 parser 对这些输入按约定工作；它不代替 USB 传输实测、固件烧录或对真实硬件抓帧。
+
+## 5. 找到帧以后怎样使用（MC02-0123）
+
+[vision_protocol.h](../../modules/master_machine/vision_protocol.h) 区分“计算 CRC”与“检查帧”：
+计算入口的长度不含待追加的 CRC，检查入口的长度包含末尾两字节。
+找帧入口逐字节前移，头或 CRC 不对就继续，找到第一份完整正确帧立即返回。
+失败时命令输出不改写，错误计数则先清零；调用方不能把上一份输出当成本次找到的帧。
+
+[master_process.h](../../modules/master_machine/master_process.h) 在采用数据前按真正接收时刻检查 50 ms 时限，
+读取和发送时也会检查旧命令是否到时。角度使用 rad，角速度使用 rad/s，进入电机控制前另做换算。
+CRC 正确只说明字节检查通过，模式、数字、机械角度和当前是否允许控制仍由后续代码检查。
+
+同目录的 [seasky_protocol.h](../../modules/master_machine/seasky_protocol.h) 保留另一种 A5 帧头格式，
+不能和 SP 帧混用。它没有接收长度或输出容量参数，调用方须先保证整帧及空间足够，
+帧头长度至少包含两字节标志；校验失败返回 0，标志和数据输出保持原值。

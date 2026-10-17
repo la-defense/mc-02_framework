@@ -1,3 +1,6 @@
+/** @file remote_safety.c
+ * @brief 保存三种开关组合的持续时间，将确认后的操作交给 RobotSafety。
+ */
 #include "remote_safety.h"
 #include "robot_safety.h"
 #include <string.h>
@@ -7,6 +10,7 @@ void RemoteSafetyGesturesInit(RemoteSafetyGestures_s *state)
     memset(state, 0, sizeof(*state));
 }
 
+// 选中状态满 1000 ms 才报告一次；未选中则取消，报告后仍保持会再开始一轮计时。
 static uint8_t Held(RemoteHold_s *hold, uint8_t selected, uint32_t now)
 {
     if (!selected) { hold->active = 0u; return 0u; }
@@ -19,12 +23,14 @@ static uint8_t Held(RemoteHold_s *hold, uint8_t selected, uint32_t now)
 void RemoteSafetyGesturesUpdate(RemoteSafetyGestures_s *state, const RC_ctrl_t *input,
                                uint8_t online, uint32_t now, uint8_t allow_enable)
 {
+    // 裸板诊断等场合每轮都撤销使能，不让旧请求随手势恢复。
     if (!allow_enable) RobotSafetyRequestDisable();
     if (!online || input == NULL)
     {
         RemoteSafetyGesturesInit(state);
         return;
     }
+    // 三种组合分别累计，开关离开对应位置后取消该组合的保持时间。
     uint8_t left = input->rc.switch_left, right = input->rc.switch_right;
     if (Held(&state->enable, (uint8_t)(allow_enable && left == RC_SW_DOWN && right == RC_SW_DOWN), now))
         RobotSafetyRequestEnable();

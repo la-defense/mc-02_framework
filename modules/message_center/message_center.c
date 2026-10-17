@@ -1,3 +1,6 @@
+/** @file message_center.c
+ * @brief 管理话题与订阅链表，发布时复制最新内容，读取时可选择检查消息时间。
+ */
 #include "message_center.h"
 #include <stdlib.h>
 #include <string.h>
@@ -5,13 +8,14 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/* The sentinel is not counted against MAX_TOPIC_COUNT. */
+// 这个起始节点只用于连接话题链表，不占 12 个话题名额。
 static Publisher_t message_center = {
     .topic_name = "Message_Manager",
     .first_subs = NULL,
     .next_topic_node = NULL,
 };
 
+// 名称须在前 32 字节内结束，且消息长度不能为 0。
 static uint8_t IsValidTopic(const char *name, uint8_t data_len)
 {
     if (name == NULL || name[0] == '\0' || data_len == 0u)
@@ -24,6 +28,7 @@ static uint8_t IsValidTopic(const char *name, uint8_t data_len)
     return 0u;
 }
 
+// 按名字查找话题；未找到时仍可通过 tail 返回末项，供新增话题连接。
 static Publisher_t *FindTopic(const char *name, Publisher_t **tail)
 {
     Publisher_t *node = &message_center;
@@ -42,6 +47,7 @@ static Publisher_t *FindTopic(const char *name, Publisher_t **tail)
     return NULL;
 }
 
+// 从首个实际话题开始逐项计数，不计起始节点。
 static uint8_t TopicCount(void)
 {
     uint8_t count = 0u;
@@ -50,6 +56,7 @@ static uint8_t TopicCount(void)
     return count;
 }
 
+// 检查容量和重名后分配话题，内容准备完整才连接到现有链表。
 static Publisher_t *CreateTopic(char *name, uint8_t data_len)
 {
     Publisher_t *tail = NULL;
@@ -94,7 +101,7 @@ Subscriber_t *SubRegister(char *name, uint8_t data_len)
     if (create_topic && (TopicCount() >= MAX_TOPIC_COUNT || tail == NULL))
         return NULL;
 
-    /* Prepare the complete subscriber before publishing it into any list. */
+    // 先准备全部消息空间；中途分配失败就逐项释放，不把残缺对象连接进链表。
     Subscriber_t *subscriber = (Subscriber_t *)malloc(sizeof(*subscriber));
     if (subscriber == NULL)
         return NULL;
@@ -158,6 +165,7 @@ uint8_t SubGetSnapshot(Subscriber_t *sub, void *data_ptr, uint8_t data_len,
         memset(freshness, 0, sizeof(*freshness));
     if (data_ptr == NULL || data_len == 0u)
         return 0u;
+    // 先清输出，后续任何检查失败都不会留下上次的控制数据。
     memset(data_ptr, 0, data_len);
     if (sub == NULL || sub->data_len != data_len)
         return 0u;
@@ -187,6 +195,7 @@ uint8_t PubPushMessageAt(Publisher_t *pub, void *data_ptr, uint32_t timestamp_ms
         return 0u;
     taskENTER_CRITICAL();
     Subscriber_t *iter = pub->first_subs;
+    // 给所有订阅者各复制一份；满时先丢旧消息，始终保留本次最新内容。
     while (iter != NULL)
     {
         if (iter->temp_size == QUEUE_SIZE)

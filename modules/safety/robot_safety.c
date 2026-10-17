@@ -1,3 +1,6 @@
+/** @file robot_safety.c
+ * @brief 汇总故障与操作请求并选择状态；控制任务读取结果后决定是否给执行器下发命令。
+ */
 #include "robot_safety.h"
 #include "bsp_log.h"
 
@@ -16,6 +19,7 @@ static Estop_Reason_e estop_reason = ESTOP_REASON_NONE;
 static uint8_t imu_fault_logged = 0;
 static uint8_t task_fault_logged = 0;
 
+// 状态不变时不重复打印，避免周期调用淹没日志。
 static void RobotSafetySetState(Robot_Status_e new_state)
 {
     if (robot_state == new_state)
@@ -214,6 +218,7 @@ const char *RobotSafetyStateName(Robot_Status_e state)
 void RobotSafetyUpdate(void)
 {
     const uint32_t active_faults = fault_flags;
+    // 初始化失败优先处理，清掉使能和标定请求，普通清故障入口也不能清除此位。
     if ((active_faults & ROBOT_FAULT_INIT_FAILURE) != 0u)
     {
         enable_requested = 0u;
@@ -221,10 +226,11 @@ void RobotSafetyUpdate(void)
         RobotSafetySetState(ROBOT_FAULT);
         return;
     }
-    /* 遥控器离线是唯一会锁存急停的故障 */
+    // 遥控离线会保留急停，恢复在线后仍须明确清除；其他故障在各自分支处理。
     if (!rc_online || (active_faults & ROBOT_FAULT_RC_OFFLINE))
         EstopRequest(ESTOP_REASON_RC_OFFLINE);
 
+    // 急停未明确清除时，每轮都撤销使能请求。
     if (estop_latched)
     {
         enable_requested = 0;
@@ -239,20 +245,21 @@ void RobotSafetyUpdate(void)
         return;
     }
 
+    // 任务和急停检查通过后可进入标定；电机等普通故障的检查在其后。
     if (calib_requested)
     {
         RobotSafetySetState(ROBOT_CALIB);
         return;
     }
 
-    /* These faults disable control without consuming the user's enable request.
-       CALIB remains available with actuators disabled. */
+    // 这三类故障阻止运行，但保留使能请求；故障清除后可继续检查，期间仍允许请求标定。
     if (active_faults & (ROBOT_FAULT_MOTOR_OFFLINE | ROBOT_FAULT_CAN_BUSOFF | ROBOT_FAULT_TILT))
     {
         RobotSafetySetState(ROBOT_FAULT);
         return;
     }
 
+    // 请求只表示用户意图，还需全部故障清除、遥控和 IMU 及标定有效才进入 READY。
     if (enable_requested)
     {
         if (active_faults != ROBOT_FAULT_NONE || !rc_online || !imu_valid || !calib_valid)

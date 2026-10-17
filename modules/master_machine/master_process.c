@@ -36,6 +36,7 @@ static uint8_t *vis_recv_buff;
 /* 从接收缓冲中滑动寻找 SP 帧并解码 */
 static void DecodeVision(const uint8_t *rx_data, uint16_t recv_len, uint32_t rx_timestamp_ms)
 {
+    // 按真正接收时刻检查这片数据，排队超过 50 ms 后不再采用。
     if (rx_data == NULL || (uint32_t)(HAL_GetTick() - rx_timestamp_ms) > MESSAGE_DEFAULT_MAX_AGE_MS)
         return;
     Vision_Recv_s packet;
@@ -66,6 +67,7 @@ static void VisionUartRxCallback(void)
 }
 #endif
 
+// 离线时清旧命令、接收时间和有效标记；UART 配置还会重新准备接收。
 static void VisionOfflineCallback(void *id)
 {
     (void)id;
@@ -166,6 +168,7 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
     return &recv_data;
 }
 
+// 即使没有离线回调，读取或发送时也检查 50 ms 时限，避免旧目标继续使用。
 static void VisionExpireIfStale(uint32_t now_ms)
 {
     taskENTER_CRITICAL();
@@ -213,6 +216,7 @@ void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status)
 {
     VisionExpireIfStale(HAL_GetTick());
     taskENTER_CRITICAL();
+    // 两个输出可各自省略；需要哪份数据就复制哪份，整个复制过程放在一起。
     if (frame != NULL)
         *frame = recv_data;
     if (status != NULL)

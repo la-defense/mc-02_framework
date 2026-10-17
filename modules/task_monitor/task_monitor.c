@@ -1,3 +1,6 @@
+/** @file task_monitor.c
+ * @brief 记录各关键任务最近执行时间，处理标定与 Flash 等长操作，并决定是否喂 IWDG。
+ */
 #include "task_monitor.h"
 #include "bsp_watchdog.h"
 #include "robot_safety.h"
@@ -37,6 +40,7 @@ typedef struct
 
 static TaskMonitor_LongOperationWindow_t long_operation_windows[TASK_MONITOR_COUNT][TASK_MONITOR_LONG_OPERATION_COUNT];
 
+// 返回该类长操作允许的毫秒数；未知类型返回 0。
 static uint32_t TaskMonitorLongOperationLimitMs(TaskMonitor_LongOperation_e operation)
 {
     if ((uint32_t)operation >= TASK_MONITOR_LONG_OPERATION_COUNT)
@@ -53,13 +57,13 @@ static uint32_t TaskMonitorLongOperationLimitMs(TaskMonitor_LongOperation_e oper
     }
 }
 
+// 检查 INS 的各项长操作；达到时限后保留失败记录，不再当作允许等待。
 static uint8_t TaskMonitorHasActiveLongOperation(TaskMonitor_Id_e id, uint32_t now)
 {
     uint8_t active = 0u;
     for (uint32_t operation = 0u; operation < TASK_MONITOR_LONG_OPERATION_COUNT; ++operation)
     {
-        /* H723 single-bank Flash stalls the whole core while erasing/programming.
-           Calibration only blocks INS, so all other task deadlines stay live. */
+        // Flash 擦写会让整个内核暂停，因此暂缓全部任务计时；标定只暂缓 INS。
         TaskMonitor_Id_e owner = TASK_MONITOR_INS;
         TaskMonitor_LongOperationWindow_t *window = &long_operation_windows[owner][operation];
         if (!window->active)
@@ -74,6 +78,7 @@ static uint8_t TaskMonitorHasActiveLongOperation(TaskMonitor_Id_e id, uint32_t n
     return (active && !long_operation_timeout_latched) ? 1u : 0u;
 }
 
+// 找到任何未结束的长操作就返回，用于保留其间发生的任务故障。
 static uint8_t TaskMonitorHasAnyActiveLongOperation(void)
 {
     for (uint32_t id = 0u; id < TASK_MONITOR_COUNT; ++id)
@@ -123,6 +128,7 @@ void TaskMonitorDelayMs(TaskMonitor_Id_e id, uint32_t milliseconds)
         return;
     }
 
+    // 分成 1 ms 等待，让其他任务运行，同时只更新当前任务的执行记录。
     while (milliseconds > 0u)
     {
         osDelay(1u);
@@ -139,6 +145,7 @@ void TaskMonitorTick(void)
                             ? 1u
                             : 0u;
 
+    // 逐项检查是否超过各自间隔；首次超时先关闭输出，再报告故障。
     for (uint32_t i = 0; i < TASK_MONITOR_COUNT; ++i)
     {
         TaskMonitorItem_t *item = &monitor_items[i];
@@ -172,6 +179,7 @@ void TaskMonitorTick(void)
 
     RobotSafetySetTaskHealthy(all_alive);
 
+    // 所有任务都正常才喂狗；保留的长操作故障也会持续阻止喂狗。
     if (all_alive)
         BSP_WatchdogFeed();
     /* 任一关键任务超时: 不喂狗, 由 IWDG 复位 */
@@ -239,13 +247,12 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperati
     if (!within_limit)
         long_operation_timeout_latched = 1u;
 
-    /* Also expire an enclosing calibration window if Flash save consumed the
-       remainder of its overall 15-second budget. This state transition is
-       atomic with respect to the daemon monitor tick. */
+    // 同时检查外层标定是否耗尽 15 秒；关中断期间完成，避免 Daemon 在中途读取。
     for (uint32_t i = 0u; i < TASK_MONITOR_COUNT; ++i)
         (void)TaskMonitorHasActiveLongOperation((TaskMonitor_Id_e)i, now);
 
     uint8_t operation_fault_latched = (uint8_t)(long_operation_timeout_latched || long_operation_fault_latched);
+    // 仅按时且期间没有故障时更新计时；超时记录不能靠结束操作清除。
     if (within_limit && !operation_fault_latched)
     {
         uint32_t first_task = (operation == TASK_MONITOR_LONG_OPERATION_FLASH) ? 0u : (uint32_t)id;
@@ -267,7 +274,7 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperati
     for (uint32_t i = 0u; i < TASK_MONITOR_COUNT; ++i)
     {
         if (operation == TASK_MONITOR_LONG_OPERATION_FLASH && within_limit && !operation_fault_latched)
-            continue; /* Begin verified every task; the CPU stall itself prevents task execution. */
+            continue; // 开始前已检查各任务；这段 Flash 暂停期间没有任务能执行，按时结束后重新计时。
         uint8_t active = TaskMonitorHasActiveLongOperation((TaskMonitor_Id_e)i, now);
         if (!monitor_items[i].alive ||
             (!active && (uint32_t)(now - monitor_items[i].last_feed_ms) > monitor_items[i].timeout_ms))

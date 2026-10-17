@@ -42,7 +42,7 @@
 #define switch_is_up(s) (s == RC_SW_UP)
 
 /* ----------------------- PC Key Definition-------------------------------- */
-// 对应key[x][0~16],获取对应的键;例如通过key[KEY_PRESS][Key_W]获取W键是否按下,后续改为位域后删除
+// 键盘位号，同时作为 key_count 的第二个下标；key[].w 等字段读取当前按键。
 #define Key_W 0
 #define Key_S 1
 // Official RoboMaster Client 5.0.2.37; verified through DT7/DR16 (MC02-0049).
@@ -62,7 +62,7 @@
 #define Key_B 15
 
 /* ----------------------- Data Struct ------------------------------------- */
-// 待测试的位域结构体,可以极大提升解析速度
+// 同一组按键可以按名称读取，也可以通过 keys 一次读取全部 16 位。
 typedef union
 {
     struct // 用于访问键盘状态
@@ -109,18 +109,17 @@ typedef struct
         uint8_t press_r;
     } mouse;
 
-    Key_t key[3]; // 改为位域后的键盘索引,空间减少8倍,速度增加16~倍
+    Key_t key[3]; // 普通、配合 Ctrl、配合 Shift 的三组按键状态。
 
     uint8_t key_count[3][16];
 } RC_ctrl_t;
 
 /* ------------------------- Internal Data ----------------------------------- */
 
-/**
- * @brief 初始化遥控器,该函数会将遥控器注册到串口
- *
- * @attention 注意分配正确的串口硬件,遥控器在C板上使用USART3
- *
+/** @brief 注册遥控 UART 和离线计时，清空旧输入。
+ * @param[in] rc_usart_handle 已配置好的遥控 UART 句柄，不能为 NULL。
+ * @return 成功返回模块内部两个 RC_ctrl_t 对象的首地址，长期有效且不可释放；失败返回 NULL。
+ * @note 只初始化一次；读取控制输入优先使用 RemoteControlGetSnapshot()，不直接改写内部对象。
  */
 RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle);
 
@@ -145,10 +144,14 @@ typedef struct
     uint8_t remote_online;
     uint8_t pc_valid;
 } RemoteControlSnapshot_s;
-/* Atomic authorized input; call every command cycle, including without new DBUS. */
+/** @brief 一次复制当前输入及可用标记，并检查键鼠是否已超过 150 ms 未更新。
+ * @param[out] snapshot 调用方的输出对象，NULL 时直接返回；读取期间暂时关闭普通中断并恢复原状态。
+ * @note 每个命令周期调用，即使没有新串口帧；摇杆在线与键鼠可用分别由 remote_online、pc_valid 表示。
+ *       键鼠失效时清零；恢复要求连续两帧所有键鼠松开，且心跳编号向前变化。等于 150 ms 仍允许。
+ */
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot);
 
-/* Read-only diagnostic evidence; timestamps use HAL tick and unsigned subtraction. */
+// 调试记录；时间单位为 HAL 毫秒，次数为累计次数，不参与调用方直接控制。
 typedef struct
 {
     uint32_t accepted_frames;
@@ -160,7 +163,7 @@ typedef struct
     uint32_t offline_events;
     uint32_t has_valid_frame;
     uint32_t online;
-    /* Zero-extended DBUS bytes 10/11, captured only after full-frame validation. */
+    // 校验整帧后记录的原始键鼠字段；10、11 字节合成心跳编号，保存时扩成 32 位。
     uint32_t raw_mouse_z;
     uint32_t raw_key_bitmap;
     uint32_t raw_mouse_x;

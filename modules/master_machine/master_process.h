@@ -1,3 +1,6 @@
+/** @file master_process.h
+ * @brief 视觉链路注册、命令读取与状态回传；先 VisionInit()，再周期更新和发送。
+ */
 #ifndef MASTER_PROCESS_H
 #define MASTER_PROCESS_H
 
@@ -75,32 +78,38 @@ typedef struct
 	uint16_t bullet_count;
 } Vision_Status_t;
 
-/**
- * @brief 调用此函数初始化和视觉的通信(USB VCP 或 UART, 由 robot_def.h 宏切换)
- *
- * @param handle 用于和视觉通信的串口handle(仅 VISION_USE_UART 时使用)
+/** @brief 注册视觉通信及离线计时，清空收发帧；仅在初始化阶段调用一次。
+ * @param[in] _handle UART 配置时须提供有效句柄；USB VCP 配置时忽略，可以为 NULL。
+ * @return 成功返回模块内部接收对象地址，长期有效且不可释放；任一注册失败返回 NULL。
+ * @note 控制任务应使用 VisionGetSnapshot() 复制读取；失败时已申请的离线计时会撤销。
  */
 Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle);
 
-/**
- * @brief 发送视觉数据
- *
+/** @brief 检查旧命令是否到时，再给已准备的状态帧追加 CRC 并尝试发送。
+ * @note 先初始化；由命令任务周期调用，状态内容由 INS 调用 VisionUpdateTx() 更新。
+ *       不等待忙链路；USB 忙时记录丢弃次数，UART 忙时直接跳过；接口不返回发送结果。
  */
 void VisionSend(void);
 
-/**
- * @brief 获取视觉链路状态(在线/模式/收发计数/CRC错误)
+/** @brief 检查时限后复制链路状态，与 VisionGetSnapshot(NULL, status) 相同。
+ * @param[out] status 调用方状态对象，NULL 时只做时限检查。
  */
 void VisionGetStatus(Vision_Status_t *status);
 
-/**
- * @brief 原子快照读取视觉命令帧和链路状态
+/** @brief 在同一次读取中复制命令和链路状态，复制期间防止任务切换改写数据。
+ * @param[out] frame 可为 NULL；命令超过 50 ms 未更新时先清零，等于 50 ms 仍保留。
+ * @param[out] status 可为 NULL；online 还要求离线计时未到，last_rx_ms 使用接收时的 HAL 毫秒值。
+ * @note 单纯到时会保留上次接收时间，但 has_valid_frame 清零；离线回调另将时间清零。
  */
 void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status);
 
-/**
- * @brief 每个控制周期把下位机状态塞给上位机
- *
+/** @brief 更新待回传的状态内容，本函数不发送、不检查数值范围。
+ * @param[in] mode 回传模式，当前调用处用 1 表示 READY，0 表示不允许自瞄。
+ * @param[in] q0,q1,q2,q3 姿态四元数，顺序为 w、x、y、z，无单位。
+ * @param[in] yaw,yaw_vel 左右角度和角速度，单位 rad、rad/s。
+ * @param[in] pitch,pitch_vel 上下角度和角速度，单位 rad、rad/s。
+ * @param[in] bullet_speed 弹速，单位 m/s。
+ * @param[in] bullet_count 累计发数。
  */
 void VisionUpdateTx(uint8_t mode,
                     float q0, float q1, float q2, float q3,

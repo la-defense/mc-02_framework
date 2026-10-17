@@ -1,8 +1,11 @@
+/** @file vision_protocol.c
+ * @brief 按现有 SP 格式计算校验，并在接收片段中寻找首个可用完整帧；接口见头文件。
+ */
 #include "vision_protocol.h"
 
 #include <string.h>
 
-/* Preserve the exact bitwise algorithm shared with the existing wire protocol. */
+// 沿用双方已使用的逐位算法；每字节先合入 CRC，再处理其中八位。
 uint16_t VisionProtocolCRC16(const uint8_t *data, size_t length)
 {
     if (data == NULL && length != 0u)
@@ -37,6 +40,7 @@ bool VisionProtocolFindCommandFrame(const uint8_t *data, size_t length,
     if (data == NULL || frame == NULL || length < sizeof(Vision_Recv_s))
         return false;
 
+    // 只访问仍能放下整帧的位置；头或 CRC 不对时向后移动一个字节继续寻找。
     for (size_t offset = 0; offset <= length - sizeof(Vision_Recv_s); ++offset)
     {
         if (data[offset] != 'S' || data[offset + 1u] != 'P')
@@ -48,6 +52,7 @@ bool VisionProtocolFindCommandFrame(const uint8_t *data, size_t length,
             continue;
         }
 
+        // 找到第一份正确帧就返回，后面的数据留给调用方决定是否再次处理。
         memcpy(frame, data + offset, sizeof(*frame));
         if (crc_errors != NULL)
             *crc_errors = errors;

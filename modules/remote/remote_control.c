@@ -1,3 +1,7 @@
+/** @file remote_control.c
+ * @brief 检查 18 字节 DBUS 帧，分别维护摇杆在线、键鼠更新及按下次数。
+ * UART 派发调用接收函数，Daemon 处理离线；命令任务周期读取当前输入和可用标记。
+ */
 #include "remote_control.h"
 #include "string.h"
 #include "bsp_usart.h"
@@ -14,6 +18,7 @@ volatile RemoteControlDiagnostics_s remote_control_diag;
 static uint16_t pc_sequence;
 static uint8_t pc_have_sequence, pc_authorized;
 
+// 只清键鼠和按下次数，保留摇杆与开关；调用前地址必须有效。
 static void ClearPC(RC_ctrl_t *input)
 {
     memset(&input->mouse, 0, sizeof(input->mouse));
@@ -21,6 +26,7 @@ static void ClearPC(RC_ctrl_t *input)
     memset(input->key_count, 0, sizeof(input->key_count));
 }
 
+// 撤销键鼠使用，清心跳与两份历史输入，防止恢复后重复旧按键。
 static void RevokePC(uint32_t now, RemotePcRevokeReason_e reason)
 {
     if (pc_authorized)
@@ -33,12 +39,14 @@ static void RevokePC(uint32_t now, RemotePcRevokeReason_e reason)
     ClearPC(&rc_ctrl[TEMP]); ClearPC(&rc_ctrl[LAST]);
 }
 
+// 恢复前要求所有键、鼠标移动和鼠标按钮均为零。
 static uint8_t PCReleased(const RC_ctrl_t *input)
 {
     return (uint8_t)(input->key[0].keys == 0u && input->mouse.x == 0 && input->mouse.y == 0 &&
                      input->mouse.press_l == 0u && input->mouse.press_r == 0u);
 }
 
+// 超过 150 ms 没有递增心跳就清除键鼠；等于 150 ms 时仍保留。
 static void ExpirePC(uint32_t now)
 {
     if (pc_have_sequence && (uint32_t)(now - remote_control_diag.pc_last_advance_tick) > REMOTE_PC_LEASE_MS)
@@ -52,7 +60,7 @@ static void ExpirePC(uint32_t now)
     }
 }
 
-/* Called with interrupts masked. Only an advancing heartbeat may publish PC data. */
+// 调用时普通中断已关闭；只接受向前变化的心跳，恢复还要连续两帧完全松开。
 static uint8_t AcceptPC(const RC_ctrl_t *candidate, uint16_t heartbeat, uint32_t now)
 {
     ExpirePC(now);
@@ -73,7 +81,7 @@ static uint8_t AcceptPC(const RC_ctrl_t *candidate, uint16_t heartbeat, uint32_t
     return pc_authorized;
 }
 
-/* Decode into a private candidate. Rejected data must not touch edge history. */
+// 先解码到临时对象，五个通道和开关等字段都通过后才发布，坏帧不改历史。
 static uint8_t DecodeCandidate(const uint8_t *b, RC_ctrl_t *c)
 {
     memset(c, 0, sizeof(*c));
@@ -107,6 +115,7 @@ static uint8_t DecodeCandidate(const uint8_t *b, RC_ctrl_t *c)
     return 1u;
 }
 
+// 比较当前和上次按键，只在从未按变成按下时累加次数；Ctrl、Shift 自身不计。
 static void UpdateKeyEdges(RC_ctrl_t *c)
 {
     memcpy(c->key_count, rc_ctrl[TEMP].key_count, sizeof(c->key_count));
@@ -117,12 +126,14 @@ static void UpdateKeyEdges(RC_ctrl_t *c)
         if ((c->key[KEY_PRESS].keys & bit) && !(rc_ctrl[LAST].key[KEY_PRESS].keys & bit) &&
             !(c->key[KEY_PRESS_WITH_CTRL].keys & bit) && !(c->key[KEY_PRESS_WITH_SHIFT].keys & bit))
             c->key_count[KEY_PRESS][i]++;
+        // 分别累计与 Ctrl、Shift 同时按下的次数，避免算入普通按下。
         for (unsigned kind = 1; kind < 3; ++kind)
             if ((c->key[kind].keys & bit) && !(rc_ctrl[LAST].key[kind].keys & bit))
                 c->key_count[kind][i]++;
     }
 }
 
+// UART 任务派发一帧后调用；先检查长度及字段，再在关中断期间一起更新输入。
 static void RemoteControlRxCallback(void)
 {
     const uint8_t *frame = USARTGetCurrentRxData(rc_usart_instance);
@@ -147,6 +158,7 @@ static void RemoteControlRxCallback(void)
     remote_control_diag.raw_mouse_y = (uint16_t)candidate.mouse.y;
     remote_control_diag.raw_mouse_left = candidate.mouse.press_l;
     remote_control_diag.raw_mouse_right = candidate.mouse.press_r;
+    // 键鼠尚未通过检查时沿用已保存结果；撤销路径会先把该结果清零，摇杆仍可更新。
     if (AcceptPC(&candidate, heartbeat, now)) UpdateKeyEdges(&candidate);
     else
     {
@@ -165,6 +177,7 @@ static void RemoteControlRxCallback(void)
     RobotSafetySetRcOnline(1u);
 }
 
+// 离线时撤销键鼠并清空摇杆，记录断开时间、请求急停，再重新准备 UART 接收。
 static void RCLostCallback(void *id)
 {
     (void)id;
@@ -205,6 +218,7 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
     if (rc_daemon_instance == NULL)
         return NULL;
     rc_usart_instance = USARTRegister(&conf);
+    // 串口注册失败时撤销已注册的离线计时对象，避免留下无主回调。
     if (rc_usart_instance == NULL)
     {
         (void)DaemonUnregister(rc_daemon_instance);

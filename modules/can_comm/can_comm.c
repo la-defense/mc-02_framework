@@ -1,3 +1,6 @@
+/** @file can_comm.c
+ * @brief 分片发送固定长度消息，接收时拼包并检查 CRC8，按真正收包时间判断是否仍可使用。
+ */
 #include "can_comm.h"
 #include "main.h"
 #include "FreeRTOS.h"
@@ -30,6 +33,7 @@ static void CANCommRxCallback(CANInstance *_instance)
 {
     CANCommInstance *comm = (CANCommInstance *)_instance->id;
     const uint32_t rx_timestamp_ms = _instance->rx_timestamp_ms;
+    // 单帧排队已超过 50 ms 时放弃旧拼包；首帧到本帧超过 50 ms 也重新开始。
     if ((uint32_t)(HAL_GetTick() - rx_timestamp_ms) > MESSAGE_DEFAULT_MAX_AGE_MS)
     {
         CANCommResetRx(comm);
@@ -37,7 +41,7 @@ static void CANCommRxCallback(CANInstance *_instance)
     }
     if (comm->recv_state != 0u &&
         (uint32_t)(rx_timestamp_ms - comm->assembly_timestamp_ms) > MESSAGE_DEFAULT_MAX_AGE_MS)
-        CANCommResetRx(comm); // 注意写法,将can instance的id强制转换为CANCommInstance*类型
+        CANCommResetRx(comm); // 本包没有及时收齐，丢掉已拼部分。
 
     /* 当前接收状态判断 */
     if (_instance->rx_buff[0] == CAN_COMM_HEADER && comm->recv_state == 0) // 之前尚未开始接收且此次包里第一个位置是帧头
@@ -45,7 +49,7 @@ static void CANCommRxCallback(CANInstance *_instance)
         if (_instance->rx_buff[1] == comm->recv_data_len) // 如果这一包里的datalen也等于我们设定接收长度(这是因为暂时不支持动态包长)
         {
             comm->recv_state = 1;
-            comm->assembly_timestamp_ms = rx_timestamp_ms; // 设置接收状态为1,说明已经开始接收
+            comm->assembly_timestamp_ms = rx_timestamp_ms; // 保留首帧时间，后续分片不能延长整包时限。
         }
         else
             return; // 直接跳过即可
@@ -88,12 +92,12 @@ static void CANCommRxCallback(CANInstance *_instance)
     }
 }
 
+// 离线时只清未完成拼包；已发布消息由读取入口按时间拒绝。
 static void CANCommLostCallback(void *cancomm)
 {
     CANCommInstance *comm = (CANCommInstance *)cancomm;
     CANCommResetRx(comm);
-    /* 原来这里打的是 &rx_id(指针)当 %d —— 新日志机制启用 GCC 的格式检查后暴露出来的:
-       改成张冠李戴的副作用是日志里出现一个像样的随机数, 反而更难查问题。 */
+    // 记录实际接收编号，便于区分是哪条链路离线。
     LOGWARNING("[can_comm] can comm rx[%lu] lost, reset rx state.",
                (unsigned long)comm->can_ins->rx_id);
 }
@@ -173,6 +177,7 @@ uint8_t CANCommGetSnapshot(CANCommInstance *instance, void *data, uint8_t data_l
 {
     if (freshness != NULL) memset(freshness, 0, sizeof(*freshness));
     if (data == NULL || data_len == 0u) return 0u;
+    // 先清输出，实例、长度或时间检查失败时不保留上次控制数据。
     memset(data, 0, data_len);
     if (instance == NULL || instance->recv_data_len != data_len) return 0u;
     taskENTER_CRITICAL();
