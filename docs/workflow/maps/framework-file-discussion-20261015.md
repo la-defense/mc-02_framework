@@ -1,5 +1,7 @@
 # MC-02 通用框架逐文件讨论记录
 
+MC02-0079迁移后，六个旧CRC文件的链接指向当前统一入口；原文件名、行号、讨论编号和检查结论保留为当时依据，当前用法见[教学20](../../学习笔记/20-SP固定帧与CRC校验.md)。
+
 讨论汇总与登记选择日期：2026-10-15～16（Asia/Shanghai）。本文保留文件用途和讨论依据，不维护任务进度；唯一任务状态见 [TODO](../../../.Doc/TODO.md)，本轮实施范围和验收设计见[范围规格](../specs/robomaster-framework-evolution.md)。
 
 用户最终批准 R01–R08、R13–R21、R23–R26、R28–R29 共 23 个主题；R09、R10、R11、R12、R22、R27 本次不新增。已有任务不因暂缓被删除。下方“讨论结论”是讨论快照，不代表每行都进入本轮实施；具体以范围规格和 TODO 为准。1–218 为文件讨论编号，R01–R29 为主题标签，都不是正式任务 ID。追加的第140–145项安全告警结论经用户整批批准，合并已有 MC02-0084／MC02-0085，不新建重复任务。
@@ -184,10 +186,10 @@ modules/        安全管理、任务监控、消息、来源监控、电机、�
 | 116 | [modules/algorithm/controller.c](../../../modules/algorithm/controller.c) | PID 计算和内部状态更新 | 调用者显式传入实测 dt（秒），算法独立于硬件时基；异常 dt／数值明确失败。 |
 | 117 | [modules/algorithm/controller.h](../../../modules/algorithm/controller.h) | PID 参数、实例和生命周期接口 | 实例存储由调用模块提供，PID 提供校验、初始化／重置结果和只读状态；不采用统一动态分配实例池。 |
 | 118 | [modules/algorithm/algorithm.md](../../../modules/algorithm/algorithm.md) | 公共算法模块和滤波使用说明 | 本轮加入一阶低通、有界滑动平均、二阶低通和陷波滤波，按实例配置，验证稳定性与延迟，不延长源有效期。 |
-| 119 | [modules/algorithm/crc8.c](../../../modules/algorithm/crc8.c) | CRC-8 软件计算 | 常用算法使用只读查表，并保留独立逐位实现和对照验证，异常路径无需运行期初始化。 |
-| 120 | [modules/algorithm/crc8.h](../../../modules/algorithm/crc8.h) | CRC-8 和公共校验入口 | 同时提供整块与调用者独立上下文的开始／更新／结束增量计算，分块不影响结果。 |
-| 121 | [modules/algorithm/crc16.c](../../../modules/algorithm/crc16.c) | CRC-16 软件计算 | 本轮统一 CRC-8／16／32，验证既有协议及参数／崩溃记录兼容性；异常记录保留独立最小入口。 |
-| 122 | [modules/algorithm/crc16.h](../../../modules/algorithm/crc16.h) | CRC 参数、上下文和结果接口 | 计算状态与 CRC 数值分开返回，校验参数、算法配置和上下文；计算成功与帧匹配分开判断。 |
+| 119 | [modules/algorithm/crc8.c（现统一CRC入口）](../../../modules/algorithm/crc.c) | CRC-8 软件计算 | 常用算法使用只读查表，并保留独立逐位实现和对照验证，异常路径无需运行期初始化。 |
+| 120 | [modules/algorithm/crc8.h（现统一CRC入口）](../../../modules/algorithm/crc.h) | CRC-8 和公共校验入口 | 同时提供整块与调用者独立上下文的开始／更新／结束增量计算，分块不影响结果。 |
+| 121 | [modules/algorithm/crc16.c（现统一CRC入口）](../../../modules/algorithm/crc.c) | CRC-16 软件计算 | 本轮统一 CRC-8／16／32，验证既有协议及参数／崩溃记录兼容性；异常记录保留独立最小入口。 |
+| 122 | [modules/algorithm/crc16.h（现统一CRC入口）](../../../modules/algorithm/crc.h) | CRC 参数、上下文和结果接口 | 计算状态与 CRC 数值分开返回，校验参数、算法配置和上下文；计算成功与帧匹配分开判断。 |
 | 123 | [modules/algorithm/kalman_filter.c](../../../modules/algorithm/kalman_filter.c) | 通用卡尔曼预测和量测校正 | 仅校正失败而预测合法时，可配置有限预测；超过时间／不确定度限制无效，保留最后有效量测时间。 |
 | 124 | [modules/algorithm/kalman_filter.h](../../../modules/algorithm/kalman_filter.h) | 滤波维度、矩阵和工作区接口 | 调用模块提供工作区，算法报告所需大小并检查容量；启动固定状态维度和最大量测容量，运行不动态分配。 |
 | 125 | [modules/algorithm/QuaternionEKF.c](../../../modules/algorithm/QuaternionEKF.c) | 四元数姿态 EKF 和零偏估计 | 本轮加入量测质量门控、有限预测以及基于安装几何和可信运动反馈的加速度补偿；缺条件时按门控／有限预测处理。 |
@@ -255,8 +257,8 @@ modules/        安全管理、任务监控、消息、来源监控、电机、�
 | 163 | [modules/referee/referee_task.h](../../../modules/referee/referee_task.h) | 裁判任务及交互接口声明 | 本轮机器人间通用收发仅报告接受、本机发送完成、失败/超时；接收方确认和重试协议以后随具体协同消息定义，本机发送不代表对方收到，对方收到也不代表业务执行。不在本轮新增通用应用层ACK协议。 | [MC02-0022](../../../.Doc/TODO.md) |
 | 164 | [modules/referee/referee_UI.c](../../../modules/referee/referee_UI.c) | 裁判客户端 UI 图形、字符串组帧与发送 | 本轮采用增量更新＋可配置低频分批重绘，支持检测到链路恢复时和人工触发重绘；周期及处理量有界，与机器人间通信共享发送预算。字符串/计数/边界及发送序号等问题复用REF-04/REF-03修复，不把本机发送成功当客户端已显示。 | [MC02-0095](../../../.Doc/TODO.md)、[REF-03](../../../.Doc/TODO.md)、[REF-04](../../../.Doc/TODO.md) |
 | 165 | [modules/referee/referee_UI.h](../../../modules/referee/referee_UI.h) | 裁判 UI 图形结构、命令及绘图接口 | 本轮加入按车型配置的UI布局和数据绑定：配置位置、样式和只读数据来源，由UI模块统一绘制并处理增量更新/重绘；基础绘图仍需校验和明确结果，不要求各车型自行维护整套布局发送代码。 | [MC02-0095](../../../.Doc/TODO.md) |
-| 166 | [modules/referee/crc_ref.c](../../../modules/referee/crc_ref.c) | 裁判专用 CRC8／CRC16 软件实现 | 沿用已批准R25统一软件CRC方案，裁判CRC8/CRC16使用独立不可变算法配置并保留线上兼容；不能直接替换为现有crc_8/crc_16（多项式/反射/初值不同）。保留校验向量和协议完整帧测试，复用MC02-0079；无新增范围选择。 | [MC02-0079](../../../.Doc/TODO.md) |
-| 167 | [modules/referee/crc_ref.h](../../../modules/referee/crc_ref.h) | 裁判校验、追加与结果接口声明 | 沿用统一CRC契约：计算状态与数值分开、只读输入/明确长度和输出容量、有界追加及明确校验结果，算法配置不可变；协议封装声明自己的具体配置与字节序，不再暴露混淆的TRUE/FALSE及重复实现；迁移复用MC02-0079而非重复任务。 | [MC02-0079](../../../.Doc/TODO.md) |
+| 166 | [modules/referee/crc_ref.c（现统一CRC入口）](../../../modules/algorithm/crc.c) | 裁判专用 CRC8／CRC16 软件实现 | 沿用已批准R25统一软件CRC方案，裁判CRC8/CRC16使用独立不可变算法配置并保留线上兼容；不能直接替换为现有crc_8/crc_16（多项式/反射/初值不同）。保留校验向量和协议完整帧测试，复用MC02-0079；无新增范围选择。 | [MC02-0079](../../../.Doc/TODO.md) |
+| 167 | [modules/referee/crc_ref.h（现统一CRC入口）](../../../modules/algorithm/crc.h) | 裁判校验、追加与结果接口声明 | 沿用统一CRC契约：计算状态与数值分开、只读输入/明确长度和输出容量、有界追加及明确校验结果，算法配置不可变；协议封装声明自己的具体配置与字节序，不再暴露混淆的TRUE/FALSE及重复实现；迁移复用MC02-0079而非重复任务。 | [MC02-0079](../../../.Doc/TODO.md) |
 | 168 | [modules/referee/referee.md](../../../modules/referee/referee.md) | 裁判、交互与 UI 接入说明 | 按第159–167项更新接入说明：已锁定2026V2.0.0并保留历史适配验收；裁判接收与可选UI分开、真实只读快照/分组源期限/上行摘要；官方共享发送限额下的通用机器人交互、本机结果语义、配置化UI及有界重绘，示例与实际函数一致。具体协同消息与对端ACK后续，复用MC02-0085/MC02-0022/REF-03/REF-04；无额外功能取舍。 | [MC02-0085](../../../.Doc/TODO.md)、[MC02-0094](../../../.Doc/TODO.md)、[MC02-0095](../../../.Doc/TODO.md) |
 
 ### 169–173：功率及超级电容

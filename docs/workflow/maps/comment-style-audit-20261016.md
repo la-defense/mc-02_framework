@@ -1,5 +1,7 @@
 # 业务文件注释检查清单（MC02-0107）
 
+MC02-0079迁移后，六个旧CRC文件的链接指向当前统一入口；原文件名、行号、讨论编号和检查结论保留为当时依据，当前用法见[教学20](../../学习笔记/20-SP固定帧与CRC校验.md)。
+
 本清单供你选择需要补注释的文件。检查对象为 `8111ccf4ce4e67a12daf5f6ec8a1967a6041fb7f` 中已跟踪的业务 C/C++ 源码和头文件，共 **178 份**。本轮只新增报告和配套教学说明，业务源码保持原样；后续补注释的文件由你选定。任务记录见 [MC02-0107](../../../.Doc/TODO.md)，规范见 [student-code-comments](../../../.agents/skills/student-code-comments/SKILL.md)。
 
 ## 检查结果与读法
@@ -186,10 +188,10 @@
 | 069 | [modules/TFminiPlus/tfminiplus.c:7](../../../modules/TFminiPlus/tfminiplus.c#L7) | 原有沿用；位置 `6c2f74b` | 一般 | 文件完全没有用途和步骤说明，距离读取时发送命令、接收数据和组合字段的关系不清楚。 | 简述测距流程及初始化延时的用途，接口用法集中在头文件。 |
 | 070 | [modules/TFminiPlus/tfminiplus.h:16](../../../modules/TFminiPlus/tfminiplus.h#L16) | 原有沿用；位置 `6c2f74b` | 重点 | 注册和测距入口无注释，字段注释只写取自哪些字节，未解释距离单位和调用条件。 | 补实际数据含义、I²C 初始化前提、返回值与现有错误处理能力。 |
 | 081 | [modules/algorithm/controller.h:7](../../../modules/algorithm/controller.h#L7) | 原有沿用；位置 `6c2f74b` | 一般 | 文件用途 @brief 留空；配置段多为英文标题，最大输出、积分上限及滤波时间参数缺简明含义。 | 补中文用途、配置字段和有效实例前提，保留已有 PID 接口说明。 |
-| 082 | [modules/algorithm/crc16.c:9](../../../modules/algorithm/crc16.c#L9) | 原有沿用；位置 `6c2f74b` | 一般 | 中文句子有明显翻译断裂；函数原型和接口说明重复放在源文件，查表初始化两层循环的用途不直观。 | 改成自然中文，说明首次生成查表及逐字节更新，完整接口移到头文件。 |
-| 083 | [modules/algorithm/crc16.h:9](../../../modules/algorithm/crc16.h#L9) | 原有沿用；位置 `6c2f74b` | 一般 | 所有公开 CRC16 入口无注释，未说明初值、字节长度、空数据和逐字节更新用法。 | 补中文文件用途与 Doxygen，说明两种入口当前使用的初值。 |
-| 084 | [modules/algorithm/crc8.c:6](../../../modules/algorithm/crc8.c#L6) | 原有沿用；位置 `6c2f74b` | 一般 | 表用途说明仅英文且只谈 SHT75，未交代本工程通用 CRC8 用途；中文接口说明语序生硬。 | 简述查表计算用途，循环前说明逐字节累计即可。 |
-| 085 | [modules/algorithm/crc8.h:8](../../../modules/algorithm/crc8.h#L8) | 原有沿用；位置 `6c2f74b` | 一般 | CRC8 两个公开入口无注释，未说明起始值、长度单位及空指针返回结果。 | 补简短中文接口说明与连续更新用法。 |
+| 082 | [modules/algorithm/crc16.c:9（现统一CRC入口）](../../../modules/algorithm/crc.c) | 原有沿用；位置 `6c2f74b` | 一般 | 中文句子有明显翻译断裂；函数原型和接口说明重复放在源文件，查表初始化两层循环的用途不直观。 | 改成自然中文，说明首次生成查表及逐字节更新，完整接口移到头文件。 |
+| 083 | [modules/algorithm/crc16.h:9（现统一CRC入口）](../../../modules/algorithm/crc.h) | 原有沿用；位置 `6c2f74b` | 一般 | 所有公开 CRC16 入口无注释，未说明初值、字节长度、空数据和逐字节更新用法。 | 补中文文件用途与 Doxygen，说明两种入口当前使用的初值。 |
+| 084 | [modules/algorithm/crc8.c:6（现统一CRC入口）](../../../modules/algorithm/crc.c) | 原有沿用；位置 `6c2f74b` | 一般 | 表用途说明仅英文且只谈 SHT75，未交代本工程通用 CRC8 用途；中文接口说明语序生硬。 | 简述查表计算用途，循环前说明逐字节累计即可。 |
+| 085 | [modules/algorithm/crc8.h:8（现统一CRC入口）](../../../modules/algorithm/crc.h) | 原有沿用；位置 `6c2f74b` | 一般 | CRC8 两个公开入口无注释，未说明起始值、长度单位及空指针返回结果。 | 补简短中文接口说明与连续更新用法。 |
 | 090 | [modules/bluetooth/HC05.c:1](../../../modules/bluetooth/HC05.c#L1) | 原有沿用；位置 `6c2f74b` | 一般 | 无文件职责说明；接收只接受固定帧头帧尾、发送添加帧头帧尾的结构未在文件开头说明。 | 补蓝牙固定帧用途，重要循环说明复制哪些数据，接口注意事项归头文件。 |
 | 091 | [modules/bluetooth/HC05.h:18](../../../modules/bluetooth/HC05.h#L18) | 原有沿用；位置 `6c2f74b` | 一般 | 入口仅普通一句话，缺参数、初始化结果、长度单位和异步发送期间再次调用的条件。 | 补简短中文 Doxygen 及固定数据长度说明。 |
 | 097 | [modules/imu/BMI088Middleware.c:1](../../../modules/imu/BMI088Middleware.c#L1) | 原有沿用；位置 `6c2f74b` | 一般 | 旧 BMI088 适配文件没有用途或历史保留说明，无法区分它和 modules/BMI088 的现行驱动；单字节收发前提未说明。 | 补旧适配层用途及 SPI 指针需先设置的前提，暂不删除或改实现。 |
@@ -205,8 +207,8 @@
 | 149 | [modules/oled/oled.c:333](../../../modules/oled/oled.c#L333) | 原有沿用；位置 `6c2f74b` | 一般 | 有较完整函数说明，但缺文件整体用途；字符取位、换行和逐页刷新循环缺少简明串联，部分指令说明仅英文。 | 说明先改内存图像再刷新显示，解释字体循环和页刷新。 |
 | 150 | [modules/oled/oled.h:122](../../../modules/oled/oled.h#L122) | 原有沿用；位置 `6c2f74b` | 一般 | row 写“开始列”、col 写“开始行”，与绘制实现相反；文件 @brief 只写待重构，未交代当前作用。 | 校正行列含义，说明字符坐标与像素坐标、缓冲绘制和刷新关系。 |
 | 151 | [modules/oled/oledfont.h:4](../../../modules/oled/oledfont.h#L4) | 原有沿用；位置 `6c2f74b` | 一般 | 版权与字库用途保留完整，但总体用途仅英文，字符起点、位序及 LOGO 数据读取方式缺中文说明。 | 保留 DJI 版权，补简短中文字库排列说明，不逐字节扩写。 |
-| 154 | [modules/referee/crc_ref.c:115](../../../modules/referee/crc_ref.c#L115) | 原有沿用；位置 `6c2f74b` | 一般 | Append_CRC8/16 的注释写输出 True/False，但函数返回 void、直接改数据尾部；多数说明仅英文。 | 校正追加校验值与检查校验值的区别，用中文说明逐字节循环。 |
-| 155 | [modules/referee/crc_ref.h:11](../../../modules/referee/crc_ref.h#L11) | 原有沿用；位置 `6c2f74b` | 重点 | 各公开函数无参数和返回说明，dwLength 是否包含校验字节、会改哪些字节、空指针行为未解释。 | 补中文 Doxygen、长度单位、初值和输出修改方式。 |
+| 154 | [modules/referee/crc_ref.c:115（现统一CRC入口）](../../../modules/algorithm/crc.c) | 原有沿用；位置 `6c2f74b` | 一般 | Append_CRC8/16 的注释写输出 True/False，但函数返回 void、直接改数据尾部；多数说明仅英文。 | 校正追加校验值与检查校验值的区别，用中文说明逐字节循环。 |
+| 155 | [modules/referee/crc_ref.h:11（现统一CRC入口）](../../../modules/algorithm/crc.h) | 原有沿用；位置 `6c2f74b` | 重点 | 各公开函数无参数和返回说明，dwLength 是否包含校验字节、会改哪些字节、空指针行为未解释。 | 补中文 Doxygen、长度单位、初值和输出修改方式。 |
 | 156 | [modules/referee/referee_UI.c:4](../../../modules/referee/referee_UI.c#L4) | 原有沿用；位置 `6c2f74b` | 一般 | 文件用途留空；长参数说明多在 .c 中，图形推送数量选择和无效数量的默认处理未解释。 | 接口说明集中到头文件，源文件说明组包、序号和推送循环。 |
 | 157 | [modules/referee/referee_UI.h:41](../../../modules/referee/referee_UI.h#L41) | 原有沿用；位置 `6c2f74b` | 重点 | 所有公开绘图/发送接口无用法说明，图形名三字节、坐标单位、可变参数类型和仅支持1/2/5/7个图形等条件未交代。 | 补中文 Doxygen 和调用前准备的数据。 |
 
