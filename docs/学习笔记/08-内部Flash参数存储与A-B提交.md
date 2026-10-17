@@ -176,9 +176,15 @@ TLV = **T**ype（键）+ **L**ength（长度）+ **V**alue（数据）：
 
 高字节分段是为了将来"一眼看出这个 key 属于哪个模块"。
 
-`PARAM_KEY_IMU_CALIB_META` 里的温度字段保存的是**摄氏度**，不是 BMI088 寄存器原始码。按 [Bosch BMI088 数据手册 §5.3.7](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi088-ds001.pdf)，温度由 11 位二进制补码组成：先拼出 `raw = (temp_msb << 3) | (temp_lsb >> 5)`；若 `raw > 1023`，要减去 `2048` 做符号扩展；最后按 `23 + signed_raw × 0.125°C` 换算。比如原始码 `2047` 表示 `-1`，温度是 `22.875°C`。
+#### 4.5.1 温度字节怎样换成摄氏度（MC02-0119）
 
-工程里的 [`BMI088DecodeTemperature`](../../modules/BMI088/bmi088_temperature.h) 在采样入口完成这次换算；在线标定拿到的 `raw_data.temperature` 已经是摄氏度，所以直接保存。再乘 `0.125` 并加 `23` 会把同一个值换算第二次。边界回归在 [`bmi088_temperature_test.c`](../../tests/host/bmi088_temperature_test.c)：覆盖原始码 `0、1023、1024、2047`，以及数据手册给出的 `-40°C`／`85°C` 端点。生产标定路径回归 [`bmi088_calibration_temperature_test.c`](../../tests/host/bmi088_calibration_temperature_test.c) 通过 `BMI088Register` 启动真实标定与参数提交流程，并验证实例、发布状态和参数元数据都保留 `22.875°C`。
+`PARAM_KEY_IMU_CALIB_META` 的温度字段保存摄氏度。按 [Bosch BMI088 数据手册 §5.3.7](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi088-ds001.pdf)，先取 `BMI088_TEMP_M`（0x22）的8位，再取 `BMI088_TEMP_L`（0x23）的高3位，拼成11位数据；低字节的其余5位不用。
+
+拼出的 `raw` 大于1023时，减2048还原带负号的数值。将它乘0.125，再加23，得到摄氏温度。因此 `signed_raw` 为负时，表示温度低于23°C。
+
+[`BMI088DecodeTemperature`](../../modules/BMI088/bmi088_temperature.h) 只做换算，不单独返回错误状态；读取是否成功、温度是否可用由调用方检查。采样入口已经完成换算，在线标定保存 `raw_data.temperature` 时直接使用，避免再次乘0.125并加23。
+
+现有 [温度换算回归](../../tests/host/bmi088_temperature_test.c) 检查原始码 `0、1023、1024、2047` 及 `-40°C`／`85°C` 对应读数；[标定回归](../../tests/host/bmi088_calibration_temperature_test.c) 经 `BMI088Register` 运行采样和参数提交流程，确认实例、显示用温度和保存的标定信息都保留 `22.875°C`。本次注释核对同时参考仓库内 `bmi088-datasheet.pdf` 第28页，不改变换算步骤。
 
 ---
 
