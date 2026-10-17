@@ -1,3 +1,6 @@
+/** @file bsp_tools.c
+ * @brief 保存最多 32 份回调和参数，任务先执行一次，再循环等待自己的信号位。
+ */
 #include <stdarg.h>
 
 #include "cmsis_os.h"
@@ -27,6 +30,7 @@ __attribute__((noreturn)) static void CallbackTaskBase(void const *cbk)
     void const *ins = ((CallbackTask_t const *)cbk)->ins;
     uint32_t sig = ((CallbackTask_t const *)cbk)->sig;
 
+    // 首次启动直接执行回调；每次回调返回后才等待下一次信号。
     for (;;)
     {
         cbk_func(ins);
@@ -36,6 +40,7 @@ __attribute__((noreturn)) static void CallbackTaskBase(void const *cbk)
 
 uint32_t CreateCallbackTask(char *name, void *cbk, void *ins, osPriority priority)
 {
+    // 信号位已经用完时不再增加任务，留在报错循环；当前没有失败返回路径。
     if (sig_idx >= MX_SIG_LIST_SIZE)
         while (1)
             LOGERROR("[rtos:cbk_register] CreateCallbackTask: sig_idx >= MX_SIG_LIST_SIZE");

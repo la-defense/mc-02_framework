@@ -1,3 +1,6 @@
+/** @file sentinel_config.c
+ * @brief 保存移入的哨兵配置，供 RobotConfigInit() 选择；来源说明保留如下。
+ */
 #include "sentinel_config.h"
 
 /*
@@ -15,6 +18,7 @@ Robot_Config_s *SentinelConfigInit(void)
             .chassis_motor_id[MOTOR_LB] = 4,
 
             .wheel_type = OMNI_WHEEL,
+            // 长度使用 mm，减速比无单位；参数沿用移入版本，启用时仍须按实车核对。
             .wheel_measure = {
                 .center_gimbal_offset_x = 0.0,
                 .center_gimbal_offset_y = 0.0,
@@ -54,6 +58,7 @@ Robot_Config_s *SentinelConfigInit(void)
             }
         },
 
+        // 角度字段用度；PID 及反馈来源必须与实际电机和安装方向配套。
         .gimbal_param = {
             .gimbal_type = MINI_GIMBAL,
             .gimbal_offset = {
@@ -170,6 +175,7 @@ Robot_Config_s *SentinelConfigInit(void)
             }
         },
 
+        // 发射参数含电机编号与拨弹盘传动比例，ShootTask() 用其计算每发对应的转子角度。
         .shoot_param = {
             .friction_motor_id[MOTOR_LF] = 8,
             .friction_motor_id[MOTOR_RF] = 4,

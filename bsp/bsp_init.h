@@ -1,3 +1,6 @@
+/** @file bsp_init.h
+ * @brief 基础 BSP 初始化的声明和实现，仅由 robot.c 包含，避免重复定义 BSPInit()。
+ */
 #ifndef BSP_INIT_h
 #define BSP_INIT_h
 
@@ -12,7 +15,7 @@
 
 /**
  * @brief bsp层初始化统一入口,这里仅初始化必须的bsp组件,其他组件的初始化在各自的模块中进行
- *        需在实时系统启动前调用,目前由RobotoInit()调用
+ *        需在实时系统启动前由 RobotInit() 调用；依次准备计时、看门狗、日志、ADC 和参数。
  * 
  * @note 其他实例型的外设如CAN和串口会在注册实例的时候自动初始化,不注册不初始化
   */
@@ -20,9 +23,7 @@
 void BSPInit()
 {
     DWT_Init(480);
-    /* IWDG 在普通系统复位后继续运行。启动早期使用 4s 窗口，RTOS 建好任务后由
-       RobotInit 切到 200ms。标定在 INS 任务中运行：TaskMonitor 只在其他任务健康时
-       喂狗，并把 INS 标定豁免限制在 15s；标定循环不直接喂狗。 */
+    // 启动先使用 4 秒看门狗等待，任务创建成功后改为 200 ms；标定过程由任务监控统一处理。
     BSP_WatchdogInit(4000);
     BSPLogInit();
     BSP_ADCInit();

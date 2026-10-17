@@ -1,3 +1,6 @@
+/** @file shoot.c
+ * @brief 接收发射命令，切换摩擦轮和拨弹盘控制；单发、三发只在进入对应模式时增加目标角度。
+ */
 #include "shoot.h"
 #include "robot_def.h"
 #include "config.h"
@@ -15,9 +18,9 @@
 static DJIMotorInstance *friction_l, *friction_r, *loader; // 拨盘电机
 // static servo_instance *lid; 需要增加弹舱盖
 
-static Shoot_Config_s *shoot_config; // loader slot count / motor->disk ratio from config
-static loader_mode_e last_load_mode = LOAD_STOP;
-static uint8_t require_load_stop = 1u; // last load mode, for edge-trigger
+static Shoot_Config_s *shoot_config; // 拨弹槽数及转子到拨弹盘的传动比例。
+static loader_mode_e last_load_mode = LOAD_STOP; // 上次处理的模式，用于判断是否刚进入单发或三发。
+static uint8_t require_load_stop = 1u; // 数据中断后先等一次停止供弹，再允许新的单发或三发。
 
 static Shoot_Ctrl_Cmd_s shoot_cmd_recv; // 来自cmd的发射控制信息
 static Subscriber_t *shoot_sub;
@@ -107,7 +110,7 @@ uint8_t ShootInit(void)
     };
     loader = DJIMotorInit(&loader_config);
 
-    shoot_config = ShootConfigFeed(); // load shooter config (slots / reduction ratio)
+    shoot_config = ShootConfigFeed(); // 取得已初始化的槽数和传动比例。
     shoot_sub = SubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
     return (uint8_t)(friction_l != NULL && friction_r != NULL && loader != NULL &&
                      shoot_config != NULL && shoot_sub != NULL);
@@ -125,8 +128,10 @@ void ShootTask()
         shoot_cmd_recv.shoot_mode = SHOOT_OFF;
         shoot_cmd_recv.friction_mode = FRICTION_OFF;
         shoot_cmd_recv.load_mode = LOAD_STOP;
+        // 数据中断后不立即重放单发或三发，须先收到停止供弹命令。
         require_load_stop = 1u;
     }
+    // 新消息持续请求单发也先等待 LOAD_STOP；连续供弹仍按当前模式处理。
     else if (require_load_stop != 0u)
     {
         if (shoot_cmd_recv.load_mode == LOAD_STOP)
@@ -136,7 +141,7 @@ void ShootTask()
             shoot_cmd_recv.load_mode = LOAD_STOP;
     }
 
-    // 对shoot mode等于SHOOT_STOP的情况特殊处理,直接停止所有电机(紧急停止)
+    // 发射总开关关闭时先停止全部电机，后面的模式计算仍会继续，但不解除停机标记。
     if (shoot_cmd_recv.shoot_mode == SHOOT_OFF)
     {
         DJIMotorStop(friction_l);
@@ -156,20 +161,20 @@ void ShootTask()
     //     return;
 
     // 若不在休眠状态,根据robotCMD传来的控制模式进行拨盘电机参考值设定和模式切换
-        // derive loader parameters from config
+        // 从配置换算每发弹丸对应的电机转子角度，单位 deg。
     const uint8_t slots = shoot_config->loader_slot_num ? shoot_config->loader_slot_num : 10;
     const float ratio = (shoot_config->loader_gearbox_ratio > 0.0f ? shoot_config->loader_gearbox_ratio : 1.0f) *
                         (shoot_config->loader_disk_ratio > 0.0f ? shoot_config->loader_disk_ratio : 1.0f);
-    const float one_bullet_delta = 360.0f / slots * ratio; // motor angle per bullet (deg)
+    const float one_bullet_delta = 360.0f / slots * ratio; // 每发对应的电机转子角度，单位 deg。
 
     switch (shoot_cmd_recv.load_mode)
     {
-    // stop loader
+    // 停止供弹时改为速度环并把目标速度置 0。
     case LOAD_STOP:
         DJIMotorOuterLoop(loader, SPEED_LOOP);
         DJIMotorSetRef(loader, 0);
         break;
-    // single shot: trigger only on mode edge + after cooldown, avoid re-adding angle every cycle
+    // 仅从其他模式进入单发且等待时间已到时，增加一次目标角度，避免每个周期重复增加。
     case LOAD_1_BULLET:
         if (last_load_mode != LOAD_1_BULLET && hibernate_time + dead_time <= DWT_GetTimeline_ms())
         {
@@ -179,7 +184,7 @@ void ShootTask()
             dead_time = 150;
         }
         break;
-    // 3-round burst
+    // 三发同样只在新进入时触发，随后至少等 300 ms。
     case LOAD_3_BULLET:
         if (last_load_mode != LOAD_3_BULLET && hibernate_time + dead_time <= DWT_GetTimeline_ms())
         {
@@ -189,17 +194,18 @@ void ShootTask()
             dead_time = 300;
         }
         break;
-    // burst fire: speed loop, rate(bullets/s) * 360deg * ratio / slots
+    // 连续供弹用速度环：发/秒乘每发转子角度，得到 deg/s。
     case LOAD_BURSTFIRE:
         DJIMotorOuterLoop(loader, SPEED_LOOP);
         DJIMotorSetRef(loader, shoot_cmd_recv.shoot_rate * 360.0f * ratio / slots);
         break;
-    // reverse: speed loop, fixed reverse speed (TBD)
+    // 反转使用固定的负方向转子角速度。
     case LOAD_REVERSE:
         DJIMotorOuterLoop(loader, SPEED_LOOP);
         DJIMotorSetRef(loader, -LOADER_REVERSE_SPEED_DEGS);
         break;
     default:
+        // 未知供弹模式保持等待；此路径不会返回到任务中的下一次运行记录更新。
         while (1)
             ;
     }
@@ -222,7 +228,7 @@ void ShootTask()
             DJIMotorSetRef(friction_l, 0);
             DJIMotorSetRef(friction_r, 0);
             break;
-        default: // 当前为了调试设定的默认值4000,因为还没有加入裁判系统无法读取弹速.
+        default: // 未匹配弹速时沿用 30000 deg/s 默认目标，需按实际机构确认。
             DJIMotorSetRef(friction_l, 30000);
             DJIMotorSetRef(friction_r, 30000);
             break;

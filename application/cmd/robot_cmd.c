@@ -1,3 +1,6 @@
+/** @file robot_cmd.c
+ * @brief 每轮取得遥控、视觉和应用反馈，选择目标后让整车状态覆盖不允许执行的命令，再统一发布。
+ */
 #include "remote_safety.h"
 static RemoteSafetyGestures_s remote_gestures;
 // app
@@ -17,6 +20,7 @@ static RemoteSafetyGestures_s remote_gestures;
 #include <string.h>
 #include <math.h>
 
+// 编译时检查视觉与应用两处供弹模式的编号是否一致。
 _Static_assert((int)LOAD_STOP == (int)VISION_CONTROL_LOAD_STOP,
                "Vision control loader mapping must match LOAD_STOP");
 _Static_assert((int)LOAD_REVERSE == (int)VISION_CONTROL_LOAD_REVERSE,
@@ -135,7 +139,7 @@ uint8_t RobotCMDInit(void)
  */
 static void CalcOffsetAngle()
 {
-    // 别名angle提高可读性,不然太长了不好看,虽然基本不会动这个函数
+    // 单圈角度与归中位置相减，跨过一圈边界时补减 360 度。
     static float angle;
     angle = gimbal_fetch_data.yaw_motor_single_round_angle; // 从云台获取的当前yaw电机单圈角度
 #if YAW_ECD_GREATER_THAN_4096                               // 如果大于180度
@@ -155,6 +159,7 @@ static void CalcOffsetAngle()
 #endif
 }
 
+// 将本轮一起读取的帧和链路状态配成输入，保留接收时间，机械范围由配置提供。
 static VisionControlInput_s GetVisionControlInput(void)
 {
     const VisionControlInput_s input = {
@@ -174,6 +179,7 @@ static VisionControlInput_s GetVisionControlInput(void)
     return input;
 }
 
+// 把已选择的发射请求转换为应用枚举；最终是否允许仍由 EmergencyHandler() 检查。
 static void ApplyShootCommand(const VisionControlShootCommand_s *command)
 {
     shoot_cmd_send.shoot_mode = command->shoot_enabled ? SHOOT_ON : SHOOT_OFF;
@@ -182,6 +188,7 @@ static void ApplyShootCommand(const VisionControlShootCommand_s *command)
     shoot_cmd_send.shoot_rate = command->shoot_rate;
 }
 
+// 使用已经换成度、度每秒等单位的视觉结果，云台应用不再解释 SP 原始字节。
 static void ApplyVisionGimbal(const VisionControlGimbalCommand_s *command)
 {
     gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
@@ -206,7 +213,7 @@ static void RemoteControlSet(uint8_t vision_active)
         gimbal_cmd_send.pitch += RC_TO_PITCH_ANGLE * (float)rc_data[TEMP].rc.rocker_l1;
     }
 
-    if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[下],底盘跟随云台
+    if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关向下：选择底盘自转。
     {
         chassis_cmd_send.chassis_mode = CHASSIS_ROTATE;
         if (!vision_active)
@@ -221,7 +228,7 @@ static void RemoteControlSet(uint8_t vision_active)
 
     // 云台软件限位
 
-    // 底盘参数,目前没有加入小陀螺(调试似乎暂时没有必要),系数需要调整
+    // 摇杆读数换成平移目标，当前系数仍需按实际底盘确认。
     chassis_cmd_send.vx = 10.0f * (float)rc_data[TEMP].rc.rocker_r_; // _水平方向
     chassis_cmd_send.vy = 10.0f * (float)rc_data[TEMP].rc.rocker_r1; // 1数值方向
 
@@ -359,12 +366,13 @@ void RobotCMDTask()
     const uint8_t feedback_received = SubGetSnapshot(gimbal_feed_sub, &gimbal_fetch_data,
         sizeof(gimbal_fetch_data), HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL);
 
-    /* One authorized snapshot per cycle also expires PC input without new frames. */
+    // 每轮读取一次输入，即使没有新帧也会检查键鼠是否超过使用时间。
     if (remote_initialized) RemoteControlGetSnapshot(&remote_snapshot);
     else memset(&remote_snapshot, 0, sizeof(remote_snapshot));
 
-    /* Copy frame and link status together so a partial ISR update cannot mix generations. */
+    // 帧和链路状态一起复制，避免一份来自更新前、另一份来自更新后。
     VisionGetSnapshot(&vision_recv_snapshot, &vision_status_snapshot);
+    // 没有当前姿态或角度为 NaN、无穷大时，不建立手动参考，先发布停止命令。
     if (!feedback_received || !isfinite(gimbal_fetch_data.gimbal_imu_data.YawTotalAngle) ||
         !isfinite(gimbal_fetch_data.gimbal_imu_data.Pitch))
     {
@@ -398,6 +406,7 @@ void RobotCMDTask()
     gimbal_cmd_send.yaw_vel = gimbal_cmd_send.yaw_acc = 0.0f;
     gimbal_cmd_send.pitch_vel = gimbal_cmd_send.pitch_acc = 0.0f;
     uint8_t manual_allowed = manual_control_active;
+    // 视觉刚退出或首次进入手动时，以当前姿态接续目标，避免跳回上次手动留下的角度。
     if (!vision_active && manual_control_active && (previous_vision_active || !manual_reference_ready))
     {
         if (feedback_received && isfinite(gimbal_fetch_data.gimbal_imu_data.YawTotalAngle) &&

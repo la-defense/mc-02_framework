@@ -1,3 +1,6 @@
+/** @file gimbal.c
+ * @brief 接收云台目标，设置 yaw、pitch 的电机参考和反馈来源，并回传姿态及电机单圈角度。
+ */
 #include "gimbal.h"
 #include "robot_def.h"
 #include "dji_motor.h"
@@ -42,7 +45,7 @@ uint8_t GimbalInit(void)
                 .MaxOut = 20000,
             },
             .other_angle_feedback_ptr = &gimba_IMU_data->YawTotalAngle,
-            // 还需要增加角速度额外反馈指针,注意方向,ins_task.md中有c板的bodyframe坐标系说明
+            // 外部角速度指向 INS 对应轴，安装方向须与本电机一致。
             .other_speed_feedback_ptr = &gimba_IMU_data->Gyro[2],
         },
         .controller_setting_init_config = {
@@ -77,7 +80,7 @@ uint8_t GimbalInit(void)
                 .MaxOut = 20000,
             },
             .other_angle_feedback_ptr = &gimba_IMU_data->Pitch,
-            // 还需要增加角速度额外反馈指针,注意方向,ins_task.md中有c板的bodyframe坐标系说明
+            // 外部角速度指向 INS 对应轴，安装方向须与本电机一致。
             .other_speed_feedback_ptr = (&gimba_IMU_data->Gyro[0]),
         },
         .controller_setting_init_config = {
@@ -89,7 +92,7 @@ uint8_t GimbalInit(void)
         },
         .motor_type = GM6020,
     };
-    // 电机对total_angle闭环,上电时为零,会保持静止,收到遥控器数据再动
+    // 这里只注册电机；实际是否运行由周期命令中的模式决定。
     yaw_motor = DJIMotorInit(&yaw_config);
     pitch_motor = DJIMotorInit(&pitch_config);
 
@@ -102,13 +105,12 @@ uint8_t GimbalInit(void)
 /* 机器人云台控制核心任务,后续考虑只保留IMU控制,不再需要电机的反馈 */
 void GimbalTask()
 {
-    // 获取云台控制数据
-    // 后续增加未收到数据的处理
+    // 只采用不超过 50 ms 的控制消息；失败清零后进入停机分支。
     if (!SubGetSnapshot(gimbal_sub, &gimbal_cmd_recv, sizeof(gimbal_cmd_recv),
                         HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL))
         memset(&gimbal_cmd_recv, 0, sizeof(gimbal_cmd_recv));
 
-    // @todo:现在已不再需要电机反馈,实际上可以始终使用IMU的姿态数据来作为云台的反馈,yaw电机的offset只是用来跟随底盘
+    // 电机单圈角度仍用于计算底盘与云台的偏转方向；控制反馈目前选外部 IMU。
     // 根据控制模式进行电机反馈切换和过渡,视觉模式在robot_cmd模块就已经设置好,gimbal只看yaw_ref和pitch_ref
     switch (gimbal_cmd_recv.gimbal_mode)
     {
@@ -130,7 +132,7 @@ void GimbalTask()
         DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw); // yaw和pitch会在robot_cmd中处理好多圈和单圈
         DJIMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch);
         break;
-    // 云台自由模式,使用编码器反馈,底盘和云台分离,仅云台旋转,一般用于调整云台姿态(英雄吊射等)/能量机关
+    // 自由模式当前也选择外部 IMU 反馈，与上面的 GYRO 分支处理相同。
     case GIMBAL_FREE_MODE: // 后续删除,或加入云台追地盘的跟随模式(响应速度更快)
         DJIMotorEnable(yaw_motor);
         DJIMotorEnable(pitch_motor);

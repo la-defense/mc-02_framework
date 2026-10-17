@@ -1,7 +1,7 @@
 /**
  * @file robot_def.c
  * @brief 机器人配置工厂入口, 根据 id 返回对应机器人配置, 并提供三个 Feed 函数
- *        供 chassis/gimbal/shoot 在 Init 时取配置指针.
+ *        Feed 会直接访问已选对象，调用前必须先完成 RobotConfigInit()。
  */
 #include "robot_def.h"
 #include "config.h"
@@ -13,6 +13,7 @@ Robot_Config_s *RobotConfigInit(uint8_t id)
 {
     Robot_Config_s *instance = NULL;
 
+    // 当前仅移入哨兵配置；其他编号也落到哨兵，不代表已支持对应车型。
     switch (id)
     {
     case SENTINEL_ROBOT:

@@ -1,3 +1,7 @@
+/** @file drmotor.h
+ * @brief DR 电机预留接口说明，全部声明仍被注释，当前不提供可调用接口。
+ * 配套来源和适配条件见 drmotor.c，保留内容用于后续移植参考。
+ */
 // #ifndef DRMOTOR_H
 // #define DRMOTOR_H
 // #include <stdint.h>

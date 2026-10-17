@@ -73,7 +73,7 @@ uint8_t ChassisInit(void)
         },
         .motor_type = M3508,
     };
-    //  @todo: 当前还没有设置电机的正反转,仍然需要手动添加reference的正负号,需要电机module的支持,待修改.
+    // 每个电机使用相同配置，注册前分别填写编号和转向标记。
     chassis_motor_config.can_init_config.tx_id = 1;
     chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
     motor_lf = DJIMotorInit(&chassis_motor_config);
@@ -149,11 +149,7 @@ static void ChassisStopAndClear(void)
     DJIMotorSetRef(motor_rb, 0.0f);
 }
 
-/**
- * @brief 根据每个轮子的速度反馈,计算底盘的实际运动速度,逆运动解算
- *        对于双板的情况,考虑增加来自底盘板IMU的数据
- *
- */
+// 实际速度估计尚未实现，保留入口，不把空反馈当作已经测得的车速。
 static void EstimateSpeed()
 {
     // 根据电机速度和陀螺仪的角速度进行解算,还可以利用加速度计判断是否打滑(如果有)
@@ -164,8 +160,7 @@ static void EstimateSpeed()
 /* 机器人底盘控制核心任务 */
 void ChassisTask()
 {
-    // 后续增加没收到消息的处理(双板的情况)
-    // 获取新的控制信息
+    // 单板消息和双板通信都按 50 ms 检查命令，失败后清零，不沿用旧速度。
     uint8_t command_fresh = 0u;
 #ifdef ONE_BOARD
     command_fresh = SubGetSnapshot(chassis_sub, &chassis_cmd_recv, sizeof(chassis_cmd_recv),
@@ -180,6 +175,7 @@ void ChassisTask()
         memset(&chassis_cmd_recv, 0, sizeof(chassis_cmd_recv));
 
     ChassisMotionMode_e motion_mode = CHASSIS_MOTION_MODE_INVALID;
+    // 只将支持的模式交给运动计算；停机或未知模式都保持无效，随后停止四轮。
     switch (chassis_cmd_recv.chassis_mode)
     {
     case CHASSIS_NO_FOLLOW:
@@ -222,6 +218,7 @@ void ChassisTask()
                                                            &motion_output);
     if (!command_allowed)
     {
+        // 配置、模式或数值不允许计算时，同时停机和清掉参考值，避免重新使能后使用旧速度。
         ChassisStopAndClear();
     }
     else

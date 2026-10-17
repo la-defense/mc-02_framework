@@ -1,3 +1,7 @@
+/** @file config.h
+ * @brief 机器人机械、电机和控制参数类型，以及配置读取入口。
+ * 当前只有哨兵配置；这些结构不表示全部参数都已由实车确认，应用仍有自身使用的常量。
+ */
 #pragma once
 
 #include "bsp_can.h"
@@ -12,8 +16,8 @@
 /* 当前机器人类型(决定 RobotConfigInit 返回哪套配置) */
 #define ROBOT_ID SENTINEL_ROBOT
 
-#define RC_TO_YAW_ANGLE 0.002f    // 遥控器转yaw增量阈值
-#define RC_TO_PITCH_ANGLE 0.001f  // 遥控器转pitch增量阈值, 增大可加快手动俯仰响应
+#define RC_TO_YAW_ANGLE 0.002f    // 每个命令周期、每单位摇杆读数增加的 yaw 角度，单位 deg。
+#define RC_TO_PITCH_ANGLE 0.001f  // 每个命令周期、每单位摇杆读数增加的 pitch 角度，单位 deg。
 
 // #define _IS_IMU_ROLL    // 是否使用IMU的roll角作为pitch角(由于不常修改,作为宏). 哨兵pitch反馈源依机械安装而定
 
@@ -41,6 +45,7 @@ typedef enum
 // 底盘轮组参数
 typedef struct
 {
+    // 云台中心偏移、轴距、轮距和轮半径均用 mm；减速比无单位。
     float center_gimbal_offset_x;
     float center_gimbal_offset_y;
 
@@ -73,6 +78,7 @@ typedef enum
 // 云台归中参数
 typedef struct
 {
+    // 云台零位偏移和俯仰上下限，单位为度，具体反馈来源仍由应用选择。
     float mini_yaw_offset;
     float yaw_offset;
     float pitch_max_angle, pitch_min_angle;
@@ -132,7 +138,20 @@ typedef enum
 #include "robot_def.h"
 
 /* 配置入口(在 robot_def.c 中实现) */
+/** @brief 选择并保存供后续 Feed 使用的机器人配置。
+ * @param[in] id 机器人类型，当前所有未实现或未知编号都会返回哨兵配置。
+ * @return 长期有效的内部配置地址，不可释放；再次调用不会恢复已改写的静态配置。
+ */
 Robot_Config_s *RobotConfigInit(uint8_t id);
+/** @brief 取得已选配置中的底盘部分。
+ * @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
+ */
 Chassis_Config_s *ChassisConfigFeed(void);
+/** @brief 取得已选配置中的云台部分。
+ * @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
+ */
 Gimbal_Config_s *GimbalConfigFeed(void);
+/** @brief 取得已选配置中的发射部分。
+ * @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
+ */
 Shoot_Config_s *ShootConfigFeed(void);

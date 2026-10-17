@@ -1,3 +1,6 @@
+/** @file robot_task.h
+ * @brief 任务创建及常驻任务实现，仅由 robot.c 包含；重复包含到其他编译单元会重复定义。
+ */
 /* 注意该文件应只用于任务初始化,只能被robot.c包含*/
 #pragma once
 
@@ -32,15 +35,30 @@ osThreadId daemonTaskHandle;
 osThreadId uiTaskHandle;
 osThreadId lcdTaskHandle;
 
+/** @brief 初始化 INS 后约每 1 ms 处理采样和姿态；失败时只维持诊断循环。
+ * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
+ */
 void StartINSTASK(void const *argument);
+/** @brief 约每 1 ms 派发通信并运行电机计算。
+ * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
+ */
 void StartMOTORTASK(void const *argument);
+/** @brief 约每 10 ms 检查设备和任务，全部正常时才喂狗。
+ * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
+ */
 void StartDAEMONTASK(void const *argument);
+/** @brief 约每 5 ms 运行整车控制和诊断。
+ * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
+ */
 void StartROBOTTASK(void const *argument);
+/** @brief 等待裁判编号并周期运行裁判 UI；每次循环至少等待 1 ms。
+ * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
+ */
 void StartUITASK(void const *argument);
 
-/**
- * @brief 初始化机器人任务,所有持续运行的任务都在这里初始化
- *
+/** @brief 创建 INS、电机、Daemon、整车、LCD 及当前配置所需 UI 任务。
+ * @return 1 为全部创建成功，0 为至少一个失败，并记录失败任务编号；不删除已创建的任务。
+ * @note 由 RobotInit() 在调度器启动前调用一次。
  */
 uint8_t OSTaskInit(void)
 {
@@ -48,17 +66,11 @@ uint8_t OSTaskInit(void)
     insTaskHandle = osThreadCreate(osThread(instask), NULL); // 由于是阻塞读取传感器,为姿态解算设置较高优先级,确保以1khz的频率执行
     // // 后续修改为读取传感器数据准备好的中断处理,
 
-    /* motortask 栈 256 -> 512 words(2026-09-26, LOG-02): 该任务会通过
-       "MotorControlTask -> CANProcessRx -> 模块回调" 打日志(can_comm 掉线、电机离线等),
-       而日志宏现在会在栈上开一块 256 字节的格式化缓冲。实测 256 words(1KB) 会被顶爆:
-       FreeRTOS 栈溢出钩子记录到任务名 motortask(STACKOVF)。 */
+    // 电机任务还会派发接收并打印日志，栈容量包含回调和格式化所需空间。
     osThreadDef(motortask, StartMOTORTASK, osPriorityNormal, 0, 512);
     motorTaskHandle = osThreadCreate(osThread(motortask), NULL);
 
-    /* daemon 栈 128 -> 512 words(2026-09-26, LOG-02): 本任务打的日志最多(限速告警、
-       CAN/串口统计), 而日志宏现在会在栈上开一块 LOG_BUF_SIZE=256 字节的格式化缓冲。
-       实测(见 RTT 的 [stk] 行): 512 words 时历史最小剩余 ~370 words, 余量充足。
-       只加到一个"刚好不溢出"的值是危险的 —— 日志的调用深度会随代码增长。 */
+    // Daemon 内有状态检查与日志，需同时容纳日志行数组和各层调用。
     osThreadDef(daemontask, StartDAEMONTASK, osPriorityNormal, 0, 512);
     daemonTaskHandle = osThreadCreate(osThread(daemontask), NULL);
 
@@ -133,6 +145,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
         IMUHeaterForceOff();
         BSP_SafetyStartupLatchOutputsOff();
+        // 算法初始化失败后保持输出关闭，但继续更新诊断和本任务记录，供人工读取。
         for (;;)
         {
             InitDiagnosticHeartbeat();
@@ -152,8 +165,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         ins_dt = (float)DWT_ProbeElapsedUs(ins_probe);
         if (ins_dt > 1000.0f)
         {
-            /* 原实现把 &ins_dt(指针)当 %f 打印, RTT 也不支持浮点 → 日志一直是坏的;
-               现在改成整数微秒 + 限速(否则 1kHz 超时会刷爆 RTT 缓冲) */
+            // 用整数微秒记录超时，每秒最多报告一次，保留总次数和省略次数。
             static LogRateLimit_t rl_ins_overrun = {0};
             if (LogRateLimitAllow(&rl_ins_overrun, 1000u))
             {
@@ -244,11 +256,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */
         TaskMonitorTick();
 #if CRASH_TEST
-        /* 崩溃自测(默认关闭): 等系统完全跑起来(启动日志都出去、RTT 稳定)之后再故意崩,
-           否则崩溃发生在 RTT 初始化后几毫秒内, 复位太频繁以至于抓不到日志。
-           这里用"数循环"而不是 osDelay: daemon 任务一睡, 就没人喂狗,
-           IWDG 200ms 会先把板子复位(实测复位原因就是 IWDG1), 自测根本跑不到。
-           每次启动触发一种, 依次 BusFault / 断言 / 栈溢出 循环。 */
+        // 自测开启时按轮数等待其他任务启动，每轮仍完成监控和喂狗；到数后触发一种异常。
         if (++s_crash_test_wait >= CRASH_TEST_DELAY_LOOPS)
             CrashLogSelfTest(); /* 不返回: 记录现场后主动复位 */
 #endif

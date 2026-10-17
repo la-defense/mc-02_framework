@@ -1,3 +1,6 @@
+/** @file robot.c
+ * @brief 启动板级资源、应用和任务，失败时统一关闭输出，并提供整车周期入口。
+ */
 #include "bsp_init.h"
 #include "main.h"
 #include "robot.h"
@@ -15,6 +18,7 @@
 #include "remote_bench.h"
 #endif
 
+// 写参数前先关闭加热，再申请 INS 的 Flash 等待时间；第二步失败时按失败结束加热长操作。
 static uint8_t RobotParamFlashOperationBegin(void)
 {
     if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_FLASH))
@@ -27,6 +31,7 @@ static uint8_t RobotParamFlashOperationBegin(void)
     return 1u;
 }
 
+// Flash 自身成功还不够，任务监控也必须按时结束；两个结果一起交给加热器决定是否等待新数据恢复。
 static uint8_t RobotParamFlashOperationEnd(uint8_t success)
 {
     uint8_t within_window = TaskMonitorEndLongOperation(TASK_MONITOR_INS,
@@ -120,6 +125,7 @@ uint8_t RobotInit(void)
     __set_PRIMASK(previous_primask);
     return 1u;
 
+// 保留首次初始化失败，失能并恢复调用前的中断状态，让 main 继续运行诊断。
 init_failed:
 #undef ROBOT_INIT_CHECK
     RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
@@ -131,6 +137,7 @@ init_failed:
 
 void RobotTask()
 {
+    // 已有启动失败时不再运行任何控制应用，只维护可读取的诊断结果。
     if (InitDiagnosticIsFailed())
     {
         InitDiagnosticHeartbeat();

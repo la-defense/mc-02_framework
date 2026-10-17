@@ -1,3 +1,6 @@
+/** @file robot_def.h
+ * @brief 编译选择、当前板级常量和各应用传递的控制及反馈消息；调整布局会影响双板通信。
+ */
 /**
  * @file robot_def.h
  * @author NeoZeng neozng1@hnu.edu.cn
@@ -35,8 +38,8 @@
 #ifndef PITCH_MIN_ANGLE
 #define PITCH_MIN_ANGLE 0
 #endif
-/* Vision limits use final gimbal command degrees. Leave unconfigured until measured.
-   Overrides are used by host fixtures; no simulated limits enter a real image. */
+// 视觉使用换算成度并加完补偿后的云台目标检查范围；没有实测前保持未配置。
+// 测试可覆盖这些宏，实际固件不能把测试角度当成已确认的机械范围。
 #ifndef VISION_LIMITS_CONFIGURED
 #define VISION_LIMITS_CONFIGURED 0u
 #endif
@@ -128,7 +131,7 @@ typedef enum
 typedef enum
 {
     GIMBAL_ZERO_FORCE = 0, // 电流零输入
-    GIMBAL_FREE_MODE,      // 云台自由运动模式,即与底盘分离(底盘此时应为NO_FOLLOW)反馈值为电机total_angle;似乎可以改为全部用IMU数据?
+    GIMBAL_FREE_MODE,      // 保留的自由模式；当前 GimbalTask 与 GYRO 模式同样选择外部 IMU 反馈。
     GIMBAL_GYRO_MODE,      // 云台陀螺仪反馈模式,反馈值为陀螺仪pitch,total_yaw_angle,底盘可以为小陀螺和跟随模式
 } gimbal_mode_e;
 
@@ -174,10 +177,10 @@ typedef struct
 typedef struct
 {
     // 控制部分
-    float vx;           // 前进方向速度
-    float vy;           // 横移方向速度
-    float wz;           // 旋转速度
-    float offset_angle; // 底盘和归中位置的夹角
+    float vx;           // 前进速度，单位 mm/s。
+    float vy;           // 横移速度，单位 mm/s。
+    float wz;           // 底盘转动角速度，单位 deg/s。
+    float offset_angle; // 底盘和云台归中方向的夹角，单位 deg。
     chassis_mode_e chassis_mode;
     int chassis_speed_buff;
     // UI部分
@@ -188,11 +191,12 @@ typedef struct
 // cmd发布的云台控制数据,由gimbal订阅
 typedef struct
 { // 云台角度控制
+    // yaw、pitch 是云台目标角度，单位 deg；chassis_rotate_wz 为底盘角速度，单位 deg/s。
     float yaw;
     float pitch;
     float chassis_rotate_wz;
 
-    // 视觉前馈数据(弧度制已转为角度制),供 gimbal 前馈控制使用
+    // 视觉已换算后的角速度与角加速度，单位分别为 deg/s、deg/s²；是否使用由控制模块决定。
     float yaw_vel;
     float yaw_acc;
     float pitch_vel;
@@ -231,7 +235,7 @@ typedef struct
 
     uint8_t rest_heat;           // 剩余枪口热量
     Bullet_Speed_e bullet_speed; // 弹速限制
-    Enemy_Color_e enemy_color;   // 0 for blue, 1 for red
+    Enemy_Color_e enemy_color;   // COLOR_NONE、COLOR_BLUE、COLOR_RED，编号见 master_process.h。
 
 } Chassis_Upload_Data_s;
 
@@ -239,7 +243,7 @@ typedef struct
 typedef struct
 {
     attitude_t gimbal_imu_data;
-    uint16_t yaw_motor_single_round_angle;
+    uint16_t yaw_motor_single_round_angle; // yaw 电机单圈角度，单位 deg，整型保存不含小数。
 } Gimbal_Upload_Data_s;
 
 typedef struct
