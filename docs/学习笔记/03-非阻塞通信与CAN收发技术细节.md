@@ -233,6 +233,22 @@ I²C 配置地址填写未左移的0x0E，由底层登记函数左移。配置�
 
 ---
 
+### 6.2 接口说明里的完成、时间和地址（MC02-0123）
+
+[bsp_can.h](../../bsp/can/bsp_can.h) 的发送返回 1 只表示写入硬件队列，空间满则立即返回 0，
+旧的 `timeout` 参数已忽略。发送完成统计记录的是回调次数，一次通知可能包含多帧，不能直接等同于帧数。
+当前回环自测默认使用外部回环，会发出测试帧，旧注释中的“不驱动总线”不能沿用。
+
+UART、USB 都是中断复制数据、任务派发，超过 50 ms 的排队数据不再回调。
+`USARTGetCurrentRxData()` 和 `VCPGetCurrentRxData()` 只在模块回调期间提供本包地址，
+回调结束后不可继续保存使用；时间读取返回入队时刻，不能用派发时刻代替接收时刻。
+USB 的初始化入口只设置回调和接收地址，不证明设备已经完成枚举。
+
+[bsp_spi.h](../../bsp/spi/bsp_spi.h) 的同时收发入口会等总线空闲，并检查阻塞时 HAL 毫秒计时能否运行；
+旧的单向入口没有同样的检查，调用前要自行确认总线空闲。异步启动成功后，发送和接收数组仍须保留到完成。
+I²C 的寄存器地址宽度由标记选择 8 位或 16 位，阻塞等待参数是 100 ms；失败未通过接口返回，也不会自动清接收数组。
+GPIO、I²C、SPI 注册还有旧容量或分配检查缺失，头文件按当前实现写明使用前提，本轮不补硬件功能。
+
 ## 7. CAN 的错误状态机：TEC / REC / Error Passive / BusOff
 
 ### 7.1 两个计数器
@@ -361,9 +377,9 @@ python tools\rtt_dump.py --seconds 20
 |---|---|---|
 | `CANTransmit()` 改非阻塞 + 丢帧计数 | `bsp/can/bsp_can.c` | 去掉每个 tick 2~3ms 的自旋 |
 | TX FIFO 4 → 16 | `Core/Src/fdcan.c` | 突发时少丢帧 |
-| `TxFifoEmpty / TxBufferComplete` 回调 | `bsp/can/bsp_can.c` | 统计"真正发出去多少帧" |
+| `TxFifoEmpty / TxBufferComplete` 回调 | `bsp/can/bsp_can.c` | 统计队列空及发送完成的通知次数，不能直接换成帧数 |
 | 接收中断源精简为 `NEW_MESSAGE + MESSAGE_LOST` | `bsp/can/bsp_can.c` | 去掉重复进中断 |
 | `rx_lookup[bus][id & 0x1FF]` 查表派发 | `bsp/can/bsp_can.c` | ISR 里从 O(N) 变 O(1) |
 | ISR 排空 FIFO（不再提前 return） | `bsp/can/bsp_can.c` | 修掉"FIFO 明明有帧却不处理"的丢帧根因 |
-| `CANHealthMonitor()` 10Hz BusOff 恢复 | `bsp/can` + daemon 任务 | 总线不会永久死掉 |
+| `CANHealthMonitor()` 10Hz BusOff 恢复 | `bsp/can` + daemon 任务 | 定期尝试恢复并记录次数，仍需查询实际状态 |
 | `CANSetDLC()` 死循环改成钳位+计数 | `bsp/can/bsp_can.c` | 参数错误不再把系统卡死 |

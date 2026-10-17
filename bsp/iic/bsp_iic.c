@@ -1,3 +1,6 @@
+/** @file bsp_iic.c
+ * @brief 保存 I²C 设备地址及模式，转调 HAL 收发，接收完成时按句柄和地址寻找模块回调。
+ */
 #include "bsp_iic.h"
 #include "memory.h"
 #include "stdlib.h"
@@ -26,7 +29,7 @@ IICInstance *IICRegister(IIC_Init_Config_s *conf)
 }
 
 void IICSetMode(IICInstance *iic, IIC_Work_Mode_e mode)
-{ // HAL自带重入保护,不需要手动终止或等待传输完成
+{ // 这里只改配置，不会中止正在执行的传输；调用方应在空闲时切换。
     if (iic->work_mode != mode)
     {
         iic->work_mode = mode; // 如果不同才需要修改
@@ -105,6 +108,7 @@ void IICReceive(IICInstance *iic, uint8_t *data, uint16_t size, IIC_Seq_Mode_e s
 
 void IICAccessMem(IICInstance *iic, uint16_t mem_addr, uint8_t *data, uint16_t size, IIC_Mem_Mode_e mem_mode, uint8_t mem8bit_flag)
 {
+    // 根据标记选择寄存器地址宽度，随后按读、写分别调用阻塞接口。
     uint16_t bit_flag = mem8bit_flag ? I2C_MEMADD_SIZE_8BIT : I2C_MEMADD_SIZE_16BIT;
     if (mem_mode == IIC_WRITE_MEM)
     {
@@ -129,6 +133,7 @@ void IICAccessMem(IICInstance *iic, uint16_t mem_addr, uint8_t *data, uint16_t s
 void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef *hi2c)
 {
     // 如果是当前i2c硬件发出的complete,且dev_address和之前发起接收的地址相同,同时回到函数不为空, 则调用回调函数
+    // 按同一外设及本次设备地址寻找接收者；找到后只调用这一份模块回调。
     for (uint8_t i = 0; i < idx; i++)
     {
         if (iic_instance[i]->handle == hi2c && hi2c->Devaddress == iic_instance[i]->dev_address)

@@ -1,3 +1,8 @@
+/** @file bsp_iic.h
+ * @brief I²C 实例注册、普通收发及寄存器访问；先完成 HAL I²C、GPIO 和所需 DMA 配置。
+ * @note 旧注册表只有 IIC_DEVICE_CNT 项（当前 1 项），不能按 8 从机宏无限注册；
+ *       注册未检查空指针或内存失败。收发接口均不返回 HAL 状态，也不自动清接收数组。
+ */
 #include "i2c.h"
 #include "stdint.h"
 
@@ -53,54 +58,43 @@ typedef struct
     void *id;                        // 用于标识i2c instance
 } IIC_Init_Config_s;
 
-/**
- * @brief IIC初始化
- *
- * @param conf 初始化配置
- * @return IICInstance*
+/** @brief 保存配置并返回 I²C 实例，不配置底层外设。
+ * @param[in] conf 有效配置地址；7 位设备地址不要左移，内部会左移一位。
+ * @return 分配的对象；申请失败未检查，没有注销入口，调用方须遵守当前实例表容量。
  */
 IICInstance *IICRegister(IIC_Init_Config_s *conf);
 
-/**
- * @brief IIC设置工作模式
- *
- * @param iic 要设置的iic实例
- * @param mode 工作模式
+/** @brief 改写实例的工作模式，不等待上次传输结束。
+ * @param[in,out] iic 有效实例，不能为 NULL。
+ * @param[in] mode 阻塞、IT 或 DMA，须在总线空闲时切换。
  */
 void IICSetMode(IICInstance *iic, IIC_Work_Mode_e mode);
 
-/**
- * @brief IIC发送数据
- *
- * @param iic iic实例
- * @param data 待发送的数据首地址指针
- * @param size 发送长度
- * @param mode 序列传输模式
- * @note 注意,如果发送结构体,那么该结构体在声明时务必使用#pragma pack(1)进行对齐,并在声明结束后使用#pragma pack()恢复对齐
- *
+/** @brief 按当前模式发送原始字节，不检查返回状态。
+ * @param[in] iic 有效实例，不能为 NULL。
+ * @param[in] data 至少可读 size 字节；异步发送完成前不可改写或释放。
+ * @param[in] size 字节数。
+ * @param[in] mode RELEASE 为最后一段，HOLDON 保持连续传输，仅 IT、DMA 支持。
+ * @note 阻塞模式的 HAL 等待参数为 100 ms；非法模式会停在循环中。
  */
 void IICTransmit(IICInstance *iic, uint8_t *data, uint16_t size, IIC_Seq_Mode_e mode);
 
-/**
- * @brief IIC接收数据
- *
- * @param iic iic实例
- * @param data 接收数据的首地址指针
- * @param size 接收长度
- * @param mode 序列传输模式
- * @note 注意,如果直接将接收数据memcpy到目标结构体或通过强制类型转换进行逐字节写入,
- *       那么该结构体在声明时务必使用#pragma pack(1)进行对齐,并在声明结束后使用#pragma pack()恢复对齐
+/** @brief 按当前模式接收数据，失败不会自动清输出，也不报告状态。
+ * @param[in,out] iic 有效实例，不能为 NULL；接收地址保存到实例中供回调使用。
+ * @param[out] data 至少可写 size 字节，异步完成前须保持有效，不可提前读取结果。
+ * @param[in] size 字节数；实例 rx_len 只有 8 位，依赖此字段的回调须将长度限制在 255 内。
+ * @param[in] mode RELEASE 为最后一段，HOLDON 保持连续传输，仅 IT、DMA 支持。
+ * @note 阻塞模式等待参数为 100 ms，不调用异步完成回调；非法模式持续等待。
  */
 void IICReceive(IICInstance *iic, uint8_t *data, uint16_t size, IIC_Seq_Mode_e mode);
 
-/**
- * @brief IIC读取从机寄存器(内存),只支持阻塞模式,超时默认为1ms
- *
- * @param iic iic实例
- * @param mem_addr 要读取的从机内存地址,目前只支持8位地址
- * @param data 要读取或写入的数据首地址指针
- * @param size 要读取或写入的数据长度
- * @param mode 写入或读取模式: IIC_READ_MEM or IIC_WRITE_MEM
- * @param mem8bit_flag 从机内存地址是否为8位
+/** @brief 阻塞读写寄存器，不受实例异步工作模式影响，HAL 等待参数为 100 ms。
+ * @param[in] iic 有效实例，不能为 NULL。
+ * @param[in] mem_addr 从机寄存器地址，宽度由 mem8bit_flag 选择。
+ * @param[in,out] data 至少有 size 字节可读或可写空间，取决于 mode，不检查 NULL。
+ * @param[in] size 字节数。
+ * @param[in] mode IIC_READ_MEM 读，IIC_WRITE_MEM 写，其他值持续等待。
+ * @param[in] mem8bit_flag 非 0 使用 8 位地址，0 使用 16 位地址。
+ * @note 不返回 HAL 状态；读失败时不能假定全部字节已更新，函数也不清零数组。
  */
 void IICAccessMem(IICInstance *iic, uint16_t mem_addr, uint8_t *data, uint16_t size, IIC_Mem_Mode_e mode, uint8_t mem8bit_flag);

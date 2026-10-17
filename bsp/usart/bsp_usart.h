@@ -1,3 +1,7 @@
+/** @file bsp_usart.h
+ * @brief UART 注册与发送；接收中断复制数据入队，MotorControlTask 统一派发和恢复错误。
+ * @note 先配置 UART、接收 DMA 及对应中断；每个硬件句柄只注册一次。
+ */
 #ifndef BSP_RC_H
 #define BSP_RC_H
 
@@ -28,7 +32,7 @@ typedef struct
     uint16_t last_recv_size;               // 最近一次回调收到的实际字节数(HAL RxEvent 的 Size)
     UART_HandleTypeDef *usart_handle;      // 实例对应的usart_handle
     usart_module_callback module_callback; // 解析收到的数据的回调函数
-    const uint8_t *current_rx_data; /* Queue snapshot; callback lifetime only. */
+    const uint8_t *current_rx_data; // 本次派发的数据，只在模块回调期间可读，不可保存地址到下一轮。
     uint32_t current_rx_timestamp_ms;
 } USARTInstance;
 
@@ -40,38 +44,31 @@ typedef struct
     usart_module_callback module_callback; // 解析收到的数据的回调函数
 } USART_Init_Config_s;
 
-/**
- * @brief 注册一个串口实例,返回一个串口实例指针
- *
- * @param init_config 传入串口初始化结构体
+/** @brief 注册 UART、分配接收队列并启动 DMA 接收。
+ * @param[in] init_config 有效句柄、非空模块回调及 1～255 字节接收容量，配置会复制。
+ * @return 成功返回长期有效对象；参数、重复注册、容量或启动失败时返回 NULL。
  */
 USARTInstance *USARTRegister(USART_Init_Config_s *init_config);
 
-/**
- * @brief 启动串口服务,需要传入一个usart实例.一般用于lost callback的情况(使用串口的模块daemon)
- *
- * @param _instance
+/** @brief 启动接收到空闲的 DMA 服务，并关闭半传输通知。
+ * @param[in] _instance 已准备 UART 与接收 DMA 的实例；NULL 或信息不完整时失败。
+ * @return 1 为启动成功，0 为参数不符或 HAL 拒绝；不会替调用方中止旧接收。
  */
 uint8_t USARTServiceInit(USARTInstance *_instance);
 
 
-/**
- * @brief 通过调用该函数可以发送一帧数据,需要传入一个usart实例,发送buff以及这一帧的长度
- * @note 在短时间内连续调用此接口,若采用IT/DMA会导致上一次的发送未完成而新的发送取消.
- * @note 若希望连续使用DMA/IT进行发送,请配合USARTIsReady()使用,或自行为你的module实现一个发送队列和任务.
- * @todo 是否考虑为USARTInstance增加发送队列以进行连续发送?
- * 
- * @param _instance 串口实例
- * @param send_buf 待发送数据的buffer
- * @param send_size how many bytes to send
+/** @brief 按指定模式尝试发送，不返回 HAL 状态，也不提供发送队列。
+ * @param[in] _instance 有效实例，不能为 NULL。
+ * @param[in] send_buf 至少可读 send_size 字节；IT、DMA 完成前保持不变。
+ * @param[in] send_size 字节数。
+ * @param[in] mode BLOCKING、IT 或 DMA；NONE 或未知值持续等待。
+ * @note 阻塞等待参数为 100 ms；异步发送前检查 USARTIsReady()，忙时 HAL 可能拒绝新发送。
  */
 void USARTSend(USARTInstance *_instance, uint8_t *send_buf, uint16_t send_size,USART_TRANSFER_MODE mode);
 
-/**
- * @brief 判断串口是否准备好,用于连续或异步的IT/DMA发送
- *
- * @param _instance 要判断的串口实例
- * @return uint8_t ready 1, busy 0
+/** @brief 检查 HAL 的发送状态是否为 READY。
+ * @param[in] _instance 有效实例，不能为 NULL。
+ * @return 1 为发送句柄空闲，0 为其他状态；不表示对端已接收上次数据。
  */
 uint8_t USARTIsReady(USARTInstance *_instance);
 
@@ -83,8 +80,15 @@ uint8_t USARTIsReady(USARTInstance *_instance);
  */
 void USARTProcessRx(void);
 
-/* NULL outside callback. Read last_recv_size before accessing this immutable frame. */
+/** @brief 取得本次派发帧地址，仅在模块接收回调中使用。
+ * @param[in] instance 对应实例，NULL 时返回 NULL。
+ * @return 可读 last_recv_size 字节的地址，回调外为 NULL；不可改写或长期保存。
+ */
 const uint8_t *USARTGetCurrentRxData(const USARTInstance *instance);
+/** @brief 读取当前派发帧入队时的 HAL 毫秒值。
+ * @param[in] instance 对应实例。
+ * @return 回调中的原接收时间，NULL 或回调外为 0，派发本身不刷新时间。
+ */
 uint32_t USARTGetCurrentRxTimestamp(const USARTInstance *instance);
 
 #endif

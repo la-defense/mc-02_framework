@@ -1,3 +1,6 @@
+/** @file bsp_pwm.c
+ * @brief 按定时器和通道保存 PWM 实例，设置输出并将 DMA 完成通知转给对应模块。
+ */
 #include "bsp_pwm.h"
 #include "stdlib.h"
 #include "memory.h"
@@ -58,7 +61,9 @@ PWMInstance *PWMRegister(PWM_Init_Config_s *config)
         return NULL;
     }
     PWMSetPeriod(pwm, pwm->period);
+    // 先写零比较值再启动，避免沿用定时器旧值产生输出；配置的占空比仍保存在对象中。
     PWMSetDutyRatio(pwm, 0.0f);
+    // 启动失败就停止并释放，不将失败对象加入回调表。
     if (HAL_TIM_PWM_Start(pwm->htim, pwm->channel) != HAL_OK)
     {
         (void)HAL_TIM_PWM_Stop(pwm->htim, pwm->channel);
@@ -80,6 +85,7 @@ uint8_t PWMUnregister(PWMInstance *pwm)
             continue;
         PWMSetDutyRatio(pwm, 0.0f);
         (void)HAL_TIM_PWM_Stop(pwm->htim, pwm->channel);
+        // 移动后续项目，保持有效实例连续，回调遍历不会读到已释放项。
         for (uint8_t j = (uint8_t)(i + 1u); j < idx; ++j)
             pwm_instance[j - 1u] = pwm_instance[j];
         pwm_instance[--idx] = NULL;

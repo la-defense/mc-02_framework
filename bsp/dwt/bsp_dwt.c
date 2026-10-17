@@ -5,7 +5,7 @@
  * @author modified by Neo with annotation
  * @version V1.1.0
  * @date    2022/3/8
- * @brief
+ * @brief 读取 CPU 周期差并累计时间，提供任务和中断可用的短时间测量。
  */
 
 #include "bsp_dwt.h"
@@ -16,28 +16,14 @@ static uint32_t CPU_FREQ_Hz, CPU_FREQ_Hz_ms, CPU_FREQ_Hz_us;
 static float CPU_FREQ_Hz_inv;    /* 1/CPU_FREQ_Hz   : 时间轴用, 省掉每次除法 */
 static float CPU_FREQ_Hz_ms_inv; /* 1000/CPU_FREQ_Hz */
 
-/* ---- 时间轴: 增量累加(2026-09 重写) ----
-   原实现是 "CYCCNT_RountCount * UINT32_MAX + cnt_now", 三个问题:
-     1) 模数应该写 2^32, 写 UINT32_MAX 会让每次回绕少算 1 个计数;
-     2) 每次调用都要做 64bit 除法(在 1kHz 热路径上很贵);
-     3) 最要命的是 -O2 下编译器按寄存器变量/别名规则把
-        "读 CYCCNT → 比较 → 累加 → 写回" 这段序列重排掉, 实测时间轴返回值
-        根本不前进 → EKF 的 dt 恒为 0、标定的 12s 超时永不触发(启动卡死)。
-   现在改成: 每次只读一次 CYCCNT, 用 32bit 无符号减法得到"距上次的周期数"
-   (回绕天然正确: (a-b) 在模 2^32 下永远等于真实增量), 再累加进 64bit 总数。
-   热路径只有一次减法 + 一次 64bit 加法, 没有除法、没有浮点。 */
+// 每次取当前周期数与上次读数之差，再加到 64 位总量；两次读取须间隔小于一次计数周期。
 static volatile uint64_t s_cycles_total = 0; /* 上电以来的 CPU 周期总数 */
 static volatile uint32_t s_cycles_last = 0;  /* 上次采样到的 CYCCNT */
 
 /* 热路径探针的除数(见 bsp_dwt.h)。给初值, 防止 DWT_Init 之前被调用时除 0 */
 volatile uint32_t dwt_cpu_freq_mhz = 480u;
 
-/**
- * @brief 把"从上一次调用到现在的周期数"累加进 64bit 总计数
- * @note  读-改-写必须原子。若两个任务/中断交错执行, 会出现
- *        "同一段增量被加两次" 或 "s_cycles_last 倒退导致时间跳变",
- *        所以用临界区包住(PRIMASK 保护, 同时挡住任务切换和中断)。
- */
+// 暂时关闭普通中断完成读、加、写，避免不同调用把同一段周期重复累加，随后恢复原状态。
 static void DWT_CyclesUpdate(void)
 {
     uint32_t primask = __get_PRIMASK();
@@ -131,6 +117,7 @@ void DWT_Delay(float Delay)
     uint32_t tickstart = DWT->CYCCNT;
     float wait = Delay;
 
+    // 只轮询 CPU 周期数，不依赖 HAL 毫秒中断，也不让出当前任务。
     while ((DWT->CYCCNT - tickstart) < wait * (float)CPU_FREQ_Hz)
         ;
 }

@@ -1,3 +1,6 @@
+/** @file bsp_gpio.c
+ * @brief GPIO 操作入口和实例表；EXTI 中断按引脚号找到第一份匹配对象，再调用模块回调。
+ */
 #include "bsp_gpio.h"
 #include "memory.h"
 #include "stdlib.h"
@@ -16,6 +19,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
     // 如有必要,可以根据pinstate和HAL_GPIO_ReadPin来判断是上升沿还是下降沿/rise&fall等
     GPIOInstance *gpio;
+    // 一个 EXTI 编号同一时刻只映射到一个端口；找到匹配且有回调的实例后停止查找。
     for (size_t i = 0; i < idx; i++)
     {
         gpio = gpio_instance[i];

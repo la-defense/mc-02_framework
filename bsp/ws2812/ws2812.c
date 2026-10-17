@@ -1,3 +1,6 @@
+/** @file ws2812.c
+ * @brief 将三色各八位编成 24 个 SPI 字节，再发送低电平字节让彩灯接收新颜色。
+ */
 #include "ws2812.h"
 #include "stm32h7xx_hal.h"
 
@@ -76,6 +79,7 @@ void WS2812_SetRGB(uint8_t r, uint8_t g, uint8_t b)
 
     uint8_t txbuf[24];
     uint8_t res = 0;
+    // 数组先排绿、红、蓝，每组倒序填入，让每种颜色的最高位最先发送。
     for (int i = 0; i < 8; i++)
     {
         txbuf[7 - i]  = (((g >> i) & 0x01) ? WS2812_HighLevel : WS2812_LowLevel) >> 1;
@@ -83,10 +87,12 @@ void WS2812_SetRGB(uint8_t r, uint8_t g, uint8_t b)
         txbuf[23 - i] = (((b >> i) & 0x01) ? WS2812_HighLevel : WS2812_LowLevel) >> 1;
     }
     HAL_SPI_Transmit(&hspi6, &res, 0, 0xFFFF);
+    // 等待 SPI 句柄空闲后再发颜色；此循环本身没有超时判断。
     while (hspi6.State != HAL_SPI_STATE_READY)
         ;
     HAL_SPI_Transmit(&hspi6, txbuf, 24, 0xFFFF);
     /* 复位码: 持续低电平 (>50us) */
+    // 连续发送零字节，让数据线保持低电平，作为颜色传输的结束间隔。
     for (int i = 0; i < 100; i++)
     {
         HAL_SPI_Transmit(&hspi6, &res, 1, 0xFFFF);

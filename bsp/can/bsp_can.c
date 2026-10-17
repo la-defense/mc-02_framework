@@ -1,3 +1,6 @@
+/** @file bsp_can.c
+ * @brief 按实例注册收发 ID；中断查找接收者并复制入队，任务逐帧解析和检查总线状态。
+ */
 #include "bsp_can.h"
 #include "message_freshness.h"
 #include "main.h"
@@ -7,9 +10,7 @@
 #include "bsp_log.h"
 #include "cmsis_os.h"
 
-/* can instance ptrs storage, used for recv callback */
-// 在CAN产生接收中断会遍历数组,选出hcan和rxid与发生中断的实例相同的那个,调用其回调函数
-// @todo: 后续为每个CAN总线单独添加一个can_instance指针数组,提高回调查找的性能
+// 注册表用于 ID 查找、过滤规则重装及注销；中断不直接运行模块解析。
 static CANInstance *can_instance[CAN_MX_REGISTER_CNT] = {NULL};
 static uint8_t idx;
 static uint8_t can_service_started;
@@ -24,16 +25,8 @@ static uint8_t can2_filter_idx = 14u;
      512×4B×3 总线 = 6KB RAM(用完整 11 位做直表要 24KB, 太贵)。 */
 #define CAN_RX_LOOKUP_SIZE 0x200u
 
-/* ---------------- 接收队列(BSPCAN-02, 2026-09-23) ----------------
-   背景: 原来 CAN 接收中断里直接调用模块回调做解析(DJI 电机的低通滤波 + 多圈累加),
-         而控制任务同时在读同一份 measure —— 属于"中断写 / 任务读"的典型数据竞争。
-   现在: 中断只做"查表找到归属实例 → 把 {实例,长度,8字节} 压进本总线的环形队列",
-         解析延后到任务上下文由 CANProcessRx() 逐帧派发。
-   为什么不是"只把最新一帧丢给任务": 滤波和多圈累加都有跨帧状态(last_ecd/speed_aps/
-         total_round), 必须逐帧按到达顺序处理, 否则多圈角度会算错。队列保证了顺序。
-   并发模型: 单生产者(本总线的 FDCAN RX 中断, 每条总线各自一个队列所以不会互相嵌套)
-            单消费者(CANProcessRx, 固定由 MotorControlTask 调用)。
-   队列满: 丢弃"新帧"并累加 rxq_drop(队列满本身已是异常, 不做覆盖最旧的复杂语义)。 */
+// 每路总线独立排队：中断复制帧，MotorControlTask 在控制计算前按顺序派发。
+// 电机滤波和多圈角度需要连续帧，队列满时丢新帧并计数，不覆盖任务正在读取的旧项。
 #define CAN_RXQ_DEPTH 32u /* 每条总线 32 帧 ≈ 32ms 缓冲 @1k 帧/s */
 
 typedef struct
@@ -109,6 +102,7 @@ volatile DWT_Probe_t can_prof_rx_dispatch = {0}; /* 任务侧逐帧派发耗时(
 volatile uint32_t can_rxq_drop_total = 0;        /* 三条总线接收队列满丢帧合计 */
 volatile uint16_t can_rxq_peak_max = 0;          /* 三条总线里队列占用的历史峰值 */
 
+// 将已知 HAL 句柄对应到本地总线记录；未找到返回 NULL。
 static CANBusState_t *CANBusFromHandle(FDCAN_HandleTypeDef *_handle)
 {
     for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
@@ -119,6 +113,7 @@ static CANBusState_t *CANBusFromHandle(FDCAN_HandleTypeDef *_handle)
     return NULL;
 }
 
+// 查询三条总线的数组编号，未知句柄返回 0xff。
 static uint8_t CANBusIndexFromHandle(FDCAN_HandleTypeDef *_handle)
 {
     for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
@@ -165,19 +160,10 @@ static void CANRxQueuePush(CANBusState_t *bus, CANInstance *ins, uint8_t len, co
         bus->rxq_peak = used;
 }
 
-/**
- * @brief 派发所有已入队的 CAN 接收帧(逐帧、按到达顺序调用模块回调)
- * @note  全工程只允许一个调用者(MotorControlTask), 否则 tail 会被多任务竞争。
- *        必须在"算控制"之前调用, 这样本周期到达的帧全部解析完再算 ——
- *        拿到的仍是最新反馈, 端到端延迟与"中断里直接解析"相同。
- */
+// 公开调用条件见头文件；只派发接收后不超过 50 ms 的帧，按总线分别保持到达顺序。
 void CANProcessRx(void)
 {
-    /* 双消费者保护: 正常工作流里只有 MotorControlTask 调用, 但启动期的自测
-       (CANRunLoopbackSelfTest / CANRunDjiFeedbackInjectTest, 跑在 daemon 任务里)
-       也会调用, 那时 motor 任务可能已经在跑 —— 两个任务同时推进 tail 会让同一个
-       槽位被消费两次/漏消费。用原子的 test-and-set 挡住: 被挡掉的一方本轮直接返回,
-       队列里的帧不会丢, 另一个消费者会处理掉。 */
+    // 检查并设置 processing 时暂时关普通中断；已有派发执行时直接返回，由另一调用处理队列。
     static volatile uint8_t processing = 0;
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
@@ -307,6 +293,7 @@ static uint8_t CANAddFilter(CANInstance *_instance)
     return 1u;
 }
 
+// 配置接收与中断并启动一条总线；任一步失败就报告 0，必要时停回去。
 static uint8_t CANBusConfigure(FDCAN_HandleTypeDef *h)
 {
     if (h == NULL ||
@@ -330,6 +317,7 @@ static uint8_t CANBusConfigure(FDCAN_HandleTypeDef *h)
     return 1u;
 }
 
+// 启动某条总线失败时统一停止已启动部分，重置过滤规则编号。
 static void CANServiceStop(void)
 {
 #ifdef FDCAN
@@ -345,6 +333,7 @@ static void CANServiceStop(void)
     can_service_started = 0u;
 }
 
+// 依次启动各总线，一条失败便停止本轮全部服务，不留下部分启动状态。
 static uint8_t CANServiceInit(void)
 {
 #ifdef FDCAN
@@ -372,22 +361,13 @@ static uint8_t CANServiceInit(void)
 
 /* ----------------------- two extern callable function -----------------------*/
 
-/* ---------------- FDCAN 内部回环自测 ----------------
-   流程(逐条总线):
-     1. Stop -> 把 Init.Mode 改成 INTERNAL_LOOPBACK -> Init -> 配全局滤镜/启动/开中断
-     2. 注册一个"测试实例"(会占用一个真实滤镜 + 进 rx_lookup)
-     3. 发 N 帧, 每帧等接收回调确认(校验 ID/DLC/数据)
-     4. 注销测试实例 -> 恢复 NORMAL 模式 -> Init -> 重新配置 -> 重装已注册实例的滤镜
-   注意: 重新 Init 会清空消息 RAM 里的滤镜, 所以第 4 步的"重装"必不可少。 */
+// 逐条总线执行：切换 CAN_SELFTEST_MODE、注册测试接收者、发送并派发确认、注销、恢复普通模式。
+// 重新初始化会清过滤规则，恢复后必须按业务注册表重装。
 #define CAN_SELFTEST_FRAMES 8u
 /* 自测 ID: 发送 ID 必须等于接收 ID, 否则测的帧会被自己的滤镜挡掉(踩过这个坑) */
 #define CAN_SELFTEST_ID 0x123u
 #define CAN_SELFTEST_WAIT_MS 20u
-/* 自测用哪种回环:
-   - INTERNAL_LOOPBACK: 不驱动总线, 但实测(STM32H7 FDCAN)没有内部自应答 ->
-     发送的帧被判 ACK 错误丢弃, 接收端收不到, 只能验证"能发出去";
-   - EXTERNAL_LOOPBACK: 帧真的发到总线上并且**由自己应答**, 能完整验证
-     发送 + 接收 + 中断 + 滤镜 + 回调; 测试 ID 用 0x123(不是电机指令)所以安全。 */
+// 默认外部回环会发到总线并自行确认接收；此功能专用于测试，平时保持关闭。
 #ifndef CAN_SELFTEST_MODE
 #define CAN_SELFTEST_MODE FDCAN_MODE_EXTERNAL_LOOPBACK
 #endif
@@ -400,7 +380,7 @@ volatile uint8_t can_selftest_pass_mask = 0;
 volatile uint8_t can_selftest_done = 0;
 volatile uint8_t can_selftest_stage = 0;   /* 调试用: 卡住时能看出走到哪一步 */
 volatile uint32_t can_selftest_state_err = 0; /* 自测里模式切换/启动未生效的次数 */
-/* 自测后的寄存器快照(排障用): TEST/PSR/ECR/RXF0S/RXGFC/RXF0C */
+// 自测后保存的寄存器读数，用于检查模式、错误与接收配置。
 volatile uint32_t can_selftest_test = 0;
 volatile uint32_t can_selftest_psr = 0;
 volatile uint32_t can_selftest_ecr = 0;
@@ -441,7 +421,7 @@ static volatile uint8_t selftest_rx_seen = 0;
 static uint8_t selftest_expect[8];
 static uint8_t selftest_expect_len = 8;
 
-/* 测试实例的接收回调: 只做校验与计数(在中断上下文执行) */
+// 测试实例也由 CANProcessRx() 在任务中派发；检查本次数据并更新计数。
 static void CANSelfTestRxCallback(CANInstance *ins)
 {
     if (ins->rx_len == selftest_expect_len &&
@@ -561,7 +541,7 @@ uint8_t CANRunLoopbackSelfTest(void)
             if (!selftest_rx_seen)
                 bus_ok = 0;
 
-            /* 排障快照: 回环模式位 / 协议状态 / 错误计数 / RX FIFO 填充 / 滤镜配置 */
+            // 保存第一条总线的模式及错误寄存器，供测试结束后读取。
             if (bus == 0u)
             {
                 can_selftest_test = h->Instance->TEST;
@@ -649,6 +629,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     instance->can_module_callback = config->can_module_callback;
     instance->id = config->id;
 
+    // 第一次注册才启动服务；随后添加过滤规则失败时，清理本次分配和本次启动。
     uint8_t started_here = (uint8_t)!can_service_started;
     if (started_here && !CANServiceInit())
     {
@@ -681,9 +662,7 @@ uint8_t CANTransmit(CANInstance *_instance, float timeout)
 #ifdef FDCAN
     if (HAL_FDCAN_GetTxFifoFreeLevel(_instance->can_handle) == 0u)
     {
-        /* 硬件 FIFO 满: 直接丢帧, 绝不等待。
-           丢一帧的代价是"这个电机再执行 1ms 上一帧指令"(可忽略);
-           等待的代价是整个 motor 任务超预算、所有电机一起延迟。 */
+        // 发送空间满就立即返回，避免等待拖延整轮控制；模块自行决定下一轮是否再次发送。
         if (bus != NULL)
         {
             bus->tx.tx_drop++;
@@ -863,8 +842,7 @@ void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status)
 
 void CANSetDLC(CANInstance *_instance, uint8_t length)
 {
-    /* 原来的实现在参数错误时会 while(1) 死循环(整机卡死)。
-       这里改成: 钳位到合法范围 + 计数 + 限速告警, 系统继续运行 */
+    // 长度 0 改成 1，超过 8 改成 8；记录错误并继续，不把整个控制任务留在等待中。
     static uint32_t dlc_err_cnt = 0;
     static uint32_t dlc_log_ms = 0;
 
@@ -894,13 +872,7 @@ void CANSetDLC(CANInstance *_instance, uint8_t length)
 
 //对于FDCAN，回调函数和处理方式完全不同，因此直接用两套逻辑处理
 #ifdef FDCAN
-/**
- * @brief 此函数会被下面两个函数调用,用于处理FIFO0和FIFO1溢出中断(说明收到了新的数据)
- *        所有的实例都会被遍历,找到can_handle和rx_id相等的实例时,调用该实例的回调函数
- *
- * @param _fdhcan
- * @param fifox passed to HAL_CAN_GetRxMessage() to get mesg from a specific fifo
- */
+// 两个 FDCAN FIFO 共用的中断处理：取完所有帧，查出对应实例后只入队，不调用模块解析。
 static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
 {
     static FDCAN_RxHeaderTypeDef rxconf; // 同上
@@ -1004,13 +976,7 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs)
 #else
 
 
-/**
-* @brief 此函数会被下面两个函数调用,用于处理FIFO0和FIFO1溢出中断(说明收到了新的数据)
-*        所有的实例都会被遍历,找到can_handle和rx_id相等的实例时,调用该实例的回调函数
-*
-* @param _hcan
-* @param fifox passed to HAL_CAN_GetRxMessage() to get mesg from a specific fifo
-*/
+// 保留的 BXCAN 路径：收到消息后逐项匹配，在中断里直接调用模块回调；与当前 FDCAN 队列路径不同。
 static void CANFIFOxCallback(CAN_HandleTypeDef *_hcan, uint32_t fifox)
 {
    static CAN_RxHeaderTypeDef rxconf; // 同上
@@ -1034,28 +1000,20 @@ static void CANFIFOxCallback(CAN_HandleTypeDef *_hcan, uint32_t fifox)
    }
 }
 
-/**
-* @brief 注意,STM32的两个CAN设备共享两个FIFO
-* 下面两个函数是HAL库中的回调函数,他们被HAL声明为__weak,这里对他们进行重载(重写)
-* 当FIFO0或FIFO1溢出时会调用这两个函数
-*/
+// 下面两个 BXCAN 回调在对应 FIFO 有待取消息时调用，不必等到 FIFO 满。
 // 下面的函数会调用CANFIFOxCallback()来进一步处理来自特定CAN设备的消息
 
-/**
-* @brief rx fifo callback. Once FIFO_0 is full,this func would be called
-*
-* @param hcan CAN handle indicate which device the oddest mesg in FIFO_0 comes from
-*/
+/** @brief BXCAN FIFO0 有待取消息时进入，继续交给共用处理函数。
+ * @param[in] hcan 来源 CAN 句柄。
+ */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
    CANFIFOxCallback(hcan, CAN_RX_FIFO0); // 调用我们自己写的函数来处理消息
 }
 
-/**
-* @brief rx fifo callback. Once FIFO_1 is full,this func would be called
-*
-* @param hcan CAN handle indicate which device the oddest mesg in FIFO_1 comes from
-*/
+/** @brief BXCAN FIFO1 有待取消息时进入，继续交给共用处理函数。
+ * @param[in] hcan 来源 CAN 句柄。
+ */
 void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
    CANFIFOxCallback(hcan, CAN_RX_FIFO1); // 调用我们自己写的函数来处理消息

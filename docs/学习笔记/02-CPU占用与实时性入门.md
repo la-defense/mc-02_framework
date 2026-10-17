@@ -144,8 +144,16 @@ DJI 电机的反馈是**电机自己按 1kHz 发的**，我们改不了：
 
 | 数据 | 位置 |
 |---|---|
-| 各任务占用率快照 | `lcd_stats_total / lcd_stats_runtime[] / lcd_stats_name[] / lcd_stats_prio[]` |
+| 各任务最近一次占用率记录 | `lcd_stats_total / lcd_stats_runtime[] / lcd_stats_name[] / lcd_stats_prio[]` |
 | RTT 汇总行 | 每 5s 一条 `[cpu] ...`（LCD 任务输出） |
 | LCD 分段耗时 | `lcd_prof_update/draw/init/recover/busy_us`、`lcd_spi_bytes`、`lcd_prof_rows/spi_us` |
 | CAN 统计 | `can_tx_*/can_rx_*/busoff_*`（本次改造新增） |
 | 读法 | IDE 的 Live Watch 挂变量；或我用 OpenOCD `mdw` 读；RTT 文本我方可用 OpenOCD 直接抓 |
+
+## 11. 周期数与微秒的接口条件（MC02-0123）
+
+[bsp_dwt.h](../../bsp/dwt/bsp_dwt.h) 的 ProbeStart 返回 CPU 周期数，ElapsedUs 才将周期差除以 MHz 频率得到微秒。
+`DWT_Init(480)` 表示 480 MHz；计数超过 32 位最大值会回到 0，约每 8.94 秒一次。
+无符号相减能处理跨过一次零点的短间隔，若两次读取相隔多个计数周期，单凭差值无法还原真实耗时。
+累计时间也要在一个周期内至少更新一次，三个 Timeline 入口各自调用内部累计函数，并非调用 `DWT_SysTimeUpdate()`。
+`DWT_GetDeltaT()` 会把传入的旧周期数改成当前读数，调用方要长期保留这份变量。

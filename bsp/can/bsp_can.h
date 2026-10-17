@@ -1,3 +1,7 @@
+/** @file bsp_can.h
+ * @brief H723 经典 CAN 实例注册、发送、接收派发和总线状态查询。
+ * 接收中断只入队，模块解析由任务调用 CANProcessRx() 完成；每帧最多 8 字节。
+ */
 #ifndef BSP_CAN_H
 #define BSP_CAN_H
 
@@ -26,12 +30,8 @@
 
 #endif
 
-/* ---------------- FDCAN 内部回环自测(2026-09) ----------------
-   置 1 则启动时自动跑一次自测: 把每条总线临时切到"内部回环"模式, 自己发自己收,
-   验证 "软件发送 -> 硬件 -> 接收中断 -> 滤镜匹配 -> 回调解析" 整条链路。
-   特点: 不驱动总线, 所以总线上挂着其他设备也安全; 无需外部 ACK, 不会累积错误计数。
-   测完会自动恢复 NORMAL 模式并把已注册实例的滤镜重新加回去。
-   结果见下面的 can_selftest_* 变量, 也可以用 Live Watch / OpenOCD 读。 */
+// 默认关闭回环自测。实际模式由 bsp_can.c 的 CAN_SELFTEST_MODE 决定，默认外部回环，
+// 会短暂切换总线并发出测试帧；不能把它当作不影响外部设备的普通状态查询。
 #ifndef CAN_SELFTEST_LOOPBACK
 #define CAN_SELFTEST_LOOPBACK 0   /* 置 1 = 启动后在 daemon 任务里跑一次 FDCAN 回环自测 */
 #endif
@@ -60,15 +60,8 @@ static const uint32_t DLC_LookUp_Table[9] = {
 
 
 /* can instance typedef, every module registered to CAN should have this variable */
-/* !! 这里绝对不能再加 #pragma pack(1) !!
-   -O2 下 HAL 的 FDCAN_CopyMessageToRAM() 会把 4 次字节读合并成一次 32 位读
-   ("pTxData[3]<<24 | pTxData[2]<<16 | pTxData[1]<<8 | pTxData[0]" 等价于一条 ldr),
-   而 pack(1) 会把 CANInstance 压成 1 字节对齐: dji_motor.c 里的
-   static CANInstance sender_assignment[9] 每个元素 77 字节, 于是
-   sender_assignment[1]/[2]/... 的地址落在非 4 字节边界, tx_buff 也是 →
-   一次 32 位读直接 UsageFault(UNALIGNED) → HardFault。
-   实测: -Og 逐字节拷贝不炸, -O2 一上电就 HardFault(复位循环)。
-   自然对齐后 sizeof 从 77 → 80, 多出的 3 字节填充完全可以接受。 */
+// 保持结构体及数组元素按自然边界存放，HAL 会把其中数据当作 32 位读取；
+// 不要在外层套用 pack(1)，否则某些数组元素地址可能无法按 32 位访问。
 typedef struct _
 {
 #ifdef FDCAN
@@ -84,14 +77,13 @@ typedef struct _
     uint8_t rx_buff[8];            // 接收缓存,最大消息长度为8
     uint32_t rx_id;                // 接收id
     uint8_t rx_len;                // 接收长度,可能为0-8
-    uint32_t rx_timestamp_ms;
+    uint32_t rx_timestamp_ms; // 当前派发帧真正入队的 HAL 毫秒时间。
     // 接收的回调函数,用于解析接收到的数据
     void (*can_module_callback)(struct _ *); // callback needs an instance to tell among registered ones
     void *id;                                // 使用can外设的模块指针(即id指向的模块拥有此can实例,是父子关系)
 } CANInstance;
 
-/* 编译期兜底: HAL 会把 tx_buff / &txconf 当 32 位数据访问, 必须 4 字节对齐。
-   谁将来再加回 pack(1), 这里会直接编译不过。 */
+// 编译时检查实例大小和两个字段是否为 4 字节的倍数，避免 HAL 的 32 位访问出错。
 _Static_assert((sizeof(CANInstance) % 4u) == 0u, "CANInstance 大小必须是 4 的倍数");
 _Static_assert((__builtin_offsetof(CANInstance, txconf) % 4u) == 0u, "txconf 必须 4 字节对齐");
 _Static_assert((__builtin_offsetof(CANInstance, tx_buff) % 4u) == 0u, "tx_buff 必须 4 字节对齐");
@@ -129,9 +121,9 @@ typedef struct
 typedef struct
 {
     uint32_t tx_ok;               /* 成功写入硬件 TX FIFO 的帧数 */
-    uint32_t tx_drop;             /* FIFO 满被丢弃的帧数(下一周期自然重发) */
+    uint32_t tx_drop;             /* 发送空间满而被丢弃的帧数，是否再次发送由调用方决定。 */
     uint32_t tx_error;            /* HAL 返回错误的次数 */
-    uint32_t tx_done;             /* 发送完成中断统计到的帧数 */
+    uint32_t tx_done;             /* 发送完成回调次数，一次通知可能包含多帧。 */
     uint32_t tx_fifo_empty_events;/* TX FIFO 变空事件次数 */
 } CAN_TxStats_t;
 
@@ -139,7 +131,7 @@ typedef struct
 typedef struct
 {
     uint32_t busoff;              /* 检测到 BusOff 的次数 */
-    uint32_t busoff_recover;      /* 执行恢复(Stop+Start)的次数 */
+    uint32_t busoff_recover;      /* 尝试恢复的次数，不代表每次都成功。 */
     uint32_t rx_lost;             /* MESSAGE_LOST 事件次数 */
     uint32_t rx_frames;           /* 收到的帧数 */
     uint8_t tx_error_count;       /* TEC */
@@ -147,45 +139,41 @@ typedef struct
     CAN_Status_e status;          /* 当前状态 */
 } CAN_BusStats_t;
 
-/**
- * @brief Register a module to CAN service,remember to call this before using a CAN device
- *        注册(初始化)一个can实例,需要传入初始化配置的指针.
- * @param config init config
- * @return CANInstance* can instance owned by module
+/** @brief 注册标准 CAN ID，按需启动服务并添加接收过滤规则。
+ * @param[in] config 有效总线、非空回调及 0～0x7ff 的收发 ID；id 指向的模块须长期有效。
+ * @return 成功返回长期有效实例，参数、重复接收 ID、容量、分配或 HAL 配置失败返回 NULL。
+ * @note 启动时注册；回调由派发任务运行，同一总线相同接收 ID 不允许重复注册。
  */
 CANInstance *CANRegister(CAN_Init_Config_s *config);
 
-/**
- * @brief 修改CAN发送报文的数据帧长度;注意最大长度为8,在没有进行修改的时候,默认长度为8
- *
- * @param _instance 要修改长度的can实例
- * @param length    设定长度
+/** @brief 设置下一帧数据字节数，默认 8。
+ * @param[in,out] _instance CAN 实例，NULL 时不处理。
+ * @param[in] length 1～8 字节；传 0 改为 1，超过 8 改为 8，并记录日志计数。
  */
 void CANSetDLC(CANInstance *_instance, uint8_t length);
 
-/**
- * @brief transmit mesg through CAN device,通过can实例发送消息
- *        发送前需要向CAN实例的tx_buff写入发送数据
- * 
- * @attention 超时时间不应该超过调用此函数的任务的周期,否则会导致任务阻塞
- * 
- * @param timeout 超时时间,单位为ms;后续改为us,获得更精确的控制
- * @param _instance* can instance owned by module
+/** @brief 把实例 tx_buff 中的数据提交给 CAN 硬件，发送空间满时直接返回。
+ * @param[in] _instance 有效实例，不能为 NULL；先填写发送数组及字节数。
+ * @param[in] timeout 保留的旧参数，当前忽略，不作为等待时间。
+ * @return 1 为已交给硬件，0 为队列满或 HAL 拒绝；不表示对端已收到，也不自动重试。
  */
 uint8_t CANTransmit(CANInstance *_instance,float timeout);
 
-/**
- * @brief 获取FDCAN总线状态(OK/ERROR/BUSOFF)
+/** @brief 读取 CAN 协议及错误计数。
+ * @param[in] hcan 有效句柄；NULL 时不处理。
+ * @param[out] status NULL 时不处理；先设 UNKNOWN、计数 0，HAL 查询失败则保留这些值。
  */
 void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status);
 
-/**
- * @brief 读取某条总线的发送统计(丢帧/完成计数)
+/** @brief 复制指定总线的累计发送统计。
+ * @param[in] hcan 已知总线句柄。
+ * @param[out] stats 输出对象，NULL 或句柄未知时保持原值。
  */
 void CANGetTxStats(FDCAN_HandleTypeDef *hcan, CAN_TxStats_t *stats);
 
-/**
- * @brief 读取某条总线的健康统计(BusOff 次数/恢复次数/错误计数)
+/** @brief 查询当前错误计数，并复制指定总线的累计状态。
+ * @param[in] hcan 已知总线句柄。
+ * @param[out] stats 输出对象，NULL 或句柄未知时保持原值。
  */
 void CANGetBusStats(FDCAN_HandleTypeDef *hcan, CAN_BusStats_t *stats);
 
@@ -198,7 +186,10 @@ void CANGetBusStats(FDCAN_HandleTypeDef *hcan, CAN_BusStats_t *stats);
      3) 队列满时丢弃新帧, 用 CANGetRxQueueDrop() 观察丢帧数。 */
 void CANProcessRx(void);
 
-/** @brief 读取某条总线"接收队列满导致的丢帧数" */
+/** @brief 读取接收队列满时丢弃新帧的次数。
+ * @param[in] hcan 已知总线句柄。
+ * @return 累计次数，句柄未知返回 0。
+ */
 uint32_t CANGetRxQueueDrop(FDCAN_HandleTypeDef *hcan);
 
 /* 接收队列诊断(由 CANHealthMonitor 每 100ms 汇总): drop 应恒为 0,
@@ -206,12 +197,20 @@ uint32_t CANGetRxQueueDrop(FDCAN_HandleTypeDef *hcan);
 extern volatile uint32_t can_rxq_drop_total;
 extern volatile uint16_t can_rxq_peak_max;
 
-/* 把一条总线强制切到指定模式 / 重装全部滤镜: 供回环类自测复用 */
+/** @brief 自测用：重新初始化一条总线到指定模式并尝试启动，会打断原有收发。
+ * @param[in,out] h 有效句柄，NULL 返回 0。
+ * @param[in] mode HAL 定义的 FDCAN 模式。
+ * @param[in] accept_all 当前预留且忽略，不会切成接收全部 ID。
+ * @return 1 为配置后已离开初始化状态，0 为失败；后续仍须重装原过滤规则。
+ */
 uint8_t CANForceMode(FDCAN_HandleTypeDef *h, uint32_t mode, uint8_t accept_all);
+/** @brief 按当前注册表重装过滤规则；仅供切换模式后使用，不报告单项失败。 */
 void CANReapplyFilters(void);
 
-/* 注销一个实例(从 can_instance[]/rx_lookup 摘掉并 free): 仅供自测流程收尾使用,
-   正常业务不要调用。 */
+/** @brief 移出注册表及接收查找表并释放实例，仅供自测收尾。
+ * @param[in] ins 待释放实例；NULL 或不在表中时不处理，成功后不可再使用。
+ * @note 须先确保接收队列及回调不再引用它，函数不处理已经排队的旧指针。
+ */
 void CANUnregisterInstance(CANInstance *ins);
 
 /**
@@ -220,7 +219,9 @@ void CANUnregisterInstance(CANInstance *ins);
  */
 void CANHealthMonitor(void);
 
-/* 手动运行一次内部回环自测(会短暂中断该总线收发), 返回通过的总线数(0~3) */
+/** @brief 在三条总线上依次切换回环、测试、恢复并重装过滤规则，供专门自测使用。
+ * @return 通过的总线数，范围 0～3；默认外部回环会发送测试帧。
+ */
 uint8_t CANRunLoopbackSelfTest(void);
 
 /* 自测结果(供 Live Watch / OpenOCD 读取) */

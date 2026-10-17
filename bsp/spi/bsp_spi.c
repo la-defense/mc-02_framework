@@ -1,3 +1,6 @@
+/** @file bsp_spi.c
+ * @brief 保存 SPI 设备与当前收发对象，管理片选和完成回调；公开参数说明见头文件。
+ */
 #include "bsp_spi.h"
 #include "memory.h"
 #include "stdlib.h"
@@ -8,9 +11,7 @@
 /* 所有的spi instance保存于此,用于callback时判断中断来源*/
 static SPIInstance *spi_instance[SPI_DEVICE_CNT] = {NULL};
 static uint8_t idx = 0;                         // 配合中断以及初始化
-/* 用于判断当前 spi 是否正在传输, 防止多个模块同时使用一条总线 (0: 正在传输, 1: 空闲)
-   @attention 必须 volatile: 它在 SPI 完成中断里被写、在任务里被轮询。
-   之前漏了 volatile, -Og 下"碰巧"能跑, 换 -O2 后轮询被优化成死循环(BMI088 初始化卡死)。 */
+// 0 表示总线正在传输，1 表示空闲；完成中断会改写，任务会读取，因此使用 volatile。
 volatile uint8_t SPIDeviceOnGoing[SPI_DEVICE_CNT] = {[0 ... SPI_DEVICE_CNT - 1] = 1};
 static SPIInstance *spi_bus_owner[SPI_DEVICE_CNT] = {NULL};
 
@@ -47,8 +48,7 @@ static int8_t SPIBusIndex(const SPIInstance *spi_ins)
     return spi_ins == NULL ? -1 : SPIBusIndexFromHandle(spi_ins->spi_handle);
 }
 
-/* Claim the bus flag and owner pointer together so a preempting caller cannot
-   observe idle and overwrite the ownership of an active transfer. */
+// 暂时关普通中断，同时记录忙标记与使用者，防止其他任务中途把同一总线当作空闲。
 static uint8_t SPIBusTryAcquire(SPIInstance *spi_ins, uint8_t bus_idx)
 {
     uint32_t previous_primask = SPIBusEnterCritical();
@@ -62,6 +62,7 @@ static uint8_t SPIBusTryAcquire(SPIInstance *spi_ins, uint8_t bus_idx)
     return acquired;
 }
 
+// 只有登记的使用者才能释放本次总线，不改动其他对象仍在进行的传输。
 static void SPIBusRelease(SPIInstance *spi_ins)
 {
     int8_t bus_idx = SPIBusIndex(spi_ins);
@@ -77,6 +78,7 @@ static void SPIBusRelease(SPIInstance *spi_ins)
     SPIBusExitCritical(previous_primask);
 }
 
+// 传输出错时释放已登记对象的片选和忙标记，返回该对象供日志定位。
 static SPIInstance *SPIBusAbortOwner(SPI_HandleTypeDef *hspi)
 {
     int8_t bus_idx = SPIBusIndexFromHandle(hspi);
@@ -100,7 +102,7 @@ static SPIInstance *SPIBusAbortOwner(SPI_HandleTypeDef *hspi)
     return owner;
 }
 
-/* Wait for and atomically claim the bus; timeout never changes another owner's state. */
+// 最多等待给定微秒数；超时只返回，不释放仍由其他对象使用的总线。
 static HAL_StatusTypeDef SPIBusAcquire(SPIInstance *spi_ins, uint8_t bus_idx, uint32_t timeout_us)
 {
     uint32_t t0 = DWT_ProbeStart();
@@ -118,8 +120,7 @@ static HAL_StatusTypeDef SPIBusAcquire(SPIInstance *spi_ins, uint8_t bus_idx, ui
     return HAL_OK;
 }
 
-/* HAL's blocking SPI timeout depends on HAL tick progress. Refuse contexts that
-   can mask the tick so a nominal timeout cannot become an unbounded wait. */
+// HAL 的阻塞超时依赖毫秒计时；当前中断状态可能阻止计时运行时，拒绝阻塞传输。
 static uint8_t SPIBlockingContextCanWait(void)
 {
     return (__get_IPSR() == 0u &&
@@ -172,6 +173,7 @@ uint8_t SPIUnregister(SPIInstance *instance)
         if (spi_instance[i] != instance)
             continue;
         HAL_GPIO_WritePin(instance->GPIOx, instance->cs_pin, GPIO_PIN_SET);
+        // 后面的实例向前移动，保持有效项连续，完成回调查找不会遇到中间空位。
         for (uint8_t j = (uint8_t)(i + 1u); j < idx; ++j)
             spi_instance[j - 1u] = spi_instance[j];
         spi_instance[--idx] = NULL;
@@ -194,7 +196,7 @@ void SPITransmit(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len)
         HAL_SPI_Transmit_IT(spi_ins->spi_handle, ptr_data, len);
         break;
     case SPI_BLOCK_MODE:
-        HAL_SPI_Transmit(spi_ins->spi_handle, ptr_data, len, 1000); // 默认50ms超时
+        HAL_SPI_Transmit(spi_ins->spi_handle, ptr_data, len, 1000); // 当前 HAL 等待参数为 1000 ms。
         // 阻塞模式不会调用回调函数,传输完成后直接拉高片选结束
         HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
         break;
@@ -287,6 +289,7 @@ HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8
         break;
     }
 
+    // 异步启动失败不会等到完成回调，必须在这里拉高片选并释放本次总线。
     if (status != HAL_OK)
     {
         HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
@@ -374,7 +377,7 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
         return;
     }
 
-    /* Legacy SPITransmit/SPIRecv paths do not claim the synchronous bus owner. */
+    // 旧 Transmit、Recv 未登记总线使用者，按句柄和低片选另行查找清理。
     for (size_t i = 0; i < idx; i++)
     {
         if (spi_instance[i]->spi_handle == hspi &&

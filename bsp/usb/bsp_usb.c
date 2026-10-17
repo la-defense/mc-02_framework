@@ -1,7 +1,6 @@
 /**
  * @file bsp_usb.c
- * @author your name (you@domain.com)
- * @brief usb是单例bsp,因此不保存实例
+ * @brief USB CDC 单例收发；中断保存接收内容，任务跳过旧包并调用模块回调。
  * @version 0.1
  * @date 2023-02-09
  *
@@ -18,16 +17,7 @@
 static uint8_t *bsp_usb_rx_buffer; // 接收到的数据会被放在这里,buffer size为2048
 static USBCallback s_rx_cbk = NULL;
 
-/* ============================================================================
-   VCP 接收队列(BSPUART-02 的 USB 侧, 2026-09-26)
-   ----------------------------------------------------------------------------
-   原来 CDC_Receive_HS()(USB 中断上下文)里直接调模块回调, 视觉要在这里做
-   "滑动找帧 + CRC16 校验"。现在中断只把端点缓冲的数据拷进队列, 解析交给任务里的
-   VCPProcessRx()。
-   为什么必须拷贝: USB 端点缓冲是复用的 —— CDC_Receive_HS 返回前会重新武装接收,
-   下一次数据随时可能盖进来, 只传指针给任务会读到半新半旧的数据。
-   并发模型: 单生产者(USB 中断) / 单消费者(VCPProcessRx)。
-   ========================================================================== */
+// USB 端点数组会被下一包复用，先复制到队列；中断负责写入，唯一派发任务负责取出。
 #define VCP_RXQ_DEPTH 8u
 #define VCP_RXQ_ITEM 128u /* USB FS 单次回调 ≤64 字节, 留一倍余量 */
 
@@ -101,14 +91,14 @@ void VCPProcessRx(void)
 
     uint32_t probe = DWT_ProbeStart();
 
+    // 按入队顺序处理，每包超过 50 ms 就不再回调；即使跳过也推进到下一项。
     while (vcp_tail != vcp_head)
     {
         uint16_t len = vcp_rxq_len[vcp_tail];
         if (bsp_usb_rx_buffer != NULL && s_rx_cbk != NULL && len > 0u &&
             (uint32_t)(HAL_GetTick() - vcp_rxq_timestamp_ms[vcp_tail]) <= MESSAGE_DEFAULT_MAX_AGE_MS)
         {
-            /* 拷回端点缓冲再回调: 模块回调(DecodeVision)仍按原约定从
-               bsp_usb_rx_buffer 读数据, 模块侧零改动 */
+            // 兼容旧回调，同时提供本包队列地址；回调返回后撤销该地址。
             memcpy(bsp_usb_rx_buffer, vcp_rxq[vcp_tail], len);
             vcp_current_rx_data = vcp_rxq[vcp_tail];
             vcp_current_rx_timestamp_ms = vcp_rxq_timestamp_ms[vcp_tail];
@@ -133,7 +123,7 @@ uint32_t VCPGetCurrentRxTimestamp(void) { return vcp_current_rx_data != NULL ? v
 
 uint8_t *USBInit(USB_Init_Config_s usb_conf)
 {
-    // usb的软件复位(模拟拔插)在usbd_conf.c中的HAL_PCD_MspInit()中
+    // 此处仅设置回调和接收地址；USB 硬件与枚举由设备初始化代码负责。
     s_rx_cbk = usb_conf.rx_cbk;
     bsp_usb_rx_buffer = CDCInitRxbufferNcallback(usb_conf.tx_cbk, usb_conf.rx_cbk); // 获取接收数据指针
     // usb的接收回调函数会在这里被设置,并将数据保存在bsp_usb_rx_buffer中

@@ -1,7 +1,7 @@
 /**
  * @file bsp_usart.c
  * @author neozng
- * @brief  串口bsp层的实现
+ * @brief UART 注册与发送，中断复制入队，任务按接收顺序派发并处理错误恢复。
  * @version beta
  * @date 2022-11-01
  *
@@ -20,18 +20,8 @@
 static uint8_t idx;
 static USARTInstance *usart_instance[DEVICE_USART_CNT] = {NULL};
 
-/* ============================================================================
-   接收队列 + 错误恢复(BSPUART-02, 2026-09-26)
-   ----------------------------------------------------------------------------
-   原来 HAL_UARTEx_RxEventCallback() 在中断里直接调模块回调做协议解析(裁判要
-   在 255 字节里滑动找帧 + 逐帧 CRC 校验), HAL_UART_ErrorCallback() 还在中断里
-   调**阻塞版** HAL_UART_AbortReceive() 并写 RTT 日志 —— 都是不该在中断里做的事。
-   现在: 中断只把数据拷进队列 + 重新武装 DMA; 解析、错误恢复、日志全搬到任务
-   (USARTProcessRx, 由 1kHz 的 MotorControlTask 调用)。
-   为什么要"拷进队列"而不是把缓冲区指针交给任务: DMA 一直在往同一个 recv_buff
-   里写, 任务解析时可能被新数据覆盖 —— 必须拷出来。
-   并发模型: 单生产者(该串口的 RxEvent 中断) / 单消费者(USARTProcessRx)。
-   ========================================================================== */
+// 每路 UART 单独保存接收队列；中断复制数据后重新启动 DMA，任务再解析和恢复错误。
+// 必须复制内容，DMA 会重复使用 recv_buff，直接保存其地址会在派发前被新数据覆盖。
 #define USART_RXQ_DEPTH 4u    /* 每实例队列深度(裁判几十 Hz、视觉 200Hz, 1kHz 消费足够) */
 #define USART_RXQ_HDR 8u      /* 每项前 8 字节: 长度、填充和入队 tick；数据保持四字节对齐 */
 #define USART_RECOVER_RETRY 3u
@@ -52,10 +42,7 @@ typedef struct
 
 static USARTQueue_t usart_q[DEVICE_USART_CNT];
 
-/* 队列内存池: 用静态内存而不是 malloc —— FreeRTOS 堆(configTOTAL_HEAP_SIZE=25600)
-   还要放各任务的栈和所有模块实例, 再从里面抠 1~2KB 有耗尽的风险; 静态池用 .bss,
-   不够时在注册阶段就能立刻发现(而不是运行期某个场景才失败)。
-   各实例按自己的 recv_buff_size 从这里切分, 所以实际占用远小于池大小。 */
+// 队列按各实例所需大小从静态池取空间，容量不足在注册时返回失败，不在收包中途申请内存。
 #define USART_RXQ_POOL_SIZE 3072u
 static uint8_t usart_rxq_pool[USART_RXQ_POOL_SIZE] __attribute__((aligned(4)));
 static uint16_t usart_rxq_used = 0u;
@@ -82,14 +69,7 @@ static uint8_t *USARTQueueItem(USARTInstance *ins, uint8_t slot, uint16_t slot_i
     return usart_q[slot].data + (uint32_t)slot_idx * USARTQueueItemSize(ins);
 }
 
-/**
- * @brief 启动串口服务,会在每个实例注册之后自动启用接收,当前实现为DMA接收,后续可能添加IT和BLOCKING接收
- *
- * @todo 串口服务会在每个实例注册之后自动启用接收,当前实现为DMA接收,后续可能添加IT和BLOCKING接收
- *       可能还要将此函数修改为extern,使得module可以控制串口的启停
- *
- * @param _instance instance owned by module,模块拥有的串口实例
- */
+// 具体参数及失败返回见头文件；启动 DMA 成功后关闭半传输通知。
 uint8_t USARTServiceInit(USARTInstance *_instance)
 {
     if (_instance == NULL || _instance->usart_handle == NULL || _instance->recv_buff_size == 0u ||
@@ -101,7 +81,7 @@ uint8_t USARTServiceInit(USARTInstance *_instance)
     if (status != HAL_OK)
         return 0u;
     // 关闭dma half transfer中断防止两次进入HAL_UARTEx_RxEventCallback()
-    // 这是HAL库的一个设计失误,发生DMA传输完成/半完成以及串口IDLE中断都会触发HAL_UARTEx_RxEventCallback()
+    // HAL 会通知半传输、传输完成及空闲；这里只保留完成和空闲通知，避免重复处理半包。
     // 我们只希望处理第一种和第三种情况,因此直接关闭DMA半传输中断
     __HAL_DMA_DISABLE_IT(_instance->usart_handle->hdmarx, DMA_IT_HT);
     return 1u;
@@ -204,7 +184,7 @@ static void USARTQueuePush(uint8_t slot, USARTInstance *ins, uint16_t len)
 
     uint8_t *item = USARTQueueItem(ins, slot, head);
     *(uint16_t *)item = len;
-    *(uint32_t *)(item + 4u) = HAL_GetTick();                                  /* 前 2 字节: 长度 */
+    *(uint32_t *)(item + 4u) = HAL_GetTick(); // 第 4 字节起保存入队毫秒时间，前两字节为长度。
     memcpy(item + USART_RXQ_HDR, ins->recv_buff, len);        /* 后面: 数据 */
 
     __DMB();
@@ -245,7 +225,7 @@ static void USARTTryRecover(uint8_t slot, USARTInstance *ins)
  */
 void USARTProcessRx(void)
 {
-    /* 双消费者保护(与 CANProcessRx 同一套做法): 原子的 test-and-set */
+    // 暂时关普通中断检查并设置 processing；已有派发正在执行时，本轮直接返回。
     static volatile uint8_t processing = 0;
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
@@ -280,6 +260,7 @@ void USARTProcessRx(void)
             uint16_t len = *(uint16_t *)item;
             if (len > ins->recv_buff_size)
                 usart_q[slot].drop++;
+            // 已排队超过 50 ms 的帧直接跳过，不把旧命令当作刚收到的数据。
             else if (len > 0u && (uint32_t)(HAL_GetTick() - *(uint32_t *)(item + 4u)) <= MESSAGE_DEFAULT_MAX_AGE_MS)
             {
                 memcpy(ins->recv_buff, item + USART_RXQ_HDR, len);
@@ -318,17 +299,7 @@ void USARTProcessRx(void)
     processing = 0u;
 }
 
-/**
- * @brief 每次dma/idle中断发生时，都会调用此函数.对于每个uart实例会调用对应的回调进行进一步的处理
- *        例如:视觉协议解析/遥控器解析/裁判系统解析
- *
- * @note  通过__HAL_DMA_DISABLE_IT(huart->hdmarx,DMA_IT_HT)关闭dma half transfer中断防止两次进入HAL_UARTEx_RxEventCallback()
- *        这是HAL库的一个设计失误,发生DMA传输完成/半完成以及串口IDLE中断都会触发HAL_UARTEx_RxEventCallback()
- *        我们只希望处理，因此直接关闭DMA半传输中断第一种和第三种情况
- *
- * @param huart 发生中断的串口
- * @param Size 此次接收到的实际字节数,会记录到 instance->last_recv_size 供模块使用
- */
+// 当前帧读取入口的参数与有效时间集中在头文件；以下不返回持续有效的数据地址。
 const uint8_t *USARTGetCurrentRxData(const USARTInstance *instance)
 {
     return instance != NULL ? instance->current_rx_data : NULL;
@@ -339,6 +310,10 @@ uint32_t USARTGetCurrentRxTimestamp(const USARTInstance *instance)
     return instance != NULL && instance->current_rx_data != NULL ? instance->current_rx_timestamp_ms : 0u;
 }
 
+/** @brief DMA 完成或 UART 空闲时复制本次数据入队，重新准备下一轮接收，不在中断里解析。
+ * @param[in] huart 来源句柄。
+ * @param[in] Size 本次实际字节数，超过注册容量时丢弃。
+ */
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
     uint32_t probe = DWT_ProbeStart();
@@ -362,12 +337,8 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
     DWT_ProbeDone(&usart_prof_rx_isr, probe);
 }
 
-/**
- * @brief 当串口发送/接收出现错误时,会调用此函数,此时这个函数要做的就是重新启动接收
- *
- * @note  最常见的错误:奇偶校验/溢出/帧错误
- *
- * @param huart 发生错误的串口
+/** @brief UART 错误中断只记录次数并请求恢复，实际中止和重新启动接收由任务执行。
+ * @param[in] huart 发生错误的 UART 句柄。
  */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {

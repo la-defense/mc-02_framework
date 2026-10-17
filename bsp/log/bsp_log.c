@@ -1,3 +1,6 @@
+/** @file bsp_log.c
+ * @brief 初始化 RTT、决定同类日志能否打印，并实现普通格式化和旧浮点转文字入口。
+ */
 #include "bsp_log.h"
 #include "main.h"
 
@@ -14,11 +17,13 @@ void BSPLogInit()
 uint8_t LogRateLimitAllow(LogRateLimit_t *rl, uint32_t period_ms)
 {
     uint32_t now;
+    // 未提供计数对象时让调用方直接打印，不保存间隔或次数。
     if (rl == NULL)
         return 1u;
 
     now = HAL_GetTick();
     rl->total++;
+    // 等到报告间隔才更新基准和这一段的计数；未到时只增加 total。
     if ((uint32_t)(now - rl->last_ms) >= period_ms)
     {
         rl->last_ms = now;
@@ -58,13 +63,7 @@ void Float2Str(char *str, float va)
 }
 
 #if LOG_TEST
-/* 日志格式串安全自测(默认关闭, 见 bsp_log.h 里的 LOG_TEST)
-   一次性覆盖: 字符串 / 整数 / 长整型 / 十六进制 / 浮点 / 多参数混排 / 超长行截断。
-   重点是第 3 条 —— "%f" 后面紧跟着一个 "%s":
-     改造前, 日志宏拼出的格式串在用户 format 之后还挂着一个 %s(复位色码),
-     而 SEGGER 的精简 printf 不消费 %f 的参数, 于是那个 %s 会取到 float 的位模式
-     当指针解引用 -> BusFault -> HardFault(LOG-01 的真凶);
-     改造后, 参数由 newlib 按标准 C 规则消费, 这一行必须完整打印、后面的 %s 正确。*/
+// 默认关闭的格式化检查：混排整数、文字和浮点，再检查超长行只保留可容纳部分。
 void LogSelfTest(void)
 {
     const char *s = "OK";
@@ -76,9 +75,7 @@ void LogSelfTest(void)
     LOGINFO("[logtest] 2/5 长整型: lu=%lu hex=%08lX", lu, lu);
     LOGWARNING("[logtest] 3/5 核心项(%%f 后面紧跟 %%s): f=%f tail_s=%s", 3.14159, s);
     LOGINFO("[logtest] 4/5 多参数混排: %s|%u|%d|%s|%lu", s, u, d, "end", lu);
-    /* 下面是**故意**超过缓冲区的长行: 用来验证 snprintf 的截断行为(不越界、不崩)。
-       注意打开 LOG_TEST 后编译会有一条 `-Wformat-truncation` 告警指向这一行 ——
-       这是预期结果, 不是新 bug。 */
+    // 故意提供超长行来检查长度处理；启用后编译器会对这行报告格式化长度告警。
     LOGWARNING("[logtest] 5/5 超长行截断验证: "
                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
