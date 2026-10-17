@@ -9,6 +9,7 @@
  */
 
 #include "bsp_spi.h"
+#include "main.h"
 #include "bmi088_data.h"
 #include "bsp_gpio.h"
 #include "controller.h"
@@ -121,7 +122,7 @@ typedef struct
     SPI_Init_Config_s spi_acc_config;
     GPIO_Init_Config_s gyro_int_config;
     GPIO_Init_Config_s acc_int_config;
-    PID_Init_Config_s heat_pid_config;
+    PID_Init_Config_s heat_pid_config; // 仅配置旧热控 PWM 时检查，启用时须给出有效 dt 范围。
     PWM_Init_Config_s heat_pwm_config;
 } BMI088_Init_Config_s;
 

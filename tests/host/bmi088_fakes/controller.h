@@ -1,11 +1,4 @@
-#ifndef MC02_HOST_BMI088_FAKE_CONTROLLER_H
-#define MC02_HOST_BMI088_FAKE_CONTROLLER_H
-
-#include "bsp_dwt.h"
-#include "main.h"
-
-typedef struct { float output; } PIDInstance;
-typedef struct { float kp; } PID_Init_Config_s;
-void PIDInit(PIDInstance *pid, PID_Init_Config_s *config);
-
-#endif
+/** @file controller.h
+ * @brief BMI088 故障回归复用生产 PID 类型，仅替换初始化结果。
+ */
+#include "../../../modules/algorithm/controller.h"

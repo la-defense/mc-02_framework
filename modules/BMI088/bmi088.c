@@ -14,6 +14,7 @@
 #include "task_monitor.h"
 #include "imu_heater.h"
 #include "cmsis_os.h"
+#include "bsp_dwt.h"
 #include <math.h>
 #include <stdlib.h>
 
@@ -987,6 +988,14 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         bmi088_init_error = BMI088_NO_SENSOR;
         return NULL;
     }
+    // 旧温控 PID 先于外设注册检查；上层独立温控不需要初始化该零配置实例。
+    if (config->heat_pwm_config.htim != NULL &&
+        PIDInit(&bmi088_instance->heat_pid, &config->heat_pid_config) != PID_OK)
+    {
+        bmi088_init_error = BMI088_RESOURCE_ERROR;
+        free(bmi088_instance);
+        return NULL;
+    }
     // 从右向左赋值,让bsp instance保存指向bmi088_instance的指针(父指针),便于在底层中断中访问bmi088_instance
     config->acc_int_config.id =
         config->gyro_int_config.id =
@@ -1032,7 +1041,6 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
             return NULL;
         }
     }
-    PIDInit(&bmi088_instance->heat_pid, &config->heat_pid_config);
 
     // 两个传感器都要完成初始化；遇到故障最多重试5次，随后释放已申请资源。
     BMI088_ERORR_CODE_e error = BMI088_NO_ERROR;

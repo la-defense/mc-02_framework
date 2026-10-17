@@ -238,7 +238,7 @@ float NormOf3d(float vector[3])
 }
 
 void *zmalloc(size_t size) { return calloc(1u, size); }
-void PIDInit(PIDInstance *pid, PID_Init_Config_s *config) { (void)pid; (void)config; }
+PID_Status_e PIDInit(PIDInstance *pid, const PID_Init_Config_s *config) { (void)pid; (void)config; return PID_OK; }
 PWMInstance *PWMRegister(PWM_Init_Config_s *config) { (void)config; return NULL; }
 GPIOInstance *GPIORegister(GPIO_Init_Config_s *config) { (void)config; return NULL; }
 void GPIOSet(GPIOInstance *instance) { (void)instance; }

@@ -49,6 +49,8 @@ uint8_t ChassisInit(void)
         .can_init_config.can_handle = &hcan1,
         .controller_param_init_config = {
             .speed_PID = {
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 10, // 4.5
                 .Ki = 0,  // 0
                 .Kd = 0,  // 0
@@ -57,6 +59,8 @@ uint8_t ChassisInit(void)
                 .MaxOut = 12000,
             },
             .current_PID = {
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 0.5, // 0.4
                 .Ki = 0,   // 0
                 .Kd = 0,

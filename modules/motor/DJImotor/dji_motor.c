@@ -2,6 +2,7 @@
 * @brief 解码 DJI 电调反馈，逐电机计算参考输出，并按总线与设备编号组成四电机 CAN 帧。
  */
 #include "dji_motor.h"
+#include <string.h>
 #include "general_def.h"
 #include "bsp_dwt.h"
 #include "bsp_log.h"
@@ -231,9 +232,17 @@ DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
     instance->motor_settings = config->controller_setting_init_config; // 正反转,闭环类型等
 
     // motor controller init 电机控制器初始化
-    PIDInit(&instance->motor_controller.current_PID, &config->controller_param_init_config.current_PID);
-    PIDInit(&instance->motor_controller.speed_PID, &config->controller_param_init_config.speed_PID);
-    PIDInit(&instance->motor_controller.angle_PID, &config->controller_param_init_config.angle_PID);
+    // 只检查实际启用的环，失败发生在注册 CAN 和发送模式命令之前。
+    if (MotorPIDInit(&instance->motor_controller.current_PID, &config->controller_param_init_config.current_PID,
+                     (config->controller_setting_init_config.close_loop_type & CURRENT_LOOP) != 0u) != PID_OK ||
+        MotorPIDInit(&instance->motor_controller.speed_PID, &config->controller_param_init_config.speed_PID,
+                     (config->controller_setting_init_config.close_loop_type & SPEED_LOOP) != 0u) != PID_OK ||
+        MotorPIDInit(&instance->motor_controller.angle_PID, &config->controller_param_init_config.angle_PID,
+                     (config->controller_setting_init_config.close_loop_type & ANGLE_LOOP) != 0u) != PID_OK)
+    {
+        free(instance);
+        return NULL;
+    }
     instance->motor_controller.other_angle_feedback_ptr = config->controller_param_init_config.other_angle_feedback_ptr;
     instance->motor_controller.other_speed_feedback_ptr = config->controller_param_init_config.other_speed_feedback_ptr;
     instance->motor_controller.current_feedforward_ptr = config->controller_param_init_config.current_feedforward_ptr;
@@ -371,23 +380,27 @@ void DJIMotorControl()
         motor_controller = &motor->motor_controller;
         measure = &motor->measure;
         pid_ref = motor_controller->pid_ref; // 保存设定值,防止motor_controller->pid_ref在计算过程中被修改
+        // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
+        float control_dt = 0.0f;
+        PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
         if (motor_setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
             pid_ref *= -1; // 设置反转
 
         // pid_ref会顺次通过被启用的闭环充当数据的载体
         // 计算位置环,只有启用位置环且外层闭环为位置时会计算速度环输出
-        if ((motor_setting->close_loop_type & ANGLE_LOOP) && motor_setting->outer_loop_type == ANGLE_LOOP)
+        if (pid_status == PID_OK && (motor_setting->close_loop_type & ANGLE_LOOP) && motor_setting->outer_loop_type == ANGLE_LOOP)
         {
             if (motor_setting->angle_feedback_source == OTHER_FEED)
                 pid_measure = *motor_controller->other_angle_feedback_ptr;
             else
                 pid_measure = measure->total_angle; // MOTOR_FEED,对total angle闭环,防止在边界处出现突跃
             // 更新pid_ref进入下一个环
-            pid_ref = PIDCalculate(&motor_controller->angle_PID, pid_measure, pid_ref);
+            if (pid_status == PID_OK)
+                pid_status = PIDCalculate(&motor_controller->angle_PID, pid_measure, pid_ref, control_dt, &pid_ref);
         }
 
         // 计算速度环,(外层闭环为速度或位置)且(启用速度环)时会计算速度环
-        if ((motor_setting->close_loop_type & SPEED_LOOP) && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
+        if (pid_status == PID_OK && (motor_setting->close_loop_type & SPEED_LOOP) && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
         {
             if (motor_setting->feedforward_flag & SPEED_FEEDFORWARD)
                 pid_ref += *motor_controller->speed_feedforward_ptr;
@@ -397,7 +410,8 @@ void DJIMotorControl()
             else // MOTOR_FEED
                 pid_measure = measure->speed_aps;
             // 更新pid_ref进入下一个环
-            pid_ref = PIDCalculate(&motor_controller->speed_PID, pid_measure, pid_ref);
+            if (pid_status == PID_OK)
+                pid_status = PIDCalculate(&motor_controller->speed_PID, pid_measure, pid_ref, control_dt, &pid_ref);
         }
 
         // 计算电流环,目前只要启用了电流环就计算,不管外层闭环是什么,并且电流只有电机自身传感器的反馈
@@ -405,11 +419,20 @@ void DJIMotorControl()
             pid_ref += *motor_controller->current_feedforward_ptr;
         if (motor_setting->close_loop_type & CURRENT_LOOP)
         {
-            pid_ref = PIDCalculate(&motor_controller->current_PID, measure->real_current, pid_ref);
+            if (pid_status == PID_OK)
+                pid_status = PIDCalculate(&motor_controller->current_PID, measure->real_current, pid_ref, control_dt, &pid_ref);
         }
 
         if (motor_setting->feedback_reverse_flag == FEEDBACK_DIRECTION_REVERSE && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
             pid_ref *= -1;
+
+        if (pid_status != PID_OK || !isfinite(pid_ref))
+        {
+            // 一环失败后丢弃本轮串级结果，恢复前清除各环已有积分和微分历史。
+            MotorPIDResetLoops(&motor_controller->angle_PID, &motor_controller->speed_PID, &motor_controller->current_PID);
+            motor->pid_clock.last_status = pid_status != PID_OK ? pid_status : PID_NUMERIC_ERROR;
+            pid_ref = 0.0f;
+        }
 
         // 获取最终输出,功率限制时直接输出电流值
         // 先把最终输出限制在本实现采用的 -16384～16384，再转成 int16_t，避免超范围转换。

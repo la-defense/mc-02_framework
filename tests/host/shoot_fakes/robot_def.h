@@ -3,12 +3,8 @@
 #include <stdint.h>
 #include "main.h"
 
-typedef enum { PID_Integral_Limit = 1 } PID_Improvement_e;
-typedef struct {
-    float Kp, Ki, Kd, MaxOut;
-    PID_Improvement_e Improve;
-    float IntegralLimit;
-} PID_Init_Config_s;
+// 复用生产 PID 参数，避免新增字段时替身仍接受旧接口。
+#include "../../../modules/motor/motor_pid.h"
 
 typedef enum { MOTOR_FEED = 0 } Feedback_Source_e;
 typedef enum { SPEED_LOOP = 2, CURRENT_LOOP = 1, ANGLE_LOOP = 4 } Closeloop_Type_e;

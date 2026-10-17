@@ -66,7 +66,7 @@ typedef enum
 }DMMotor_Mode_e;
 
 /** @brief 分配对象、改写 CAN 配置回调并注册电机，发送使能和当前位置置零命令。
-* @param[in,out] config 有效配置，初始化期间会改写 can_init_config；不检查 NULL、容量或注册分配失败。
+* @param[in,out] config 有效配置，初始化期间会改写 can_init_config；检查空参数、内存及启用 PID 参数；容量和底层注册失败仍待处理。
 * @return 长期保存的对象，无释放入口；最多四个，先注册全部电机，再调用 DMMotorControlInit() 创建任务。
 * @note 调用含共约 0.3 s 的 DWT 等待及实际 CAN 命令，须先准备外设和计时。
 */

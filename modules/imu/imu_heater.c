@@ -39,6 +39,8 @@
 #define IMU_HEATER_MAX_SUPPLY_V 30.0f
 
 static PIDInstance heater_pid;
+static uint32_t heater_pid_tick_ms;
+static uint8_t heater_pid_has_tick;
 static float heater_target = IMU_HEATER_TARGET_DEFAULT;
 static uint16_t heater_duty = 0;
 volatile uint32_t imu_heater_duty_diag = 0u;
@@ -159,8 +161,10 @@ void IMUHeaterInit(void)
         .Ki = 20.0f,
         .Kd = 0.0f,
         .Improve = PID_Integral_Limit,
+        .DtMin_s = 0.00001f,
+        .DtMax_s = 0.02f,
     };
-    PIDInit(&heater_pid, &config);
+    PID_Status_e pid_status = PIDInit(&heater_pid, &config);
 
     heater_target = IMU_HEATER_TARGET_DEFAULT;
     heater_duty = 0u;
@@ -189,6 +193,14 @@ void IMUHeaterInit(void)
     heater_fault_sample_sequence = 0u;
     heater_fault_timestamp_ms = 0u;
     heater_initialized = 1u;
+    heater_pid_has_tick = 0u;
+    if (pid_status != PID_OK)
+    {
+        // PID 参数被拒绝时保持故障和零输出，不启动加热 PWM。
+        (void)IMUHeaterLatchFault(HAL_GetTick());
+        IMUHeaterApplyDuty(0u);
+        return;
+    }
 
     if (!IMUHeaterReadFreshSupply(&last_vcc_in) ||
         last_vcc_in < IMU_HEATER_MIN_SUPPLY_V || last_vcc_in > IMU_HEATER_MAX_SUPPLY_V)
@@ -215,11 +227,10 @@ void IMUHeaterForceOff(void)
     IMUHeaterApplyDuty(0u);
     if (heater_initialized)
     {
-        // 清掉积分项和两次输出，后续重新加热时不沿用这些数值。
-        heater_pid.Iout = 0.0f;
-        heater_pid.Output = 0.0f;
-        heater_pid.Last_Output = 0.0f;
+        // 关闭后清除全部计算历史，重新加热前先建立新的计时起点。
+        (void)PIDReset(&heater_pid);
     }
+    heater_pid_has_tick = 0u;
     heat_start_ms = 0u;
     heat_timer_active = 0u;
 }
@@ -501,7 +512,28 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
         return;
     }
 
-    float output = PIDCalculate(&heater_pid, temperature, heater_target);
+    // 温控任务使用现有毫秒时基测量实际调用间隔，无符号减法允许计数回绕。
+    uint32_t elapsed_ms = now - heater_pid_tick_ms;
+    uint8_t had_tick = heater_pid_has_tick;
+    heater_pid_tick_ms = now;
+    heater_pid_has_tick = 1u;
+    if (!had_tick || elapsed_ms == 0u || elapsed_ms > 20u)
+    {
+        // 首轮或时间间隔异常时只建立新起点，本轮不使用过去累计的积分。
+        (void)PIDReset(&heater_pid);
+        IMUHeaterApplyDuty(0u);
+        heat_start_ms = 0u;
+        heat_timer_active = 0u;
+        return;
+    }
+    float output = 0.0f;
+    if (PIDCalculate(&heater_pid, temperature, heater_target,
+                     (float)elapsed_ms / 1000.0f, &output) != PID_OK)
+    {
+        // 计算失败不能沿用上次 PWM；下一轮重新计时后再尝试。
+        IMUHeaterForceOff();
+        return;
+    }
     // PID 输出出现 NaN/Inf 或小于0时按0处理，过大时按刚才算出的允许值处理。
     if (!isfinite(output) || output < 0.0f)
         output = 0.0f;

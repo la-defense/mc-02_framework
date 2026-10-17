@@ -37,6 +37,8 @@ uint8_t ShootInit(void)
         },
         .controller_param_init_config = {
             .speed_PID = {
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 0, // 20
                 .Ki = 0, // 1
                 .Kd = 0,
@@ -45,6 +47,8 @@ uint8_t ShootInit(void)
                 .MaxOut = 15000,
             },
             .current_PID = {
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 0, // 0.7
                 .Ki = 0, // 0.1
                 .Kd = 0,
@@ -78,12 +82,16 @@ uint8_t ShootInit(void)
         .controller_param_init_config = {
             .angle_PID = {
                 // 如果启用位置环来控制发弹,需要较大的I值保证输出力矩的线性度否则出现接近拨出的力矩大幅下降
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 0, // 10
                 .Ki = 0,
                 .Kd = 0,
                 .MaxOut = 200,
             },
             .speed_PID = {
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 0, // 10
                 .Ki = 0, // 1
                 .Kd = 0,
@@ -92,6 +100,8 @@ uint8_t ShootInit(void)
                 .MaxOut = 5000,
             },
             .current_PID = {
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 0, // 0.7
                 .Ki = 0, // 0.1
                 .Kd = 0,

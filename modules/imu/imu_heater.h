@@ -39,7 +39,8 @@ typedef enum
 
 /**
  * @brief 首次初始化温控，目标设为40°C，输出置0；需先配置 TIM3。
- * @note 禁热时不启动 PWM；启热时调用 HAL 启动 CH4，本接口不报告启动结果。
+ * @note PID 参数失败时记录故障且不启动 PWM；禁热也不启动 PWM。
+ *       启热且 PID 初始化成功时调用 HAL 启动 CH4，本接口不报告 HAL 启动结果。
  *       重复调用只执行 ForceOff，不重设目标、不清除故障或耗时操作记录。
  */
 void IMUHeaterInit(void);
@@ -54,11 +55,13 @@ void IMUHeaterInit(void);
  *       输入电压需在10～30V，两端均允许；ADC 数据需有效且未超过20ms。
  *       连续非零输出达到300000ms时记录故障，温度达到目标加2°C时关闭本次输出。
  *       禁热仍检查数据和故障；未初始化时直接返回，不写硬件。
+ *       首轮或关闭后首次可用更新只记录时刻；后续间隔须大于0且不超过20ms。
+ *       间隔或 PID 计算失败时输出为0，清除计算历史，后续重新测量间隔。
  */
 void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off);
 
 /**
- * @brief 将 PWM 比较值、PID 积分项及 PID 当前和上次输出清0，结束本段连续加热计时。
+ * @brief 将 PWM 比较值和 PID 全部计算历史清0，结束本段连续加热计时。
  * @note 初始化前不写 TIM3；保留故障、采样和耗时操作记录。
  *       本函数不持续禁止加热，后续 Update 仍可按条件恢复输出。
  */

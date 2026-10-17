@@ -50,6 +50,7 @@ typedef struct
 {
     DJI_Motor_Measure_s measure;            // 电机测量值
     Motor_Control_Setting_s motor_settings; // 电机设置
+    MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
     Motor_Controller_s motor_controller;    // 电机控制器
 
     CANInstance *motor_can_instance; // 电机CAN实例

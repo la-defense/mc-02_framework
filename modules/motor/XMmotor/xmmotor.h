@@ -47,6 +47,7 @@ typedef struct
 {
     XM_Motor_Measure_s measure;                 // 电机测量值
     Motor_Control_Setting_s motor_settings;     // 电机控制设置
+    MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
     Motor_Controller_s motor_controller;        // 电机控制器
 
     Motor_Working_Type_e stop_flag;
@@ -64,8 +65,9 @@ typedef enum
 }XMMotor_Mode_e;
 
 /** @brief 保存控制设置和 PID；默认没有硬件收发。
-* @param[in] config 有效配置，不检查 NULL 或内存失败；反馈指针须长期有效，实例最多四个。
-* @return 模块保存的对象；不检查容量，不能用返回对象判断 CAN 已接入。
+* @param[in] config 有效配置；启用环须给出 PID 参数及 dt 范围，反馈指针须长期有效。
+* @return 参数为空、内存分配或 PID 初始化失败返回 NULL，否则返回对象；容量仍未检查。
+* @note 默认仅软件对象，不能用返回对象判断 CAN 已接入。
 */
 XMMotorInstance *XMMotorInit(Motor_Init_Config_s *config);
 

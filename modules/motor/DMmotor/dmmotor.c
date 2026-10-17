@@ -2,6 +2,8 @@
 * @brief 保留的达妙力矩协议；注册时使能和置零，每个电机独立任务持续发送并接收反馈。
 */
 #include "dmmotor.h"
+#include <string.h>
+#include "bsp_dwt.h"
 #include "memory.h"
 #include "general_def.h"
 #include "user_lib.h"
@@ -71,13 +73,25 @@ void DMMotorCaliEncoder(DMMotorInstance *motor)
 }
 DMMotorInstance *DMMotorInit(Motor_Init_Config_s *config)
 {
+    if (config == NULL)
+        return NULL;
     DMMotorInstance *motor = (DMMotorInstance *)malloc(sizeof(DMMotorInstance));
+    if (motor == NULL)
+        return NULL;
     memset(motor, 0, sizeof(DMMotorInstance));
     
     motor->motor_settings = config->controller_setting_init_config;
-    PIDInit(&motor->current_PID, &config->controller_param_init_config.current_PID);
-    PIDInit(&motor->speed_PID, &config->controller_param_init_config.speed_PID);
-    PIDInit(&motor->angle_PID, &config->controller_param_init_config.angle_PID);
+    // 只检查实际启用的环，失败发生在注册 CAN 和发送模式命令之前。
+    if (MotorPIDInit(&motor->current_PID, &config->controller_param_init_config.current_PID,
+                     (config->controller_setting_init_config.close_loop_type & CURRENT_LOOP) != 0u) != PID_OK ||
+        MotorPIDInit(&motor->speed_PID, &config->controller_param_init_config.speed_PID,
+                     (config->controller_setting_init_config.close_loop_type & SPEED_LOOP) != 0u) != PID_OK ||
+        MotorPIDInit(&motor->angle_PID, &config->controller_param_init_config.angle_PID,
+                     (config->controller_setting_init_config.close_loop_type & ANGLE_LOOP) != 0u) != PID_OK)
+    {
+        free(motor);
+        return NULL;
+    }
     motor->other_angle_feedback_ptr = config->controller_param_init_config.other_angle_feedback_ptr;
     motor->other_speed_feedback_ptr = config->controller_param_init_config.other_speed_feedback_ptr;
 

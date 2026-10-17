@@ -1,3 +1,7 @@
+/** @file imu_heater_fault_recovery_test.c
+ * @brief 用生产温控和 PID 检查关闭、恢复、真实间隔及传感器失效。
+ * PWM 和采样由替身提供，测试不操作实体加热器。
+ */
 #include "imu_heater.h"
 #include "main.h"
 #include "tim.h"
@@ -40,13 +44,6 @@ int HAL_TIM_PWM_Start(TIM_HandleTypeDef *timer, uint32_t channel)
     (void)timer;
     (void)channel;
     return 0;
-}
-
-float DWT_GetDeltaT(uint32_t *last_count)
-{
-    if (last_count != NULL)
-        ++*last_count;
-    return 0.002f;
 }
 
 static void setup(uint32_t start_ms)
@@ -103,6 +100,7 @@ static int test_overtemp_and_manual_recovery(void)
 {
     setup(100u);
     update_at(100u, 1u, 20.0f);
+    update_at(101u, 1u, 20.0f);
 #if MC02_HEATER_ENABLED
     ASSERT_TRUE(htim3.compare > 0u, "enabled profile should produce a simulated nonzero PWM");
 #else
@@ -129,6 +127,8 @@ static int test_overtemp_and_manual_recovery(void)
     IMUHeaterUpdate(&replay, 0u);
     ASSERT_TRUE(htim3.compare == 0u, "replaying the clear sample must not resume PWM");
     update_at(108u, 5u, 20.0f);
+    ASSERT_TRUE(htim3.compare == 0u, "first post-clear update must only establish PID time");
+    update_at(109u, 5u, 20.0f);
 #if MC02_HEATER_ENABLED
     ASSERT_TRUE(htim3.compare > 0u, "a new post-clear sample may resume normal control");
 #else
@@ -286,24 +286,33 @@ static int test_sensor_loss_timeout_boundary(uint32_t start_ms)
     return EXIT_SUCCESS;
 }
 
+// 每毫秒交付真实新样本，防止用超长 dt 跳过连续加热过程。
+static void keep_heating(uint32_t start_ms, uint32_t count, uint32_t *sequence)
+{
+    for (uint32_t elapsed = 1u; elapsed <= count; ++elapsed)
+        update_at(start_ms + elapsed, ++*sequence, 20.0f);
+}
+
 static int test_continuous_heat_timeout_boundary(uint32_t start_ms, uint8_t reaches_target)
 {
-    setup(start_ms);
-    update_at(start_ms, 1u, 20.0f);
+    setup(start_ms - 1u);
+    update_at(start_ms - 1u, 1u, 20.0f);
+    ASSERT_TRUE(htim3.compare == 0u, "first update only establishes PID time");
+    update_at(start_ms, 2u, 20.0f);
 #if MC02_HEATER_ENABLED
     ASSERT_TRUE(htim3.compare > 0u, "continuous-heating test requires simulated PWM");
-    update_at(start_ms + 299999u, 2u, 20.0f);
-    ASSERT_TRUE(expect_fault(0u, "continuous heating must not latch before 300000ms"), "heater timeout latched early");
-    update_at(start_ms + 300000u, 3u, reaches_target ? 42.0f : 20.0f);
-    ASSERT_TRUE(expect_fault(1u, "continuous heating must latch at 300000ms"), "heater timeout did not latch at boundary");
-    ASSERT_TRUE(htim3.compare == 0u, "heater timeout must leave output off");
+    uint32_t sequence = 2u;
+    keep_heating(start_ms, 299999u, &sequence);
+    ASSERT_TRUE(expect_fault(0u, "no timeout before 300000ms"), "heater timeout latched early");
+    update_at(start_ms + 300000u, ++sequence, reaches_target ? 42.0f : 20.0f);
+    ASSERT_TRUE(expect_fault(1u, "timeout at 300000ms"), "heater timeout boundary failed");
+    ASSERT_TRUE(htim3.compare == 0u, "timeout must leave output off");
     IMUHeaterStatus_t status;
     get_status(&status);
-    ASSERT_TRUE(status.timeout_fault == 1u, "continuous timeout must report its fault cause");
+    ASSERT_TRUE(status.timeout_fault == 1u, "timeout cause must be visible");
 #else
-    update_at(start_ms + 299999u, 2u, 20.0f);
     update_at(start_ms + 300000u, 3u, reaches_target ? 42.0f : 20.0f);
-    ASSERT_TRUE(expect_fault(0u, "a disabled heater cannot accumulate continuous-heating time"), "disabled profile latched a heat timeout");
+    ASSERT_TRUE(expect_fault(0u, "disabled heater has no heating timer"), "unexpected timeout");
     ASSERT_TRUE(htim3.compare == 0u, "disabled profile must keep output off");
 #endif
     return EXIT_SUCCESS;
@@ -313,23 +322,58 @@ static int test_heat_timeout_restarts_after_zero(void)
 {
     setup(0u);
     update_at(0u, 1u, 20.0f);
+    update_at(1u, 2u, 20.0f);
+    uint32_t sequence = 2u;
 #if MC02_HEATER_ENABLED
-    ASSERT_TRUE(htim3.compare > 0u, "first heating interval should produce nonzero PWM");
-    update_at(299999u, 2u, 42.0f);
-    ASSERT_TRUE(htim3.compare == 0u, "reaching the target must end the current heating interval");
-    update_at(300000u, 3u, 20.0f);
-    ASSERT_TRUE(htim3.compare > 0u, "a new heating interval may start after PWM returned to zero");
-    update_at(599999u, 4u, 20.0f);
-    ASSERT_TRUE(expect_fault(0u, "time before the new interval must not count toward its timeout"), "heat timer did not restart");
-    update_at(600000u, 5u, 20.0f);
-    ASSERT_TRUE(expect_fault(1u, "the restarted interval must latch at 300000ms"), "restarted heat interval did not time out");
-#else
-    update_at(299999u, 2u, 42.0f);
-    update_at(300000u, 3u, 20.0f);
-    update_at(599999u, 4u, 20.0f);
-    update_at(600000u, 5u, 20.0f);
-    ASSERT_TRUE(expect_fault(0u, "disabled profile has no nonzero heating interval"), "disabled profile accumulated heating time");
+    ASSERT_TRUE(htim3.compare > 0u, "first measured interval should produce PWM");
+    keep_heating(1u, 299997u, &sequence);
 #endif
+    update_at(299999u, ++sequence, 42.0f);
+    ASSERT_TRUE(htim3.compare == 0u, "reaching target ends the heating interval");
+    update_at(300000u, ++sequence, 20.0f);
+    ASSERT_TRUE(htim3.compare == 0u, "restart first establishes PID time");
+    update_at(300001u, ++sequence, 20.0f);
+#if MC02_HEATER_ENABLED
+    ASSERT_TRUE(htim3.compare > 0u, "new measured interval permits heating");
+    keep_heating(300001u, 299999u, &sequence);
+    ASSERT_TRUE(expect_fault(0u, "old interval is excluded"), "timer did not restart");
+    update_at(600001u, ++sequence, 20.0f);
+    ASSERT_TRUE(expect_fault(1u, "restarted timer expires at 300000ms"), "timeout missing");
+#else
+    update_at(600001u, ++sequence, 20.0f);
+    ASSERT_TRUE(expect_fault(0u, "disabled profile has no timer"), "unexpected timeout");
+#endif
+    return EXIT_SUCCESS;
+}
+
+static int test_pid_timing(void)
+{
+    setup(100u);
+    update_at(100u, 1u, 20.0f);
+    ASSERT_TRUE(htim3.compare == 0u, "first call must not heat");
+    update_at(101u, 2u, 20.0f);
+#if MC02_HEATER_ENABLED
+    ASSERT_TRUE(htim3.compare > 0u, "valid interval permits heating");
+#endif
+    update_at(101u, 3u, 20.0f);
+    ASSERT_TRUE(htim3.compare == 0u, "zero interval must turn output off");
+    update_at(102u, 4u, 20.0f);
+#if MC02_HEATER_ENABLED
+    ASSERT_TRUE(htim3.compare > 0u, "next valid interval may recover");
+#endif
+    update_at(122u, 5u, 20.0f);
+#if MC02_HEATER_ENABLED
+    ASSERT_TRUE(htim3.compare > 0u, "20ms is an inclusive valid PID interval");
+#endif
+    update_at(143u, 6u, 20.0f);
+    ASSERT_TRUE(htim3.compare == 0u, "21ms interval must turn output off");
+    update_at(144u, 7u, 20.0f);
+#if MC02_HEATER_ENABLED
+    ASSERT_TRUE(htim3.compare > 0u, "long interval must not poison future timing");
+#endif
+    IMUHeaterForceOff();
+    update_at(145u, 8u, 20.0f);
+    ASSERT_TRUE(htim3.compare == 0u, "force-off requires a new time origin");
     return EXIT_SUCCESS;
 }
 
@@ -380,6 +424,8 @@ static int test_successful_long_operation_requires_new_sample(void)
     IMUHeaterUpdate(&replay, 0u);
     ASSERT_TRUE(htim3.compare == 0u, "old pre-operation sequence must not restore PWM");
     update_at(102u, 2u, 20.0f);
+    ASSERT_TRUE(htim3.compare == 0u, "first post-operation update must only establish PID time");
+    update_at(103u, 2u, 20.0f);
 #if MC02_HEATER_ENABLED
     ASSERT_TRUE(htim3.compare > 0u, "a new post-operation sample may restore normal control");
 #else
@@ -401,6 +447,7 @@ static int test_clear_requires_initialized_fresh_state(void)
 
 static int run(const char *name)
 {
+    if (strcmp(name, "pid-timing") == 0) return test_pid_timing();
     if (strcmp(name, "recovery") == 0) return test_overtemp_and_manual_recovery();
     if (strcmp(name, "invalid-temperature") == 0) return test_clear_rejects_invalid_temperature();
     if (strcmp(name, "imu-age-5") == 0) return test_clear_requires_recent_imu(5u);

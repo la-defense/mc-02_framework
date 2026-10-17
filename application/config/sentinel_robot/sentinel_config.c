@@ -32,6 +32,8 @@ Robot_Config_s *SentinelConfigInit(void)
                 .can_init_config.can_handle = &hcan1,
                 .controller_param_init_config = {
                     .speed_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 5.0,
                         .Ki = 1.0,
                         .Kd = 0.0,
@@ -40,6 +42,8 @@ Robot_Config_s *SentinelConfigInit(void)
                         .MaxOut = 12000,
                     },
                     .current_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 0.5,
                         .Ki = 0.0,
                         .Kd = 0.0,
@@ -75,6 +79,8 @@ Robot_Config_s *SentinelConfigInit(void)
                 },
                 .controller_param_init_config = {
                     .angle_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 10.0,
                         .Ki = 0.0,
                         .Kd = 0.7,
@@ -84,6 +90,8 @@ Robot_Config_s *SentinelConfigInit(void)
                         .MaxOut = 500,
                     },
                     .speed_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 100.0,
                         .Ki = 0.0,
                         .Kd = 0.0,
@@ -111,6 +119,8 @@ Robot_Config_s *SentinelConfigInit(void)
                 },
                 .controller_param_init_config = {
                     .angle_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 10.0,
                         .Ki = 0.0,
                         .Kd = 0.0,
@@ -120,6 +130,8 @@ Robot_Config_s *SentinelConfigInit(void)
                         .MaxOut = 300,
                     },
                     .speed_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 40.0,
                         .Ki = 0.0,
                         .Kd = 0.0,
@@ -146,6 +158,8 @@ Robot_Config_s *SentinelConfigInit(void)
                 },
                 .controller_param_init_config = {
                     .angle_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 10.0,
                         .Ki = 0.0,
                         .Kd = 0.2,
@@ -154,6 +168,8 @@ Robot_Config_s *SentinelConfigInit(void)
                         .MaxOut = 500,
                     },
                     .speed_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 45.0,
                         .Ki = 0.0,
                         .Kd = 0.2,
@@ -189,6 +205,8 @@ Robot_Config_s *SentinelConfigInit(void)
                 },
                 .controller_param_init_config = {
                     .speed_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 15.0,
                         .Ki = 1.0,
                         .Kd = 0.0,
@@ -197,6 +215,8 @@ Robot_Config_s *SentinelConfigInit(void)
                         .MaxOut = 15000,
                     },
                     .current_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 0.4,
                         .Ki = 0.0,
                         .Kd = 0.0,
@@ -222,12 +242,16 @@ Robot_Config_s *SentinelConfigInit(void)
                 },
                 .controller_param_init_config = {
                     .angle_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 5.0,
                         .Ki = 1.0,
                         .Kd = 0.0,
                         .MaxOut = 200,
                     },
                     .speed_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 5.0,
                         .Ki = 1.0,
                         .Kd = 0.0,
@@ -236,6 +260,8 @@ Robot_Config_s *SentinelConfigInit(void)
                         .MaxOut = 10000,
                     },
                     .current_PID = {
+                        .DtMin_s = MOTOR_PID_DT_MIN_S,
+                        .DtMax_s = MOTOR_PID_DT_MAX_S,
                         .Kp = 0.4,
                         .Ki = 0.0,
                         .Kd = 0.0,

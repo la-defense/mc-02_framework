@@ -47,6 +47,7 @@ typedef struct
     HTMotor_Measure_t measure;
 
     Motor_Control_Setting_s motor_settings;
+    MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
 
     PIDInstance current_PID;
     PIDInstance speed_PID;
@@ -74,7 +75,7 @@ typedef enum
 } HTMotor_Mode_t;
 
 /** @brief 注册 HT04 电机及离线计数，初始化中发送使能和编码器置零命令。
-* @param[in,out] config 有效配置，会改写 CAN 回调及 id；不检查 NULL、容量或分配注册失败。
+* @param[in,out] config 有效配置，会改写 CAN 回调及 id；检查空参数、内存及启用 PID 参数；容量和底层注册失败仍待处理。
 * @return 长期保存的对象，无释放入口，最多四个；随后调用 HTMotorControlInit() 创建独立控制任务。
 * @note 已包含实际 CAN 命令和 DWT 等待，先准备外设与计时；外部角度、速度反馈须用 rad、rad/s。
  */

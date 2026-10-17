@@ -2,6 +2,8 @@
 * @brief 解析 LK 单圈及速度反馈，累计多圈角度，再按编号填入同一八字节发送数组。
  */
 #include "LK9025.h"
+#include <string.h>
+#include <math.h>
 #include "stdlib.h"
 #include "general_def.h"
 #include "daemon.h"
@@ -60,14 +62,26 @@ static void LKMotorLostCallback(void *motor_ptr)
 
 LKMotorInstance *LKMotorInit(Motor_Init_Config_s *config)
 {
+    if (config == NULL)
+        return NULL;
     LKMotorInstance *motor = (LKMotorInstance *)malloc(sizeof(LKMotorInstance));
     motor = (LKMotorInstance *)malloc(sizeof(LKMotorInstance));
+    if (motor == NULL)
+        return NULL;
     memset(motor, 0, sizeof(LKMotorInstance));
 
     motor->motor_settings = config->controller_setting_init_config;
-    PIDInit(&motor->current_PID, &config->controller_param_init_config.current_PID);
-    PIDInit(&motor->speed_PID, &config->controller_param_init_config.speed_PID);
-    PIDInit(&motor->angle_PID, &config->controller_param_init_config.angle_PID);
+    // 只检查实际启用的环，失败发生在注册 CAN 和发送模式命令之前。
+    if (MotorPIDInit(&motor->current_PID, &config->controller_param_init_config.current_PID,
+                     (config->controller_setting_init_config.close_loop_type & CURRENT_LOOP) != 0u) != PID_OK ||
+        MotorPIDInit(&motor->speed_PID, &config->controller_param_init_config.speed_PID,
+                     (config->controller_setting_init_config.close_loop_type & SPEED_LOOP) != 0u) != PID_OK ||
+        MotorPIDInit(&motor->angle_PID, &config->controller_param_init_config.angle_PID,
+                     (config->controller_setting_init_config.close_loop_type & ANGLE_LOOP) != 0u) != PID_OK)
+    {
+        free(motor);
+        return NULL;
+    }
     motor->other_angle_feedback_ptr = config->controller_param_init_config.other_angle_feedback_ptr;
     motor->other_speed_feedback_ptr = config->controller_param_init_config.other_speed_feedback_ptr;
 
@@ -112,34 +126,48 @@ void LKMotorControl()
         measure = &motor->measure;
         setting = &motor->motor_settings;
         pid_ref = motor->pid_ref;
+        // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
+        float control_dt = 0.0f;
+        PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
 
         // 保留的旧控制路径：默认角度分支实际使用 real_current，外部反馈由相应指针提供。
-        if ((setting->close_loop_type & ANGLE_LOOP) && setting->outer_loop_type == ANGLE_LOOP)
+        if (pid_status == PID_OK && (setting->close_loop_type & ANGLE_LOOP) && setting->outer_loop_type == ANGLE_LOOP)
         {
             if (setting->angle_feedback_source == OTHER_FEED)
                 pid_measure = *motor->other_angle_feedback_ptr;
             else
                 pid_measure = measure->real_current;
-            pid_ref = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref);
+            if (pid_status == PID_OK)
+                pid_status = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref, control_dt, &pid_ref);
             if (setting->feedforward_flag & SPEED_FEEDFORWARD)
                 pid_ref += *motor->speed_feedforward_ptr;
         }
 
         // 速度分支当前也使用 angle_PID；这里按现有实现说明，不推断已换成速度 PID。
-        if ((setting->close_loop_type & SPEED_LOOP) && setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP))
+        if (pid_status == PID_OK && (setting->close_loop_type & SPEED_LOOP) && setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP))
         {
             if (setting->angle_feedback_source == OTHER_FEED)
                 pid_measure = *motor->other_speed_feedback_ptr;
             else
                 pid_measure = measure->speed_rads;
-            pid_ref = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref);
+            if (pid_status == PID_OK)
+                pid_status = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref, control_dt, &pid_ref);
             if (setting->feedforward_flag & CURRENT_FEEDFORWARD)
                 pid_ref += *motor->current_feedforward_ptr;
         }
 
         if (setting->close_loop_type & CURRENT_LOOP)
         {
-            pid_ref = PIDCalculate(&motor->current_PID, measure->real_current, pid_ref);
+            if (pid_status == PID_OK)
+                pid_status = PIDCalculate(&motor->current_PID, measure->real_current, pid_ref, control_dt, &pid_ref);
+        }
+
+        if (pid_status != PID_OK || !isfinite(pid_ref))
+        {
+            // 一环失败后丢弃本轮串级结果，恢复前清除各环已有积分和微分历史。
+            MotorPIDResetLoops(&motor->angle_PID, &motor->speed_PID, &motor->current_PID);
+            motor->pid_clock.last_status = pid_status != PID_OK ? pid_status : PID_NUMERIC_ERROR;
+            pid_ref = 0.0f;
         }
 
         set = pid_ref;

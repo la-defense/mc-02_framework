@@ -1,3 +1,6 @@
+/** @file imu_heater_sample_test.c
+ * @brief 用生产温控和 PID 验证 IMU、ADC 过期与恢复；硬件输出由替身记录。
+ */
 #include "imu_heater.h"
 #include "controller.h"
 #include "main.h"
@@ -41,17 +44,6 @@ void HostSetCompare(TIM_HandleTypeDef *timer, uint32_t channel, uint32_t value)
 { (void)channel; timer->compare = value; compare_value = value; }
 int HAL_TIM_PWM_Start(TIM_HandleTypeDef *timer, uint32_t channel)
 { (void)timer; (void)channel; return 0; }
-void PIDInit(PIDInstance *pid, PID_Init_Config_s *config)
-{ pid->Kp = config->Kp; pid->MaxOut = config->MaxOut; }
-float PIDCalculate(PIDInstance *pid, float measure, float ref)
-{
-    float output = (ref - measure) * pid->Kp;
-    if (output > pid->MaxOut) output = pid->MaxOut;
-    pid->Last_Output = pid->Output;
-    pid->Output = output;
-    return output;
-}
-
 int main(void)
 {
     now_ms = 100u;
@@ -63,6 +55,9 @@ int main(void)
         .valid = 1u,
     };
 
+    IMUHeaterUpdate(&sample, 0u);
+    if (compare_value != 0u) fail("the first PID call must only establish its time origin");
+    now_ms = 101u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("a fresh valid sample should exercise the enabled heater control path");
 
@@ -82,6 +77,9 @@ int main(void)
     now_ms = 122u;
     sample.sequence = 3u;
     sample.timestamp_ms = 122u;
+    IMUHeaterUpdate(&sample, 0u);
+    if (compare_value != 0u) fail("recovery must first establish a new time origin");
+    now_ms = 123u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("a fresh VIN sample must permit normal control when the supply is valid");
 
@@ -116,6 +114,8 @@ int main(void)
     sample.sequence = 7u;
     sample.timestamp_ms = 127u;
     IMUHeaterUpdate(&sample, 0u);
+    now_ms = 128u;
+    IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("fresh in-range voltage may resume normal control after a low supply");
 
     adc_sample.vcc_in_volts = 30.1f;
@@ -140,6 +140,8 @@ int main(void)
     sample.sequence = 10u;
     sample.timestamp_ms = 130u;
     IMUHeaterUpdate(&sample, 0u);
+    now_ms = 131u;
+    IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("valid in-range supply may resume after manual fault clear");
 
     if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION))
@@ -155,9 +157,11 @@ int main(void)
     adc_sample.timestamp_ms = 131u;
     now_ms = 131u;
     IMUHeaterUpdate(&sample, 0u);
+    now_ms = 132u;
+    IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("a new fresh post-operation sample may re-enable normal heater control");
 
-    now_ms = 132u;
+    now_ms = 133u;
     IMUHeaterUpdate(&sample, 0u);
     if (compare_value == 0u) fail("re-reading a still-fresh snapshot should not turn off before its age limit");
 

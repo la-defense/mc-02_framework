@@ -8,6 +8,8 @@
 * @date 2022/2/23
  */
 #include "ins_task.h"
+#include "bsp_dwt.h"
+#include "bsp_log.h"
 #include "controller.h"
 #include "QuaternionEKF.h"
 #include "spi.h"

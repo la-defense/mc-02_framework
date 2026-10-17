@@ -26,6 +26,29 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(CTest)
+# PID 本身只依赖标准 C；Linux 用真实线程检查不同实例同时计算。
+add_executable(pid_test pid_test.c ../../modules/algorithm/controller.c ../../modules/motor/motor_pid.c)
+target_include_directories(pid_test PRIVATE ../../modules/algorithm ../../modules/motor)
+if(UNIX)
+  target_link_libraries(pid_test PRIVATE m)
+  find_package(Threads REQUIRED)
+  target_link_libraries(pid_test PRIVATE Threads::Threads)
+  target_compile_definitions(pid_test PRIVATE PID_TEST_THREADS=1)
+endif()
+foreach(scenario IN ITEMS numeric improvements failures blocked instances timing)
+  add_test(NAME production_pid_${scenario} COMMAND pid_test ${scenario})
+  set_tests_properties(production_pid_${scenario} PROPERTIES TIMEOUT 15)
+endforeach()
+add_executable(motor_pid_integration_test motor_pid_integration_test.c
+  ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_pid.c
+  ../../modules/algorithm/controller.c)
+target_include_directories(motor_pid_integration_test BEFORE PRIVATE motor_pid_fakes)
+target_include_directories(motor_pid_integration_test PRIVATE ../../modules/motor
+  ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon)
+if(UNIX)
+  target_link_libraries(motor_pid_integration_test PRIVATE m)
+endif()
+add_test(NAME production_motor_pid_cascade_and_failure COMMAND motor_pid_integration_test)
 add_executable(host_test_check_test test_check_test.c)
 target_include_directories(host_test_check_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME host_test_check_positive_control COMMAND host_test_check_test)
@@ -357,7 +380,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   add_executable(
     imu_heater_sample_test
     imu_heater_sample_test.c
-    ../../modules/imu/imu_heater.c)
+    ../../modules/imu/imu_heater.c ../../modules/algorithm/controller.c)
   target_include_directories(imu_heater_sample_test BEFORE PRIVATE imu_heater_fakes)
   target_include_directories(imu_heater_sample_test PRIVATE ../../modules/imu ../../modules/BMI088)
   target_compile_definitions(imu_heater_sample_test PRIVATE MC02_HEATER_ENABLED=1)
@@ -382,7 +405,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
     endif()
     target_link_libraries(${heater_recovery_target} PRIVATE m)
     foreach(recovery_scenario IN ITEMS
-        recovery invalid-temperature imu-age-5 imu-age-6 sequence adc-invalid adc-age-21
+        pid-timing recovery invalid-temperature imu-age-5 imu-age-6 sequence adc-invalid adc-age-21
         sensor-timeout sensor-timeout-wrap heat-timeout heat-timeout-wrap heat-timeout-at-target
         heat-timeout-restarts-after-zero force-off-reinit long-operation post-operation-sample
         initialized-state)
@@ -391,6 +414,17 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
         COMMAND ${heater_recovery_target} ${recovery_scenario})
     endforeach()
   endforeach()
+
+  # 注入 PID 初始化拒绝，检查失败发生在 PWM 启动之前。
+  add_executable(imu_heater_pid_init_failure_test imu_heater_pid_init_failure_test.c
+    ../../modules/imu/imu_heater.c ../../modules/algorithm/controller.c)
+  target_include_directories(imu_heater_pid_init_failure_test BEFORE PRIVATE imu_heater_recovery_fakes)
+  target_include_directories(imu_heater_pid_init_failure_test PRIVATE
+    ../../modules/imu ../../modules/BMI088 ../../modules/algorithm)
+  target_compile_definitions(imu_heater_pid_init_failure_test PRIVATE MC02_HEATER_ENABLED=1)
+  target_link_libraries(imu_heater_pid_init_failure_test PRIVATE m)
+  target_link_options(imu_heater_pid_init_failure_test PRIVATE -Wl,--wrap=PIDInit)
+  add_test(NAME production_heater_pid_init_failure COMMAND imu_heater_pid_init_failure_test)
 
   add_executable(
     param_operation_test

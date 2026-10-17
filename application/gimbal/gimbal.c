@@ -27,6 +27,8 @@ uint8_t GimbalInit(void)
         },
         .controller_param_init_config = {
             .angle_PID = {
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 8, // 8
                 .Ki = 0,
                 .Kd = 0,
@@ -37,6 +39,8 @@ uint8_t GimbalInit(void)
                 .MaxOut = 500,
             },
             .speed_PID = {
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 50,  // 50
                 .Ki = 200, // 200
                 .Kd = 0,
@@ -64,6 +68,8 @@ uint8_t GimbalInit(void)
         },
         .controller_param_init_config = {
             .angle_PID = {
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 10, // 10
                 .Ki = 0,
                 .Kd = 0,
@@ -72,6 +78,8 @@ uint8_t GimbalInit(void)
                 .MaxOut = 500,
             },
             .speed_PID = {
+                .DtMin_s = MOTOR_PID_DT_MIN_S,
+                .DtMax_s = MOTOR_PID_DT_MAX_S,
                 .Kp = 50,  // 50
                 .Ki = 350, // 350
                 .Kd = 0,   // 0

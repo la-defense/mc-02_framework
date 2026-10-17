@@ -41,6 +41,7 @@ typedef struct
     LKMotor_Measure_t measure;
 
     Motor_Control_Setting_s motor_settings;
+    MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
 
     float *other_angle_feedback_ptr; // 其他反馈来源的反馈数据指针
     float *other_speed_feedback_ptr;
@@ -61,7 +62,8 @@ typedef struct
 
 /** @brief 分配 LK 对象，改写 CAN 编号与回调并注册离线计数，初始为运行标记。
 * @param[in,out] config 有效配置；同组编号应从 1 连续排列，最多四个且位于同一总线。
-* @return 长期保存对象，当前没有检查空参数、容量、重复分配或底层注册失败，不提供失败保证。
+* @return 参数为空、当前分配结果为空或启用 PID 参数非法时返回 NULL，否则返回长期对象。
+* @note 重复分配、容量及底层注册失败仍待对应任务处理，不能将 PID 检查视为整个注册过程已可靠。
  */
 LKMotorInstance *LKMotorInit(Motor_Init_Config_s *config);
 
