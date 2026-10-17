@@ -1,3 +1,7 @@
+/** @file lcd_font_cn.h
+ * @brief LCD 中文字形编号及常用标签。枚举顺序对应 lcd_cn_font16，COUNT 用作串尾标记。
+ * 标签是枚举数组的初始化内容，不是 UTF-8 字符串；字形排列见 lcd_font_cn.c。
+ */
 #ifndef LCD_FONT_CN_H
 #define LCD_FONT_CN_H
 
@@ -5,102 +9,103 @@
 
 typedef enum
 {
-    LCD_CN_XI,
-    LCD_CN_TONG,
-    LCD_CN_AN,
-    LCD_CN_QUAN,
-    LCD_CN_ZHUANG,
-    LCD_CN_TAI,
-    LCD_CN_GU,
-    LCD_CN_ZHANG,
-    LCD_CN_JI,
-    LCD_CN_TING,
-    LCD_CN_DIAN,
-    LCD_CN_YA,
-    LCD_CN_REN,
-    LCD_CN_WU,
-    LCD_CN_YAO,
-    LCD_CN_KONG,
-    LCD_CN_SHI,
-    LCD_CN_JUE,
-    LCD_CN_KAN,
-    LCD_CN_MEN,
-    LCD_CN_GOU,
-    LCD_CN_WEN,
-    LCD_CN_DU,
-    LCD_CN_MU,
-    LCD_CN_BIAO,
-    LCD_CN_ZHAN,
-    LCD_CN_KONG2,
-    LCD_CN_JIA,
-    LCD_CN_RE,
-    LCD_CN_ZI,
-    LCD_CN_YOU,
-    LCD_CN_XIAO,
-    LCD_CN_CAI,
-    LCD_CN_PAN,
-    LCD_CN_JIE,
-    LCD_CN_DUAN,
-    LCD_CN_XUE,
-    LCD_CN_LIANG,
-    LCD_CN_GONG,
-    LCD_CN_LV,
-    LCD_CN_HUAN,
-    LCD_CN_CHONG,
-    LCD_CN_TAN,
-    LCD_CN_SU,
-    LCD_CN_JIN,
-    LCD_CN_BI,
-    LCD_CN_DI,
-    LCD_CN_PAN2,
-    LCD_CN_YUN,
-    LCD_CN_FA,
-    LCD_CN_SHE,
-    LCD_CN_ZAI,
-    LCD_CN_XIAN,
-    LCD_CN_LI,
-    LCD_CN_ZONG,
-    LCD_CN_LIAN,
-    LCD_CN_LU,
-    LCD_CN_DANG,
-    LCD_CN_QIAN,
-    LCD_CN_JI2,
-    LCD_CN_DING,
-    LCD_CN_CHU,
-    LCD_CN_SHI2,
-    LCD_CN_HUA,
-    LCD_CN_SHI3,
-    LCD_CN_FOU,
-    LCD_CN_WU2,
-    LCD_CN_KAI,
-    LCD_CN_GUAN,
-    LCD_CN_SHU,
-    LCD_CN_JU,
-    LCD_CN_SHI4,
-    LCD_CN_JIAN,
-    LCD_CN_YE,
-    LCD_CN_SHANG,
-    LCD_CN_XIA,
-    LCD_CN_DONG,
-    LCD_CN_JIE2,
-    LCD_CN_HUI,
-    LCD_CN_FU,
-    LCD_CN_CUO,
-    LCD_CN_WU3,
-    LCD_CN_ZHONG,
-    LCD_CN_JING,
-    LCD_CN_ZHI,
-    LCD_CN_CHENG,
-    LCD_CN_SHI5,
-    LCD_CN_BAI,
-    LCD_CN_QING,
-    LCD_CN_BAO,
-    LCD_CN_CHI,
-    LCD_CN_JIU,
-    LCD_CN_XU,
+    LCD_CN_XI, // 系
+    LCD_CN_TONG, // 统
+    LCD_CN_AN, // 安
+    LCD_CN_QUAN, // 全
+    LCD_CN_ZHUANG, // 状
+    LCD_CN_TAI, // 态
+    LCD_CN_GU, // 故
+    LCD_CN_ZHANG, // 障
+    LCD_CN_JI, // 急
+    LCD_CN_TING, // 停
+    LCD_CN_DIAN, // 电
+    LCD_CN_YA, // 压
+    LCD_CN_REN, // 任
+    LCD_CN_WU, // 务
+    LCD_CN_YAO, // 遥
+    LCD_CN_KONG, // 控
+    LCD_CN_SHI, // 视
+    LCD_CN_JUE, // 觉
+    LCD_CN_KAN, // 看
+    LCD_CN_MEN, // 门
+    LCD_CN_GOU, // 狗
+    LCD_CN_WEN, // 温
+    LCD_CN_DU, // 度
+    LCD_CN_MU, // 目
+    LCD_CN_BIAO, // 标
+    LCD_CN_ZHAN, // 占
+    LCD_CN_KONG2, // 空
+    LCD_CN_JIA, // 加
+    LCD_CN_RE, // 热
+    LCD_CN_ZI, // 姿
+    LCD_CN_YOU, // 有
+    LCD_CN_XIAO, // 效
+    LCD_CN_CAI, // 裁
+    LCD_CN_PAN, // 判
+    LCD_CN_JIE, // 阶
+    LCD_CN_DUAN, // 段
+    LCD_CN_XUE, // 血
+    LCD_CN_LIANG, // 量
+    LCD_CN_GONG, // 功
+    LCD_CN_LV, // 率
+    LCD_CN_HUAN, // 缓
+    LCD_CN_CHONG, // 冲
+    LCD_CN_TAN, // 弹
+    LCD_CN_SU, // 速
+    LCD_CN_JIN, // 金
+    LCD_CN_BI, // 币
+    LCD_CN_DI, // 底
+    LCD_CN_PAN2, // 盘
+    LCD_CN_YUN, // 云
+    LCD_CN_FA, // 发
+    LCD_CN_SHE, // 射
+    LCD_CN_ZAI, // 在
+    LCD_CN_XIAN, // 线
+    LCD_CN_LI, // 离
+    LCD_CN_ZONG, // 总
+    LCD_CN_LIAN, // 链
+    LCD_CN_LU, // 路
+    LCD_CN_DANG, // 当
+    LCD_CN_QIAN, // 前
+    LCD_CN_JI2, // 机
+    LCD_CN_DING, // 定
+    LCD_CN_CHU, // 初
+    LCD_CN_SHI2, // 始
+    LCD_CN_HUA, // 化
+    LCD_CN_SHI3, // 是
+    LCD_CN_FOU, // 否
+    LCD_CN_WU2, // 无
+    LCD_CN_KAI, // 开
+    LCD_CN_GUAN, // 关
+    LCD_CN_SHU, // 数
+    LCD_CN_JU, // 据
+    LCD_CN_SHI4, // 时
+    LCD_CN_JIAN, // 间
+    LCD_CN_YE, // 页
+    LCD_CN_SHANG, // 上
+    LCD_CN_XIA, // 下
+    LCD_CN_DONG, // 冻
+    LCD_CN_JIE2, // 结
+    LCD_CN_HUI, // 恢
+    LCD_CN_FU, // 复
+    LCD_CN_CUO, // 错
+    LCD_CN_WU3, // 误
+    LCD_CN_ZHONG, // 中
+    LCD_CN_JING, // 静
+    LCD_CN_ZHI, // 止
+    LCD_CN_CHENG, // 成
+    LCD_CN_SHI5, // 失
+    LCD_CN_BAI, // 败
+    LCD_CN_QING, // 请
+    LCD_CN_BAO, // 保
+    LCD_CN_CHI, // 持
+    LCD_CN_JIU, // 就
+    LCD_CN_XU, // 绪
     LCD_CN_COUNT,
 } Lcd_CnChar_e;
 
+// 每项保存一个 16×16 字形，共 32 字节；字形编号须小于 LCD_CN_COUNT。
 extern const uint8_t lcd_cn_font16[LCD_CN_COUNT][32];
 
 /* 常用标签的枚举序列，末尾 LCD_CN_COUNT 作为结束标记 */

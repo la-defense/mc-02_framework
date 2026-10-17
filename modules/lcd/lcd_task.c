@@ -1,3 +1,7 @@
+/** @file lcd_task.c
+ * @brief 连接 ADC 按键、LCD 页面和标定提示，并周期记录任务耗时。
+ * StartLCDTASK() 先初始化屏幕；循环中先处理按键和拔插，再决定是否更新数值。
+ */
 #include "lcd_task.h"
 #include "lcd_ui.h"
 #include "lcd_buf.h"
@@ -39,30 +43,16 @@
 #define LCD_KEY_DOWN_LO ADC16(2800u)
 #define LCD_KEY_DOWN_HI ADC16(3500u)
 
-/* 模组在位检测(热插拔恢复):
-   模组拔掉后 PA5(按键分压输入)没有驱动, 重新插上时模组已经掉电复位,
-   必须重发初始化序列才可能重新显示。
-   实测(2026-09-21, 拔掉模组): PA5 稳定在 ~5900(0.29V), 既不越界也不跳动,
-   所以"越界/极差"判据抓不到, 必须按"极性档位带"判断:
-     合法档位 = mid(0~3200) / right(11200~16000) / left(24000~28800)
-                / up(35200~40000) / down(44800~56000) / 空闲(>=58000)
-   落在档位之间的缝隙(如拔掉时的 5900)即视为不在位。 */
+// 用按键和空闲读数范围检查模组是否接入；读数落在档位之间时记为拔出。
+// 模组重新上电后需要重发初始化命令，连续八次有效读数后再恢复显示。
 #define LCD_PRESENCE_WINDOW 10u
 #define LCD_PRESENCE_SPREAD_MAX 1500u
 #define LCD_IDLE_RAW_MIN 58000u
 #define LCD_ABSENT_RAW_HI 65200u
 #define LCD_PRESENT_CONFIRM 8u  /* 连续 400ms 正常 -> 判定插回 */
 
-/* 按键定义(全部在"松开"时判定, 以 1.5s 为界分成"短按/长按", 没有中间的空白区):
-     < 1.5s  上/下       : 翻页
-     < 1.5s  中键        : 冻结 / 恢复
-     < 1.5s  左/右       : (无功能)
-     >= 1.5s 中键        : 手动重初始化面板(拔插后没自动恢复时的兜底), 并解除冻结
-     >= 1.5s 左/右       : 进入按需 IMU 标定(进 CALIB, 电机失能, 保持静止)
-   为什么把标定从中键挪到左右:
-     中键的长按已经被"面板重初始化"占用, 再塞"标定"会让人分不清按了多久会发生什么;
-     而且用户最常用的就是中键, 误触标定会让机器人突然失能。
-     左右键原本没有任何功能(而且之前根本没被识别), 拿来做"破坏性动作"最合适。 */
+// 动作在松开时处理：短按上下翻页、中键冻结；长按中键恢复面板、左右请求标定。
+// 长短按以 1500 ms 区分；标定先请求电机失能，执行过程交给 INS 任务。
 #define LCD_KEY_LONG_MIN_MS 1500u
 /* 标定结果显示保持时间(ms) */
 #define LCD_CALIB_RESULT_MS 3000u
@@ -101,9 +91,8 @@ volatile uint32_t lcd_prof_recover_us = 0;
 volatile uint32_t lcd_prof_busy_us = 0;
 volatile uint32_t lcd_prof_cycles = 0;
 
-/* ---- 全系统 CPU 占用快照(每 5s 采一次, 供 OpenOCD 读取) ----
-   RTOS 运行时间统计依赖 Core/Src/freertos.c 里 getRunTimeCounterValue() = DWT->CYCCNT。
-   任务占用率 = Δlcd_stats_runtime[i] / Δlcd_stats_total。 */
+// 每 25 个刷新周期记录一次任务运行计数，供调试读取；任务耗时比例用前后差值计算。
+// 原始计数来自 getRunTimeCounterValue()，当前返回 CYCCNT/1000。
 #define LCD_TASK_STATS_PERIOD 25u /* 25 个 200ms 周期 = 5s */
 #define LCD_TASK_STATS_MAX 12u
 volatile uint32_t lcd_stats_total = 0;
@@ -136,10 +125,7 @@ typedef struct
 /* 每 5s 打印一次: 第一行各任务占用率(千分比, RTT 不支持浮点), 第二行分段耗时 */
 static void lcd_cpu_report(uint32_t delta_total, const uint32_t *deltas)
 {
-    /* 208 字节足够放下"最多 12 个任务 × (11 字符任务名 + = + 4 位千分比 + 空格)"(实测最多
-       8 个任务, 实际约 140 字节); 不能更大 —— 这一行是作为 %s 塞进 LOGINFO 的, 日志宏的
-       缓冲区(LOG_BUF_SIZE-8 = 248)必须能连前缀和尾注一起装下, 否则 GCC 的
-       -Wformat-truncation 会报警, 真超长时也会被截断。 */
+    // 给日志前缀留出空间；只在行数组还有空位时继续追加各任务占用率。
     char line[208];
     int off = snprintf(line, sizeof(line), "[cpu] win=%lums ",
                        (unsigned long)LCD_STATS_UNIT_TO_US(delta_total) / 1000u);
@@ -186,6 +172,7 @@ static void lcd_cpu_report(uint32_t delta_total, const uint32_t *deltas)
     LOGINFO("%s", stk);
 }
 
+// 记录各任务计数与剩余栈；第一次只保存基数，从第二次开始报告这一段时间的占用。
 static void lcd_task_stats_snapshot(void)
 {
     static TaskStatus_t st[LCD_TASK_STATS_MAX];
@@ -197,8 +184,7 @@ static void lcd_task_stats_snapshot(void)
     if (n > LCD_TASK_STATS_MAX)
         n = LCD_TASK_STATS_MAX;
 
-    /* 用各任务累计运行时间之和作为总时间: 计数器单位是 us(见 freertos.c),
-       单个任务要 4295s 才回绕, 比直接读 portGET_RUN_TIME_COUNTER_VALUE() 稳。 */
+    // 总量取各任务累计计数之和，计数单位沿用 CYCCNT/1000，下面按同名任务求差。
     (void)total;
     uint32_t sum = 0;
     for (UBaseType_t i = 0; i < n; ++i)
@@ -209,6 +195,7 @@ static void lcd_task_stats_snapshot(void)
     uint32_t deltas[LCD_TASK_STATS_MAX] = {0};
     uint32_t delta_total = 0;
 
+    // 按任务逐项保存名称、优先级和剩余栈，再与上次记录配对。
     for (UBaseType_t i = 0; i < n; ++i)
     {
         lcd_stats_runtime[i] = st[i].ulRunTimeCounter;
@@ -224,7 +211,7 @@ static void lcd_task_stats_snapshot(void)
                 break;
         }
 
-        /* 与上一次快照按任务名配对, 求增量; 无符号差值天然兼容计数器回绕 */
+        // 任务排列可能变化，按名字查找上一次记录，找到后只计算这一对的差值。
         for (uint8_t k = 0; k < prev_cnt; ++k)
         {
             if (strncmp((const char *)lcd_stats_name[i], prev[k].name, sizeof(prev[k].name)) == 0)
@@ -239,6 +226,7 @@ static void lcd_task_stats_snapshot(void)
     if (prev_cnt != 0u)
         lcd_cpu_report(delta_total, deltas);
 
+    // 本次结果作为下一轮的比较起点，名称连同结尾 0 一起保存。
     for (uint8_t i = 0; i < n; ++i)
     {
         for (uint8_t k = 0; k < 12u; ++k)
@@ -248,6 +236,7 @@ static void lcd_task_stats_snapshot(void)
     prev_cnt = (uint8_t)n;
 }
 
+// 保存本次耗时及历史最大耗时，并加入 LCD 操作的累计时间。
 static void lcd_prof_record(uint32_t t0, volatile uint32_t *last, volatile uint32_t *maxv)
 {
     uint32_t dt = DWT_ProbeElapsedUs(t0); /* 探针统一直接读 CYCCNT */
@@ -257,6 +246,7 @@ static void lcd_prof_record(uint32_t t0, volatile uint32_t *last, volatile uint3
     lcd_prof_busy_us += dt;
 }
 
+// 读取有效 ADC 样本，按实际安装方向把电压范围换成用户看到的按键方向。
 static LcdKey_e lcd_key_read(void)
 {
     BSP_ADC_Sample_t sample;
@@ -275,14 +265,7 @@ static LcdKey_e lcd_key_read(void)
     if (raw < lcd_key_raw_min)
         lcd_key_raw_min = raw;
 
-    /* 中键: 按下时 ADC 趋近 0。
-       原来这里还有一条 "raw < LCD_ABSENT_RAW_LO(100) 判为悬空" 的保护, 那是
-       为了防"模组拔掉后引脚浮空" —— 但实测拔掉模组时读数稳定在 ~5900(落在
-       档位缝隙里, 本来就会被判成 NONE), 根本不会出现在 0 附近; 那条保护反而把
-       中键按下的真实值吃掉了 → 短按/长按中键时灵时不灵。这里去掉它,
-       也**不能**用 lcd_module_absent 来兜底: 按住按键时读数本来就会大幅变化,
-       在位检测偶尔会误判成"模组拔出", 那样会把按键整个屏蔽掉(用户体感:
-       按什么都没反应)。 */
+    // 中键按下时接近 0；直接按其范围识别，避免把真实按下误当成模组拔出。
     if (raw < LCD_KEY_MID_HI)
         return LCD_KEY_MID;
 
@@ -292,9 +275,7 @@ static LcdKey_e lcd_key_read(void)
     if (raw >= LCD_KEY_LEFT_LO && raw < LCD_KEY_LEFT_HI)
         return LCD_KEY_DOWN;
 
-    /* 用户视角的左右 = 模组原始 up/down 触点。
-       模组逆时针旋转 90° 安装: 局部 +y(up) → 用户 -x(左), 局部 -y(down) → 用户 +x(右)。
-       之前这里漏了这两档, 所以摇杆左右按下去没有任何反应(直接落到 LCD_KEY_NONE)。 */
+    // 模组旋转安装，原始 up/down 分别对应用户的左、右。
     if (raw >= LCD_KEY_UP_LO && raw < LCD_KEY_UP_HI)
         return LCD_KEY_LEFT;
     if (raw >= LCD_KEY_DOWN_LO && raw < LCD_KEY_DOWN_HI)
@@ -323,6 +304,7 @@ static uint8_t lcd_raw_valid_level(uint16_t raw)
     return 0u;
 }
 
+// 检查最近采样的电平，记住拔出状态；连续确认接入后重新初始化屏幕。
 static void lcd_module_presence_check(void)
 {
     static uint16_t hist[LCD_PRESENCE_WINDOW];
@@ -365,18 +347,12 @@ static void lcd_module_presence_check(void)
         }
         lcd_key_spread = (idle_cnt > 0u) ? (uint16_t)(idle_max - idle_min) : 0u;
 
-        /* 这里原来还有一条"空闲电平极差过大 → 判模组不在位"的判据(spread > 1500)。
-           实测本模组的空闲电平本身就会在 58000~65000 之间抖动(极差 6000+),
-           于是好端端的模组被反复判成"不在位" → 数值区停止刷新 + 误触发重初始化。
-           插拔检测其实只靠"读数落在档位缝隙里"(拔掉时稳定在 ~5900)就够了,
-           所以这条判据去掉, lcd_key_spread 仍保留仅供观察。 */
+        // 空闲读数的最大、最小差仅供观察；空闲本身会波动，不据此宣布模组拔出。
     }
 
     if (invalid)
     {
-        /* 只要出现过一次"缝隙档位/剧烈跳动", 就记下这次拔插事件,
-           之后电平回到合法档位并稳定 400ms 就重初始化面板。
-           这样即使拔插很快(只抓到一两帧), 也能恢复。 */
+        // 记住一次不合档位的读数；之后连续八次有效才恢复，避免反复重初始化。
         invalid_seen = 1u;
         present_streak = 0u;
         if (!lcd_module_absent)
@@ -404,6 +380,7 @@ static void lcd_module_presence_check(void)
     }
 }
 
+// 将连续确认后的事件转成页面或标定动作；只有松开事件会执行这些动作。
 static void lcd_key_update(void)
 {
     LcdKey_e key = lcd_key_read();
@@ -459,8 +436,7 @@ static void lcd_key_update(void)
         if (released == LCD_KEY_MID)
         {
             lcd_recover_count++;
-            /* 长按中键的语义是"重置显示", 顺便解冻 —— 否则用户习惯了长按,
-               冻结之后怎么长按都解不开(长按被"重初始化"吃掉了)。 */
+            // 重置显示时同时解除冻结，使恢复后的数值继续刷新。
             lcd_frozen = 0u;
             LCD_UI_SetFrozen(0u);
             LOGINFO("[lcd] manual re-init (recover=%lu)", (unsigned long)lcd_recover_count);

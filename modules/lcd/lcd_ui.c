@@ -1,3 +1,7 @@
+/** @file lcd_ui.c
+ * @brief 组合系统、IMU、功率和电机四页信息，通过 lcd_buf.c 绘制。
+ * 标签与标题按页重画，值区保留上次内容，相同内容跳过；页面被覆盖后须清除记录。
+ */
 #include "lcd_ui.h"
 #include "lcd.h"
 #include "lcd_buf.h"
@@ -82,6 +86,7 @@ static uint8_t lcd_frozen = 0;
    启动卡死时读它就能知道卡在哪一步, 不用靠猜。 */
 volatile uint8_t lcd_init_stage = 0;
 
+// 将整车状态换成标签；未知状态显示“否”，不改变整车状态。
 static const Lcd_CnChar_e *state_label(Robot_Status_e state)
 {
     switch (state)
@@ -108,6 +113,7 @@ static const Lcd_CnChar_e *online_label(uint8_t online)
     return online ? L_ONLINE : L_OFFLINE;
 }
 
+// 把 CAN 状态换成短文字，未识别的状态显示 --。
 static const char *can_status_str(CAN_Status_e status)
 {
     switch (status)
@@ -132,6 +138,7 @@ static uint8_t cn_len(const Lcd_CnChar_e *str)
     return n;
 }
 
+// 用底色重画标题栏，同时显示页号和冻结提示，不清理下面的值区。
 static void draw_title(const Lcd_CnChar_e *title_cn, const char *title_ascii)
 {
     LCD_BufFill(0, 0, LCD_W - 1u, 23u, BLUE);
@@ -148,12 +155,7 @@ static void draw_title(const Lcd_CnChar_e *title_cn, const char *title_ascii)
         LCD_BufShowCnString((uint16_t)(LCD_W - 68u), 4, L_FREEZE, YELLOW, BLUE);
 }
 
-/**
- * @brief 按页码重画标题栏(draw_title 内部会先铺满标题栏底色, 所以是"完整重画")
- * @note  抽出来是为了两个地方能单独刷新标题栏而不必整页重画:
- *          1) 冻结/恢复 —— 只影响右上角那个"冻结"标记;
- *          2) LCD_UI_DrawStatic() —— 统一画标题, 各页的 static 函数就不再重复画了。
- */
+// 按页号选择标题；独立重画可让冻结提示变化时只更新顶部。
 static void draw_page_title(uint8_t page)
 {
     switch (page)
@@ -177,28 +179,26 @@ static void draw_page_title(uint8_t page)
     }
 }
 
+// 在固定标签列绘制一行中文标签，row 从 0 开始。
 static void draw_label(uint8_t row, const Lcd_CnChar_e *label)
 {
     LCD_BufShowCnString(COL_LABEL_X, ROW_Y(row), label, WHITE, BLACK);
 }
 
+// 在固定标签列绘制一行 ASCII 标签。
 static void draw_label_ascii(uint8_t row, const char *label)
 {
     LCD_BufShowAscii(COL_LABEL_X, ROW_Y(row), label, WHITE, BLACK, 16);
 }
 
+// 只清指定行的值区，覆盖旧文本可能留下的较长尾部。
 static void clear_value(uint8_t row)
 {
     LCD_BufFill(COL_VALUE_X, ROW_Y(row), LCD_W - 1u, ROW_Y(row) + 15u, BLACK);
 }
 
-/* ---------------- 值区重绘缓存(2026-09-26, LCD-12) ----------------
-   刷新率 5Hz、每帧无条件重画 9 行值区, 但大部分数值(电压/状态/在线位)根本不变化 ——
-   白白吃掉 SPI 带宽和 CPU。这里按"页 × 行"记住上次画的内容, 内容没变就整行跳过
-   (连清屏都不做)。
-   !! 任何"整页被重画/被破坏"的路径都必须先 LCD_UI_InvalidateValueCache(),
-      否则会出现"屏幕被清了但值一直不刷新"。目前只在 LCD_UI_DrawStatic() 里调用,
-      而所有整页重画(Init/Recover/SetFrozen/翻页/标定提示消失)都会经过它。 */
+// 按“页、行”保存最后绘制的内容；相同内容无需再次清背景和发送像素。
+// 整页内容被覆盖后要清除这些记录，避免下次把已消失的值误当成还在屏上。
 #define LCD_ROW_COUNT 9u
 #define LCD_TEXT_MAX 48u
 
@@ -279,8 +279,7 @@ void LCD_UI_InvalidateValueCache(void)
 
 static void draw_value_ascii(uint8_t row, const char *str)
 {
-    /* 可用宽度随 LCD_W 变化(可见区偏移会缩小绘图区)，过长时先降字号，
-       仍然放不下就截断，避免整行因为越界校验而什么都不显示。 */
+    // 文本过长先改用 12 像素字高，仍放不下时只保留能显示的部分并加 ~。
     size_t len = strlen(str);
     uint16_t avail = (uint16_t)(LCD_W - COL_VALUE_X);
     uint8_t sizey = 16u;
@@ -309,8 +308,7 @@ static void draw_value_ascii(uint8_t row, const char *str)
         buf[len] = '\0';
     }
 
-    /* 比较"实际要画出去的文本"而不是原始入参: 原始串可能每次都不同但显示结果相同。
-       内容没变就整行跳过(连清屏都不做) —— 这是本次性能优化的主要来源。 */
+    // 比较最终显示的文本；前面的缩短处理可能让不同输入得到相同画面。
     if (value_unchanged(row, VALUE_KIND_ASCII, buf, 0u))
     {
         lcd_rows_skipped++;
@@ -338,8 +336,7 @@ static void draw_value_cn(uint8_t row, const Lcd_CnChar_e *str)
 
 static void draw_value_float_unit(uint8_t row, float value, uint8_t decimals, const char *unit)
 {
-    /* 本工程不用 %f(nano.specs 不支持), 没法先格式化成字符串比较,
-       所以直接比较"数值 + 小数位数"。同一行 unit 是固定的, 不参与比较。 */
+    // 同一行单位固定，只比较数值和小数位数；数字文本由 LCD_BufShowFloat() 准备。
     if (value_unchanged(row, VALUE_KIND_FLOAT, &value, decimals))
     {
         lcd_rows_skipped++;
@@ -352,6 +349,7 @@ static void draw_value_float_unit(uint8_t row, float value, uint8_t decimals, co
     value_mark_drawn(row, VALUE_KIND_FLOAT, &value, decimals);
 }
 
+// 在调用方提供的文本空间内写故障编号，并追加已知故障的简称。
 static void build_fault_string(uint32_t faults, char *buf, size_t len)
 {
     snprintf(buf, len, "0x%04lX ", (unsigned long)faults);
@@ -371,6 +369,7 @@ static void build_fault_string(uint32_t faults, char *buf, size_t len)
         strncat(buf, "TASK", len - strlen(buf) - 1u);
 }
 
+// 第 0 页标签：整车状态、故障、输入在线情况和上次异常。
 static void draw_page0_static(void)
 {
     draw_label(0, L_STATE);
@@ -384,6 +383,7 @@ static void draw_page0_static(void)
     draw_label_ascii(8, "CRASH"); /* 上次崩溃(异常/断言/栈溢出)现场, 没崩过显示 -- */
 }
 
+// 第 0 页读取系统信息；逐项检查任务是否超时，异常记录不存在时显示 --。
 static void draw_page0_values(void)
 {
     draw_value_cn(0, state_label(RobotSafetyGetState()));
@@ -444,6 +444,7 @@ static void draw_page0_values(void)
     draw_value_ascii(8, buf);
 }
 
+// 第 1 页标签：温度、加热输出、姿态和标定来源。
 static void draw_page1_static(void)
 {
     draw_label(0, L_TEMP);
@@ -457,13 +458,13 @@ static void draw_page1_static(void)
     draw_label_ascii(8, "CAL"); /* 标定来源 + 标定温度 */
 }
 
+// 第 1 页读取当前加热与姿态数据；姿态地址不可用时以 -- 替代角度。
 static void draw_page1_values(void)
 {
     IMUHeaterStatus_t hs;
     IMUHeaterGetStatus(&hs);
 
-    /* 标定来源(FLASH=读参数区 / AUTO=首次自动 / MAN=按需标定 / DEF=默认值)
-       + 标定时温度。snprintf 在本工程用 nano.specs, 不支持 %f, 所以手算一位小数。 */
+    // 显示标定来源及温度；手工拆出一位小数，避免依赖浮点格式化。
     char cal_buf[24];
     const char *src;
     switch (bmi088_calib_source)
@@ -529,6 +530,7 @@ static void draw_page1_values(void)
     draw_value_float_unit(7, att->Roll, 1, "d");
 }
 
+// 第 2 页标签：裁判状态、功率和弹量。
 static void draw_page2_static(void)
 {
     draw_label(0, L_REFEREE);
@@ -542,6 +544,7 @@ static void draw_page2_static(void)
     draw_label(8, L_COIN);
 }
 
+// 裁判离线或尚无数据对象时，逐行清掉旧值并显示 --。
 static void draw_page2_values(void)
 {
     uint8_t online = RefereeIsOnline();
@@ -586,6 +589,7 @@ static void draw_page2_values(void)
     draw_value_ascii(8, buf);
 }
 
+// 第 3 页标签：各电机在线情况、CAN、视觉和按键读数。
 static void draw_page3_static(void)
 {
     draw_label(0, L_CHASSIS);
@@ -598,6 +602,7 @@ static void draw_page3_static(void)
     draw_label_ascii(7, "KEY");
 }
 
+// 汇总模块提供的当前状态；无有效 ADC 样本时不显示旧按键读数。
 static void draw_page3_values(void)
 {
     char buf[48];
@@ -660,13 +665,7 @@ void LCD_UI_DrawStatic(uint8_t page)
 
     lcd_page = page % LCD_PAGE_COUNT;
 
-    /* 只清"会变的那一块", 不再整屏清黑 ——
-       原来这里 LCD_BufFill 整屏刷黑, 于是每次按键(翻页/冻结/重初始化)屏幕都会
-       黑一下再刷回来, 用户能看到"黑屏然后重刷"。现在:
-         · 标题栏由 draw_page_title() 自己铺底色覆盖;
-         · 标签列(x: 0~COL_VALUE_X-1)在这里清掉(新旧页的标签内容不同, 不清会留残影);
-         · 值区交给后面的 UpdateValues() 逐行清+画(缓存刚失效, 一定会全部重画)。
-       四页都是 9 行值区, 行数一致, 不会出现"上一页多出来的行没被覆盖"。 */
+    // 清旧标签列；标题自行铺底色，值区由下一次 UpdateValues() 逐行清理和重画。
     LCD_BufFill(0, 24u, (uint16_t)(COL_VALUE_X - 1u), LCD_H - 1u, BLACK);
     draw_page_title(lcd_page);
 
@@ -726,8 +725,7 @@ void LCD_UI_Init(void)
     lcd_init_stage = 6;
 }
 
-/* 面板掉电(拔插模组/欠压复位)后重新初始化并整屏重画。
-   模组重新上电时 ST7789 回到默认状态(休眠、18bit 色深)，不重发初始化序列就会一直黑屏。 */
+// 面板重新上电后配置可能丢失，需要重发初始化命令再恢复当前页面。
 void LCD_UI_Recover(void)
 {
     if (HAL_SPI_GetState(&hspi1) != HAL_SPI_STATE_READY)
@@ -745,18 +743,11 @@ void LCD_UI_Recover(void)
 void LCD_UI_SetFrozen(uint8_t frozen)
 {
     lcd_frozen = frozen ? 1u : 0u;
-    /* 冻结/恢复只影响标题栏右上角那个"冻结"标记 —— 只重画标题栏就够,
-       不要走 DrawStatic+UpdateValues 那样整页重画(按中键会闪一下)。
-       draw_title() 内部会先把整个标题栏铺成底色, 所以标记能正确出现/消失。 */
+    // 只重画标题，让冻结标记出现或消失；值区更新由 LCD 任务决定。
     draw_page_title(lcd_page);
 }
 
-/**
- * @brief 按需标定的屏幕提示(覆盖当前页面中间一块)
- * @param msg 0=清除提示并重画整页, 1=标定中(请保持静止), 2=成功, 3=失败
- * @note  只画中间一块, 不整屏重画 —— 标定期间 CPU 被 INS 任务大量占用,
- *        LCD 任务只能抢到很小的切片, 全屏重画会来不及。
- */
+// 只覆盖页面中间一块，减少标定期间显示所需的发送时间。
 void LCD_UI_ShowCalibMsg(uint8_t msg)
 {
     if (msg == 0u)
