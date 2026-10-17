@@ -1,5 +1,5 @@
 /** @file bsp_pwm.c
- * @brief 按定时器和通道保存 PWM 实例，设置输出并将 DMA 完成通知转给对应模块。
+* @brief 按定时器和通道保存 PWM 实例，设置输出并将 DMA 完成通知转给对应模块。
  */
 #include "bsp_pwm.h"
 #include "stdlib.h"

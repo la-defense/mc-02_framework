@@ -1,6 +1,6 @@
 /** @file message_center.c
- * @brief 管理话题与订阅链表，发布时复制最新内容，读取时可选择检查消息时间。
- */
+* @brief 管理话题与订阅链表，发布时复制最新内容，读取时可选择检查消息时间。
+*/
 #include "message_center.h"
 #include <stdlib.h>
 #include <string.h>

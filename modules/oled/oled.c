@@ -1,4 +1,9 @@
-#include "oled.h" 
+/**
+* @file oled.c
+* @brief 维护 OLED 显存缓冲区，并通过 I2C 向面板发送指令和像素数据。
+* 绘图函数只改缓冲区；OLED_refresh_gram 按8页、每页128列发送整屏。
+ */
+#include "oled.h"
 #include "oledfont.h"
 #include "main.h"
 #include <stdio.h>
@@ -7,15 +12,11 @@
 extern I2C_HandleTypeDef hi2c2;
 static uint8_t OLED_GRAM[128][8];
 
-/**
-  * @brief          写数据或者指令到OLED， 如果使用的是SPI，请重写这个函数
-  * @param[in]      dat: 要写入的字节
-  * @param[in]      cmd: OLED_CMD 代表写入的字节是指令; OLED_DATA 代表写入的字节是数据
-  * @retval         none
-  */
+
 void oled_write_byte(uint8_t dat, uint8_t cmd)
 {
     static uint8_t cmd_data[2];
+    // 控制字节区分指令与显存数据，第二字节才是实际发送内容。
     if(cmd == OLED_CMD)
     {
         cmd_data[0] = 0x00;
@@ -29,11 +30,7 @@ void oled_write_byte(uint8_t dat, uint8_t cmd)
 }
 
 
-/**
-  * @brief          初始化OLED模块，
-  * @param[in]      none
-  * @retval         none
-  */
+
 void OLED_init(void)
 {
     oled_write_byte(0xAE, OLED_CMD);    //display off
@@ -67,11 +64,7 @@ void OLED_init(void)
 }
 
 
-/**
-  * @brief          打开OLED显示
-  * @param[in]      none
-  * @retval         none
-  */
+
 void OLED_display_on(void)
 {
     oled_write_byte(0x8d, OLED_CMD);
@@ -80,11 +73,7 @@ void OLED_display_on(void)
 }
 
 
-/**
-  * @brief          关闭OLED显示
-  * @param[in]      none
-  * @retval         none
-  */
+
 void OLED_display_off(void)
 {
     oled_write_byte(0x8d, OLED_CMD);
@@ -93,18 +82,12 @@ void OLED_display_off(void)
 }
 
 
-/**
-  * @brief          操作GRAM内存(128*8char数组)
-  * @param[in]      pen: 操作类型.
-                    PEN_CLEAR: 设置为0x00
-                    PEN_WRITE: 设置为0xff
-                    PEN_INVERSION: 按位取反
-  * @retval         none
-  */
+
 void OLED_operate_gram(pen_typedef pen)
 {
     uint8_t i, n;
 
+    // 外层遍历8页，内层遍历每页128列。
     for (i = 0; i < 8; i++)
     {
         for (n = 0; n < 128; n++)
@@ -119,44 +102,33 @@ void OLED_operate_gram(pen_typedef pen)
             }
             else
             {
+                // 清零和全置1之外的操作按位翻转当前缓冲字节。
                 OLED_GRAM[n][i] = 0xff - OLED_GRAM[n][i];
             }
         }
     }
 }
 
-/**
-  * @brief          设置光标起点(x,y)
-  * @param[in]      x:x轴, 从 0 到 127
-  * @param[in]      y:y轴, 从 0 到 7
-  * @retval         none
-  */
+
 void OLED_set_pos(uint8_t x, uint8_t y)
 {
+    // 先设页，再把列地址拆成高4位和低4位发送。
     oled_write_byte((0xb0 + y), OLED_CMD);              //set page address y
     oled_write_byte(((x&0xf0)>>4)|0x10, OLED_CMD);      //set column high address
     oled_write_byte((x&0x0f), OLED_CMD);                //set column low address
 }
 
-/**
-  * @brief          操作GRAM中的一个位，相当于操作屏幕的一个点
-  * @param[in]      x:x轴,  [0,X_WIDTH-1]
-  * @param[in]      y:y轴,  [0,Y_WIDTH-1]
-  * @param[in]      pen: 操作类型,
-                        PEN_CLEAR: 设置 (x,y) 点为 0
-                        PEN_WRITE: 设置 (x,y) 点为 1
-                        PEN_INVERSION: (x,y) 值反转
-  * @retval         none
-  */
+
 void OLED_draw_point(int8_t x, int8_t y, pen_typedef pen)
 {
     uint8_t page = 0, row = 0;
 
-    /* check the corrdinate */
+    // 越界坐标不改写缓冲区。
     if ((x < 0) || (x > (X_WIDTH - 1)) || (y < 0) || (y > (Y_WIDTH - 1)))
     {
         return;
     }
+    // 每个字节竖着保存8个像素，page 选字节，row 选字节中的那一位。
     page = y / 8;
     row = y % 8;
 
@@ -175,15 +147,7 @@ void OLED_draw_point(int8_t x, int8_t y, pen_typedef pen)
 }
 
 
-/**
-  * @brief          画一条直线，从(x1,y1)到(x2,y2)
-  * @param[in]      x1: 起点
-  * @param[in]      y1: 起点
-  * @param[in]      x2: 终点
-  * @param[in]      y2: 终点
-  * @param[in]      pen: 操作类型,PEN_CLEAR,PEN_WRITE,PEN_INVERSION.
-  * @retval         none
-  */
+
   
 void OLED_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, pen_typedef pen)
 {
@@ -193,6 +157,7 @@ void OLED_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, pen_typedef 
 
     if (y1 == y2)
     {
+        // 水平线沿 x 方向逐点绘制。
         (x1 <= x2) ? (x_st = x1):(x_st = x2);
         (x1 <= x2) ? (x_ed = x2):(x_ed = x1);
 
@@ -203,6 +168,7 @@ void OLED_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, pen_typedef 
     }
     else if (x1 == x2)
     {
+        // 竖直线沿 y 方向逐点绘制。
         (y1 <= y2) ? (y_st = y1):(y_st = y2);
         (y1 <= y2) ? (y_ed = y2):(y_ed = y1);
 
@@ -213,6 +179,7 @@ void OLED_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, pen_typedef 
     }
     else
     {
+        // 斜线按每个 x 位置计算对应 y，再逐列写入像素。
         k = ((float)(y2 - y1)) / (x2 - x1);
         b = (float)y1 - k * x1;
 
@@ -226,13 +193,7 @@ void OLED_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, pen_typedef 
     }
 }
 
-/**
-  * @brief          显示一个字符
-  * @param[in]      row: 字符的开始行
-  * @param[in]      col: 字符的开始列
-  * @param[in]      chr: 字符
-  * @retval         none
-  */
+
 void OLED_show_char(uint8_t row, uint8_t col, uint8_t chr)
 {
     uint8_t x = col * 6;
@@ -241,6 +202,7 @@ void OLED_show_char(uint8_t row, uint8_t col, uint8_t chr)
     uint8_t y0 = y;
     chr = chr - ' ';
 
+    // 每个字形占6列、12行；两个字节依次提供一列的12个像素。
     for (t = 0; t < 12; t++)
     {
         temp = asc2_1206[chr][t];
@@ -256,6 +218,7 @@ void OLED_show_char(uint8_t row, uint8_t col, uint8_t chr)
             y++;
             if ((y - y0) == 12)
             {
+                // 这一列绘制满12个像素后回到起始行，再画下一列。
                 y = y0;
                 x++;
                 break;
@@ -264,17 +227,12 @@ void OLED_show_char(uint8_t row, uint8_t col, uint8_t chr)
     }
 }
 
-/**
-  * @brief          显示一个字符串
-  * @param[in]      row: 字符串的开始行
-  * @param[in]      col: 字符串的开始列
-  * @param[in]      chr: 字符串
-  * @retval         none
-  */
+
 void OLED_show_string(uint8_t row, uint8_t col, uint8_t *chr)
 {
     uint8_t n =0;
 
+    // 遇到结束标记停止；列号超过20时换到下一行开头。
     while (chr[n] != '\0')
     {
         OLED_show_char(row, col, chr[n]);
@@ -290,46 +248,39 @@ void OLED_show_string(uint8_t row, uint8_t col, uint8_t *chr)
 }
 
 
-/**
-  * @brief          格式输出
-  * @param[in]      row: 开始列，0 <= row <= 4;
-  * @param[in]      col: 开始行， 0 <= col <= 20;
-  * @param[in]      *fmt:格式化输出字符串
-  * @note           如果字符串长度大于一行，额外的字符会换行
-  * @retval         none
-  */
+
 void OLED_printf(uint8_t row, uint8_t col, const char *fmt,...)
 {
     static uint8_t LCD_BUF[128] = {0};
     static va_list ap;
     uint8_t remain_size = 0;
 
+    // OLED_printf 只支持字符网格的5行、每行21列。
     if ((row > 4) || (col > 20) )
     {
         return;
     }
     va_start(ap, fmt);
 
+    // 格式化结果先写入临时缓冲区，调用者需保证不超过128字节。
     vsprintf((char *)LCD_BUF, fmt, ap);
 
     va_end(ap);
 
     remain_size = 21 - col;
 
+    // 只保留当前行剩余位置能显示的字符。
     LCD_BUF[remain_size] = '\0';
 
     OLED_show_string(row, col, LCD_BUF);
 }
 
-/**
-  * @brief          发送数据到OLED的GRAM
-  * @param[in]      none
-  * @retval         none
-  */
+
 void OLED_refresh_gram(void)
 {
     uint8_t i, n;
 
+    // 逐页设置起点，再连续发送该页128列的字节。
     for (i = 0; i < 8; i++)
     {
         OLED_set_pos(0, i);
@@ -342,11 +293,7 @@ void OLED_refresh_gram(void)
 
 
 
-/**
-  * @brief          显示RM的LOGO
-  * @param[in]      none
-  * @retval         none
-  */
+
 void OLED_LOGO(void)
 {
     uint8_t temp_char = 0;
@@ -355,6 +302,7 @@ void OLED_LOGO(void)
     OLED_operate_gram(PEN_CLEAR);
 
 
+    // 字库按页保存；逐页、逐列读取，再按位画出8个竖直像素。
     for(; y < 64; y += 8)
     {
         for(x = 0; x < 128; x++)

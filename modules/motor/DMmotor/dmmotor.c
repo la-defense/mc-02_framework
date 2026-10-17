@@ -1,6 +1,6 @@
 /** @file dmmotor.c
- * @brief 保留的达妙力矩协议；注册时使能和置零，每个电机独立任务持续发送并接收反馈。
- */
+* @brief 保留的达妙力矩协议；注册时使能和置零，每个电机独立任务持续发送并接收反馈。
+*/
 #include "dmmotor.h"
 #include "memory.h"
 #include "general_def.h"
@@ -124,8 +124,8 @@ void DMMotorOuterLoop(DMMotorInstance *motor, Closeloop_Type_e type)
 
 //@Todo: 目前只实现了力控，更多位控PID等请自行添加
 /** @brief 每轮将参考力矩编码进八字节报文，停止时仅把力矩字段改为零。
- * @param[in] argument 对应有效电机对象，任务持续运行，约每 2 ms 重复。
- */
+* @param[in] argument 对应有效电机对象，任务持续运行，约每 2 ms 重复。
+*/
 void DMMotorTask(void const *argument)
 {
     float  pid_ref, set;

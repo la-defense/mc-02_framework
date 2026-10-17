@@ -1,6 +1,6 @@
 /** @file bsp_flash.c
- * @brief 未纳入当前 H723 固件的旧 Flash 操作，地址表和写入单位沿用 F1/F4 风格。
- * 接口用法和已有长度处理限制见 bsp_flash.h，本轮不改变地址及擦写流程。
+* @brief 未纳入当前 H723 固件的旧 Flash 操作，地址表和写入单位沿用 F1/F4 风格。
+* 接口用法和已有长度处理限制见 bsp_flash.h，本轮不改变地址及擦写流程。
  */
 #include "bsp_flash.h"
 #include "main.h"

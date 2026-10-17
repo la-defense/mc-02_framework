@@ -1,5 +1,5 @@
 /** @file HT04.h
- * @brief HT04 独立任务控制接口；注册及独立任务均未接入当前统一初始化失败检查。
+* @brief HT04 独立任务控制接口；注册及独立任务均未接入当前统一初始化失败检查。
  */
 #ifndef HT04_H
 #define HT04_H
@@ -74,42 +74,42 @@ typedef enum
 } HTMotor_Mode_t;
 
 /** @brief 注册 HT04 电机及离线计数，初始化中发送使能和编码器置零命令。
- * @param[in,out] config 有效配置，会改写 CAN 回调及 id；不检查 NULL、容量或分配注册失败。
- * @return 长期保存的对象，无释放入口，最多四个；随后调用 HTMotorControlInit() 创建独立控制任务。
- * @note 已包含实际 CAN 命令和 DWT 等待，先准备外设与计时；外部角度、速度反馈须用 rad、rad/s。
+* @param[in,out] config 有效配置，会改写 CAN 回调及 id；不检查 NULL、容量或分配注册失败。
+* @return 长期保存的对象，无释放入口，最多四个；随后调用 HTMotorControlInit() 创建独立控制任务。
+* @note 已包含实际 CAN 命令和 DWT 等待，先准备外设与计时；外部角度、速度反馈须用 rad、rad/s。
  */
 HTMotorInstance *HTMotorInit(Motor_Init_Config_s *config);
 
 /** @brief 保存目标供独立任务计算。
- * @param[in,out] motor 有效对象，不能为 NULL。
- * @param[in] ref 角度环目标用 deg，速度环目标用 deg/s；直接输出按 T_MIN～T_MAX 的协议力矩数值处理。
- * @note 数值须正常；real_current 由协议力矩区间还原，不能按变量名直接当作 A。
+* @param[in,out] motor 有效对象，不能为 NULL。
+* @param[in] ref 角度环目标用 deg，速度环目标用 deg/s；直接输出按 T_MIN～T_MAX 的协议力矩数值处理。
+* @note 数值须正常；real_current 由协议力矩区间还原，不能按变量名直接当作 A。
  */
 void HTMotorSetRef(HTMotorInstance *motor, float ref);
 
 /** @brief 为每个已注册 HT 电机创建约每 1 ms 运行的任务，无电机时返回。
- * @note 注册完成后只调用一次；不检查任务创建失败，重复调用会新增任务。
+* @note 注册完成后只调用一次；不检查任务创建失败，重复调用会新增任务。
  */
 void HTMotorControlInit();
 
 /** @brief 只设置停止标记，任务下一轮发送零力矩，并继续保持通信。
- * @param[in,out] motor 有效实例，不能为 NULL。
+* @param[in,out] motor 有效实例，不能为 NULL。
  */
 void HTMotorStop(HTMotorInstance *motor);
 
 /** @brief 设置运行标记，任务重新使用已保存目标。
- * @param[in,out] motor 有效实例，不能为 NULL。
+* @param[in,out] motor 有效实例，不能为 NULL。
  */
 void HTMotorEnable(HTMotorInstance *motor);
 
 /** @brief 改写最外层控制环，下一轮任务按设置计算。
- * @param[in,out] motor 有效实例，不能为 NULL。
- * @param[in] type 角度、速度或直接输出的控制类型，须与其余环配置匹配。
+* @param[in,out] motor 有效实例，不能为 NULL。
+* @param[in] type 角度、速度或直接输出的控制类型，须与其余环配置匹配。
  */
 void HTMotorOuterLoop(HTMotorInstance *motor, Closeloop_Type_e type);
 
 /** @brief 先发零目标报文，再发将当前位置置零的命令，两次各等待 5 ms。
- * @param[in] motor 有效 CAN 电机对象，不检查 NULL 或发送结果，须确认实际设备允许置零。
+* @param[in] motor 有效 CAN 电机对象，不检查 NULL 或发送结果，须确认实际设备允许置零。
  */
 void HTMotorCalibEncoder(HTMotorInstance *motor);
 

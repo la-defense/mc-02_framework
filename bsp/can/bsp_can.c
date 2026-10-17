@@ -1,5 +1,5 @@
 /** @file bsp_can.c
- * @brief 按实例注册收发 ID；中断查找接收者并复制入队，任务逐帧解析和检查总线状态。
+* @brief 按实例注册收发 ID；中断查找接收者并复制入队，任务逐帧解析和检查总线状态。
  */
 #include "bsp_can.h"
 #include "message_freshness.h"
@@ -1004,7 +1004,7 @@ static void CANFIFOxCallback(CAN_HandleTypeDef *_hcan, uint32_t fifox)
 // 下面的函数会调用CANFIFOxCallback()来进一步处理来自特定CAN设备的消息
 
 /** @brief BXCAN FIFO0 有待取消息时进入，继续交给共用处理函数。
- * @param[in] hcan 来源 CAN 句柄。
+* @param[in] hcan 来源 CAN 句柄。
  */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
@@ -1012,7 +1012,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 }
 
 /** @brief BXCAN FIFO1 有待取消息时进入，继续交给共用处理函数。
- * @param[in] hcan 来源 CAN 句柄。
+* @param[in] hcan 来源 CAN 句柄。
  */
 void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {

@@ -1,6 +1,6 @@
 /** @file lcd_key_input.h
- * @brief 将每次按键采样变成按下、松开事件；连续三次相同结果才确认变化。
- */
+* @brief 将每次按键采样变成按下、松开事件；连续三次相同结果才确认变化。
+*/
 #ifndef LCD_KEY_INPUT_H
 #define LCD_KEY_INPUT_H
 
@@ -40,14 +40,14 @@ typedef struct
 } LCDKeyEvent_t;
 
 /**
- * @brief 更新一次按键状态；无效采样会取消正在等待或已按住的键，不产生松开事件。
- * @param[in,out] input 首次使用前清零，之后每次调用保留；NULL 时仅清空 event。
- * @param[in] sample_valid 非 0 表示此次采样可用，为 0 时取消当前状态。
- * @param[in] sampled_key 本次键值，超出枚举范围时按无效采样处理。
- * @param[in] now_ms 当前毫秒计数，须保持同一时间来源。
- * @param[out] event 本次事件；先清空，无事件时 type 为 NONE；NULL 时整个函数不处理。
- * @note 连续三次同键确认按下，连续三次 NONE 确认松开；按住期间忽略其他方向。
- */
+* @brief 更新一次按键状态；无效采样会取消正在等待或已按住的键，不产生松开事件。
+* @param[in,out] input 首次使用前清零，之后每次调用保留；NULL 时仅清空 event。
+* @param[in] sample_valid 非 0 表示此次采样可用，为 0 时取消当前状态。
+* @param[in] sampled_key 本次键值，超出枚举范围时按无效采样处理。
+* @param[in] now_ms 当前毫秒计数，须保持同一时间来源。
+* @param[out] event 本次事件；先清空，无事件时 type 为 NONE；NULL 时整个函数不处理。
+* @note 连续三次同键确认按下，连续三次 NONE 确认松开；按住期间忽略其他方向。
+*/
 void LCDKeyInputUpdate(LCDKeyInput_t *input, uint8_t sample_valid, LcdKey_e sampled_key,
                       uint32_t now_ms, LCDKeyEvent_t *event);
 

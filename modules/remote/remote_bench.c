@@ -1,6 +1,6 @@
 /** @file remote_bench.c
- * @brief 裸板观察遥控及手势，持续请求失能；不用于驱动实车执行器。
- */
+* @brief 裸板观察遥控及手势，持续请求失能；不用于驱动实车执行器。
+*/
 #include "remote_bench.h"
 #include "remote_safety.h"
 #include "robot_safety.h"

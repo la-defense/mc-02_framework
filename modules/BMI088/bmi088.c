@@ -1,3 +1,8 @@
+/**
+* @file bmi088.c
+* @brief 实现 BMI088 的寄存器读写、采样、启动检查和在线标定。
+* BMI088Acquire 只在整份样本读取成功后更新输出；标定由 INS 任务执行。
+ */
 #include "bmi088_regNdef.h"
 #include "bmi088.h"
 #include "bmi088_temperature.h"
@@ -27,10 +32,7 @@ static void BMI088RecordInitFailureStage(void)
         bmi088_init_failure_stage = bmi088_init_stage;
 }
 
-/* ---------------- 在线标定诊断量(2026-09-22, 排查 -O2 启动卡死) ----------------
-   标定循环"卡住"时, 光看 PC 只能知道卡在哪, 看不出"为什么出不来"。这几个量把循环
-   内部状态暴露出来: 外层重试了几次、内层跑到第几轮、采集成功/失败、加速度模长、
-   超时分支是否命中。变量是 volatile, 方便 Live Watch / OpenOCD 直接读。 */
+/* 标定诊断计数可供 Live Watch / OpenOCD 查看重试、采样和超时进度。 */
 volatile uint32_t cali_diag_outer = 0;        /* 外层 do-while 执行次数 */
 volatile uint32_t cali_diag_inner = 0;        /* 内层循环最后一次的 i */
 volatile uint32_t cali_diag_acq_ok = 0;       /* BMI088Acquire 返回 1 次数 */
@@ -323,7 +325,7 @@ static void BMI088AccSPIFinishCallback(SPIInstance *spi)
     // bmi088 = (BMI088Instance *)(spi->id);
    
     // 若第一次读取加速度,则在这里启动温度读取
-    // 如果使用异步姿态更新,此处唤醒量测更新的任务
+// 若采用异步姿态更新，可在这里唤醒负责处理新测量的任务。
 }
 
 static void BMI088GyroSPIFinishCallback(SPIInstance *spi)
@@ -363,11 +365,12 @@ static void BMI088GyroINTCallback(GPIOInstance *gpio)
 
 // -------------------------以下为公有函数,用于注册BMI088,标定和数据读取--------------------------------//
 
-/* Reject non-finite values before they cross the published sample boundary. */
+/* 检查样本中的温度、三轴加速度和角速度，拒绝 NaN 或无穷大。 */
 static uint8_t BMI088SampleValuesAreFinite(const BMI088_Data_t *sample)
 {
     if (sample == NULL || !isfinite(sample->temperature))
         return 0u;
+    // 三个轴都必须是可用数值，整份样本才会交给调用者。
     for (uint8_t axis = 0; axis < 3u; ++axis)
     {
         if (!isfinite(sample->acc[axis]) || !isfinite(sample->gyro[axis]))
@@ -376,17 +379,13 @@ static uint8_t BMI088SampleValuesAreFinite(const BMI088_Data_t *sample)
     return 1u;
 }
 
-/**
- * @brief Read and publish one complete, finite BMI088 sample.
- * @param bmi088 BMI088 sensor instance.
- * @param data_store Receives the sample only when acquisition succeeds.
- * @return BMI088_AcquireStatus_e Acquisition status; output remains unchanged on failure.
- */
+
 BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data_store)
 {
     if (bmi088 == NULL || data_store == NULL)
         return BMI088_ACQUIRE_NO_DATA;
 
+    // 先在局部变量中准备数据；所有检查通过后再一次写入实例和输出。
     BMI088_Data_t staged = {0};
     uint8_t raw[6] = {0};
     HAL_StatusTypeDef spi_status;
@@ -396,12 +395,14 @@ BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data
         spi_status = BMI088AccelRead(bmi088, BMI088_ACCEL_XOUT_L, raw, 6u);
         if (spi_status != HAL_OK)
             goto spi_failure;
+        // 每两个寄存器字节组成一个有符号轴数据，再乘对应换算系数。
         for (uint8_t i = 0; i < 3u; ++i)
             staged.acc[i] = bmi088->acc_coef * (float)(int16_t)(((uint16_t)raw[2u * i + 1u] << 8u) | raw[2u * i]);
 
         spi_status = BMI088GyroRead(bmi088, BMI088_GYRO_X_L, raw, 6u);
         if (spi_status != HAL_OK)
             goto spi_failure;
+        // 陀螺仪同样按 x、y、z 顺序读取和换算。
         for (uint8_t i = 0; i < 3u; ++i)
             staged.gyro[i] = bmi088->BMI088_GYRO_SEN * (float)(int16_t)(((uint16_t)raw[2u * i + 1u] << 8u) | raw[2u * i]);
 
@@ -418,6 +419,7 @@ BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data
             bmi088->last_acquire_status = BMI088_ACQUIRE_NO_DATA;
             return BMI088_ACQUIRE_NO_DATA;
         }
+        // 加速度或角速度数据过期时清除 ready 标志，下次等新中断数据。
         if ((uint32_t)(now_ms - bmi088->acc_sample_timestamp_ms) > BMI088_SAMPLE_MAX_AGE_MS ||
             (uint32_t)(now_ms - bmi088->gyro_sample_timestamp_ms) > BMI088_SAMPLE_MAX_AGE_MS)
         {
@@ -449,6 +451,7 @@ BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data
         return BMI088_ACQUIRE_INVALID_DATA;
     }
 
+    // 成功样本才递增序号、记录时间并对外标记可用。
     staged.sequence = bmi088->sample_sequence + 1u;
     if (staged.sequence == 0u)
         staged.sequence = 1u;
@@ -487,23 +490,12 @@ spi_failure:
 #define BMI088_PRE_CALI_ACC_Z_OFFSET 0.0f
 #define BMI088_PRE_CALI_G_NORM 9.805f
 
-/* 在线标定最多重试轮数(每轮 6000 次采样, 约 3.6s)。
-   原来是 12s 超时前无限重试; -O2 下超时判据失效就变成无限重标定 → 启动卡死。 */
+/* 在线标定最多重试3轮；每轮最多收集6000份样本。 */
 #define BMI088_CALI_MAX_ATTEMPTS 3u
 /* 标定循环里每隔多少次采样让出一次 CPU(给 daemon 喂狗、给 LCD 显示"标定中") */
 #define BMI088_CALI_YIELD_INTERVAL 4u
 #define BMI088_CALI_YIELD_MS 1u
-/**
- * @brief BMI088 acc gyro 标定
- * @note 标定后的数据存储在bmi088->bias和gNorm中,用于后续数据消噪和单位转换归一化
- * @attention 标定使用阻塞采样路径，必须由 INS 任务独占 BMI088 SPI；系统中断保持开启以支持 HAL 超时和 RTOS 调度。
- * @attention 标定精度和等待时间有关,目前使用线性回归.后续考虑引入非线性回归
- * @todo 将标定次数(等待时间)变为参数供设定
- * @section 整体流程为1.累加加速度数据计算gNrom() 2.累加陀螺仪数据计算零飘
- *          3. 如果标定过程运动幅度过大,重新标定  4.保存标定参数
- *
- * @param _bmi088 待标定的BMI088实例
- */
+
 uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
 {
     uint8_t online_ok = 0;
@@ -528,7 +520,7 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
 
         BMI088_Data_t raw_data = {0};
         startCycle = DWT_ProbeStart();
-        // 循环继续的条件为标定环境不满足
+        // 环境不合适时重新收集一轮；最多尝试 BMI088_CALI_MAX_ATTEMPTS 次。
         do // 用do while至少执行一次,省得对上面的参数进行初始化
         {  // 标定超时,直接使用预标定参数(如果有)
             cali_diag_outer++;
@@ -562,9 +554,7 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
                     timed_out = 1u;
                     break;
                 }
-                /* 标定在 INS 任务中运行，只临时豁免 INS 的普通任务期限；其他任务仍须
-                   正常运行，TaskMonitor 才会继续喂狗。周期性让出 CPU 让 daemon/LCD
-                   获得调度；标定没有直接喂狗路径，整体期限由 15s 监控窗口限制。 */
+                /* 周期性让出 CPU，让 daemon 和 LCD 继续运行；标定不直接喂狗。 */
                 if (((valid_samples % BMI088_CALI_YIELD_INTERVAL) == 0u) && osKernelRunning())
                     osDelay(BMI088_CALI_YIELD_MS);
                 uint32_t diag_acq = DWT_ProbeStart();
@@ -645,7 +635,7 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
                   fabsf(_bmi088->gyro_offset[2]) > 0.01f) && // 满足条件说明标定环境不好
                  attempt < BMI088_CALI_MAX_ATTEMPTS); // 最多试 3 轮, 避免开机无限重标定
 
-        /* 判据与循环条件完全一致: 循环是"因为判据满足才退出"才算成功 */
+        // 只有按满样本数且所有稳定性检查都通过，才使用这轮标定结果。
         online_ok = (uint8_t)(timed_out == 0 && valid_samples == CaliTimes &&
                               gNormDiff <= 0.5f &&
                               fabsf(_bmi088->gNorm - 9.8f) <= 0.5f &&
@@ -657,8 +647,7 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
 
     if (online_ok)
     {
-        /* 只有判据通过才允许算 acc_coef: 失败时 gNorm 可能是垃圾值(甚至 0),
-           原来无条件 `*= 9.805/gNorm` 会算出 inf/NaN 并污染整条加速度链路 */
+        // 通过检查后才用 gNorm 计算系数，避免失败数据导致除以0或产生无效数值。
         _bmi088->acc_coef = BMI088_ACCEL_6G_SEN * (9.805f / _bmi088->gNorm);
         bmi088_calib_temp = _bmi088->temperature;
         /* 注意: RTT 的 printf 实现不支持 %f, 而且遇到 %f 时**不会消费参数**,
@@ -695,19 +684,8 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
     return online_ok;
 }
 
-/* ============================================================================
-   标定结果持久化 + 按需标定 (2026-09)
-   ----------------------------------------------------------------------------
-   背景: 原来 BMI088Register 无条件做 6000 次采样在线标定, 启动要 3~15s;
-         -O2 下更会因为 DWT 时间轴失效导致 12s 超时永不触发 → 无限重标定 → 启动卡死。
-   现在:
-     1) 启动先查内部 Flash 参数区(bsp/param) 有没有有效记录 → 有就直接用(启动 <1s),
-        并 RobotSafetySetCalibValid(1);
-     2) 没有记录 → 首次自动标定一次(最多 BMI088_CALI_MAX_ATTEMPTS 轮), 成功即写参数区;
-        失败用编译期默认值 + CALIB_INVALID 报警, 但**不阻塞启动**;
-     3) 运行期由 LCD 长按中键 3s 触发按需标定(BMI088CalibRequest),
-        由 INS 任务在自身上下文里执行(BMI088CalibService), 避免和 INS_Task 抢 SPI。
-   ========================================================================== */
+   /* 启动时先尝试读取已保存的标定值；缺少可用记录时再在线标定或使用默认值。
+   运行中由 LCD 左键或右键长按申请，INS 任务负责执行，避免两个任务同时读 SPI。 */
 
 volatile uint8_t bmi088_calib_source = BMI088_CALIB_SRC_NONE; /* 标定来源 */
 volatile float bmi088_calib_temp = 0.0f;                      /* 标定时 IMU 温度 */
@@ -895,6 +873,7 @@ uint8_t BMI088CalibRequest(void)
 {
     if (s_calib_instance == NULL)
         return 0;
+    // 未完成的请求只保留一份，避免重复启动长时间标定。
     if (s_recalib_state == BMI088_RECALIB_BUSY)
         return 0; /* 已经在标定中, 不重复受理 */
 
@@ -905,6 +884,7 @@ uint8_t BMI088CalibRequest(void)
 
 uint8_t BMI088CalibService(void)
 {
+    // 请求只由 INS 任务取走并处理，保证 BMI088 的 SPI 不与采样同时使用。
     if (!s_recalib_request)
         return 0;
     s_recalib_request = 0;
@@ -978,12 +958,6 @@ uint8_t BMI088CalibIsValid(void)
     return s_calib_ok;
 }
 
-// 考虑阻塞模式和非阻塞模式的兼容性,通过条件编译(则需要在编译前修改宏定义)或runtime参数判断
-// runtime的开销不大(一次性判断),但是需要修改函数原型,增加参数,代码长度增加(但不多)
-// runtime如何修改callback?根据参数选择是否给spi传入callback,如果是阻塞模式,则不传入callback,如果是非阻塞模式,则传入callback(bsp会检查是否NULL)
-// 条件编译的开销小,但是需要修改宏定义,增加编译时间,同时人力介入
-// 根据实际情况选择(说了和没说一样!)
-
 BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
 {
     bmi088_init_error = BMI088_NO_ERROR;
@@ -1002,7 +976,7 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         return NULL;
     }
 
-    /* Registration owns a private config copy: failures must not rewrite caller state. */
+    // 在本地副本中填写内部 id 和 SPI 模式，保留调用者传入的配置。
     BMI088_Init_Config_s local_config = *config;
     config = &local_config;
 
@@ -1060,7 +1034,7 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     }
     PIDInit(&bmi088_instance->heat_pid, &config->heat_pid_config);
 
-    // 初始化acc和gyro; 传感器异常时不能无限重试, 避免开机死循环
+    // 两个传感器都要完成初始化；遇到故障最多重试5次，随后释放已申请资源。
     BMI088_ERORR_CODE_e error = BMI088_NO_ERROR;
     uint8_t init_retry = 0;
     do
@@ -1091,7 +1065,7 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
 
     bmi088_instance->work_mode = BMI088_BLOCK_PERIODIC_MODE; // 临时设置为阻塞模式
     s_calib_instance = bmi088_instance;                      // 供按需标定使用
-    // 标定: Flash 有记录→直接用(启动<1s); 没有→首次自动标定并保存; 失败→默认值+报警
+    // 优先使用已保存的标定值；没有可用记录时在线标定，失败则保留默认值并报告无效。
     BMI088CalibInit(bmi088_instance, config->cali_mode);
     bmi088_instance->work_mode = config->work_mode; // 恢复工作模式
     if (config->work_mode == BMI088_BLOCK_TRIGGER_MODE)

@@ -1,7 +1,7 @@
 /**
  * @file bsp_usart.c
  * @author neozng
- * @brief UART 注册与发送，中断复制入队，任务按接收顺序派发并处理错误恢复。
+* @brief UART 注册与发送，中断复制入队，任务按接收顺序派发并处理错误恢复。
  * @version beta
  * @date 2022-11-01
  *
@@ -311,8 +311,8 @@ uint32_t USARTGetCurrentRxTimestamp(const USARTInstance *instance)
 }
 
 /** @brief DMA 完成或 UART 空闲时复制本次数据入队，重新准备下一轮接收，不在中断里解析。
- * @param[in] huart 来源句柄。
- * @param[in] Size 本次实际字节数，超过注册容量时丢弃。
+* @param[in] huart 来源句柄。
+* @param[in] Size 本次实际字节数，超过注册容量时丢弃。
  */
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
@@ -338,7 +338,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 }
 
 /** @brief UART 错误中断只记录次数并请求恢复，实际中止和重新启动接收由任务执行。
- * @param[in] huart 发生错误的 UART 句柄。
+* @param[in] huart 发生错误的 UART 句柄。
  */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {

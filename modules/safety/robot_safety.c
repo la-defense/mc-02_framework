@@ -1,6 +1,6 @@
 /** @file robot_safety.c
- * @brief 汇总故障与操作请求并选择状态；控制任务读取结果后决定是否给执行器下发命令。
- */
+* @brief 汇总故障与操作请求并选择状态；控制任务读取结果后决定是否给执行器下发命令。
+*/
 #include "robot_safety.h"
 #include "bsp_log.h"
 

@@ -1,134 +1,16 @@
 /**
- ******************************************************************************
- * @file    kalman filter.c
- * @author  Wang Hongxi
+* @file kalman_filter.c
+* @brief 分配卡尔曼滤波器所需空间，并按各阶段更新状态和方差。
+* 自动调整模式会根据本轮非零测量重新设置 H、R 和 K 的行列数。
+* @author Wang Hongxi
  * @version V1.2.2
- * @date    2022/1/8
- * @brief   C implementation of kalman filter
- ******************************************************************************
- * @attention
- * 该卡尔曼滤波器可以在传感器采样频率不同的情况下，动态调整矩阵H R和K的维数与数值。
- * This implementation of kalman filter can dynamically adjust dimension and
- * value of matrix H R and K according to the measurement validity under any
- * circumstance that the sampling rate of component sensors are different.
- *
- * 因此矩阵H和R的初始化会与矩阵P A和Q有所不同。另外的，在初始化量测向量z时需要额外写
- * 入传感器量测所对应的状态与这个量测的方式，详情请见例程
- * Therefore, the initialization of matrix P, F, and Q is sometimes different
- * from that of matrices H R. when initialization. Additionally, the corresponding
- * state and the method of the measurement should be provided when initializing
- * measurement vector z. For more details, please see the example.
- *
- * 若不需要动态调整量测向量z，可简单将结构体中的Use_Auto_Adjustment初始化为0，并像初
- * 始化矩阵P那样用常规方式初始化z H R即可。
- * If automatic adjustment is not required, assign zero to the UseAutoAdjustment
- * and initialize z H R in the normal way as matrix P.
- *
- * 要求量测向量z与控制向量u在传感器回调函数中更新。整数0意味着量测无效，即自上次卡尔曼
- * 滤波更新后无传感器数据更新。因此量测向量z与控制向量u会在卡尔曼滤波更新过程中被清零
- * MeasuredVector and ControlVector are required to be updated in the sensor
- * callback function. Integer 0 in measurement vector z indicates the invalidity
- * of current measurement, so MeasuredVector and ControlVector will be reset
- * (to 0) during each update.
- *
- * 此外，矩阵P过度收敛后滤波器将难以再适应状态的缓慢变化，从而产生滤波估计偏差。该算法
- * 通过限制矩阵P最小值的方法，可有效抑制滤波器的过度收敛，详情请见例程。
- * Additionally, the excessive convergence of matrix P will make filter incapable
- * of adopting the slowly changing state. This implementation can effectively
- * suppress filter excessive convergence through boundary limiting for matrix P.
- * For more details, please see the example.
- *
- * @example:
- * x =
- *   |   height   |
- *   |  velocity  |
- *   |acceleration|
- *
- * KalmanFilter_t Height_KF;
- *
- * void INS_Task_Init(void)
- * {
- *     static float P_Init[9] =
- *     {
- *         10, 0, 0,
- *         0, 30, 0,
- *         0, 0, 10,
- *     };
- *     static float F_Init[9] =
- *     {
- *         1, dt, 0.5*dt*dt,
- *         0, 1, dt,
- *         0, 0, 1,
- *     };
- *     static float Q_Init[9] =
- *     {
- *         0.25*dt*dt*dt*dt, 0.5*dt*dt*dt, 0.5*dt*dt,
- *         0.5*dt*dt*dt,        dt*dt,         dt,
- *         0.5*dt*dt,              dt,         1,
- *     };
- *
- *     // 设置最小方差
- *     static float state_min_variance[3] = {0.03, 0.005, 0.1};
- *
- *     // 开启自动调整
- *     Height_KF.UseAutoAdjustment = 1;
- *
- *     // 气压测得高度 GPS测得高度 加速度计测得z轴运动加速度
- *     static uint8_t measurement_reference[3] = {1, 1, 3}
- *
- *     static float measurement_degree[3] = {1, 1, 1}
- *     // 根据measurement_reference与measurement_degree生成H矩阵如下（在当前周期全部测量数据有效情况下）
- *       |1   0   0|
- *       |1   0   0|
- *       |0   0   1|
- *
- *     static float mat_R_diagonal_elements = {30, 25, 35}
- *     //根据mat_R_diagonal_elements生成R矩阵如下（在当前周期全部测量数据有效情况下）
- *       |30   0   0|
- *       | 0  25   0|
- *       | 0   0  35|
- *
- *     Kalman_Filter_Init(&Height_KF, 3, 0, 3);
- *
- *     // 设置矩阵值
- *     memcpy(Height_KF.P_data, P_Init, sizeof(P_Init));
- *     memcpy(Height_KF.F_data, F_Init, sizeof(F_Init));
- *     memcpy(Height_KF.Q_data, Q_Init, sizeof(Q_Init));
- *     memcpy(Height_KF.MeasurementMap, measurement_reference, sizeof(measurement_reference));
- *     memcpy(Height_KF.MeasurementDegree, measurement_degree, sizeof(measurement_degree));
- *     memcpy(Height_KF.MatR_DiagonalElements, mat_R_diagonal_elements, sizeof(mat_R_diagonal_elements));
- *     memcpy(Height_KF.StateMinVariance, state_min_variance, sizeof(state_min_variance));
- * }
- *
- * void INS_Task(void const *pvParameters)
- * {
- *     // 循环更新
- *     Kalman_Filter_Update(&Height_KF);
- *     vTaskDelay(ts);
- * }
- *
- * // 测量数据更新应按照以下形式 即向MeasuredVector赋值
- * void Barometer_Read_Over(void)
- * {
- *     ......
- *     INS_KF.MeasuredVector[0] = baro_height;
- * }
- * void GPS_Read_Over(void)
- * {
- *     ......
- *     INS_KF.MeasuredVector[1] = GPS_height;
- * }
- * void Acc_Data_Process(void)
- * {
- *     ......
- *     INS_KF.MeasuredVector[2] = acc.z;
- * }
- ******************************************************************************
+* @date 2022/1/8
  */
 
 #include "kalman_filter.h"
 #include <string.h>
 
+/** 确认矩阵地址、数据地址和行列数有效后，绑定已有的数据空间。 */
 static uint8_t KalmanMatrixInit(mat *matrix, uint16_t rows, uint16_t cols, float *data)
 {
     if (matrix == NULL || data == NULL || rows == 0u || cols == 0u)
@@ -142,12 +24,8 @@ uint16_t sizeof_float, sizeof_double;
 static void H_K_R_Adjustment(KalmanFilter_t *kf);
 
 /**
- * @brief 初始化矩阵维度信息并为矩阵分配空间
- *
- * @param kf kf类型定义
- * @param xhatSize 状态变量维度
- * @param uSize 控制变量维度
- * @param zSize 观测量维度
+* @brief 释放滤波器初始化时分配的数组。
+* @param kf 已初始化的滤波器；NULL 时不执行操作。
  */
 void Kalman_Filter_Release(KalmanFilter_t *kf)
 {
@@ -164,12 +42,20 @@ void Kalman_Filter_Release(KalmanFilter_t *kf)
 #undef KF_FREE
 }
 
+/**
+* @brief 准备矩阵空间，全部成功后再交给目标对象。
+* @param destination 要保存滤波器的对象。
+* @param xhatSize 状态个数。
+* @param uSize 控制输入个数；0 表示没有控制输入。
+* @param zSize 测量项数。
+* @return 成功返回1；指针或维数无效、分配失败时返回0。
+ */
 uint8_t Kalman_Filter_Init(KalmanFilter_t *destination, uint8_t xhatSize, uint8_t uSize, uint8_t zSize)
 {
     if (destination == NULL || xhatSize == 0u || zSize == 0u)
         return 0u;
 
-    /* Build off to the side so failure never publishes a partial filter. */
+    // 先在临时对象中完成分配；有一步失败时，目标对象仍保留原内容。
     KalmanFilter_t prepared = {0};
     KalmanFilter_t *kf = &prepared;
 #define KF_ALLOC(field, type, count)                                      \
@@ -193,16 +79,17 @@ uint8_t Kalman_Filter_Init(KalmanFilter_t *destination, uint8_t xhatSize, uint8_
 
     kf->MeasurementValidNum = 0;
 
-    // measurement flags
+    // 为每项测量准备状态编号、系数、噪声和临时索引。
     KF_ALLOC(MeasurementMap, uint8_t, zSize);
     KF_ALLOC(MeasurementDegree, float, zSize);
     KF_ALLOC(MatR_DiagonalElements, float, zSize);
     KF_ALLOC(StateMinVariance, float, xhatSize);
     KF_ALLOC(temp, uint8_t, zSize);
 
-    // filter data
+    // 为输入、预测结果和最终状态准备缓冲区。
     KF_ALLOC(FilteredValue, float, xhatSize);
     KF_ALLOC(MeasuredVector, float, zSize);
+    // 没有控制输入时不分配相关数组，后续计算也会跳过这一项。
     if (uSize != 0u)
         KF_ALLOC(ControlVector, float, uSize);
 
@@ -281,6 +168,7 @@ uint8_t Kalman_Filter_Init(KalmanFilter_t *destination, uint8_t xhatSize, uint8_
     kf->SkipEq4 = 0;
     kf->SkipEq5 = 0;
 
+    // 所有申请都成功后，才一次性更新调用者的对象。
     *destination = prepared;
     sizeof_float = sizeof(float);
     sizeof_double = sizeof(double);
@@ -288,6 +176,7 @@ uint8_t Kalman_Filter_Init(KalmanFilter_t *destination, uint8_t xhatSize, uint8_
 #undef KF_ALLOC
     return 1u;
 
+// 任一申请失败都释放临时对象已取得的空间，并报告失败。
 allocation_failed:
     Kalman_Filter_Release(kf);
 #undef KF_MATRIX
@@ -297,8 +186,7 @@ allocation_failed:
 
 void Kalman_Filter_Measure(KalmanFilter_t *kf)
 {
-    // 矩阵H K R根据量测情况自动调整
-    // matrix H K R auto adjustment
+    // 按本轮有数据的传感器重新设置测量矩阵和参与计算的行数。
     if (kf->UseAutoAdjustment != 0)
         H_K_R_Adjustment(kf);
     else
@@ -395,15 +283,10 @@ void Kalman_Filter_P_Update(KalmanFilter_t *kf)
     }
 }
 
-/**
- * @brief 执行卡尔曼滤波黄金五式,提供了用户定义函数,可以替代五个中的任意一个环节,方便自行扩展为EKF/UKF/ESKF/AUKF等
- * 
- * @param kf kf类型定义
- * @return float* 返回滤波值
- */
+
 float *Kalman_Filter_Update(KalmanFilter_t *kf)
 {
-    // 0. 获取量测信息
+    // 0. 读取本轮传感器数据。
     Kalman_Filter_Measure(kf);
     if (kf->User_Func0_f != NULL)
         kf->User_Func0_f(kf);
@@ -420,9 +303,10 @@ float *Kalman_Filter_Update(KalmanFilter_t *kf)
     if (kf->User_Func2_f != NULL)
         kf->User_Func2_f(kf);
 
+    // 自动调整模式没有有效测量时只做预测；固定矩阵模式仍按已配置的测量矩阵更新。
     if (kf->MeasurementValidNum != 0 || kf->UseAutoAdjustment == 0)
     {
-        // 量测更新
+        // 用有效测量修正预测结果。
         // 3. K(k) = P'(k)·HT / (H·P'(k)·HT + R)
         Kalman_Filter_SetK(kf);
 
@@ -442,7 +326,7 @@ float *Kalman_Filter_Update(KalmanFilter_t *kf)
     }
     else
     {
-        // 无有效量测,仅预测
+        // 没有可用测量时只保留预测结果。
         // xhat(k) = xhat'(k)
         // P(k) = P'(k)
         memcpy(kf->xhat_data, kf->xhatminus_data, sizeof_float * kf->xhatSize);
@@ -453,8 +337,7 @@ float *Kalman_Filter_Update(KalmanFilter_t *kf)
     if (kf->User_Func5_f != NULL)
         kf->User_Func5_f(kf);
 
-    // 避免滤波器过度收敛
-    // suppress filter excessive convergence
+    // 防止状态方差变得过小；每个对角元素都保留至少配置的值。
     for (uint8_t i = 0; i < kf->xhatSize; ++i)
     {
         if (kf->P_data[i * kf->xhatSize + i] < kf->StateMinVariance[i])
@@ -476,33 +359,31 @@ static void H_K_R_Adjustment(KalmanFilter_t *kf)
     memcpy(kf->z_data, kf->MeasuredVector, sizeof_float * kf->zSize);
     memset(kf->MeasuredVector, 0, sizeof_float * kf->zSize);
 
-    // 识别量测数据有效性并调整矩阵H R K
-    // recognize measurement validity and adjust matrices H R K
+    // 根据本轮数据重建 H、R 和 K，使矩阵行数与可用测量数一致。
     memset(kf->R_data, 0, sizeof_float * kf->zSize * kf->zSize);
     memset(kf->H_data, 0, sizeof_float * kf->xhatSize * kf->zSize);
+    // 逐项保留非零测量；结果按原顺序放到数组前面。
     for (uint8_t i = 0; i < kf->zSize; ++i)
     {
+        // 当前实现把数值0当作没有新数据；真实测量值为0时也会被跳过。
         if (kf->z_data[i] != 0)
         {
-            // 重构向量z
-            // rebuild vector z
+            // 将有效数据移到数组前面，形成本轮使用的测量向量。
             kf->z_data[kf->MeasurementValidNum] = kf->z_data[i];
             kf->temp[kf->MeasurementValidNum] = i;
-            // 重构矩阵H
-            // rebuild matrix H
+            // MeasurementMap 的状态编号从1开始，写入矩阵时减1；调用者要传入有效编号。
             kf->H_data[kf->xhatSize * kf->MeasurementValidNum + kf->MeasurementMap[i] - 1] = kf->MeasurementDegree[i];
             kf->MeasurementValidNum++;
         }
     }
+    // R 只为本轮保留的测量填写对应噪声值。
     for (uint8_t i = 0; i < kf->MeasurementValidNum; ++i)
     {
-        // 重构矩阵R
-        // rebuild matrix R
+        // 将每项有效测量的噪声值放到 R 矩阵对角线上。
         kf->R_data[i * kf->MeasurementValidNum + i] = kf->MatR_DiagonalElements[kf->temp[i]];
     }
 
-    // 调整矩阵维数
-    // adjust the dimensions of system matrices
+    // 更新矩阵行列数，后续运算只处理本轮有效测量。
     kf->H.numRows = kf->MeasurementValidNum;
     kf->H.numCols = kf->xhatSize;
     kf->HT.numRows = kf->xhatSize;

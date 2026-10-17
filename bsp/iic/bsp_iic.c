@@ -1,5 +1,5 @@
 /** @file bsp_iic.c
- * @brief 保存 I²C 设备地址及模式，转调 HAL 收发，接收完成时按句柄和地址寻找模块回调。
+* @brief 保存 I²C 设备地址及模式，转调 HAL 收发，接收完成时按句柄和地址寻找模块回调。
  */
 #include "bsp_iic.h"
 #include "memory.h"

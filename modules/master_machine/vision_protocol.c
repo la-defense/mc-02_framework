@@ -1,6 +1,6 @@
 /** @file vision_protocol.c
- * @brief 按现有 SP 格式计算校验，并在接收片段中寻找首个可用完整帧；接口见头文件。
- */
+* @brief 按现有 SP 格式计算校验，并在接收片段中寻找首个可用完整帧；接口见头文件。
+*/
 #include "vision_protocol.h"
 
 #include <string.h>

@@ -1,6 +1,6 @@
 /** @file gimbal.c
- * @brief 接收云台目标，设置 yaw、pitch 的电机参考和反馈来源，并回传姿态及电机单圈角度。
- */
+* @brief 接收云台目标，设置 yaw、pitch 的电机参考和反馈来源，并回传姿态及电机单圈角度。
+*/
 #include "gimbal.h"
 #include "robot_def.h"
 #include "dji_motor.h"

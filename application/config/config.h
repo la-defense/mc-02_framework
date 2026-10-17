@@ -1,6 +1,6 @@
 /** @file config.h
- * @brief 机器人机械、电机和控制参数类型，以及配置读取入口。
- * 当前只有哨兵配置；这些结构不表示全部参数都已由实车确认，应用仍有自身使用的常量。
+* @brief 机器人机械、电机和控制参数类型，以及配置读取入口。
+* 当前只有哨兵配置；这些结构不表示全部参数都已由实车确认，应用仍有自身使用的常量。
  */
 #pragma once
 
@@ -139,19 +139,19 @@ typedef enum
 
 /* 配置入口(在 robot_def.c 中实现) */
 /** @brief 选择并保存供后续 Feed 使用的机器人配置。
- * @param[in] id 机器人类型，当前所有未实现或未知编号都会返回哨兵配置。
- * @return 长期有效的内部配置地址，不可释放；再次调用不会恢复已改写的静态配置。
+* @param[in] id 机器人类型，当前所有未实现或未知编号都会返回哨兵配置。
+* @return 长期有效的内部配置地址，不可释放；再次调用不会恢复已改写的静态配置。
  */
 Robot_Config_s *RobotConfigInit(uint8_t id);
 /** @brief 取得已选配置中的底盘部分。
- * @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
+* @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
  */
 Chassis_Config_s *ChassisConfigFeed(void);
 /** @brief 取得已选配置中的云台部分。
- * @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
+* @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
  */
 Gimbal_Config_s *GimbalConfigFeed(void);
 /** @brief 取得已选配置中的发射部分。
- * @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
+* @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
  */
 Shoot_Config_s *ShootConfigFeed(void);

@@ -1,8 +1,8 @@
 /**
- * @file lcd_buf.c
- * @brief 逐行组合颜色和字模，再通过 SPI1 发送；公开接口用法见 lcd_buf.h。
- * lcd_line_buf 只存一行，画完即复用；LCD_Address_Set() 负责绘图区到面板的坐标换算。
- */
+* @file lcd_buf.c
+* @brief 逐行组合颜色和字模，再通过 SPI1 发送；公开接口用法见 lcd_buf.h。
+* lcd_line_buf 只存一行，画完即复用；LCD_Address_Set() 负责绘图区到面板的坐标换算。
+*/
 #include "lcd_buf.h"
 #include "lcd.h"
 #include "lcdfont.h"

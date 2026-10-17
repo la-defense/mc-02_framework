@@ -1,5 +1,5 @@
 /** @file bsp_gpio.h
- * @brief 保存 GPIO 实例和 EXTI 回调；GPIO 的引脚模式与中断触发方式仍须提前由板级代码配置。
+* @brief 保存 GPIO 实例和 EXTI 回调；GPIO 的引脚模式与中断触发方式仍须提前由板级代码配置。
  */
 #include "gpio.h"
 #include "stdint.h"
@@ -53,29 +53,29 @@ typedef struct
 } GPIO_Init_Config_s;
 
 /** @brief 复制配置并保存到 GPIO 实例表，不在此处修改引脚模式。
- * @param[in] GPIO_config 有效配置，端口、引脚及回调地址须在使用期间有效，不能为 NULL。
- * @return 分配的内部对象，没有检查内存申请失败；目前最多容纳 10 项，但注册没有检查容量。
- * @note 仅在启动阶段注册，不可自行释放；同一 EXTI 引脚号应只对应一个回调对象。
+* @param[in] GPIO_config 有效配置，端口、引脚及回调地址须在使用期间有效，不能为 NULL。
+* @return 分配的内部对象，没有检查内存申请失败；目前最多容纳 10 项，但注册没有检查容量。
+* @note 仅在启动阶段注册，不可自行释放；同一 EXTI 引脚号应只对应一个回调对象。
  */
 GPIOInstance *GPIORegister(GPIO_Init_Config_s *GPIO_config);
 
 /** @brief 翻转指定引脚的输出电平。
- * @param[in] _instance 注册得到的有效对象，不能为 NULL。
+* @param[in] _instance 注册得到的有效对象，不能为 NULL。
  */
 void GPIOToggel(GPIOInstance *_instance);
 
 /** @brief 将指定引脚输出设为高电平。
- * @param[in] _instance 注册得到的有效对象，不能为 NULL。
+* @param[in] _instance 注册得到的有效对象，不能为 NULL。
  */
 void GPIOSet(GPIOInstance *_instance);
 
 /** @brief 将指定引脚输出设为低电平。
- * @param[in] _instance 注册得到的有效对象，不能为 NULL。
+* @param[in] _instance 注册得到的有效对象，不能为 NULL。
  */
 void GPIOReset(GPIOInstance *_instance);
 
 /** @brief 读取引脚当前电平。
- * @param[in] _instance 注册得到的有效对象，不能为 NULL。
- * @return GPIO_PIN_SET 为高电平，GPIO_PIN_RESET 为低电平。
+* @param[in] _instance 注册得到的有效对象，不能为 NULL。
+* @return GPIO_PIN_SET 为高电平，GPIO_PIN_RESET 为低电平。
  */
 GPIO_PinState GPIORead(GPIOInstance *_instance);

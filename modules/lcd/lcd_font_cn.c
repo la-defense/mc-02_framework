@@ -1,7 +1,7 @@
 /** @file lcd_font_cn.c
- * @brief LCD 标签使用的 16×16 字库，数组下标与 Lcd_CnChar_e 顺序相同。
- * 每字 32 字节，按列排列：每列两字节，低位对应上方像素，由 LCD_BufShowCnString() 读取。
- */
+* @brief LCD 标签使用的 16×16 字库，数组下标与 Lcd_CnChar_e 顺序相同。
+* 每字 32 字节，按列排列：每列两字节，低位对应上方像素，由 LCD_BufShowCnString() 读取。
+*/
 #include "lcd_font_cn.h"
 
 const uint8_t lcd_cn_font16[LCD_CN_COUNT][32] = {

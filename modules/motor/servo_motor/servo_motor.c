@@ -1,6 +1,6 @@
 /** @file servo_motor.c
- * @brief 保留的总线固定命令及 PWM 输出选择，公共数组保存移动、查询和卸载命令。
- */
+* @brief 保留的总线固定命令及 PWM 输出选择，公共数组保存移动、查询和卸载命令。
+*/
 #include "servo_motor.h"
 #include "stdlib.h"
 #include "memory.h"

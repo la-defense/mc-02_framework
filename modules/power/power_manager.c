@@ -1,6 +1,6 @@
 /** @file power_manager.c
- * @brief 功率管理预留实现：初始化只保存系数，反馈和更新无实际处理；注释内算法仅供参考。
- */
+* @brief 功率管理预留实现：初始化只保存系数，反馈和更新无实际处理；注释内算法仅供参考。
+*/
 #include "power_manager.h"
 #include "string.h"
 #include "stdlib.h"
@@ -38,7 +38,7 @@ void PowerManagerEnable(PowerManagerInstance *instance)
 
 void PowerManagerUpdate(float power, float sample_a, float sample_b)
 {
-    // 以下全部为未启用的参考步骤，不会修改系数或计算功率。
+// 以下全部为未启用的参考步骤，不会修改系数或计算功率。
     // M[0] = sample_a;
     // M[1] = sample_b;
 

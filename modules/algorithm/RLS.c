@@ -1,3 +1,7 @@
+/**
+* @file RLS.c
+* @brief 分配并更新递推最小二乘算法使用的向量和矩阵。
+ */
 #include "RLS.h"
 
 #ifdef _CMSIS_OS_H
@@ -13,19 +17,18 @@ static uint16_t sizeof_float, sizeof_double;
  *
  * @param rls rls类型定义
  * @param vectorSize 输入变量维度
- * @param delta 传递矩阵因子
- * @param lambda 渐消因子
+* @param delta 重置时传递矩阵对角线的起始值
+* @param lambda 逐步减小较早样本影响的系数
  */
 void RLS_Init(RLS_t *rls, uint8_t vectorSize, float delta, float lambda)
 {
-    // 计算出的矩阵数值依据精度而定，值不一定均为0
-    // 使用double计算可能导致数据溢出
+    // 记录元素字节数，后面用它清零各块矩阵存储空间。
     sizeof_float = sizeof(float);
     sizeof_double = sizeof(double);
 
     rls->vectorSize = vectorSize;
 
-    // init RLS vectors
+    // 为输入、转置输入、增益和参数向量分别准备存储空间。
     rls->input_data = (float *)user_malloc(sizeof_float * vectorSize);
     memset(rls->input_data, 0, sizeof_float * vectorSize);
     Matrix_Init(&rls->input_vector, rls->vectorSize, 1, (float *)rls->input_data);
@@ -63,6 +66,7 @@ void RLS_Init(RLS_t *rls, uint8_t vectorSize, float delta, float lambda)
     memset(rls->temp_matrix1_data, 0, sizeof_float * vectorSize * vectorSize);
     Matrix_Init(&rls->temp_matrix1, rls->vectorSize, rls->vectorSize, (float *)rls->temp_matrix1_data);
 
+    // 保存重置时使用的对角线初值和每次更新的渐消因子。
     rls->delta = delta;
     rls->lambda = lambda;
 }
@@ -75,6 +79,7 @@ void RLS_Init(RLS_t *rls, uint8_t vectorSize, float delta, float lambda)
  */
 void RLS_SetParam(RLS_t *rls, float* updateParams)
 {
+    // 把调用者给出的每个参数依次保存到滤波器的结果数组。
     for (uint8_t i = 0; i < rls->vectorSize; ++i)
     {
         rls->params_data[i] = updateParams[i];
@@ -88,6 +93,7 @@ void RLS_SetParam(RLS_t *rls, float* updateParams)
  */
 void RLS_Reset(RLS_t *rls)
 {
+    // 只重设对角线；非对角元素不会在这里清除。
     for (uint8_t i = 0; i < rls->trans_matrix.numRows; ++i)
     {
         rls->trans_data[i * rls->trans_matrix.numCols + i] = 1.0f;
@@ -107,7 +113,7 @@ void RLS_Reset(RLS_t *rls)
  */
 void RLS_Update(RLS_t *rls, float *vector, float actualOutput)
 {
-    // Copy the input vector to the input data array
+    // 复制调用者的输入，后续矩阵运算都使用滤波器自己的缓冲区。
     for (uint8_t i = 0; i < rls->input_vector.numRows * rls->input_vector.numCols; ++i)
     {
         rls->input_data[i] = vector[i];
@@ -115,21 +121,22 @@ void RLS_Update(RLS_t *rls, float *vector, float actualOutput)
     // rls->input_data[0] = vector[0];
     // rls->input_data[1] = vector[1];
 
-    // Calculate the transpose of the input vector and store it in the temp vector
+    // 先计算 T·X 和 X'·T·X，供本轮增益计算使用。
     rls->temp_vector.numRows = rls->input_vector.numRows;
     rls->temp_vector.numCols = 1;
-    rls->MatStatus = Matrix_Multiply(&rls->trans_matrix, &rls->input_vector, &rls->temp_vector);    // temp_vector = T·X
+    rls->MatStatus = Matrix_Multiply(&rls->trans_matrix, &rls->input_vector, &rls->temp_vector);    // 计算传递矩阵对当前输入的加权结果。
 
-    // Calculate the transpose of the input vector and store it in the t_input_vector
-    rls->MatStatus = Matrix_Transpose(&rls->input_vector, &rls->t_input_vector);    // X=>X'
+    // 转置输入向量，后面用它计算预测输出和更新矩阵。
+    rls->MatStatus = Matrix_Transpose(&rls->input_vector, &rls->t_input_vector);    // 将输入列向量转成行向量，供后续矩阵乘法使用。
     rls->temp_vector1.numRows = 1;
     rls->temp_vector1.numCols = rls->t_input_vector.numCols;
-    rls->MatStatus = Matrix_Multiply(&rls->t_input_vector, &rls->trans_matrix, &rls->temp_vector1);  // temp_vector1 = X'·T
+    rls->MatStatus = Matrix_Multiply(&rls->t_input_vector, &rls->trans_matrix, &rls->temp_vector1);  // 计算输入对传递矩阵的加权结果。
     rls->temp.numRows = 1;
     rls->temp.numCols = 1;
-    rls->MatStatus = Matrix_Multiply(&rls->temp_vector1, &rls->input_vector, &rls->temp);     // temp = X'·T·X
+    rls->MatStatus = Matrix_Multiply(&rls->temp_vector1, &rls->input_vector, &rls->temp);     // 计算当前输入对应的标量权重。
 
-    // Calculate the gain vector
+    // 按输入与传递矩阵的关系计算本轮增益。
+    // 按 lambda 调整增益，让较早样本对后续结果的影响逐步减小。
     for (uint8_t i = 0; i < rls->temp_vector.numRows * rls->temp_vector.numCols; ++i)
     {
         rls->temp_vector_data[i] /= 1.0f + (rls->temp_data[0] / rls->lambda);
@@ -137,36 +144,36 @@ void RLS_Update(RLS_t *rls, float *vector, float actualOutput)
     }
     for (uint8_t i = 0; i < rls->gain_vector.numRows * rls->gain_vector.numCols; ++i)
     {
-        // Get gain vector = T·X ./ (1 + X'·T·X ./ lambda) ./ lambda
+        // 逐项保存上面得到的增益向量。
         rls->gain_data[i] = rls->temp_vector_data[i];
     }
     // rls->MatStatus = Matrix_Transpose(&rls->temp_vector, &rls->gain_vector);
 
-    // Calculate the temp vector
+    // 先用旧参数估计当前输出，再计算它与实际输出的差。
     rls->temp.numRows = 1;
     rls->temp.numCols = 1;
-    rls->MatStatus = Matrix_Multiply(&rls->t_input_vector, &rls->params_vector, &rls->temp);        // temp = X'·P
+    rls->MatStatus = Matrix_Multiply(&rls->t_input_vector, &rls->params_vector, &rls->temp);        // 用旧参数估计当前输出。
 
-    // Update the actual output
+    // 用输出误差调整参数；误差为零时本轮不会改变参数。
     actualOutput -= rls->temp_data[0];
     for (uint8_t i = 0; i < rls->gain_vector.numRows * rls->gain_vector.numCols; ++i)
     {
         rls->gain_data[i] *= actualOutput;
     }
-    rls->MatStatus = Matrix_Add(&rls->params_vector, &rls->gain_vector, &rls->params_vector);    // Get params vector = P + G.*(out - (X'·P))
+    rls->MatStatus = Matrix_Add(&rls->params_vector, &rls->gain_vector, &rls->params_vector);    // 把增益乘以输出误差，累加到参数估计中。
 
-    // Calculate the temp matrix
+    // 用增益和输入更新传递矩阵，为下一组样本做准备。
     rls->temp_matrix.numRows = rls->trans_matrix.numRows;
     rls->temp_matrix.numCols = rls->trans_matrix.numCols;
-    rls->MatStatus = Matrix_Multiply(&rls->gain_vector, &rls->t_input_vector, &rls->temp_matrix);        // temp_matrix = G·X'
+    rls->MatStatus = Matrix_Multiply(&rls->gain_vector, &rls->t_input_vector, &rls->temp_matrix);        // 用增益和输入构造本轮需要扣除的矩阵部分。
     rls->temp_matrix1.numRows = rls->trans_matrix.numRows;
     rls->temp_matrix1.numCols = rls->trans_matrix.numCols;
     rls->MatStatus = Matrix_Multiply(&rls->temp_matrix, &rls->trans_matrix, &rls->temp_matrix1);
     rls->temp_matrix1.numRows = rls->trans_matrix.numRows;
     rls->temp_matrix1.numCols = rls->trans_matrix.numCols;
-    rls->MatStatus = Matrix_Subtract(&rls->trans_matrix, &rls->temp_matrix1, &rls->temp_matrix1);        // temp_matrix1 = T - (G·X'·T)
+    rls->MatStatus = Matrix_Subtract(&rls->trans_matrix, &rls->temp_matrix1, &rls->temp_matrix1);        // 从旧传递矩阵中减去本轮修正量。
     for (uint8_t i = 0; i < rls->trans_matrix.numRows * rls->trans_matrix.numCols; ++i)
     {
-        rls->trans_data[i] = rls->temp_matrix1_data[i] / rls->lambda;                   // Get trans matrix = (T - (G·X'·T)) ./ lambda
+        rls->trans_data[i] = rls->temp_matrix1_data[i] / rls->lambda;                   // 再按 lambda 调整传递矩阵，为下一组输入做准备。
     }
 }

@@ -1,5 +1,5 @@
 /** @file robot_task.h
- * @brief 任务创建及常驻任务实现，仅由 robot.c 包含；重复包含到其他编译单元会重复定义。
+* @brief 任务创建及常驻任务实现，仅由 robot.c 包含；重复包含到其他编译单元会重复定义。
  */
 /* 注意该文件应只用于任务初始化,只能被robot.c包含*/
 #pragma once
@@ -36,29 +36,29 @@ osThreadId uiTaskHandle;
 osThreadId lcdTaskHandle;
 
 /** @brief 初始化 INS 后约每 1 ms 处理采样和姿态；失败时只维持诊断循环。
- * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
+* @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartINSTASK(void const *argument);
 /** @brief 约每 1 ms 派发通信并运行电机计算。
- * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
+* @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartMOTORTASK(void const *argument);
 /** @brief 约每 10 ms 检查设备和任务，全部正常时才喂狗。
- * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
+* @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartDAEMONTASK(void const *argument);
 /** @brief 约每 5 ms 运行整车控制和诊断。
- * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
+* @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartROBOTTASK(void const *argument);
 /** @brief 等待裁判编号并周期运行裁判 UI；每次循环至少等待 1 ms。
- * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
+* @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartUITASK(void const *argument);
 
 /** @brief 创建 INS、电机、Daemon、整车、LCD 及当前配置所需 UI 任务。
- * @return 1 为全部创建成功，0 为至少一个失败，并记录失败任务编号；不删除已创建的任务。
- * @note 由 RobotInit() 在调度器启动前调用一次。
+* @return 1 为全部创建成功，0 为至少一个失败，并记录失败任务编号；不删除已创建的任务。
+* @note 由 RobotInit() 在调度器启动前调用一次。
  */
 uint8_t OSTaskInit(void)
 {

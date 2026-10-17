@@ -1,5 +1,5 @@
 /** @file bsp_log.h
- * @brief 先用标准格式化函数准备短文本，再通过 RTT 输出；支持同类日志限速。
+* @brief 先用标准格式化函数准备短文本，再通过 RTT 输出；支持同类日志限速。
  */
 #ifndef _BSP_LOG_H
 #define _BSP_LOG_H
@@ -87,24 +87,24 @@ typedef struct
 } LogRateLimit_t;
 
 /** @brief 计数一次事件，按时间决定本次是否允许调用方打印。
- * @param[in,out] rl 首次使用前清零；NULL 时始终返回 1，不计数。
- * @param[in] period_ms 最短报告间隔，单位 ms；为 0 时每次允许。
- * @return 达到间隔返回 1 并更新时间，否则为 0；不负责实际输出。
+* @param[in,out] rl 首次使用前清零；NULL 时始终返回 1，不计数。
+* @param[in] period_ms 最短报告间隔，单位 ms；为 0 时每次允许。
+* @return 达到间隔返回 1 并更新时间，否则为 0；不负责实际输出。
  */
 uint8_t LogRateLimitAllow(LogRateLimit_t *rl, uint32_t period_ms);
 
 /** @brief 在本地数组中格式化并尝试写 RTT。
- * @param[in] fmt 有效 printf 格式串，不能为 NULL。
- * @param[in] ... 与格式串对应的参数。
- * @return 格式化所需字节数，不含结尾 0；负值表示格式化失败且不输出。
- * @note 文本超过 255 字节时只输出前面放得下的部分，返回值仍为完整所需长度，不代表实际写出数量。
+* @param[in] fmt 有效 printf 格式串，不能为 NULL。
+* @param[in] ... 与格式串对应的参数。
+* @return 格式化所需字节数，不含结尾 0；负值表示格式化失败且不输出。
+* @note 文本超过 255 字节时只输出前面放得下的部分，返回值仍为完整所需长度，不代表实际写出数量。
  */
 int PrintLog(const char *fmt, ...);
 
 /** @brief 旧浮点转文字入口，保留原有小数写法，不是日志输出的必要步骤。
- * @param[out] str 足够大的可写数组，不检查 NULL 或容量；本函数不提供长度参数。
- * @param[in] va 待转换值，须能以 int 保存整数部分和小数乘 1000 的部分；不接受 NaN 或无穷大。
- * @note 不补足小数前面的 0，不做四舍五入；日志宏已由 newlib 支持浮点格式化。
+* @param[out] str 足够大的可写数组，不检查 NULL 或容量；本函数不提供长度参数。
+* @param[in] va 待转换值，须能以 int 保存整数部分和小数乘 1000 的部分；不接受 NaN 或无穷大。
+* @note 不补足小数前面的 0，不做四舍五入；日志宏已由 newlib 支持浮点格式化。
  */
 void Float2Str(char *str, float va);
 

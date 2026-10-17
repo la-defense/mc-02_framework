@@ -1,6 +1,6 @@
 /** @file daemon.c
- * @brief 保存模块计数，周期递减并调用一次离线处理，收到新数据后可重新开始下一轮。
- */
+* @brief 保存模块计数，周期递减并调用一次离线处理，收到新数据后可重新开始下一轮。
+*/
 #include "daemon.h"
 #include "bsp_dwt.h" // 后续通过定时器来计时?
 #include "stdlib.h"

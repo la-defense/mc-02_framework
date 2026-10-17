@@ -1,3 +1,8 @@
+/**
+* @file rm_referee.h
+* @brief 声明裁判系统接收数据、交互数据和串口服务接口。
+* RefereeInit 返回的数据结构由接收回调持续更新；调用方不要释放它。
+ */
 #ifndef RM_REFEREE_H
 #define RM_REFEREE_H
 
@@ -18,7 +23,7 @@ typedef struct
 	uint16_t Receiver_Robot_ID; // 机器人车间通信时接收者的ID，必须和本机器人同颜色
 } referee_id_t;
 
-// 此结构体包含裁判系统接收数据以及UI绘制与机器人车间通信的相关信息
+/** @brief 保存裁判系统接收字段、机器人编号和初始化状态。 */
 typedef struct
 {
 	referee_id_t referee_id;
@@ -53,7 +58,7 @@ typedef struct
 
 } referee_info_t;
 
-// 模式是否切换标志位，0为未切换，1为切换，static定义默认为0
+/** @brief UI 用来记录哪些显示内容需要刷新；1表示对应数据发生变化。 */
 typedef struct
 {
 	uint32_t chassis_flag : 1;
@@ -65,7 +70,7 @@ typedef struct
 	uint8_t refresh_flag : 2;
 } Referee_Interactive_Flag_t;
 
-// 此结构体包含UI绘制与机器人车间通信的需要的其他非裁判系统数据
+/** @brief 保存 UI 和机器人间通信需要的应用状态及上次显示值。 */
 typedef struct
 {
 	Referee_Interactive_Flag_t Referee_Interactive_Flag;
@@ -94,30 +99,25 @@ typedef struct
 #pragma pack()
 
 /**
- * @brief 裁判系统通信初始化,该函数会初始化裁判系统串口,开启中断
- *
- * @param referee_usart_handle 串口handle,C板一般用串口6
- * @return referee_info_t* 返回裁判系统反馈的数据,包括热量/血量/状态等
+* @brief 注册裁判系统串口和接收数据处理。
+* @param referee_usart_handle 已初始化的 UART 句柄，不能为 NULL。
+* @return 成功时返回持续更新的裁判数据地址；空句柄、重复注册或资源注册失败时返回 NULL。
+* @note 接收数据在串口回调中解析；调用方不要释放返回地址。
  */
 referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle);
 
 /**
- * @brief UI绘制和交互数的发送接口,由UI绘制任务和多机通信函数调用
- * @note 内部包含了一个实时系统的延时函数,这是因为裁判系统接收CMD数据至高位10Hz
- *
- * @param send 发送数据首地址
- * @param tx_len 发送长度
+* @brief 使用 DMA 发送裁判系统帧。
+* @param send 可读发送缓冲区，发送期间保持内容不变。
+* @param tx_len 发送字节数。
+* @note 调用后会让当前任务等待115ms；不检查空指针，也不返回发送状态。
  */
 void RefereeSend(uint8_t *send, uint16_t tx_len);
 
-/**
- * @brief 裁判系统是否在线
- */
+/** @brief 查询看门狗是否收到足够新的裁判串口数据；返回1在线，0离线。 */
 uint8_t RefereeIsOnline(void);
 
-/**
- * @brief 最后一次收到裁判数据的时间戳(ms)
- */
+/** @brief 返回最近一次串口接收回调的 HAL 毫秒计数；不代表该帧已通过校验。 */
 uint32_t RefereeGetLastRxMs(void);
 
 #endif // !REFEREE_H

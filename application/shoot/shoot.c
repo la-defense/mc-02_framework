@@ -1,6 +1,6 @@
 /** @file shoot.c
- * @brief 接收发射命令，切换摩擦轮和拨弹盘控制；单发、三发只在进入对应模式时增加目标角度。
- */
+* @brief 接收发射命令，切换摩擦轮和拨弹盘控制；单发、三发只在进入对应模式时增加目标角度。
+*/
 #include "shoot.h"
 #include "robot_def.h"
 #include "config.h"
@@ -161,7 +161,7 @@ void ShootTask()
     //     return;
 
     // 若不在休眠状态,根据robotCMD传来的控制模式进行拨盘电机参考值设定和模式切换
-        // 从配置换算每发弹丸对应的电机转子角度，单位 deg。
+    // 从配置换算每发弹丸对应的电机转子角度，单位 deg。
     const uint8_t slots = shoot_config->loader_slot_num ? shoot_config->loader_slot_num : 10;
     const float ratio = (shoot_config->loader_gearbox_ratio > 0.0f ? shoot_config->loader_gearbox_ratio : 1.0f) *
                         (shoot_config->loader_disk_ratio > 0.0f ? shoot_config->loader_disk_ratio : 1.0f);

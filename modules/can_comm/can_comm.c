@@ -1,5 +1,5 @@
 /** @file can_comm.c
- * @brief 分片发送固定长度消息，接收时拼包并检查 CRC8，按真正收包时间判断是否仍可使用。
+* @brief 分片发送固定长度消息，接收时拼包并检查 CRC8，按真正收包时间判断是否仍可使用。
  */
 #include "can_comm.h"
 #include "main.h"

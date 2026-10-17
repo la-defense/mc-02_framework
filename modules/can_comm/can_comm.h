@@ -57,39 +57,39 @@ typedef struct
 } CANComm_Init_Config_s;
 
 /** @brief 注册 CAN 和离线回调，准备固定长度的消息收发对象。
- * @param[in] comm_config 收发长度单位为字节，均不得超过 60；配置不能为 NULL，内部复制 CAN 配置。
- * @return 成功返回长期有效实例，失败返回 NULL；失败会清理已分配对象，不创建控制任务。
+* @param[in] comm_config 收发长度单位为字节，均不得超过 60；配置不能为 NULL，内部复制 CAN 配置。
+* @return 成功返回长期有效实例，失败返回 NULL；失败会清理已分配对象，不创建控制任务。
  */
 CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config);
 
 /** @brief 添加帧头、长度、CRC8 和帧尾，每次最多 8 字节依次尝试发送。
- * @param[in,out] instance 初始化成功的实例，不能为 NULL；共用发送数组，不要并发调用。
- * @param[in] data 至少可读注册发送长度，不能为 NULL，数据会在本次调用中复制。
- * @note 不等待也不报告单帧发送失败，不保证整包到达；接收端通过整包校验判断是否采用。
+* @param[in,out] instance 初始化成功的实例，不能为 NULL；共用发送数组，不要并发调用。
+* @param[in] data 至少可读注册发送长度，不能为 NULL，数据会在本次调用中复制。
+* @note 不等待也不报告单帧发送失败，不保证整包到达；接收端通过整包校验判断是否采用。
  */
 void CANCommSend(CANCommInstance *instance, uint8_t *data);
 
 /** @brief 清除更新标记并取得最后一次完整接收的内部数据，不检查时间。
- * @param[in,out] instance 初始化成功的实例，不能为 NULL。
- * @return 内部字节数组地址，下次收包可改写；不要释放，应用优先使用带时限的复制入口。
- * @note 两端须使用相同字段顺序与字节排列，不可仅因结构体名称相同就直接解释数据。
+* @param[in,out] instance 初始化成功的实例，不能为 NULL。
+* @return 内部字节数组地址，下次收包可改写；不要释放，应用优先使用带时限的复制入口。
+* @note 两端须使用相同字段顺序与字节排列，不可仅因结构体名称相同就直接解释数据。
  */
 void *CANCommGet(CANCommInstance *instance);
 /** @brief 复制仍在时限内的完整消息，不消耗或更新时间。
- * @param[in] instance 收发实例，NULL 或接收长度不符时失败。
- * @param[out] data 至少可写 data_len 字节，先清零；NULL 时失败。
- * @param[in] data_len 输出字节数，须等于注册的接收长度且非 0。
- * @param[in] now_ms,max_age_ms 当前时间和允许过去的毫秒数，等于时限也允许。
- * @param[out] freshness 可选发布记录，先清零，成功时填写。
- * @return 1 为成功，0 为失败；可写输出清零，防止应用继续使用旧值。
+* @param[in] instance 收发实例，NULL 或接收长度不符时失败。
+* @param[out] data 至少可写 data_len 字节，先清零；NULL 时失败。
+* @param[in] data_len 输出字节数，须等于注册的接收长度且非 0。
+* @param[in] now_ms,max_age_ms 当前时间和允许过去的毫秒数，等于时限也允许。
+* @param[out] freshness 可选发布记录，先清零，成功时填写。
+* @return 1 为成功，0 为失败；可写输出清零，防止应用继续使用旧值。
  */
 uint8_t CANCommGetSnapshot(CANCommInstance *instance, void *data, uint8_t data_len,
                            uint32_t now_ms, uint32_t max_age_ms,
                            MessageFreshness_t *freshness);
 
 /** @brief 检查完整消息时间和离线计时。
- * @param[in] instance 收发实例，NULL 时返回 0。
- * @return 1 为最近消息不超过 50 ms 且 Daemon 在线，否则为 0。
+* @param[in] instance 收发实例，NULL 时返回 0。
+* @return 1 为最近消息不超过 50 ms 且 Daemon 在线，否则为 0。
  */
 uint8_t CANCommIsOnline(CANCommInstance *instance);
 

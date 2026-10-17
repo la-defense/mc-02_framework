@@ -1,7 +1,7 @@
 /** @file bsp_flash.h
- * @brief 保留的 F1/F4 风格 Flash 接口及地址表，当前 H723 固件已在 CMake 中排除此实现。
- * H723 参数保存使用 bsp_param.c；本表大小及地址不能当作 H723 的实际扇区布局。
- * 以下接口均不检查地址、容量或空指针，也不负责擦写前的系统准备，仅供后续移植参考。
+* @brief 保留的 F1/F4 风格 Flash 接口及地址表，当前 H723 固件已在 CMake 中排除此实现。
+* H723 参数保存使用 bsp_param.c；本表大小及地址不能当作 H723 的实际扇区布局。
+* 以下接口均不检查地址、容量或空指针，也不负责擦写前的系统准备，仅供后续移植参考。
  */
 #ifndef _BSP_FLASH_H
 #define _BSP_FLASH_H
@@ -40,40 +40,40 @@
 
 
 /** @brief 从旧地址表对应扇区起擦除指定数量，不返回 HAL 结果。
- * @param[in] address 旧芯片表支持的地址；超范围查找会落到扇区 11，不报告错误。
- * @param[in] len 连续扇区个数，不是字节数，调用方须检查实际芯片范围。
+* @param[in] address 旧芯片表支持的地址；超范围查找会落到扇区 11，不报告错误。
+* @param[in] len 连续扇区个数，不是字节数，调用方须检查实际芯片范围。
  */
 void flash_erase_address(uint32_t address, uint16_t len);
 
 /** @brief 按四字节逐项写入，从 start_address 到下一扇区起点之间尝试写入。
- * @param[in] start_address 已擦除区域中四字节对齐的地址，须使用旧芯片对应的表。
- * @param[in] buf 至少可读 len 个 uint32_t，不能为 NULL。
- * @param[in] len uint32_t 元素个数，须大于 0 且不超过本扇区剩余空间。
- * @return -1 为 HAL 写入失败，前面部分可能已写；0 只表示未遇到失败，不保证写足 len 项。
- * @note 循环包含下一扇区起点，且 len 为 0 也会尝试写入；调用方必须先检查长度，不可并发调用。
+* @param[in] start_address 已擦除区域中四字节对齐的地址，须使用旧芯片对应的表。
+* @param[in] buf 至少可读 len 个 uint32_t，不能为 NULL。
+* @param[in] len uint32_t 元素个数，须大于 0 且不超过本扇区剩余空间。
+* @return -1 为 HAL 写入失败，前面部分可能已写；0 只表示未遇到失败，不保证写足 len 项。
+* @note 循环包含下一扇区起点，且 len 为 0 也会尝试写入；调用方必须先检查长度，不可并发调用。
  */
 int8_t flash_write_single_address(uint32_t start_address, uint32_t *buf, uint32_t len);
 
 
 /** @brief 按四字节递增地址写入，达到指定个数或越过 end_address 后结束。
- * @param[in] start_address 已擦除且四字节对齐的起始地址。
- * @param[in] end_address 允许尝试写入的末地址，包含此地址，调用方须检查芯片和扇区范围。
- * @param[in] buf 至少可读 len 个 uint32_t，不能为 NULL。
- * @param[in] len uint32_t 元素个数，须大于 0。
- * @return -1 为 HAL 失败，0 为未遇到失败；范围提前用完也返回 0，已写部分不回退。
+* @param[in] start_address 已擦除且四字节对齐的起始地址。
+* @param[in] end_address 允许尝试写入的末地址，包含此地址，调用方须检查芯片和扇区范围。
+* @param[in] buf 至少可读 len 个 uint32_t，不能为 NULL。
+* @param[in] len uint32_t 元素个数，须大于 0。
+* @return -1 为 HAL 失败，0 为未遇到失败；范围提前用完也返回 0，已写部分不回退。
  */
 int8_t flash_write_muli_address(uint32_t start_address, uint32_t end_address, uint32_t *buf, uint32_t len);
 
 /** @brief 通过内存复制读取 Flash，不检查地址或容量。
- * @param[in] address 至少可读 len*4 字节的起始地址。
- * @param[out] buf 至少可写 len 个 uint32_t 的区域，不能与源区重叠。
- * @param[in] len uint32_t 元素个数，不是字节数。
+* @param[in] address 至少可读 len*4 字节的起始地址。
+* @param[out] buf 至少可写 len 个 uint32_t 的区域，不能与源区重叠。
+* @param[in] len uint32_t 元素个数，不是字节数。
  */
 void flash_read(uint32_t address, uint32_t *buf, uint32_t len);
 
 /** @brief 按旧地址表查下一扇区的起点。
- * @param[in] address 当前地址。
- * @return 表中下一扇区地址；未命中前面分支时返回 FLASH_END_ADDR，不表示输入一定合法。
+* @param[in] address 当前地址。
+* @return 表中下一扇区地址；未命中前面分支时返回 FLASH_END_ADDR，不表示输入一定合法。
  */
 uint32_t get_next_flash_address(uint32_t address);
 #endif

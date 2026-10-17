@@ -78,23 +78,23 @@ typedef struct
 } DJIMotorSummary_t;
 
 /** @brief 注册 DJI 电机、CAN 接收与离线计数，成功后保持停止输出。
- * @param[in] config 有效配置；支持 M2006、M3508、GM6020，当前检查设备编号 1～8，按型号分别计算接收 ID。
- * @return 成功返回长期有效对象，参数、重复 ID、容量或注册分配失败返回 NULL，并清理本次已分配资源。
- * @note 先配置 BSP，再在应用初始化阶段注册；外部反馈和前馈指针须长期有效，数据单位由调用方匹配。
+* @param[in] config 有效配置；支持 M2006、M3508、GM6020，当前检查设备编号 1～8，按型号分别计算接收 ID。
+* @return 成功返回长期有效对象，参数、重复 ID、容量或注册分配失败返回 NULL，并清理本次已分配资源。
+* @note 先配置 BSP，再在应用初始化阶段注册；外部反馈和前馈指针须长期有效，数据单位由调用方匹配。
  */
 DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config);
 
 /** @brief 保存目标，供下一轮 DJIMotorControl() 计算，不直接发送。
- * @param[in,out] motor 有效实例，不能为 NULL。
- * @param[in] ref 正常数值；使用电机反馈时，角度目标为 deg、速度目标为 deg/s，直接输出为电调原始数值。
- * @note 外部反馈不会自动换单位；目标、反馈和 PID 配置须配套，不可直接把原始电调值当作 A。
+* @param[in,out] motor 有效实例，不能为 NULL。
+* @param[in] ref 正常数值；使用电机反馈时，角度目标为 deg、速度目标为 deg/s，直接输出为电调原始数值。
+* @note 外部反馈不会自动换单位；目标、反馈和 PID 配置须配套，不可直接把原始电调值当作 A。
  */
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
 
 /** @brief 改写角度或速度反馈来源，下一轮控制生效。
- * @param[in,out] motor 有效实例，不能为 NULL。
- * @param[in] loop ANGLE_LOOP 或 SPEED_LOOP，其他值只打印错误。
- * @param[in] type MOTOR_FEED 用电机反馈，OTHER_FEED 用初始化时保存的有效指针。
+* @param[in,out] motor 有效实例，不能为 NULL。
+* @param[in] loop ANGLE_LOOP 或 SPEED_LOOP，其他值只打印错误。
+* @param[in] type MOTOR_FEED 用电机反馈，OTHER_FEED 用初始化时保存的有效指针。
  */
 void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback_Source_e type);
 
@@ -102,36 +102,36 @@ void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback
 void DJIMotorControl();
 
 /** @brief 设置停止标记，下一轮控制将该电机对应的发送字节清零，保留原目标值。
- * @param[in,out] motor 有效实例，不能为 NULL；需要清目标时另调用 DJIMotorSetRef()。
+* @param[in,out] motor 有效实例，不能为 NULL；需要清目标时另调用 DJIMotorSetRef()。
  */
 void DJIMotorStop(DJIMotorInstance *motor);
 
 /** @brief 设置运行标记，下一轮控制重新使用已保存目标，不负责整车许可检查。
- * @param[in,out] motor 有效实例，不能为 NULL；初始化成功时默认保持停止。
+* @param[in,out] motor 有效实例，不能为 NULL；初始化成功时默认保持停止。
  */
 void DJIMotorEnable(DJIMotorInstance *motor);
 
 /** @brief 改写从哪个控制环开始使用参考值。
- * @param[in,out] motor 有效实例，不能为 NULL。
- * @param[in] outer_loop 目标最外层类型，须与 close_loop_type 和 PID 配置匹配。
+* @param[in,out] motor 有效实例，不能为 NULL。
+* @param[in] outer_loop 目标最外层类型，须与 close_loop_type 和 PID 配置匹配。
  */
 void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop);
 
 /** @brief 查询 Daemon 并更新实例 online_flag，本函数没有返回值。
- * @param[in,out] motor 有效实例，不能为 NULL；在线不等于已允许输出。
+* @param[in,out] motor 有效实例，不能为 NULL；在线不等于已允许输出。
  */
 void DJIMotorIsOnline(DJIMotorInstance *motor);
 
 /** @brief 改写参与计算的控制环组合。
- * @param[in,out] motor 有效实例，不能为 NULL。
- * @param[in] outer_loop 实际写入 close_loop_type 的标志组合，可按位或，名称沿用旧接口。
+* @param[in,out] motor 有效实例，不能为 NULL。
+* @param[in] outer_loop 实际写入 close_loop_type 的标志组合，可按位或，名称沿用旧接口。
  */
 void DJIMotorCloseLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop);
 
 /** @brief 复制在线、运行及当前测量值，供显示读取。
- * @param[in] motor 电机实例，NULL 时不处理。
- * @param[out] summary 输出对象，NULL 时不处理；失败时保持原值，不自动清零。
- * @note 角度用 deg，速度用 deg/s，温度用摄氏度，current 为电调原始反馈整数。
+* @param[in] motor 电机实例，NULL 时不处理。
+* @param[out] summary 输出对象，NULL 时不处理；失败时保持原值，不自动清零。
+* @note 角度用 deg，速度用 deg/s，温度用摄氏度，current 为电调原始反馈整数。
  */
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);
 

@@ -1,18 +1,9 @@
 /**
- ******************************************************************************
- * @file    QuaternionEKF.c
- * @author  Wang Hongxi
+* @file QuaternionEKF.c
+* @brief 根据陀螺仪预测姿态，再用加速度计修正，并估计陀螺仪零偏。
+* @author Wang Hongxi
  * @version V1.2.0
- * @date    2022/3/8
- * @brief   attitude update with gyro bias estimate and chi-square test
- ******************************************************************************
- * @attention
- * 1st order LPF transfer function:
- *     1
- *  ———————
- *  as + 1
- * 
- ******************************************************************************
+* @date 2022/3/8
  */
 #include "QuaternionEKF.h"
 #include <float.h>
@@ -49,12 +40,14 @@ static void IMU_QuaternionEKF_SetH(KalmanFilter_t *kf);
 static void IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf);
 
 /**
- * @brief Quaternion EKF initialization and some reference value
- * @param[in] process_noise1 quaternion process noise    10
- * @param[in] process_noise2 gyro bias process noise     0.001
- * @param[in] measure_noise  accel measure noise         1000000
- * @param[in] lambda         fading coefficient          0.9996
- * @param[in] lpf            lowpass filter coefficient  0
+* @brief 初始化矩阵、噪声参数和姿态四元数。
+* @param[in] init_quaternion 四元数数组，包含 q0 到 q3。
+* @param[in] process_noise1 四元数状态的过程噪声参数。
+* @param[in] process_noise2 陀螺仪零偏的过程噪声参数。
+* @param[in] measure_noise 加速度计测量噪声参数。
+* @param[in] lambda 调整旧零偏估计影响程度的系数；大于1会被改为1。
+* @param[in] lpf 加速度低通滤波时间参数，单位 s。
+* @return 成功返回1；空指针或内部卡尔曼滤波器初始化失败返回0。
  */
 uint8_t IMU_QuaternionEKF_Init(float* init_quaternion,float process_noise1, float process_noise2, float measure_noise, float lambda, float lpf)
 {
@@ -103,10 +96,11 @@ uint8_t IMU_QuaternionEKF_Init(float* init_quaternion,float process_noise1, floa
 }
 
 /**
- * @brief Quaternion EKF update
- * @param[in]       gyro x y z in rad/s
- * @param[in]       accel x y z in m/s²
- * @param[in]       update period in s
+* @brief 处理一组陀螺仪和加速度计数据，更新姿态估计。
+* @param[in] gx, gy, gz 三轴角速度，单位 rad/s。
+* @param[in] ax, ay, az 三轴加速度，单位 m/s²。
+* @param[in] dt 本次更新间隔，单位 s。
+* @note 调用前须成功初始化。更新后的四元数和角度写入 QEKF_INS。
  */
 void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, float az, float dt)
 {
@@ -164,13 +158,13 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
     QEKF_INS.Accel[1] = QEKF_INS.Accel[1] * QEKF_INS.accLPFcoef / (QEKF_INS.dt + QEKF_INS.accLPFcoef) + ay * QEKF_INS.dt / (QEKF_INS.dt + QEKF_INS.accLPFcoef);
     QEKF_INS.Accel[2] = QEKF_INS.Accel[2] * QEKF_INS.accLPFcoef / (QEKF_INS.dt + QEKF_INS.accLPFcoef) + az * QEKF_INS.dt / (QEKF_INS.dt + QEKF_INS.accLPFcoef);
 
-    // set z,单位化重力加速度向量
+    // 把加速度数据按向量长度缩放到长度为1，供滤波器比较方向。
     float accelNormSq = QEKF_INS.Accel[0] * QEKF_INS.Accel[0] +
                         QEKF_INS.Accel[1] * QEKF_INS.Accel[1] +
                         QEKF_INS.Accel[2] * QEKF_INS.Accel[2];
     if (accelNormSq < 1e-6f)
     {
-        // 加速度全零/异常: 用重力方向兜底, 避免 invSqrt(0) 产生异常量测
+        // 加速度全零/异常: 用重力方向兜底, 避免 invSqrt(0) 产生异常测量
         QEKF_INS.IMU_QuaternionEKF.MeasuredVector[0] = 0.0f;
         QEKF_INS.IMU_QuaternionEKF.MeasuredVector[1] = 0.0f;
         QEKF_INS.IMU_QuaternionEKF.MeasuredVector[2] = 1.0f;
@@ -182,7 +176,7 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
         accelInvNorm = invSqrt(accelNormSq);
         for (uint8_t i = 0; i < 3; ++i)
         {
-            QEKF_INS.IMU_QuaternionEKF.MeasuredVector[i] = QEKF_INS.Accel[i] * accelInvNorm; // 用加速度向量更新量测值
+            QEKF_INS.IMU_QuaternionEKF.MeasuredVector[i] = QEKF_INS.Accel[i] * accelInvNorm; // 用加速度方向更新滤波器的测量输入
         }
         QEKF_INS.accl_norm = 1.0f / accelInvNorm;
     }
@@ -230,7 +224,7 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
     QEKF_INS.Pitch = atan2f(2.0f * (QEKF_INS.q[0] * QEKF_INS.q[1] + QEKF_INS.q[2] * QEKF_INS.q[3]), 2.0f * (QEKF_INS.q[0] * QEKF_INS.q[0] + QEKF_INS.q[3] * QEKF_INS.q[3]) - 1.0f) * 57.295779513f;
     QEKF_INS.Roll = asinf(-2.0f * (QEKF_INS.q[1] * QEKF_INS.q[3] - QEKF_INS.q[0] * QEKF_INS.q[2])) * 57.295779513f;
 
-    // get Yaw total, yaw数据可能会超过360,处理一下方便其他功能使用(如小陀螺)
+    // 角度跨过 ±180° 时调整圈数，保留连续累计的 yaw 角。
     if (QEKF_INS.Yaw - QEKF_INS.YawAngleLast > 180.0f)
     {
         QEKF_INS.YawRoundCount--;
@@ -246,7 +240,7 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
 
 /**
  * @brief 用于更新线性化后的状态转移矩阵F右上角的一个4x2分块矩阵,稍后用于协方差矩阵P的更新;
- *        并对零漂的方差进行限制,防止过度收敛并限幅防止发散
+*        并给零偏方差设范围，避免长期沿用过小或过大的估计。
  *
  * @param kf
  */
@@ -260,7 +254,7 @@ static void IMU_QuaternionEKF_F_Linearization_P_Fading(KalmanFilter_t *kf)
     q2 = kf->xhatminus_data[2];
     q3 = kf->xhatminus_data[3];
 
-    // quaternion normalize
+    // 把预测四元数按长度缩放到长度为1，避免计算中长度逐渐偏离。
     qInvNorm = invSqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
     for (uint8_t i = 0; i < 4; ++i)
     {
@@ -275,6 +269,7 @@ static void IMU_QuaternionEKF_F_Linearization_P_Fading(KalmanFilter_t *kf)
     30    31    32    33    34     35
     */
     // set F
+    // 把四元数与 x、y 轴零偏之间的变化关系写进 F 矩阵右上角。
     kf->F_data[4] = q1 * QEKF_INS.dt / 2;
     kf->F_data[5] = q2 * QEKF_INS.dt / 2;
 
@@ -287,11 +282,11 @@ static void IMU_QuaternionEKF_F_Linearization_P_Fading(KalmanFilter_t *kf)
     kf->F_data[22] = q2 * QEKF_INS.dt / 2;
     kf->F_data[23] = -q1 * QEKF_INS.dt / 2;
 
-    // fading filter,防止零飘参数过度收敛
+    // 放大零偏估计的方差，避免滤波器长期过度相信旧估计。
     kf->P_data[28] /= QEKF_INS.lambda;
     kf->P_data[35] /= QEKF_INS.lambda;
 
-    // 限幅,防止发散
+    // 限制两个零偏方差的最大值，避免它们无限增大。
     if (kf->P_data[28] > 10000)
     {
         kf->P_data[28] = 10000;
@@ -303,9 +298,8 @@ static void IMU_QuaternionEKF_F_Linearization_P_Fading(KalmanFilter_t *kf)
 }
 
 /**
- * @brief 在工作点处计算观测函数h(x)的Jacobi矩阵H
- *
- * @param kf
+* @brief 根据预测姿态计算 H 矩阵，说明姿态变化怎样影响重力方向测量。
+* @param kf 当前滤波器及其预测结果。
  */
 static void IMU_QuaternionEKF_SetH(KalmanFilter_t *kf)
 {
@@ -341,11 +335,8 @@ static void IMU_QuaternionEKF_SetH(KalmanFilter_t *kf)
 }
 
 /**
- * @brief 利用观测值和先验估计得到最优的后验估计
- *        加入了卡方检验以判断融合加速度的条件是否满足
- *        同时引入发散保护保证恶劣工况下的必要量测更新
- *
- * @param kf
+* @brief 比较预测的重力方向与加速度计数据，再修正姿态和零偏。
+* @param kf 当前滤波器及其预测结果、测量数据。
  */
 static void IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf)
 {
@@ -375,62 +366,64 @@ static void IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf)
     kf->temp_vector_data[1] = 2 * (q0 * q1 + q2 * q3);
     kf->temp_vector_data[2] = q0 * q0 - q1 * q1 - q2 * q2 + q3 * q3; // temp_vector = h(xhat'(k))
 
-    // 计算预测值和各个轴的方向余弦
+    // 求预测重力方向与各坐标轴的夹角，后面用它调整零偏修正力度。
     for (uint8_t i = 0; i < 3; ++i)
     {
         QEKF_INS.OrientationCosine[i] = acosf(fabsf(kf->temp_vector_data[i]));
     }
 
-    // 利用加速度计数据修正
+    // 用加速度计数据修正预测姿态。
     kf->temp_vector1.numRows = kf->z.numRows;
     kf->temp_vector1.numCols = 1;
     kf->MatStatus = Matrix_Subtract(&kf->z, &kf->temp_vector, &kf->temp_vector1); // temp_vector1 = z(k) - h(xhat'(k))
 
-    // chi-square test,卡方检验
+    // 计算测量方向与预测方向的差距，并结合噪声大小判断本轮测量是否可信。
     kf->temp_matrix.numRows = kf->temp_vector1.numRows;
     kf->temp_matrix.numCols = 1;
-    kf->MatStatus = Matrix_Multiply(&kf->temp_matrix1, &kf->temp_vector1, &kf->temp_matrix); // temp_matrix = inv(H·P'(k)·HT + R)·(z(k) - h(xhat'(k)))
+    kf->MatStatus = Matrix_Multiply(&kf->temp_matrix1, &kf->temp_vector1, &kf->temp_matrix); // 把测量方向的差距按当前估计和噪声大小换算，作为后面的差距检查值。
     kf->temp_vector.numRows = 1;
     kf->temp_vector.numCols = kf->temp_vector1.numRows;
     kf->MatStatus = Matrix_Transpose(&kf->temp_vector1, &kf->temp_vector); // temp_vector = z(k) - h(xhat'(k))'
     kf->MatStatus = Matrix_Multiply(&kf->temp_vector, &kf->temp_matrix, &QEKF_INS.ChiSquare);
-    // rk is small,filter converged/converging
+    // 预测方向和加速度计方向接近时，记录滤波器已进入收敛状态。
     if (QEKF_INS.ChiSquare_Data[0] < 0.5f * QEKF_INS.ChiSquareTestThreshold)
     {
         QEKF_INS.ConvergeFlag = 1;
     }
-    // rk is bigger than thre but once converged
+    // 收敛后若两种方向差得太多，先检查当前是否处于稳定状态。
     if (QEKF_INS.ChiSquare_Data[0] > QEKF_INS.ChiSquareTestThreshold && QEKF_INS.ConvergeFlag)
     {
         if (QEKF_INS.StableFlag)
         {
-            QEKF_INS.ErrorCount++; // 载体静止时仍无法通过卡方检验
+            QEKF_INS.ErrorCount++; // 静止时仍连续出现方向差距过大，累计次数。
         }
         else
         {
             QEKF_INS.ErrorCount = 0;
         }
 
+        // 稳定时连续51次差距过大，就清除稳定标记并继续使用本轮数据。
         if (QEKF_INS.ErrorCount > 50)
         {
             // 滤波器发散
             QEKF_INS.ConvergeFlag = 0;
-            kf->SkipEq5 = FALSE; // step-5 is cov mat P updating
+            kf->SkipEq5 = FALSE; // 允许更新本轮方差，避免继续沿用失准后的估计。
         }
         else
         {
-            //  残差未通过卡方检验 仅预测
+            //  两个方向差距过大时，本轮只采用陀螺仪预测结果。
             //  xhat(k) = xhat'(k)
             //  P(k) = P'(k)
+            // 暂时不融合这次加速度数据，沿用预测的姿态和方差。
             memcpy(kf->xhat_data, kf->xhatminus_data, sizeof_float * kf->xhatSize);
             memcpy(kf->P_data, kf->Pminus_data, sizeof_float * kf->xhatSize * kf->xhatSize);
-            kf->SkipEq5 = TRUE; // part5 is P updating
+            kf->SkipEq5 = TRUE; // 这次只采用预测结果，不用本轮异常测量更新方差。
             return;
         }
     }
-    else // if divergent or rk is not that big/acceptable,use adaptive gain
+    else // 误差还可接受或滤波器尚未收敛时，按方向差距调整加速度修正力度。
     {
-        // scale adaptive,rk越小则增益越大,否则更相信预测值
+        // 方向差距越大，修正力度越小；差距较小时保留完整修正。
         if (QEKF_INS.ChiSquare_Data[0] > 0.1f * QEKF_INS.ChiSquareTestThreshold && QEKF_INS.ConvergeFlag)
         {
             QEKF_INS.AdaptiveGainScale = (QEKF_INS.ChiSquareTestThreshold - QEKF_INS.ChiSquare_Data[0]) / (0.9f * QEKF_INS.ChiSquareTestThreshold);
@@ -449,7 +442,7 @@ static void IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf)
     kf->MatStatus = Matrix_Multiply(&kf->Pminus, &kf->HT, &kf->temp_matrix); // temp_matrix = P'(k)·HT
     kf->MatStatus = Matrix_Multiply(&kf->temp_matrix, &kf->temp_matrix1, &kf->K);
 
-    // implement adaptive
+    // 对所有增益元素应用上面算出的修正力度。
     for (uint8_t i = 0; i < kf->K.numRows * kf->K.numCols; ++i)
     {
         kf->K_data[i] *= QEKF_INS.AdaptiveGainScale;
@@ -466,7 +459,7 @@ static void IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf)
     kf->temp_vector.numCols = 1;
     kf->MatStatus = Matrix_Multiply(&kf->K, &kf->temp_vector1, &kf->temp_vector); // temp_vector = K(k)·(z(k) - H·xhat'(k))
 
-    // 零漂修正限幅,一般不会有过大的漂移
+    // 收敛后限制每次零偏改变量，避免单次测量让估计跳得太远。
     if (QEKF_INS.ConvergeFlag)
     {
         for (uint8_t i = 4; i < 6; ++i)
@@ -482,7 +475,8 @@ static void IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf)
         }
     }
 
-    // 不修正yaw轴数据
+    // 加速度计只能提供重力方向，无法单独判断绕重力方向的转动，因此不修正 yaw。
+    // 加速度计看不到绕重力方向的转动，这一分量不由它修正。
     kf->temp_vector.pData[3] = 0;
     kf->MatStatus = Matrix_Add(&kf->xhatminus, &kf->temp_vector, &kf->xhat);
 }
@@ -511,6 +505,7 @@ static float invSqrt(float x)
     float y = x;
     uint32_t bits;
     memcpy(&bits, &y, sizeof(bits));
+    // 用浮点数的位模式给倒平方根一个初值，再用一次牛顿迭代细化。
     bits = UINT32_C(0x5f375a86) - (bits >> 1u);
     memcpy(&y, &bits, sizeof(y));
     y = y * (1.5f - (halfx * y * y));

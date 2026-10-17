@@ -117,9 +117,9 @@ typedef struct
 /* ------------------------- Internal Data ----------------------------------- */
 
 /** @brief 注册遥控 UART 和离线计时，清空旧输入。
- * @param[in] rc_usart_handle 已配置好的遥控 UART 句柄，不能为 NULL。
- * @return 成功返回模块内部两个 RC_ctrl_t 对象的首地址，长期有效且不可释放；失败返回 NULL。
- * @note 只初始化一次；读取控制输入优先使用 RemoteControlGetSnapshot()，不直接改写内部对象。
+* @param[in] rc_usart_handle 已配置好的遥控 UART 句柄，不能为 NULL。
+* @return 成功返回模块内部两个 RC_ctrl_t 对象的首地址，长期有效且不可释放；失败返回 NULL。
+* @note 只初始化一次；读取控制输入优先使用 RemoteControlGetSnapshot()，不直接改写内部对象。
  */
 RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle);
 
@@ -145,9 +145,9 @@ typedef struct
     uint8_t pc_valid;
 } RemoteControlSnapshot_s;
 /** @brief 一次复制当前输入及可用标记，并检查键鼠是否已超过 150 ms 未更新。
- * @param[out] snapshot 调用方的输出对象，NULL 时直接返回；读取期间暂时关闭普通中断并恢复原状态。
- * @note 每个命令周期调用，即使没有新串口帧；摇杆在线与键鼠可用分别由 remote_online、pc_valid 表示。
- *       键鼠失效时清零；恢复要求连续两帧所有键鼠松开，且心跳编号向前变化。等于 150 ms 仍允许。
+* @param[out] snapshot 调用方的输出对象，NULL 时直接返回；读取期间暂时关闭普通中断并恢复原状态。
+* @note 每个命令周期调用，即使没有新串口帧；摇杆在线与键鼠可用分别由 remote_online、pc_valid 表示。
+*       键鼠失效时清零；恢复要求连续两帧所有键鼠松开，且心跳编号向前变化。等于 150 ms 仍允许。
  */
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot);
 

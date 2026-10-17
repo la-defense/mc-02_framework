@@ -1,7 +1,12 @@
+/**
+* @file bmi088_regNdef.h
+* @brief 保存 BMI088 寄存器地址、配置值和原始数据换算系数。
+* 加速度换算系数把原始读数换成 m/s²；陀螺仪系数把原始读数换成 rad/s。
+*/
 #ifndef BMI088REG_H
 #define BMI088REG_H
 
-/*------- BMI088寄存器地址及其存放的内容-------*/
+/* BMI088 加速度计与陀螺仪的寄存器地址、位和配置值。 */
 
 #define BMI088_ACC_CHIP_ID 0x00 // the register is  " Who am I "
 #define BMI088_ACC_CHIP_ID_VALUE 0x1E
@@ -179,7 +184,7 @@
 #define BMI088_GYRO_TRIG_BIST_SHFITS 0x0
 #define BMI088_GYRO_TRIG_BIST (0x1 << BMI088_GYRO_TRIG_BIST_SHFITS)
 
-/* -------BMI088 配置和传感器灵敏度换算系数等------- */
+/* 温度换算参数、初始化等待时间，以及每个原始计数对应的物理单位系数。 */
 
 #define BMI088_TEMP_FACTOR 0.125f
 #define BMI088_TEMP_OFFSET 23.0f

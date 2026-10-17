@@ -1,6 +1,13 @@
 #ifndef __BMI088_H__ // 防止重复包含
 #define __BMI088_H__
 
+/**
+* @file bmi088.h
+* @brief 声明 BMI088 传感器、采样和标定接口。
+* 当前 BMI088Register 只接受周期读取模式；注册成功后再读取数据。
+* 样本中的角速度单位为 rad/s，加速度为 m/s²，温度为 °C。
+ */
+
 #include "bsp_spi.h"
 #include "bmi088_data.h"
 #include "bsp_gpio.h"
@@ -34,31 +41,32 @@ typedef enum
     BMI088_INIT_STAGE_READY
 } BMI088_Init_Stage_e;
 
-// bmi088工作模式枚举
+/** @brief 传感器数据的读取方式；当前注册接口只接受周期读取模式。 */
 typedef enum
 {
     BMI088_BLOCK_PERIODIC_MODE = 0, // 阻塞模式,周期性读取
     BMI088_BLOCK_TRIGGER_MODE,      // 阻塞模式,触发读取(中断)
 } BMI088_Work_Mode_e;
 
-// bmi088标定方式枚举,若使用预设标定参数,注意修改预设参数
+/** @brief 启动时在线标定，或使用编译时设置的预设参数。 */
 typedef enum
 {
     BMI088_CALIBRATE_ONLINE_MODE = 0, // 初始化时进行标定
     BMI088_LOAD_PRE_CALI_MODE,        // 使用预设标定参数,
 } BMI088_Calibrate_Mode_e;
 
+/** @brief 说明本次采样为何成功或失败；成功后才会写入完整样本。 */
 typedef enum
 {
-    BMI088_ACQUIRE_NO_DATA = 0,
-    BMI088_ACQUIRE_OK = 1,
-    BMI088_ACQUIRE_SPI_ERROR,
-    BMI088_ACQUIRE_SPI_BUSY,
-    BMI088_ACQUIRE_SPI_TIMEOUT,
-    BMI088_ACQUIRE_INVALID_DATA
+    BMI088_ACQUIRE_NO_DATA = 0, // 本轮没有完整新样本
+    BMI088_ACQUIRE_OK = 1,      // 加速度、角速度和温度均已读取
+    BMI088_ACQUIRE_SPI_ERROR,   // SPI 读取失败
+    BMI088_ACQUIRE_SPI_BUSY,    // SPI 当前由其他操作使用
+    BMI088_ACQUIRE_SPI_TIMEOUT, // 等待 SPI 超时
+    BMI088_ACQUIRE_INVALID_DATA // 读数不是有效数字，例如 NaN 或 Inf
 } BMI088_AcquireStatus_e;
 
-/* BMI088实例结构体定义 */
+/** @brief 保存 BMI088 的接口、样本、标定结果和温控状态。 */
 typedef struct
 {
     // 传输模式和工作模式控制
@@ -74,20 +82,20 @@ typedef struct
     PIDInstance heat_pid; // 恒温PID
     PWMInstance *heat_pwm; // 加热PWM
     // IMU数据
-    float gyro[3];     // 陀螺仪数据,xyz
-    float acc[3];      // 加速度计数据,xyz
-    float temperature; // 温度
+    float gyro[3];     // 陀螺仪 x/y/z 轴角速度，单位 rad/s
+    float acc[3];      // 加速度计 x/y/z 轴读数，单位 m/s²，包含重力
+    float temperature; // 传感器温度，单位 °C
     // 标定数据
     float gyro_offset[3]; // 陀螺仪零偏
-    float gNorm;          // 重力加速度模长,从标定获取
+    float gNorm;          // 标定时测得的重力加速度大小，单位 m/s²
     float acc_coef;       // 加速度计原始数据转换系数
     // 传感器灵敏度,用于计算实际值(regNdef.h中定义)
     float BMI088_ACCEL_SEN;
     float BMI088_GYRO_SEN;
-    uint32_t sample_sequence;
-    uint32_t acc_sample_timestamp_ms;
-    uint32_t gyro_sample_timestamp_ms;
-    BMI088_AcquireStatus_e last_acquire_status;
+    uint32_t sample_sequence;          // 完整样本成功更新后递增
+    uint32_t acc_sample_timestamp_ms;  // 最近一次加速度采样时间，单位 ms
+    uint32_t gyro_sample_timestamp_ms; // 最近一次角速度采样时间，单位 ms
+    BMI088_AcquireStatus_e last_acquire_status; // 最近一次采样结果
     // 用于计算两次采样的时间间隔
     uint32_t bias_dwt_cnt;
     // 数据更新标志位
@@ -104,7 +112,7 @@ typedef struct
     } update_flag;
 } BMI088Instance;
 
-/* BMI088初始化配置 */
+/** @brief 注册 BMI088 时使用的接口和运行设置。 */
 typedef struct
 {
     BMI088_Work_Mode_e work_mode;
@@ -118,30 +126,29 @@ typedef struct
 } BMI088_Init_Config_s;
 
 /**
- * @brief 初始化BMI088,返回BMI088实例指针
- * @note  一般一个开发板只有一个BMI088,所以这里就叫BMI088Init而不是Register
- *
- * @param config bmi088初始化配置
- * @return BMI088Instance* 实例指针
+* @brief 注册并初始化 BMI088，成功后返回传感器实例。
+* @param config SPI、读取方式、标定方式和可选温控配置；不能为 NULL。
+* @return 成功时返回 BMI088 实例；配置为空、读取方式不支持或资源/传感器初始化失败时返回 NULL。
+* @note 当前只支持 BMI088_BLOCK_PERIODIC_MODE。初始化最多重试 BMI088_INIT_MAX_RETRY 次。
  */
 BMI088Instance *BMI088Register(BMI088_Init_Config_s *config);
 
 /**
- * @brief 读取BMI088数据
- * @param bmi088 BMI088实例指针
- * @param data_store 读取成功后接收完整样本；失败时保持不变
- * @return BMI088_AcquireStatus_e 采样状态
+* @brief 读取并换算一份完整的 BMI088 样本。
+* @param bmi088 已成功注册的传感器实例。
+* @param data_store 用来接收样本的可写对象；读取失败时保持原内容。
+* @return BMI088_ACQUIRE_OK 表示成功；其他值说明没有数据、SPI 忙/超时/失败或数据无效。
+* @note 成功样本的角速度单位为 rad/s、加速度为 m/s²、温度为 °C。
  */
 BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data_store);
 
 /**
- * @brief 标定传感器.BMI088在初始化的时候会调用此函数. 提供接口方便标定离线数据
- * @attention 本函数只做"在线标定"这一件事, 不再自己决定失败后用哪套参数
- *            (Flash 记录 / 编译期默认值由 BMI088CalibInit 与 BMI088CalibService 决定)。
- *            运行期请通过 BMI088CalibRequest + BMI088CalibService 触发, 不要直接调用。
- *
- * @param _bmi088 待标定的实例
- * @return 1=在线标定成功(已通过严格判据); 0=超时/判据不满足, 结果不可信
+* @brief 使用静止时采集的数据计算陀螺仪零偏和重力大小。
+* @param _bmi088 已注册并处于阻塞读取模式的传感器实例。
+* @return 在线标定的样本数和稳定程度符合要求时返回1；超时、样本不足或数据变化过大时返回0。
+* @note 启动时由驱动内部调用。运行中请通过 BMI088CalibRequest 和 BMI088CalibService 申请标定。
+*       选择预设模式时会载入预设值，本函数仍返回0，因为没有执行在线标定。
+*       在线标定最多尝试3轮，每轮最多收集6000份有效样本；总用时超过12.01 s会放弃。
  */
 uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088);
 
@@ -169,22 +176,23 @@ extern volatile float bmi088_calib_temp;       /* 标定时 IMU 温度(摄氏度
 extern volatile uint8_t bmi088_calib_attempts; /* 最近一次标定用了几轮 */
 
 /**
- * @brief 申请一次"按需标定"(由 LCD 长按中键触发, 进程内只允许一个未完成请求)
- * @return 1=已受理(状态变 BUSY); 0=已在进行中或 IMU 未注册
+* @brief 申请一次运行中标定；当前由 LCD 左键或右键长按松开后调用。
+* @return 返回1表示请求已受理并进入 BUSY；未注册 IMU 或已有请求时返回0。
  */
 uint8_t BMI088CalibRequest(void);
 
 /**
- * @brief 按需标定的执行体. 必须在 INS 任务里每轮调用(IMU 的 SPI 只被该任务使用)
- * @return 1=本次真的执行了标定(调用方应跳过本轮姿态解算); 0=无请求, 什么都没做
+* @brief 在 INS 任务中处理已受理的标定请求。
+* @return 返回1表示本轮已处理请求，调用方应跳过姿态解算；返回0表示没有待处理请求。
+* @note 必须由 INS 任务调用，避免标定读取和姿态采样同时使用 BMI088 的 SPI。
  */
 uint8_t BMI088CalibService(void);
 
-/** @brief 取按需标定状态(BMI088_RecalibState_e) */
+/** @brief 读取当前标定状态，返回 BMI088_RecalibState_e 中的值。 */
 uint8_t BMI088CalibGetState(void);
-/** @brief LCD 显示完结果后调用, 把 OK/FAIL 状态清回 IDLE */
+/** @brief 显示完 OK 或 FAIL 后调用，把结果状态清回 IDLE。 */
 void BMI088CalibAckResult(void);
-/** @brief 当前正在使用的标定值是否可信(0 时不允许进入 READY) */
+/** @brief 当前标定值可信时返回非0；返回0时安全状态不能进入 READY。 */
 uint8_t BMI088CalibIsValid(void);
 
 #endif // !__BMI088_H__

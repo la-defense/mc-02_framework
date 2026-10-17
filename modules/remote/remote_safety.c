@@ -1,6 +1,6 @@
 /** @file remote_safety.c
- * @brief 保存三种开关组合的持续时间，将确认后的操作交给 RobotSafety。
- */
+* @brief 保存三种开关组合的持续时间，将确认后的操作交给 RobotSafety。
+*/
 #include "remote_safety.h"
 #include "robot_safety.h"
 #include <string.h>

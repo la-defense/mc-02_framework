@@ -1,6 +1,6 @@
 /** @file ws2812.c
- * @brief 将三色各八位编成 24 个 SPI 字节，再发送低电平字节让彩灯接收新颜色。
- */
+* @brief 将三色各八位编成 24 个 SPI 字节，再发送低电平字节让彩灯接收新颜色。
+*/
 #include "ws2812.h"
 #include "stm32h7xx_hal.h"
 

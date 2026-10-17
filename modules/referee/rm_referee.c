@@ -1,7 +1,8 @@
 /**
- * @file rm_referee.C
+* @file rm_referee.c
+* @brief 接收裁判系统串口数据，检查帧后更新对应数据结构。
+* 只处理命令码已知且数据段长度足够的帧；未知命令会跳过。
  * @author kidneygood (you@domain.com)
- * @brief
  * @version 0.1
  * @date 2022-11-18
  *
@@ -26,10 +27,10 @@ static uint32_t referee_last_rx_ms = 0;
 static referee_info_t referee_info;			  // 裁判系统数据
 
 /**
- * @brief  读取裁判数据,中断中读取保证速度
- * @param  buff: 读取到的裁判系统原始数据
- * @retval 是否对正误判断做处理
- * @attention  在此判断帧头和CRC校验,无误再写入数据，不重复判断帧头
+* @brief 在一段串口数据中查找并解析完整的裁判系统帧。
+* @param buff 本次接收到的字节缓冲区。
+* @param recv_len 缓冲区内的字节数。
+* @note 空指针或数据不足一帧时直接返回；本函数不返回解析结果。
  */
 static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 {
@@ -38,6 +39,7 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 		return;
 
 	// 在本次实际接收长度内滑动解析, 一个数据包可能包含多帧
+	// 一段接收缓冲区可能含多帧；扫描位置会移到下一帧或向后找一个字节。
 	while (offset + LEN_HEADER <= recv_len)
 	{
 		uint16_t frame_len;
@@ -61,7 +63,7 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 		data_len = (uint16_t)buff[offset + DATA_LENGTH] | ((uint16_t)buff[offset + DATA_LENGTH + 1] << 8);
 		frame_len = LEN_HEADER + LEN_CMDID + data_len + LEN_TAIL;
 
-		// 边界校验: 帧长非法或未完整落在本次接收缓冲内则停止解析
+		// 当前缓冲区不够一整帧时停止；剩余数据不从本次缓冲区外读取。
 		if (frame_len < LEN_HEADER + LEN_CMDID + LEN_TAIL || frame_len > recv_len - offset)
 			break;
 
@@ -76,7 +78,7 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 		memcpy(&referee_info.FrameHeader, buff + offset, LEN_HEADER);
 		referee_info.CmdID = (uint16_t)buff[offset + CMD_ID_Offset] | ((uint16_t)buff[offset + CMD_ID_Offset + 1] << 8);
 
-		// 数据从第 8 个字节开始(offset + DATA_Offset), 拷贝前核对数据段长度防止越界
+		// 只处理已知命令且数据段达到本地结构体长度的帧。
 		switch (referee_info.CmdID)
 		{
 		case ID_game_state: // 0x0001
@@ -172,6 +174,7 @@ static void JudgeReadData(uint8_t *buff, uint16_t recv_len)
 /*裁判系统串口接收回调函数,解析数据 */
 static void RefereeRxCallback()
 {
+	// 每次串口接收都会更新时间，再把本次字节交给帧解析函数。
 	DaemonReload(referee_daemon);
 	referee_last_rx_ms = HAL_GetTick();
 	JudgeReadData(referee_usart_instance->recv_buff, referee_usart_instance->last_recv_size);
@@ -179,6 +182,7 @@ static void RefereeRxCallback()
 // 裁判系统丢失回调函数,重新初始化裁判系统串口
 static void RefereeLostCallback(void *arg)
 {
+	// 看门狗发现长时间没有接收后重新启动串口接收。
 	USARTServiceInit(referee_usart_instance);
 	LOGWARNING("[rm_ref] lost referee data");
 }
@@ -186,6 +190,7 @@ static void RefereeLostCallback(void *arg)
 /* 裁判系统通信初始化 */
 referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle)
 {
+    // 只允许注册一次，并要求调用方提供已初始化的 UART。
     if (referee_usart_handle == NULL || referee_usart_instance != NULL || referee_daemon != NULL)
         return NULL;
 
@@ -205,6 +210,7 @@ referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle)
     referee_usart_instance = USARTRegister(&conf);
     if (referee_usart_instance == NULL)
     {
+        // 串口注册失败时撤销先前建立的 daemon，避免留下半套资源。
         (void)DaemonUnregister(referee_daemon);
         referee_daemon = NULL;
         return NULL;

@@ -1,7 +1,7 @@
 /** @file lcd_font_cn.h
- * @brief LCD 中文字形编号及常用标签。枚举顺序对应 lcd_cn_font16，COUNT 用作串尾标记。
- * 标签是枚举数组的初始化内容，不是 UTF-8 字符串；字形排列见 lcd_font_cn.c。
- */
+* @brief LCD 中文字形编号及常用标签。枚举顺序对应 lcd_cn_font16，COUNT 用作串尾标记。
+* 标签是枚举数组的初始化内容，不是 UTF-8 字符串；字形排列见 lcd_font_cn.c。
+*/
 #ifndef LCD_FONT_CN_H
 #define LCD_FONT_CN_H
 

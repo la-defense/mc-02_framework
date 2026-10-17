@@ -1,9 +1,9 @@
 /** @file lcdfont.h
- * @brief lcd.c 和 lcd_buf.c 读取的 ASCII 字库，以及 lcd.c 使用的汉字点阵。
- * ASCII 各表从空格（32）排到 ~（126），按行保存，每字节低位对应左侧像素；
- * 行尾不满八位仍占一个字节。表名中的数字分别为字高、字宽，单位为像素。
- * tfont 汉字表带 Index 索引和 Msk 点阵，lcd.c 只比较索引的前两个字节。
- */
+* @brief lcd.c 和 lcd_buf.c 读取的 ASCII 字库，以及 lcd.c 使用的汉字点阵。
+* ASCII 各表从空格（32）排到 ~（126），按行保存，每字节低位对应左侧像素；
+* 行尾不满八位仍占一个字节。表名中的数字分别为字高、字宽，单位为像素。
+* tfont 汉字表带 Index 索引和 Msk 点阵，lcd.c 只比较索引的前两个字节。
+*/
 #ifndef __LCDFONT_H
 #define __LCDFONT_H 	   
 

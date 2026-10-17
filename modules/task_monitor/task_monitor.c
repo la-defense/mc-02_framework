@@ -1,6 +1,6 @@
 /** @file task_monitor.c
- * @brief 记录各关键任务最近执行时间，处理标定与 Flash 等长操作，并决定是否喂 IWDG。
- */
+* @brief 记录各关键任务最近执行时间，处理标定与 Flash 等长操作，并决定是否喂 IWDG。
+*/
 #include "task_monitor.h"
 #include "bsp_watchdog.h"
 #include "robot_safety.h"

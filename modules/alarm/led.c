@@ -1,5 +1,5 @@
 /** @file led.c
- * @brief 保存唯一报警灯设置，按任务调用次数变化亮度，并转为 WS2812 RGB 输出。
+* @brief 保存唯一报警灯设置，按任务调用次数变化亮度，并转为 WS2812 RGB 输出。
  */
 #include "led.h"
 #include "bsp_dwt.h"

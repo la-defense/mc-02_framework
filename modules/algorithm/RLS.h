@@ -1,3 +1,8 @@
+/**
+* @file RLS.h
+* @brief 声明递推最小二乘滤波器。它根据输入向量和实际输出，逐次调整 params_data 中的参数。
+* 初始化后要调用 RLS_Reset，再按每组样本调用 RLS_Update。
+*/
 #ifndef __RLS_H
 #define __RLS_H
 
@@ -16,6 +21,10 @@
 #define Matrix_Transpose arm_mat_trans_f32
 #define Matrix_Inverse arm_mat_inverse_f32
 
+/**
+* @brief 保存递推最小二乘计算所需的矩阵和参数。
+* 所有输入向量和输出值必须使用一致的单位；params_data 保存当前估计结果。
+*/
 typedef struct rls_t
 {
     uint8_t vectorSize;
@@ -38,12 +47,38 @@ typedef struct rls_t
     float *temp_data, *temp_matrix_data, *temp_matrix1_data, *temp_vector_data, *temp_vector1_data;
 
     double delta;            // 传递矩阵初始化
-    double lambda;           // 渐消因子
+    double lambda;           // 逐步减小较早样本影响的系数
 } RLS_t;
 
+/**
+* @brief 分配矩阵空间并设置滤波器维度与计算参数。
+* @param rls 目标滤波器对象，必须指向可写对象。
+* @param vectorSize 每组输入的元素个数，后续输入数组也须有这么多元素。
+* @param delta 初始化矩阵对角元素的数值，由 RLS_Reset 写入。
+* @param lambda 每次更新时降低旧数据影响程度的系数；代码不检查它的取值。
+* @note 本函数不检查空指针或内存分配结果，也不返回失败状态；每个动态空间都要成功分配。
+*/
 void RLS_Init(RLS_t *rls, uint8_t vectorSize, float delta, float lambda);
+/**
+* @brief 把调用者给出的参数复制到滤波器。
+* @param rls 已成功初始化的滤波器。
+* @param updateParams 至少包含 vectorSize 个 float 的数组。
+* @note 不检查空指针；不会复制数组之后的内容。
+*/
 void RLS_SetParam(RLS_t *rls, float* updateParams);
+/**
+* @brief 将参数和增益清零，并把传递矩阵的对角线设为 delta。
+* @param rls 已成功初始化的滤波器。
+* @note 当前实现不清零传递矩阵的非对角元素；再次调用时这些元素会保留原值。
+*/
 void RLS_Reset(RLS_t *rls);
+/**
+* @brief 用一组输入和对应的实际输出更新参数估计。
+* @param rls 已成功初始化并调用过 RLS_Reset 的滤波器。
+* @param vector 至少包含 vectorSize 个 float 的输入数组。
+* @param actualOutput 与输入向量对应的实际输出值。
+* @note 结果写在 rls->params_data；本函数不检查空指针，也不返回状态。
+*/
 void RLS_Update(RLS_t *rls, float *vector, float actualOutput);
 
 #endif //__RLS_H

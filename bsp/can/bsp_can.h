@@ -1,6 +1,6 @@
 /** @file bsp_can.h
- * @brief H723 经典 CAN 实例注册、发送、接收派发和总线状态查询。
- * 接收中断只入队，模块解析由任务调用 CANProcessRx() 完成；每帧最多 8 字节。
+* @brief H723 经典 CAN 实例注册、发送、接收派发和总线状态查询。
+* 接收中断只入队，模块解析由任务调用 CANProcessRx() 完成；每帧最多 8 字节。
  */
 #ifndef BSP_CAN_H
 #define BSP_CAN_H
@@ -140,40 +140,40 @@ typedef struct
 } CAN_BusStats_t;
 
 /** @brief 注册标准 CAN ID，按需启动服务并添加接收过滤规则。
- * @param[in] config 有效总线、非空回调及 0～0x7ff 的收发 ID；id 指向的模块须长期有效。
- * @return 成功返回长期有效实例，参数、重复接收 ID、容量、分配或 HAL 配置失败返回 NULL。
- * @note 启动时注册；回调由派发任务运行，同一总线相同接收 ID 不允许重复注册。
+* @param[in] config 有效总线、非空回调及 0～0x7ff 的收发 ID；id 指向的模块须长期有效。
+* @return 成功返回长期有效实例，参数、重复接收 ID、容量、分配或 HAL 配置失败返回 NULL。
+* @note 启动时注册；回调由派发任务运行，同一总线相同接收 ID 不允许重复注册。
  */
 CANInstance *CANRegister(CAN_Init_Config_s *config);
 
 /** @brief 设置下一帧数据字节数，默认 8。
- * @param[in,out] _instance CAN 实例，NULL 时不处理。
- * @param[in] length 1～8 字节；传 0 改为 1，超过 8 改为 8，并记录日志计数。
+* @param[in,out] _instance CAN 实例，NULL 时不处理。
+* @param[in] length 1～8 字节；传 0 改为 1，超过 8 改为 8，并记录日志计数。
  */
 void CANSetDLC(CANInstance *_instance, uint8_t length);
 
 /** @brief 把实例 tx_buff 中的数据提交给 CAN 硬件，发送空间满时直接返回。
- * @param[in] _instance 有效实例，不能为 NULL；先填写发送数组及字节数。
- * @param[in] timeout 保留的旧参数，当前忽略，不作为等待时间。
- * @return 1 为已交给硬件，0 为队列满或 HAL 拒绝；不表示对端已收到，也不自动重试。
+* @param[in] _instance 有效实例，不能为 NULL；先填写发送数组及字节数。
+* @param[in] timeout 保留的旧参数，当前忽略，不作为等待时间。
+* @return 1 为已交给硬件，0 为队列满或 HAL 拒绝；不表示对端已收到，也不自动重试。
  */
 uint8_t CANTransmit(CANInstance *_instance,float timeout);
 
 /** @brief 读取 CAN 协议及错误计数。
- * @param[in] hcan 有效句柄；NULL 时不处理。
- * @param[out] status NULL 时不处理；先设 UNKNOWN、计数 0，HAL 查询失败则保留这些值。
+* @param[in] hcan 有效句柄；NULL 时不处理。
+* @param[out] status NULL 时不处理；先设 UNKNOWN、计数 0，HAL 查询失败则保留这些值。
  */
 void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status);
 
 /** @brief 复制指定总线的累计发送统计。
- * @param[in] hcan 已知总线句柄。
- * @param[out] stats 输出对象，NULL 或句柄未知时保持原值。
+* @param[in] hcan 已知总线句柄。
+* @param[out] stats 输出对象，NULL 或句柄未知时保持原值。
  */
 void CANGetTxStats(FDCAN_HandleTypeDef *hcan, CAN_TxStats_t *stats);
 
 /** @brief 查询当前错误计数，并复制指定总线的累计状态。
- * @param[in] hcan 已知总线句柄。
- * @param[out] stats 输出对象，NULL 或句柄未知时保持原值。
+* @param[in] hcan 已知总线句柄。
+* @param[out] stats 输出对象，NULL 或句柄未知时保持原值。
  */
 void CANGetBusStats(FDCAN_HandleTypeDef *hcan, CAN_BusStats_t *stats);
 
@@ -187,8 +187,8 @@ void CANGetBusStats(FDCAN_HandleTypeDef *hcan, CAN_BusStats_t *stats);
 void CANProcessRx(void);
 
 /** @brief 读取接收队列满时丢弃新帧的次数。
- * @param[in] hcan 已知总线句柄。
- * @return 累计次数，句柄未知返回 0。
+* @param[in] hcan 已知总线句柄。
+* @return 累计次数，句柄未知返回 0。
  */
 uint32_t CANGetRxQueueDrop(FDCAN_HandleTypeDef *hcan);
 
@@ -198,18 +198,18 @@ extern volatile uint32_t can_rxq_drop_total;
 extern volatile uint16_t can_rxq_peak_max;
 
 /** @brief 自测用：重新初始化一条总线到指定模式并尝试启动，会打断原有收发。
- * @param[in,out] h 有效句柄，NULL 返回 0。
- * @param[in] mode HAL 定义的 FDCAN 模式。
- * @param[in] accept_all 当前预留且忽略，不会切成接收全部 ID。
- * @return 1 为配置后已离开初始化状态，0 为失败；后续仍须重装原过滤规则。
+* @param[in,out] h 有效句柄，NULL 返回 0。
+* @param[in] mode HAL 定义的 FDCAN 模式。
+* @param[in] accept_all 当前预留且忽略，不会切成接收全部 ID。
+* @return 1 为配置后已离开初始化状态，0 为失败；后续仍须重装原过滤规则。
  */
 uint8_t CANForceMode(FDCAN_HandleTypeDef *h, uint32_t mode, uint8_t accept_all);
 /** @brief 按当前注册表重装过滤规则；仅供切换模式后使用，不报告单项失败。 */
 void CANReapplyFilters(void);
 
 /** @brief 移出注册表及接收查找表并释放实例，仅供自测收尾。
- * @param[in] ins 待释放实例；NULL 或不在表中时不处理，成功后不可再使用。
- * @note 须先确保接收队列及回调不再引用它，函数不处理已经排队的旧指针。
+* @param[in] ins 待释放实例；NULL 或不在表中时不处理，成功后不可再使用。
+* @note 须先确保接收队列及回调不再引用它，函数不处理已经排队的旧指针。
  */
 void CANUnregisterInstance(CANInstance *ins);
 
@@ -220,7 +220,7 @@ void CANUnregisterInstance(CANInstance *ins);
 void CANHealthMonitor(void);
 
 /** @brief 在三条总线上依次切换回环、测试、恢复并重装过滤规则，供专门自测使用。
- * @return 通过的总线数，范围 0～3；默认外部回环会发送测试帧。
+* @return 通过的总线数，范围 0～3；默认外部回环会发送测试帧。
  */
 uint8_t CANRunLoopbackSelfTest(void);
 

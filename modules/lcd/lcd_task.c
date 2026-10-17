@@ -1,6 +1,6 @@
 /** @file lcd_task.c
- * @brief 连接 ADC 按键、LCD 页面和标定提示，并周期记录任务耗时。
- * StartLCDTASK() 先初始化屏幕；循环中先处理按键和拔插，再决定是否更新数值。
+* @brief 连接 ADC 按键、LCD 页面和标定提示，并周期记录任务耗时。
+* StartLCDTASK() 先初始化屏幕；循环中先处理按键和拔插，再决定是否更新数值。
  */
 #include "lcd_task.h"
 #include "lcd_ui.h"
@@ -347,7 +347,7 @@ static void lcd_module_presence_check(void)
         }
         lcd_key_spread = (idle_cnt > 0u) ? (uint16_t)(idle_max - idle_min) : 0u;
 
-        // 空闲读数的最大、最小差仅供观察；空闲本身会波动，不据此宣布模组拔出。
+    // 空闲读数的最大、最小差仅供观察；空闲本身会波动，不据此宣布模组拔出。
     }
 
     if (invalid)

@@ -1,5 +1,5 @@
 /** @file bsp_spi.c
- * @brief 保存 SPI 设备与当前收发对象，管理片选和完成回调；公开参数说明见头文件。
+* @brief 保存 SPI 设备与当前收发对象，管理片选和完成回调；公开参数说明见头文件。
  */
 #include "bsp_spi.h"
 #include "memory.h"

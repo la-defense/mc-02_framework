@@ -1,5 +1,5 @@
 /*
- * @Descripttion: 保存超级电容原始 CAN 反馈并发送固定八字节控制内容。
+* @Descripttion: 保存超级电容原始 CAN 反馈并发送固定八字节控制内容。
  * @version:
  * @Author: Chenfu
  * @Date: 2022-12-02 21:32:47
@@ -57,8 +57,8 @@ void SuperCapSend(SuperCapInstance *instance, uint8_t *data)
 }
 
 /** @brief 按值返回最近保存的原始反馈，不检查在线或数据时间。
- * @param[in] instance 有效实例，不能为 NULL。
- * @return 电压、电流、功率原始整数，比例见设备协议。
+* @param[in] instance 有效实例，不能为 NULL。
+* @return 电压、电流、功率原始整数，比例见设备协议。
  */
 SuperCap_Msg_s SuperCapGet(SuperCapInstance *instance)
 {

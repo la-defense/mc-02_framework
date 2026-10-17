@@ -2,7 +2,7 @@
  * @file seasky_protocol.c
  * @author Liu Wei
  * @author modified by Neozng
- * @brief 保留的 A5 串口帧组装与解析；当前 SP 视觉链路使用 vision_protocol.c。
+* @brief 保留的 A5 串口帧组装与解析；当前 SP 视觉链路使用 vision_protocol.c。
  * @version 0.1
  * @date 2022-11-03
  *
@@ -17,9 +17,9 @@
 
 /*获取CRC8校验码*/
 /** @brief 计算已有协议 CRC8，接口行为同 crc_8()。
- * @param[in] pchMessage 可读数据地址。
- * @param[in] dwLength 字节数。
- * @return CRC8 结果。
+* @param[in] pchMessage 可读数据地址。
+* @param[in] dwLength 字节数。
+* @return CRC8 结果。
  */
 uint8_t Get_CRC8_Check(uint8_t *pchMessage,uint16_t dwLength)
 {
@@ -37,9 +37,9 @@ static uint8_t CRC8_Check_Sum(uint8_t *pchMessage, uint16_t dwLength)
 
 /*获取CRC16校验码*/
 /** @brief 计算已有协议 CRC16，接口行为同 crc_16()。
- * @param[in] pchMessage 可读数据地址。
- * @param[in] dwLength 字节数。
- * @return CRC16 结果。
+* @param[in] pchMessage 可读数据地址。
+* @param[in] dwLength 字节数。
+* @return CRC16 结果。
  */
 uint16_t Get_CRC16_Check(uint8_t *pchMessage,uint32_t dwLength)
 {

@@ -1,7 +1,7 @@
 /**
  * @file robot_def.c
  * @brief 机器人配置工厂入口, 根据 id 返回对应机器人配置, 并提供三个 Feed 函数
- *        Feed 会直接访问已选对象，调用前必须先完成 RobotConfigInit()。
+*        Feed 会直接访问已选对象，调用前必须先完成 RobotConfigInit()。
  */
 #include "robot_def.h"
 #include "config.h"

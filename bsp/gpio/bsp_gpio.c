@@ -1,5 +1,5 @@
 /** @file bsp_gpio.c
- * @brief GPIO 操作入口和实例表；EXTI 中断按引脚号找到第一份匹配对象，再调用模块回调。
+* @brief GPIO 操作入口和实例表；EXTI 中断按引脚号找到第一份匹配对象，再调用模块回调。
  */
 #include "bsp_gpio.h"
 #include "memory.h"

@@ -1,5 +1,5 @@
 /** @file bsp_init.h
- * @brief 基础 BSP 初始化的声明和实现，仅由 robot.c 包含，避免重复定义 BSPInit()。
+* @brief 基础 BSP 初始化的声明和实现，仅由 robot.c 包含，避免重复定义 BSPInit()。
  */
 #ifndef BSP_INIT_h
 #define BSP_INIT_h
@@ -15,7 +15,7 @@
 
 /**
  * @brief bsp层初始化统一入口,这里仅初始化必须的bsp组件,其他组件的初始化在各自的模块中进行
- *        需在实时系统启动前由 RobotInit() 调用；依次准备计时、看门狗、日志、ADC 和参数。
+*        需在实时系统启动前由 RobotInit() 调用；依次准备计时、看门狗、日志、ADC 和参数。
  * 
  * @note 其他实例型的外设如CAN和串口会在注册实例的时候自动初始化,不注册不初始化
   */

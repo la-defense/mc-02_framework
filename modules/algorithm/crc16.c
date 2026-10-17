@@ -1,21 +1,21 @@
+/**
+* @file crc16.c
+* @brief 用查表方式计算 CRC-16；首次调用时生成查找表。
+ */
 #include "crc16.h"
 
 static uint8_t crc_tab16_init = 0;
 static uint16_t crc_tab16[256];
 
-/*
- * uint16_t crc_16( const unsigned char *input_str, size_t num_bytes );
- *
- *函数crc_16()一次计算一个字节的16位CRC16
- *其开头已传递给函数的字符串。的数量
- *要检查的字节也是一个参数。字符串中的字节数为
- *受恒定大小最大值的限制。
+/**
+* @brief 计算一段数据的 CRC-16。空指针时保留起始值。
  */
 uint16_t crc_16(const uint8_t *input_str, uint16_t num_bytes)
 {
     uint16_t crc;
     const uint8_t *ptr;
     uint16_t a;
+    // 第一次计算时先生成查找表，后续调用直接复用。
     if (!crc_tab16_init)
         init_crc16_tab();
     crc = CRC_START_16;
@@ -28,12 +28,8 @@ uint16_t crc_16(const uint8_t *input_str, uint16_t num_bytes)
     return crc;
 }
 
-/*
- * uint16_t crc_modbus( const unsigned char *input_str, size_t num_bytes );
- *
- *函数crc_modbus()一次计算16位modbus循环冗余校验
- *一个字节字符串，其开头已被传递给函数。这
- *要检查的字节数也是一个参数。
+/**
+* @brief 计算一段数据的 Modbus CRC。算法使用本文件定义的 CRC-16 查找表。
  */
 
 uint16_t crc_modbus(const uint8_t *input_str, uint16_t num_bytes)
@@ -42,6 +38,7 @@ uint16_t crc_modbus(const uint8_t *input_str, uint16_t num_bytes)
     const uint8_t *ptr;
     uint16_t a;
 
+    // 第一次计算时先生成查找表，后续调用直接复用。
     if (!crc_tab16_init)
         init_crc16_tab();
 
@@ -56,26 +53,17 @@ uint16_t crc_modbus(const uint8_t *input_str, uint16_t num_bytes)
     return crc;
 }
 
-/*
- * uint16_t update_crc_16( uint16_t crc, unsigned char c );
- *
- *函数update_crc_16()根据
- *前一个循环冗余校验值和下一个要检查的数据字节。
- */
+/** @brief 用一个字节继续更新传入的 CRC 值。 */
 uint16_t update_crc_16(uint16_t crc, uint8_t c)
 {
+    // 第一次计算时先生成查找表，后续调用直接复用。
     if (!crc_tab16_init)
         init_crc16_tab();
     return (crc >> 8) ^ crc_tab16[(crc ^ (uint16_t)c) & 0x00FF];
 }
 
-/*
- * static void init_crc16_tab( void );
- *
- *为了获得最佳性能，使用CRC16例程查找带有值的表
- *可以直接在异或算法中使用的算法。
- *查找表首次由init_crc16_tab()例程计算
- *调用循环冗余校验函数。
+/**
+* @brief 按多项式逐项生成256个表值，供后续字节计算查表。
  */
 void init_crc16_tab(void)
 {
@@ -83,10 +71,12 @@ void init_crc16_tab(void)
     uint16_t j;
     uint16_t crc;
     uint16_t c;
+    // 每个可能的字节值各生成一个表项。
     for (i = 0; i < 256; i++)
     {
         crc = 0;
         c = i;
+        // 按位处理一个字节，逐次移位并按多项式修正 CRC。
         for (j = 0; j < 8; j++)
         {
             if ((crc ^ c) & 0x0001)

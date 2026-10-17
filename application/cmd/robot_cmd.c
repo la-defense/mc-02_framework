@@ -1,5 +1,5 @@
 /** @file robot_cmd.c
- * @brief 每轮取得遥控、视觉和应用反馈，选择目标后让整车状态覆盖不允许执行的命令，再统一发布。
+* @brief 每轮取得遥控、视觉和应用反馈，选择目标后让整车状态覆盖不允许执行的命令，再统一发布。
  */
 #include "remote_safety.h"
 static RemoteSafetyGestures_s remote_gestures;

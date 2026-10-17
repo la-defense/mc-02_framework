@@ -1,11 +1,12 @@
+/**
+* @file crc8.c
+* @brief 使用固定查找表逐字节计算 CRC-8。
+ */
 #include "crc8.h"
 
 /*
- * static uint8_t sht75_crc_table[];
- *
- * The SHT75 humidity sensor is capable of calculating an 8 bit CRC checksum to
- * ensure data integrity. The lookup table crc_table[] is used to recalculate
- * the CRC.
+* 查找表沿用 SHT75 传感器使用的 CRC-8 算法。
+* 每处理一个字节，用当前 CRC 与数据字节作为表索引。
  */
 static uint8_t sht75_crc_table[] =
     {
@@ -26,12 +27,7 @@ static uint8_t sht75_crc_table[] =
         193, 240, 163, 146, 5, 52, 103, 86, 120, 73, 26, 43, 188, 141, 222, 239,
         130, 179, 224, 209, 70, 119, 36, 21, 59, 10, 89, 104, 255, 206, 157, 172};
 
-/*
- * uint8_t crc_8( const unsigned char *input_str, size_t num_bytes );
- *
- *函数crc_8()计算输入字符串的8位宽crc
- *给定长度。
- */
+/** @brief 从初始值开始，逐字节计算 CRC-8；空指针时返回初始值。 */
 uint8_t crc_8(const uint8_t *input_str, uint16_t num_bytes)
 {
     uint16_t a;
@@ -40,7 +36,9 @@ uint8_t crc_8(const uint8_t *input_str, uint16_t num_bytes)
 
     crc = CRC_START_8;
     ptr = input_str;
+    // 空指针时不读数据，返回仍为初始值的 crc。
     if (ptr != NULL)
+        // 每个字节都参与一次查表更新。
         for (a = 0; a < num_bytes; a++)
         {
             crc = sht75_crc_table[(*ptr++) ^ crc];
@@ -48,12 +46,7 @@ uint8_t crc_8(const uint8_t *input_str, uint16_t num_bytes)
     return crc;
 }
 
-/*
- * uint8_t update_crc_8( unsigned char crc, unsigned char val );
- *
- *给定一个数据字节和循环冗余校验值的前一个值
- *update_crc_8()计算并返回数据的新的实际crc值
- */
+/** @brief 根据已有 CRC 和一个新字节查表，得到更新后的 CRC。 */
 
 uint8_t update_crc_8(uint8_t crc, uint8_t val)
 {

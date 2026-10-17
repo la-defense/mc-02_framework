@@ -1,5 +1,5 @@
 /** @file sentinel_config.c
- * @brief 保存移入的哨兵配置，供 RobotConfigInit() 选择；来源说明保留如下。
+* @brief 保存移入的哨兵配置，供 RobotConfigInit() 选择；来源说明保留如下。
  */
 #include "sentinel_config.h"
 

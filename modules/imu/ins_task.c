@@ -1,15 +1,11 @@
 /**
- ******************************************************************************
- * @file    ins_task.c
- * @author  Wang Hongxi
- * @author  annotation and modificaiton by neozng
+* @file ins_task.c
+* @brief 读取 BMI088 样本，更新姿态估计，并向视觉链路提供有效数据。
+* StartINSTASK 在专属任务中初始化本模块；INS_Task 按1kHz运行。
+* @author Wang Hongxi
+* @author annotation and modificaiton by neozng
  * @version V2.0.0
- * @date    2022/2/23
- * @brief
- ******************************************************************************
- * @attention
- *
- ******************************************************************************
+* @date 2022/2/23
  */
 #include "ins_task.h"
 #include "controller.h"
@@ -49,13 +45,13 @@ static float dt = 0, t = 0;
 
 static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[3]);
 
-// 使用加速度计的数据初始化Roll和Pitch,而Yaw置0,这样可以避免在初始时候的姿态估计误差
+// 用初始加速度估计倾斜角；静止时加速度能表示重力方向，偏航角仍从0开始。
 static void InitQuaternion(float *init_q4)
 {
     float acc_init[3] = {0};
-    float gravity_norm[3] = {0, 0, 1}; // 导航系重力加速度矢量,归一化后为(0,0,1)
+    float gravity_norm[3] = {0, 0, 1}; // 导航系重力方向；这里的向量长度为1
     float axis_rot[3] = {0};           // 旋转轴
-    // 读取100次加速度计数据,取平均值作为初始值
+    // 最多尝试200次，收集到100份有效样本后再求平均。
     uint8_t successful_samples = 0u;
     for (uint16_t attempt = 0; attempt < 200u && successful_samples < 100u; ++attempt)
     {
@@ -71,6 +67,7 @@ static void InitQuaternion(float *init_q4)
         successful_samples++;
         TaskMonitorDelayMs(TASK_MONITOR_INS, 1u);
     }
+    // 只有样本收齐才使用平均值；不足100份时使用水平姿态作为起点。
     if (successful_samples == 100u)
         for (uint8_t i = 0; i < 3; ++i)
             acc_init[i] /= successful_samples;
@@ -80,13 +77,14 @@ static void InitQuaternion(float *init_q4)
         acc_init[Y] = 0.0f;
         acc_init[Z] = 1.0f;
     }
-    // 加速度数据异常(模长≈0)时兜底为水平姿态, 避免 Norm3d 除零
+    // 加速度长度接近0时改用向上的方向，避免后续除以0。
     if (NormOf3d(acc_init) < 1e-6f)
     {
         acc_init[0] = 0.0f;
         acc_init[1] = 0.0f;
         acc_init[2] = 1.0f;
     }
+    // 除以向量长度，把加速度方向的长度调整为1。
     Norm3d(acc_init);
     // 计算原始加速度矢量和导航系重力加速度矢量的夹角
     float dot = Dot3d(acc_init, gravity_norm);
@@ -113,6 +111,7 @@ static void InitQuaternion(float *init_q4)
     }
     else
     {
+        // 旋转轴也要调整为长度1，才能用于四元数计算。
         Norm3d(axis_rot);
     }
 
@@ -126,7 +125,7 @@ attitude_t *INS_Init(void)
     if (ins_init_result != 0u)
         return (ins_init_result == 3u) ? NULL : (attitude_t *)&INS.Gyro;
     INS.init = 1u;
-    /* Initialize heater PWM at zero before sensor calibration or Flash work. */
+    // 初始化传感器或读取参数前先关闭加热输出。
     IMUHeaterForceOff();
     IMUHeaterInit();
     bmi088_sample_sequence_diag = 0u;
@@ -164,7 +163,8 @@ attitude_t *INS_Init(void)
         DWT_GetDeltaT(&INS_DWT_Count);
         LOGERROR("[INS] BMI088 unavailable; remaining in safe sensor-invalid mode (error=0x%02X retries=%u)",
                  (unsigned)bmi088_init_error, (unsigned)bmi088_init_retry_count);
-        ins_init_result = 1u; /* Keep the established MC02-0042 sensor-invalid downgrade. */
+        // 保留姿态存储供任务继续运行，但安全状态会记录传感器无效。
+        ins_init_result = 1u;
         return (attitude_t *)&INS.Gyro;
     }
     IMU_Param.scale[X] = 1;
@@ -185,7 +185,7 @@ attitude_t *INS_Init(void)
         ins_init_result = 3u;
         return NULL;
     }
-    // noise of accel is relatively big and of high freq,thus lpf is used
+    // 加速度读数波动较大，后续用低通滤波减小高频变化。
     INS.AccelLPF = 0.0085;
     DWT_GetDeltaT(&INS_DWT_Count);
     ins_init_result = 2u;
@@ -204,7 +204,7 @@ attitude_t *INS_GetStorage(void)
     return (attitude_t *)&INS.Gyro;
 }
 
-/* 注意以1kHz的频率运行此任务 */
+   /* INS_Task 每1ms运行一次；这里的计数和温控间隔都按任务调用次数计算。 */
 /* ---------------- 性能探针(2026-09, CPU 占用排查) ----------------
    ins_prof_all   : 单次 INS_Task 总耗时
    ins_prof_read  : BMI088Acquire(传感器读取)
@@ -222,8 +222,7 @@ void INS_Task(void)
     uint32_t probe_all = DWT_ProbeStart();
     uint32_t probe_seg;
 
-    /* 按需标定: 由 LCD 长按中键触发, 必须由 IMU 的拥有者任务来执行,
-       否则会和这里的 BMI088Acquire 抢同一条 SPI。 */
+    /* 左键或右键长按会提出标定请求；由本任务执行，避免和采样同时占用 SPI。 */
     if (BMI088CalibService())
     {
         DWT_GetDeltaT(&INS_DWT_Count); /* 丢掉标定耗时, 否则 EKF 会拿到一个巨大的 dt */
@@ -243,6 +242,7 @@ void INS_Task(void)
 
         uint8_t sample_valid = (acq_ok == BMI088_ACQUIRE_OK) &&
                                BMI088SampleIsFresh(&bmi088_data, HAL_GetTick());
+        // 样本读取失败或已经过期时，清除有效标记、撤下旧姿态并关闭温控输入。
         if (!sample_valid)
         {
             imu_sample_valid_diag = 0u;
@@ -287,7 +287,8 @@ void INS_Task(void)
         // 将重力从导航坐标系n转换到机体系b,随后根据加速度计数据计算运动加速度
         float gravity_b[3];
         EarthFrameToBodyFrame(gravity, gravity_b, INS.q);
-        for (uint8_t i = 0; i < 3; ++i) // 同样过一个低通滤波
+        // 先减去当前姿态下的重力，再滤掉高频变化，得到机体运动加速度。
+        for (uint8_t i = 0; i < 3; ++i)
         {
             INS.MotionAccel_b[i] = (INS.Accel[i] - gravity_b[i]) * dt / (INS.AccelLPF + dt) + INS.MotionAccel_b[i] * INS.AccelLPF / (INS.AccelLPF + dt);
         }
@@ -298,7 +299,7 @@ void INS_Task(void)
         INS.Roll = QEKF_INS.Roll;
         INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
 
-        // 姿态有效性检查: 任何 NaN/Inf 都视为IMU失效, 停止向视觉发送姿态
+        // 任一姿态或角速度不是有效数值时，都不把这组结果送给视觉端。
         uint8_t imu_valid = sample_valid && isfinite(INS.q[0]) && isfinite(INS.q[1]) && isfinite(INS.q[2]) && isfinite(INS.q[3]) &&
                             isfinite(INS.Gyro[X]) && isfinite(INS.Gyro[Y]) && isfinite(INS.Gyro[Z]) &&
                             isfinite(INS.Yaw) && isfinite(INS.Pitch);
@@ -318,7 +319,7 @@ void INS_Task(void)
         ins_sample_processed:;
     }
 
-    // temperature control: 500Hz; 急停/故障时强制关闭加热
+    // 每两次任务调用更新一次温控；急停或故障时强制关闭加热。
     if ((count % 2) == 0)
     {
         probe_seg = DWT_ProbeStart();
@@ -335,12 +336,7 @@ void INS_Task(void)
     DWT_ProbeDone(&ins_prof_all, probe_all);
 }
 
-/**
- * @brief          Transform 3dvector from BodyFrame to EarthFrame
- * @param[1]       vector in BodyFrame
- * @param[2]       vector in EarthFrame
- * @param[3]       quaternion
- */
+
 void BodyFrameToEarthFrame(const float *vecBF, float *vecEF, float *q)
 {
     vecEF[0] = 2.0f * ((0.5f - q[2] * q[2] - q[3] * q[3]) * vecBF[0] +
@@ -356,12 +352,7 @@ void BodyFrameToEarthFrame(const float *vecBF, float *vecEF, float *q)
                        (0.5f - q[1] * q[1] - q[2] * q[2]) * vecBF[2]);
 }
 
-/**
- * @brief          Transform 3dvector from EarthFrame to BodyFrame
- * @param[1]       vector in EarthFrame
- * @param[2]       vector in BodyFrame
- * @param[3]       quaternion
- */
+
 void EarthFrameToBodyFrame(const float *vecEF, float *vecBF, float *q)
 {
     vecBF[0] = 2.0f * ((0.5f - q[2] * q[2] - q[3] * q[3]) * vecEF[0] +
@@ -451,9 +442,7 @@ static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[
 //----------------------------------you can read them for learning or programming-----------------------------------------------
 //----------------------------------they could also be helpful for further design-----------------------------------------------
 
-/**
- * @brief        Update quaternion
- */
+
 void QuaternionUpdate(float *q, float gx, float gy, float gz, float dt)
 {
     float qa, qb, qc;
@@ -470,9 +459,7 @@ void QuaternionUpdate(float *q, float gx, float gy, float gz, float dt)
     q[3] += (qa * gz + qb * gy - qc * gx);
 }
 
-/**
- * @brief        Convert quaternion to eular angle
- */
+
 void QuaternionToEularAngle(float *q, float *Yaw, float *Pitch, float *Roll)
 {
     *Yaw = atan2f(2.0f * (q[0] * q[3] + q[1] * q[2]), 2.0f * (q[0] * q[0] + q[1] * q[1]) - 1.0f) * 57.295779513f;
@@ -480,9 +467,7 @@ void QuaternionToEularAngle(float *q, float *Yaw, float *Pitch, float *Roll)
     *Roll = asinf(2.0f * (q[0] * q[2] - q[1] * q[3])) * 57.295779513f;
 }
 
-/**
- * @brief        Convert eular angle to quaternion
- */
+
 void EularAngleToQuaternion(float Yaw, float Pitch, float Roll, float *q)
 {
     float cosPitch, cosYaw, cosRoll, sinPitch, sinYaw, sinRoll;

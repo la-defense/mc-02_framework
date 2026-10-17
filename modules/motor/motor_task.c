@@ -1,6 +1,6 @@
 /** @file motor_task.c
- * @brief 统一接收派发顺序和电机周期计算，提供各段耗时记录。
- */
+* @brief 统一接收派发顺序和电机周期计算，提供各段耗时记录。
+*/
 #include "motor_task.h"
 #include "LK9025.h"
 #include "HT04.h"

@@ -1,5 +1,5 @@
 /** @file HT04.c
- * @brief 解码 HT04 协议，并用每电机独立任务计算所选控制环及发送力矩字段。
+* @brief 解码 HT04 协议，并用每电机独立任务计算所选控制环及发送力矩字段。
  */
 #include "HT04.h"
 #include "memory.h"

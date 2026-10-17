@@ -1,5 +1,7 @@
 /**
- * @file referee.C
+* @file referee_task.c
+* @brief 准备裁判系统 UI，并按状态变化刷新图形和文字。
+* 当前 UITask 每次运行都会调用 RobotModeTest，自动轮换测试状态。
  * @author kidneygood (you@domain.com)
  * @brief
  * @version 0.1
@@ -20,12 +22,7 @@ static referee_info_t *referee_recv_info;            // 接收到的裁判系统
 uint8_t UI_Seq;                                      // 包序号，供整个referee文件使用
 // @todo 不应该使用全局变量
 
-/**
- * @brief  判断各种ID，选择客户端ID
- * @param  referee_info_t *referee_recv_info
- * @retval none
- * @attention
- */
+/* 根据本机编号填写队伍颜色和对应客户端编号。 */
 static void DeterminRobotID()
 {
     // id小于7是红色,大于7是蓝色,0为红色，1为蓝色   #define Robot_Red 0    #define Robot_Blue 1
@@ -41,6 +38,7 @@ static void RobotModeTest(Referee_Interactive_info_t *_Interactive_data); // 测
 
 referee_info_t *UITaskInit(UART_HandleTypeDef *referee_usart_handle, Referee_Interactive_info_t *UI_data)
 {
+    // 由 RefereeInit 注册串口；当前实现假定注册成功后才访问返回对象。
     referee_recv_info = RefereeInit(referee_usart_handle); // 初始化裁判系统的串口,并返回裁判系统反馈数据指针
     Interactive_data = UI_data;                            // 获取UI绘制需要的机器人状态数据
     referee_recv_info->init_flag = 1;
@@ -54,6 +52,7 @@ referee_info_t *RefereeGetInfo(void)
 
 void UITask()
 {
+    // 测试函数修改状态，随后只发送发生变化的显示项。
     RobotModeTest(Interactive_data); // 测试用函数，实现模式自动变化,用于检查该任务和裁判系统是否连接正常
     MyUIRefresh(referee_recv_info, Interactive_data);
 }
@@ -68,6 +67,7 @@ void MyUIInit()
 {
     if (!referee_recv_info->init_flag)
         vTaskDelete(NULL); // 如果没有初始化裁判系统则直接删除ui任务
+    // 收到机器人编号前无法算出客户端编号，因此每100ms再检查一次。
     while (referee_recv_info->GameRobotState.robot_id == 0)
         osDelay(100); // 若还未收到裁判系统数据,等待一段时间后再检查
 
@@ -121,7 +121,7 @@ void MyUIInit()
     UIGraphRefresh(&referee_recv_info->referee_id, 2, UI_Energy[1], UI_Energy[2]);
 }
 
-// 测试用函数，实现模式自动变化,用于检查该任务和裁判系统是否连接正常
+// 每50次调用切换一次演示状态，方便观察 UI 是否随状态更新。
 static uint8_t count = 0;
 static uint16_t count1 = 0;
 static void RobotModeTest(Referee_Interactive_info_t *_Interactive_data) // 测试用函数，实现模式自动变化
@@ -181,7 +181,7 @@ static void RobotModeTest(Referee_Interactive_info_t *_Interactive_data) // 测�
 static void MyUIRefresh(referee_info_t *referee_recv_info, Referee_Interactive_info_t *_Interactive_data)
 {
     UIChangeCheck(_Interactive_data);
-    // chassis
+    // 只重画发生变化的项目，发送后清除对应标志位。
     if (_Interactive_data->Referee_Interactive_Flag.chassis_flag == 1)
     {
         switch (_Interactive_data->chassis_mode)

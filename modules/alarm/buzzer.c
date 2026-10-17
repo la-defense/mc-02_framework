@@ -1,5 +1,5 @@
 /** @file buzzer.c
- * @brief 管理分级报警配置并共用一个 PWM 输出，第一项正在报警的对象优先发声。
+* @brief 管理分级报警配置并共用一个 PWM 输出，第一项正在报警的对象优先发声。
  */
 #include "bsp_pwm.h"
 #include "buzzer.h"

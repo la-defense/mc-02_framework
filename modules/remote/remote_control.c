@@ -1,7 +1,7 @@
 /** @file remote_control.c
- * @brief 检查 18 字节 DBUS 帧，分别维护摇杆在线、键鼠更新及按下次数。
- * UART 派发调用接收函数，Daemon 处理离线；命令任务周期读取当前输入和可用标记。
- */
+* @brief 检查 18 字节 DBUS 帧，分别维护摇杆在线、键鼠更新及按下次数。
+* UART 派发调用接收函数，Daemon 处理离线；命令任务周期读取当前输入和可用标记。
+*/
 #include "remote_control.h"
 #include "string.h"
 #include "bsp_usart.h"

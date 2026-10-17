@@ -1,6 +1,6 @@
 /** @file lcd_key_input.c
- * @brief 保存按键连续确认次数，并向 LCD 任务报告按下或松开事件。
- */
+* @brief 保存按键连续确认次数，并向 LCD 任务报告按下或松开事件。
+*/
 #include "lcd_key_input.h"
 
 #include <stddef.h>

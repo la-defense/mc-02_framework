@@ -1,6 +1,6 @@
 /** @file tfminiplus.c
- * @brief 保留的测距请求和原始字段组合；已知接收长度问题见头文件，当前不保证设备数据有效。
- */
+* @brief 保留的测距请求和原始字段组合；已知接收长度问题见头文件，当前不保证设备数据有效。
+*/
 #include "tfminiplus.h"
 #include "stdlib.h"
 #include "bsp_dwt.h"

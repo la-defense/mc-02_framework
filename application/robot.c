@@ -1,6 +1,6 @@
 /** @file robot.c
- * @brief 启动板级资源、应用和任务，失败时统一关闭输出，并提供整车周期入口。
- */
+* @brief 启动板级资源、应用和任务，失败时统一关闭输出，并提供整车周期入口。
+*/
 #include "bsp_init.h"
 #include "main.h"
 #include "robot.h"

@@ -1,3 +1,8 @@
+/**
+* @file crc_ref.c
+* @brief 使用查找表计算和检查裁判系统帧的 CRC-8、CRC-16。
+* 追加接口会改写缓冲区末尾的校验字节，检查接口只返回结果。
+ */
 #include "crc_ref.h"
 #include <stdio.h>
 
@@ -74,7 +79,7 @@ uint16_t Get_CRC16_Check_Sum(uint8_t *pchMessage,uint32_t dwLength,uint16_t wCRC
 
 
 
-/* CRC校验 */
+/* 每次循环取一个数据字节，用查找表更新当前 CRC。 */
 
 uint8_t Get_CRC8_Check_Sum( uint8_t *pchMessage, uint16_t dwLength, uint8_t ucCRC8 )
 {
@@ -82,6 +87,7 @@ uint8_t Get_CRC8_Check_Sum( uint8_t *pchMessage, uint16_t dwLength, uint8_t ucCR
 	
 		while (dwLength--)
 		{
+				// 当前结果与下一个数据字节决定查找表位置。
 				ucIndex = ucCRC8^(*pchMessage++);
 				ucCRC8 = CRC8_TAB[ucIndex];
 		}
@@ -89,11 +95,7 @@ uint8_t Get_CRC8_Check_Sum( uint8_t *pchMessage, uint16_t dwLength, uint8_t ucCR
 }
 
 
-/*
-** Descriptions: CRC8 Verify function
-** Input: Data to Verify,Stream length = Data + checksum
-** Output: True or False (CRC Verify Result)
-*/
+/* 帧最后1字节是 CRC-8；短帧或空指针不能用于检查。 */
 uint32_t Verify_CRC8_Check_Sum( uint8_t *pchMessage, uint16_t dwLength)
 {
 		uint8_t ucExpected = 0;
@@ -103,17 +105,14 @@ uint32_t Verify_CRC8_Check_Sum( uint8_t *pchMessage, uint16_t dwLength)
 			  return 0;
 		}
 		
+		// 先计算校验字节前面的内容，再和帧尾保存值比较。
 		ucExpected = Get_CRC8_Check_Sum( pchMessage, dwLength-1, CRC8_INIT);
 		
 		return ( ucExpected == pchMessage[dwLength-1] );
 }
 
 
-/*
-** Descriptions: append CRC8 to the end of data
-** Input: Data to CRC and append,Stream length = Data + checksum
-** Output: True or False (CRC Verify Result)
-*/
+/* 把 CRC-8 写到帧末尾；本函数不返回成功或失败状态。 */
 void Append_CRC8_Check_Sum( uint8_t *pchMessage, uint16_t dwLength)
 {
 		uint8_t ucCRC = 0;
@@ -129,11 +128,7 @@ void Append_CRC8_Check_Sum( uint8_t *pchMessage, uint16_t dwLength)
 }
 
 
-/*
-** Descriptions: CRC16 checksum function
-** Input: Data to check,Stream length, initialized checksum
-** Output: CRC checksum
-*/
+/* 根据每个字节更新 CRC-16；空指针时返回协议使用的起始值。 */
 uint16_t Get_CRC16_Check_Sum(uint8_t *pchMessage,uint32_t dwLength,uint16_t wCRC)
 {
     uint8_t chData;	
@@ -143,6 +138,7 @@ uint16_t Get_CRC16_Check_Sum(uint8_t *pchMessage,uint32_t dwLength,uint16_t wCRC
 	}
 	while(dwLength--)
 	{
+		// 取出下一个字节，与当前 CRC 的低位一起查表。
 		chData = *pchMessage++;
 		(wCRC) = ((uint16_t)(wCRC) >> 8) ^ 
 		wCRC_Table[((uint16_t)(wCRC) ^ (uint16_t)(chData)) & 0x00ff];
@@ -151,11 +147,7 @@ uint16_t Get_CRC16_Check_Sum(uint8_t *pchMessage,uint32_t dwLength,uint16_t wCRC
 }
 
 
-/*
-** Descriptions: CRC16 Verify function
-** Input: Data to Verify,Stream length = Data + checksum
-** Output: True or False (CRC Verify Result)
-*/
+/* CRC-16 的低字节和高字节分别放在帧尾倒数第2、倒数第1个位置。 */
 uint32_t Verify_CRC16_Check_Sum(uint8_t *pchMessage, uint32_t dwLength)
 {
 		uint16_t wExpected = 0;
@@ -165,17 +157,14 @@ uint32_t Verify_CRC16_Check_Sum(uint8_t *pchMessage, uint32_t dwLength)
         	return FALSE;
 		}
 		
+		// 只对校验字段之前的数据计算 CRC，再与帧尾两个字节比较。
 		wExpected = Get_CRC16_Check_Sum ( pchMessage, dwLength - 2, CRC_INIT);
 		return ( (wExpected & 0xff) == pchMessage[dwLength - 2] 
 			     && ((wExpected >> 8) & 0xff) == pchMessage[dwLength - 1]);
 }
 
 
-/*
-** Descriptions: append CRC16 to the end of data
-** Input: Data to CRC and append,Stream length = Data + checksum
-** Output: True or False (CRC Verify Result)
-*/
+/* 把 CRC-16 的低字节和高字节写到帧尾；本函数不返回状态。 */
 void Append_CRC16_Check_Sum(uint8_t * pchMessage,uint32_t dwLength)
 {
 		uint16_t wCRC = 0;

@@ -1,3 +1,8 @@
+/**
+* @file BMI088reg.h
+* @brief 保留旧版 BMI088 驱动使用的寄存器地址和配置值。
+* 当前寄存器定义位于 modules/BMI088/bmi088_regNdef.h；修改前先确认实际包含的是哪一份。
+*/
 #ifndef BMI088REG_H
 #define BMI088REG_H
 

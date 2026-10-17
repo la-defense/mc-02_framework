@@ -1,11 +1,11 @@
 /**
  * @file referee_protocol.h
+* @brief 定义本工程使用的裁判系统帧、数据段和绘图字段。
+* 结构体按协议字节排列；字段长度以本文件常量为准，使用前还要核对比赛所用协议版本。
  * @author kidneygood (you@domain.com)
  * @version 0.1
  * @date 2022-12-02
- *
  * @copyright Copyright (c) HNU YueLu EC 2022 all rights reserved
- *
  */
 
 #ifndef referee_protocol_H
@@ -122,13 +122,13 @@ typedef enum
 /****************************接收数据的详细说明****************************/
 /****************************接收数据的详细说明****************************/
 
-/* ID: 0x0001  Byte:  11    比赛状态数据 */
-typedef  struct 
-{ 
- uint8_t game_type : 4; 
- uint8_t game_progress : 4; 
- uint16_t stage_remain_time; 
- uint64_t SyncTimeStamp; 
+/* ID: 0x0001 比赛状态数据 */
+typedef  struct
+{
+ uint8_t game_type : 4;      // 比赛类型
+ uint8_t game_progress : 4;  // 当前比赛阶段
+ uint16_t stage_remain_time; // 当前阶段剩余时间，单位 s
+ uint64_t SyncTimeStamp;     // 裁判系统同步用的 UNIX 时间值
 } ext_game_state_t;
 
 /* ID: 0x0002  Byte:  1    比赛结果数据 */
@@ -173,39 +173,39 @@ typedef struct
 	uint16_t dart_info;
 } ext_dart_info_t;
 
-/* ID: 0X0201  Byte: 17    机器人性能体系数据 */
+/* ID: 0X0201 机器人状态和输出能力数据 */
 typedef struct
 {
-	uint8_t robot_id; 
-	uint8_t robot_level; 
-	uint16_t current_HP; 
-	uint16_t maximum_HP; 
-	uint16_t shooter_barrel_cooling_value; 
-	uint16_t shooter_barrel_heat_limit; 
-	uint16_t chassis_power_limit; 
-	float bullet_speed_limit;
+	uint8_t robot_id;                         // 机器人编号
+	uint8_t robot_level;                      // 机器人等级
+	uint16_t current_HP;                      // 当前血量
+	uint16_t maximum_HP;                      // 血量上限
+	uint16_t shooter_barrel_cooling_value;    // 枪管每秒冷却值
+	uint16_t shooter_barrel_heat_limit;       // 枪管热量上限
+	uint16_t chassis_power_limit;             // 底盘功率上限，单位 W
+	float bullet_speed_limit;                 // 弹速上限，单位 m/s
 	uint8_t power_management_gimbal_output : 1; 
 	uint8_t power_management_chassis_output : 1; 
 	uint8_t power_management_shooter_output : 1; 
 } ext_game_robot_state_t;
 
-/* ID: 0X0202  Byte: 14    实时功率热量数据 */
+/* ID: 0X0202 实时功率与枪管热量数据 */
 typedef struct
 {
-	uint16_t reserved_1; 
-	uint16_t reserved_2; 
-	float reserved_3; 
-	uint16_t buffer_energy; 
-	uint16_t shooter_17mm_barrel_heat; 
-	uint16_t shooter_42mm_barrel_heat; 
+	uint16_t reserved_1;                 // 本工程当前不使用
+	uint16_t reserved_2;                 // 本工程当前不使用
+	float reserved_3;                    // 本工程当前不使用
+	uint16_t buffer_energy;              // 缓冲能量，单位 J
+	uint16_t shooter_17mm_barrel_heat;   // 17mm 枪管热量读数
+	uint16_t shooter_42mm_barrel_heat;   // 42mm 枪管热量读数
 } ext_power_heat_data_t;
 
 /* ID: 0x0203  Byte: 12    机器人位置数据 */
 typedef struct
 {
-	float x;
-	float y;
-	float angle;
+	float x;     // 场地 x 坐标，单位 m
+	float y;     // 场地 y 坐标，单位 m
+	float angle; // 机器人朝向，单位度
 } ext_game_robot_pos_t;
 
 /* ID: 0x0204  Byte:  8    机器人增益数据 */
@@ -231,8 +231,8 @@ typedef struct
 {
 	uint8_t bullet_type;
 	uint8_t shooter_number;
-	uint8_t launching_frequency;
-	float initial_speed;
+	uint8_t launching_frequency; // 发射频率，单位 Hz
+	float initial_speed;         // 弹丸初速度，单位 m/s
 } ext_shoot_data_t;
 
 /* ID: 0x0208  Byte:  8    允许发弹量与剩余金币 */
@@ -263,14 +263,14 @@ typedef struct
 /* ID: 0x020B  Byte: 40    地面机器人位置数据（发送给己方哨兵） */
 typedef struct
 {
-	float hero_x;
-	float hero_y;
-	float engineer_x;
-	float engineer_y;
-	float standard_3_x;
-	float standard_3_y;
-	float standard_4_x;
-	float standard_4_y;
+	float hero_x;       // 英雄机器人 x 坐标，单位 m
+	float hero_y;       // 英雄机器人 y 坐标，单位 m
+	float engineer_x;   // 工程机器人 x 坐标，单位 m
+	float engineer_y;   // 工程机器人 y 坐标，单位 m
+	float standard_3_x; // 3号步兵 x 坐标，单位 m
+	float standard_3_y; // 3号步兵 y 坐标，单位 m
+	float standard_4_x; // 4号步兵 x 坐标，单位 m
+	float standard_4_y; // 4号步兵 y 坐标，单位 m
 	float reserved_1;
 	float reserved_2;
 } ext_ground_robot_position_t;
@@ -295,11 +295,11 @@ typedef struct
 	uint8_t radar_info;
 } ext_radar_info_t;
 
-/* ID: 0x0303  Byte: 12    选手端小地图交互数据 */
+/* ID: 0x0303 选手端小地图交互数据 */
 typedef struct
 {
-	float target_position_x;
-	float target_position_y;
+	float target_position_x; // 目标场地 x 坐标，单位 m
+	float target_position_y; // 目标场地 y 坐标，单位 m
 	uint8_t cmd_keyboard;
 	uint8_t target_robot_id;
 	uint16_t cmd_source;

@@ -1,6 +1,6 @@
 /**
  * @file bsp_usb.c
- * @brief USB CDC 单例收发；中断保存接收内容，任务跳过旧包并调用模块回调。
+* @brief USB CDC 单例收发；中断保存接收内容，任务跳过旧包并调用模块回调。
  * @version 0.1
  * @date 2023-02-09
  *

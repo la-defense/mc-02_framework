@@ -1,6 +1,6 @@
 /** @file bsp_log.c
- * @brief 初始化 RTT、决定同类日志能否打印，并实现普通格式化和旧浮点转文字入口。
- */
+* @brief 初始化 RTT、决定同类日志能否打印，并实现普通格式化和旧浮点转文字入口。
+*/
 #include "bsp_log.h"
 #include "main.h"
 

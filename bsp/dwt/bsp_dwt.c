@@ -5,7 +5,7 @@
  * @author modified by Neo with annotation
  * @version V1.1.0
  * @date    2022/3/8
- * @brief 读取 CPU 周期差并累计时间，提供任务和中断可用的短时间测量。
+* @brief 读取 CPU 周期差并累计时间，提供任务和中断可用的短时间测量。
  */
 
 #include "bsp_dwt.h"

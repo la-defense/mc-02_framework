@@ -1,6 +1,6 @@
 /** @file bsp_tools.c
- * @brief 保存最多 32 份回调和参数，任务先执行一次，再循环等待自己的信号位。
- */
+* @brief 保存最多 32 份回调和参数，任务先执行一次，再循环等待自己的信号位。
+*/
 #include <stdarg.h>
 
 #include "cmsis_os.h"
