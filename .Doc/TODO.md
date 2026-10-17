@@ -167,7 +167,7 @@
 - [ ] **BSPUART-03U1** [enhancement] [ready-for-agent] 统一 UART 不可变接收块与协议分帧接口。验收：交付实际长度、原始接收时间及实例上下文，协议负责拼帧／拆帧／校验；半帧、多帧、越界与过期回归通过，短暂坏帧不刷新上一合法快照期限。关联 MC02-0061、MC02-0062，舵机接入扩展本轮暂缓，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **BSPSPI-03** [bug] [needs-triage] 核查 `SPITransmit`、`SPIRecv` 与 `SPITransRecv` 是否采用一致的总线占用和错误释放规则。验收：梳理全部调用点，明确并发请求的拒绝或串行策略；完成态、错误态和超时态都能释放本次事务，主机或台架回归证明不会互相覆盖片选或忙标志。
 - [ ] **BSPIIC-01** [bug] [needs-triage] 核查 I2C 注册路径中的重复分配及失败清理。验收：注册成功只保留一份实例分配，分配失败与重复注册均不泄漏；主机分配器测试或静态分析给出证据。
-- [ ] **BSPMISC-02** [bug] [ready-for-human] 核查 PID 积分限幅辅助函数中的静态临时状态。验收：多个 PID 实例交错调用时互不影响，生产函数回归覆盖调用顺序变化。 软件已实现：显式 dt、失败保留、重置及状态副本，积分限幅不共享临时变量；WSL Debug／Release 各112/112、Windows 可移植子集各14/14、六种禁热固件与 ELF 检查通过，裸板回归后关闭。见[实施记录](../docs/workflow/tickets/MC02-0015.md)。
+- [x] **BSPMISC-02** [bug] 核查 PID 积分限幅辅助函数中的静态临时状态。验收：多个 PID 实例交错调用时互不影响，生产函数回归覆盖调用顺序变化。 验收完成：软件提交 `1b10845`，WSL Debug／Release 各112/112、Windows 可移植子集各14/14、六种禁热固件及 ELF／非法配置检查通过；裸板烧录 verify 与参数逐字节保留通过，60.22秒被动收到12042个 CRC 正确且四元数有限的状态帧，发送0帧，IMU递增、禁热／输出隔离及无新增复位迹象检查通过。见[实施与证据](../docs/workflow/tickets/MC02-0015.md)和[教学23](../docs/学习笔记/23-Ozone辅助PID调参.md)。真实闭环及加热性能不在本轮验收范围。
 - [ ] **BSPMISC-03** [bug] [needs-triage] 核查 `float_rounding` 对负数、半数边界和静态临时状态的处理。验收：明确舍入规则，并以正负边界和多实例交错调用测试覆盖。
 - [ ] **BSPMISC-06** [bug] [needs-triage] 核查 WS2812 与 ADC 的引脚/外设资源冲突是否仍存在。验收：当前板级映射和初始化配置中不存在同时启用的资源冲突；若冲突存在，互斥配置有构建或测试验证。
 - [ ] **BSPMISC-07** [enhancement] [needs-triage] 核查历史报告提出的 SPI 时序问题是否仍可复现。验收：记录当前配置、目标外设规格及逻辑分析仪波形；确认满足时序，或提交修复和复测结果。
@@ -322,7 +322,7 @@ Unicom
 
 #### controller
 
-- [ ] **MC02-0015** [enhancement] [ready-for-human] 改造 PID 为调用者存储与显式实测 dt 接口，替代原统一分配方案。验收：调用模块提供实例，算法纯计算，dt 以秒输入并检查范围／数值；初始化／重置有结果和只读状态，运行期不分配，多实例交错／异常间隔／失败不覆盖有效结果回归通过。关联 BSPMISC-02、MC02-0076，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 软件已实现：显式 dt、失败保留、重置及状态副本，积分限幅不共享临时变量；WSL Debug／Release 各112/112、Windows 可移植子集各14/14、六种禁热固件与 ELF 检查通过，裸板回归后关闭。见[实施记录](../docs/workflow/tickets/MC02-0015.md)。
+- [x] **MC02-0015** [enhancement] 改造 PID 为调用者存储与显式实测 dt 接口，替代原统一分配方案。验收：调用模块提供实例，算法纯计算，dt 以秒输入并检查范围／数值；初始化／重置有结果和只读状态，运行期不分配，多实例交错／异常间隔／失败不覆盖有效结果回归通过。关联 BSPMISC-02、MC02-0076，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。 验收完成：软件提交 `1b10845`，WSL Debug／Release 各112/112、Windows 可移植子集各14/14、六种禁热固件及 ELF／非法配置检查通过；裸板烧录 verify 与参数逐字节保留通过，60.22秒被动收到12042个 CRC 正确且四元数有限的状态帧，发送0帧，IMU递增、禁热／输出隔离及无新增复位迹象检查通过。见[实施与证据](../docs/workflow/tickets/MC02-0015.md)和[教学23](../docs/学习笔记/23-Ozone辅助PID调参.md)。真实闭环及加热性能不在本轮验收范围。
 
 #### dji_motor
 
