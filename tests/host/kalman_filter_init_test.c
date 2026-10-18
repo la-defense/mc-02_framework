@@ -107,7 +107,7 @@ static void scalar_and_time(void)
     TEST_CHECK(step(&f,1,0,1,NULL,0)==KF_PREDICTION_LIMIT && f.k.result.prediction_age_ms==UINT32_MAX);
 }
 static KFStatus_t failing(KalmanFilter_t *k,void *ctx)
-{ k->xhat_data[0]=1234; return ctx?KF_CORRECTION_REJECTED:KF_ERROR_MATRIX; }
+{ k->xhat_data[0]=1234; return ctx?KF_PREDICTED:KF_ERROR_MATRIX; }
 static void variable_dt(void)
 {
     Fixture f={0};init(&f,2,1);f.k.H_data[0]=1;f.k.H_data[1]=0;
@@ -173,6 +173,10 @@ static void failures_and_variance(void)
     s=(KFStep_t){.001f,0,0,0,&nonfinite,&absent,1,NULL};
     TEST_CHECK(KFUpdate(&f.k,&s)==KF_PREDICTION_LIMIT); // 不存在的量测无需数值参与校正。
     absent=2;TEST_CHECK(KFUpdate(&f.k,&s)==KF_ERROR_ARGUMENT);
+    // 扩展步骤误返回正数也必须报告失败，不能与valid=0的结果给出成功状态。
+    init(&f,1,1);f.k.config.after_state_prediction=failing;
+    s=(KFStep_t){.001f,0,0,0,NULL,NULL,0,(void *)1};
+    TEST_CHECK(KFUpdate(&f.k,&s)==KF_ERROR_STATE && f.k.fatal && !f.k.result.valid);
 }
 static void *instances(void *arg)
 {

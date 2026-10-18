@@ -140,6 +140,9 @@ static KFStatus_t checked(arm_status status,const arm_matrix_instance_f32 *out)
     if(status!=ARM_MATH_SUCCESS) return KF_ERROR_MATRIX;
     return finite_values(out->pData,(size_t)out->numRows*out->numCols)?KF_OK:KF_ERROR_NUMERIC;
 }
+// 扩展步骤只能成功或返回失败；正数不能冒充已发布的有限预测。
+static KFStatus_t stage_status(KFStatus_t status)
+{ return status>KF_OK?KF_ERROR_STATE:status; }
 #define MATRIX(expression,out) do { KFStatus_t s=checked((expression),(out)); if(s!=KF_OK) return s; } while(0)
 static KFStatus_t predict(KalmanFilter_t *f,const KFStep_t *step)
 {
@@ -156,7 +159,7 @@ static KFStatus_t predict(KalmanFilter_t *f,const KFStep_t *step)
     }
     if(f->config.after_state_prediction!=NULL)
     {
-        KFStatus_t status=f->config.after_state_prediction(f,step->callback_context);
+        KFStatus_t status=stage_status(f->config.after_state_prediction(f,step->callback_context));
         if(status!=KF_OK) return status;
     }
     if(!finite_values(f->xhatminus_data,n) || !covariance_valid(f->P_data,n) ||
@@ -195,7 +198,7 @@ static KFStatus_t correct(KalmanFilter_t *f,const KFStep_t *step,uint16_t active
     size_t n=f->xhatSize,maximum=f->config.measurement_capacity;
     if(f->config.prepare_measurement!=NULL)
     {
-        KFStatus_t status=f->config.prepare_measurement(f,step->callback_context);
+        KFStatus_t status=stage_status(f->config.prepare_measurement(f,step->callback_context));
         if(status!=KF_OK) return status;
     }
     // 把存在的量测行及其R子矩阵复制到独立数组，合法零值不会被丢弃。
@@ -211,7 +214,7 @@ static KFStatus_t correct(KalmanFilter_t *f,const KFStep_t *step,uint16_t active
     matrix(&f->H,active,(uint16_t)n,f->H_data); matrix(&f->R,active,active,f->R_data);
     matrix(&f->HT,(uint16_t)n,active,f->HT_data); matrix(&f->K,(uint16_t)n,active,f->K_data);
     matrix(&f->S,active,active,f->S_data); matrix(&f->z,active,1,f->z_data); f->zSize=active;
-    KFStatus_t status=f->config.correction!=NULL?f->config.correction(f,step->callback_context):linear_correction(f);
+    KFStatus_t status=f->config.correction!=NULL?stage_status(f->config.correction(f,step->callback_context)):linear_correction(f);
     if(status!=KF_OK) return status;
     matrix(&f->temp_matrix,(uint16_t)n,(uint16_t)n,f->temp_matrix_data);
     matrix(&f->temp_matrix1,(uint16_t)n,(uint16_t)n,f->temp_matrix_data1);

@@ -26,6 +26,7 @@ struct kf_t;
 /** @brief 扩展步骤只操作本轮候选数组，不发布结果、不访问硬件；非KF_OK停止该阶段。
  * after_state_prediction可修改xhatminus、F和候选P；prepare_measurement只写H/R；
  * correction只写候选xhat、K及临时数组，不改写预测xhatminus/Pminus。
+ * 返回KF_OK或负数；误返回正数统一按KF_ERROR_STATE处理。
  */
 typedef KFStatus_t (*KFStageFunction_t)(struct kf_t *candidate, void *context);
 /** @brief n/m为1～255，u为0～255；时限为毫秒，dt为秒，方差比无单位。 */
