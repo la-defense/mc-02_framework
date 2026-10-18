@@ -10,6 +10,7 @@
 static uint32_t now,seq;
 static int scenario,valid,mode,force_off;
 static float frame[4];
+static float period_s=.001f;
 #ifdef INS_TEST_INIT_WRAP
 static int fail_init;
 KFStatus_t __real_IMU_QuaternionEKF_Init(const float *,const QEKFConfig_t *,void *,size_t);
@@ -18,7 +19,7 @@ KFStatus_t __wrap_IMU_QuaternionEKF_Init(const float *q,const QEKFConfig_t *c,vo
 #endif
 int hspi2;
 volatile uint32_t bmi088_init_error,bmi088_init_retry_count;
-float DWT_GetDeltaT(uint32_t *p){ *p=now;return .001f; }
+float DWT_GetDeltaT(uint32_t *p){ *p=now;return period_s; }
 uint32_t DWT_ProbeStart(void){ return 0; }
 void DWT_ProbeDone(volatile DWT_Probe_t *p,uint32_t s){(void)p;(void)s;}
 uint32_t HAL_GetTick(void){return now;}
@@ -44,7 +45,7 @@ float NormOf3d(float *v){return sqrtf(Dot3d(v,v));}
 void Norm3d(float *v){float n=NormOf3d(v);for(int i=0;i<3;i++)v[i]/=n;}
 float Dot3d(float *a,float *b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
 void Cross3d(float *a,float *b,float *o){o[0]=a[1]*b[2]-a[2]*b[1];o[1]=a[2]*b[0]-a[0]*b[2];o[2]=a[0]*b[1]-a[1]*b[0];}
-static void tick(void){now++;INS_Task();}
+static void tick(void){now+=(uint32_t)lroundf(period_s*1000);INS_Task();}
 static void invalid(void){TEST_CHECK(!valid && mode==0);for(int i=0;i<4;i++)TEST_CHECK(frame[i]==0);}
 int main(int argc,char **argv)
 {
@@ -60,6 +61,12 @@ int main(int argc,char **argv)
     tick();invalid();TEST_CHECK(force_off);
     scenario=0;tick();TEST_CHECK(valid && mode==1 && QEKF_INS.IMU_QuaternionEKF.result.mode==KF_CORRECTED);
     scenario=3;tick();invalid();scenario=0;tick();TEST_CHECK(valid);
+    // 调度或原始采样延迟超过20ms时，正常预测加新鲜校正仍应恢复，不能附加dt故障。
+    period_s=.025f;tick();TEST_CHECK(valid && QEKF_INS.IMU_QuaternionEKF.result.mode==KF_CORRECTED);
+    scenario=1;tick();invalid();TEST_CHECK(!QEKF_INS.IMU_QuaternionEKF.fatal);
+    period_s=.001f;scenario=0;tick();TEST_CHECK(valid);
+    scenario=3;period_s=.025f;tick();invalid();
+    scenario=0;period_s=.001f;tick();TEST_CHECK(valid);
     scenario=2;tick();invalid();scenario=0;tick();invalid();
     TEST_CHECK(QEKF_INS.IMU_QuaternionEKF.fatal);
     TEST_CHECK(INS_Init()!=NULL);tick();invalid(); // 重复INS_Init不能偷偷重建姿态参考。

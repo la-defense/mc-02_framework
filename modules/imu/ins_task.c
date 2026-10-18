@@ -23,6 +23,7 @@
 #include "imu_heater.h"
 #include "task_monitor.h"
 #include <math.h>
+#include <float.h>
 #include <string.h>
 
 #define DEG_2_RAD (1.0f / RAD_2_DEGREE) // 角度转弧度, sp_vision_25 协议为弧度制
@@ -34,7 +35,8 @@ static BMI088_Data_t bmi088_data;
 static uint8_t ins_init_result;
 // KF工作区跟随任务存活；20ms和2倍方差是默认软件范围。
 static _Alignas(KF_WORKSPACE_ALIGNMENT) uint8_t qekf_workspace[KF_WORKSPACE_BYTES(6,0,3)];
-static const QEKFConfig_t qekf_config={10.0f,0.001f,1000000.0f,1.0f,0.0f,20u,2.0f,0.020f};
+// 20ms只限制无校正预测的发布；较长的有限dt由计算结果检查决定能否继续。
+static const QEKFConfig_t qekf_config={10.0f,0.001f,1000000.0f,1.0f,0.0f,20u,2.0f,FLT_MAX};
 volatile uint32_t imu_filter_mode_diag=0u;
 volatile uint32_t imu_filter_age_ms_diag=0u;
 volatile int32_t imu_filter_cause_diag=0;
