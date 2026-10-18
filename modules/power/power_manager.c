@@ -18,10 +18,8 @@ PowerManagerInstance *PowerControlInit(PowerManager_Init_Config_s *power_manager
     power_control_instance->k2 = power_manager_config->k2;
     power_control_instance->k3 = power_manager_config->k3;
 
-    // // 初始化RLS滤波器，用于解算k1，k2
-    // RLS_Init(&RLS, 2, 1e-5f, 0.99999f);
-    // RLS_Reset(&RLS);
-    // RLS_SetParam(&RLS, k);
+    // RLS 已改为调用者保存实例和独立工作区；在线辨识仍由 MC02-0081 决定是否启用。
+    // 本模块尚无可信功率采样与样本配对时间，因此此处不创建实例或工作区。
 
     return power_control_instance;
 }
@@ -39,13 +37,6 @@ void PowerManagerEnable(PowerManagerInstance *instance)
 void PowerManagerUpdate(float power, float sample_a, float sample_b)
 {
 // 以下全部为未启用的参考步骤，不会修改系数或计算功率。
-    // M[0] = sample_a;
-    // M[1] = sample_b;
-
-    // if (power > 5.0f)
-    // {
-    //     RLS_Update(&RLS, M, power);
-    //     power_control_instance->k1 = fmax(RLS.params_data[0], 1e-5f);  // In case the k1 diverge to negative number
-    //     power_control_instance->k2 = fmax(RLS.params_data[1], 1e-5f);  // In case the k2 diverge to negative number
-    // }
+    // 当前功率和 sample_a/sample_b 未组成经确认的训练样本，不能据此调用 RLSUpdate。
+    // MC02-0081 明确采样来源和模型质量后，再接入状态查询与参数应用。
 }

@@ -599,3 +599,25 @@ if(TARGET param_operation_test)
   add_test(NAME production_crc_parameter_legacy_read COMMAND param_operation_test legacy-read)
   add_test(NAME production_crc_parameter_read_failure COMMAND param_operation_test read-failure)
 endif()
+
+# RLS 主机回归链接真实 CMSIS-DSP；Linux 额外注入矩阵失败并并发运行独立实例。
+add_executable(rls_test rls_test.c ../../modules/algorithm/RLS.c)
+target_include_directories(rls_test PRIVATE ../../modules/algorithm)
+target_link_libraries(rls_test PRIVATE mc02_dsp_host)
+if(UNIX)
+  target_link_libraries(rls_test PRIVATE m)
+  find_package(Threads REQUIRED)
+  target_link_libraries(rls_test PRIVATE Threads::Threads)
+  target_compile_definitions(rls_test PRIVATE RLS_TEST_THREADS=1)
+endif()
+if(UNIX AND NOT APPLE)
+  target_compile_definitions(rls_test PRIVATE
+    RLS_TEST_MATRIX_WRAP=1 RLS_TEST_ALLOC_WRAP=1)
+  target_link_options(rls_test PRIVATE
+    -Wl,--wrap=arm_mat_mult_f32 -Wl,--wrap=arm_mat_sub_f32
+    -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free)
+endif()
+foreach(scenario IN ITEMS math workspace failures instances)
+  add_test(NAME production_rls_${scenario} COMMAND rls_test ${scenario})
+  set_tests_properties(production_rls_${scenario} PROPERTIES TIMEOUT 30)
+endforeach()
