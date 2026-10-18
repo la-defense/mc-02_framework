@@ -1,0 +1,80 @@
+{
+  "repository": "ARM-software/CMSIS_5",
+  "commit": "a65b7c9a3e6502127fdb80eb288d8cbdf251a6f4",
+  "cmsis_version": "5.7.0",
+  "dsp_version": "1.7.0",
+  "files": [
+    {
+      "path": "Include/arm_math.h",
+      "upstream": "CMSIS/DSP/Include/arm_math.h",
+      "sha256": "78e38b20c04467837116173f33f108b06c63241724458f01f556d774a8520daa"
+    },
+    {
+      "path": "Include/arm_common_tables.h",
+      "upstream": "CMSIS/DSP/Include/arm_common_tables.h",
+      "sha256": "7ec673e2a79eb49151bc76f833a5220f2cb701127a0022e3ac700741b6bcc463"
+    },
+    {
+      "path": "Source/MatrixFunctions/arm_mat_init_f32.c",
+      "upstream": "CMSIS/DSP/Source/MatrixFunctions/arm_mat_init_f32.c",
+      "sha256": "f441c917e21caab027621c4f2ee430020bd62e2b7981931cb5484d5b23211977"
+    },
+    {
+      "path": "Source/MatrixFunctions/arm_mat_add_f32.c",
+      "upstream": "CMSIS/DSP/Source/MatrixFunctions/arm_mat_add_f32.c",
+      "sha256": "2cf7a381bb07764845cf73d91a92b54373d8ec3868d0c1731e7634b6b99b21db"
+    },
+    {
+      "path": "Source/MatrixFunctions/arm_mat_sub_f32.c",
+      "upstream": "CMSIS/DSP/Source/MatrixFunctions/arm_mat_sub_f32.c",
+      "sha256": "0877c3591e8b7ee7e881513099cdb9cd30f9572c8cfcb7a74b38214516dd80c9"
+    },
+    {
+      "path": "Source/MatrixFunctions/arm_mat_mult_f32.c",
+      "upstream": "CMSIS/DSP/Source/MatrixFunctions/arm_mat_mult_f32.c",
+      "sha256": "2a9d23498f295626b1cb7ea76077b3a352cb52df407b971499597f6bf421f426"
+    },
+    {
+      "path": "Source/MatrixFunctions/arm_mat_trans_f32.c",
+      "upstream": "CMSIS/DSP/Source/MatrixFunctions/arm_mat_trans_f32.c",
+      "sha256": "d7007ae071b95253facc7d8904a046ec74700c4f07c80525d950e61bf7314f81"
+    },
+    {
+      "path": "Source/MatrixFunctions/arm_mat_inverse_f32.c",
+      "upstream": "CMSIS/DSP/Source/MatrixFunctions/arm_mat_inverse_f32.c",
+      "sha256": "e05fbc4aa0c60538e5638483af5074fbdb1c83ff0dcdc9799e95253e60d0b548"
+    },
+    {
+      "path": "Source/FastMathFunctions/arm_sin_f32.c",
+      "upstream": "CMSIS/DSP/Source/FastMathFunctions/arm_sin_f32.c",
+      "sha256": "660139a65f4ccd6bde68097f09b136c716e534773ab8f316d22da1b5cb00292b"
+    },
+    {
+      "path": "Source/FastMathFunctions/arm_cos_f32.c",
+      "upstream": "CMSIS/DSP/Source/FastMathFunctions/arm_cos_f32.c",
+      "sha256": "b2d1583aeb1b0d332ab06a6a6f9f4d56fd719e2d1a7164201bf60bfec8075b70"
+    },
+    {
+      "path": "Source/CommonTables/arm_common_tables.c",
+      "upstream": "CMSIS/DSP/Source/CommonTables/arm_common_tables.c",
+      "sha256": "c9ff6a6d077e7a765055828330254e15526056f7aa72fbdbe3655cfcba6f4588"
+    },
+    {
+      "path": "LICENSE.txt",
+      "upstream": "LICENSE.txt",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    }
+  ],
+  "existing_core_headers": [
+    {
+      "path": "Drivers/CMSIS/Include/cmsis_compiler.h",
+      "sha256": "869640702d811c4c63abb52206715c891a93fd03be954df5ad40d378355af3d6",
+      "sha256_lf": "b51963d271c1571ca3463654c76aa7ea50c4eac5d0a2710df10414ac64d9e0f8"
+    },
+    {
+      "path": "Drivers/CMSIS/Include/cmsis_gcc.h",
+      "sha256": "0837f98e834d6a529854c8c86336e9d99eb8e379bf1deb964858d7863950f862",
+      "sha256_lf": "1fba3e120e5c0a439e0982bd37fae04bd033dbd14187428214462a1707c56252"
+    }
+  ]
+}

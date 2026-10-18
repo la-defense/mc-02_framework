@@ -1,6 +1,14 @@
 # 主机行为回归入口：CMake 配置后构建，再用 CTest 执行；硬件操作不在此处运行。
 cmake_minimum_required(VERSION 3.16)
 project(mc02_host_tests C)
+include(../../cmake/mc02_dsp.cmake)
+mc02_add_dsp(mc02_dsp_host TRUE)
+add_library(mc02_kf STATIC ../../modules/algorithm/kalman_filter.c ../../modules/algorithm/dsp_matrix.c)
+target_include_directories(mc02_kf PUBLIC ../../modules/algorithm)
+target_link_libraries(mc02_kf PUBLIC mc02_dsp_host)
+if(UNIX)
+  target_link_libraries(mc02_kf PUBLIC m)
+endif()
 
 # 生产 CRC 仅依赖标准 C；协议与参数测试共同使用同一份实现。
 add_library(mc02_software_crc STATIC ../../modules/algorithm/crc.c)
@@ -71,10 +79,9 @@ add_test(NAME host_test_check_negative_control
     -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_check_failure.cmake)
 
 add_executable(quaternion_ekf_inv_sqrt_test quaternion_ekf_inv_sqrt_test.c
-  quaternion_ekf_fakes/arm_math.c
   ../../modules/algorithm/QuaternionEKF.c
-  ../../modules/algorithm/kalman_filter.c)
-target_include_directories(quaternion_ekf_inv_sqrt_test BEFORE PRIVATE kalman_fakes)
+  )
+target_link_libraries(quaternion_ekf_inv_sqrt_test PRIVATE mc02_kf)
 target_include_directories(quaternion_ekf_inv_sqrt_test PRIVATE ../../modules/algorithm)
 if(UNIX)
   target_compile_options(quaternion_ekf_inv_sqrt_test PRIVATE -ffunction-sections -fdata-sections)
@@ -110,15 +117,33 @@ add_executable(init_diagnostic_test init_diagnostic_test.c ../../application/ini
 target_include_directories(init_diagnostic_test BEFORE PRIVATE init_diagnostic_fakes)
 target_include_directories(init_diagnostic_test PRIVATE ../../application)
 add_test(NAME production_init_diagnostic_preserves_first_failure COMMAND init_diagnostic_test)
-add_executable(kalman_filter_init_test kalman_filter_init_test.c ../../modules/algorithm/kalman_filter.c)
-target_include_directories(kalman_filter_init_test BEFORE PRIVATE kalman_fakes)
-target_include_directories(kalman_filter_init_test PRIVATE ../../modules/algorithm)
+# 旧分配器测试替换为调用者工作区、无分配及失败原值测试。
+add_executable(kalman_filter_init_test kalman_filter_init_test.c)
+target_link_libraries(kalman_filter_init_test PRIVATE mc02_kf)
+add_test(NAME production_kalman_workspace_and_results COMMAND kalman_filter_init_test)
+add_executable(dsp_numeric_test dsp_numeric_test.c)
+target_link_libraries(dsp_numeric_test PRIVATE mc02_kf)
+add_test(NAME production_dsp_matrix_and_trigonometry COMMAND dsp_numeric_test)
+add_executable(ins_filter_test ins_filter_test.c ../../modules/imu/ins_task.c ../../modules/algorithm/QuaternionEKF.c)
+target_include_directories(ins_filter_test BEFORE PRIVATE ins_filter_fakes)
+target_include_directories(ins_filter_test PRIVATE ../../modules/imu ../../modules/BMI088)
+target_link_libraries(ins_filter_test PRIVATE mc02_kf)
+add_test(NAME production_ins_filter_validity_and_recovery COMMAND ins_filter_test)
 if(UNIX AND NOT APPLE)
-  target_compile_options(kalman_filter_init_test PRIVATE -ffunction-sections -fdata-sections -fno-pie)
-  target_link_options(kalman_filter_init_test PRIVATE -Wl,--gc-sections -no-pie
-    -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
+  find_package(Threads REQUIRED)
+  target_compile_definitions(ins_filter_test PRIVATE INS_TEST_INIT_WRAP=1)
+  target_link_options(ins_filter_test PRIVATE -Wl,--wrap=IMU_QuaternionEKF_Init)
+  add_test(NAME production_ins_filter_init_failure COMMAND ins_filter_test --init-failure)
+  add_executable(kf_matrix_failure_test kf_matrix_failure_test.c)
+  target_link_libraries(kf_matrix_failure_test PRIVATE mc02_kf)
+  target_link_options(kf_matrix_failure_test PRIVATE -Wl,--wrap=arm_mat_mult_f32
+    -Wl,--wrap=arm_mat_add_f32 -Wl,--wrap=arm_mat_sub_f32
+    -Wl,--wrap=arm_mat_trans_f32 -Wl,--wrap=arm_mat_inverse_f32)
+  add_test(NAME production_kf_matrix_failure_atomicity COMMAND kf_matrix_failure_test)
+  target_link_libraries(kalman_filter_init_test PRIVATE Threads::Threads)
+  target_compile_definitions(kalman_filter_init_test PRIVATE KF_TEST_THREADS=1 KF_TEST_ALLOC_WRAP=1)
+  target_link_options(kalman_filter_init_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
 endif()
-add_test(NAME production_kalman_allocation_failure_rolls_back COMMAND kalman_filter_init_test)
 add_executable(robot_safety_test robot_safety_test.c ../../modules/safety/robot_safety.c)
 target_include_directories(robot_safety_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_safety_test PRIVATE ../../application ../../modules/imu

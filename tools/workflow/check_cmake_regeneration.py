@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that edits to the tracked source tree update an existing CMake build."""
+"""在隔离副本检查增删源码后的CMake增量构建；只复制已跟踪输入，不接触板卡。"""
 
 from __future__ import annotations
 
@@ -26,7 +26,8 @@ SOURCE_PREFIXES = (
     "Drivers/STM32H7xx_HAL_Driver/",
     "Drivers/CMSIS/Device/",
     "Drivers/CMSIS/Include/",
-    "Drivers/CMSIS/DSP/Include/",
+    "cmake/",
+    "Middlewares/Third_Party/CMSIS-DSP-1.7.0/",
     "Middlewares/Third_Party/FreeRTOS/Source/",
     "Middlewares/Third_Party/SEGGER/RTT/",
     "Middlewares/Third_Party/SEGGER/Config/",
@@ -102,18 +103,12 @@ class Checker:
         if result.returncode:
             raise CheckFailure(f"git ls-files failed: {result.stderr.decode(errors='replace')}")
 
-        cmake_text = (self.root / "CMakeLists.txt").read_text(encoding="utf-8")
-        match = re.search(r'set\(DSP_NAME\s+"?([^\s")]+)', cmake_text)
-        dsp_library = f"Drivers/CMSIS/DSP/Lib/GCC/lib{match.group(1)}.a" if match else None
-
         paths = []
         for raw_path in result.stdout.split(b"\0"):
             if not raw_path:
                 continue
             relative = raw_path.decode("utf-8", errors="surrogateescape").replace("\\", "/")
             relevant = relative in ROOT_FILES or relative.startswith(SOURCE_PREFIXES)
-            if relative.startswith("Drivers/CMSIS/DSP/Lib/GCC/"):
-                relevant = relative == dsp_library
             source_path = self.root / Path(*PurePosixPath(relative).parts)
             if relevant and source_path.is_file():
                 paths.append(relative)

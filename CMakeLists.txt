@@ -62,8 +62,8 @@ endif ()
 # board specific settings, arch/fpu/instruction (H723: cortex-m7, fpv5-d16)
 set(MCU_FLAGS -mcpu=cortex-m7 -mthumb -mfloat-abi=hard -mfpu=fpv5-d16)
 set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/STM32H723VGTx_FLASH.ld") # 指定链接脚本
-set(DSP_NAME "arm_cortexM7lfdp_math") # 指定DSP库名称 (M7)
-link_directories(${CMAKE_SOURCE_DIR}/Drivers/CMSIS/DSP/Lib/GCC)
+# 固定源码目标替代来源不明的预编译库，宏只在相关目标设置。
+include(cmake/mc02_dsp.cmake)
 
 # Generic compiler settings for optimization and basic link lib
 add_compile_options(-pipe ${MCU_FLAGS} -Wall -fmessage-length=0 # basic options
@@ -107,7 +107,6 @@ endif ()
 add_definitions(
     -DUSE_HAL_DRIVER
     -DSTM32H723xx
-    -DARM_MATH_CM7
     )
 
 # add inc
@@ -144,7 +143,6 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
     ${CMAKE_SOURCE_DIR}/Drivers/CMSIS/Device/ST/STM32H7xx/Include
     ${CMAKE_SOURCE_DIR}/Drivers/CMSIS/Include
-    ${CMAKE_SOURCE_DIR}/Middlewares/ST/ARM/DSP/Inc
     ${CMAKE_SOURCE_DIR}/Middlewares/Third_Party/SEGGER/RTT
     ${CMAKE_SOURCE_DIR}/Middlewares/Third_Party/SEGGER/Config
 )
@@ -247,7 +245,8 @@ endif ()
 
 # build binary and hex file
 add_executable(${MC02_OUTPUT_BASENAME}.elf  ${SOURCES} ${ASM_SOURCES} ${LINKER_SCRIPT})
-target_link_libraries(${MC02_OUTPUT_BASENAME}.elf ${DSP_NAME} m) # link DSP lib and math lib
+mc02_add_dsp(mc02_dsp FALSE)
+target_link_libraries(${MC02_OUTPUT_BASENAME}.elf PRIVATE mc02_dsp m)
 
 add_custom_command(
   TARGET ${MC02_OUTPUT_BASENAME}.elf POST_BUILD

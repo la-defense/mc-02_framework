@@ -1,174 +1,122 @@
-/**
-* @file kalman_filter.h
-* @brief 声明通用卡尔曼滤波器的数据结构和计算步骤。
-* 初始化后填写模型矩阵、初始状态和最小方差，再周期调用 Kalman_Filter_Update。
-* 自动调整测量矩阵时，MeasuredVector 中的0表示该传感器本轮没有新数据；固定矩阵模式会在读取后清空输入数组。
-* @author Wang Hongxi
- * @version V1.2.2
-* @date 2022/1/8
+/** @file kalman_filter.h
+ * @brief 调用者保存实例和工作区的KF；先查询容量、初始化、填写模型，再更新及复制结果。
+ * @author Wang Hongxi（原实现）；本轮保留计算公式，替换存储和结果处理。
+ * @note 无硬件、RTOS或分配器依赖；同一实例由调用者串行访问。
  */
-#ifndef __KALMAN_FILTER_H
-#define __KALMAN_FILTER_H
-
-// cortex-m4 DSP lib
-/*
-#define __CC_ARM    // Keil
-#define ARM_MATH_CM4
-#define ARM_MATH_MATRIX_CHECK
-#define ARM_MATH_ROUNDING
-#define ARM_MATH_DSP    // define in arm_math.h
-*/
-
-//#include "stm32f407xx.h"
+#ifndef MC02_KALMAN_FILTER_H
+#define MC02_KALMAN_FILTER_H
 #include "arm_math.h"
-//#include "dsp/matrix_functions.h"
-#include "math.h"
-#include "stdint.h"
-#include "stdlib.h"
-
-#ifndef user_malloc
-#ifdef _CMSIS_OS_H
-#define user_malloc pvPortMalloc
-#define user_free pvPortFree
-#else
-#define user_malloc malloc
-#define user_free free
-#endif
-#endif
-
-// 若运算速度不够,可以使用q31代替f32,但是精度会降低
-#define mat arm_matrix_instance_f32
-#define Matrix_Init arm_mat_init_f32
-#define Matrix_Add arm_mat_add_f32
-#define Matrix_Subtract arm_mat_sub_f32
-#define Matrix_Multiply arm_mat_mult_f32
-#define Matrix_Transpose arm_mat_trans_f32
-#define Matrix_Inverse arm_mat_inverse_f32
-
-/**
-* @brief 保存卡尔曼滤波器的矩阵、数据缓冲区和扩展回调。
-* 矩阵使用单精度浮点数；数组长度按 xhatSize、uSize 和 zSize 分配。
+#include <stddef.h>
+#include <stdint.h>
+typedef enum {
+    KF_OK=0, KF_PREDICTED=1, KF_ERROR_ARGUMENT=-1, KF_ERROR_CONFIG=-2,
+    KF_ERROR_WORKSPACE=-3, KF_ERROR_STATE=-4, KF_ERROR_TIME=-5, KF_ERROR_NUMERIC=-6,
+    KF_ERROR_MATRIX=-7, KF_CORRECTION_REJECTED=-8, KF_NO_MEASUREMENT=-9,
+    KF_STALE_MEASUREMENT=-10, KF_DUPLICATE_MEASUREMENT=-11, KF_PREDICTION_LIMIT=-12
+} KFStatus_t;
+typedef enum { KF_INVALID=0, KF_CORRECTED=1, KF_PREDICTION=2 } KFResultMode_t;
+/** @brief valid为0时，复制出的旧数值仅供诊断；预测不更新measurement_ms。 */
+typedef struct {
+    KFResultMode_t mode;
+    KFStatus_t cause;
+    uint8_t valid, has_measurement;
+    uint32_t estimate_ms, measurement_ms, prediction_age_ms;
+} KFResult_t;
+struct kf_t;
+/** @brief 扩展步骤只操作本轮候选数组，不发布结果、不访问硬件；非KF_OK停止该阶段。
+ * after_state_prediction可修改xhatminus、F和候选P；prepare_measurement只写H/R；
+ * correction只写候选xhat、K及临时数组，不改写预测xhatminus/Pminus。
  */
-typedef struct kf_t
-{
-    float *FilteredValue;
-    float *MeasuredVector;
-    float *ControlVector;
-
-    uint8_t xhatSize;
-    uint8_t uSize;
-    uint8_t zSize;
-
-    uint8_t UseAutoAdjustment; // 非零时按本轮数据调整测量矩阵；0时使用调用者准备的矩阵
-    uint8_t MeasurementValidNum; // 本轮实际参与计算的测量数
-
-    /* 自动调整测量矩阵时使用：每项测量对应的状态编号从1开始。 */
-    uint8_t *MeasurementMap;      // 自动调整模式下，每项测量对应的状态编号，从1开始
-    /* 自动调整测量矩阵时，写入 H 矩阵的系数。 */
-    float *MeasurementDegree;     // 每项测量在 H 矩阵中使用的系数
-    /* 自动调整测量矩阵时，各项数据对应的 R 矩阵对角值。 */
-    float *MatR_DiagonalElements; // 每项测量对应的噪声值，写入 R 矩阵对角线
-    /* 每个状态方差允许的最小值，更新末尾会逐项检查。 */
-    float *StateMinVariance;      // 每个状态方差允许的最小值；每轮更新结束时都会检查
-    uint8_t *temp; // 记录有效测量在原数组中的位置
-
-    // 对应位置非零时跳过预测、方差预测、权重计算、状态修正或方差更新步骤。
-    uint8_t SkipEq1, SkipEq2, SkipEq3, SkipEq4, SkipEq5;
-
-    // 每个 mat 保存矩阵的行数、列数和数据地址。
-    mat xhat;      // 当前修正后的状态
-    mat xhatminus; // 根据上一轮结果预测的状态
-    mat u;         // 控制输入
-    mat z;         // 本轮参与计算的测量数据
-    mat P;         // 当前状态估计的方差
-    mat Pminus;    // 预测状态的方差
-    mat F, FT;     // 描述状态怎样变化的矩阵及其转置
-    mat B;         // 描述控制输入怎样影响状态
-    mat H, HT;     // 描述状态与测量数据关系的矩阵及其转置
-    mat Q;         // 状态预测误差的大小
-    mat R;         // 传感器测量误差的大小
-    mat K;         // 把预测结果向测量结果修正时使用的权重
-    mat S, temp_matrix, temp_matrix1, temp_vector, temp_vector1;
-
-    int8_t MatStatus; // 最近一次矩阵计算的状态
-
-    // 用户定义函数,可以替换或扩展基准KF的功能
-    void (*User_Func0_f)(struct kf_t *kf);
-    void (*User_Func1_f)(struct kf_t *kf);
-    void (*User_Func2_f)(struct kf_t *kf);
-    void (*User_Func3_f)(struct kf_t *kf);
-    void (*User_Func4_f)(struct kf_t *kf);
-    void (*User_Func5_f)(struct kf_t *kf);
-    void (*User_Func6_f)(struct kf_t *kf);
-
-    // 矩阵存储空间指针
-    float *xhat_data, *xhatminus_data;
-    float *u_data;
-    float *z_data;
-    float *P_data, *Pminus_data;
-    float *F_data, *FT_data;
-    float *B_data;
-    float *H_data, *HT_data;
-    float *Q_data;
-    float *R_data;
-    float *K_data;
-    float *S_data, *temp_matrix_data, *temp_matrix_data1, *temp_vector_data, *temp_vector_data1;
+typedef KFStatus_t (*KFStageFunction_t)(struct kf_t *candidate, void *context);
+/** @brief n/m为1～255，u为0～255；时限为毫秒，dt为秒，方差比无单位。 */
+typedef struct {
+    uint16_t state_count, control_count, measurement_capacity;
+    uint32_t max_prediction_ms, max_measurement_age_ms;
+    float max_prediction_variance_ratio, max_dt_s;
+    KFStageFunction_t after_state_prediction, prepare_measurement, correction;
+} KFConfig_t;
+/** @brief 本轮量测含合法零值；存在数组为NULL时前measurement_count项全部存在。 */
+typedef struct {
+    float dt_s;
+    uint32_t now_ms, measurement_ms, measurement_sequence;
+    const float *measurements;
+    const uint8_t *measurement_present;
+    uint16_t measurement_count;
+    void *callback_context; // 只在本次调用使用，不保存该地址。
+} KFStep_t;
+#define KF_WORKSPACE_ALIGNMENT _Alignof(max_align_t)
+#define KF_MAX_DIM(n,m) ((size_t)(n)>(size_t)(m)?(size_t)(n):(size_t)(m))
+// 与绑定顺序共用的容量公式：float数组在前，量测行索引在后，最后补齐地址要求。
+#define KF_WORKSPACE_FLOATS(n,u,m) (7u*(size_t)(n)*(n)+4u*(size_t)(n)*(m)+5u*(size_t)(m)*(m)+ \
+    (size_t)(n)*(u)+6u*(size_t)(n)+2u*(size_t)(u)+2u*(size_t)(m)+ \
+    2u*KF_MAX_DIM(n,m)*KF_MAX_DIM(n,m)+2u*KF_MAX_DIM(n,m))
+#define KF_WORKSPACE_BYTES(n,u,m) (((KF_WORKSPACE_FLOATS(n,u,m)*sizeof(float)+(size_t)(m)+ \
+    KF_WORKSPACE_ALIGNMENT-1u)/KF_WORKSPACE_ALIGNMENT)*KF_WORKSPACE_ALIGNMENT)
+/** @brief F/Q为n*n，B为n*u，H为m*n，R为m*m，由调用者填写模型；其他成员由接口维护。
+ * 禁止改写指针和容量。回调中xhat_data/P_data指候选数据，xhatminus/Pminus指本轮预测。
+ */
+typedef struct kf_t {
+    KFConfig_t config;
+    KFResult_t result;
+    uint32_t initialized,last_step_ms,last_seen_ms,last_seen_sequence;
+    uint8_t has_time,has_seen,fatal;
+    uint16_t xhatSize,uSize,zSize;
+    void *workspace;
+    size_t workspace_bytes;
+    float *xhat_data,*P_data,*trial_x,*trial_P,*xhatminus_data,*Pminus_data;
+    float *FilteredValue,*published_P,*corrected_variance;
+    float *F_data,*FT_data,*Q_data,*B_data,*H_data,*HT_data,*K_data,*R_data,*S_data;
+    float *selected_H,*selected_R,*temp_matrix_data,*temp_matrix_data1;
+    float *temp_vector_data,*temp_vector_data1,*MeasuredVector,*z_data;
+    float *ControlVector,*u_data,*StateMinVariance,*inverse_workspace;
+    uint8_t *selected_rows;
+    arm_matrix_instance_f32 xhat,P,xhatminus,Pminus,F,FT,Q,B,H,HT,K,R,S;
+    arm_matrix_instance_f32 temp_matrix,temp_matrix1,temp_vector,temp_vector1,z,u;
 } KalmanFilter_t;
-
-extern uint16_t sizeof_float, sizeof_double;
-
-/**
-* @brief 为滤波器分配矩阵和数据缓冲区。
-* @param kf 目标对象；初始化成功后由它保存分配结果。
-* @param xhatSize 状态个数，须大于0且不小于 zSize。
-* @param uSize 控制输入个数；为0时不分配控制向量和控制矩阵。
-* @param zSize 测量个数，须大于0。
-* @return 成功返回1；空指针、维数不合要求或内存分配失败时返回0。
-* @note 重新初始化已分配过的对象前，先调用 Kalman_Filter_Release，避免旧内存没有释放。
+/** @brief 查询存储要求，不分配内存。
+ * @param[in] config 合法配置，方差比有限且>=1，max_dt_s有限且>0，时限不超过INT32_MAX。
+ * @param[out] bytes 接收字节数，失败保持原值。
+ * @param[out] alignment 接收地址对齐要求，失败保持原值。
+ * @return KF_OK或参数／配置错误。
  */
-uint8_t Kalman_Filter_Init(KalmanFilter_t *kf, uint8_t xhatSize, uint8_t uSize, uint8_t zSize);
-/**
-* @brief 释放初始化时分配的缓冲区。
-* @param kf 已初始化的对象；传入 NULL 时直接返回。
+KFStatus_t KFGetWorkspaceRequirements(const KFConfig_t *config,size_t *bytes,size_t *alignment);
+/** @brief 绑定长期工作区并接受初始状态；成功后先填写模型再更新。
+ * @param[out] filter 实例地址，失败保持原值。
+ * @param[in] config 合法配置，成功复制。
+ * @param[in,out] workspace 满足查询容量和对齐的存储，不能与实例、配置或初始数组重叠。
+ * @param[in] bytes 可写字节数，成功后工作区由该实例独占。
+ * @param[in] state n个有限float，成功复制，后续可释放。
+ * @param[in] covariance n*n个有限float，对角非负，成功复制。
+ * @return KF_OK或具体错误；首次校正前不发布预测。
  */
-void Kalman_Filter_Release(KalmanFilter_t *kf);
-/**
-* @brief 把回调写入的测量和控制输入送入本轮计算。
-* @param kf 已初始化的滤波器；测量数组会在读取后清零，控制数组会被复制。
+KFStatus_t KFInit(KalmanFilter_t *filter,const KFConfig_t *config,void *workspace,
+    size_t bytes,const float *state,const float *covariance);
+/** @brief 接受新起点，清除时间、校正及致命失败历史，保留模型与工作区。
+ * @param[in,out] filter 已初始化实例。
+ * @param[in] state n个有限float，不与工作区重叠。
+ * @param[in] covariance n*n个有限float且对角非负，不与工作区重叠。
+ * @return KF_OK或具体错误；失败保持旧数值，成功后等待首次校正。
  */
-void Kalman_Filter_Measure(KalmanFilter_t *kf);
-/**
-* @brief 根据上一时刻状态预测当前状态；SkipEq1 非零时跳过。
-* @param kf 已初始化且模型矩阵已填写的滤波器。
+KFStatus_t KFReset(KalmanFilter_t *filter,const float *state,const float *covariance);
+/** @brief 预测后尝试校正，完整数值通过检查后才发布。
+ * @param[in,out] filter 已初始化且模型已填写的实例，禁止并发访问同一实例。
+ * @param[in] step 实测dt及同一本机时钟的时间、源序号、量测和存在标记；数组至少count项。
+ * @return KF_OK为校正，KF_PREDICTED为有效预测，负数为无效，原因同时写入result。
+ * @note 无效时旧输出保持，valid清零；超限可用新校正恢复，预测失败须重置。
+ * 时间及序号间隔小于2^31，允许回绕及同毫秒不同序号；存在标记取0或1。
+ * step本身不能与实例或工作区重叠；输入数组只在调用期间使用。
+ * F/Q等离散模型由调用方按dt填写；核心不替调用方选择运动模型。
  */
-void Kalman_Filter_xhatMinusUpdate(KalmanFilter_t *kf);
-/**
-* @brief 预测当前状态的方差；SkipEq2 非零时跳过。
-* @param kf 已初始化且模型矩阵已填写的滤波器。
+KFStatus_t KFUpdate(KalmanFilter_t *filter,const KFStep_t *step);
+/** @brief 复制旧有效数值及当前有效标记，所有输出不得相互重叠或与工作区重叠。
+ * @param[in] filter 已初始化实例，复制期间不能更新。
+ * @param[out] state 至少state_capacity项的可写数组。
+ * @param[in] state_capacity float容量，须>=n。
+ * @param[out] covariance 至少covariance_capacity项的可写数组。
+ * @param[in] covariance_capacity float容量，须>=n*n。
+ * @param[out] result 接收模式、时间、有效性和失败原因。
+ * @return KF_OK表示复制成功，不表示result.valid为1；失败所有输出保持原值。
  */
-void Kalman_Filter_PminusUpdate(KalmanFilter_t *kf);
-/**
-* @brief 根据测量矩阵、测量噪声和预测方差计算修正权重 K；SkipEq3 非零时跳过。
-* @param kf 已初始化且本轮测量矩阵已准备好的滤波器。
- */
-void Kalman_Filter_SetK(KalmanFilter_t *kf);
-/**
-* @brief 用本轮测量修正预测状态；SkipEq4 非零时跳过。
-* @param kf 已初始化且增益已经计算好的滤波器。
- */
-void Kalman_Filter_xhatUpdate(KalmanFilter_t *kf);
-/**
-* @brief 根据 Kalman 增益更新状态方差；SkipEq5 非零时跳过。
-* @param kf 已初始化的滤波器。
- */
-void Kalman_Filter_P_Update(KalmanFilter_t *kf);
-/**
-* @brief 按预测、测量修正和方差更新的顺序完成一轮计算。
-* @param kf 已初始化并填好模型数据的滤波器。
-* @return 指向内部状态结果数组的指针，内容会在下次更新时改写。
-* @note 自动调整模式下，MeasuredVector 中等于0的项会被当作本轮无数据；矩阵运算状态写在 MatStatus 中。
-*       返回指针由滤波器持有，调用者不要释放。
- */
-float *Kalman_Filter_Update(KalmanFilter_t *kf);
-
-#endif //__KALMAN_FILTER_H
+KFStatus_t KFGetState(const KalmanFilter_t *filter,float *state,size_t state_capacity,
+    float *covariance,size_t covariance_capacity,KFResult_t *result);
+#endif

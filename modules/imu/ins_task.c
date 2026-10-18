@@ -23,6 +23,7 @@
 #include "imu_heater.h"
 #include "task_monitor.h"
 #include <math.h>
+#include <string.h>
 
 #define DEG_2_RAD (1.0f / RAD_2_DEGREE) // 角度转弧度, sp_vision_25 协议为弧度制
 
@@ -31,6 +32,12 @@ static IMU_Param_t IMU_Param;
 static BMI088Instance *bmi088_ins;
 static BMI088_Data_t bmi088_data;
 static uint8_t ins_init_result;
+// KF工作区跟随任务存活；20ms和2倍方差是默认软件范围。
+static _Alignas(KF_WORKSPACE_ALIGNMENT) uint8_t qekf_workspace[KF_WORKSPACE_BYTES(6,0,3)];
+static const QEKFConfig_t qekf_config={10.0f,0.001f,1000000.0f,1.0f,0.0f,20u,2.0f,0.020f};
+volatile uint32_t imu_filter_mode_diag=0u;
+volatile uint32_t imu_filter_age_ms_diag=0u;
+volatile int32_t imu_filter_cause_diag=0;
 
 /* Fixed-width symbols used by the bounded, read-only SWD diagnostic tool. */
 volatile uint32_t bmi088_sample_sequence_diag = 0u;
@@ -179,7 +186,7 @@ attitude_t *INS_Init(void)
 
     float init_quaternion[4] = {0};
     InitQuaternion(init_quaternion);
-    if (!IMU_QuaternionEKF_Init(init_quaternion, 10, 0.001, 1000000, 1, 0))
+    if (IMU_QuaternionEKF_Init(init_quaternion, &qekf_config, qekf_workspace, sizeof(qekf_workspace)) != KF_OK)
     {
         IMUHeaterForceOff();
         RobotSafetySetImuValid(0u);
@@ -220,6 +227,7 @@ volatile DWT_Probe_t ins_prof_temp = {0};
 void INS_Task(void)
 {
     static uint32_t count = 0;
+    static float filter_elapsed_s=0.0f;
     const float gravity[3] = {0, 0, 9.81f};
     uint32_t probe_all = DWT_ProbeStart();
     uint32_t probe_seg;
@@ -233,6 +241,7 @@ void INS_Task(void)
     }
 
     dt = DWT_GetDeltaT(&INS_DWT_Count);
+    filter_elapsed_s+=dt;
     t += dt;
 
     // ins update
@@ -276,8 +285,24 @@ void INS_Task(void)
 
         // 核心函数,EKF更新四元数
         probe_seg = DWT_ProbeStart();
-        IMU_QuaternionEKF_Update(INS.Gyro[X], INS.Gyro[Y], INS.Gyro[Z], INS.Accel[X], INS.Accel[Y], INS.Accel[Z], dt);
+        KFStatus_t filter_status=IMU_QuaternionEKF_Update(INS.Gyro[X], INS.Gyro[Y], INS.Gyro[Z],
+            INS.Accel[X], INS.Accel[Y], INS.Accel[Z], filter_elapsed_s, HAL_GetTick(),
+            bmi088_data.timestamp_ms, bmi088_data.sequence);
+        filter_elapsed_s=0.0f;
+        imu_filter_mode_diag=QEKF_INS.IMU_QuaternionEKF.result.mode;
+        imu_filter_age_ms_diag=QEKF_INS.IMU_QuaternionEKF.result.prediction_age_ms;
+        imu_filter_cause_diag=QEKF_INS.IMU_QuaternionEKF.result.cause;
         DWT_ProbeDone(&ins_prof_ekf, probe_seg);
+
+        // 滤波失效立即撤销许可；严重预测失败由显式重置恢复，不重建参考姿态。
+        if ((filter_status!=KF_OK && filter_status!=KF_PREDICTED) || !QEKF_INS.IMU_QuaternionEKF.result.valid)
+        {
+            imu_sample_valid_diag=0u;
+            RobotSafetySetImuValid(0u);
+            VisionUpdateTx(0u,0,0,0,0,0,0,0,0,VISION_BULLET_SPEED_DEFAULT,0u);
+            IMUHeaterUpdate(NULL,1u);
+            goto ins_sample_processed;
+        }
 
         memcpy(INS.q, QEKF_INS.q, sizeof(QEKF_INS.q));
 
@@ -326,7 +351,7 @@ void INS_Task(void)
     {
         probe_seg = DWT_ProbeStart();
         Robot_Status_e state = RobotSafetyGetState();
-        uint8_t force_off = (state == ROBOT_ESTOP || state == ROBOT_FAULT) ? 1 : 0;
+        uint8_t force_off = (state == ROBOT_ESTOP || state == ROBOT_FAULT || !imu_sample_valid_diag) ? 1 : 0;
         IMUHeaterUpdate(&bmi088_data, force_off);
         DWT_ProbeDone(&ins_prof_temp, probe_seg);
     }

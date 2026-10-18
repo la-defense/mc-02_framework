@@ -1,0 +1,4 @@
+# 厂商文件逐字节保留，避免Windows换行转换使来源校验值失效。
+Include/** -text
+Source/** -text
+LICENSE.txt -text
