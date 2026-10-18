@@ -20,7 +20,7 @@
 
 | 模块 | 内容 |
 |---|---|
-| 基础/算法 | general_def 6 个单位换算宏、user_lib `floatEqual`+清理、RLS 递归最小二乘辨识器 |
+| 基础/算法 | general_def 单位换算；原 user_lib 已按 MC02-0076 拆为标量／角度、向量和采样平均接口；RLS 使用调用者工作区 |
 | alarm | `alarm_def.h` 公共枚举、buzzer 重命名+`BuzzerSetOctave`、新增 LED 模块（用 WS2812 经 SPI6，替代远程 htim5 三路 PWM） |
 | motor | `Motor_Online_Flag_e`/`enable` 字段、`DR04`/`XMCY` 类型、`DJIMotorIsOnline`/`DJIMotorCloseLoop`、XMmotor 骨架、DRmotor 占位、HT04 扭矩系数宏 |
 | power | `power_manager.c/.h` 功率管理（k1/k2/k3 模型，RLS 待启用） |

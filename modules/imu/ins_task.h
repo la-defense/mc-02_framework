@@ -79,9 +79,10 @@ typedef struct
 
 /**
 * @brief 注册 BMI088 并准备姿态解算所需的滤波器。
-* @return 返回内部姿态数据地址；卡尔曼滤波器初始化失败时返回 NULL。
+* @return 返回内部姿态数据地址；初始姿态计算或卡尔曼滤波器初始化失败时返回 NULL。
 * @note 由 StartINSTASK 在 INS 专属任务中调用。BMI088 初始化失败时仍返回地址，
 *       但 IMU 状态会标记为无效，应用不得使用旧姿态作为有效数据。
+*       返回NULL时关闭加热并撤销IMU及标定许可；重复调用保持该失败，不自动重建参考。
  */
 attitude_t *INS_Init(void);
 

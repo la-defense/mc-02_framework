@@ -1,6 +1,15 @@
 # 主机行为回归入口：CMake 配置后构建，再用 CTest 执行；硬件操作不在此处运行。
 cmake_minimum_required(VERSION 3.16)
 project(mc02_host_tests C)
+# 生产纯数值模块供独立测试和INS／BMI088／HT04调用方共同链接。
+add_library(mc02_numeric STATIC ../../modules/algorithm/math_utils.c
+  ../../modules/algorithm/vector3.c ../../modules/algorithm/sample_filter.c)
+target_include_directories(mc02_numeric PUBLIC ../../modules/algorithm)
+target_compile_features(mc02_numeric PUBLIC c_std_11)
+target_compile_options(mc02_numeric PRIVATE -fno-fast-math)
+if(UNIX)
+  target_link_libraries(mc02_numeric PUBLIC m)
+endif()
 include(../../cmake/mc02_dsp.cmake)
 mc02_add_dsp(mc02_dsp_host TRUE)
 add_library(mc02_kf STATIC ../../modules/algorithm/kalman_filter.c ../../modules/algorithm/dsp_matrix.c)
@@ -59,6 +68,25 @@ endif()
 foreach(scenario IN ITEMS numeric improvements failures blocked instances timing)
   add_test(NAME production_pid_${scenario} COMMAND pid_test ${scenario})
   set_tests_properties(production_pid_${scenario} PROPERTIES TIMEOUT 15)
+endforeach()
+
+# 标量、向量、平均和多历史分别报告，全部在Release运行且限制执行时间。
+add_executable(math_utils_test math_utils_test.c)
+target_link_libraries(math_utils_test PRIVATE mc02_numeric)
+target_compile_options(math_utils_test PRIVATE -Wall -Wextra -Werror)
+if(UNIX)
+  find_package(Threads REQUIRED)
+  target_link_libraries(math_utils_test PRIVATE Threads::Threads)
+  target_compile_definitions(math_utils_test PRIVATE MATH_TEST_THREADS=1)
+endif()
+if(UNIX AND NOT APPLE)
+  target_compile_definitions(math_utils_test PRIVATE MATH_TEST_ALLOC_WRAP=1)
+  target_link_options(math_utils_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc
+    -Wl,--wrap=realloc -Wl,--wrap=free)
+endif()
+foreach(scenario IN ITEMS scalars vectors average instances)
+  add_test(NAME production_numeric_${scenario} COMMAND math_utils_test ${scenario})
+  set_tests_properties(production_numeric_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
 add_executable(motor_pid_integration_test motor_pid_integration_test.c
   ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_pid.c
@@ -127,8 +155,14 @@ add_test(NAME production_dsp_matrix_and_trigonometry COMMAND dsp_numeric_test)
 add_executable(ins_filter_test ins_filter_test.c ../../modules/imu/ins_task.c ../../modules/algorithm/QuaternionEKF.c)
 target_include_directories(ins_filter_test BEFORE PRIVATE ins_filter_fakes)
 target_include_directories(ins_filter_test PRIVATE ../../modules/imu ../../modules/BMI088)
-target_link_libraries(ins_filter_test PRIVATE mc02_kf)
+target_link_libraries(ins_filter_test PRIVATE mc02_kf mc02_numeric)
 add_test(NAME production_ins_filter_validity_and_recovery COMMAND ins_filter_test)
+add_test(NAME production_ins_numeric_init_failure COMMAND ins_filter_test --math-failure)
+foreach(direction IN ITEMS tilt inverted zero short)
+  add_test(NAME production_ins_numeric_initial_${direction} COMMAND ins_filter_test --initial-${direction})
+  set_tests_properties(production_ins_numeric_initial_${direction} PROPERTIES TIMEOUT 10)
+endforeach()
+set_tests_properties(production_ins_numeric_init_failure PROPERTIES TIMEOUT 10)
 if(UNIX AND NOT APPLE)
   find_package(Threads REQUIRED)
   target_compile_definitions(ins_filter_test PRIVATE INS_TEST_INIT_WRAP=1)
@@ -620,4 +654,35 @@ endif()
 foreach(scenario IN ITEMS math workspace failures instances)
   add_test(NAME production_rls_${scenario} COMMAND rls_test ${scenario})
   set_tests_properties(production_rls_${scenario} PROPERTIES TIMEOUT 30)
+endforeach()
+
+# HT04生产接收回调保留真实平均和PID，只替换CAN、任务及计时。
+add_executable(ht_numeric_test ht_numeric_test.c ../../modules/motor/HTmotor/HT04.c
+  ../../modules/motor/motor_pid.c ../../modules/algorithm/controller.c)
+target_include_directories(ht_numeric_test BEFORE PRIVATE ht_numeric_fakes motor_pid_fakes)
+target_include_directories(ht_numeric_test PRIVATE ../../modules/motor/HTmotor
+  ../../modules/motor ../../modules/daemon)
+target_link_libraries(ht_numeric_test PRIVATE mc02_numeric)
+add_test(NAME production_ht_numeric_feedback COMMAND ht_numeric_test)
+set_tests_properties(production_ht_numeric_feedback PROPERTIES TIMEOUT 10)
+
+# 模长与分配失败注入仅在支持链接包装的Linux运行，其余路径仍执行真实计算。
+if(UNIX AND NOT APPLE)
+  add_executable(bmi088_numeric_test bmi088_numeric_test.c bmi088_host_fixture.c
+    ../../modules/BMI088/bmi088.c)
+  target_include_directories(bmi088_numeric_test BEFORE PRIVATE bmi088_fakes)
+  target_include_directories(bmi088_numeric_test PRIVATE ../../modules/BMI088)
+  target_link_options(bmi088_numeric_test PRIVATE -Wl,--wrap=Vec3NormF32 -Wl,--wrap=calloc)
+  foreach(scenario IN ITEMS once persistent allocation)
+    add_test(NAME production_bmi088_numeric_${scenario} COMMAND bmi088_numeric_test ${scenario})
+    set_tests_properties(production_bmi088_numeric_${scenario} PROPERTIES TIMEOUT 10)
+  endforeach()
+endif()
+# BMI088只替换传输等硬件，其标定使用真实向量算法。
+foreach(target IN ITEMS bmi088_calibration_temperature_test bmi088_init_failure_test
+    bmi088_post_reset_dummy_read_test bmi088_init_write_error_test bmi088_sample_status_test
+    bmi088_numeric_test)
+  if(TARGET ${target})
+    target_link_libraries(${target} PRIVATE mc02_numeric)
+  endif()
 endforeach()

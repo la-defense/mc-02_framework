@@ -1,3 +1,7 @@
+/** @file bmi088_host_fixture.c
+ * @brief 为生产BMI088提供SPI寄存器、时钟和参数替身；数值计算由真实算法完成。
+ * @note 先调用BMI088HostReset，再配置测试条件，不连接真实外设。
+ */
 #include "bmi088_host_fixture.h"
 #include "bmi088_regNdef.h"
 #include "imu_heater.h"
@@ -232,12 +236,6 @@ void TaskMonitorDelayMs(TaskMonitor_Id_e id, uint32_t milliseconds)
     }
 }
 
-float NormOf3d(float vector[3])
-{
-    return sqrtf(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]);
-}
-
-void *zmalloc(size_t size) { return calloc(1u, size); }
 PID_Status_e PIDInit(PIDInstance *pid, const PID_Init_Config_s *config) { (void)pid; (void)config; return PID_OK; }
 PWMInstance *PWMRegister(PWM_Init_Config_s *config) { (void)config; return NULL; }
 GPIOInstance *GPIORegister(GPIO_Init_Config_s *config) { (void)config; return NULL; }

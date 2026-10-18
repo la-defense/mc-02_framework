@@ -14,7 +14,7 @@
 #include "QuaternionEKF.h"
 #include "spi.h"
 #include "tim.h"
-#include "user_lib.h"
+#include "vector3.h"
 #include "general_def.h"
 #include "master_process.h"
 #include "arm_math.h"
@@ -57,7 +57,7 @@ static float dt = 0, t = 0;
 static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[3]);
 
 // 用初始加速度估计倾斜角；静止时加速度能表示重力方向，偏航角仍从0开始。
-static void InitQuaternion(float *init_q4)
+static MathStatus_t InitQuaternion(float *init_q4)
 {
     float acc_init[3] = {0};
     float gravity_norm[3] = {0, 0, 1}; // 导航系重力方向；这里的向量长度为1
@@ -89,24 +89,34 @@ static void InitQuaternion(float *init_q4)
         acc_init[Z] = 1.0f;
     }
     // 加速度长度接近0时改用向上的方向，避免后续除以0。
-    if (NormOf3d(acc_init) < 1e-6f)
+    float acc_length;
+    MathStatus_t math_status = Vec3NormF32(acc_init, &acc_length);
+    if (math_status != MATH_OK) return math_status;
+    if (acc_length < 1e-6f)
     {
         acc_init[0] = 0.0f;
         acc_init[1] = 0.0f;
         acc_init[2] = 1.0f;
     }
     // 除以向量长度，把加速度方向的长度调整为1。
-    Norm3d(acc_init);
+    math_status = Vec3NormalizeF32(acc_init, acc_init);
+    if (math_status != MATH_OK) return math_status;
     // 计算原始加速度矢量和导航系重力加速度矢量的夹角
-    float dot = Dot3d(acc_init, gravity_norm);
+    float dot;
+    math_status = Vec3DotF32(acc_init, gravity_norm, &dot);
+    if (math_status != MATH_OK) return math_status;
     if (dot > 1.0f)
         dot = 1.0f;
     else if (dot < -1.0f)
         dot = -1.0f;
     float angle = acosf(dot);
 
-    Cross3d(acc_init, gravity_norm, axis_rot);
-    if (NormOf3d(axis_rot) < 1e-6f)
+    math_status = Vec3CrossF32(acc_init, gravity_norm, axis_rot);
+    if (math_status != MATH_OK) return math_status;
+    float axis_length;
+    math_status = Vec3NormF32(axis_rot, &axis_length);
+    if (math_status != MATH_OK) return math_status;
+    if (axis_length < 1e-6f)
     {
         // 加速度与重力平行: 水平时为初始姿态(单位四元数), 倒置时绕 X 轴转 180°
         if (dot < 0.0f)
@@ -123,12 +133,18 @@ static void InitQuaternion(float *init_q4)
     else
     {
         // 旋转轴也要调整为长度1，才能用于四元数计算。
-        Norm3d(axis_rot);
+        math_status = Vec3NormalizeF32(axis_rot, axis_rot);
+        if (math_status != MATH_OK) return math_status;
     }
 
-    init_q4[0] = cosf(angle / 2.0f);
+    float candidate[4] = {cosf(angle / 2.0f), 0.0f, 0.0f, 0.0f};
     for (uint8_t i = 0; i < 2; ++i)
-        init_q4[i + 1] = axis_rot[i] * sinf(angle / 2.0f); // 轴角公式,第三轴为0(没有z轴分量)
+        candidate[i + 1] = axis_rot[i] * sinf(angle / 2.0f); // 轴角公式,第三轴为0(没有z轴分量)
+    // 整份初值有限后才交给EKF，失败不发布部分姿态。
+    for (uint8_t i = 0u; i < 4u; ++i)
+        if (!isfinite(candidate[i])) return MATH_NONFINITE;
+    memcpy(init_q4, candidate, sizeof(candidate));
+    return MATH_OK;
 }
 
 attitude_t *INS_Init(void)
@@ -187,8 +203,8 @@ attitude_t *INS_Init(void)
     IMU_Param.flag = 1;
 
     float init_quaternion[4] = {0};
-    InitQuaternion(init_quaternion);
-    if (IMU_QuaternionEKF_Init(init_quaternion, &qekf_config, qekf_workspace, sizeof(qekf_workspace)) != KF_OK)
+    if (InitQuaternion(init_quaternion) != MATH_OK ||
+        IMU_QuaternionEKF_Init(init_quaternion, &qekf_config, qekf_workspace, sizeof(qekf_workspace)) != KF_OK)
     {
         IMUHeaterForceOff();
         RobotSafetySetImuValid(0u);

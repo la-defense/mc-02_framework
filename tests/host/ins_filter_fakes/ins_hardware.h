@@ -37,8 +37,4 @@ uint8_t RobotSafetyIsReady(void);
 void VisionUpdateTx(uint8_t mode,float w,float x,float y,float z,float yaw,float vyaw,float pitch,float vpitch,float speed,uint8_t flag);
 #define TASK_MONITOR_INS 0
 void TaskMonitorDelayMs(int task,uint32_t ms);
-float NormOf3d(float *v);
-void Norm3d(float *v);
-float Dot3d(float *a,float *b);
-void Cross3d(float *a,float *b,float *out);
 #endif

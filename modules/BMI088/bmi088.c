@@ -6,7 +6,7 @@
 #include "bmi088_regNdef.h"
 #include "bmi088.h"
 #include "bmi088_temperature.h"
-#include "user_lib.h"
+#include "vector3.h"
 #include "daemon.h"
 #include "bsp_log.h"
 #include "bsp_param.h"
@@ -17,6 +17,7 @@
 #include "bsp_dwt.h"
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 volatile uint32_t bmi088_init_error = BMI088_NO_ERROR;
 volatile uint32_t bmi088_init_retry_count = 0u;
@@ -566,13 +567,18 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
                     continue;
                 }
                 cali_diag_acq_ok++;
+                // 数学失败的样本不计数、不累加，仍受本轮总超时限制。
+                if (Vec3NormF32(raw_data.acc, &gNormTemp) != MATH_OK)
+                {
+                    DWT_Delay(0.0005);
+                    continue;
+                }
                 valid_samples++;
                 uint32_t acq_us = DWT_ProbeElapsedUs(diag_acq);
                 if (acq_us > cali_diag_acq_us_max)
                     cali_diag_acq_us_max = acq_us;
-                cali_diag_acc_norm = NormOf3d(raw_data.acc);
+                cali_diag_acc_norm = gNormTemp;
                 cali_diag_gyro_x = raw_data.gyro[0];
-                gNormTemp = NormOf3d(raw_data.acc);
                 _bmi088->gNorm += gNormTemp; // 计算范数并累加,最后除以calib times获取单次值
                 for (uint8_t ii = 0; ii < 3; ii++)
                     _bmi088->gyro_offset[ii] += raw_data.gyro[ii]; // 因为标定时传感器静止,所以采集到的值就是漂移,累加当前值,最后除以calib times获得零飘
@@ -982,7 +988,7 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     config = &local_config;
 
     // 申请内存
-    BMI088Instance *bmi088_instance = (BMI088Instance *)zmalloc(sizeof(BMI088Instance));
+    BMI088Instance *bmi088_instance = (BMI088Instance *)calloc(1u, sizeof(BMI088Instance));
     if (bmi088_instance == NULL)
     {
         bmi088_init_error = BMI088_NO_SENSOR;

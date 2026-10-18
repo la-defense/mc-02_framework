@@ -7,7 +7,7 @@
 #include <math.h>
 #include "memory.h"
 #include "general_def.h"
-#include "user_lib.h"
+#include "sample_filter.h"
 #include "cmsis_os.h"
 #include "string.h"
 #include "daemon.h"
@@ -58,19 +58,25 @@ static void HTMotorDecode(CANInstance *motor_can)
     HTMotorInstance *motor = (HTMotorInstance *)motor_can->id;
     HTMotor_Measure_t *measure = &(motor->measure); // 将can实例中保存的id转换成电机实例的指针
 
-    DaemonReload(motor->motor_daemon);
-    measure->feed_dt = DWT_GetDeltaT(&measure->feed_cnt);
-
-    measure->last_angle = measure->total_angle;
+    HTMotor_Measure_t candidate = *measure;
+    candidate.last_angle = measure->total_angle;
     tmp = (uint16_t)((rxbuff[1] << 8) | rxbuff[2]);
-    measure->total_angle = uint_to_float(tmp, P_MIN, P_MAX, 16);
+    candidate.total_angle = uint_to_float(tmp, P_MIN, P_MAX, 16);
 
     tmp = (uint16_t)(rxbuff[3] << 4) | (rxbuff[4] >> 4);
-    measure->speed_rads = AverageFilter((uint_to_float(tmp, V_MIN, V_MAX, 12) - HT_SPEED_BIAS), measure->speed_buff, SPEED_BUFFER_SIZE);
+    // 先在本地历史上平均，失败时整份反馈和接收计时保持原样。
+    if (MovingAverageF32(uint_to_float(tmp, V_MIN, V_MAX, 12) - HT_SPEED_BIAS,
+                         candidate.speed_buff, SPEED_BUFFER_SIZE, SPEED_BUFFER_SIZE,
+                         &candidate.speed_rads) != MATH_OK)
+        return;
 
     tmp = (uint16_t)(((rxbuff[4] & 0x0f) << 8) | rxbuff[5]);
-    measure->real_current = CURRENT_SMOOTH_COEF * uint_to_float(tmp, T_MIN, T_MAX, 12) +
+    candidate.real_current = CURRENT_SMOOTH_COEF * uint_to_float(tmp, T_MIN, T_MAX, 12) +
                             (1 - CURRENT_SMOOTH_COEF) * measure->real_current;
+    if (!isfinite(candidate.real_current)) return;
+    candidate.feed_dt = DWT_GetDeltaT(&candidate.feed_cnt);
+    *measure = candidate;
+    DaemonReload(motor->motor_daemon);
 }
 
 static void HTMotorLostCallback(void *motor_ptr)

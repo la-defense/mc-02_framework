@@ -6,7 +6,6 @@
 #include "bsp_dwt.h"
 #include "memory.h"
 #include "general_def.h"
-#include "user_lib.h"
 #include "cmsis_os.h"
 #include "string.h"
 #include "daemon.h"

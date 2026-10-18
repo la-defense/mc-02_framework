@@ -1,5 +1,7 @@
 # 业务文件注释检查清单（MC02-0107）
 
+MC02-0076将原user_lib拆为标量／角度、三维向量和采样平均入口。表内原文件名和行号保留检查时的含义，链接转到当前对应文件；当前用法见[算法入口](../../../modules/algorithm/algorithm.md)。
+
 MC02-0079迁移后，六个旧CRC文件的链接指向当前统一入口；原文件名、行号、讨论编号和检查结论保留为当时依据，当前用法见[教学20](../../学习笔记/20-SP固定帧与CRC校验.md)。
 
 本清单供你选择需要补注释的文件。检查对象为 `8111ccf4ce4e67a12daf5f6ec8a1967a6041fb7f` 中已跟踪的业务 C/C++ 源码和头文件，共 **178 份**。本轮只新增报告和配套教学说明，业务源码保持原样；后续补注释的文件由你选定。任务记录见 [MC02-0107](../../../.Doc/TODO.md)，规范见 [student-code-comments](../../../.agents/skills/student-code-comments/SKILL.md)。
@@ -142,8 +144,8 @@ MC02-0079迁移后，六个旧CRC文件的链接指向当前统一入口；原�
 | 080 | [modules/algorithm/controller.c:146](../../../modules/algorithm/controller.c#L146) | 混合修改；位置 `6c2f74b`；最近 `fa22f0c` | 重点 | PIDCalculate 的源内说明写“返回空”，实际返回 float；内部辅助函数说明密度不一致。 | 校正返回说明并与头文件去重，补积分停止等容易误解的选择原因。 |
 | 086 | [modules/algorithm/kalman_filter.c:145](../../../modules/algorithm/kalman_filter.c#L145) | 混合修改；位置 `6c2f74b`；最近 `ba149d5` | 重点 | 原初始化注释紧贴 Kalman_Filter_Release 定义，参数说明与函数错位；分配失败清理路径缺少说明，文件头示例过长。 | 校正注释位置，说明分配/释放及失败处理，保留必要算法步骤并压缩示例。 |
 | 087 | [modules/algorithm/kalman_filter.h:115](../../../modules/algorithm/kalman_filter.h#L115) | 混合修改；位置 `ba149d5`；最近 `ba149d5` | 重点 | 初始化、释放和更新等公开函数只有声明；维数、初始化失败、返回数据保存位置和有效期未说明。 | 补中文 Doxygen，解释调用顺序、内存释放及各分步入口。 |
-| 088 | [modules/algorithm/user_lib.c:175](../../../modules/algorithm/user_lib.c#L175) | 混合修改；位置 `6c2f74b`；最近 `ba149d5` | 一般 | 含“归一化”等词，部分步骤只有英文；AverageFilter 写删除最后一个元素，实际向前移动后替换末项。 | 改为具体向量处理说明，校正均值滤波步骤，补文件用途。 |
-| 089 | [modules/algorithm/user_lib.h:107](../../../modules/algorithm/user_lib.h#L107) | 混合修改；位置 `6c2f74b`；最近 `47133e8` | 重点 | 向量、矩阵和均值滤波函数无接口说明；是否改写原数组、数组长度、返回地址及有效输入条件不清楚。 | 补中文 Doxygen 和会修改输入的说明，保留角度与长度单位。 |
+| 088 | [modules/algorithm/user_lib.c:175](../../../modules/algorithm/vector3.c) | 混合修改；位置 `6c2f74b`；最近 `ba149d5` | 一般 | 含“归一化”等词，部分步骤只有英文；AverageFilter 写删除最后一个元素，实际向前移动后替换末项。 | 改为具体向量处理说明，校正均值滤波步骤，补文件用途。 |
+| 089 | [modules/algorithm/user_lib.h:107](../../../modules/algorithm/vector3.h) | 混合修改；位置 `6c2f74b`；最近 `47133e8` | 重点 | 向量、矩阵和均值滤波函数无接口说明；是否改写原数组、数组长度、返回地址及有效输入条件不清楚。 | 补中文 Doxygen 和会修改输入的说明，保留角度与长度单位。 |
 | 092 | [modules/can_comm/can_comm.c:33](../../../modules/can_comm/can_comm.c#L33) | 混合修改；位置 `d2a503b`；最近 `d2a503b` | 重点 | 新增单帧过期、整包拼接超时、复制前清零输出等选择缺少说明；文件无整体收发流程。 | 解释何时放弃未收齐的数据、CRC通过后才发布及读取失败为何清零。 |
 | 093 | [modules/can_comm/can_comm.h:84](../../../modules/can_comm/can_comm.h#L84) | 混合修改；位置 `d2a503b`；最近 `d2a503b` | 重点 | 新增 CANCommGetSnapshot 无任何接口说明；旧指针读取未说明何时会被覆盖，在线返回值仍空泛。 | 补复制读取的参数、时间单位、失败清零和指针读取注意事项。 |
 | 094 | [modules/daemon/daemon.c:80](../../../modules/daemon/daemon.c#L80) | 混合修改；位置 `6c2f74b`；最近 `ba149d5` | 一般 | 末尾保留“下面是copilot的回答”和简单电机例子，长度超出实际说明需要；无文件用途概述。 | 把 owner_id 用途压成一句，补注销循环和只报告一次掉线的说明。 |

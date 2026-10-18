@@ -1,5 +1,7 @@
 # MC-02 通用框架逐文件讨论记录
 
+MC02-0076将原user_lib拆为标量／角度、三维向量和采样平均入口。下表原文件名及讨论编号保留历史含义，链接转到当前文件；当前用法见[算法入口](../../../modules/algorithm/algorithm.md)。
+
 MC02-0079迁移后，六个旧CRC文件的链接指向当前统一入口；原文件名、行号、讨论编号和检查结论保留为当时依据，当前用法见[教学20](../../学习笔记/20-SP固定帧与CRC校验.md)。
 
 讨论汇总与登记选择日期：2026-10-15～16（Asia/Shanghai）。本文保留文件用途和讨论依据，不维护任务进度；唯一任务状态见 [TODO](../../../.Doc/TODO.md)，本轮实施范围和验收设计见[范围规格](../specs/robomaster-framework-evolution.md)。
@@ -196,8 +198,8 @@ modules/        安全管理、任务监控、消息、来源监控、电机、�
 | 126 | [modules/algorithm/QuaternionEKF.h](../../../modules/algorithm/QuaternionEKF.h) | 姿态 EKF 状态和接口 | 按配置支持多实例，各自独立状态、工作区和坐标系；外置设备已提供合格姿态时可直接适配。 |
 | 127 | [modules/algorithm/RLS.c](../../../modules/algorithm/RLS.c) | 递推最小二乘参数辨识 | 本轮修复数学实现及数值／初始化失败处理，接入可配置功率模型在线辨识；需可信功率测量与时间匹配，否则固定模型。 |
 | 128 | [modules/algorithm/RLS.h](../../../modules/algorithm/RLS.h) | 辨识参数、质量和结果接口 | 通过质量检查后自动逐步应用，变化速率配置；异常回退已验证固定模型，候选与生效模型分别查询。 |
-| 129 | [modules/algorithm/user_lib.c](../../../modules/algorithm/user_lib.c) | 角度、向量、数值和其他通用工具实现 | 内部校验非法输入，计算有界且明确返回状态，失败不改变原有效结果。 |
-| 130 | [modules/algorithm/user_lib.h](../../../modules/algorithm/user_lib.h) | 通用数值工具声明及依赖 | 按角度／向量、滤波、矩阵等职责分类，按需引用，纯数值计算移除 HAL／RTOS 依赖。 |
+| 129 | [modules/algorithm/user_lib.c](../../../modules/algorithm/math_utils.c) | 角度、向量、数值和其他通用工具实现 | 内部校验非法输入，计算有界且明确返回状态，失败不改变原有效结果。 |
+| 130 | [modules/algorithm/user_lib.h](../../../modules/algorithm/math_utils.h) | 通用数值工具声明及依赖 | 按角度／向量、滤波、矩阵等职责分类，按需引用，纯数值计算移除 HAL／RTOS 依赖。 |
 
 ### 131–139：BMI088 与姿态服务
 
