@@ -88,6 +88,23 @@ foreach(scenario IN ITEMS scalars vectors average instances)
   add_test(NAME production_numeric_${scenario} COMMAND math_utils_test ${scenario})
   set_tests_properties(production_numeric_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
+# 四类生产滤波共享公开入口；参考、失败、并发及频率响应分别报告。
+add_executable(sample_filter_test sample_filter_test.c)
+target_link_libraries(sample_filter_test PRIVATE mc02_numeric)
+target_compile_options(sample_filter_test PRIVATE -Wall -Wextra -Werror)
+if(UNIX)
+  target_link_libraries(sample_filter_test PRIVATE Threads::Threads)
+  target_compile_definitions(sample_filter_test PRIVATE FILTER_TEST_THREADS=1)
+endif()
+if(UNIX AND NOT APPLE)
+  target_compile_definitions(sample_filter_test PRIVATE FILTER_TEST_ALLOC_WRAP=1)
+  target_link_options(sample_filter_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc
+    -Wl,--wrap=realloc -Wl,--wrap=free)
+endif()
+foreach(scenario IN ITEMS reference failures instances response)
+  add_test(NAME production_sample_filter_${scenario} COMMAND sample_filter_test ${scenario})
+  set_tests_properties(production_sample_filter_${scenario} PROPERTIES TIMEOUT 15)
+endforeach()
 add_executable(motor_pid_integration_test motor_pid_integration_test.c
   ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c)

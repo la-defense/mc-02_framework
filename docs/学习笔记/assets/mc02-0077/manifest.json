@@ -1,0 +1,18 @@
+{
+  "matplotlib": "3.10.0",
+  "numpy": "2.2.6",
+  "source_sha256": {
+    "modules/algorithm/sample_filter.h": "11c486d78232bedbc9ae2b9da343dd9acaa35814f9eb205c539356ea69615c9c",
+    "modules/algorithm/sample_filter.c": "8e540982720435197921fad9650198cb5768d70387aacff9ce552e46ab345f35",
+    "tests/host/sample_filter_test.c": "7722bf9af85f3d4e6caced8c5e466ec1ee503aebe945cb0a256fd0da179ce435",
+    "tools/workflow/plot_sample_filter.py": "6fbe276bac882fedc3572230dc941c6259340664bf917d6c1dc926c7b0b504bd",
+    "tools/workflow/requirements-filter-plots.txt": "3dafbbc224efe3827936eac88c1dd70c2a4380e22374491c1712b62e512fa875"
+  },
+  "artifact_sha256": {
+    "responses_step.csv": "868aba8bb273e6ea9255ba403c057b16fb4a5ad6a5ca622da530de49b0eb4f00",
+    "responses_frequency.csv": "ba6f3b917c07cbefbfce7558e1ed39c03649692507f651b7d4be4edd87c5ca92",
+    "responses.svg": "f197ff27af0bc327f995967d73801ce95e6aec78b285b93c63c806ee51d21f4f",
+    "responses.png": "2d9a7117536c7484319d3268fc557b6a157dbb14c072a03eba650525060528fa",
+    "summary.md": "fa5c17094fb1758cf051c265138ea3dcf8629ac755b1adffaccefc12c84f6583"
+  }
+}
