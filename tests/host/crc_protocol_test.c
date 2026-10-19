@@ -16,8 +16,15 @@ static uint32_t now_ms, reloads, usb_sends, uart_sends;
 static uint8_t usb_bytes[64], uart_bytes[255], sent[512];
 static uint16_t sent_length;
 static void (*usb_callback)(uint16_t);
-static void (*uart_callback)(void);
-static USARTInstance uart_instance = {uart_bytes, 0u};
+static usart_module_callback uart_callback;
+static void *uart_context;
+static uint32_t uart_sequence;
+static void deliver_uart(size_t length)
+{
+    const USART_RxBlock_t block = {uart_bytes,length,now_ms,++uart_sequence};
+    uart_callback(uart_context,&block);
+}
+static USARTInstance uart_instance = {0};
 static DaemonInstance daemon_instance;
 
 uint32_t HAL_GetTick(void) { return now_ms; }
@@ -26,8 +33,8 @@ uint8_t DaemonUnregister(DaemonInstance *instance) { (void)instance; return 1u; 
 void DaemonReload(DaemonInstance *instance) { (void)instance; ++reloads; }
 uint8_t DaemonIsOnline(DaemonInstance *instance) { (void)instance; return 1u; }
 USARTInstance *USARTRegister(USART_Init_Config_s *config)
-{ uart_callback = config->module_callback; return &uart_instance; }
-void USARTServiceInit(USARTInstance *instance) { (void)instance; }
+{ uart_callback = config->module_callback; uart_context=config->context; return &uart_instance; }
+uint8_t USARTServiceInit(USARTInstance *instance) { (void)instance; return 1u; }
 void USARTSend(USARTInstance *instance, uint8_t *data, uint16_t length, int mode)
 {
     (void)instance; (void)mode;
@@ -98,18 +105,18 @@ int main(void)
     frame[4] = (uint8_t)reference(frame, 4u, 0x8cu, 0xffu);
     uint16_t tail = (uint16_t)reference(frame, 8u, 0x8408u, 0xffffu);
     frame[8] = (uint8_t)tail; frame[9] = (uint8_t)(tail >> 8u);
-    memcpy(uart_bytes, frame, sizeof(frame)); uart_instance.last_recv_size = sizeof(frame);
-    now_ms = 20u; uart_callback();
+    memcpy(uart_bytes, frame, sizeof(frame));
+    now_ms = 20u; deliver_uart(sizeof(frame));
     TEST_CHECK(RefereeGetLastRxMs() == 20u && info->CmdID == 2u);
     referee_info_t saved = *info; old_reloads = reloads;
     // 分别让帧头与整帧计算失败，都不能刷新时间或发布字段。
     for (int failure = 0; failure < 2; ++failure)
     {
-        crc_fail_after = failure; now_ms = 21u; uart_callback();
+        crc_fail_after = failure; now_ms = 21u; deliver_uart(sizeof(frame));
         TEST_CHECK(RefereeGetLastRxMs() == 20u && reloads == old_reloads);
         TEST_CHECK(memcmp(&saved, info, sizeof(saved)) == 0);
     }
-    uart_bytes[7] ^= 1u; now_ms = 22u; uart_callback();
+    uart_bytes[7] ^= 1u; now_ms = 22u; deliver_uart(sizeof(frame));
     TEST_CHECK(RefereeGetLastRxMs() == 20u && reloads == old_reloads);
 
     referee_id_t id = {.Robot_ID = 1u, .Cilent_ID = 0x101u};

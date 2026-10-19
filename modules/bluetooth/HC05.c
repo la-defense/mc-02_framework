@@ -15,31 +15,26 @@ static USARTInstance *hc05_usart_instance;    // HC05串口通信实例
 static uint8_t hc05_init_flag = 0;  // HC05初始化标志位
 
 // *hc05_usart_instance串口回调函数
-static void HC05RxCallback()
+static void HC05RxCallback(void *context, const USART_RxBlock_t *block)
 {
-    uint8_t *rxbuff;
-    rxbuff = hc05_usart_instance->recv_buff;
-
-    // 帧头帧尾判断
-    if(rxbuff[0] == FRAME_HEAD && rxbuff[HC05_BUFFERSIZE - 1] == FRAME_END)
-    {
-        // 跳过帧头，只复制四字节内容；帧头或帧尾不对则保留上一次接收值。
-        for(int i = 0; i < HC05_DATASIZE; i++)
-            hc05_msg.recv_data[i] = (uint8_t)rxbuff[i+1];
-    }
-    
-    return;
+    HC05 *message = context;
+    if (message == NULL || block->data == NULL || block->length != HC05_BUFFERSIZE) return;
+    const uint8_t *rxbuff = block->data;
+    if (rxbuff[0] == FRAME_HEAD && rxbuff[HC05_BUFFERSIZE - 1] == FRAME_END)
+        for (int i = 0; i < HC05_DATASIZE; ++i) message->recv_data[i] = rxbuff[i + 1];
 }
 
 // HC05串口接收初始化
 HC05 *HC05Init(UART_HandleTypeDef *hc05_usart_handle)
 {
-    USART_Init_Config_s conf;
+    USART_Init_Config_s conf = {0};
+    conf.context = &hc05_msg;
     conf.module_callback = HC05RxCallback;
     conf.usart_handle = hc05_usart_handle;
     conf.recv_buff_size = HC05_BUFFERSIZE;
     hc05_usart_instance = USARTRegister(&conf);
 
+    if (hc05_usart_instance == NULL) return NULL;
     hc05_init_flag = 1;
     return (HC05*)&hc05_msg;
 }

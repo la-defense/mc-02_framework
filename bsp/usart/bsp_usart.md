@@ -2,79 +2,39 @@
 
 <p align='right'>neozng1@hnu.edu.cn</p>
 
-> TODO: 增加发送队列以解决短时间内调用`USARTSend()`发生丢包的问题,目前仅支持DMA。还需要提供阻塞和IT模式以供选择，参考bspiic和spi进行实现。
-> 可以直接在发送函数的参数列表添加发送模式选择,或增加instance成员变量,并提供设置模式接口,两者各有优劣
+本模块登记UART、复制接收数据、在任务中派发并有限重试接收错误。先配置HAL句柄、接收DMA及中断，再在启动阶段串行注册；每个硬件句柄只能有一个所有者。接口说明集中在[bsp_usart.h](bsp_usart.h)，纯接收描述符见[usart_rx.h](usart_rx.h)。本页随BSPUART-03U1更新。
 
-## 使用说明
-
-若你需要构建新的基于串口的module，首先需要拥有一个`usart_instance`的指针用于操作串口对象。
-
-需要在串口实例下设定接收的数据包的长度，实例对应的串口硬件（通过`UART_HandleTypeDef`指定，如`&huart1`），解析接收数据对应的回调函数这三个参数。然后，调用`USARTRegister()`并传入配置好的`usart_instance`指针即可。
-
-若要发送数据，调用`USARTSend()`。注意buffsize务必小于你创建的buff的大小，否则造成指针越界后果未知。
-
-串口硬件收到数据时，会将其存入`usart_instance.recv_buff[]`中，当收到完整一包数据，会调用设定的回调函数`module_callback`（即你注册时提供的解析函数）。在此函数中，你可以通过`usart_instance.recv_buff[]`访问串口收到的数据。
-
-## 代码结构
-
-.h文件内包括了外部接口和类型定义,以及模块对应的宏。c文件内为私有函数和外部接口的定义。
-
-## 类型定义
+## 注册和借用
 
 ```c
-#define DEVICE_USART_CNT 3     // C板至多分配3个串口
-#define USART_RXBUFF_LIMIT 128 // if your protocol needs bigger buff, modify here
-
-typedef void (*usart_module_callback)();
-
-/* usart_instance struct,each app would have one instance */
-typedef struct
+static void Receive(void *context, const USART_RxBlock_t *block)
 {
-    uint8_t recv_buff[USART_RXBUFF_LIMIT]; // 预先定义的最大buff大小,如果太小请修改USART_RXBUFF_LIMIT
-    uint8_t recv_buff_size;                // 模块接收一包数据的大小
-    UART_HandleTypeDef *usart_handle;      // 实例对应的usart_handle
-    usart_module_callback module_callback; // 解析收到的数据的回调函数
-} usart_instance;
+    MyParser *parser = context;
+    // 在这里检查连续性、长度、来源时间，再复制需要保留的残帧。
+    MyParserFeed(parser, block);
+}
+
+USART_Init_Config_s config = {
+    .usart_handle = &huart1, .recv_buff_size = 128,
+    .module_callback = Receive, .context = &parser,
+};
+USARTInstance *uart = USARTRegister(&config);
 ```
 
-- `DEVICE_USART_CNT`是开发板上可用的串口数量。
+以上MyParser为调用示意，真实例子是[裁判接收](../../modules/referee/rm_referee.c)。配置值被复制，HAL句柄和context指向的对象必须长期有效；注册失败返回NULL。业务不能读取recv_buff，它一直由DMA复用。回调的block及其只读data只在本次回调返回前有效，跨回调残帧由协议自己复制。
 
-- `USART_RXBUFF_LIMIT`是串口单次接收的数据长度上限，暂时设为128，如果需要更大的buffer容量，修改该值。
+length是此次RxEvent实际字节数，单位字节；它可能只是一帧的一部分，也可能包含多个帧。received_ms是在原RxEvent通知中记录的HAL毫秒值，0合法，不是逐字节的物理到达时间。sequence是BSP连续性编号，通知、丢块、错误和显式重启都会消耗编号，自然回绕；相邻已派发块编号不连续时，协议必须清除残帧。
 
-- `usart_module_callback()`是模块提供给串口接收中断回调函数使用的协议解析函数指针。对于每个需要串口的模块，需要定义一个这样的函数用于解包数据。
+## 中断、任务与容量
 
-- 每定义一个`usart_instance`，就代表一个串口的**实例**（对象）。一个串口实例内有接收buffer，单个数据包的大小，该串口对应的`HAL handle`（代表其使用的串口硬件具体是哪一个）以及用于解包数据的回调函数。
+中断复制字节及元数据到队列，再重装DMA。USARTProcessRx()只由一个任务调用，直接借用队列数据，不把数据复制回DMA数组。回调返回之后才释放该槽；递归派发直接返回。
 
+每路四槽、可用三槽，满时丢新块。接收容量为1～255字节，八个登记名额共享3072字节静态池。每槽占align4(16 + 接收容量)字节，容量和名额都可能使注册失败。任务入口记录各路已有数据的末位置，每路最多处理三块，处理中新增的块留到下一轮。超过50ms的排队数据丢弃，等于50ms允许；不把这些数量上限解释为板上耗时保证。
 
-## 外部接口
+USARTServiceInit()供任务显式重启，打断连续性并隔离此前排队块。正常通知后的DMA重装使用内部入口，保持连续性。错误中断只计数并请求恢复；任务中最多尝试三次Abort及重装，失败后保留诊断，等待显式重启。注册启动失败后先确认中止；中止也失败时保留隔离对象和池空间，禁用业务回调，避免释放硬件仍可能借用的数组。
 
-```c
-void USARTRegister(usart_instance *_instance);
-void USARTSend(usart_instance *_instance, uint8_t *send_buf, uint16_t send_size);
-```
+## 发送和验证
 
-- `USARTRegister`是用于初始化串口对象的接口，module层的模块对象（也应当为一个结构体）内要包含一个`usart_instance`。
+旧USARTSend()保留兼容；新业务需要结果时使用USARTSendChecked()。返回ACCEPTED仅表示HAL接受启动，IT/DMA完成前原发送数组仍须有效且不变。本模块没有通用发送队列；裁判发送的持久缓冲由其模块管理。
 
-  **在调用该函数之前，需要先对其成员变量`*usart_handle`,`module_callback()`以及`recv_buff_size`进行赋值。**
-
-- `USARTSend()`是通过模块通过其拥有的串口对象发送数据的接口，调用时传入的参数为串口实例指针，发送缓存以及此次要发送的数据长度（8-bit\*n)。
-
-## 私有函数和变量
-
-在.c文件内设为static的函数和变量
-
-```c
-static usart_instance *instance[DEVICE_USART_CNT];
-```
-
-这是bsp层管理所有串口实例的入口。
-
-```c
-static void USARTServiceInit(usart_instance *_instance)
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-```
-
-- `USARTServiceInit()`会被`USARTRegister()`调用，开启接收中断
-
-- `HAL_UARTEx_RxEventCallback()`和`HAL_UART_ErrorCallback()`都是对HAL的回调函数的重定义（原本的callback是`__week`修饰的弱定义），前者在发生**IDLE中断**或**单次DMA传输中断**后会被调用（说明收到了完整的一包数据），随后在里面根据中断来源，调用拥有产生了该中断的模块的协议解析函数进行数据解包；后者在串口传输出错的时候会被调用，重新开启接收。
+[队列测试](../../tests/host/usart_snapshot_test.c)检查只读借用、派发中到达、满队列、重启、有限恢复及注册失败；[端到端测试](../../tests/host/uart_stream_test.c)用真实BSP、裁判/SP解析及CRC检查跨块、多帧和原时间。[任务记录](../../docs/workflow/tickets/BSPUART-03U1.md)保存验证范围。主机模型不代替DMA时序、电平或真实吞吐测试。

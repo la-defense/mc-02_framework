@@ -100,9 +100,11 @@ typedef struct
 
 /**
 * @brief 注册裁判系统串口和接收数据处理。
-* @param referee_usart_handle 已初始化的 UART 句柄，不能为 NULL。
+* @param[in] referee_usart_handle 已初始化的 UART 句柄，不能为 NULL，须长期有效。
 * @return 成功时返回持续更新的裁判数据地址；空句柄、重复注册或资源注册失败时返回 NULL。
-* @note 接收数据在串口回调中解析；调用方不要释放返回地址。
+* @note USARTProcessRx任务回调解析，保留128字节候选，跨块组帧期限50ms，边界允许。
+* 只接受现有命令及其既有最短前缀，未知、短内容及CRC失败均不发布、不续期。
+* 调用方不要释放返回地址；本接口不提供各命令组的一致性复制读取。
  */
 referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle);
 
@@ -123,10 +125,10 @@ typedef enum {
  */
 RefereeSendStatus_t RefereeSend(const uint8_t *send, uint16_t tx_len);
 
-/** @brief 查询看门狗是否收到通过 CRC 检查的裁判数据；返回1在线，0离线。 */
+/** @brief 已收到合法已支持命令、源数据年龄不超过300ms且看门狗在线时返回1，否则0；不续期。 */
 uint8_t RefereeIsOnline(void);
 
-/** @brief 返回最近一次通过帧头及整帧 CRC 检查的 HAL 毫秒计数；初始为0。 */
+/** @brief 返回最近合法已支持命令的首个组成块RxEvent毫秒值，0也合法；初始为0，不续期。 */
 uint32_t RefereeGetLastRxMs(void);
 
 #endif // !REFEREE_H

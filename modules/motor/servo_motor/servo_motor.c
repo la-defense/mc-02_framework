@@ -9,16 +9,17 @@ uint8_t servo_angle_read[6]={0x55 ,0x55 ,0x04, 0x15 ,0x01 ,0x01 ,};
 uint8_t servo_angle_write[16]={0x55 ,0x55, 0x08, 0x03, 0x01 ,0xF4 ,0x01 ,0x01 ,0x20 ,0x03,0x55 ,0x55 ,0x04, 0x15 ,0x01 ,0x01 ,};
 uint8_t servo_unload[6]={0x55,0x55,0x04,0x14,0x01,0x01};
 
-// 本地表按 servo_id 放对象，回调却按注册数量遍历，使用时必须从 0 连续编号。
+// 本地表保留现有注册方式；接收回调只访问注册时传入的舵机对象。
 static ServoInstance *servo_motor_instance[SERVO_MOTOR_CNT];
 static uint8_t servo_idx = 0; // register servo_idx,是该文件的全局舵机索引,在注册时使用
-static void DecodeServo();
+static void DecodeServo(void *context, const USART_RxBlock_t *block);
 // 通过此函数注册一个舵机
 ServoInstance *ServoInit(Servo_Init_Config_s *Servo_Init_Config)
 {
     ServoInstance *servo = (ServoInstance *)malloc(sizeof(ServoInstance));
     memset(servo, 0, sizeof(ServoInstance));
-    USART_Init_Config_s config;
+    USART_Init_Config_s config = {0};
+    config.context = servo;
     servo->servo_type = Servo_Init_Config->servo_type;
     // 总线舵机注册串口接收，PWM 舵机注册定时器；未知类型只记录错误。
     switch (Servo_Init_Config->servo_type)
@@ -65,20 +66,12 @@ void ServoSetAngle(ServoInstance *servo, float angle)
 }
 
 //@todo 只读取了角度 还有电压，动作是否完成等 且只支持一个串口
-static void DecodeServo()
+static void DecodeServo(void *context, const USART_RxBlock_t *block)
 {
-    // 逐对象检查同一接收数组的帧头和查询命令，只保存返回位置，不换算角度。
-    for (uint8_t i = 0; i < servo_idx; i++)
-    {
-        if (servo_motor_instance[i]->servo_type == Bus_Servo)
-        {
-            if (servo_motor_instance[i]->usart_instance->recv_buff[0] == Servo_Frame_First && servo_motor_instance[i]->usart_instance->recv_buff[1] == Servo_Frame_Second)
-            {
-                if (servo_motor_instance[i]->usart_instance->recv_buff[3] == 21)
-                {
-                    servo_motor_instance[i]->recv_angle = (servo_motor_instance[i]->usart_instance->recv_buff[7] << 8 | servo_motor_instance[i]->usart_instance->recv_buff[6]);
-                }
-            }
-        }
-    }
+    // 这里只迁移已有查询响应，短块不读取位置字节；完整设备协议接入另行验证。
+    ServoInstance *servo = context;
+    if (servo == NULL || block->data == NULL || block->length < 8u) return;
+    const uint8_t *data = block->data;
+    if (data[0] == Servo_Frame_First && data[1] == Servo_Frame_Second && data[3] == 21u)
+        servo->recv_angle = (uint16_t)((uint16_t)data[7] << 8u | data[6]);
 }

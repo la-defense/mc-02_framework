@@ -61,7 +61,7 @@ static void ExpirePC(uint32_t now)
 }
 
 // 调用时普通中断已关闭；只接受向前变化的心跳，恢复还要连续两帧完全松开。
-static uint8_t AcceptPC(const RC_ctrl_t *candidate, uint16_t heartbeat, uint32_t now)
+static uint8_t AcceptPC(const RC_ctrl_t *candidate, uint16_t heartbeat, uint32_t now, uint32_t source_ms)
 {
     ExpirePC(now);
     if (heartbeat == 0u) { RevokePC(now, REMOTE_PC_REVOKE_INACTIVE); return 0u; }
@@ -70,7 +70,7 @@ static uint8_t AcceptPC(const RC_ctrl_t *candidate, uint16_t heartbeat, uint32_t
     if (pc_have_sequence && (advance == 0u || advance >= 0x8000u)) return 0u;
     pc_sequence = heartbeat; pc_have_sequence = 1u;
     remote_control_diag.pc_heartbeat = heartbeat;
-    remote_control_diag.pc_last_advance_tick = now;
+    remote_control_diag.pc_last_advance_tick = source_ms;
     if (!pc_authorized)
     {
         remote_control_diag.pc_recovery_count++;
@@ -133,11 +133,14 @@ static void UpdateKeyEdges(RC_ctrl_t *c)
     }
 }
 
-// UART 任务派发一帧后调用；先检查长度及字段，再在关中断期间一起更新输入。
-static void RemoteControlRxCallback(void)
+// DBUS没有帧头或CRC，只接收独立18字节块，禁止自动拼接或搜索对齐。
+static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
 {
-    const uint8_t *frame = USARTGetCurrentRxData(rc_usart_instance);
-    if (rc_usart_instance->last_recv_size != REMOTE_CONTROL_FRAME_SIZE || frame == NULL)
+    RC_ctrl_t *controls = context;
+    if (controls == NULL || block == NULL) return;
+    const uint8_t *frame = block->data;
+    if (block->length != REMOTE_CONTROL_FRAME_SIZE || frame == NULL ||
+        (uint32_t)(HAL_GetTick() - block->received_ms) > 50u)
     {
         remote_control_diag.rejected_length++;
         return;
@@ -159,17 +162,17 @@ static void RemoteControlRxCallback(void)
     remote_control_diag.raw_mouse_left = candidate.mouse.press_l;
     remote_control_diag.raw_mouse_right = candidate.mouse.press_r;
     // 键鼠尚未通过检查时沿用已保存结果；撤销路径会先把该结果清零，摇杆仍可更新。
-    if (AcceptPC(&candidate, heartbeat, now)) UpdateKeyEdges(&candidate);
+    if (AcceptPC(&candidate, heartbeat, now, block->received_ms)) UpdateKeyEdges(&candidate);
     else
     {
-        candidate.mouse = rc_ctrl[TEMP].mouse;
-        memcpy(candidate.key, rc_ctrl[TEMP].key, sizeof(candidate.key));
-        memcpy(candidate.key_count, rc_ctrl[TEMP].key_count, sizeof(candidate.key_count));
+        candidate.mouse = controls[TEMP].mouse;
+        memcpy(candidate.key, controls[TEMP].key, sizeof(candidate.key));
+        memcpy(candidate.key_count, controls[TEMP].key_count, sizeof(candidate.key_count));
     }
-    rc_ctrl[TEMP] = candidate;
-    rc_ctrl[LAST] = candidate;
+    controls[TEMP] = candidate;
+    controls[LAST] = candidate;
     remote_control_diag.accepted_frames++;
-    remote_control_diag.last_valid_tick = now;
+    remote_control_diag.last_valid_tick = block->received_ms;
     remote_control_diag.has_valid_frame = 1u;
     DaemonReload(rc_daemon_instance);
     remote_control_diag.online = 1u;
@@ -202,6 +205,7 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
         return NULL;
     USART_Init_Config_s conf = {
         .module_callback = RemoteControlRxCallback,
+        .context = rc_ctrl,
         .usart_handle = handle,
         .recv_buff_size = REMOTE_CONTROL_FRAME_SIZE,
     };
@@ -232,6 +236,10 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
 
 uint8_t RemoteControlIsOnline(void)
 {
+    // 派发和DaemonReload不能刷新源数据期限；查询过期时沿用离线清输入及急停路径。
+    if (rc_init_flag && remote_control_diag.has_valid_frame &&
+        (uint32_t)(HAL_GetTick() - remote_control_diag.last_valid_tick) > 100u)
+        RCLostCallback(NULL);
     const uint8_t online = (uint8_t)(rc_init_flag && remote_control_diag.has_valid_frame &&
                                    DaemonIsOnline(rc_daemon_instance));
     remote_control_diag.online = online;
@@ -244,8 +252,8 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     const uint32_t primask = __get_PRIMASK();
     __disable_irq();
     ExpirePC(HAL_GetTick());
-    snapshot->input = rc_ctrl[TEMP];
     snapshot->remote_online = RemoteControlIsOnline();
+    snapshot->input = rc_ctrl[TEMP];
     snapshot->pc_valid = (uint8_t)(snapshot->remote_online && pc_authorized);
     __set_PRIMASK(primask);
 }

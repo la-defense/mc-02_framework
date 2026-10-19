@@ -23,7 +23,7 @@ static USARTInstance *usart_instance[DEVICE_USART_CNT] = {NULL};
 // 每路 UART 单独保存接收队列；中断复制数据后重新启动 DMA，任务再解析和恢复错误。
 // 必须复制内容，DMA 会重复使用 recv_buff，直接保存其地址会在派发前被新数据覆盖。
 #define USART_RXQ_DEPTH 4u    /* 每实例队列深度(裁判几十 Hz、视觉 200Hz, 1kHz 消费足够) */
-#define USART_RXQ_HDR 8u      /* 每项前 8 字节: 长度、填充和入队 tick；数据保持四字节对齐 */
+#define USART_RXQ_HDR 16u     /* 长度、填充、原始tick、序号及重启代数，数据四字节对齐。 */
 #define USART_RECOVER_RETRY 3u
 
 typedef struct
@@ -70,7 +70,7 @@ static uint8_t *USARTQueueItem(USARTInstance *ins, uint8_t slot, uint16_t slot_i
 }
 
 // 具体参数及失败返回见头文件；启动 DMA 成功后关闭半传输通知。
-uint8_t USARTServiceInit(USARTInstance *_instance)
+static uint8_t USARTStartRx(USARTInstance *_instance)
 {
     if (_instance == NULL || _instance->usart_handle == NULL || _instance->recv_buff_size == 0u ||
         _instance->usart_handle->hdmarx == NULL)
@@ -85,6 +85,28 @@ uint8_t USARTServiceInit(USARTInstance *_instance)
     // 我们只希望处理第一种和第三种情况,因此直接关闭DMA半传输中断
     __HAL_DMA_DISABLE_IT(_instance->usart_handle->hdmarx, DMA_IT_HT);
     return 1u;
+}
+
+uint8_t USARTServiceInit(USARTInstance *instance)
+{
+    if (instance == NULL) return 0u;
+    // 显式重启打断协议残帧，即使HAL本次拒绝也不能继续拼接旧数据。
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    ++instance->rx_sequence;
+    ++instance->rx_generation;
+    for (uint8_t i = 0; i < idx; ++i)
+        if (usart_instance[i] == instance)
+        {
+            usart_q[i].need_recover = 0u;
+            usart_q[i].recover_failed = 0u;
+        }
+    __set_PRIMASK(mask);
+    uint8_t result = USARTStartRx(instance);
+    if (!result)
+        for (uint8_t i = 0; i < idx; ++i)
+            if (usart_instance[i] == instance) usart_q[i].need_recover = 1u;
+    return result;
 }
 
 USARTInstance *USARTRegister(USART_Init_Config_s *init_config)
@@ -106,9 +128,10 @@ USARTInstance *USARTRegister(USART_Init_Config_s *init_config)
     instance->usart_handle = init_config->usart_handle;
     instance->recv_buff_size = init_config->recv_buff_size;
     instance->module_callback = init_config->module_callback;
+    instance->context = init_config->context;
 
     /* 接收队列内存: 从静态池里按本实例的 recv_buff_size 切一块
-       (裁判 255 / 遥控 18 / 视觉 40, 比统一按 USART_RXBUFF_LIMIT 省很多)。
+       (裁判255、遥控18、备用UART视觉128字节，按实际容量使用池空间)。
        池子不够说明配置有问题, 启动阶段就报错暴露出来。 */
     uint32_t need = USART_RXQ_DEPTH * USARTQueueItemSize(instance);
     if ((uint32_t)usart_rxq_used + need > USART_RXQ_POOL_SIZE)
@@ -116,17 +139,28 @@ USARTInstance *USARTRegister(USART_Init_Config_s *init_config)
         free(instance);
         return NULL;
     }
-    if (!USARTServiceInit(instance))
-    {
-        (void)HAL_UART_AbortReceive(instance->usart_handle);
-        free(instance);
-        return NULL;
-    }
-
+    // 先登记存储，再启动接收；启动阶段串行注册，避免首个中断找不到实例。
     usart_q[idx].data = &usart_rxq_pool[usart_rxq_used];
     memset(usart_q[idx].data, 0, need);
     usart_rxq_used = (uint16_t)(usart_rxq_used + need);
     usart_instance[idx++] = instance;
+    if (!USARTStartRx(instance))
+    {
+        instance->module_callback = NULL;
+        if (HAL_UART_AbortReceive(instance->usart_handle) == HAL_OK)
+        {
+            uint32_t mask = __get_PRIMASK();
+            __disable_irq();
+            --idx;
+            usart_instance[idx] = NULL;
+            memset(&usart_q[idx], 0, sizeof(usart_q[idx]));
+            usart_rxq_used = (uint16_t)(usart_rxq_used - need);
+            __set_PRIMASK(mask);
+            free(instance);
+        }
+        // 中止失败时保留对象及队列，硬件仍可能借用其存储；不再调用业务回调。
+        return NULL;
+    }
     return instance;
 }
 
@@ -189,14 +223,15 @@ uint8_t USARTIsReady(USARTInstance *_instance)
  * @note  只能在对应串口的 RxEvent 中断里调用(单生产者的前提)。
  *        数据先写完、__DMB 之后再发布 head, 保证消费者看到 head 时数据已就绪。
  */
-static void USARTQueuePush(uint8_t slot, USARTInstance *ins, uint16_t len)
+static void USARTQueuePush(uint8_t slot, USARTInstance *ins, uint16_t len, uint32_t received_ms)
 {
     if (usart_q[slot].data == NULL)
         return;
-    if (len > ins->recv_buff_size)
+    uint32_t sequence = ++ins->rx_sequence;
+    if (len == 0u || len > ins->recv_buff_size)
     {
         usart_q[slot].drop++;
-        usart_rx_oversize_total++;
+        if (len > ins->recv_buff_size) usart_rx_oversize_total++;
         return;
     }
 
@@ -210,7 +245,9 @@ static void USARTQueuePush(uint8_t slot, USARTInstance *ins, uint16_t len)
 
     uint8_t *item = USARTQueueItem(ins, slot, head);
     *(uint16_t *)item = len;
-    *(uint32_t *)(item + 4u) = HAL_GetTick(); // 第 4 字节起保存入队毫秒时间，前两字节为长度。
+    *(uint32_t *)(item + 4u) = received_ms; // 保存RxEvent入口记录的毫秒值，派发时不改写。
+    *(uint32_t *)(item + 8u) = sequence;
+    *(uint32_t *)(item + 12u) = ins->rx_generation;
     memcpy(item + USART_RXQ_HDR, ins->recv_buff, len);        /* 后面: 数据 */
 
     __DMB();
@@ -247,7 +284,7 @@ static void USARTTryRecover(uint8_t slot, USARTInstance *ins)
 /**
  * @brief 逐帧派发所有串口收到的数据 + 处理错误恢复(在任务上下文调用)
  * @note  全工程只允许一个调用者(当前是 1kHz 的 MotorControlTask), 否则队列 tail
- *        会被多任务竞争。放在"用数据之前"调用, 解析延迟就是任务周期(≤1ms)。
+ *        会被多任务竞争。放在使用数据前调用，每轮处理入口时已有块，不承诺物理耗时。
  */
 void USARTProcessRx(void)
 {
@@ -261,6 +298,9 @@ void USARTProcessRx(void)
         return;
     }
     processing = 1u;
+    uint16_t ends[DEVICE_USART_CNT];
+    for (uint8_t i = 0; i < idx; ++i) ends[i] = usart_q[i].head;
+    __DMB();
     __set_PRIMASK(primask);
 
     uint32_t probe = DWT_ProbeStart();
@@ -273,31 +313,34 @@ void USARTProcessRx(void)
             continue;
 
         /* ① 中断报告过错误 → 在这里恢复(阻塞 Abort 在任务里是安全的) */
-        if (usart_q[slot].need_recover)
+        uint32_t mask = __get_PRIMASK();
+        __disable_irq();
+        uint8_t recover = usart_q[slot].need_recover;
+        usart_q[slot].need_recover = 0u;
+        __set_PRIMASK(mask);
+        if (recover)
         {
-            usart_q[slot].need_recover = 0u;
             USARTTryRecover(slot, ins);
         }
 
-        /* ② 逐帧派发(按到达顺序) */
-        while (usart_q[slot].tail != usart_q[slot].head)
+        // 只派发入口时已有的块，每路最多三块；处理中到达的数据留到下一轮。
+        while (usart_q[slot].tail != ends[slot])
         {
             uint8_t *item = USARTQueueItem(ins, slot, usart_q[slot].tail);
+            __DMB();
             uint16_t len = *(uint16_t *)item;
-            if (len > ins->recv_buff_size)
+            uint32_t received = *(uint32_t *)(item + 4u);
+            if (*(uint32_t *)(item + 12u) != ins->rx_generation || len == 0u || len > ins->recv_buff_size ||
+                (uint32_t)(HAL_GetTick() - received) > MESSAGE_DEFAULT_MAX_AGE_MS)
                 usart_q[slot].drop++;
-            // 已排队超过 50 ms 的帧直接跳过，不把旧命令当作刚收到的数据。
-            else if (len > 0u && (uint32_t)(HAL_GetTick() - *(uint32_t *)(item + 4u)) <= MESSAGE_DEFAULT_MAX_AGE_MS)
+            else if (ins->module_callback != NULL)
             {
-                memcpy(ins->recv_buff, item + USART_RXQ_HDR, len);
-                ins->last_recv_size = len;
-                ins->current_rx_data = item + USART_RXQ_HDR;
-                ins->current_rx_timestamp_ms = *(uint32_t *)(item + 4u);
-                if (ins->module_callback != NULL)
-                    ins->module_callback();
-                ins->current_rx_data = NULL;
+                const USART_RxBlock_t block = {
+                    .data = item + USART_RXQ_HDR, .length = len,
+                    .received_ms = received, .sequence = *(uint32_t *)(item + 8u)
+                };
+                ins->module_callback(ins->context, &block);
             }
-
             __DMB();
             usart_q[slot].tail = (uint16_t)((usart_q[slot].tail + 1u) % USART_RXQ_DEPTH);
         }
@@ -325,37 +368,39 @@ void USARTProcessRx(void)
     processing = 0u;
 }
 
-// 当前帧读取入口的参数与有效时间集中在头文件；以下不返回持续有效的数据地址。
-const uint8_t *USARTGetCurrentRxData(const USARTInstance *instance)
-{
-    return instance != NULL ? instance->current_rx_data : NULL;
-}
-
-uint32_t USARTGetCurrentRxTimestamp(const USARTInstance *instance)
-{
-    return instance != NULL && instance->current_rx_data != NULL ? instance->current_rx_timestamp_ms : 0u;
-}
-
 /** @brief DMA 完成或 UART 空闲时复制本次数据入队，重新准备下一轮接收，不在中断里解析。
 * @param[in] huart 来源句柄。
 * @param[in] Size 本次实际字节数，超过注册容量时丢弃。
  */
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
+    uint32_t received_ms = HAL_GetTick();
     uint32_t probe = DWT_ProbeStart();
 
     for (uint8_t i = 0; i < idx; ++i)
     { // find the instance which is being handled
         if (huart == usart_instance[i]->usart_handle)
         { // call the callback function if it is not NULL
+            if (usart_q[i].need_recover || usart_q[i].recover_failed)
+            {
+                // 错误恢复完成前不接受可能属于旧DMA事务的回调。
+                ++usart_instance[i]->rx_sequence;
+                ++usart_q[i].drop;
+                break;
+            }
             /* 只入队, 不在中断里解析(BSPUART-02): 协议解析(裁判要在 255 字节里
                滑动找帧 + 逐帧 CRC 校验)搬到任务上下文, 由 USARTProcessRx() 逐帧执行。
                必须"拷贝"而不是传指针 —— DMA 会继续往 recv_buff 里写。 */
-            USARTQueuePush(i, usart_instance[i], Size);
+            USARTQueuePush(i, usart_instance[i], Size, received_ms);
 
             /* 立刻重新武装接收(不然只收得到这一包) */
-            HAL_UARTEx_ReceiveToIdle_DMA(usart_instance[i]->usart_handle, usart_instance[i]->recv_buff, usart_instance[i]->recv_buff_size);
-            __HAL_DMA_DISABLE_IT(usart_instance[i]->usart_handle->hdmarx, DMA_IT_HT);
+            if (!USARTStartRx(usart_instance[i]))
+            {
+                ++usart_instance[i]->rx_sequence;
+                ++usart_instance[i]->rx_generation;
+                ++usart_q[i].err_count;
+                usart_q[i].need_recover = 1u;
+            }
             break; // break the loop
         }
     }
@@ -376,6 +421,8 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
                真正的 Abort/重启交给 USARTProcessRx() 在任务上下文做 ——
                HAL_UART_AbortReceive() 是阻塞版, 会轮询等 UART/DMA 回到 READY,
                在中断里可能一直等到超时; 写 RTT 日志同样是长耗时操作。 */
+            ++usart_instance[i]->rx_sequence;
+            ++usart_instance[i]->rx_generation;
             usart_q[i].err_count++;
             usart_q[i].need_recover = 1u;
             return;

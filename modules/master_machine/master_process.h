@@ -82,6 +82,8 @@ typedef struct
 * @param[in] _handle UART 配置时须提供有效句柄；USB VCP 配置时忽略，可以为 NULL。
 * @return 成功返回模块内部接收对象地址，长期有效且不可释放；任一注册失败返回 NULL。
 * @note 控制任务应使用 VisionGetSnapshot() 复制读取；失败时已申请的离线计时会撤销。
+* UART以29字节候选处理跨块及同块多帧，首个组成块的RxEvent毫秒值作为来源时间；
+* 连续性中断或组帧超过50ms时清残帧。USB继续沿用独立接收片段扫描。
  */
 Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle);
 
@@ -98,7 +100,7 @@ void VisionGetStatus(Vision_Status_t *status);
 
 /** @brief 在同一次读取中复制命令和链路状态，复制期间防止任务切换改写数据。
 * @param[out] frame 可为 NULL；命令超过 50 ms 未更新时先清零，等于 50 ms 仍保留。
-* @param[out] status 可为 NULL；online 还要求离线计时未到，last_rx_ms 使用接收时的 HAL 毫秒值。
+* @param[out] status 可为 NULL；online 还要求离线计时未到，last_rx_ms 使用原RxEvent通知时间。
 * @note 单纯到时会保留上次接收时间，但 has_valid_frame 清零；离线回调另将时间清零。
  */
 void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status);

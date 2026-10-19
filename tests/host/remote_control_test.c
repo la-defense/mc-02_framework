@@ -1,3 +1,7 @@
+/** @file remote_control_test.c
+ * @brief 用真实UART、DBUS和安全逻辑检查长度、字段、来源时间与键鼠租约。
+ * @note HAL与毫秒时钟由测试提供，无硬件操作，检查在Release仍生效。
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,6 +90,23 @@ int main(int argc, char **argv)
     RobotSafetyUpdate();
     CHECK(EstopIsLatched());
     CHECK(RobotSafetyGetState() == ROBOT_ESTOP);
+    if (argc > 1 && !strcmp(argv[1], "source-time")) {
+        uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
+        RemoteControlSnapshot_s state;
+        const uint32_t starts[]={0u,UINT32_MAX-25u};
+        for (unsigned i=0;i<2;++i) {
+            now=starts[i]; encode(b,ch,1,3); set_heartbeat(b,1);
+            memcpy(dma_buffer,b,18); HAL_UARTEx_RxEventCallback(&huart5,18);
+            now+=50u; USARTProcessRx();
+            CHECK(remote_control_diag.last_valid_tick==starts[i]);
+            CHECK(remote_control_diag.pc_last_advance_tick==starts[i]);
+            now=starts[i]+100u; RemoteControlGetSnapshot(&state); CHECK(state.remote_online);
+            now=starts[i]+101u; RemoteControlGetSnapshot(&state);
+            CHECK(!state.remote_online && !state.pc_valid && !state.input.rc.switch_left);
+            CHECK(remote_control_diag.offline_tick==now && remote_control_diag.offline_last_valid_tick==starts[i]);
+        }
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "pc-boundaries")) {
         RemoteControlSnapshot_s s;
         pc_frame(65534,0); pc_frame(65535,0); pc_frame(1,1);
@@ -94,7 +115,8 @@ int main(int argc, char **argv)
         uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
         encode(b,ch,1,3); set_heartbeat(b,2); b[12]=2; now=100; receive(b,18);
         CHECK(remote_control_diag.pc_last_advance_tick==0 && remote_control_diag.raw_mouse_z==0x8001);
-        now=150; RemoteControlGetSnapshot(&s); CHECK(s.pc_valid);
+        // 无线帧继续到达，但重复键鼠心跳不能延长150ms键鼠期限。
+        now=150; pc_frame(0x8001,0); RemoteControlGetSnapshot(&s); CHECK(s.pc_valid);
         now=151; RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
         b[12]=0; b[6]=1; set_heartbeat(b,3); receive(b,18);
         b[6]=0; set_heartbeat(b,4); receive(b,18); RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);

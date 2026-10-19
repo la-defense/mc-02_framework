@@ -20,9 +20,10 @@ static const uint8_t *inflight;
 static unsigned sends, delays, reloads, unregisters;
 static int ready = 1, complete_on_delay = 1, format_fail, registration_fail;
 static USARTSendStatus_t start_status = USART_SEND_ACCEPTED;
-static USARTInstance instance = {rx, 0};
+static USARTInstance instance = {0};
 static DaemonInstance daemon_instance;
-static void (*receive_callback)(void);
+static usart_module_callback receive_callback;
+static void *receive_context;
 static uint32_t now_ms;
 
 uint32_t HAL_GetTick(void) { return now_ms; }
@@ -31,8 +32,8 @@ uint8_t DaemonUnregister(DaemonInstance *d) { (void)d; ++unregisters; return 1; 
 void DaemonReload(DaemonInstance *d) { (void)d; ++reloads; }
 uint8_t DaemonIsOnline(DaemonInstance *d) { (void)d; return 1; }
 USARTInstance *USARTRegister(USART_Init_Config_s *c)
-{ receive_callback=c->module_callback; return registration_fail?NULL:&instance; }
-void USARTServiceInit(USARTInstance *i) { (void)i; }
+{ receive_callback=c->module_callback;receive_context=c->context; return registration_fail?NULL:&instance; }
+uint8_t USARTServiceInit(USARTInstance *i) { (void)i; return 1u; }
 uint8_t USARTIsReady(USARTInstance *i) { TEST_CHECK(i==&instance); return (uint8_t)ready; }
 USARTSendStatus_t USARTSendChecked(USARTInstance *i,const uint8_t *data,uint16_t length,int mode)
 {
@@ -281,7 +282,9 @@ static void task_tests(void)
     uint8_t frame[]={0xa5,1,0,7,0,2,0,5,0,0};
     frame[4]=(uint8_t)reference_crc(frame,4,0x8c,0xff);
     uint16_t tail=reference_crc(frame,8,0x8408,0xffff);frame[8]=(uint8_t)tail;frame[9]=(uint8_t)(tail>>8);
-    memcpy(rx,frame,sizeof(frame));instance.last_recv_size=sizeof(frame);now_ms=17;receive_callback();
+    memcpy(rx,frame,sizeof(frame));now_ms=17;
+    const USART_RxBlock_t block={rx,sizeof(frame),now_ms,1u};
+    receive_callback(receive_context,&block);
     TEST_CHECK(info->GameResult.winner==5 && RefereeGetLastRxMs()==17 && reloads==1);
     start_status=USART_SEND_ACCEPTED;
     crc_fail_after=3;unsigned partial=sends;

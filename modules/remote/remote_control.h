@@ -124,9 +124,11 @@ typedef struct
 RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle);
 
 /**
- * @brief 检查遥控器是否在线,若尚未初始化也视为离线
+ * @brief 检查合法18字节块的来源年龄及看门狗，未初始化为离线。
  *
  * @return uint8_t 1:在线 0:离线
+ * @note 原RxEvent时间起100ms边界允许，超过后清输入、撤销许可并请求急停；查询不续期。
+ * 仅任务调用；本函数可能执行离线重启接收及日志。
  */
 uint8_t RemoteControlIsOnline();
 
@@ -157,7 +159,7 @@ typedef struct
     uint32_t accepted_frames;
     uint32_t rejected_length;
     uint32_t rejected_fields;
-    uint32_t last_valid_tick;
+    uint32_t last_valid_tick; // 最近合法块的原RxEvent时间，0也合法。
     uint32_t offline_tick;
     uint32_t offline_last_valid_tick;
     uint32_t offline_events;
@@ -173,7 +175,7 @@ typedef struct
     uint32_t pc_authorized;
     uint32_t pc_heartbeat;
     uint32_t pc_recovery_count;
-    uint32_t pc_last_advance_tick;
+    uint32_t pc_last_advance_tick; // 最近向前心跳的原RxEvent时间，独立于派发和撤销时刻。
     uint32_t pc_expire_tick;
     uint32_t pc_expirations;
     uint32_t pc_revoke_tick;

@@ -26,7 +26,15 @@ static uint8_t vision_has_valid_frame;
 #ifdef VISION_USE_UART
 #include "bsp_usart.h"
 static USARTInstance *vision_usart_instance;
-static uint8_t *vis_recv_buff;
+typedef struct {
+    uint8_t bytes[sizeof(Vision_Recv_s)];
+    uint32_t time[sizeof(Vision_Recv_s)];
+    size_t used;
+    uint32_t sequence;
+    uint8_t have_sequence;
+    volatile uint8_t reset_requested;
+} VisionUartStream;
+static VisionUartStream vision_stream;
 #endif
 
 #ifdef VISION_USE_VCP
@@ -35,6 +43,7 @@ static uint8_t *vis_recv_buff;
 #endif
 
 /* 从接收缓冲中滑动寻找 SP 帧并解码 */
+#ifdef VISION_USE_VCP
 static void DecodeVision(const uint8_t *rx_data, uint16_t recv_len, uint32_t rx_timestamp_ms)
 {
     // 按真正接收时刻检查这片数据，排队超过 50 ms 后不再采用。
@@ -58,13 +67,57 @@ static void DecodeVision(const uint8_t *rx_data, uint16_t recv_len, uint32_t rx_
     taskEXIT_CRITICAL();
 }
 
+#endif
 #ifdef VISION_USE_UART
-/* bsp_usart 回调(无参): 数据到达后调用 DecodeVision */
-static void VisionUartRxCallback(void)
+static void VisionShift(VisionUartStream *stream, size_t count)
 {
-    DecodeVision(USARTGetCurrentRxData(vision_usart_instance),
-                 vision_usart_instance->last_recv_size,
-                 USARTGetCurrentRxTimestamp(vision_usart_instance));
+    stream->used -= count;
+    memmove(stream->bytes, stream->bytes + count, stream->used);
+    memmove(stream->time, stream->time + count, stream->used * sizeof(stream->time[0]));
+}
+
+static void VisionUartRxCallback(void *context, const USART_RxBlock_t *block)
+{
+    VisionUartStream *stream = context;
+    if (stream == NULL || block == NULL) return;
+    taskENTER_CRITICAL();
+    if (stream->reset_requested) { stream->used = 0u; stream->reset_requested = 0u; }
+    taskEXIT_CRITICAL();
+    if (block->data == NULL || block->length == 0u || block->length > 255u)
+    { stream->used = 0u; return; }
+    if ((stream->have_sequence && block->sequence != stream->sequence + 1u) ||
+        (stream->used && (uint32_t)(HAL_GetTick() - stream->time[0]) > 50u))
+        stream->used = 0u;
+    stream->sequence = block->sequence;
+    stream->have_sequence = 1u;
+    if ((uint32_t)(HAL_GetTick() - block->received_ms) > 50u)
+    { stream->used = 0u; return; }
+    // 固定29字节候选；坏头或CRC失败后移动一字节，同一块内的完整帧按顺序全部处理。
+    for (size_t i = 0u; i < block->length; ++i)
+    {
+        if (stream->reset_requested) return;
+        stream->bytes[stream->used] = block->data[i];
+        stream->time[stream->used++] = block->received_ms;
+        while (stream->used)
+        {
+            if (stream->bytes[0] != 'S' || (stream->used >= 2u && stream->bytes[1] != 'P'))
+            { VisionShift(stream, 1u); continue; }
+            if (stream->used < sizeof(Vision_Recv_s)) break;
+            if (!VisionProtocolCheckCRC16(stream->bytes, sizeof(Vision_Recv_s)))
+            { ++vision_crc_error_count; VisionShift(stream, 1u); continue; }
+            taskENTER_CRITICAL();
+            if (!stream->reset_requested && (uint32_t)(HAL_GetTick() - stream->time[0]) <= 50u)
+            {
+                memcpy(&recv_data, stream->bytes, sizeof(recv_data));
+                ++vision_rx_count;
+                vision_last_rx_ms = stream->time[0];
+                vision_has_valid_frame = 1u;
+                DaemonReload(vision_daemon_instance);
+            }
+            taskEXIT_CRITICAL();
+            VisionShift(stream, sizeof(Vision_Recv_s));
+        }
+    }
 }
 #endif
 
@@ -76,6 +129,9 @@ static void VisionOfflineCallback(void *id)
     memset(&recv_data, 0, sizeof(recv_data));
     vision_last_rx_ms = 0u;
     vision_has_valid_frame = 0u;
+#ifdef VISION_USE_UART
+    vision_stream.reset_requested = 1u;
+#endif
     taskEXIT_CRITICAL();
 #ifdef VISION_USE_UART
     USARTServiceInit(vision_usart_instance);
@@ -146,7 +202,8 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
         vision_daemon_instance = NULL;
         return NULL;
     }
-    USART_Init_Config_s conf;
+    USART_Init_Config_s conf = {0};
+    conf.context = &vision_stream;
     conf.module_callback = VisionUartRxCallback;
     conf.recv_buff_size = VISION_RECV_SIZE * 2;
     conf.usart_handle = _handle;
@@ -157,7 +214,6 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
         vision_daemon_instance = NULL;
         return NULL;
     }
-    vis_recv_buff = vision_usart_instance->recv_buff;
 #else
     UNUSED(_handle);
     LOGWARNING("[vision] neither VISION_USE_VCP nor VISION_USE_UART defined");

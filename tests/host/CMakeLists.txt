@@ -727,3 +727,25 @@ foreach(target IN ITEMS bmi088_calibration_temperature_test bmi088_init_failure_
     target_link_libraries(${target} PRIVATE mc02_numeric)
   endif()
 endforeach()
+
+# 真实UART队列及两种流式协议一起运行；只替代HAL、时钟与看门狗。
+add_executable(uart_stream_test uart_stream_test.c ../../bsp/usart/bsp_usart.c
+  ../../modules/master_machine/master_process.c ../../modules/master_machine/vision_protocol.c
+  ../../modules/referee/rm_referee.c)
+target_include_directories(uart_stream_test BEFORE PRIVATE remote_fakes ../../bsp/usart
+  crc_protocol_fakes can_comm_fakes)
+target_include_directories(uart_stream_test PRIVATE ../../modules/master_machine ../../modules/referee
+  ../../modules/message_center)
+target_compile_definitions(uart_stream_test PRIVATE VISION_USE_UART=1)
+target_compile_options(uart_stream_test PRIVATE -Wall -Wextra -Werror)
+target_link_options(uart_stream_test PRIVATE -Wl,--wrap=USARTRegister)
+target_link_libraries(uart_stream_test PRIVATE mc02_software_crc)
+add_test(NAME production_uart_stream_protocols COMMAND uart_stream_test)
+add_test(NAME production_uart_pool_limit COMMAND usart_snapshot_test pool)
+foreach(case IN ITEMS init-race quarantine slots)
+  add_test(NAME production_uart_${case} COMMAND usart_snapshot_test ${case})
+  set_tests_properties(production_uart_${case} PROPERTIES TIMEOUT 10)
+endforeach()
+add_test(NAME production_remote_original_receive_time COMMAND remote_control_test source-time)
+set_tests_properties(production_uart_stream_protocols production_uart_pool_limit
+  production_remote_original_receive_time PROPERTIES TIMEOUT 10)
