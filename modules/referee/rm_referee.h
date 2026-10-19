@@ -106,13 +106,22 @@ typedef struct
  */
 referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle);
 
-/**
-* @brief 使用 DMA 发送裁判系统帧。
-* @param send 可读发送缓冲区，发送期间保持内容不变。
-* @param tx_len 发送字节数。
-* @note 调用后会让当前任务等待115ms；不检查空指针，也不返回发送状态。
+/** @brief 裁判串口提交结果；ACCEPTED只表示本机启动发送。 */
+typedef enum {
+    REFEREE_SEND_ACCEPTED = 0, REFEREE_SEND_BAD_ARGUMENT,
+    REFEREE_SEND_NOT_INITIALIZED, REFEREE_SEND_BUSY,
+    REFEREE_SEND_ERROR, REFEREE_SEND_TIMEOUT
+} RefereeSendStatus_t;
+
+/** @brief 复制完整帧到持久缓冲并尝试DMA发送，无队列。
+ * @param[in] send 非空，至少tx_len个可读字节；返回后调用者可以复用原数据。
+ * @param[in] tx_len 帧字节数，1～128。
+ * @return 本机接受、参数错误、未初始化、忙、发送错误或启动超时。
+ * @note 先成功RefereeInit；仅裁判任务串行调用，禁止ISR及其他发送者共用该UART。
+ * UART未READY时不覆盖在途缓冲。接受后等待115ms保持既有节奏；延时不证明完成。
+ * 失败不等待、不排队、不自动重试，不证明客户端已收到或显示。
  */
-void RefereeSend(uint8_t *send, uint16_t tx_len);
+RefereeSendStatus_t RefereeSend(const uint8_t *send, uint16_t tx_len);
 
 /** @brief 查询看门狗是否收到通过 CRC 检查的裁判数据；返回1在线，0离线。 */
 uint8_t RefereeIsOnline(void);

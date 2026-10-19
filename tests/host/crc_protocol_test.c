@@ -34,6 +34,12 @@ void USARTSend(USARTInstance *instance, uint8_t *data, uint16_t length, int mode
     TEST_CHECK(length <= sizeof(sent));
     memcpy(sent, data, length); sent_length = length; ++uart_sends;
 }
+uint8_t USARTIsReady(USARTInstance *instance) { (void)instance; return 1u; }
+USARTSendStatus_t USARTSendChecked(USARTInstance *instance, const uint8_t *data, uint16_t length, int mode)
+{
+    USARTSend(instance, (uint8_t *)data, length, mode);
+    return USART_SEND_ACCEPTED;
+}
 void osDelay(uint32_t milliseconds) { (void)milliseconds; }
 uint8_t *USBInit(USB_Init_Config_s config) { usb_callback = config.rx_cbk; return usb_bytes; }
 const uint8_t *VCPGetCurrentRxData(void) { return usb_bytes; }
@@ -109,16 +115,17 @@ int main(void)
     referee_id_t id = {.Robot_ID = 1u, .Cilent_ID = 0x101u};
     Graph_Data_t graph = {0}; String_Data_t text = {0};
     UIDelete(&id, 1u, 0u); check_referee_frame();
-    UIGraphRefresh(&id, 1, graph); check_referee_frame();
-    UICharRefresh(&id, text); check_referee_frame();
+    UIGraphRefresh(&id, &graph, 1u, 1u); check_referee_frame();
+    TEST_CHECK(UICharDraw(&text, "crc", 1u, 0u, 0u, 15u, 2u, 0u, 0u, "CRC") == UI_OK);
+    UICharRefresh(&id, &text); check_referee_frame();
     for (int failure = 0; failure < 2; ++failure)
     {
         uint32_t previous = uart_sends; uint8_t sequence = UI_Seq;
         crc_fail_after = failure; UIDelete(&id, 1u, 0u);
         TEST_CHECK(uart_sends == previous && UI_Seq == sequence);
-        crc_fail_after = failure; UIGraphRefresh(&id, 1, graph);
+        crc_fail_after = failure; UIGraphRefresh(&id, &graph, 1u, 1u);
         TEST_CHECK(uart_sends == previous && UI_Seq == sequence);
-        crc_fail_after = failure; UICharRefresh(&id, text);
+        crc_fail_after = failure; UICharRefresh(&id, &text);
         TEST_CHECK(uart_sends == previous && UI_Seq == sequence);
     }
     return 0;

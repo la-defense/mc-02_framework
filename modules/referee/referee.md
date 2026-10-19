@@ -1,196 +1,63 @@
-# referee
+# 裁判接收与 UI 接入
 
-## referee运行流程
+本页说明当前生产接口和使用条件。协议固定为官方RoboMaster2026高校系列赛通信协议V2.0.0（2026-06-26），任务状态只在[TODO](../../.Doc/TODO.md)维护。
 
-首先在chassis的初始化中调用裁判系统初始化函数，将要绘制的uidata的指针传递给接口，接口会返回裁判系统的反馈数据指针。然后，在refereeUItask里进行UI初始化，确定ui发送的目标并绘制初始化UI。完成后，uitask会以10hz的频率按顺序更新UI。
+## 初始化和任务
 
-## 如何绘制你的自定义UI？以绘制超级电容能量条为例
+`UITaskInit()`注册裁判串口并保存长期有效的应用状态地址，失败返回NULL；返回非空只说明接收注册成功。`StartUITASK`沿用等待首个机器人编号的顺序，再调用`MyUIInit()`，逐项检查构图与发送结果。
 
-UI的绘制包含初始化和TASK两个部分，初始化部分在`MyUIInit`函数中，TASK部分在`MyUIRefresh`函数中。
+`MyUIInit()`全轮提交成功返回`UI_SUBMITTED`；失败仅停用UI刷新，不删除裁判接收服务。再次尝试须显式调用它，不提供自动重绘恢复。部分帧可能已经发出，失败不等于整轮从未发送。
 
-### 初始化部分
+`UITask()`保留原来的`RobotModeTest()`演示状态修改，然后调用`UIRefresh()`。`UIRefresh()`只读取已绑定的应用状态并提交变化项，不执行演示修改。失败保留未接受项的刷新标记，下次重新构图；只有本机接受后才清标记。当前任务周期包含发送后的115ms等待，不能称为固定10Hz刷新。
 
-初始化部分的UI主要有两个目的：静态UI的绘制、为动态UI的绘制做准备。
+所有发送入口由同一裁判任务串行调用，不允许ISR或其他发送者并用该UART。共享预算、通用发送队列、自动重绘及配置化布局分别由REF-03、MC02-0061、MC02-0095跟踪。
 
-分析超级电容能量条功能可知，此UI包含如下：
-Power：xxx Power为静态不变的，冒号后的xxx为变化的量。
-方框以及方框内的能量条：方框为静态不变的，能量条为变化的量。（参考游戏血条）
+## 先构图，检查成功后再发送
 
-因而，静态UI的绘制包含如下：
-绘制字符“Power:”、绘制矩形方框。
-为动态UI的准备如下：
-绘制矩形方框内的初始能量条、绘制Power的初始值。
-
-### 绘制字符“Power:”
-
-设置绘制用结构体，此处使用数组是因为需要绘制多个字符。本次绘制的字符为“Power:”，只是用到了第6个，即xxx[5]：
+公开说明集中在[referee_UI.h](referee_UI.h)。坐标x为0～1920、y为0～1080；图层0～9、颜色0～8，其他尺寸及位宽见头文件。超范围直接返回错误，不把高位丢掉后继续发送，也不计算整幅图形是否完全落在屏幕内。
 
 ```c
-static String_Data_t UI_State_sta[6];  // 静态
+String_Data_t label;
+UIStatus_t status = UICharDraw(&label, "ss5", UI_Graph_ADD, 7,
+                              UI_Color_Green, 18, 2, 620, 230, "Power:");
+if (status == UI_OK)
+    status = UICharRefresh(&referee_recv_info->referee_id, &label);
+// 只有UI_SUBMITTED表示本机接受；没有任何状态证明客户端已显示。
 ```
 
-字符格式以及内容设置：
+构图失败保持原对象，所以调用方必须检查返回值，不能把保留的旧对象当成本次构图成功。名称最多读3字节，遇NUL停止；继续使用旧的逆序字节规则，短名称的其余字节清零。
+
+文字区固定30字节，临时格式化区为31字节，允许恰好30字节。超长整条拒绝，格式化失败也不改对象。长度按字节计，不转换编码；满30字节的文字没有NUL，不能把协议文字区直接当作C字符串。短文字剩余字节发0。
+
+## 图形数组与数值显示
 
 ```c
-UICharDraw(&UI_State_sta[5], "ss5", UI_Graph_ADD, 7, UI_Color_Green, 18, 2, 620, 230, "Power:");
-
-//各参数意义如下，函数定义中有详细注释：
-        string String_Data类型变量指针，用于存放字符串数据
-        stringname[3]   字符串名称，用于标识更改
-        String_Operate   字符串操作，初始化时一般使用"UI_Graph_ADD"
-        String_Layer    图层0-9
-        String_Color    字符串颜色
-        String_Size     字号
-        String_Width    字符串线宽
-        Start_x、Start_y    开始坐标
-        *stringdata    字符串数据
-
-//设置完毕后，使用“Char_ReFresh”发送即可：
-UICharRefresh(&referee_recv_info->referee_id, UI_State_sta[5]);
+Graph_Data_t graphics[2];
+UIStatus_t status = UIFloatDraw(&graphics[0], "sd5", UI_Graph_ADD, 8,
+                               UI_Color_Green, 18, 2, 2, 750, 230, 24000);
+if (status == UI_OK)
+    status = UILineDraw(&graphics[1], "sd6", UI_Graph_ADD, 8,
+                        UI_Color_Pink, 30, 720, 160, 1020, 160);
+if (status == UI_OK)
+    status = UIGraphRefresh(&referee_recv_info->referee_id, graphics, 2U, 2U);
 ```
 
-### 绘制能量框
+刷新数量只允许1、2、5、7，容量以元素计。旧可变参数入口已经删除；整批检查通过后才编码发送，非法对象不能只发出前半批。字符图形使用专门的`UICharRefresh()`入口。
 
-定义一个图形类结构体，用于绘制能量框：
+浮点显示传入的仍是乘1000后的int32_t，例中24000表示24.000。旧`Graph_Digit`参数保留0～511的调用范围，但2026协议明确对应字段无作用，线上固定发0，不能用它配置小数位。负整数先转uint32_t再拆位，避免有符号右移解释不一致。应用功率值在转整数前先检查有限值、int32_t范围及能量条终点。
 
-```c
-static Graph_Data_t UI_energy_line[3]; // 电容能量条
-```
+## 组帧、身份和 DMA 缓冲
 
-能量框参数设置以及发送函数：
+图形对象的C位域只供本地使用，线上数据用移位和小端写入显式编码。统一CRC计算失败就不提交；删除、图形及文字帧都在本机接受后才递增`UI_Seq`，255之后回到0，失败不消耗序号。
 
-```c
-UIRectangleDraw(&UI_energy_line[0],"ss6", UI_Graph_ADD, 7, UI_Color_Green,20, 720, 220, 820, 240)
-UIRefresh(&referee_recv_info->referee_id, 1,UI_energy_line[0]);
-```
+普通发送者只能向对应的己方选手端发送，雷达可向任意己方选手端发送。固定协议附录二只列每方1～6号选手端；不能给哨兵或飞镖虚构一个选手端ID。当前`MyUIInit()`使用自己的对应客户端，身份不合法时只报告UI失败，不扩展雷达目标选择或新业务。
 
-### 绘制power的初始值
+`RefereeSend()`先检查长度1～128及初始化状态，确认UART为READY，再复制到128字节持久缓冲并调用`USARTSendChecked()`。DMA未结束时拒绝新提交，不覆盖在途数据；调用者的局部帧返回后可以复用。接受后保留115ms等待，延时结束时仍可能忙，下一次仍须检查真实HAL状态。
 
-```c
-UIFloatDraw(&UI_Energy[1], "sd5", UI_Graph_ADD, 8, UI_Color_Green, 18, 2, 2, 750, 230, 24000);
-```
+新结果仅报告发送启动的接受、忙、错误及超时；不提供排队、自动重试或异步完成确认。原`USARTSend()`仍为其他模块保留。发送预算和吞吐不能仅由115ms推算为已符合全部官方限额。
 
-### 绘制能量条的初始值
+## 本机验证
 
-```c
-UILineDraw(&UI_Energy[2], "sd6", UI_Graph_ADD, 8, UI_Color_Pink, 30, 720, 160, 1020, 160);
-```
+[REF-04测试](../../tests/host/referee_ui_test.c)运行生产构图、CRC、发送和任务逻辑，只有硬件、时钟及一次指定失败由替身提供。固定字节向量和独立逐位CRC核对完整帧；容量、长文字、极值、失败保留、序号、在途缓冲和待刷新标记均有回归。
 
-将两个图形打包发送
-
-```
-UIRefresh(&referee_recv_info->referee_id, 2, UI_Energy[1], UI_Energy[2]);
-```
-
-## TASK部分
-
-task中UI处于动态变化，此时需要检测所画的UI是否发生变化，若发生变化，则刷新对应UI。
-
-### 添加变化检测
-
-绘制功率部分UI，我们需要的是`Chassis_Power_Data_s`中的数据，我们定义`Chassis_Power_Data_s Chassis_Power_Data;`和`Chassis_Power_Data_s Chassis_last_Power_Data;`分别存储此次和上次的对应数据，本次和上次对应检测变化的需求。
-
-```c
-typedef struct
-{
- Referee_Interactive_Flag_t Referee_Interactive_Flag;
- // 为UI绘制以及交互数据所用
- chassis_mode_e chassis_mode;    // 底盘模式
- gimbal_mode_e gimbal_mode;     // 云台模式
- shoot_mode_e shoot_mode;     // 发射模式设置
- friction_mode_e friction_mode;    // 摩擦轮关闭
- lid_mode_e lid_mode;      // 弹舱盖打开
- Chassis_Power_Data_s Chassis_Power_Data; // 功率控制
-
- // 上一次的模式，用于flag判断
- chassis_mode_e chassis_last_mode; 
- gimbal_mode_e gimbal_last_mode;  
- shoot_mode_e shoot_last_mode;  
- friction_mode_e friction_last_mode; 
- lid_mode_e lid_last_mode;   
- Chassis_Power_Data_s Chassis_last_Power_Data;
-
-} Referee_Interactive_info_t;
-```
-
-添加功率变化标志位，`uint32_t Power_flag : 1;`，1为检测到变化，0为未检测到变换
-
-```
-typedef struct
-{
- uint32_t chassis_flag : 1;
- uint32_t gimbal_flag : 1;
- uint32_t shoot_flag : 1;
- uint32_t lid_flag : 1;
- uint32_t friction_flag : 1;
- uint32_t Power_flag : 1;
-} Referee_Interactive_Flag_t;
-```
-
-在变化检测函数中增加对应判断,由于voltage和能量条的变化对应同一个参数`Chassis_last_Power_Data.chassis_power_mx`的变化，所以只需要一个参数即可：
-
-```
-static void UIChangeCheck(Referee_Interactive_info_t *_Interactive_data)
-{
-    if (_Interactive_data->chassis_mode != _Interactive_data->chassis_last_mode)
-    ......
-    ......
-    if (_Interactive_data->lid_mode != _Interactive_data->lid_last_mode)
-    {
-        _Interactive_data->Referee_Interactive_Flag.lid_flag = 1;
-        _Interactive_data->lid_last_mode = _Interactive_data->lid_mode;
-    }
-
-	if (_Interactive_data->Chassis_Power_Data.chassis_power_mx != _Interactive_data->Chassis_last_Power_Data.chassis_power_mx)
-    {
-        _Interactive_data->Referee_Interactive_Flag.Power_flag = 1;
-        _Interactive_data->Chassis_last_Power_Data.chassis_power_mx = _Interactive_data->Chassis_Power_Data.chassis_power_mx;
-    }
-}
-```
-
-### 根据功率的变化绘制UI
-
-在绘制变化的UI时，由于初始化时已经使用`UI_Graph_ADD`操作添加了UI，所以在绘制时，需要使用`UI_Graph_Change`操作，以便于刷新UI。
-
-同时，完成UI刷新后，需要将对应的flag置0，以便于下次检测变化
-
-```
-if (_Interactive_data->Referee_Interactive_Flag.Power_flag == 1)
-{
- UIFloatDraw(&UI_Energy[1], "sd5", UI_Graph_Change, 8, UI_Color_Green, 18, 2, 2, 750, 230, _Interactive_data->Chassis_Power_Data.chassis_power_mx * 1000);
- UILineDraw(&UI_Energy[2], "sd6", UI_Graph_Change, 8, UI_Color_Pink, 30, 720, 160, (uint32_t)750 + _Interactive_data->Chassis_Power_Data.chassis_power_mx * 30, 160);
- UIRefresh(&referee_recv_info->referee_id, 2, UI_Energy[1], UI_Energy[2]);
- _Interactive_data->Referee_Interactive_Flag.Power_flag = 0;
-}
-```
-
----
-
-若需要进行多机交互，可增加此函数：
-
-```c
-void CommBetweenRobotSend(referee_id_t *_id, robot_interactive_data_t *_data)
-{
- Communicate_SendData_t SendData;
- uint8_t temp_datalength = Interactive_Data_LEN_Head + Communicate_Data_LEN; // 计算交互数据长度  6+n,n为交互数据长度
-
- SendData.FrameHeader.SOF = REFEREE_SOF;
- SendData.FrameHeader.DataLength = temp_datalength;
- SendData.FrameHeader.Seq = UI_Seq;
- SendData.FrameHeader.CRC8 = Get_CRC8_Check_Sum((uint8_t *)&SendData, LEN_CRC8, 0xFF);
-
- SendData.CmdID = ID_student_interactive;
-
- SendData.datahead.data_cmd_id = Communicate_Data_ID;
- SendData.datahead.sender_ID = _id->Robot_ID;
- SendData.datahead.receiver_ID = _id->Receiver_Robot_ID;
-
- SendData.Data = *_data;
-
- SendData.frametail = Get_CRC16_Check_Sum((uint8_t *)&SendData, LEN_HEADER + LEN_CMDID + temp_datalength, 0xFFFF);
-
- RefereeSend((uint8_t *)&SendData, LEN_HEADER + LEN_CMDID + temp_datalength + LEN_TAIL); // 发送
- UI_Seq++;                    // 包序号+1
-}
-```
+现有[CRC兼容回归](../../tests/host/crc_protocol_test.c)和[UART生产封装回归](../../tests/host/usart_snapshot_test.c)继续执行。协议页码、构建与测试结果见[REF-04证据](../../docs/workflow/tickets/REF-04.md)。本机结果不证明实际客户端显示、串口波形或链路吞吐，未连接开发板。

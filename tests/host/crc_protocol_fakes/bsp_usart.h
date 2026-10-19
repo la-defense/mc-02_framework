@@ -29,4 +29,20 @@ void USARTServiceInit(USARTInstance *instance);
  * @param[in] mode 生产调用传入 USART_TRANSFER_DMA，替身不启动 DMA。
  */
 void USARTSend(USARTInstance *instance, uint8_t *data, uint16_t length, int mode);
+
+/** @brief 模拟HAL启动结果，保持与生产发送状态的枚举值一致。 */
+typedef enum {
+    USART_SEND_ACCEPTED = 0, USART_SEND_BAD_ARGUMENT, USART_SEND_BUSY,
+    USART_SEND_ERROR, USART_SEND_TIMEOUT
+} USARTSendStatus_t;
+/** @brief 将结果交给测试选择；只在接受时保存数据，参数单位为字节。
+ * @param[in] instance 注册的替身对象。
+ * @param[in] data 至少length个可读字节，替身可保存指针检查在途寿命。
+ * @param[in] length 字节数。
+ * @param[in] mode DMA模式。
+ * @return 测试设定的启动结果，不证明完成。
+ */
+USARTSendStatus_t USARTSendChecked(USARTInstance *instance, const uint8_t *data, uint16_t length, int mode);
+/** @brief 返回测试设定的READY值；instance须为测试注册对象。 */
+uint8_t USARTIsReady(USARTInstance *instance);
 #endif

@@ -23,6 +23,12 @@ typedef enum
     USART_TRANSFER_DMA,
 } USART_TRANSFER_MODE;
 
+/** @brief 仅报告本机发送启动结果；ACCEPTED不表示传输完成或对端收到。 */
+typedef enum {
+    USART_SEND_ACCEPTED = 0, USART_SEND_BAD_ARGUMENT, USART_SEND_BUSY,
+    USART_SEND_ERROR, USART_SEND_TIMEOUT
+} USARTSendStatus_t;
+
 // 串口实例结构体,每个module都要包含一个实例.
 // 由于串口是独占的点对点通信,所以不需要考虑多个module同时使用一个串口的情况,因此不用加入id;当然也可以选择加入,这样在bsp层可以访问到module的其他信息
 typedef struct
@@ -65,6 +71,17 @@ uint8_t USARTServiceInit(USARTInstance *_instance);
 * @note 阻塞等待参数为 100 ms；异步发送前检查 USARTIsReady()，忙时 HAL 可能拒绝新发送。
  */
 void USARTSend(USARTInstance *_instance, uint8_t *send_buf, uint16_t send_size,USART_TRANSFER_MODE mode);
+
+/** @brief 检查参数并返回HAL发送启动结果，无队列或内部数据复制。
+ * @param[in] instance 非空、持有已初始化UART句柄的实例；同一发送者串行调用。
+ * @param[in] data 非空，至少length个可读字节；IT/DMA终止前内容保持不变。
+ * @param[in] length 字节数，1～65535。
+ * @param[in] mode BLOCKING、IT或DMA；其他值返回BAD_ARGUMENT，不等待。
+ * @return ACCEPTED、BAD_ARGUMENT、BUSY、ERROR或TIMEOUT；阻塞模式HAL时限100ms。
+ * @note 仅任务上下文使用；异步错误和完成须由后续传输管理处理，本函数不证明完成。
+ */
+USARTSendStatus_t USARTSendChecked(USARTInstance *instance, const uint8_t *data,
+                                 uint16_t length, USART_TRANSFER_MODE mode);
 
 /** @brief 检查 HAL 的发送状态是否为 READY。
 * @param[in] _instance 有效实例，不能为 NULL。

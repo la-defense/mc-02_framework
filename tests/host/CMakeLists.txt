@@ -226,6 +226,7 @@ if(UNIX AND NOT APPLE)
   target_link_options(usart_snapshot_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
 endif()
 add_test(NAME production_uart_immutable_dispatch COMMAND usart_snapshot_test)
+set_tests_properties(production_uart_immutable_dispatch PROPERTIES TIMEOUT 10)
 add_executable(vcp_queue_freshness_test vcp_queue_freshness_test.c ../../bsp/usb/bsp_usb.c)
 target_include_directories(vcp_queue_freshness_test BEFORE PRIVATE vcp_fakes)
 target_include_directories(vcp_queue_freshness_test PRIVATE ../../bsp/usb ../../modules/message_center)
@@ -633,6 +634,29 @@ target_include_directories(crc_protocol_test BEFORE PRIVATE crc_protocol_fakes c
 target_include_directories(crc_protocol_test PRIVATE ../../modules/master_machine ../../modules/referee
   ../../modules/message_center)
 add_test(NAME production_crc_protocol_failure_and_compatibility COMMAND crc_protocol_test)
+
+# UI使用生产构图、组帧和任务逻辑；只替代传输与时钟，包装用于选定的一次计算失败。
+add_executable(referee_ui_test referee_ui_test.c crc_injection.c
+  ../../modules/referee/referee_UI.c ../../modules/referee/rm_referee.c
+  ../../modules/referee/referee_task.c)
+target_include_directories(referee_ui_test BEFORE PRIVATE crc_protocol_fakes can_comm_fakes)
+target_include_directories(referee_ui_test PRIVATE ../../modules/referee ../../modules/master_machine
+  ../../modules/message_center)
+target_link_libraries(referee_ui_test PRIVATE mc02_software_crc m)
+target_compile_options(referee_ui_test PRIVATE -Wall -Wextra -Werror)
+target_link_options(referee_ui_test PRIVATE -Wl,--wrap=CRCCompute)
+if(WIN32)
+  target_link_options(referee_ui_test PRIVATE -Wl,--wrap=__mingw_vsnprintf)
+else()
+  target_link_options(referee_ui_test PRIVATE -Wl,--wrap=vsnprintf)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(referee_ui_test PRIVATE -Wl,--wrap=__vsnprintf_chk)
+  endif()
+endif()
+foreach(case IN ITEMS drawing text frames transport task init-failure)
+  add_test(NAME production_referee_ui_${case} COMMAND referee_ui_test ${case})
+  set_tests_properties(production_referee_ui_${case} PROPERTIES TIMEOUT 10)
+endforeach()
 # 只给实际使用 CRC 的测试链接算法，其余测试保持各自依赖。
 foreach(target IN ITEMS crc_test crc_a5_test crc_protocol_test can_comm_freshness_test
                         vision_protocol_test param_operation_test)

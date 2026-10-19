@@ -306,12 +306,19 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
 __attribute__((noreturn)) void StartUITASK(void const *argument)
 {
     LOGINFO("[freeRTOS] UI Task Start");
-    MyUIInit();
-    LOGINFO("[freeRTOS] UI Init Done, communication with ref has established");
+    // 沿用等待首个机器人编号的启动顺序；真正构图失败后不自动重画或影响裁判接收。
+    referee_info_t *ui_info = RefereeGetInfo();
+    while (ui_info != NULL && ui_info->init_flag && ui_info->GameRobotState.robot_id == 0u)
+        osDelay(100);
+    UIStatus_t ui_status = MyUIInit();
+    if (ui_status == UI_SUBMITTED)
+        LOGINFO("[freeRTOS] UI initial frames accepted locally");
+    else
+        LOGERROR("[freeRTOS] UI disabled after init failure: %d", (int)ui_status);
     for (;;)
     {
         // 每给裁判系统发送一包数据会挂起一次,详见UITask函数的refereeSend()
-        UITask();
+        (void)UITask(); // 失败保留待刷新项；初始化失败时此入口不会提交数据。
         osDelay(1); // 即使没有任何UI需要刷新,也挂起一次,防止卡在UITask中无法切换
     }
 }

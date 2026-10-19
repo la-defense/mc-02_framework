@@ -1,124 +1,111 @@
 /**
-* @file referee_task.c
-* @brief 准备裁判系统 UI，并按状态变化刷新图形和文字。
-* 当前 UITask 每次运行都会调用 RobotModeTest，自动轮换测试状态。
+ * @file referee_task.c
+ * @brief 单任务准备UI并检查每次构图及发送；初始化失败只停用UI，保留裁判接收。
  * @author kidneygood (you@domain.com)
- * @brief
  * @version 0.1
  * @date 2022-11-18
- *
  * @copyright Copyright (c) 2022
- *
  */
 #include "referee_task.h"
-#include "robot_def.h"
-#include "rm_referee.h"
 #include "referee_UI.h"
-#include "string.h"
 #include "cmsis_os.h"
+#include <math.h>
+#include <limits.h>
 
-static Referee_Interactive_info_t *Interactive_data; // UI绘制需要的机器人状态数据
-static referee_info_t *referee_recv_info;            // 接收到的裁判系统数据
-uint8_t UI_Seq;                                      // 包序号，供整个referee文件使用
-// @todo 不应该使用全局变量
+static Referee_Interactive_info_t *Interactive_data;
+static referee_info_t *referee_recv_info;
+static uint8_t ui_ready;
+uint8_t UI_Seq;
+static void RobotModeTest(Referee_Interactive_info_t *data);
+static void UIChangeCheck(Referee_Interactive_info_t *data);
+static UIStatus_t MyUIRefresh(referee_info_t *info, Referee_Interactive_info_t *data);
 
-/* 根据本机编号填写队伍颜色和对应客户端编号。 */
-static void DeterminRobotID()
+static Graph_Data_t UI_shoot_line[10];
+static Graph_Data_t UI_Energy[3];
+static String_Data_t UI_State_sta[6], UI_State_dyn[6];
+static const uint32_t shoot_line_location[5] = {540, 960, 490, 515, 565};
+
+referee_info_t *UITaskInit(UART_HandleTypeDef *handle, Referee_Interactive_info_t *data)
 {
-    // id小于7是红色,大于7是蓝色,0为红色，1为蓝色   #define Robot_Red 0    #define Robot_Blue 1
-    referee_recv_info->referee_id.Robot_Color = referee_recv_info->GameRobotState.robot_id > 7 ? Robot_Blue : Robot_Red;
-    referee_recv_info->referee_id.Robot_ID = referee_recv_info->GameRobotState.robot_id;
-    referee_recv_info->referee_id.Cilent_ID = 0x0100 + referee_recv_info->referee_id.Robot_ID; // 计算客户端ID
-    referee_recv_info->referee_id.Receiver_Robot_ID = 0;
+    if (data == NULL) return NULL;
+    referee_info_t *info = RefereeInit(handle);
+    if (info == NULL) return NULL;
+    referee_recv_info = info;
+    Interactive_data = data;
+    ui_ready = 0u;
+    info->init_flag = 1u;
+    return info;
 }
 
-static void MyUIRefresh(referee_info_t *referee_recv_info, Referee_Interactive_info_t *_Interactive_data);
-static void UIChangeCheck(Referee_Interactive_info_t *_Interactive_data); // 模式切换检测
-static void RobotModeTest(Referee_Interactive_info_t *_Interactive_data); // 测试用函数，实现模式自动变化
+referee_info_t *RefereeGetInfo(void) { return referee_recv_info; }
 
-referee_info_t *UITaskInit(UART_HandleTypeDef *referee_usart_handle, Referee_Interactive_info_t *UI_data)
+UIStatus_t UITask(void)
 {
-    // 由 RefereeInit 注册串口；当前实现假定注册成功后才访问返回对象。
-    referee_recv_info = RefereeInit(referee_usart_handle); // 初始化裁判系统的串口,并返回裁判系统反馈数据指针
-    Interactive_data = UI_data;                            // 获取UI绘制需要的机器人状态数据
-    referee_recv_info->init_flag = 1;
-    return referee_recv_info;
+    if (!ui_ready || Interactive_data == NULL || referee_recv_info == NULL) return UI_NOT_INITIALIZED;
+    RobotModeTest(Interactive_data);
+    return UIRefresh();
 }
 
-referee_info_t *RefereeGetInfo(void)
+UIStatus_t UIRefresh(void)
 {
-    return referee_recv_info;
+    if (!ui_ready || Interactive_data == NULL || referee_recv_info == NULL) return UI_NOT_INITIALIZED;
+    return MyUIRefresh(referee_recv_info, Interactive_data);
 }
 
-void UITask()
+// 初始化是一轮显式尝试；任一步失败不置就绪，重试须由调用者再次调用MyUIInit。
+#define UI_BUILD(call) do { UIStatus_t result = (call); if (result != UI_OK) return result; } while (0)
+#define UI_SUBMIT(call) do { UIStatus_t result = (call); if (result != UI_SUBMITTED) return result; } while (0)
+UIStatus_t MyUIInit(void)
 {
-    // 测试函数修改状态，随后只发送发生变化的显示项。
-    RobotModeTest(Interactive_data); // 测试用函数，实现模式自动变化,用于检查该任务和裁判系统是否连接正常
-    MyUIRefresh(referee_recv_info, Interactive_data);
-}
-
-static Graph_Data_t UI_shoot_line[10]; // 射击准线
-static Graph_Data_t UI_Energy[3];      // 电容能量条
-static String_Data_t UI_State_sta[6];  // 机器人状态,静态只需画一次
-static String_Data_t UI_State_dyn[6];  // 机器人状态,动态先add才能change
-static uint32_t shoot_line_location[10] = {540, 960, 490, 515, 565};
-
-void MyUIInit()
-{
-    if (!referee_recv_info->init_flag)
-        vTaskDelete(NULL); // 如果没有初始化裁判系统则直接删除ui任务
-    // 收到机器人编号前无法算出客户端编号，因此每100ms再检查一次。
-    while (referee_recv_info->GameRobotState.robot_id == 0)
-        osDelay(100); // 若还未收到裁判系统数据,等待一段时间后再检查
-
-    DeterminRobotID();                                            // 确定ui要发送到的目标客户端
-    UIDelete(&referee_recv_info->referee_id, UI_Data_Del_ALL, 0); // 清空UI
-
-    // 绘制发射基准线
-    UILineDraw(&UI_shoot_line[0], "sl0", UI_Graph_ADD, 7, UI_Color_White, 3, 710, shoot_line_location[0], 1210, shoot_line_location[0]);
-    UILineDraw(&UI_shoot_line[1], "sl1", UI_Graph_ADD, 7, UI_Color_White, 3, shoot_line_location[1], 340, shoot_line_location[1], 740);
-    UILineDraw(&UI_shoot_line[2], "sl2", UI_Graph_ADD, 7, UI_Color_Yellow, 2, 810, shoot_line_location[2], 1110, shoot_line_location[2]);
-    UILineDraw(&UI_shoot_line[3], "sl3", UI_Graph_ADD, 7, UI_Color_Yellow, 2, 810, shoot_line_location[3], 1110, shoot_line_location[3]);
-    UILineDraw(&UI_shoot_line[4], "sl4", UI_Graph_ADD, 7, UI_Color_Yellow, 2, 810, shoot_line_location[4], 1110, shoot_line_location[4]);
-    UIGraphRefresh(&referee_recv_info->referee_id, 5, UI_shoot_line[0], UI_shoot_line[1], UI_shoot_line[2], UI_shoot_line[3], UI_shoot_line[4]);
-
-    // 绘制车辆状态标志指示
-    UICharDraw(&UI_State_sta[0], "ss0", UI_Graph_ADD, 8, UI_Color_Main, 15, 2, 150, 750, "chassis:");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_sta[0]);
-    UICharDraw(&UI_State_sta[1], "ss1", UI_Graph_ADD, 8, UI_Color_Yellow, 15, 2, 150, 700, "gimbal:");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_sta[1]);
-    UICharDraw(&UI_State_sta[2], "ss2", UI_Graph_ADD, 8, UI_Color_Orange, 15, 2, 150, 650, "shoot:");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_sta[2]);
-    UICharDraw(&UI_State_sta[3], "ss3", UI_Graph_ADD, 8, UI_Color_Pink, 15, 2, 150, 600, "frict:");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_sta[3]);
-    UICharDraw(&UI_State_sta[4], "ss4", UI_Graph_ADD, 8, UI_Color_Pink, 15, 2, 150, 550, "lid:");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_sta[4]);
-
-    // 绘制车辆状态标志，动态
-    // 由于初始化时xxx_last_mode默认为0，所以此处对应UI也应该设为0时对应的UI，防止模式不变的情况下无法置位flag，导致UI无法刷新
-    UICharDraw(&UI_State_dyn[0], "sd0", UI_Graph_ADD, 8, UI_Color_Main, 15, 2, 270, 750, "zeroforce");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[0]);
-    UICharDraw(&UI_State_dyn[1], "sd1", UI_Graph_ADD, 8, UI_Color_Yellow, 15, 2, 270, 700, "zeroforce");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[1]);
-    UICharDraw(&UI_State_dyn[2], "sd2", UI_Graph_ADD, 8, UI_Color_Orange, 15, 2, 270, 650, "off");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[2]);
-    UICharDraw(&UI_State_dyn[3], "sd3", UI_Graph_ADD, 8, UI_Color_Pink, 15, 2, 270, 600, "off");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[3]);
-    UICharDraw(&UI_State_dyn[4], "sd4", UI_Graph_ADD, 8, UI_Color_Pink, 15, 2, 270, 550, "open ");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[4]);
-
-    // 底盘功率显示，静态
-    UICharDraw(&UI_State_sta[5], "ss5", UI_Graph_ADD, 7, UI_Color_Green, 18, 2, 620, 230, "Power:");
-    UICharRefresh(&referee_recv_info->referee_id, UI_State_sta[5]);
-    // 能量条框
-    UIRectangleDraw(&UI_Energy[0], "ss6", UI_Graph_ADD, 7, UI_Color_Green, 2, 720, 140, 1220, 180);
-    UIGraphRefresh(&referee_recv_info->referee_id, 1, UI_Energy[0]);
-
-    // 底盘功率显示,动态
-    UIFloatDraw(&UI_Energy[1], "sd5", UI_Graph_ADD, 8, UI_Color_Green, 18, 2, 2, 750, 230, 24000);
-    // 能量条初始状态
-    UILineDraw(&UI_Energy[2], "sd6", UI_Graph_ADD, 8, UI_Color_Pink, 30, 720, 160, 1020, 160);
-    UIGraphRefresh(&referee_recv_info->referee_id, 2, UI_Energy[1], UI_Energy[2]);
+    ui_ready = 0u;
+    if (referee_recv_info == NULL || Interactive_data == NULL || !referee_recv_info->init_flag)
+        return UI_NOT_INITIALIZED;
+    if (referee_recv_info->GameRobotState.robot_id == 0u) return UI_NOT_INITIALIZED;
+    uint16_t robot = referee_recv_info->GameRobotState.robot_id;
+    referee_recv_info->referee_id.Robot_Color = robot >= 100u ? Robot_Blue : Robot_Red;
+    referee_recv_info->referee_id.Robot_ID = robot;
+    referee_recv_info->referee_id.Cilent_ID = (uint16_t)(0x100u + robot);
+    referee_recv_info->referee_id.Receiver_Robot_ID = 0u;
+    const referee_id_t *id = &referee_recv_info->referee_id;
+    UI_SUBMIT(UIDelete(id, UI_Data_Del_ALL, 0));
+    UI_BUILD(UILineDraw(&UI_shoot_line[0], "sl0", UI_Graph_ADD, 7, UI_Color_White, 3, 710, shoot_line_location[0], 1210, shoot_line_location[0]));
+    UI_BUILD(UILineDraw(&UI_shoot_line[1], "sl1", UI_Graph_ADD, 7, UI_Color_White, 3, shoot_line_location[1], 340, shoot_line_location[1], 740));
+    for (size_t i = 2; i < 5; ++i)
+    {
+        const char name[3] = {'s','l',(char)('0'+i)};
+        UI_BUILD(UILineDraw(&UI_shoot_line[i], name, UI_Graph_ADD, 7, UI_Color_Yellow, 2, 810, shoot_line_location[i], 1110, shoot_line_location[i]));
+    }
+    UI_SUBMIT(UIGraphRefresh(id, UI_shoot_line, 10u, 5u));
+    static const char *const labels[5] = {"chassis:", "gimbal:", "shoot:", "frict:", "lid:"};
+    static const char *const defaults[5] = {"zeroforce", "zeroforce", "off", "off", "open "};
+    static const uint32_t colors[5] = {UI_Color_Main, UI_Color_Yellow, UI_Color_Orange, UI_Color_Pink, UI_Color_Pink};
+    // 固定布局沿用原位置及颜色；每一项只有构图成功才提交。
+    for (size_t i = 0; i < 5; ++i)
+    {
+        const char name[3] = {'s','s',(char)('0'+i)};
+        const char dynamic_name[3] = {'s','d',(char)('0'+i)};
+        uint32_t y = 750u - (uint32_t)i*50u;
+        UI_BUILD(UICharDraw(&UI_State_sta[i], name, UI_Graph_ADD, 8, colors[i], 15, 2, 150, y, "%s", labels[i]));
+        UI_SUBMIT(UICharRefresh(id, &UI_State_sta[i]));
+        UI_BUILD(UICharDraw(&UI_State_dyn[i], dynamic_name, UI_Graph_ADD, 8, colors[i], 15, 2, 270, y, "%s", defaults[i]));
+        UI_SUBMIT(UICharRefresh(id, &UI_State_dyn[i]));
+    }
+    UI_BUILD(UICharDraw(&UI_State_sta[5], "ss5", UI_Graph_ADD, 7, UI_Color_Green, 18, 2, 620, 230, "Power:"));
+    UI_SUBMIT(UICharRefresh(id, &UI_State_sta[5]));
+    UI_BUILD(UIRectangleDraw(&UI_Energy[0], "ss6", UI_Graph_ADD, 7, UI_Color_Green, 2, 720, 140, 1220, 180));
+    UI_SUBMIT(UIGraphRefresh(id, UI_Energy, 3u, 1u));
+    UI_BUILD(UIFloatDraw(&UI_Energy[1], "sd5", UI_Graph_ADD, 8, UI_Color_Green, 18, 2, 2, 750, 230, 24000));
+    UI_BUILD(UILineDraw(&UI_Energy[2], "sd6", UI_Graph_ADD, 8, UI_Color_Pink, 30, 720, 160, 1020, 160));
+    UI_SUBMIT(UIGraphRefresh(id, &UI_Energy[1], 2u, 2u));
+    // 固定初始图之后重新提交当前状态，避免显式重初始化被上轮last_mode掩盖。
+    Interactive_data->Referee_Interactive_Flag.chassis_flag = 1u;
+    Interactive_data->Referee_Interactive_Flag.gimbal_flag = 1u;
+    Interactive_data->Referee_Interactive_Flag.shoot_flag = 1u;
+    Interactive_data->Referee_Interactive_Flag.friction_flag = 1u;
+    Interactive_data->Referee_Interactive_Flag.lid_flag = 1u;
+    Interactive_data->Referee_Interactive_Flag.Power_flag = 1u;
+    ui_ready = 1u;
+    return UI_SUBMITTED;
 }
 
 // 每50次调用切换一次演示状态，方便观察 UI 是否随状态更新。
@@ -178,92 +165,74 @@ static void RobotModeTest(Referee_Interactive_info_t *_Interactive_data) // 测�
     }
 }
 
-static void MyUIRefresh(referee_info_t *referee_recv_info, Referee_Interactive_info_t *_Interactive_data)
+// 只在本机接受完整刷新后清标志；失败留到下一轮，不把旧对象当成新构图结果发送。
+static UIStatus_t MyUIRefresh(referee_info_t *info, Referee_Interactive_info_t *data)
 {
-    UIChangeCheck(_Interactive_data);
-    // 只重画发生变化的项目，发送后清除对应标志位。
-    if (_Interactive_data->Referee_Interactive_Flag.chassis_flag == 1)
+    UIChangeCheck(data);
+    const referee_id_t *id = &info->referee_id;
+    if (data->Referee_Interactive_Flag.chassis_flag)
     {
-        switch (_Interactive_data->chassis_mode)
+        const char *text;
+        switch (data->chassis_mode)
         {
-        case CHASSIS_ZERO_FORCE:
-            UICharDraw(&UI_State_dyn[0], "sd0", UI_Graph_Change, 8, UI_Color_Main, 15, 2, 270, 750, "zeroforce");
-            break;
-        case CHASSIS_ROTATE:
-            UICharDraw(&UI_State_dyn[0], "sd0", UI_Graph_Change, 8, UI_Color_Main, 15, 2, 270, 750, "rotate   ");
-            // 此处注意字数对齐问题，字数相同才能覆盖掉
-            break;
-        case CHASSIS_NO_FOLLOW:
-            UICharDraw(&UI_State_dyn[0], "sd0", UI_Graph_Change, 8, UI_Color_Main, 15, 2, 270, 750, "nofollow ");
-            break;
-        case CHASSIS_FOLLOW_GIMBAL_YAW:
-            UICharDraw(&UI_State_dyn[0], "sd0", UI_Graph_Change, 8, UI_Color_Main, 15, 2, 270, 750, "follow   ");
-            break;
+        case CHASSIS_ZERO_FORCE: text = "zeroforce"; break;
+        case CHASSIS_ROTATE: text = "rotate   "; break;
+        case CHASSIS_NO_FOLLOW: text = "nofollow "; break;
+        case CHASSIS_FOLLOW_GIMBAL_YAW: text = "follow   "; break;
+        default: return UI_ERROR_RANGE;
         }
-        UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[0]);
-        _Interactive_data->Referee_Interactive_Flag.chassis_flag = 0;
+        UI_BUILD(UICharDraw(&UI_State_dyn[0], "sd0", UI_Graph_Change, 8, UI_Color_Main, 15, 2, 270, 750, "%s", text));
+        UI_SUBMIT(UICharRefresh(id, &UI_State_dyn[0]));
+        data->Referee_Interactive_Flag.chassis_flag = 0u;
     }
-    // gimbal
-    if (_Interactive_data->Referee_Interactive_Flag.gimbal_flag == 1)
+    if (data->Referee_Interactive_Flag.gimbal_flag)
     {
-        switch (_Interactive_data->gimbal_mode)
+        const char *text;
+        switch (data->gimbal_mode)
         {
-        case GIMBAL_ZERO_FORCE:
-        {
-            UICharDraw(&UI_State_dyn[1], "sd1", UI_Graph_Change, 8, UI_Color_Yellow, 15, 2, 270, 700, "zeroforce");
-            break;
+        case GIMBAL_ZERO_FORCE: text = "zeroforce"; break;
+        case GIMBAL_FREE_MODE: text = "free     "; break;
+        case GIMBAL_GYRO_MODE: text = "gyro     "; break;
+        default: return UI_ERROR_RANGE;
         }
-        case GIMBAL_FREE_MODE:
-        {
-            UICharDraw(&UI_State_dyn[1], "sd1", UI_Graph_Change, 8, UI_Color_Yellow, 15, 2, 270, 700, "free     ");
-            break;
-        }
-        case GIMBAL_GYRO_MODE:
-        {
-            UICharDraw(&UI_State_dyn[1], "sd1", UI_Graph_Change, 8, UI_Color_Yellow, 15, 2, 270, 700, "gyro     ");
-            break;
-        }
-        }
-        UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[1]);
-        _Interactive_data->Referee_Interactive_Flag.gimbal_flag = 0;
+        UI_BUILD(UICharDraw(&UI_State_dyn[1], "sd1", UI_Graph_Change, 8, UI_Color_Yellow, 15, 2, 270, 700, "%s", text));
+        UI_SUBMIT(UICharRefresh(id, &UI_State_dyn[1]));
+        data->Referee_Interactive_Flag.gimbal_flag = 0u;
     }
-    // shoot
-    if (_Interactive_data->Referee_Interactive_Flag.shoot_flag == 1)
+    if (data->Referee_Interactive_Flag.shoot_flag)
     {
-        UICharDraw(&UI_State_dyn[2], "sd2", UI_Graph_Change, 8, UI_Color_Pink, 15, 2, 270, 650, _Interactive_data->shoot_mode == SHOOT_ON ? "on " : "off");
-        UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[2]);
-        _Interactive_data->Referee_Interactive_Flag.shoot_flag = 0;
+        UI_BUILD(UICharDraw(&UI_State_dyn[2], "sd2", UI_Graph_Change, 8, UI_Color_Pink, 15, 2, 270, 650, data->shoot_mode == SHOOT_ON ? "on " : "off"));
+        UI_SUBMIT(UICharRefresh(id, &UI_State_dyn[2]));
+        data->Referee_Interactive_Flag.shoot_flag = 0u;
     }
-    // friction
-    if (_Interactive_data->Referee_Interactive_Flag.friction_flag == 1)
+    if (data->Referee_Interactive_Flag.friction_flag)
     {
-        UICharDraw(&UI_State_dyn[3], "sd3", UI_Graph_Change, 8, UI_Color_Pink, 15, 2, 270, 600, _Interactive_data->friction_mode == FRICTION_ON ? "on " : "off");
-        UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[3]);
-        _Interactive_data->Referee_Interactive_Flag.friction_flag = 0;
+        UI_BUILD(UICharDraw(&UI_State_dyn[3], "sd3", UI_Graph_Change, 8, UI_Color_Pink, 15, 2, 270, 600, data->friction_mode == FRICTION_ON ? "on " : "off"));
+        UI_SUBMIT(UICharRefresh(id, &UI_State_dyn[3]));
+        data->Referee_Interactive_Flag.friction_flag = 0u;
     }
-    // lid
-    if (_Interactive_data->Referee_Interactive_Flag.lid_flag == 1)
+    if (data->Referee_Interactive_Flag.lid_flag)
     {
-        UICharDraw(&UI_State_dyn[4], "sd4", UI_Graph_Change, 8, UI_Color_Pink, 15, 2, 270, 550, _Interactive_data->lid_mode == LID_OPEN ? "open " : "close");
-        UICharRefresh(&referee_recv_info->referee_id, UI_State_dyn[4]);
-        _Interactive_data->Referee_Interactive_Flag.lid_flag = 0;
+        UI_BUILD(UICharDraw(&UI_State_dyn[4], "sd4", UI_Graph_Change, 8, UI_Color_Pink, 15, 2, 270, 550, data->lid_mode == LID_OPEN ? "open " : "close"));
+        UI_SUBMIT(UICharRefresh(id, &UI_State_dyn[4]));
+        data->Referee_Interactive_Flag.lid_flag = 0u;
     }
-    // power
-    if (_Interactive_data->Referee_Interactive_Flag.Power_flag == 1)
+    if (data->Referee_Interactive_Flag.Power_flag)
     {
-        UIFloatDraw(&UI_Energy[1], "sd5", UI_Graph_Change, 8, UI_Color_Green, 18, 2, 2, 750, 230, _Interactive_data->Chassis_Power_Data.chassis_power_mx * 1000);
-        UILineDraw(&UI_Energy[2], "sd6", UI_Graph_Change, 8, UI_Color_Pink, 30, 720, 160, (uint32_t)750 + _Interactive_data->Chassis_Power_Data.chassis_power_mx * 30, 160);
-        UIGraphRefresh(&referee_recv_info->referee_id, 2, UI_Energy[1], UI_Energy[2]);
-        _Interactive_data->Referee_Interactive_Flag.Power_flag = 0;
+        double watts = data->Chassis_Power_Data.chassis_power_mx;
+        double milli = watts*1000.0, end_x = 750.0+watts*30.0;
+        // 先在double中检查再转整数，NaN、过大或负坐标不会进入C的未定义转换。
+        if (!isfinite(milli) || milli < INT32_MIN || milli > INT32_MAX ||
+            !isfinite(end_x) || end_x < 0.0 || end_x > 1920.0) return UI_ERROR_RANGE;
+        Graph_Data_t power[2];
+        UI_BUILD(UIFloatDraw(&power[0], "sd5", UI_Graph_Change, 8, UI_Color_Green, 18, 2, 2, 750, 230, (int32_t)milli));
+        UI_BUILD(UILineDraw(&power[1], "sd6", UI_Graph_Change, 8, UI_Color_Pink, 30, 720, 160, (uint32_t)end_x, 160));
+        UI_SUBMIT(UIGraphRefresh(id, power, 2u, 2u));
+        data->Referee_Interactive_Flag.Power_flag = 0u;
     }
+    return UI_OK;
 }
 
-/**
- * @brief  模式切换检测,模式发生切换时，对flag置位
- * @param  Referee_Interactive_info_t *_Interactive_data
- * @retval none
- * @attention
- */
 static void UIChangeCheck(Referee_Interactive_info_t *_Interactive_data)
 {
     if (_Interactive_data->chassis_mode != _Interactive_data->chassis_last_mode)

@@ -151,6 +151,32 @@ void USARTSend(USARTInstance *_instance, uint8_t *send_buf, uint16_t send_size, 
     }
 }
 
+USARTSendStatus_t USARTSendChecked(USARTInstance *instance, const uint8_t *data,
+                                 uint16_t length, USART_TRANSFER_MODE mode)
+{
+    if (instance == NULL || instance->usart_handle == NULL || data == NULL || length == 0u)
+        return USART_SEND_BAD_ARGUMENT;
+    HAL_StatusTypeDef status;
+    // 本入口拒绝非法模式，不沿用旧入口的无限等待；HAL接口只借用缓冲区。
+    switch (mode)
+    {
+    case USART_TRANSFER_BLOCKING:
+        status = HAL_UART_Transmit(instance->usart_handle, (uint8_t *)data, length, 100u); break;
+    case USART_TRANSFER_IT:
+        status = HAL_UART_Transmit_IT(instance->usart_handle, (uint8_t *)data, length); break;
+    case USART_TRANSFER_DMA:
+        status = HAL_UART_Transmit_DMA(instance->usart_handle, (uint8_t *)data, length); break;
+    default: return USART_SEND_BAD_ARGUMENT;
+    }
+    switch (status)
+    {
+    case HAL_OK: return USART_SEND_ACCEPTED;
+    case HAL_BUSY: return USART_SEND_BUSY;
+    case HAL_TIMEOUT: return USART_SEND_TIMEOUT;
+    default: return USART_SEND_ERROR;
+    }
+}
+
 /* 串口发送时,gstate会被设为BUSY_TX */
 uint8_t USARTIsReady(USARTInstance *_instance)
 {

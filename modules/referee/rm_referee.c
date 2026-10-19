@@ -1,6 +1,6 @@
 /**
 * @file rm_referee.c
-* @brief 接收裁判系统串口数据，检查帧后更新对应数据结构。
+* @brief 接收并检查裁判帧；RefereeSend由裁判任务串行复制到持久缓冲后发送。
 * 只处理命令码已知且数据段长度足够的帧；未知命令会跳过。
  * @author kidneygood (you@domain.com)
  * @version 0.1
@@ -72,8 +72,8 @@ static uint8_t JudgeReadData(uint8_t *buff, uint16_t recv_len)
 
 		// 整包 CRC16 校验
 		if (CRCCompute(CRC16_SP_REFEREE, buff + offset, frame_len - 2u, &crc) != CRC_OK ||
-            crc != ((uint16_t)buff[offset + frame_len - 2u] |
-                    ((uint16_t)buff[offset + frame_len - 1u] << 8u)))
+            crc != ((uint32_t)buff[offset + frame_len - 2u] |
+                    ((uint32_t)buff[offset + frame_len - 1u] << 8u)))
 		{
 			offset++; // CRC 错误, 继续向后查找
 			continue;
@@ -192,6 +192,7 @@ static void RefereeRxCallback()
 // 裁判系统丢失回调函数,重新初始化裁判系统串口
 static void RefereeLostCallback(void *arg)
 {
+    (void)arg;
 	// 看门狗发现长时间没有接收后重新启动串口接收。
 	USARTServiceInit(referee_usart_instance);
 	LOGWARNING("[rm_ref] lost referee data");
@@ -228,14 +229,24 @@ referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle)
     return &referee_info;
 }
 
-/**
- * @brief 裁判系统数据发送函数
- * @param
- */
-void RefereeSend(uint8_t *send, uint16_t tx_len)
+RefereeSendStatus_t RefereeSend(const uint8_t *send, uint16_t tx_len)
 {
-	USARTSend(referee_usart_instance, send, tx_len, USART_TRANSFER_DMA);
-	osDelay(115);
+    static uint8_t tx_buffer[128];
+    if (send == NULL || tx_len == 0u || tx_len > sizeof(tx_buffer)) return REFEREE_SEND_BAD_ARGUMENT;
+    if (referee_usart_instance == NULL) return REFEREE_SEND_NOT_INITIALIZED;
+    // 单任务独占发送；必须先确认HAL结束借用旧缓冲，115ms等待不能替代此检查。
+    if (!USARTIsReady(referee_usart_instance)) return REFEREE_SEND_BUSY;
+    memcpy(tx_buffer, send, tx_len);
+    USARTSendStatus_t status = USARTSendChecked(referee_usart_instance, tx_buffer, tx_len, USART_TRANSFER_DMA);
+    switch (status)
+    {
+    case USART_SEND_ACCEPTED:
+        osDelay(115);
+        return REFEREE_SEND_ACCEPTED;
+    case USART_SEND_BUSY: return REFEREE_SEND_BUSY;
+    case USART_SEND_TIMEOUT: return REFEREE_SEND_TIMEOUT;
+    default: return REFEREE_SEND_ERROR;
+    }
 }
 
 uint8_t RefereeIsOnline(void)

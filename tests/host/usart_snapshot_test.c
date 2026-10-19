@@ -1,3 +1,7 @@
+/** @file usart_snapshot_test.c
+ * @brief 用HAL模型检查UART接收独立副本、初始化回退和发送启动结果。
+ * @note 主机运行，不连接串口；所有检查在Release下仍执行。
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +13,8 @@ static HAL_StatusTypeDef receive_start_status = HAL_OK;
 static unsigned receive_start_count;
 static unsigned abort_receive_count;
 static uint32_t now_ms;
+static HAL_StatusTypeDef transmit_status = HAL_OK;
+static unsigned transmit_calls;
 #if defined(__linux__)
 static long allocation_countdown = -1;
 void *__real_malloc(size_t size);
@@ -37,7 +43,7 @@ HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h,uint8_t *p,
 { (void)h;(void)p;(void)n;++receive_start_count;return receive_start_status; }
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h) { (void)h;++abort_receive_count;return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *h,uint8_t *p,uint16_t n,uint32_t t)
-{ (void)h;(void)p;(void)n;(void)t;return HAL_OK; }
+{ (void)h;(void)p;(void)n;CHECK(t==0u || t==100u);++transmit_calls;return transmit_status; }
 HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h,uint8_t *p,uint16_t n) { return HAL_UART_Transmit(h,p,n,0); }
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h,uint8_t *p,uint16_t n) { return HAL_UART_Transmit(h,p,n,0); }
 static void callback(void)
@@ -53,6 +59,25 @@ static void callback(void)
 int main(void)
 {
     UART_HandleTypeDef uart={0};
+    USARTInstance sender={.usart_handle=&uart}, missing={0};
+    uint8_t outgoing[1]={7};
+    CHECK(USARTSendChecked(NULL,outgoing,1,USART_TRANSFER_DMA)==USART_SEND_BAD_ARGUMENT);
+    CHECK(USARTSendChecked(&missing,outgoing,1,USART_TRANSFER_DMA)==USART_SEND_BAD_ARGUMENT);
+    CHECK(USARTSendChecked(&sender,NULL,1,USART_TRANSFER_DMA)==USART_SEND_BAD_ARGUMENT);
+    CHECK(USARTSendChecked(&sender,outgoing,0,USART_TRANSFER_DMA)==USART_SEND_BAD_ARGUMENT);
+    CHECK(USARTSendChecked(&sender,outgoing,1,USART_TRANSFER_NONE)==USART_SEND_BAD_ARGUMENT);
+    CHECK(USARTSendChecked(&sender,outgoing,1,(USART_TRANSFER_MODE)99)==USART_SEND_BAD_ARGUMENT);
+    CHECK(transmit_calls==0);
+    const HAL_StatusTypeDef results[]={HAL_OK,HAL_BUSY,HAL_ERROR,HAL_TIMEOUT};
+    const USARTSendStatus_t expected[]={USART_SEND_ACCEPTED,USART_SEND_BUSY,USART_SEND_ERROR,USART_SEND_TIMEOUT};
+    // 三种模式都经真实封装报告HAL结果，未知模式不再进入新接口的等待循环。
+    for(unsigned mode=USART_TRANSFER_BLOCKING;mode<=USART_TRANSFER_DMA;++mode)
+        for(unsigned result=0;result<4u;++result) {
+            transmit_status=results[result];
+            CHECK(USARTSendChecked(&sender,outgoing,1,(USART_TRANSFER_MODE)mode)==expected[result]);
+        }
+    CHECK(transmit_calls==12);
+    transmit_status=HAL_OK;
     DMA_HandleTypeDef uart_dma={0};
     uart.hdmarx=&uart_dma;
     USART_Init_Config_s config={.recv_buff_size=18,.usart_handle=&uart,.module_callback=callback};

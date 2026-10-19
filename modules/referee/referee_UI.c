@@ -1,357 +1,280 @@
 /**
-* @file referee_UI.c
+ * @file referee_UI.c
  * @author kidneygood (you@domain.com)
-* @brief 填写裁判系统图形和文字数据，组包后交给裁判串口发送。
+ * @brief 检查绘图候选值并显式编码裁判UI帧；发送由裁判任务串行调用。
  * @version 0.1
  * @date 2023-1-18
- *
  * @copyright Copyright (c) 2022
- *
  */
 #include "referee_UI.h"
-#include "string.h"
 #include "crc.h"
-#include "stdio.h"
-#include "rm_referee.h"
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
 
-// 包序号
-/********************************************删除操作*************************************
-**参数：_id 对应的id结构体
-		Del_Operate  对应头文件删除操作
-		Del_Layer    要删除的层 取值0-9
-*****************************************************************************************/
-void UIDelete(referee_id_t *_id, uint8_t Del_Operate, uint8_t Del_Layer)
+// 官方2026 V2.0.0表1-27～1-32；尺寸是编码范围，不推算图形是否完全落在屏幕中。
+static int common_valid(uint32_t op, uint32_t layer, uint32_t color, uint32_t width, uint32_t x, uint32_t y)
 {
-	static UI_delete_t UI_delete_data;
-	uint8_t temp_datalength = Interactive_Data_LEN_Head + UI_Operate_LEN_Del;
-
-	UI_delete_data.FrameHeader.SOF = REFEREE_SOF;
-	UI_delete_data.FrameHeader.DataLength = temp_datalength;
-	UI_delete_data.FrameHeader.Seq = UI_Seq;
-	uint32_t crc;
-    // 只在 CRC 算出后填写字段，失败不提交报文。
-    if (CRCCompute(CRC8_REFEREE, (const uint8_t *)&UI_delete_data, LEN_CRC8, &crc) != CRC_OK)
-        return;
-    UI_delete_data.FrameHeader.CRC8 = (uint8_t)crc;
-
-	UI_delete_data.CmdID = ID_student_interactive;
-
-	UI_delete_data.datahead.data_cmd_id = UI_Data_ID_Del;
-	UI_delete_data.datahead.receiver_ID = _id->Cilent_ID;
-	UI_delete_data.datahead.sender_ID = _id->Robot_ID;
-
-	UI_delete_data.Delete_Operate = Del_Operate;
-	UI_delete_data.Layer = Del_Layer;
-
-	// 帧尾校验覆盖帧头、命令码和交互数据。
-	if (CRCCompute(CRC16_SP_REFEREE, (const uint8_t *)&UI_delete_data,
-                   LEN_HEADER + LEN_CMDID + temp_datalength, &crc) != CRC_OK)
-        return;
-    UI_delete_data.frametail = (uint16_t)crc;
-
-	RefereeSend((uint8_t *)&UI_delete_data, LEN_HEADER + LEN_CMDID + temp_datalength + LEN_TAIL);
-
-	UI_Seq++;
+    return op <= 3u && layer <= 9u && color <= 8u && width <= 1023u && x <= 1920u && y <= 1080u;
 }
 
-void UILineDraw(Graph_Data_t *graph, char graphname[3], uint32_t Graph_Operate, uint32_t Graph_Layer, uint32_t Graph_Color,
-				uint32_t Graph_Width, uint32_t Start_x, uint32_t Start_y, uint32_t End_x, uint32_t End_y)
+// 名称最多读3字节；遇到结束标记即停止，候选对象清零避免留下上次的名称。
+static UIStatus_t prepare(Graph_Data_t *candidate, const void *output, const char *name,
+                         uint32_t op, uint32_t layer, uint32_t color,
+                         uint32_t width, uint32_t x, uint32_t y, uint32_t type)
 {
-	int i;
-	// 图形名最多占三个字节，按协议要求从后往前写入。
-	for (i = 0; i < 3 && graphname[i] != '\0'; i++)
-	{
-		graph->graphic_name[2 - i] = graphname[i];
-	}
-
-	graph->operate_tpye = Graph_Operate;
-	graph->graphic_tpye = UI_Graph_Line;
-	graph->layer = Graph_Layer;
-	graph->color = Graph_Color;
-
-	graph->start_angle = 0;
-	graph->end_angle = 0;
-	graph->width = Graph_Width;
-	graph->start_x = Start_x;
-	graph->start_y = Start_y;
-	graph->radius = 0;
-	graph->end_x = End_x;
-	graph->end_y = End_y;
+    if (output == NULL || name == NULL) return UI_ERROR_ARGUMENT;
+    if (!common_valid(op, layer, color, width, x, y)) return UI_ERROR_RANGE;
+    memset(candidate, 0, sizeof(*candidate));
+    for (size_t i = 0; i < 3u && name[i] != '\0'; ++i) candidate->graphic_name[2u-i] = (uint8_t)name[i];
+    candidate->operate_tpye = op; candidate->graphic_tpye = type;
+    candidate->layer = layer; candidate->color = color;
+    candidate->width = width; candidate->start_x = x; candidate->start_y = y;
+    return UI_OK;
 }
 
-void UIRectangleDraw(Graph_Data_t *graph, char graphname[3], uint32_t Graph_Operate, uint32_t Graph_Layer, uint32_t Graph_Color,
-					 uint32_t Graph_Width, uint32_t Start_x, uint32_t Start_y, uint32_t End_x, uint32_t End_y)
+UIStatus_t UILineDraw(Graph_Data_t *graph, const char *name, uint32_t op, uint32_t layer,
+                     uint32_t color, uint32_t width, uint32_t x, uint32_t y, uint32_t ex, uint32_t ey)
 {
-	int i;
-	// 图形名最多占三个字节，按协议要求从后往前写入。
-	for (i = 0; i < 3 && graphname[i] != '\0'; i++)
-	{
-		graph->graphic_name[2 - i] = graphname[i];
-	}
-
-	graph->graphic_tpye = UI_Graph_Rectangle;
-	graph->operate_tpye = Graph_Operate;
-	graph->layer = Graph_Layer;
-	graph->color = Graph_Color;
-
-	graph->start_angle = 0;
-	graph->end_angle = 0;
-	graph->width = Graph_Width;
-	graph->start_x = Start_x;
-	graph->start_y = Start_y;
-	graph->radius = 0;
-	graph->end_x = End_x;
-	graph->end_y = End_y;
+    Graph_Data_t candidate;
+    UIStatus_t status = prepare(&candidate, graph, name, op, layer, color, width, x, y, UI_Graph_Line);
+    if (status != UI_OK) return status;
+    if (ex > 1920u || ey > 1080u) return UI_ERROR_RANGE;
+    candidate.end_x = ex; candidate.end_y = ey;
+    *graph = candidate;
+    return UI_OK;
 }
 
-void UICircleDraw(Graph_Data_t *graph, char graphname[3], uint32_t Graph_Operate, uint32_t Graph_Layer, uint32_t Graph_Color,
-				  uint32_t Graph_Width, uint32_t Start_x, uint32_t Start_y, uint32_t Graph_Radius)
+UIStatus_t UIRectangleDraw(Graph_Data_t *graph, const char *name, uint32_t op, uint32_t layer,
+                          uint32_t color, uint32_t width, uint32_t x, uint32_t y, uint32_t ex, uint32_t ey)
 {
-	int i;
-	// 图形名最多占三个字节，按协议要求从后往前写入。
-	for (i = 0; i < 3 && graphname[i] != '\0'; i++)
-	{
-		graph->graphic_name[2 - i] = graphname[i];
-	}
-
-	graph->graphic_tpye = UI_Graph_Circle;
-	graph->operate_tpye = Graph_Operate;
-	graph->layer = Graph_Layer;
-	graph->color = Graph_Color;
-
-	graph->start_angle = 0;
-	graph->end_angle = 0;
-	graph->width = Graph_Width;
-	graph->start_x = Start_x;
-	graph->start_y = Start_y;
-	graph->radius = Graph_Radius;
-	graph->end_x = 0;
-	graph->end_y = 0;
+    if (graph == NULL) return UI_ERROR_ARGUMENT;
+    Graph_Data_t candidate;
+    UIStatus_t status = UILineDraw(&candidate, name, op, layer, color, width, x, y, ex, ey);
+    if (status != UI_OK) return status;
+    candidate.graphic_tpye = UI_Graph_Rectangle;
+    *graph = candidate;
+    return UI_OK;
 }
 
-void UIOvalDraw(Graph_Data_t *graph, char graphname[3], uint32_t Graph_Operate, uint32_t Graph_Layer, uint32_t Graph_Color,
-				uint32_t Graph_Width, uint32_t Start_x, uint32_t Start_y, uint32_t end_x, uint32_t end_y)
+UIStatus_t UICircleDraw(Graph_Data_t *graph, const char *name, uint32_t op, uint32_t layer,
+                       uint32_t color, uint32_t width, uint32_t x, uint32_t y, uint32_t radius)
 {
-	int i;
-	// 图形名最多占三个字节，按协议要求从后往前写入。
-	for (i = 0; i < 3 && graphname[i] != '\0'; i++)
-	{
-		graph->graphic_name[2 - i] = graphname[i];
-	}
-
-	graph->graphic_tpye = UI_Graph_Ellipse;
-	graph->operate_tpye = Graph_Operate;
-	graph->layer = Graph_Layer;
-	graph->color = Graph_Color;
-	graph->width = Graph_Width;
-
-	graph->start_angle = 0;
-	graph->end_angle = 0;
-	graph->width = Graph_Width;
-	graph->start_x = Start_x;
-	graph->start_y = Start_y;
-	graph->radius = 0;
-	graph->end_x = end_x;
-	graph->end_y = end_y;
+    Graph_Data_t candidate;
+    UIStatus_t status = prepare(&candidate, graph, name, op, layer, color, width, x, y, UI_Graph_Circle);
+    if (status != UI_OK) return status;
+    if (radius > 1023u) return UI_ERROR_RANGE;
+    candidate.radius = radius;
+    *graph = candidate;
+    return UI_OK;
 }
 
-void UIArcDraw(Graph_Data_t *graph, char graphname[3], uint32_t Graph_Operate, uint32_t Graph_Layer, uint32_t Graph_Color,
-			   uint32_t Graph_StartAngle, uint32_t Graph_EndAngle, uint32_t Graph_Width, uint32_t Start_x, uint32_t Start_y,
-			   uint32_t end_x, uint32_t end_y)
+UIStatus_t UIOvalDraw(Graph_Data_t *graph, const char *name, uint32_t op, uint32_t layer,
+                     uint32_t color, uint32_t width, uint32_t x, uint32_t y, uint32_t rx, uint32_t ry)
 {
-	int i;
-	// 图形名最多占三个字节，按协议要求从后往前写入。
-	for (i = 0; i < 3 && graphname[i] != '\0'; i++)
-	{
-		graph->graphic_name[2 - i] = graphname[i];
-	}
-
-	graph->graphic_tpye = UI_Graph_Arc;
-	graph->operate_tpye = Graph_Operate;
-	graph->layer = Graph_Layer;
-	graph->color = Graph_Color;
-
-	graph->start_angle = Graph_StartAngle;
-	graph->end_angle = Graph_EndAngle;
-	graph->width = Graph_Width;
-	graph->start_x = Start_x;
-	graph->start_y = Start_y;
-	graph->radius = 0;
-	graph->end_x = end_x;
-	graph->end_y = end_y;
+    Graph_Data_t candidate;
+    UIStatus_t status = prepare(&candidate, graph, name, op, layer, color, width, x, y, UI_Graph_Ellipse);
+    if (status != UI_OK) return status;
+    if (rx > 2047u || ry > 2047u) return UI_ERROR_RANGE;
+    candidate.end_x = rx; candidate.end_y = ry;
+    *graph = candidate;
+    return UI_OK;
 }
 
-void UIFloatDraw(Graph_Data_t *graph, char graphname[3], uint32_t Graph_Operate, uint32_t Graph_Layer, uint32_t Graph_Color,
-				 uint32_t Graph_Size, uint32_t Graph_Digit, uint32_t Graph_Width, uint32_t Start_x, uint32_t Start_y, int32_t Graph_Float)
+UIStatus_t UIArcDraw(Graph_Data_t *graph, const char *name, uint32_t op, uint32_t layer,
+                    uint32_t color, uint32_t start, uint32_t end, uint32_t width,
+                    uint32_t x, uint32_t y, uint32_t rx, uint32_t ry)
 {
-
-	int i;
-	// 图形名最多占三个字节，按协议要求从后往前写入。
-	for (i = 0; i < 3 && graphname[i] != '\0'; i++)
-	{
-		graph->graphic_name[2 - i] = graphname[i];
-	}
-	graph->graphic_tpye = UI_Graph_Float;
-	graph->operate_tpye = Graph_Operate;
-	graph->layer = Graph_Layer;
-	graph->color = Graph_Color;
-
-	graph->width = Graph_Width;
-	graph->start_x = Start_x;
-	graph->start_y = Start_y;
-	graph->start_angle = Graph_Size;
-	graph->end_angle = Graph_Digit;
-
-	graph->radius = Graph_Float & 0x3FF;
-	graph->end_x = (Graph_Float >> 10) & 0x7FF;
-	graph->end_y = (Graph_Float >> 21) & 0x7FF;
+    if (graph == NULL) return UI_ERROR_ARGUMENT;
+    Graph_Data_t candidate;
+    UIStatus_t status = UIOvalDraw(&candidate, name, op, layer, color, width, x, y, rx, ry);
+    if (status != UI_OK) return status;
+    if (start > 360u || end > 360u) return UI_ERROR_RANGE;
+    candidate.graphic_tpye = UI_Graph_Arc;
+    candidate.start_angle = start; candidate.end_angle = end;
+    *graph = candidate;
+    return UI_OK;
 }
 
-void UIIntDraw(Graph_Data_t *graph, char graphname[3], uint32_t Graph_Operate, uint32_t Graph_Layer, uint32_t Graph_Color,
-			   uint32_t Graph_Size, uint32_t Graph_Width, uint32_t Start_x, uint32_t Start_y, int32_t Graph_Integer)
+UIStatus_t UIIntDraw(Graph_Data_t *graph, const char *name, uint32_t op, uint32_t layer,
+                    uint32_t color, uint32_t size, uint32_t width, uint32_t x, uint32_t y, int32_t value)
 {
-	int i;
-	// 图形名最多占三个字节，按协议要求从后往前写入。
-	for (i = 0; i < 3 && graphname[i] != '\0'; i++)
-	{
-		graph->graphic_name[2 - i] = graphname[i];
-	}
-	graph->graphic_tpye = UI_Graph_Int;
-	graph->operate_tpye = Graph_Operate;
-	graph->layer = Graph_Layer;
-	graph->color = Graph_Color;
-
-	graph->start_angle = Graph_Size;
-	graph->end_angle = 0;
-	graph->width = Graph_Width;
-	graph->start_x = Start_x;
-	graph->start_y = Start_y;
-	graph->radius = Graph_Integer & 0x3FF;
-	graph->end_x = (Graph_Integer >> 10) & 0x7FF;
-	graph->end_y = (Graph_Integer >> 21) & 0x7FF;
+    Graph_Data_t candidate;
+    UIStatus_t status = prepare(&candidate, graph, name, op, layer, color, width, x, y, UI_Graph_Int);
+    if (status != UI_OK) return status;
+    if (size > 511u) return UI_ERROR_RANGE;
+    candidate.start_angle = size;
+    // 先转无符号再拆位，负数也有明确的32位补码结果。
+    uint32_t bits = (uint32_t)value;
+    candidate.radius = bits & 0x3ffu;
+    candidate.end_x = (bits >> 10u) & 0x7ffu;
+    candidate.end_y = (bits >> 21u) & 0x7ffu;
+    *graph = candidate;
+    return UI_OK;
 }
 
-void UICharDraw(String_Data_t *graph, char graphname[3], uint32_t Graph_Operate, uint32_t Graph_Layer, uint32_t Graph_Color,
-				uint32_t Graph_Size, uint32_t Graph_Width, uint32_t Start_x, uint32_t Start_y, char *fmt, ...)
+UIStatus_t UIFloatDraw(Graph_Data_t *graph, const char *name, uint32_t op, uint32_t layer,
+                      uint32_t color, uint32_t size, uint32_t digit, uint32_t width,
+                      uint32_t x, uint32_t y, int32_t value)
 {
-	int i;
-	// 图形名最多占三个字节，按协议要求从后往前写入。
-	for (i = 0; i < 3 && graphname[i] != '\0'; i++)
-	{
-		graph->Graph_Control.graphic_name[2 - i] = graphname[i];
-	}
-
-	graph->Graph_Control.graphic_tpye = UI_Graph_Char;
-	graph->Graph_Control.operate_tpye = Graph_Operate;
-	graph->Graph_Control.layer = Graph_Layer;
-	graph->Graph_Control.color = Graph_Color;
-
-	graph->Graph_Control.width = Graph_Width;
-	graph->Graph_Control.start_x = Start_x;
-	graph->Graph_Control.start_y = Start_y;
-	graph->Graph_Control.start_angle = Graph_Size;
-	graph->Graph_Control.radius = 0;
-	graph->Graph_Control.end_x = 0;
-	graph->Graph_Control.end_y = 0;
-
-	// 按 fmt 和后续参数生成裁判端显示的文字。
-	va_list ap;
-	va_start(ap, fmt);
-	vsprintf((char *)graph->show_Data, fmt, ap);
-	va_end(ap);
-	graph->Graph_Control.end_angle = strlen((const char *)graph->show_Data);
+    if (graph == NULL) return UI_ERROR_ARGUMENT;
+    Graph_Data_t candidate;
+    UIStatus_t status = UIIntDraw(&candidate, name, op, layer, color, size, width, x, y, value);
+    if (status != UI_OK) return status;
+    if (digit > 511u) return UI_ERROR_RANGE;
+    // 2026协议details_b无作用；保留旧形参但固定发送0，不虚构可配置小数位。
+    candidate.graphic_tpye = UI_Graph_Float;
+    *graph = candidate;
+    return UI_OK;
 }
 
-void UIGraphRefresh(referee_id_t *_id, int cnt, ...)
+UIStatus_t UICharDraw(String_Data_t *graph, const char *name, uint32_t op, uint32_t layer,
+                     uint32_t color, uint32_t size, uint32_t width, uint32_t x, uint32_t y, const char *fmt, ...)
 {
-	UI_GraphReFresh_t UI_GraphReFresh_data;
-	Graph_Data_t graphData;
-
-	uint8_t temp_datalength = LEN_HEADER + LEN_CMDID + Interactive_Data_LEN_Head + UI_Operate_LEN_PerDraw * cnt + LEN_TAIL; // 计算交互数据长度
-
-	static uint8_t buffer[512]; // 交互数据缓存
-
-	va_list ap;		   // 创建一个 va_list 类型变量
-	va_start(ap, cnt); // 初始化 va_list 变量为一个参数列表
-
-	UI_GraphReFresh_data.FrameHeader.SOF = REFEREE_SOF;
-	UI_GraphReFresh_data.FrameHeader.DataLength = Interactive_Data_LEN_Head + cnt * UI_Operate_LEN_PerDraw;
-	UI_GraphReFresh_data.FrameHeader.Seq = UI_Seq;
-	uint32_t crc;
-    // 只在 CRC 算出后填写字段，失败不提交报文。
-    if (CRCCompute(CRC8_REFEREE, (const uint8_t *)&UI_GraphReFresh_data, LEN_CRC8, &crc) != CRC_OK)
-        { va_end(ap); return; }
-    UI_GraphReFresh_data.FrameHeader.CRC8 = (uint8_t)crc;
-
-	UI_GraphReFresh_data.CmdID = ID_student_interactive;
-
-	// 协议只提供四种图形数量对应的命令码，cnt 必须是其中之一。
-	switch (cnt)
-	{
-	case 1:
-		UI_GraphReFresh_data.datahead.data_cmd_id = UI_Data_ID_Draw1;
-		break;
-	case 2:
-		UI_GraphReFresh_data.datahead.data_cmd_id = UI_Data_ID_Draw2;
-		break;
-	case 5:
-		UI_GraphReFresh_data.datahead.data_cmd_id = UI_Data_ID_Draw5;
-		break;
-	case 7:
-		UI_GraphReFresh_data.datahead.data_cmd_id = UI_Data_ID_Draw7;
-		break;
-	}
-
-	UI_GraphReFresh_data.datahead.receiver_ID = _id->Cilent_ID;
-	UI_GraphReFresh_data.datahead.sender_ID = _id->Robot_ID;
-	memcpy(buffer, (uint8_t *)&UI_GraphReFresh_data, LEN_HEADER + LEN_CMDID + Interactive_Data_LEN_Head); // 将帧头、命令码、交互数据帧头三部分复制到缓存中
-
-	// 可变参数按 Graph_Data_t 值读取，逐个放到帧数据区。
-	for (uint8_t i = 0; i < cnt; i++)
-	{
-		graphData = va_arg(ap, Graph_Data_t);
-		memcpy(buffer + (LEN_HEADER + LEN_CMDID + Interactive_Data_LEN_Head + UI_Operate_LEN_PerDraw * i), (uint8_t *)&graphData, UI_Operate_LEN_PerDraw);
-	}
-	if (CRCCompute(CRC16_SP_REFEREE, buffer, temp_datalength - 2u, &crc) != CRC_OK)
-    { va_end(ap); return; }
-    buffer[temp_datalength - 2u] = (uint8_t)crc;
-    buffer[temp_datalength - 1u] = (uint8_t)(crc >> 8u);
-	RefereeSend(buffer, temp_datalength);
-
-	va_end(ap); // 结束可变参数的获取
+    String_Data_t candidate = {0};
+    UIStatus_t status = prepare(&candidate.Graph_Control, graph, name, op, layer, color, width, x, y, UI_Graph_Char);
+    if (status != UI_OK) return status;
+    if (fmt == NULL) return UI_ERROR_ARGUMENT;
+    if (size > 511u) return UI_ERROR_RANGE;
+    char text[31];
+    va_list ap;
+    va_start(ap, fmt);
+    int length = vsnprintf(text, sizeof(text), fmt, ap);
+    va_end(ap);
+    // 临时区另留结束标记；超长整条拒绝，不改旧对象。
+    if (length < 0) return UI_ERROR_FORMAT;
+    if (length > 30) return UI_ERROR_LENGTH;
+    memcpy(candidate.show_Data, text, (size_t)length);
+    candidate.Graph_Control.start_angle = size;
+    candidate.Graph_Control.end_angle = (uint32_t)length;
+    *graph = candidate;
+    return UI_OK;
 }
 
-/************************************************UI推送字符（使更改生效）*********************************/
-void UICharRefresh(referee_id_t *_id, String_Data_t string_Data)
+// 数字图形的后三个位段合起来是int32，不按坐标检查。
+static int valid_graph(const Graph_Data_t *g, int text)
 {
-	static UI_CharReFresh_t UI_CharReFresh_data;
+    if (!common_valid(g->operate_tpye, g->layer, g->color, g->width, g->start_x, g->start_y)) return 0;
+    switch (g->graphic_tpye)
+    {
+    case UI_Graph_Line:
+    case UI_Graph_Rectangle:
+        return !text && g->start_angle == 0u && g->end_angle == 0u && g->radius == 0u &&
+               g->end_x <= 1920u && g->end_y <= 1080u;
+    case UI_Graph_Circle:
+        return !text && g->start_angle == 0u && g->end_angle == 0u && g->end_x == 0u && g->end_y == 0u;
+    case UI_Graph_Ellipse:
+        return !text && g->start_angle == 0u && g->end_angle == 0u && g->radius == 0u;
+    case UI_Graph_Arc:
+        return !text && g->start_angle <= 360u && g->end_angle <= 360u && g->radius == 0u;
+    case UI_Graph_Float:
+    case UI_Graph_Int:
+        return !text && g->end_angle == 0u;
+    case UI_Graph_Char:
+        return text && g->end_angle <= 30u && g->radius == 0u && g->end_x == 0u && g->end_y == 0u;
+    default: return 0;
+    }
+}
 
-	uint8_t temp_datalength = Interactive_Data_LEN_Head + UI_Operate_LEN_DrawChar; // 计算交互数据长度
+static void le16(uint8_t *out, uint16_t value)
+{
+    out[0] = (uint8_t)value; out[1] = (uint8_t)(value >> 8u);
+}
 
-	UI_CharReFresh_data.FrameHeader.SOF = REFEREE_SOF;
-	UI_CharReFresh_data.FrameHeader.DataLength = temp_datalength;
-	UI_CharReFresh_data.FrameHeader.Seq = UI_Seq;
-	uint32_t crc;
-    // 只在 CRC 算出后填写字段，失败不提交报文。
-    if (CRCCompute(CRC8_REFEREE, (const uint8_t *)&UI_CharReFresh_data, LEN_CRC8, &crc) != CRC_OK)
-        return;
-    UI_CharReFresh_data.FrameHeader.CRC8 = (uint8_t)crc;
+static void le32(uint8_t *out, uint32_t value)
+{
+    for (unsigned i = 0; i < 4u; ++i) out[i] = (uint8_t)(value >> (8u*i));
+}
 
-	UI_CharReFresh_data.CmdID = ID_student_interactive;
+// 位域仅作为本地对象，线上字节显式组合，不依赖编译器布局。
+static void encode_graph(uint8_t *out, const Graph_Data_t *g)
+{
+    memcpy(out, g->graphic_name, 3u);
+    le32(out+3, g->operate_tpye | (g->graphic_tpye << 3u) | (g->layer << 6u) |
+         (g->color << 10u) | (g->start_angle << 14u) | ((uint32_t)g->end_angle << 23u));
+    le32(out+7, g->width | (g->start_x << 10u) | ((uint32_t)g->start_y << 21u));
+    le32(out+11, g->radius | (g->end_x << 10u) | ((uint32_t)g->end_y << 21u));
+}
 
-	UI_CharReFresh_data.datahead.data_cmd_id = UI_Data_ID_DrawChar;
+// 附录二只列出每方1～6号选手端；雷达另允许向任意己方选手端发送。
+static int valid_id(const referee_id_t *id)
+{
+    unsigned client = id->Cilent_ID;
+    if (client < 0x100u) return 0;
+    client -= 0x100u;
+    int red = client >= 1u && client <= 6u;
+    int blue = client >= 101u && client <= 106u;
+    return (red || blue) && (id->Robot_ID == client ||
+           (red && id->Robot_ID == 9u) || (blue && id->Robot_ID == 109u));
+}
 
-	UI_CharReFresh_data.datahead.receiver_ID = _id->Cilent_ID;
-	UI_CharReFresh_data.datahead.sender_ID = _id->Robot_ID;
+static UIStatus_t send_frame(const referee_id_t *id, uint16_t command, const uint8_t *content, size_t length)
+{
+    if (id == NULL) return UI_ERROR_ARGUMENT;
+    if (!valid_id(id)) return UI_ERROR_RANGE;
+    uint8_t frame[120] = {0};
+    size_t total = 15u + length;
+    if (total > sizeof(frame)) return UI_ERROR_LENGTH;
+    frame[0] = REFEREE_SOF;
+    le16(frame+1, (uint16_t)(6u+length));
+    frame[3] = UI_Seq;
+    uint32_t crc;
+    if (CRCCompute(CRC8_REFEREE, frame, 4u, &crc) != CRC_OK) return UI_ERROR_CRC;
+    frame[4] = (uint8_t)crc;
+    le16(frame+5, ID_student_interactive);
+    le16(frame+7, command); le16(frame+9, id->Robot_ID); le16(frame+11, id->Cilent_ID);
+    memcpy(frame+13, content, length);
+    if (CRCCompute(CRC16_SP_REFEREE, frame, total-2u, &crc) != CRC_OK) return UI_ERROR_CRC;
+    le16(frame+total-2u, (uint16_t)crc);
+    RefereeSendStatus_t status = RefereeSend(frame, (uint16_t)total);
+    // 仅本机接受后推进序号，失败不消费序号，也不冒称客户端已经显示。
+    switch (status)
+    {
+    case REFEREE_SEND_ACCEPTED: ++UI_Seq; return UI_SUBMITTED;
+    case REFEREE_SEND_NOT_INITIALIZED: return UI_NOT_INITIALIZED;
+    case REFEREE_SEND_BUSY: return UI_SEND_BUSY;
+    case REFEREE_SEND_TIMEOUT: return UI_SEND_TIMEOUT;
+    default: return UI_SEND_ERROR;
+    }
+}
 
-	UI_CharReFresh_data.String_Data = string_Data;
+UIStatus_t UIDelete(const referee_id_t *id, uint8_t operation, uint8_t layer)
+{
+    if (operation > 2u || layer > 9u) return UI_ERROR_RANGE;
+    uint8_t content[2] = {operation, layer};
+    return send_frame(id, UI_Data_ID_Del, content, sizeof(content));
+}
 
-	if (CRCCompute(CRC16_SP_REFEREE, (const uint8_t *)&UI_CharReFresh_data,
-                   LEN_HEADER + LEN_CMDID + temp_datalength, &crc) != CRC_OK)
-        return;
-    UI_CharReFresh_data.frametail = (uint16_t)crc;
+UIStatus_t UIGraphRefresh(const referee_id_t *id, const Graph_Data_t *graphs, size_t capacity, size_t count)
+{
+    if (id == NULL || graphs == NULL) return UI_ERROR_ARGUMENT;
+    uint16_t command;
+    switch (count)
+    {
+    case 1: command = UI_Data_ID_Draw1; break;
+    case 2: command = UI_Data_ID_Draw2; break;
+    case 5: command = UI_Data_ID_Draw5; break;
+    case 7: command = UI_Data_ID_Draw7; break;
+    default: return UI_ERROR_LENGTH;
+    }
+    if (count > capacity) return UI_ERROR_LENGTH;
+    uint8_t content[105];
+    // 整批检查并编码成功才提交，某个对象非法时不发送前半批。
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (!valid_graph(&graphs[i], 0)) return UI_ERROR_RANGE;
+        encode_graph(content+15u*i, &graphs[i]);
+    }
+    return send_frame(id, command, content, count*15u);
+}
 
-	RefereeSend((uint8_t *)&UI_CharReFresh_data, LEN_HEADER + LEN_CMDID + temp_datalength + LEN_TAIL); // 发送
-
-	UI_Seq++; // 包序号+1
+UIStatus_t UICharRefresh(const referee_id_t *id, const String_Data_t *text)
+{
+    if (id == NULL || text == NULL) return UI_ERROR_ARGUMENT;
+    if (!valid_graph(&text->Graph_Control, 1)) return UI_ERROR_RANGE;
+    uint8_t content[45] = {0};
+    encode_graph(content, &text->Graph_Control);
+    // 仅复制声明长度，余下固定文字区保持0；30字节文本无需结束标记。
+    memcpy(content+15, text->show_Data, text->Graph_Control.end_angle);
+    return send_frame(id, UI_Data_ID_DrawChar, content, sizeof(content));
 }
