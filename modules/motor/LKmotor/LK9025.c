@@ -1,5 +1,7 @@
-/** @file LK9025.c
-* @brief 解析 LK 单圈及速度反馈，累计多圈角度，再按编号填入同一八字节发送数组。
+/**
+ * @file LK9025.c
+ * @brief 管理 LK 实例、解析反馈，并按物理 CAN 总线分别提交多电机帧。
+ * 实例只在启动阶段登记，资源在运行期间长期保留。
  */
 #include "LK9025.h"
 #include <string.h>
@@ -10,10 +12,21 @@
 #include "bsp_dwt.h"
 #include "bsp_log.h"
 
-static uint8_t idx;
-static LKMotorInstance *lkmotor_instance[LK_MOTOR_MX_CNT] = {NULL};
-static CANInstance *sender_instance; // 多电机发送时使用的caninstance(当前保存的是注册的第一个电机的caninstance)
-// 后续考虑兼容单电机和多电机指令.
+static LKMotorInstance *lkmotor_instance[DEVICE_CAN_CNT][LK_MOTOR_PER_BUS_CNT] = {{NULL}};
+static CANInstance *lk_sender_instance[DEVICE_CAN_CNT] = {NULL};
+static uint8_t lk_bus_count[DEVICE_CAN_CNT] = {0};
+
+// 拒绝未知句柄，避免资源申请后才发现目标不属于当前 H723 的三条 CAN 总线。
+static int8_t LKBusIndexFromHandle(FDCAN_HandleTypeDef *can_handle)
+{
+    if (can_handle == &hfdcan1)
+        return 0;
+    if (can_handle == &hfdcan2)
+        return 1;
+    if (can_handle == &hfdcan3)
+        return 2;
+    return -1;
+}
 
 /**
  * @brief 电机反馈报文解析
@@ -56,50 +69,53 @@ static void LKMotorLostCallback(void *motor_ptr)
     static LogRateLimit_t rl_lk_lost = {0};
     if (LogRateLimitAllow(&rl_lk_lost, 1000u))
         LOGWARNING("[LKMotor] 电机离线: id %d (累计 %lu 次, 期间限速 %lu 条)",
-                   (int)motor->motor_can_ins->tx_id,
+                   (int)motor->motor_id,
                    (unsigned long)rl_lk_lost.total, (unsigned long)rl_lk_lost.dropped);
 }
 
-LKMotorInstance *LKMotorInit(Motor_Init_Config_s *config)
+LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
 {
-    if (config == NULL)
+    if (config == NULL || config->motor_type != LK9025)
         return NULL;
+
+    int8_t bus_index = LKBusIndexFromHandle(config->can_init_config.can_handle);
+    uint32_t motor_id = config->can_init_config.tx_id;
+    if (bus_index < 0 || motor_id < 1u || motor_id > LK_MOTOR_PER_BUS_CNT)
+        return NULL;
+
+    uint8_t slot = (uint8_t)(motor_id - 1u);
+    if (lkmotor_instance[(uint8_t)bus_index][slot] != NULL ||
+        lk_bus_count[(uint8_t)bus_index] >= LK_MOTOR_PER_BUS_CNT)
+        return NULL;
+
+    // 先在栈上检查启用环的参数，非法配置不会分配对象或占用底层资源。
+    PIDInstance current_pid = {0};
+    PIDInstance speed_pid = {0};
+    PIDInstance angle_pid = {0};
+    if (MotorPIDInit(&current_pid, &config->controller_param_init_config.current_PID,
+                     (config->controller_setting_init_config.close_loop_type & CURRENT_LOOP) != 0u) != PID_OK ||
+        MotorPIDInit(&speed_pid, &config->controller_param_init_config.speed_PID,
+                     (config->controller_setting_init_config.close_loop_type & SPEED_LOOP) != 0u) != PID_OK ||
+        MotorPIDInit(&angle_pid, &config->controller_param_init_config.angle_PID,
+                     (config->controller_setting_init_config.close_loop_type & ANGLE_LOOP) != 0u) != PID_OK)
+        return NULL;
+
     LKMotorInstance *motor = (LKMotorInstance *)malloc(sizeof(LKMotorInstance));
-    motor = (LKMotorInstance *)malloc(sizeof(LKMotorInstance));
     if (motor == NULL)
         return NULL;
     memset(motor, 0, sizeof(LKMotorInstance));
 
+    motor->motor_id = (uint8_t)motor_id;
+    motor->can_bus_index = (uint8_t)bus_index;
+
     motor->motor_settings = config->controller_setting_init_config;
-    // 只检查实际启用的环，失败发生在注册 CAN 和发送模式命令之前。
-    if (MotorPIDInit(&motor->current_PID, &config->controller_param_init_config.current_PID,
-                     (config->controller_setting_init_config.close_loop_type & CURRENT_LOOP) != 0u) != PID_OK ||
-        MotorPIDInit(&motor->speed_PID, &config->controller_param_init_config.speed_PID,
-                     (config->controller_setting_init_config.close_loop_type & SPEED_LOOP) != 0u) != PID_OK ||
-        MotorPIDInit(&motor->angle_PID, &config->controller_param_init_config.angle_PID,
-                     (config->controller_setting_init_config.close_loop_type & ANGLE_LOOP) != 0u) != PID_OK)
-    {
-        free(motor);
-        return NULL;
-    }
+    motor->current_PID = current_pid;
+    motor->speed_PID = speed_pid;
+    motor->angle_PID = angle_pid;
     motor->other_angle_feedback_ptr = config->controller_param_init_config.other_angle_feedback_ptr;
     motor->other_speed_feedback_ptr = config->controller_param_init_config.other_speed_feedback_ptr;
 
-    config->can_init_config.id = motor;
-    config->can_init_config.can_module_callback = LKMotorDecode;
-    config->can_init_config.rx_id = 0x140 + config->can_init_config.tx_id;
-    config->can_init_config.tx_id = config->can_init_config.tx_id + 0x280 - 1; // 这样在发送写入buffer的时候更方便,因为下标从0开始,LK多电机发送id为0x280
-    motor->motor_can_ins = CANRegister(&config->can_init_config);
-
-    if (idx == 0) // 用第一个电机的can instance发送数据
-    {
-        sender_instance = motor->motor_can_ins;
-        sender_instance->tx_id = 0x280; //  修改tx_id为0x280,用于多电机发送,不用管其他LKMotorInstance的tx_id,它们仅作初始化用
-    }
-
-    LKMotorEnable(motor);
     DWT_GetDeltaT(&motor->measure.feed_dwt_cnt);
-    lkmotor_instance[idx++] = motor;
 
     Daemon_Init_Config_s daemon_config = {
         .callback = LKMotorLostCallback,
@@ -107,83 +123,142 @@ LKMotorInstance *LKMotorInit(Motor_Init_Config_s *config)
         .reload_count = 5, // 50ms
     };
     motor->daemon = DaemonRegister(&daemon_config);
+    if (motor->daemon == NULL)
+    {
+        free(motor);
+        return NULL;
+    }
+
+    CAN_Init_Config_s can_config = config->can_init_config;
+    can_config.id = motor;
+    can_config.can_module_callback = LKMotorDecode;
+    can_config.rx_id = 0x140u + motor_id;
+    can_config.tx_id = 0x280u;
+    motor->motor_can_ins = CANRegister(&can_config);
+    if (motor->motor_can_ins == NULL)
+    {
+        // CAN 失败时先移除离线回调，避免它引用即将释放的候选对象。
+        (void)DaemonUnregister(motor->daemon);
+        free(motor);
+        return NULL;
+    }
+
+    // 所有可能失败的资源申请已完成，至此才让控制和接收路径看到实例。
+    if (lk_sender_instance[(uint8_t)bus_index] == NULL)
+        lk_sender_instance[(uint8_t)bus_index] = motor->motor_can_ins;
+    LKMotorEnable(motor);
+    lkmotor_instance[(uint8_t)bus_index][slot] = motor;
+    lk_bus_count[(uint8_t)bus_index]++;
 
     return motor;
 }
 
-/* 第一个电机的can instance用于发送数据,向其tx_buff填充数据 */
-void LKMotorControl()
+/* 各总线使用本组首个成功登记实例的发送缓冲区。 */
+void LKMotorControl(void)
 {
     float pid_measure, pid_ref;
     int16_t set;
     LKMotorInstance *motor;
     LKMotor_Measure_t *measure;
     Motor_Control_Setting_s *setting;
+    uint8_t tx_frames[DEVICE_CAN_CNT][8] = {{0}};
 
-    for (size_t i = 0; i < idx; ++i)
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
     {
-        motor = lkmotor_instance[i];
-        measure = &motor->measure;
-        setting = &motor->motor_settings;
-        pid_ref = motor->pid_ref;
-        // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
-        float control_dt = 0.0f;
-        PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
-
-        // 保留的旧控制路径：默认角度分支实际使用 real_current，外部反馈由相应指针提供。
-        if (pid_status == PID_OK && (setting->close_loop_type & ANGLE_LOOP) && setting->outer_loop_type == ANGLE_LOOP)
+        for (uint8_t slot = 0u; slot < LK_MOTOR_PER_BUS_CNT; ++slot)
         {
-            if (setting->angle_feedback_source == OTHER_FEED)
-                pid_measure = *motor->other_angle_feedback_ptr;
+            motor = lkmotor_instance[bus][slot];
+            if (motor == NULL)
+                continue;
+
+            measure = &motor->measure;
+            setting = &motor->motor_settings;
+            pid_ref = motor->pid_ref;
+            // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
+            float control_dt = 0.0f;
+            PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
+
+            // 保留当前角度环使用的反馈与 PID 选择，范围由其他任务跟踪。
+            if (pid_status == PID_OK && (setting->close_loop_type & ANGLE_LOOP) && setting->outer_loop_type == ANGLE_LOOP)
+            {
+                if (setting->angle_feedback_source == OTHER_FEED)
+                    pid_measure = *motor->other_angle_feedback_ptr;
+                else
+                    pid_measure = measure->real_current;
+                if (pid_status == PID_OK)
+                    pid_status = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref, control_dt, &pid_ref);
+                if (setting->feedforward_flag & SPEED_FEEDFORWARD)
+                    pid_ref += *motor->speed_feedforward_ptr;
+            }
+
+            // 保留当前速度分支使用 angle_PID 的行为，不在本任务改变控制公式。
+            if (pid_status == PID_OK && (setting->close_loop_type & SPEED_LOOP) && setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP))
+            {
+                if (setting->angle_feedback_source == OTHER_FEED)
+                    pid_measure = *motor->other_speed_feedback_ptr;
+                else
+                    pid_measure = measure->speed_rads;
+                if (pid_status == PID_OK)
+                    pid_status = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref, control_dt, &pid_ref);
+                if (setting->feedforward_flag & CURRENT_FEEDFORWARD)
+                    pid_ref += *motor->current_feedforward_ptr;
+            }
+
+            if (setting->close_loop_type & CURRENT_LOOP)
+            {
+                if (pid_status == PID_OK)
+                    pid_status = PIDCalculate(&motor->current_PID, measure->real_current, pid_ref, control_dt, &pid_ref);
+            }
+
+            if (pid_status != PID_OK || !isfinite(pid_ref))
+            {
+                // 一环失败后丢弃本轮串级结果，恢复前清除各环已有积分和微分历史。
+                MotorPIDResetLoops(&motor->angle_PID, &motor->speed_PID, &motor->current_PID);
+                motor->pid_clock.last_status = pid_status != PID_OK ? pid_status : PID_NUMERIC_ERROR;
+                pid_ref = 0.0f;
+            }
+
+            if (motor->stop_flag == MOTOR_STOP)
+                pid_ref = 0.0f;
+
+            // 先按原有向零截断规则检查可表示范围，避免越界浮点转整数。
+            int32_t command = 0;
+            if (pid_ref >= 32768.0f || pid_ref <= -32769.0f)
+            {
+                MotorPIDResetLoops(&motor->angle_PID, &motor->speed_PID, &motor->current_PID);
+                motor->pid_clock.last_status = PID_NUMERIC_ERROR;
+            }
             else
-                pid_measure = measure->real_current;
-            if (pid_status == PID_OK)
-                pid_status = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref, control_dt, &pid_ref);
-            if (setting->feedforward_flag & SPEED_FEEDFORWARD)
-                pid_ref += *motor->speed_feedforward_ptr;
-        }
+            {
+                command = (int32_t)pid_ref;
+                if (setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE)
+                    command = -command;
+                if (command < -32768 || command > 32767)
+                {
+                    // 反向后无法装入有符号16位命令时，按本周期计算失败清零。
+                    MotorPIDResetLoops(&motor->angle_PID, &motor->speed_PID, &motor->current_PID);
+                    motor->pid_clock.last_status = PID_NUMERIC_ERROR;
+                    command = 0;
+                }
+            }
+            set = (int16_t)command;
 
-        // 速度分支当前也使用 angle_PID；这里按现有实现说明，不推断已换成速度 PID。
-        if (pid_status == PID_OK && (setting->close_loop_type & SPEED_LOOP) && setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP))
-        {
-            if (setting->angle_feedback_source == OTHER_FEED)
-                pid_measure = *motor->other_speed_feedback_ptr;
-            else
-                pid_measure = measure->speed_rads;
-            if (pid_status == PID_OK)
-                pid_status = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref, control_dt, &pid_ref);
-            if (setting->feedforward_flag & CURRENT_FEEDFORWARD)
-                pid_ref += *motor->current_feedforward_ptr;
-        }
-
-        if (setting->close_loop_type & CURRENT_LOOP)
-        {
-            if (pid_status == PID_OK)
-                pid_status = PIDCalculate(&motor->current_PID, measure->real_current, pid_ref, control_dt, &pid_ref);
-        }
-
-        if (pid_status != PID_OK || !isfinite(pid_ref))
-        {
-            // 一环失败后丢弃本轮串级结果，恢复前清除各环已有积分和微分历史。
-            MotorPIDResetLoops(&motor->angle_PID, &motor->speed_PID, &motor->current_PID);
-            motor->pid_clock.last_status = pid_status != PID_OK ? pid_status : PID_NUMERIC_ERROR;
-            pid_ref = 0.0f;
-        }
-
-        set = pid_ref;
-        if (setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE)
-            set *= -1;
-        // 当前以 tx_id 与 0x280 的差值选择两字节位置，首个实例也共用作整组发送。
-        memcpy(sender_instance->tx_buff + (motor->motor_can_ins->tx_id - 0x280) * 2, &set, sizeof(uint16_t));
-
-        if (motor->stop_flag == MOTOR_STOP)
-        { // 若该电机处于停止状态,直接将发送buff置零
-            memset(sender_instance->tx_buff + (motor->motor_can_ins->tx_id - 0x280) * 2, 0, sizeof(uint16_t));
+            // 用编号选择固定位置，并显式按 CAN 小端顺序写字节。
+            uint16_t wire_value = (uint16_t)set;
+            uint8_t offset = (uint8_t)(motor->motor_id - 1u) * 2u;
+            tx_frames[bus][offset] = (uint8_t)(wire_value & 0xFFu);
+            tx_frames[bus][offset + 1u] = (uint8_t)(wire_value >> 8);
         }
     }
 
-    if (idx) // 如果有电机注册了
-        CANTransmit(sender_instance, 0.2);
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+    {
+        if (lk_sender_instance[bus] == NULL)
+            continue;
+        // 先完整准备本组八字节，再提交；失败帧不会留作下周期重发。
+        memcpy(lk_sender_instance[bus]->tx_buff, tx_frames[bus], sizeof(tx_frames[bus]));
+        (void)CANTransmit(lk_sender_instance[bus], 0.2f);
+    }
 }
 
 void LKMotorStop(LKMotorInstance *motor)

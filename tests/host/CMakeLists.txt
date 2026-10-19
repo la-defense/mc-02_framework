@@ -67,6 +67,45 @@ foreach(caller IN ITEMS a b)
   add_test(NAME production_bsp_init_link_${caller} COMMAND bsp_init_link_test ${caller})
   set_tests_properties(production_bsp_init_link_${caller} PROPERTIES TIMEOUT 10)
 endforeach()
+# 生产 LK、PID 和 Daemon 共同链接；仅替换 CAN 与硬件时基，检查资源回滚及三总线路由。
+add_executable(lk_motor_registration_test lk_motor_registration_test.c
+  ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_pid.c
+  ../../modules/algorithm/controller.c ../../modules/daemon/daemon.c)
+target_include_directories(lk_motor_registration_test BEFORE PRIVATE lk_motor_fakes)
+target_include_directories(lk_motor_registration_test PRIVATE ../../modules/motor/LKmotor
+  ../../modules/motor ../../modules ../../modules/algorithm ../../modules/daemon)
+target_compile_options(lk_motor_registration_test PRIVATE -Wall -Wextra -Werror)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(lk_motor_registration_test PRIVATE -fno-builtin-malloc -fno-builtin-free)
+endif()
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
+   (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE))
+  target_compile_definitions(lk_motor_registration_test PRIVATE LK_TEST_ALLOC_WRAP=1)
+  target_link_options(lk_motor_registration_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=free)
+endif()
+foreach(scenario IN ITEMS registration can_failure sparse routing)
+  add_test(NAME production_lk_motor_${scenario} COMMAND lk_motor_registration_test ${scenario})
+  set_tests_properties(production_lk_motor_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+
+# 这组回归链接生产 BSP CAN 注册与发送实现，仅替换 HAL、时间和日志。
+add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
+  ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_pid.c
+  ../../modules/algorithm/controller.c ../../modules/daemon/daemon.c ../../bsp/can/bsp_can.c)
+target_include_directories(lk_motor_bsp_can_test BEFORE PRIVATE ../../bsp/can lk_motor_can_fakes
+  lk_motor_fakes . ../../modules/motor/LKmotor ../../modules/motor ../../modules
+  ../../modules/algorithm ../../modules/daemon ../../modules/message_center)
+target_compile_options(lk_motor_bsp_can_test PRIVATE -Wall -Wextra -Werror
+  -Wno-type-limits -ffunction-sections -fdata-sections -fno-builtin-malloc -fno-builtin-free)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
+   (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE))
+  target_compile_definitions(lk_motor_bsp_can_test PRIVATE LK_TEST_ALLOC_WRAP=1)
+  target_link_options(lk_motor_bsp_can_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=free -Wl,--gc-sections)
+endif()
+add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test rollback)
+add_test(NAME production_lk_motor_bsp_can_routing COMMAND lk_motor_bsp_can_test routing)
+set_tests_properties(production_lk_motor_bsp_can_rollback production_lk_motor_bsp_can_routing
+  PROPERTIES TIMEOUT 10)
 # PID 本身只依赖标准 C；Linux 用真实线程检查不同实例同时计算。
 add_executable(pid_test pid_test.c ../../modules/algorithm/controller.c ../../modules/motor/motor_pid.c)
 target_include_directories(pid_test PRIVATE ../../modules/algorithm ../../modules/motor)

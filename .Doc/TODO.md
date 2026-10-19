@@ -174,8 +174,8 @@
 - [ ] **BUILD-02** [enhancement] [ready-for-agent] 统一为唯一 CMake 构建入口，替代双入口维护方案。验收：删除旧 Makefile 及对应编辑器任务，按平台／车型显式选择源码和头依赖；干净、增量构建选择一致，非法组合拒绝，未选模块不误编入。适配现有增量及 ELF/profile 检查并保持裸板隔离；CubeMX 先人工核对，不新增再生成自动化。关联 MC02-0020／0054，保留 MC02-0032 的远端 CI 待验状态。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [x] **CORE-03** [bug] [ready-for-agent] 将 `BSPInit()` 实现移出公共头，消除多源文件链接时的多重定义。验收：公共头只声明接口、单个源文件提供定义；两个独立调用源文件共同链接生产实现，启动顺序及参数回归通过。详见[验收记录](../docs/workflow/tickets/CORE-03.md)。
 - [ ] **BSPMISC-08** [bug] [needs-triage] 核查 `Float2Str` 的四舍五入、进位和负数边界。验收：正负数、进位、零值和缓冲区边界均有生产函数测试，输出符合明确的精度规则。
-- [ ] **MOTOR-04** [bug] [needs-triage] 核查 LK9025 注册过程中是否存在重复分配和失败清理缺失。验收：单实例与多实例注册均无重复分配或泄漏，失败注入测试通过。
-- [ ] **MOTOR-05** [bug] [needs-triage] 核查多个 LK9025 实例是否都通过首个实例的 CAN 通道发送。验收：每个实例使用自己的总线与发送 ID；跨总线、多 ID 回归证明报文路由正确。
+- [x] **MOTOR-04** [bug] 修复 LK9025 注册重复分配与失败资源清理。验收完成：输入配置保持不变；每个 LK 实例只分配一次；PID、Daemon、CAN 按顺序准备，后续失败逐级回滚；每总线最多4个、总计最多12个，重复编号不占资源。WSL Debug／Release 各169/169，ASan／UBSan 注册与回退场景通过。见[任务记录](../docs/workflow/tickets/MOTOR-04-05.md)。
+- [x] **MOTOR-05** [bug] 修复 LK9025 跨 CAN 总线发送归属和编号槽位。验收完成：每条已注册总线独立用 `0x280` 提交一帧；反馈 ID 按编号设置，1～4号固定映射四个小端槽；稀疏／乱序注册、停止、数值失败、忙和 HAL 错误均有主机回归。Windows Debug／Release 支持子集各105/105通过；六种禁热固件、ELF隔离、非法配置拒绝及 CMake 增量检查通过。未连接硬件，实际电机行为未验证。见[任务记录](../docs/workflow/tickets/MOTOR-04-05.md)。
 - [ ] **MOTOR-06** [bug] [needs-triage] 核查舵机实例注册索引与遍历方式，以及 DMA 发送缓冲区共享问题。验收：稀疏 ID 注册不会解引用空槽，多舵机并发发送不会改写传输中的缓冲区。
 - [ ] **MISC-03** [bug] [needs-triage] 核查 TFmini 接收长度是否超过缓冲区容量。验收：模块启用前缓冲区与协议帧长一致，短帧、满长帧和超长帧均不会越界。
 - [ ] **MISC-04** [bug] [needs-triage] 核对现有电容容量、状态与未选型边界。验收：回调已有 CAN owner，不按已证伪的全局回调问题修复；核对单例限制、接收长度、发送长度／空参数／结果和在线新鲜度，修正文档2字节变量传固定8字节复制接口示例。设备未选型，具体协议／缩放／多实例实物验证后置；不可用回退普通供电，关联0057／0085。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。

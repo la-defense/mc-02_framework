@@ -1,5 +1,7 @@
-/** @file LK9025.h
-* @brief 保留的 LK 多电机控制，一条总线共用首个实例发送；启用前须核对当前旧控制路径。
+/**
+ * @file LK9025.h
+ * @brief 声明 LK9025 实例注册、按总线组帧和反馈接口。
+ * 注册在启动阶段串行进行；实际控制环用途仍须按各接口当前实现核对。
  */
 #ifndef LK9025_H
 #define LK9025_H
@@ -10,7 +12,8 @@
 #include "motor_def.h"
 #include "daemon.h"
 
-#define LK_MOTOR_MX_CNT 4 // 最多允许4个LK电机使用多电机指令,挂载在一条总线上
+#define LK_MOTOR_PER_BUS_CNT 4u /**< 每条 CAN 总线最多登记的 LK 电机数。 */
+#define LK_MOTOR_MX_CNT (DEVICE_CAN_CNT * LK_MOTOR_PER_BUS_CNT) /**< H723 三条总线共最多12个。 */
 
 #define I_MIN -2000
 #define I_MAX 2000
@@ -55,41 +58,55 @@ typedef struct
     Motor_Working_Type_e stop_flag; // 启停标志
 
     CANInstance *motor_can_ins;
+    uint8_t motor_id;      // 反馈编号1～4，与发送帧中的两字节位置对应。
+    uint8_t can_bus_index; // 对应 DEVICE_CAN_CNT 中的物理总线序号。
 
     DaemonInstance *daemon;
 
 } LKMotorInstance;
 
-/** @brief 分配 LK 对象，改写 CAN 编号与回调并注册离线计数，初始为运行标记。
-* @param[in,out] config 有效配置；同组编号应从 1 连续排列，最多四个且位于同一总线。
-* @return 参数为空、当前分配结果为空或启用 PID 参数非法时返回 NULL，否则返回长期对象。
-* @note 重复分配、容量及底层注册失败仍待对应任务处理，不能将 PID 检查视为整个注册过程已可靠。
+/**
+ * @brief 登记一个 LK 电机并准备它的 PID、离线计数和 CAN 接收。
+ * @param[in] config 有效初始化配置；motor_type 须为 LK9025，can_handle 为已支持的总线句柄，tx_id 填1～4的电机编号。
+ * @return 长期有效实例；空参数、未知总线、编号错误、同总线编号重复、PID 或资源初始化失败返回 NULL。
+ * @note 每条总线最多4个，允许编号稀疏及乱序。CAN接收ID设为0x140+编号，发送ID固定为0x280。
+ *       配置本身保持不变。只在启动阶段串行调用，并在 CAN 派发、Daemon 与控制任务运行前完成；
+ *       本任务未提供运行期注销，成功实例及其资源会保留到复位。
  */
-LKMotorInstance *LKMotorInit(Motor_Init_Config_s *config);
+LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config);
 
-/** @brief 保存参考值供下一轮控制使用，不自动换单位。
-* @param[in,out] motor 有效对象，不能为 NULL。
-* @param[in] ref 须与所选反馈和 PID 配置使用相同数值单位；电机速度反馈为 rad/s，单圈及总角度为 deg。
-* @note 当前角度分支默认取 real_current，速度分支也调用 angle_PID，须按实际实现核对后再选用闭环。
+/**
+ * @brief 保存参考值供下一轮控制使用，不自动换单位。
+ * @param[in,out] motor 由 LKMotorInit 返回的有效实例，不能为 NULL。
+ * @param[in] ref 须与所选反馈和 PID 配置使用相同数值单位；电机速度反馈为 rad/s，单圈及总角度为 deg。
+ * @note 当前角度分支默认取 real_current，速度分支也调用 angle_PID，须按实际实现核对后再选用闭环。
  */
 void LKMotorSetRef(LKMotorInstance *motor, float ref);
 
-/** @brief 遍历已注册对象、填写每电机两字节原始输出，再用首个实例发送一帧；无注册对象时不发送。 */
-void LKMotorControl();
+/**
+ * @brief 分别计算各已登记电机，并为每条非空总线提交一帧八字节0x280命令。
+ * @return 无返回值；CAN 本机提交结果由现有 CAN 发送统计记录，不代表对端已收到。
+ * @note 由电机控制任务顺序调用。编号1～4对应帧内四个两字节位置；空槽和停止电机写零，
+ *       非有限或无法表示为有符号16位命令的结果写零并清除 PID 历史；发送失败的帧不缓存，下一周期重新计算。
+ */
+void LKMotorControl(void);
 
-/** @brief 设置停止标记，下一次控制将对应两字节输出清零；保留目标值。
-* @param[in,out] motor 有效实例，不能为 NULL。
+/**
+ * @brief 设置停止标记，下一次控制将对应两字节输出清零；保留目标值。
+ * @param[in,out] motor 由 LKMotorInit 返回的有效实例，不能为 NULL。
  */
 void LKMotorStop(LKMotorInstance *motor);
 
-/** @brief 设置运行标记，下一次控制继续使用已保存目标。
-* @param[in,out] motor 有效实例，不能为 NULL。
+/**
+ * @brief 设置运行标记，下一次控制继续使用已保存目标。
+ * @param[in,out] motor 由 LKMotorInit 返回的有效实例，不能为 NULL。
  */
 void LKMotorEnable(LKMotorInstance *motor);
 
-/** @brief 读取对应 Daemon 是否仍有剩余计数。
-* @param[in] motor 有效实例，不能为 NULL。
-* @return 1 为计数未耗尽，0 为离线；不代表已允许输出。
+/**
+ * @brief 读取对应 Daemon 是否仍有剩余计数。
+ * @param[in] motor 由 LKMotorInit 返回的有效实例，不能为 NULL。
+ * @return 1 为计数未耗尽，0 为离线；不代表数据有效或已允许输出。
  */
 uint8_t LKMotorIsOnline(LKMotorInstance *motor);
 
