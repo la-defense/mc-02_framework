@@ -120,6 +120,7 @@ bsp/can/bsp_can.c \
 bsp/usart/bsp_usart.c \
 bsp/log/bsp_log.c \
 bsp/bsp_tools.c \
+bsp/bsp_init.c \
 bsp/ws2812/ws2812.c \
 modules/algorithm/controller.c \
 modules/algorithm/kalman_filter.c \

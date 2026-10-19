@@ -56,6 +56,17 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(CTest)
+# 两个独立调用源文件共同链接生产启动实现，防止头文件再次带入函数体。
+add_executable(bsp_init_link_test bsp_init_link_test.c bsp_init_caller_a.c
+  bsp_init_caller_b.c ../../bsp/bsp_init.c)
+target_include_directories(bsp_init_link_test BEFORE PRIVATE bsp_init_fakes)
+target_include_directories(bsp_init_link_test PRIVATE ../../bsp)
+target_compile_features(bsp_init_link_test PRIVATE c_std_11)
+target_compile_options(bsp_init_link_test PRIVATE -Wall -Wextra -Werror)
+foreach(caller IN ITEMS a b)
+  add_test(NAME production_bsp_init_link_${caller} COMMAND bsp_init_link_test ${caller})
+  set_tests_properties(production_bsp_init_link_${caller} PROPERTIES TIMEOUT 10)
+endforeach()
 # PID 本身只依赖标准 C；Linux 用真实线程检查不同实例同时计算。
 add_executable(pid_test pid_test.c ../../modules/algorithm/controller.c ../../modules/motor/motor_pid.c)
 target_include_directories(pid_test PRIVATE ../../modules/algorithm ../../modules/motor)

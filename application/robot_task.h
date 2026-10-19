@@ -27,6 +27,7 @@
 #include "robot_safety.h"
 
 #include "bsp_log.h"
+#include "bsp_dwt.h"
 
 osThreadId insTaskHandle;
 osThreadId robotTaskHandle;
