@@ -158,6 +158,26 @@ if(UNIX AND NOT APPLE)
     -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
 endif()
 add_test(NAME production_init_resource_failures COMMAND init_resource_test)
+add_executable(iic_registration_test iic_registration_test.c
+  ../../bsp/iic/bsp_iic.c ../../modules/TFminiPlus/tfminiplus.c
+  ../../modules/ist8310/ist8310.c)
+target_include_directories(iic_registration_test BEFORE PRIVATE iic_registration_fakes)
+target_include_directories(iic_registration_test PRIVATE ../../bsp/iic ../../bsp/dwt
+  ../../modules/TFminiPlus ../../modules/ist8310)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(iic_registration_test PRIVATE -ffunction-sections -fdata-sections
+    -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-free)
+endif()
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
+   (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE))
+  target_link_options(iic_registration_test PRIVATE -Wl,--gc-sections
+    -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
+endif()
+add_test(NAME production_iic_registration_contract COMMAND iic_registration_test register)
+add_test(NAME production_iic_registration_capacity COMMAND iic_registration_test capacity)
+add_test(NAME production_iic_callers_handle_registration_failure COMMAND iic_registration_test callers)
+set_tests_properties(production_iic_registration_contract production_iic_registration_capacity
+  production_iic_callers_handle_registration_failure PROPERTIES TIMEOUT 10)
 add_executable(init_diagnostic_test init_diagnostic_test.c ../../application/init_diagnostic.c)
 target_include_directories(init_diagnostic_test BEFORE PRIVATE init_diagnostic_fakes)
 target_include_directories(init_diagnostic_test PRIVATE ../../application)

@@ -1,13 +1,15 @@
 /** @file bsp_iic.h
-* @brief I²C 实例注册、普通收发及寄存器访问；先完成 HAL I²C、GPIO 和所需 DMA 配置。
-* @note 旧注册表只有 IIC_DEVICE_CNT 项（当前 1 项），不能按 8 从机宏无限注册；
-*       注册未检查空指针或内存失败。收发接口均不返回 HAL 状态，也不自动清接收数组。
+* @brief I²C 设备登记、普通收发及寄存器访问。
+* @note 调用接口前先完成 HAL I²C、GPIO 和所需 DMA 配置；设备登记只在启动阶段串行进行。
  */
-#include "i2c.h"
-#include "stdint.h"
+#ifndef BSP_IIC_H
+#define BSP_IIC_H
 
-#define IIC_DEVICE_CNT 1   // MC02只有1个I2C接口可用，
-#define MX_IIC_SLAVE_CNT 8 // 最大从机数目,根据需要修改
+#include "i2c.h"
+#include <stdint.h>
+
+#define IIC_DEVICE_CNT 1u   // 当前板级配置使用的物理 I²C 外设数量。
+#define MX_IIC_SLAVE_CNT 8u // 登记表可保存的设备数量，与物理总线数量分开计算。
 
 /* i2c 工作模式枚举 */
 typedef enum
@@ -58,11 +60,16 @@ typedef struct
     void *id;                        // 用于标识i2c instance
 } IIC_Init_Config_s;
 
-/** @brief 保存配置并返回 I²C 实例，不配置底层外设。
-* @param[in] conf 有效配置地址；7 位设备地址不要左移，内部会左移一位。
-* @return 分配的对象；申请失败未检查，没有注销入口，调用方须遵守当前实例表容量。
+/**
+ * @brief 检查配置并登记一个 I²C 设备，不配置底层外设。
+ * @param[in] conf 配置地址；handle 非空，dev_address 为未左移的 0x00～0x7F 地址，
+ *                 work_mode 必须是阻塞、中断或 DMA 模式；callback 和 id 可为空。
+ * @return 登记成功返回长期有效的实例；空配置、非法字段、重复设备、容量满或分配失败返回 NULL。
+ * @note 同一 HAL 句柄和同一 7 位地址只能登记一次；相同地址可用于不同句柄，不同地址可共用句柄。
+ *       成功实例由登记表持有，调用方不得释放；配置可在返回后释放，HAL 句柄须持续有效。
+ *       只允许启动阶段串行调用。登记失败不占用容量，也不更改已有实例。
  */
-IICInstance *IICRegister(IIC_Init_Config_s *conf);
+IICInstance *IICRegister(const IIC_Init_Config_s *conf);
 
 /** @brief 改写实例的工作模式，不等待上次传输结束。
 * @param[in,out] iic 有效实例，不能为 NULL。
@@ -98,3 +105,5 @@ void IICReceive(IICInstance *iic, uint8_t *data, uint16_t size, IIC_Seq_Mode_e m
 * @note 不返回 HAL 状态；读失败时不能假定全部字节已更新，函数也不清零数组。
  */
 void IICAccessMem(IICInstance *iic, uint16_t mem_addr, uint8_t *data, uint16_t size, IIC_Mem_Mode_e mode, uint8_t mem8bit_flag);
+
+#endif // BSP_IIC_H

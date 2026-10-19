@@ -2,29 +2,50 @@
 * @brief 保存 I²C 设备地址及模式，转调 HAL 收发，接收完成时按句柄和地址寻找模块回调。
  */
 #include "bsp_iic.h"
-#include "memory.h"
-#include "stdlib.h"
+#include <stdlib.h>
+#include <string.h>
 
-static uint8_t idx = 0; // 配合中断以及初始化
-static IICInstance *iic_instance[IIC_DEVICE_CNT] = {NULL};
+static uint8_t idx = 0u; // 已完整登记并可由接收回调访问的设备数量。
+static IICInstance *iic_instance[MX_IIC_SLAVE_CNT] = {NULL};
 
-IICInstance *IICRegister(IIC_Init_Config_s *conf)
+IICInstance *IICRegister(const IIC_Init_Config_s *conf)
 {
-    if (idx >= MX_IIC_SLAVE_CNT) // 超过最大实例数
-        while (1)                // 酌情增加允许的实例上限,也有可能是内存泄漏
-            ;
-    // 申请到的空间未必是0, 所以需要手动初始化
+    if (conf == NULL || conf->handle == NULL || conf->dev_address > 0x7Fu ||
+        (conf->work_mode != IIC_BLOCK_MODE && conf->work_mode != IIC_IT_MODE &&
+         conf->work_mode != IIC_DMA_MODE))
+        return NULL;
+
+    // 同一总线地址只能有一个回调所有者，避免新配置替换已在用的实例。
+    for (uint8_t i = 0u; i < idx; ++i)
+    {
+        if (iic_instance[i]->handle == conf->handle &&
+            iic_instance[i]->dev_address == (uint8_t)(conf->dev_address << 1u))
+            return NULL;
+    }
+
+    if (idx >= MX_IIC_SLAVE_CNT)
+        return NULL;
+
+    // 先准备完整对象，再公开给可能由中断调用的接收回调。
     IICInstance *instance = (IICInstance *)malloc(sizeof(IICInstance));
-    instance = (IICInstance *)malloc(sizeof(IICInstance));
+    if (instance == NULL)
+        return NULL;
+
     memset(instance, 0, sizeof(IICInstance));
 
-    instance->dev_address = conf->dev_address << 1; // 地址左移一位,最低位为读写位
+    instance->dev_address = (uint8_t)(conf->dev_address << 1u); // HAL 地址最低位留给读写方向。
     instance->callback = conf->callback;
     instance->work_mode = conf->work_mode;
     instance->handle = conf->handle;
     instance->id = conf->id;
 
-    iic_instance[idx++] = instance;
+    // 临界区只保护登记表发布，避免接收中断读到未完成的实例。
+    uint32_t previous_primask = __get_PRIMASK();
+    __disable_irq();
+    iic_instance[idx] = instance;
+    __DMB();
+    ++idx;
+    __set_PRIMASK(previous_primask);
     return instance;
 }
 

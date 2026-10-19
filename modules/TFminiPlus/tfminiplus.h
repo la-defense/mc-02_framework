@@ -17,10 +17,13 @@ typedef struct
 	uint8_t buf[9];	
 } TFMiniInstance;
 
-/** @brief 分配对象、注册地址 0x10 的阻塞 I²C，等待 0.5 s。
-* @param[in] hi2c 已配置的有效 I²C 句柄，DWT 须已初始化。
-* @return 分配对象；未检查分配和注册失败，没有注销入口，只应初始化一次。
-*/
+/**
+ * @brief 分配 TFmini 对象并登记 7 位地址 0x10 的阻塞式 I²C 设备。
+ * @param[in] hi2c HAL 句柄；为空时登记失败，非空时须已初始化且生命周期长于登记对象。
+ * @return 成功返回由调用方持有、不可释放的 TFmini 对象；外层分配或 I²C 登记失败返回 NULL。
+ * @note 登记失败时释放本次对象，且不会执行 DWT 延时。成功后等待0.5秒，调用前须初始化 DWT。
+ *       GetDistance 的接收长度问题仍未修复，不应据此认定该设备驱动完整可用。
+ */
 TFMiniInstance *TFMiniRegister(I2C_HandleTypeDef *hi2c);
 
 /** @brief 发送请求、读取数据并返回原始距离值，未检查帧头、校验或 I²C 成败。

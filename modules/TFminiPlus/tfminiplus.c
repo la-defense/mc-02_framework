@@ -2,14 +2,15 @@
 * @brief 保留的测距请求和原始字段组合；已知接收长度问题见头文件，当前不保证设备数据有效。
 */
 #include "tfminiplus.h"
-#include "stdlib.h"
 #include "bsp_dwt.h"
-
-static TFMiniInstance *tfmini;
+#include <stdlib.h>
 
 TFMiniInstance *TFMiniRegister(I2C_HandleTypeDef *hi2c)
 {
-	tfmini = (TFMiniInstance *)malloc(sizeof(TFMiniInstance));
+	TFMiniInstance *tfmini = (TFMiniInstance *)malloc(sizeof(TFMiniInstance));
+	if (tfmini == NULL)
+		return NULL;
+
 	IIC_Init_Config_s conf = {
 		.handle = hi2c,
 		.dev_address = 0x10,
@@ -17,6 +18,12 @@ TFMiniInstance *TFMiniRegister(I2C_HandleTypeDef *hi2c)
 		.work_mode = IIC_BLOCK_MODE,
 	};
 	tfmini->iic = IICRegister(&conf);
+	if (tfmini->iic == NULL)
+	{
+		free(tfmini);
+		return NULL;
+	}
+
 	DWT_Delay(0.5);
 	return tfmini;
 }

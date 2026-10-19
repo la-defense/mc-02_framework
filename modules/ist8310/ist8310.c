@@ -8,7 +8,7 @@
 #include "bsp_dwt.h"
 #include "ist8310.h"
 #include "bsp_log.h"
-#include <memory.h>
+#include <string.h>
 #include <stdlib.h>
 
 // 保存最近成功初始化的实例；回调通过 I²C/GPIO 的 id 找到各自的实例。
@@ -53,17 +53,32 @@ IST8310Instance *IST8310Init(IST8310_Init_Config_s *config)
     static const uint8_t sleepTime = 50; // 两次复位等待均为50ms
     uint8_t check_who_i_am = 0;          // 先接收 ID，后续复用来接收配置读回值
 
+    if (config == NULL)
+        return NULL;
+
     // 分配实例后将这块 RAM 置0，避免指针和数据带有旧内存内容。
     IST8310Instance *ist = (IST8310Instance *)malloc(sizeof(IST8310Instance));
+    if (ist == NULL)
+        return NULL;
     memset(ist, 0, sizeof(IST8310Instance));
 
-    // 三个底层对象都记住所属实例，回调据此找到缓冲区和三轴结果。
-    config->iic_config.id = config->gpio_conf_exti.id = config->gpio_conf_rst.id = ist;
-    // 同时登记 I²C 解析回调和 GPIO 数据就绪回调；本文件阻塞读取后还会直接调用解析。
+    // 先用局部配置登记I²C；失败时调用方配置仍保持原值。
+    IIC_Init_Config_s iic_config = config->iic_config;
+    iic_config.id = ist;
+    iic_config.callback = IST8310Decode;
+    ist->iic = IICRegister(&iic_config);
+    if (ist->iic == NULL)
+    {
+        free(ist);
+        return NULL;
+    }
+
+    // 登记成功后再改写调用方的 GPIO 回调配置并继续初始化。
+    config->iic_config.id = ist;
     config->iic_config.callback = IST8310Decode;
+    config->gpio_conf_exti.id = ist;
     config->gpio_conf_exti.gpio_model_callback = IST8310StartTransfer;
-    // 登记对象只复制配置字段，I²C 和 GPIO 的硬件初始化需在调用前完成。
-    ist->iic = IICRegister(&config->iic_config);
+    config->gpio_conf_rst.id = ist;
     ist->gpio_exti = GPIORegister(&config->gpio_conf_exti);
     ist->gpio_rst = GPIORegister(&config->gpio_conf_rst);
 

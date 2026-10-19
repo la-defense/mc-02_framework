@@ -44,14 +44,10 @@ typedef struct
 } IST8310_Init_Config_s;
 
 /**
- * @brief 分配实例、登记外设、复位传感器，再检查 ID 和逐项读回配置。
- * @param[in,out] config 必须非空，外设和 GPIO 已完成硬件初始化；本函数改写上述 id 和回调字段。
- *                      登记时复制配置字段，返回后配置表本身可释放，HAL 句柄需持续有效。
- * @return ID 为0x10且四项配置读回一致时返回实例；ID 不符时返回 NULL。
- *         配置读回不符时停在循环中反复打印该项日志编号，不返回。
- * @note 复位拉低、拉高后各调用一次 HAL_Delay(50)，需保证 HAL 毫秒计数正常增加。
- *       寄存器访问使用阻塞式 IICAccessMem，HAL 超时参数为100ms，不随 work_mode 改为中断或 DMA。
- *       当前实现不检查 config 或分配结果的空指针，也不检查或返回底层读写状态。
- *       ID 失败返回时不会释放已申请和登记的对象；本模块没有注销或释放接口。
+ * @brief 分配实例、登记 I²C 和 GPIO、复位传感器并检查 ID 与配置读回。
+ * @param[in,out] config 非空配置；HAL 句柄和 GPIO 配置须已准备好。I²C 登记失败前不改写该结构。
+ * @return ID 和配置读回通过时返回实例；空配置、分配失败、I²C 登记失败或 ID 不符返回 NULL。
+ * @note I²C 登记成功后会写入 id 和回调字段；调用方须保持 GPIO、HAL 句柄及已登记对象有效。
+ *       登记后的 ID 不符会返回 NULL 但不释放对象；配置读回不符会持续打印并等待，不会返回。
  */
 IST8310Instance *IST8310Init(IST8310_Init_Config_s *config);
