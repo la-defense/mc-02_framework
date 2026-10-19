@@ -730,8 +730,7 @@ endforeach()
 
 # 真实UART队列及两种流式协议一起运行；只替代HAL、时钟与看门狗。
 add_executable(uart_stream_test uart_stream_test.c ../../bsp/usart/bsp_usart.c
-  ../../modules/master_machine/master_process.c ../../modules/master_machine/vision_protocol.c
-  ../../modules/referee/rm_referee.c)
+  ../../modules/master_machine/master_process.c ../../modules/master_machine/vision_protocol.c)
 target_include_directories(uart_stream_test BEFORE PRIVATE remote_fakes ../../bsp/usart
   crc_protocol_fakes can_comm_fakes)
 target_include_directories(uart_stream_test PRIVATE ../../modules/master_machine ../../modules/referee
@@ -749,3 +748,28 @@ endforeach()
 add_test(NAME production_remote_original_receive_time COMMAND remote_control_test source-time)
 set_tests_properties(production_uart_stream_protocols production_uart_pool_limit
   production_remote_original_receive_time PROPERTIES TIMEOUT 10)
+
+# 裁判生产解析器和UART块队列一起运行；Linux线程共享真实互斥临界区模型。
+add_executable(referee_snapshot_test referee_snapshot_test.c ../../bsp/usart/bsp_usart.c
+  ../../modules/referee/rm_referee.c)
+target_include_directories(referee_snapshot_test BEFORE PRIVATE referee_snapshot_fakes remote_fakes
+  ../../bsp/usart crc_protocol_fakes)
+target_include_directories(referee_snapshot_test PRIVATE ../../modules/referee ../../modules/master_machine
+  ../../modules/algorithm ../../modules/daemon ../../modules/message_center)
+target_compile_options(referee_snapshot_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(referee_snapshot_test PRIVATE mc02_software_crc)
+if(UNIX)
+  target_link_libraries(referee_snapshot_test PRIVATE m)
+  find_package(Threads REQUIRED)
+  target_link_libraries(referee_snapshot_test PRIVATE Threads::Threads)
+  target_compile_definitions(referee_snapshot_test PRIVATE REFEREE_TEST_THREADS=1)
+endif()
+add_test(NAME production_referee_snapshot COMMAND referee_snapshot_test)
+set_tests_properties(production_referee_snapshot PROPERTIES TIMEOUT 30)
+add_executable(lcd_referee_rows_test lcd_referee_rows_test.c ../../modules/lcd/lcd_referee_rows.c)
+target_include_directories(lcd_referee_rows_test PRIVATE ../../modules/lcd ../../modules/referee)
+target_compile_options(lcd_referee_rows_test PRIVATE -Wall -Wextra -Werror)
+if(UNIX)
+  target_link_libraries(lcd_referee_rows_test PRIVATE m)
+endif()
+add_test(NAME production_lcd_referee_group_freshness COMMAND lcd_referee_rows_test)

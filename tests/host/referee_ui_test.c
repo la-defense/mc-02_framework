@@ -25,6 +25,7 @@ static DaemonInstance daemon_instance;
 static usart_module_callback receive_callback;
 static void *receive_context;
 static uint32_t now_ms;
+static uint32_t rx_sequence;
 
 uint32_t HAL_GetTick(void) { return now_ms; }
 DaemonInstance *DaemonRegister(Daemon_Init_Config_s *c) { (void)c; return &daemon_instance; }
@@ -70,7 +71,7 @@ int __wrap___vsnprintf_chk(char *out,size_t size,int flag,size_t capacity,const 
 }
 #endif
 
-static const referee_id_t id={.Robot_ID=1u,.Cilent_ID=0x101u};
+static const referee_id_t id={.Robot_Color=Robot_Red,.Robot_ID=1u,.Cilent_ID=0x101u};
 static uint16_t reference_crc(const uint8_t *p,size_t n,uint16_t poly,uint16_t seed)
 {
     for(size_t i=0;i<n;++i) {
@@ -78,6 +79,26 @@ static uint16_t reference_crc(const uint8_t *p,size_t n,uint16_t poly,uint16_t s
         for(unsigned bit=0;bit<8;++bit) seed=(uint16_t)((seed>>1)^((seed&1u)?poly:0u));
     }
     return seed;
+}
+static size_t make_referee_frame(uint8_t *frame,uint16_t command,const uint8_t *payload,size_t length)
+{
+    memset(frame,0,length+9u);frame[0]=0xa5u;frame[1]=(uint8_t)length;
+    frame[2]=(uint8_t)(length>>8u);frame[3]=(uint8_t)rx_sequence;
+    frame[4]=(uint8_t)reference_crc(frame,4u,0x8cu,0xffu);
+    frame[5]=(uint8_t)command;frame[6]=(uint8_t)(command>>8u);memcpy(frame+7u,payload,length);
+    uint16_t crc=reference_crc(frame,length+7u,0x8408u,0xffffu);
+    frame[length+7u]=(uint8_t)crc;frame[length+8u]=(uint8_t)(crc>>8u);return length+9u;
+}
+static void feed_referee(uint16_t command,const uint8_t *payload,size_t length)
+{
+    size_t total=make_referee_frame(rx,command,payload,length);
+    const USART_RxBlock_t block={rx,total,now_ms,++rx_sequence};
+    receive_callback(receive_context,&block);
+}
+static void publish_robot_state(uint8_t robot_id)
+{
+    uint8_t payload[17]={0};payload[0]=robot_id;
+    feed_referee(ID_game_robot_state,payload,sizeof(payload));
 }
 static void check_frame(uint16_t content,size_t length,uint8_t sequence)
 {
@@ -179,7 +200,8 @@ static void frames(void)
     Graph_Data_t graphs[7];
     for(size_t i=0;i<7;++i) TEST_CHECK(UILineDraw(&graphs[i],"abc",1,2,8,3,100,200,300,400)==UI_OK);
     TEST_CHECK(UIGraphRefresh(&id,graphs,7,1)==UI_NOT_INITIALIZED && sends==0);
-    UART_HandleTypeDef handle={0};TEST_CHECK(RefereeInit(&handle)!=NULL);
+    UART_HandleTypeDef handle={0};TEST_CHECK(RefereeInit(&handle,NULL)==REFEREE_OK);
+    now_ms=10u;publish_robot_state(1u);
     UI_Seq=0;
     TEST_CHECK(UIGraphRefresh(&id,graphs,7,1)==UI_SUBMITTED);
     TEST_CHECK(sent_length==sizeof(golden) && memcmp(sent,golden,sizeof(golden))==0 && UI_Seq==1);
@@ -226,9 +248,10 @@ static void frames(void)
     wrong.Cilent_ID=0x165;
     TEST_CHECK(UIDelete(&wrong,1,0)==UI_ERROR_RANGE);
     wrong.Robot_ID=101;
-    TEST_CHECK(UIDelete(&wrong,2,9)==UI_SUBMITTED);
+    wrong.Robot_Color=Robot_Blue;
+    TEST_CHECK(UIDelete(&wrong,2,9)==UI_NOT_INITIALIZED);
     wrong.Robot_ID=109;
-    TEST_CHECK(UIDelete(&wrong,0,0)==UI_SUBMITTED);
+    TEST_CHECK(UIDelete(&wrong,0,0)==UI_NOT_INITIALIZED);
     UI_Seq=255;
     TEST_CHECK(UIDelete(&id,1,0)==UI_SUBMITTED && UI_Seq==0);
     check_frame(0x100,2,255);
@@ -241,7 +264,8 @@ static void transport(void)
     TEST_CHECK(RefereeSend(NULL,3)==REFEREE_SEND_BAD_ARGUMENT);
     TEST_CHECK(RefereeSend(bytes,0)==REFEREE_SEND_BAD_ARGUMENT);
     TEST_CHECK(RefereeSend(bytes,129)==REFEREE_SEND_BAD_ARGUMENT);
-    UART_HandleTypeDef h={0};TEST_CHECK(RefereeInit(&h)!=NULL);
+    UART_HandleTypeDef h={0};TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_OK);
+    now_ms=10u;publish_robot_state(1u);
     USARTSendStatus_t statuses[]={USART_SEND_BUSY,USART_SEND_ERROR,USART_SEND_TIMEOUT,USART_SEND_BAD_ARGUMENT};
     UIStatus_t expected[]={UI_SEND_BUSY,UI_SEND_ERROR,UI_SEND_TIMEOUT,UI_SEND_ERROR};
     for(size_t i=0;i<4;++i) {
@@ -270,22 +294,18 @@ static void task_tests(void)
 {
     Referee_Interactive_info_t data={0};UART_HandleTypeDef h={0};
     TEST_CHECK(UITask()==UI_NOT_INITIALIZED && MyUIInit()==UI_NOT_INITIALIZED);
-    TEST_CHECK(UITaskInit(&h,NULL)==NULL);
-    TEST_CHECK(UITaskInit(NULL,&data)==NULL);
-    referee_info_t *info=UITaskInit(&h,&data);TEST_CHECK(info!=NULL);
+    TEST_CHECK(UITaskInit(NULL)==UI_ERROR_ARGUMENT);
+    TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_OK);
+    TEST_CHECK(UITaskInit(&data)==UI_OK);
     TEST_CHECK(MyUIInit()==UI_NOT_INITIALIZED);
-    info->GameRobotState.robot_id=1;
+    now_ms=10u;publish_robot_state(1u);
     start_status=USART_SEND_ERROR;
     TEST_CHECK(MyUIInit()==UI_SEND_ERROR && UITask()==UI_NOT_INITIALIZED && sends==0);
-    TEST_CHECK(RefereeGetInfo()==info && info->init_flag);
-    // 初始化失败后仍通过生产接收回调接受合法帧，接收租约正常更新。
-    uint8_t frame[]={0xa5,1,0,7,0,2,0,5,0,0};
-    frame[4]=(uint8_t)reference_crc(frame,4,0x8c,0xff);
-    uint16_t tail=reference_crc(frame,8,0x8408,0xffff);frame[8]=(uint8_t)tail;frame[9]=(uint8_t)(tail>>8);
-    memcpy(rx,frame,sizeof(frame));now_ms=17;
-    const USART_RxBlock_t block={rx,sizeof(frame),now_ms,1u};
-    receive_callback(receive_context,&block);
-    TEST_CHECK(info->GameResult.winner==5 && RefereeGetLastRxMs()==17 && reloads==1);
+    // UI初始化发送失败后，裁判接收仍接受新命令并更新只读副本。
+    uint8_t result=2u;now_ms=17u;feed_referee(ID_game_result,&result,1u);
+    RefereeSnapshot_t snapshot;
+    TEST_CHECK(RefereeGetSnapshot(&snapshot)==REFEREE_OK &&
+               snapshot.command[REF_CMD_GAME_RESULT].data.game_result.winner==2u && reloads==2u);
     start_status=USART_SEND_ACCEPTED;
     crc_fail_after=3;unsigned partial=sends;
     TEST_CHECK(MyUIInit()==UI_ERROR_CRC && sends==partial+1 && UITask()==UI_NOT_INITIALIZED);
@@ -307,6 +327,13 @@ static void task_tests(void)
     data.Chassis_Power_Data.chassis_power_mx=3.5f;
     TEST_CHECK(UIRefresh()==UI_OK && !data.Referee_Interactive_Flag.Power_flag && sends==previous+1);
     TEST_CHECK(UITask()==UI_OK && data.Chassis_Power_Data.chassis_power_mx==7.0f);
+    previous=sends;
+    now_ms=311u;
+    TEST_CHECK(UIRefresh()==UI_NOT_INITIALIZED && sends==previous);
+    TEST_CHECK(MyUIInit()==UI_NOT_INITIALIZED);
+    now_ms=312u;publish_robot_state(2u);
+    TEST_CHECK(UIRefresh()==UI_NOT_INITIALIZED && sends==previous);
+    TEST_CHECK(MyUIInit()==UI_SUBMITTED && sent[9]==2u && sent[10]==0u);
     start_status=USART_SEND_ERROR;
     TEST_CHECK(MyUIInit()==UI_SEND_ERROR);
     previous=sends;
@@ -317,14 +344,17 @@ static void initialization_failure(void)
 {
     Referee_Interactive_info_t data={0};UART_HandleTypeDef h={0};
     registration_fail=1;
-    TEST_CHECK(UITaskInit(&h,&data)==NULL && RefereeGetInfo()==NULL && unregisters==1);
+    TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_ERROR_RESOURCE && unregisters==1);
+    TEST_CHECK(UITaskInit(&data)==UI_OK);
     TEST_CHECK(MyUIInit()==UI_NOT_INITIALIZED && UIRefresh()==UI_NOT_INITIALIZED);
     registration_fail=0;
-    referee_info_t *info=UITaskInit(&h,&data);TEST_CHECK(info!=NULL);
-    info->GameRobotState.robot_id=1;
+    TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_OK);
+    now_ms=10u;publish_robot_state(1u);
     TEST_CHECK(MyUIInit()==UI_SUBMITTED);
-    TEST_CHECK(UITaskInit(&h,&data)==NULL && RefereeGetInfo()==info);
-    TEST_CHECK(UIRefresh()==UI_OK);
+    TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_ERROR_ALREADY_INITIALIZED);
+    TEST_CHECK(UITaskInit(&data)==UI_OK);
+    TEST_CHECK(UIRefresh()==UI_NOT_INITIALIZED);
+    TEST_CHECK(MyUIInit()==UI_SUBMITTED && UIRefresh()==UI_OK);
 }
 
 int main(int argc,char **argv)

@@ -16,6 +16,7 @@
 #include "ins_task.h"
 #include "referee_task.h"
 #include "rm_referee.h"
+#include "lcd_referee_rows.h"
 #include "chassis.h"
 #include "gimbal.h"
 #include "shoot.h"
@@ -547,46 +548,12 @@ static void draw_page2_static(void)
 // 裁判离线或尚无数据对象时，逐行清掉旧值并显示 --。
 static void draw_page2_values(void)
 {
-    uint8_t online = RefereeIsOnline();
-    referee_info_t *ref = RefereeGetInfo();
-    draw_value_cn(0, online_label(online));
-
-    if (!online || ref == NULL)
-    {
-        for (uint8_t row = 1; row <= 8u; ++row)
-            draw_value_ascii(row, "--");
-        return;
-    }
-
-    char buf[40];
-    snprintf(buf, sizeof(buf), "G:%u T:%us", (unsigned)ref->GameState.game_progress,
-             (unsigned)ref->GameState.stage_remain_time);
-    draw_value_ascii(1, buf);
-
-    snprintf(buf, sizeof(buf), "%u/%u", (unsigned)ref->GameRobotState.current_HP,
-             (unsigned)ref->GameRobotState.maximum_HP);
-    draw_value_ascii(2, buf);
-
-    float chassis_power = ref->PowerHeatData.reserved_3;
-    snprintf(buf, sizeof(buf), "%u/%uW", (unsigned)chassis_power,
-             (unsigned)ref->GameRobotState.chassis_power_limit);
-    draw_value_ascii(3, buf);
-
-    snprintf(buf, sizeof(buf), "%u", (unsigned)ref->PowerHeatData.buffer_energy);
-    draw_value_ascii(4, buf);
-
-    snprintf(buf, sizeof(buf), "%u/%u", (unsigned)ref->PowerHeatData.shooter_17mm_barrel_heat,
-             (unsigned)ref->GameRobotState.shooter_barrel_heat_limit);
-    draw_value_ascii(5, buf);
-
-    snprintf(buf, sizeof(buf), "%u/%u", (unsigned)ref->ProjectileAllowance.projectile_allowance_17mm,
-             (unsigned)ref->ProjectileAllowance.remaining_gold_coin);
-    draw_value_ascii(6, buf);
-
-    draw_value_float_unit(7, ref->ShootData.initial_speed, 1, "m/s");
-
-    snprintf(buf, sizeof(buf), "%u", (unsigned)ref->ProjectileAllowance.remaining_gold_coin);
-    draw_value_ascii(8, buf);
+    RefereeSnapshot_t ref = {0};
+    uint8_t available = (uint8_t)(RefereeGetSnapshot(&ref) == REFEREE_OK);
+    draw_value_cn(0, online_label((uint8_t)(available && ref.link_online)));
+    char values[LCD_REFEREE_VALUE_COUNT][LCD_REFEREE_VALUE_SIZE];
+    LCDRefereeFormatRows(available ? &ref : NULL, values);
+    for (uint8_t i=0u;i<LCD_REFEREE_VALUE_COUNT;++i) draw_value_ascii((uint8_t)(i+1u),values[i]);
 }
 
 // 第 3 页标签：各电机在线情况、CAN、视觉和按键读数。

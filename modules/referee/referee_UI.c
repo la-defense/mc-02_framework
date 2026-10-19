@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <string.h>
 
+static RefereeSnapshot_t ui_identity_snapshot; // UI任务串行发送时复用，避免在任务栈上放置整份快照。
+
 // 官方2026 V2.0.0表1-27～1-32；尺寸是编码范围，不推算图形是否完全落在屏幕中。
 static int common_valid(uint32_t op, uint32_t layer, uint32_t color, uint32_t width, uint32_t x, uint32_t y)
 {
@@ -208,10 +210,24 @@ static int valid_id(const referee_id_t *id)
            (red && id->Robot_ID == 9u) || (blue && id->Robot_ID == 109u));
 }
 
+static UIStatus_t validate_current_id(const referee_id_t *id)
+{
+    if (RefereeGetSnapshot(&ui_identity_snapshot) != REFEREE_OK ||
+        ui_identity_snapshot.command[REF_CMD_ROBOT_STATE].state != REFEREE_DATA_FRESH)
+        return UI_NOT_INITIALIZED;
+    const RefereeRobotState_t *robot = &ui_identity_snapshot.command[REF_CMD_ROBOT_STATE].data.robot_state;
+    if (id->Robot_ID != robot->robot_id || id->Cilent_ID != (uint16_t)(0x100u+robot->robot_id) ||
+        id->Robot_Color != (robot->robot_id >= 100u ? Robot_Blue : Robot_Red))
+        return UI_NOT_INITIALIZED;
+    return UI_OK;
+}
+
 static UIStatus_t send_frame(const referee_id_t *id, uint16_t command, const uint8_t *content, size_t length)
 {
     if (id == NULL) return UI_ERROR_ARGUMENT;
     if (!valid_id(id)) return UI_ERROR_RANGE;
+    UIStatus_t identity_status = validate_current_id(id);
+    if (identity_status != UI_OK) return identity_status;
     uint8_t frame[120] = {0};
     size_t total = 15u + length;
     if (total > sizeof(frame)) return UI_ERROR_LENGTH;

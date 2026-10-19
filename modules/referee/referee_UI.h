@@ -18,6 +18,17 @@
 #include "referee_protocol.h"
 #include "rm_referee.h"
 
+/** @brief UI发送身份；由新鲜的0x0201裁判数据重新计算，不能来自可变接收对象。 */
+typedef struct {
+    uint8_t Robot_Color;
+    uint16_t Robot_ID;
+    uint16_t Cilent_ID;
+    uint16_t Receiver_Robot_ID;
+} referee_id_t;
+
+/** @brief UI发送帧序号；仅由串行的裁判UI发送路径在本机接受后递增。 */
+extern uint8_t UI_Seq;
+
 /** @brief OK表示本地构图成功，SUBMITTED表示本机接受发送；两者都不证明客户端已显示。 */
 typedef enum {
     UI_OK = 0, UI_SUBMITTED = 1,

@@ -69,6 +69,18 @@ static uint32_t reference(const uint8_t *bytes, size_t length, uint32_t poly, ui
     return crc;
 }
 
+static size_t referee_frame(uint8_t *frame, uint16_t command, const uint8_t *payload, size_t length)
+{
+    memset(frame, 0, length+9u);
+    frame[0]=0xa5u; frame[1]=(uint8_t)length; frame[2]=(uint8_t)(length>>8u); frame[3]=7u;
+    frame[4]=(uint8_t)reference(frame,4u,0x8cu,0xffu);
+    frame[5]=(uint8_t)command; frame[6]=(uint8_t)(command>>8u);
+    memcpy(frame+7u,payload,length);
+    uint16_t crc=(uint16_t)reference(frame,length+7u,0x8408u,0xffffu);
+    frame[length+7u]=(uint8_t)crc; frame[length+8u]=(uint8_t)(crc>>8u);
+    return length+9u;
+}
+
 static void check_referee_frame(void)
 {
     TEST_CHECK(sent[4] == reference(sent, 4u, 0x8cu, 0xffu));
@@ -99,27 +111,42 @@ int main(void)
     TEST_CHECK(reference(sent, 41u, 0x8408u, 0xffffu) == ((uint16_t)sent[41] | ((uint16_t)sent[42] << 8u)));
 
     UART_HandleTypeDef handle = {0};
-    referee_info_t *info = RefereeInit(&handle);
-    TEST_CHECK(info != NULL);
-    uint8_t frame[] = {0xa5, 1, 0, 7, 0, 2, 0, 5, 0, 0};
-    frame[4] = (uint8_t)reference(frame, 4u, 0x8cu, 0xffu);
-    uint16_t tail = (uint16_t)reference(frame, 8u, 0x8408u, 0xffffu);
-    frame[8] = (uint8_t)tail; frame[9] = (uint8_t)(tail >> 8u);
-    memcpy(uart_bytes, frame, sizeof(frame));
-    now_ms = 20u; deliver_uart(sizeof(frame));
-    TEST_CHECK(RefereeGetLastRxMs() == 20u && info->CmdID == 2u);
-    referee_info_t saved = *info; old_reloads = reloads;
+    TEST_CHECK(RefereeInit(&handle, NULL) == REFEREE_OK);
+    uint8_t payload[17]={1u};
+    uint8_t frame[64];
+    size_t frame_len=referee_frame(frame,ID_game_robot_state,payload,sizeof(payload));
+    memcpy(uart_bytes, frame, frame_len);
+    now_ms = 20u; deliver_uart(frame_len);
+    RefereeSnapshot_t saved;
+    TEST_CHECK(RefereeGetSnapshot(&saved)==REFEREE_OK);
+    TEST_CHECK(saved.command[REF_CMD_ROBOT_STATE].source_rx_ms==20u &&
+               saved.command[REF_CMD_ROBOT_STATE].data.robot_state.robot_id==1u);
+    payload[0]=2u;
+    frame_len=referee_frame(frame,ID_game_result,payload,1u);
+    memcpy(uart_bytes,frame,frame_len); now_ms=21u; deliver_uart(frame_len);
+    TEST_CHECK(RefereeGetSnapshot(&saved)==REFEREE_OK);
+    TEST_CHECK(saved.command[REF_CMD_GAME_RESULT].state==REFEREE_DATA_EVENT_RECORDED &&
+               saved.command[REF_CMD_GAME_RESULT].data.game_result.winner==2u);
+    old_reloads = reloads;
     // 分别让帧头与整帧计算失败，都不能刷新时间或发布字段。
     for (int failure = 0; failure < 2; ++failure)
     {
-        crc_fail_after = failure; now_ms = 21u; deliver_uart(sizeof(frame));
-        TEST_CHECK(RefereeGetLastRxMs() == 20u && reloads == old_reloads);
-        TEST_CHECK(memcmp(&saved, info, sizeof(saved)) == 0);
+        crc_fail_after = failure; now_ms = 22u; deliver_uart(frame_len);
+        RefereeSnapshot_t after;
+        TEST_CHECK(RefereeGetSnapshot(&after)==REFEREE_OK);
+        TEST_CHECK(after.command[REF_CMD_GAME_RESULT].source_rx_ms==21u && reloads == old_reloads);
+        TEST_CHECK(memcmp(&saved.command[REF_CMD_GAME_RESULT].data,
+                          &after.command[REF_CMD_GAME_RESULT].data,
+                          sizeof(saved.command[REF_CMD_GAME_RESULT].data)) == 0);
+        TEST_CHECK(saved.command[REF_CMD_GAME_RESULT].receive_count ==
+                   after.command[REF_CMD_GAME_RESULT].receive_count);
     }
-    uart_bytes[7] ^= 1u; now_ms = 22u; deliver_uart(sizeof(frame));
-    TEST_CHECK(RefereeGetLastRxMs() == 20u && reloads == old_reloads);
+    uart_bytes[7] ^= 1u; now_ms = 23u; deliver_uart(frame_len);
+    RefereeSnapshot_t after;
+    TEST_CHECK(RefereeGetSnapshot(&after)==REFEREE_OK &&
+               after.command[REF_CMD_GAME_RESULT].source_rx_ms==21u && reloads == old_reloads);
 
-    referee_id_t id = {.Robot_ID = 1u, .Cilent_ID = 0x101u};
+    referee_id_t id = {.Robot_Color=Robot_Red,.Robot_ID = 1u, .Cilent_ID = 0x101u};
     Graph_Data_t graph = {0}; String_Data_t text = {0};
     UIDelete(&id, 1u, 0u); check_referee_frame();
     UIGraphRefresh(&id, &graph, 1u, 1u); check_referee_frame();

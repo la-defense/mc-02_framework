@@ -18,7 +18,6 @@ static DJIMotorInstance motors[4];
 static unsigned motor_count;
 static unsigned operation_order;
 static SuperCapInstance cap;
-static referee_info_t referee;
 
 DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
 {
@@ -34,8 +33,8 @@ void DJIMotorEnable(DJIMotorInstance *motor)
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
 { (void)motor; memset(summary, 0, sizeof(*summary)); }
 SuperCapInstance *SuperCapInit(SuperCap_Init_Config_s *config) { (void)config; return &cap; }
-referee_info_t *UITaskInit(UART_HandleTypeDef *handle, Referee_Interactive_info_t *ui)
-{ (void)handle; (void)ui; return &referee; }
+RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *config)
+{ (void)handle; (void)config; return REFEREE_OK; }
 void MC02ChassisTestLogError(void) {}
 
 int main(void)

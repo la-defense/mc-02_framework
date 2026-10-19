@@ -1,112 +1,38 @@
 /**
-* @file rm_referee.h
-* @brief 声明裁判系统接收数据、交互数据和串口服务接口。
-* RefereeInit 返回的数据结构由接收回调持续更新；调用方不要释放它。
+ * @file rm_referee.h
+ * @brief 声明裁判帧接收、复制读取和串口发送接口。
+ * 先注册唯一UART，再由任意任务复制读取；UI不参与接收初始化。
+ * @author kidneygood (you@domain.com)
+ * @version 0.1
+ * @date 2022-11-18
+ * @copyright Copyright (c) 2022
  */
 #ifndef RM_REFEREE_H
 #define RM_REFEREE_H
 
+#include <stdint.h>
 #include "usart.h"
-#include "referee_protocol.h"
-#include "robot_def.h"
-#include "bsp_usart.h"
-#include "FreeRTOS.h"
+#include "referee_snapshot.h"
 
-extern uint8_t UI_Seq;
+#define REFEREE_LINK_TIMEOUT_MS 300u
 
-#pragma pack(1)
-typedef struct
-{
-	uint8_t Robot_Color;		// 机器人颜色
-	uint16_t Robot_ID;			// 本机器人ID
-	uint16_t Cilent_ID;			// 本机器人对应的客户端ID
-	uint16_t Receiver_Robot_ID; // 机器人车间通信时接收者的ID，必须和本机器人同颜色
-} referee_id_t;
+/** @brief 按命令发送频率设置的期限；0x0002、0x0206、0x0207、0x0301为事件记录，不使用期限。 */
+typedef struct {
+    uint32_t timeout_10hz_ms; /**< 0x0201、0x0202、0x0208的有效期限，1～INT32_MAX ms。 */
+    uint32_t timeout_3hz_ms;  /**< 0x0003、0x0204、0x0209、0x020A的有效期限，1～INT32_MAX ms。 */
+    uint32_t timeout_1hz_ms;  /**< 1Hz命令的有效期限，1～INT32_MAX ms。 */
+    uint32_t timeout_map_ms;  /**< 0x0303最近内容的有效期限，1～INT32_MAX ms。 */
+} RefereeConfig_t;
 
-/** @brief 保存裁判系统接收字段、机器人编号和初始化状态。 */
-typedef struct
-{
-	referee_id_t referee_id;
-
-	xFrameHeader FrameHeader; // 接收到的帧头信息
-	uint16_t CmdID;
-	ext_game_state_t GameState;							   // 0x0001
-	ext_game_result_t GameResult;						   // 0x0002
-	ext_game_robot_HP_t GameRobotHP;					   // 0x0003
-	ext_event_data_t EventData;							   // 0x0101
-	ext_referee_warning_t RefereeWarning;				   // 0x0104
-	ext_dart_info_t DartInfo;							   // 0x0105
-	ext_game_robot_state_t GameRobotState;				   // 0x0201
-	ext_power_heat_data_t PowerHeatData;				   // 0x0202
-	ext_game_robot_pos_t GameRobotPos;					   // 0x0203
-	ext_buff_musk_t BuffMusk;							   // 0x0204
-	ext_robot_hurt_t RobotHurt;							   // 0x0206
-	ext_shoot_data_t ShootData;							   // 0x0207
-	ext_projectile_allowance_t ProjectileAllowance;		   // 0x0208
-	ext_rfid_status_t RfidStatus;						   // 0x0209
-	ext_dart_client_cmd_t DartClientCmd;				   // 0x020A
-	ext_ground_robot_position_t GroundRobotPosition;	   // 0x020B
-	ext_radar_mark_data_t RadarMarkData;				   // 0x020C
-	ext_sentry_info_t SentryInfo;						   // 0x020D
-	ext_radar_info_t RadarInfo;							   // 0x020E
-	ext_map_command_t MapCommand;						   // 0x0303
-
-	// 自定义交互数据的接收
-	Communicate_ReceiveData_t ReceiveData;
-
-	uint8_t init_flag;
-
-} referee_info_t;
-
-/** @brief UI 用来记录哪些显示内容需要刷新；1表示对应数据发生变化。 */
-typedef struct
-{
-	uint32_t chassis_flag : 1;
-	uint32_t gimbal_flag : 1;
-	uint32_t shoot_flag : 1;
-	uint32_t lid_flag : 1;
-	uint32_t friction_flag : 1;
-	uint32_t Power_flag : 1;
-	uint8_t refresh_flag : 2;
-} Referee_Interactive_Flag_t;
-
-/** @brief 保存 UI 和机器人间通信需要的应用状态及上次显示值。 */
-typedef struct
-{
-	Referee_Interactive_Flag_t Referee_Interactive_Flag;
-	// 为UI绘制以及交互数据所用
-	chassis_mode_e chassis_mode;			 // 底盘模式
-	gimbal_mode_e gimbal_mode;				 // 云台模式
-	shoot_mode_e shoot_mode;				 // 发射模式设置
-	friction_mode_e friction_mode;			 // 摩擦轮关闭
-	lid_mode_e lid_mode;					 // 弹舱盖打开
-	Chassis_Power_Data_s Chassis_Power_Data; // 功率控制
-
-	// 上一次的模式，用于flag判断
-	chassis_mode_e chassis_last_mode;
-	gimbal_mode_e gimbal_last_mode;
-	shoot_mode_e shoot_last_mode;
-	friction_mode_e friction_last_mode;
-	lid_mode_e lid_last_mode;
-	Chassis_Power_Data_s Chassis_last_Power_Data;
-
-	Bullet_Speed_e bullet_speed;
-	float chassis_offset_angle;
-	float pitch_angle;
-
-} Referee_Interactive_info_t;
-
-#pragma pack()
-
-/**
-* @brief 注册裁判系统串口和接收数据处理。
-* @param[in] referee_usart_handle 已初始化的 UART 句柄，不能为 NULL，须长期有效。
-* @return 成功时返回持续更新的裁判数据地址；空句柄、重复注册或资源注册失败时返回 NULL。
-* @note USARTProcessRx任务回调解析，保留128字节候选，跨块组帧期限50ms，边界允许。
-* 只接受现有命令及其既有最短前缀，未知、短内容及CRC失败均不发布、不续期。
-* 调用方不要释放返回地址；本接口不提供各命令组的一致性复制读取。
- */
-referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle);
+/** @brief 初始化或快照读取的结果。 */
+typedef enum {
+    REFEREE_OK = 0,
+    REFEREE_ERROR_ARGUMENT,
+    REFEREE_ERROR_CONFIG,
+    REFEREE_ERROR_ALREADY_INITIALIZED,
+    REFEREE_ERROR_NOT_INITIALIZED,
+    REFEREE_ERROR_RESOURCE
+} RefereeStatus_t;
 
 /** @brief 裁判串口提交结果；ACCEPTED只表示本机启动发送。 */
 typedef enum {
@@ -115,20 +41,34 @@ typedef enum {
     REFEREE_SEND_ERROR, REFEREE_SEND_TIMEOUT
 } RefereeSendStatus_t;
 
-/** @brief 复制完整帧到持久缓冲并尝试DMA发送，无队列。
+/**
+ * @brief 注册唯一裁判UART并启动跨块帧解析。
+ * @param[in] referee_usart_handle 已初始化且长期有效的UART句柄，不能为NULL。
+ * @param[in] config 可为NULL；非NULL时初始化复制，四个期限必须在1～INT32_MAX ms。
+ * @return REFEREE_OK或具体参数、配置、重复初始化及资源错误；失败不覆盖已运行实例。
+ * @note 默认期限为10Hz组300ms、3Hz组1000ms、1Hz组及0x0303为3000ms。UI可在接收成功后单独绑定。
+ *       候选帧最长128字节，首字节RxEvent时间向后50ms内必须完成组帧，边界允许。
+ */
+RefereeStatus_t RefereeInit(UART_HandleTypeDef *referee_usart_handle, const RefereeConfig_t *config);
+
+/**
+ * @brief 一次复制全部命令数据、各自期限状态和链路诊断。
+ * @param[out] output 接收完整副本；NULL返回参数错误。未初始化时清零整个可写输出。
+ * @return REFEREE_OK、REFEREE_ERROR_ARGUMENT或REFEREE_ERROR_NOT_INITIALIZED。
+ * @note 可从任务调用；复制期间接收发布暂时停止。查询不消费数据、不续期，周期数据必须检查state。
+ *       事件命令只报告最近记录和年龄，不表示事件仍有效，也不会重放动作。
+ */
+RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output);
+
+/**
+ * @brief 复制完整帧到持久缓冲并尝试DMA发送，无队列。
  * @param[in] send 非空，至少tx_len个可读字节；返回后调用者可以复用原数据。
  * @param[in] tx_len 帧字节数，1～128。
  * @return 本机接受、参数错误、未初始化、忙、发送错误或启动超时。
  * @note 先成功RefereeInit；仅裁判任务串行调用，禁止ISR及其他发送者共用该UART。
- * UART未READY时不覆盖在途缓冲。接受后等待115ms保持既有节奏；延时不证明完成。
- * 失败不等待、不排队、不自动重试，不证明客户端已收到或显示。
+ *       UART未READY时不覆盖在途缓冲。接受后等待115ms保持既有节奏；延时不证明完成。
+ *       失败不等待、不排队、不自动重试，不证明客户端已收到或显示。
  */
 RefereeSendStatus_t RefereeSend(const uint8_t *send, uint16_t tx_len);
 
-/** @brief 已收到合法已支持命令、源数据年龄不超过300ms且看门狗在线时返回1，否则0；不续期。 */
-uint8_t RefereeIsOnline(void);
-
-/** @brief 返回最近合法已支持命令的首个组成块RxEvent毫秒值，0也合法；初始为0，不续期。 */
-uint32_t RefereeGetLastRxMs(void);
-
-#endif // !REFEREE_H
+#endif

@@ -51,10 +51,12 @@ void StartDAEMONTASK(void const *argument);
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartROBOTTASK(void const *argument);
-/** @brief 等待裁判编号并周期运行裁判 UI；每次循环至少等待 1 ms。
+#if MC02_ENABLE_REFEREE_UI
+/** @brief 等待新鲜裁判机器人编号并周期运行 UI；每次循环至少等待 1 ms。
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartUITASK(void const *argument);
+#endif
 
 /** @brief 创建 INS、电机、Daemon、整车、LCD 及当前配置所需 UI 任务。
 * @return 1 为全部创建成功，0 为至少一个失败，并记录失败任务编号；不删除已创建的任务。
@@ -77,7 +79,7 @@ uint8_t OSTaskInit(void)
     osThreadDef(robottask, StartROBOTTASK, osPriorityNormal, 0, 1024);
     robotTaskHandle = osThreadCreate(osThread(robottask), NULL);
 
-#if !defined(MC02_PROFILE_BENCH_SAFE)
+#if MC02_ENABLE_REFEREE_UI
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
 #endif
@@ -109,7 +111,7 @@ uint8_t OSTaskInit(void)
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_ROBOT);
         all_created = 0u;
     }
-#if !defined(MC02_PROFILE_BENCH_SAFE)
+#if MC02_ENABLE_REFEREE_UI
     if (uiTaskHandle == NULL)
     {
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
@@ -303,12 +305,15 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
     }
 }
 
+#if MC02_ENABLE_REFEREE_UI
 __attribute__((noreturn)) void StartUITASK(void const *argument)
 {
+    (void)argument;
     LOGINFO("[freeRTOS] UI Task Start");
-    // 沿用等待首个机器人编号的启动顺序；真正构图失败后不自动重画或影响裁判接收。
-    referee_info_t *ui_info = RefereeGetInfo();
-    while (ui_info != NULL && ui_info->init_flag && ui_info->GameRobotState.robot_id == 0u)
+    RefereeSnapshot_t snapshot;
+    // 只等0x0201自己的期限内数据，其他裁判命令不能替它提供机器人身份。
+    while (RefereeGetSnapshot(&snapshot) == REFEREE_OK &&
+           snapshot.command[REF_CMD_ROBOT_STATE].state != REFEREE_DATA_FRESH)
         osDelay(100);
     UIStatus_t ui_status = MyUIInit();
     if (ui_status == UI_SUBMITTED)
@@ -322,3 +327,4 @@ __attribute__((noreturn)) void StartUITASK(void const *argument)
         osDelay(1); // 即使没有任何UI需要刷新,也挂起一次,防止卡在UITask中无法切换
     }
 }
+#endif

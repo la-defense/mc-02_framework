@@ -13,60 +13,75 @@
 #include <limits.h>
 
 static Referee_Interactive_info_t *Interactive_data;
-static referee_info_t *referee_recv_info;
+static referee_id_t ui_identity;
+static RefereeSnapshot_t ui_snapshot;
+static uint8_t ui_identity_valid;
 static uint8_t ui_ready;
 uint8_t UI_Seq;
 static void RobotModeTest(Referee_Interactive_info_t *data);
 static void UIChangeCheck(Referee_Interactive_info_t *data);
-static UIStatus_t MyUIRefresh(referee_info_t *info, Referee_Interactive_info_t *data);
+static UIStatus_t MyUIRefresh(Referee_Interactive_info_t *data);
 
 static Graph_Data_t UI_shoot_line[10];
 static Graph_Data_t UI_Energy[3];
 static String_Data_t UI_State_sta[6], UI_State_dyn[6];
 static const uint32_t shoot_line_location[5] = {540, 960, 490, 515, 565};
 
-referee_info_t *UITaskInit(UART_HandleTypeDef *handle, Referee_Interactive_info_t *data)
+static UIStatus_t UIIdentityCheck(void)
 {
-    if (data == NULL) return NULL;
-    referee_info_t *info = RefereeInit(handle);
-    if (info == NULL) return NULL;
-    referee_recv_info = info;
-    Interactive_data = data;
-    ui_ready = 0u;
-    info->init_flag = 1u;
-    return info;
+    if (!ui_identity_valid || RefereeGetSnapshot(&ui_snapshot) != REFEREE_OK ||
+        ui_snapshot.command[REF_CMD_ROBOT_STATE].state != REFEREE_DATA_FRESH ||
+        ui_snapshot.command[REF_CMD_ROBOT_STATE].data.robot_state.robot_id != ui_identity.Robot_ID) {
+        ui_ready = 0u;
+        ui_identity_valid = 0u;
+        return UI_NOT_INITIALIZED;
+    }
+    return UI_OK;
 }
 
-referee_info_t *RefereeGetInfo(void) { return referee_recv_info; }
+UIStatus_t UITaskInit(Referee_Interactive_info_t *data)
+{
+    if (data == NULL) return UI_ERROR_ARGUMENT;
+    Interactive_data = data;
+    ui_ready = 0u;
+    ui_identity_valid = 0u;
+    return UI_OK;
+}
 
 UIStatus_t UITask(void)
 {
-    if (!ui_ready || Interactive_data == NULL || referee_recv_info == NULL) return UI_NOT_INITIALIZED;
+    if (!ui_ready || Interactive_data == NULL) return UI_NOT_INITIALIZED;
     RobotModeTest(Interactive_data);
     return UIRefresh();
 }
 
 UIStatus_t UIRefresh(void)
 {
-    if (!ui_ready || Interactive_data == NULL || referee_recv_info == NULL) return UI_NOT_INITIALIZED;
-    return MyUIRefresh(referee_recv_info, Interactive_data);
+    if (!ui_ready || Interactive_data == NULL) return UI_NOT_INITIALIZED;
+    UIStatus_t identity_status = UIIdentityCheck();
+    if (identity_status != UI_OK) return identity_status;
+    return MyUIRefresh(Interactive_data);
 }
 
 // 初始化是一轮显式尝试；任一步失败不置就绪，重试须由调用者再次调用MyUIInit。
 #define UI_BUILD(call) do { UIStatus_t result = (call); if (result != UI_OK) return result; } while (0)
-#define UI_SUBMIT(call) do { UIStatus_t result = (call); if (result != UI_SUBMITTED) return result; } while (0)
+#define UI_SUBMIT(call) do { UIStatus_t identity_status = UIIdentityCheck(); if (identity_status != UI_OK) return identity_status; \
+    UIStatus_t result = (call); if (result != UI_SUBMITTED) return result; } while (0)
 UIStatus_t MyUIInit(void)
 {
     ui_ready = 0u;
-    if (referee_recv_info == NULL || Interactive_data == NULL || !referee_recv_info->init_flag)
-        return UI_NOT_INITIALIZED;
-    if (referee_recv_info->GameRobotState.robot_id == 0u) return UI_NOT_INITIALIZED;
-    uint16_t robot = referee_recv_info->GameRobotState.robot_id;
-    referee_recv_info->referee_id.Robot_Color = robot >= 100u ? Robot_Blue : Robot_Red;
-    referee_recv_info->referee_id.Robot_ID = robot;
-    referee_recv_info->referee_id.Cilent_ID = (uint16_t)(0x100u + robot);
-    referee_recv_info->referee_id.Receiver_Robot_ID = 0u;
-    const referee_id_t *id = &referee_recv_info->referee_id;
+    ui_identity_valid = 0u;
+    if (Interactive_data == NULL) return UI_NOT_INITIALIZED;
+    if (RefereeGetSnapshot(&ui_snapshot) != REFEREE_OK ||
+        ui_snapshot.command[REF_CMD_ROBOT_STATE].state != REFEREE_DATA_FRESH) return UI_NOT_INITIALIZED;
+    uint16_t robot = ui_snapshot.command[REF_CMD_ROBOT_STATE].data.robot_state.robot_id;
+    if (robot == 0u) return UI_NOT_INITIALIZED;
+    ui_identity.Robot_Color = robot >= 100u ? Robot_Blue : Robot_Red;
+    ui_identity.Robot_ID = robot;
+    ui_identity.Cilent_ID = (uint16_t)(0x100u + robot);
+    ui_identity.Receiver_Robot_ID = 0u;
+    ui_identity_valid = 1u;
+    const referee_id_t *id = &ui_identity;
     UI_SUBMIT(UIDelete(id, UI_Data_Del_ALL, 0));
     UI_BUILD(UILineDraw(&UI_shoot_line[0], "sl0", UI_Graph_ADD, 7, UI_Color_White, 3, 710, shoot_line_location[0], 1210, shoot_line_location[0]));
     UI_BUILD(UILineDraw(&UI_shoot_line[1], "sl1", UI_Graph_ADD, 7, UI_Color_White, 3, shoot_line_location[1], 340, shoot_line_location[1], 740));
@@ -166,10 +181,10 @@ static void RobotModeTest(Referee_Interactive_info_t *_Interactive_data) // 测�
 }
 
 // 只在本机接受完整刷新后清标志；失败留到下一轮，不把旧对象当成新构图结果发送。
-static UIStatus_t MyUIRefresh(referee_info_t *info, Referee_Interactive_info_t *data)
+static UIStatus_t MyUIRefresh(Referee_Interactive_info_t *data)
 {
     UIChangeCheck(data);
-    const referee_id_t *id = &info->referee_id;
+    const referee_id_t *id = &ui_identity;
     if (data->Referee_Interactive_Flag.chassis_flag)
     {
         const char *text;
