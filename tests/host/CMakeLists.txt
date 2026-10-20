@@ -61,6 +61,31 @@ endif()
 include(CTest)
 # 三位小数入口独立于日志硬件；Python Decimal提供不同实现的数值参考。
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_executable(
+  bsp_adc_snapshot_test
+  bsp_adc_snapshot_test.c
+  ../../bsp/adc/bsp_adc.c)
+target_include_directories(bsp_adc_snapshot_test BEFORE PRIVATE bsp_adc_fakes)
+target_include_directories(bsp_adc_snapshot_test PRIVATE ../../bsp/adc)
+add_test(NAME production_adc_snapshot_age_error_and_diagnostics COMMAND bsp_adc_snapshot_test)
+set_tests_properties(production_adc_snapshot_age_error_and_diagnostics PROPERTIES TIMEOUT 10)
+
+add_executable(
+  bsp_adc_invalid_config_test
+  bsp_adc_snapshot_test.c
+  ../../bsp/adc/bsp_adc.c)
+target_include_directories(bsp_adc_invalid_config_test BEFORE PRIVATE bsp_adc_fakes)
+target_include_directories(bsp_adc_invalid_config_test PRIVATE ../../bsp/adc)
+target_compile_definitions(bsp_adc_invalid_config_test PRIVATE
+  BSP_ADC_EXPECT_INVALID_CONFIG
+  BSP_ADC_VREF_MV=0u)
+add_test(NAME production_adc_rejects_invalid_voltage_config COMMAND bsp_adc_invalid_config_test)
+set_tests_properties(production_adc_rejects_invalid_voltage_config PROPERTIES TIMEOUT 10)
+
+add_test(NAME production_adc_vin_measurement_tool
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_adc_vin_measurement.py)
+set_tests_properties(production_adc_vin_measurement_tool PROPERTIES TIMEOUT 10)
+
 add_executable(float_to_string_test float_to_string_test.c ../../bsp/log/float_to_string.c)
 target_include_directories(float_to_string_test PRIVATE ../../bsp/log)
 target_compile_features(float_to_string_test PRIVATE c_std_11)
@@ -634,25 +659,6 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   target_compile_options(param_operation_test PRIVATE -fno-pie)
   target_link_options(param_operation_test PRIVATE -no-pie)
   add_test(NAME production_parameter_flash_is_guarded COMMAND param_operation_test)
-
-  add_executable(
-    bsp_adc_snapshot_test
-    bsp_adc_snapshot_test.c
-    ../../bsp/adc/bsp_adc.c)
-  target_include_directories(bsp_adc_snapshot_test BEFORE PRIVATE bsp_adc_fakes)
-  target_include_directories(bsp_adc_snapshot_test PRIVATE ../../bsp/adc)
-  add_test(NAME production_adc_snapshot_age_and_error COMMAND bsp_adc_snapshot_test)
-
-  add_executable(
-    bsp_adc_invalid_config_test
-    bsp_adc_snapshot_test.c
-    ../../bsp/adc/bsp_adc.c)
-  target_include_directories(bsp_adc_invalid_config_test BEFORE PRIVATE bsp_adc_fakes)
-  target_include_directories(bsp_adc_invalid_config_test PRIVATE ../../bsp/adc)
-  target_compile_definitions(bsp_adc_invalid_config_test PRIVATE
-    BSP_ADC_EXPECT_INVALID_CONFIG
-    BSP_ADC_VREF_MV=0u)
-  add_test(NAME production_adc_rejects_invalid_voltage_config COMMAND bsp_adc_invalid_config_test)
 
   add_executable(
     lcd_key_input_test

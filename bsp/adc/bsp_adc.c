@@ -12,7 +12,9 @@
 #include "main.h"
 #include "bsp_log.h"
 
+#include <float.h>
 #include <stddef.h>
+#include <string.h>
 
 // 每对包含两个 uint16_t 读数，前后半段分别处理。
 #define BSP_ADC_DMA_WORD_COUNT (BSP_ADC_DMA_BATCH_PAIR_COUNT * 2u)
@@ -27,6 +29,15 @@ static volatile uint32_t adc_error_flags = BSP_ADC_ERROR_NONE;
 static volatile uint32_t adc_hal_error_code = 0u;
 static volatile uint8_t adc_started = 0u;
 static volatile uint8_t sample_ready = 0u;
+// 只读诊断保留在 RAM 中；更新任务和离线 ELF 工具共用头文件中的格式说明。
+volatile BSP_ADC_Diagnostic_t bsp_adc_diagnostic;
+static uint8_t diagnostic_published;
+
+_Static_assert(sizeof(float) == sizeof(uint32_t), "ADC diagnostics require binary32 float");
+_Static_assert(FLT_RADIX == 2 && FLT_MANT_DIG == 24 && FLT_MAX_EXP == 128,
+               "ADC diagnostics require IEEE-754 binary32 float");
+_Static_assert(sizeof(BSP_ADC_Diagnostic_t) == 15u * sizeof(uint32_t),
+               "ADC diagnostic layout must contain 15 contiguous 32-bit fields");
 
 // 检查参考电压、ADC 最大读数和分压倍数是否符合换算要求。
 static uint8_t BSP_ADCVoltageConfigValid(void)
@@ -65,6 +76,23 @@ static void BSP_ADCResetPublishedSample(void)
     adc_hal_error_code = 0u;
     sample_ready = 0u;
     adc_started = 0u;
+    diagnostic_published = 0u;
+    // 重启测试或受控重新初始化时，先撤销旧记录，避免工具误读上次启动的数据。
+    bsp_adc_diagnostic.version = 0u;
+    bsp_adc_diagnostic.layout = 0u;
+    bsp_adc_diagnostic.captured_ms = 0u;
+    bsp_adc_diagnostic.status = 0u;
+    bsp_adc_diagnostic.raw_vcc_in = 0u;
+    bsp_adc_diagnostic.raw_key = 0u;
+    bsp_adc_diagnostic.sample_sequence = 0u;
+    bsp_adc_diagnostic.sample_timestamp_ms = 0u;
+    bsp_adc_diagnostic.error_flags = 0u;
+    bsp_adc_diagnostic.hal_error_code = 0u;
+    bsp_adc_diagnostic.voltage_config_valid = 0u;
+    bsp_adc_diagnostic.volts_bits = 0u;
+    bsp_adc_diagnostic.vref_mv = 0u;
+    bsp_adc_diagnostic.full_scale = 0u;
+    bsp_adc_diagnostic.divider_milli = 0u;
     __set_PRIMASK(previous_primask);
 }
 
@@ -173,6 +201,47 @@ BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample)
     if ((uint32_t)(HAL_GetTick() - sample->timestamp_ms) > BSP_ADC_SAMPLE_MAX_AGE_MS)
         return BSP_ADC_STATUS_STALE;
     return BSP_ADC_STATUS_VALID;
+}
+
+void BSP_ADCUpdateDiagnostics(void)
+{
+    uint32_t now = HAL_GetTick();
+    // 用真实毫秒差限制频率，计时回绕后仍可继续记录。
+    if (diagnostic_published &&
+        (uint32_t)(now - bsp_adc_diagnostic.captured_ms) < BSP_ADC_DIAGNOSTIC_PERIOD_MS)
+        return;
+
+    BSP_ADC_Sample_t sample;
+    uint32_t previous_primask = __get_PRIMASK();
+    __disable_irq();
+    uint32_t captured_ms = HAL_GetTick();
+    BSP_ADC_Status_e status = BSP_ADCGetSample(&sample);
+    uint32_t volts_bits;
+    memcpy(&volts_bits, &sample.vcc_in_volts, sizeof(volts_bits));
+
+    // 两个版本写入之间只放本次 getter 的数据；SWD 跨更新读取时必须整份丢弃。
+    uint32_t writing_version = bsp_adc_diagnostic.version + 1u;
+    bsp_adc_diagnostic.version = writing_version;
+    __DMB();
+    bsp_adc_diagnostic.layout = BSP_ADC_DIAGNOSTIC_LAYOUT;
+    bsp_adc_diagnostic.captured_ms = captured_ms;
+    bsp_adc_diagnostic.status = (uint32_t)status;
+    bsp_adc_diagnostic.raw_vcc_in = sample.raw_vcc_in;
+    bsp_adc_diagnostic.raw_key = sample.raw_key;
+    bsp_adc_diagnostic.sample_sequence = sample.sequence;
+    bsp_adc_diagnostic.sample_timestamp_ms = sample.timestamp_ms;
+    bsp_adc_diagnostic.error_flags = sample.error_flags;
+    bsp_adc_diagnostic.hal_error_code = sample.hal_error_code;
+    bsp_adc_diagnostic.voltage_config_valid = sample.voltage_config_valid;
+    bsp_adc_diagnostic.volts_bits = volts_bits;
+    bsp_adc_diagnostic.vref_mv = BSP_ADC_VREF_MV;
+    bsp_adc_diagnostic.full_scale = BSP_ADC_FULL_SCALE;
+    bsp_adc_diagnostic.divider_milli = BSP_ADC_VCC_IN_DIVIDER_MILLI;
+    __DMB();
+    // 保留 0 表示未发布；版本回绕时跳过 0，不改变 ADC 的批次序号。
+    bsp_adc_diagnostic.version = writing_version == UINT32_MAX ? 2u : writing_version + 1u;
+    diagnostic_published = 1u;
+    __set_PRIMASK(previous_primask);
 }
 
 /**

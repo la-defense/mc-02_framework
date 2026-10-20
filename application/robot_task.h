@@ -29,6 +29,7 @@
 #include "bsp_log.h"
 #include "bsp_dwt.h"
 #include "bsp_spi.h"
+#include "bsp_adc.h"
 
 osThreadId insTaskHandle;
 osThreadId robotTaskHandle;
@@ -256,6 +257,8 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 #endif
         // 约每 10 ms 停止出错或到期的异步 SPI，停止失败的总线保持隔离。
         (void)SPIProcessTimeouts();
+        // 电压诊断只记录读取结果，内部每 250ms 更新一次，不参与控制许可。
+        BSP_ADCUpdateDiagnostics();
         DaemonTask();
         if (buzzer_ready)
             BuzzerTask();

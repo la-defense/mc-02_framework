@@ -4,6 +4,8 @@
 GDB is used offline to resolve ELF symbol addresses only. Live reads use the
 loopback OpenOCD Telnet port configured by tools/openocd_running_inspection.cfg
 and are restricted to target-state queries and single-byte/word RAM reads.
+
+ADC 模式另检查记录前后的版本和格式编号，防止把更新中的字段拼在一起。
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ import ipaddress
 import json
 import re
 import socket
+import math
+import struct
 import subprocess
 import sys
 import time
@@ -74,6 +78,62 @@ IMU_SNAPSHOT_FIELDS = {
     "imu_sample_valid": SnapshotField("imu_sample_valid_diag", "mdw", 32),
     "imu_heater_duty": SnapshotField("imu_heater_duty_diag", "mdw", 32),
 }
+
+# 每个地址都从给定 ELF 离线解析；不接受运行时提供的任意地址。
+ADC_SNAPSHOT_FIELDS = {
+    **{f"adc_{key}": SnapshotField(f"bsp_adc_diagnostic.{key}", "mdw", 32)
+       for key in ("version", "layout", "captured_ms", "status", "raw_vcc_in", "raw_key",
+                   "sample_sequence", "sample_timestamp_ms", "error_flags", "hal_error_code",
+                   "voltage_config_valid", "volts_bits", "vref_mv", "full_scale", "divider_milli")},
+    "tick_ms": SnapshotField("uwTick", "mdw", 32),
+    "iwdg_reset_flag": SnapshotField("iwdg_reset_flag", "mdb", 8),
+}
+ADC_DIAGNOSTIC_LAYOUT = 0xADC10001
+
+
+def decode_adc(snapshot: dict[str, int]) -> dict:
+    """验证一份完整的 ADC 诊断记录；失败抛出 ProbeIOError，保留调用方原数据。"""
+    expected = set(ADC_SNAPSHOT_FIELDS) | {"adc_version_after"}
+    if set(snapshot) != expected:
+        raise ProbeIOError("ADC record has missing or unexpected fields")
+    if any(type(value) is not int or not 0 <= value <= UINT32_MAX for value in snapshot.values()):
+        raise ProbeIOError("ADC record contains an invalid unsigned word")
+    version = snapshot["adc_version"]
+    if not version or version & 1 or version != snapshot["adc_version_after"]:
+        raise ProbeIOError("ADC record changed during reading or has not been published")
+    if snapshot["adc_layout"] != ADC_DIAGNOSTIC_LAYOUT:
+        raise ProbeIOError("ADC layout mismatch: use the verified firmware ELF")
+    if snapshot["adc_status"] not in range(4):
+        raise ProbeIOError("invalid ADC status")
+    if snapshot["iwdg_reset_flag"] not in (0, 1):
+        raise ProbeIOError("invalid IWDG reset flag")
+    if snapshot["adc_raw_vcc_in"] > 65535 or snapshot["adc_raw_key"] > 65535:
+        raise ProbeIOError("ADC raw value is outside the 16-bit range")
+    if snapshot["adc_voltage_config_valid"] not in (0, 1):
+        raise ProbeIOError("invalid ADC configuration flag")
+    # 诊断更新比 ADC 慢；这里分别检查诊断是否停更、采样在记录时是否新鲜。
+    diagnostic_age = (snapshot["tick_ms"] - snapshot["adc_captured_ms"]) & UINT32_MAX
+    sample_age = (snapshot["adc_captured_ms"] - snapshot["adc_sample_timestamp_ms"]) & UINT32_MAX
+    if diagnostic_age > 1000:
+        raise ProbeIOError("ADC diagnostic record is older than 1000ms")
+    volts = struct.unpack("<f", struct.pack("<I", snapshot["adc_volts_bits"]))[0]
+    if not math.isfinite(volts):
+        raise ProbeIOError("ADC voltage is not finite")
+    if snapshot["adc_voltage_config_valid"]:
+        if not (0 < snapshot["adc_vref_mv"] <= 5000 and snapshot["adc_full_scale"] == 65535
+                and 0 < snapshot["adc_divider_milli"] <= 100000):
+            raise ProbeIOError("ADC configuration fields do not match the valid flag")
+        expected_volts = (snapshot["adc_raw_vcc_in"] * snapshot["adc_vref_mv"]
+                          * snapshot["adc_divider_milli"] / (65535 * 1_000_000))
+        if abs(volts - expected_volts) > 0.00002:
+            raise ProbeIOError("ADC voltage and raw/configuration fields disagree")
+    elif volts != 0.0:
+        raise ProbeIOError("invalid ADC configuration has a nonzero voltage")
+    if snapshot["adc_status"] == 1 and (sample_age > 20 or snapshot["adc_error_flags"]):
+        raise ProbeIOError("ADC valid status disagrees with its age or errors")
+    return {**snapshot, "adc_volts": volts, "adc_sample_age_ms": sample_age,
+            "adc_diagnostic_age_ms": diagnostic_age,
+            "adc_usable": snapshot["adc_status"] == 1 and snapshot["adc_voltage_config_valid"] == 1}
 
 INIT_SNAPSHOT_FIELDS = {
     "tick_ms": SnapshotField("uwTick", "mdw", 32),
@@ -433,6 +493,12 @@ def read_snapshot(
                     output, address, fields[key].width_bits
                 )
                 _require_running(client.command("targets"), f"after reading {key}")
+            if fields is ADC_SNAPSHOT_FIELDS:
+                # 完整记录读完后再读版本；只重复已列入白名单的地址。
+                address = addresses["adc_version"]
+                output = client.command(_build_read_command("adc_version", address, fields))
+                snapshot["adc_version_after"] = _parse_memory_value(output, address, 32)
+                _require_running(client.command("targets"), "after checking ADC version")
     except (OSError, ValueError) as error:
         if isinstance(error, ProbeIOError):
             raise
@@ -480,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=5.0, help="per snapshot timeout, >0..5 seconds")
     profile = parser.add_mutually_exclusive_group()
     profile.add_argument("--imu", action="store_true", help="read the fixed BMI088/INS/heater diagnostic profile")
+    profile.add_argument("--adc", action="store_true", help="读取并核对固定 ADC 诊断记录")
     profile.add_argument("--init", action="store_true", help="read the fixed startup-failure diagnostic profile")
     profile.add_argument("--rc", action="store_true", help="read the fixed remote/safety diagnostic profile")
     profile.add_argument("--rc-input", action="store_true", help="read fixed remote/safety plus keyboard and mouse fields (non-atomic)")
@@ -498,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"ELF file does not exist: {args.elf}")
 
     try:
-        fields = (RC_INPUT_SNAPSHOT_FIELDS if args.rc_input else RC_SNAPSHOT_FIELDS if args.rc
+        fields = (ADC_SNAPSHOT_FIELDS if args.adc else RC_INPUT_SNAPSHOT_FIELDS if args.rc_input else RC_SNAPSHOT_FIELDS if args.rc
                   else INIT_SNAPSHOT_FIELDS if args.init else IMU_SNAPSHOT_FIELDS if args.imu
                   else SNAPSHOT_FIELDS)
         addresses = resolve_symbol_addresses(args.gdb, str(args.elf), args.timeout, fields)
@@ -512,6 +579,8 @@ def main(argv: list[str] | None = None) -> int:
             current = read_snapshot(addresses, args.host, args.telnet_port, args.timeout, fields)
             if args.rc_input:
                 current = decode_rc_input(current)
+            elif args.adc:
+                current = decode_adc(current)
             status = "baseline" if previous is None else classify_change(previous, current)
             print(json.dumps({"sample": index + 1, "status": status, **current}, sort_keys=True))
             previous = current

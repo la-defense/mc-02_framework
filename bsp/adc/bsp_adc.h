@@ -80,4 +80,41 @@ void BSP_ADCInit(void);
  */
 BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample);
 
+#define BSP_ADC_DIAGNOSTIC_LAYOUT 0xADC10001u ///< 只读工具核对的记录格式编号
+#define BSP_ADC_DIAGNOSTIC_PERIOD_MS 250u    ///< 诊断记录最多每 250ms 更新一次
+
+/** @brief 供运行态工具读取的固定 32 位字段；业务代码仍使用 BSP_ADCGetSample()。
+ * @note 业务不得改写。工具先读 version，再读全部字段，最后再读 version；
+ *       两次版本相同、非零且为偶数，才属于一份完整记录。记录的是 captured_ms
+ *       时的读取结果，不能拿这份低频记录代替实时控制输入。
+ */
+typedef struct
+{
+    uint32_t version;              ///< 奇数表示正在写，偶数表示写完；0 表示尚未发布
+    uint32_t layout;               ///< BSP_ADC_DIAGNOSTIC_LAYOUT
+    uint32_t captured_ms;          ///< 调用生产 getter 的 HAL tick，单位 ms
+    uint32_t status;               ///< 该次 getter 返回的 BSP_ADC_Status_e
+    uint32_t raw_vcc_in;           ///< 电源原始读数，零扩展到 32 位
+    uint32_t raw_key;              ///< 按键原始读数，零扩展到 32 位
+    uint32_t sample_sequence;      ///< ADC 完成批次的序号，查询不推进
+    uint32_t sample_timestamp_ms;  ///< ADC 批次完成时间，单位 ms
+    uint32_t error_flags;          ///< ADC 错误位
+    uint32_t hal_error_code;       ///< HAL 错误码
+    uint32_t voltage_config_valid; ///< 换算设置是否有效
+    uint32_t volts_bits;           ///< 生产 getter 电压的 IEEE-754 binary32 原始位形，单位 V
+    uint32_t vref_mv;              ///< 该固件采用的参考电压，单位 mV
+    uint32_t full_scale;           ///< 该固件采用的最大 ADC 读数
+    uint32_t divider_milli;        ///< 该固件采用的分压还原倍数乘 1000
+} BSP_ADC_Diagnostic_t;
+
+/**
+ * @brief 在普通任务中低频记录生产 getter 的完整返回结果，供 SWD 只读采集。
+ * @note 由 Daemon 每约 10ms 调用；内部按 HAL tick 限制为至少间隔 250ms。
+ *       只有此任务可以调用，不在中断中调用；不申请内存、不重启 ADC，也不控制输出。
+ *       getter 及诊断字段写入期间短暂关闭普通中断，使采集时刻与样本状态相符。
+ *       错误和过期结果也会被记录，工具必须检查 status 后再统计电压。
+ *       诊断记录以 ELF 符号 bsp_adc_diagnostic 供工具读取，不向业务代码开放写指针。
+ */
+void BSP_ADCUpdateDiagnostics(void);
+
 #endif // !BSP_ADC_H
