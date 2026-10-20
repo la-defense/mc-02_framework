@@ -56,6 +56,26 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(CTest)
+# 三位小数入口独立于日志硬件；Python Decimal提供不同实现的数值参考。
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_executable(float_to_string_test float_to_string_test.c ../../bsp/log/float_to_string.c)
+target_include_directories(float_to_string_test PRIVATE ../../bsp/log)
+target_compile_features(float_to_string_test PRIVATE c_std_11)
+target_compile_options(float_to_string_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+if(UNIX)
+  find_package(Threads REQUIRED)
+  target_link_libraries(float_to_string_test PRIVATE m Threads::Threads)
+  target_compile_definitions(float_to_string_test PRIVATE FLOAT2STR_TEST_THREADS=1)
+endif()
+foreach(scenario IN ITEMS values failures instances)
+  add_test(NAME production_float_to_string_${scenario} COMMAND float_to_string_test ${scenario})
+  set_tests_properties(production_float_to_string_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+add_test(NAME production_float_to_string_decimal_reference
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/float_to_string_reference.py
+    $<TARGET_FILE:float_to_string_test>)
+set_tests_properties(production_float_to_string_decimal_reference PROPERTIES TIMEOUT 10)
+
 # 两个独立调用源文件共同链接生产启动实现，防止头文件再次带入函数体。
 add_executable(bsp_init_link_test bsp_init_link_test.c bsp_init_caller_a.c
   bsp_init_caller_b.c ../../bsp/bsp_init.c)

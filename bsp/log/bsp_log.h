@@ -1,5 +1,6 @@
 /** @file bsp_log.h
-* @brief 先用标准格式化函数准备短文本，再通过 RTT 输出；支持同类日志限速。
+* @brief 声明 BSPLogInit、PrintLog 和日志宏，支持同类日志限速，并引入 Float2Str 声明。
+* @note RTT 日志先调用 BSPLogInit；独立的 Float2Str 不需要日志初始化或硬件。
  */
 #ifndef _BSP_LOG_H
 #define _BSP_LOG_H
@@ -9,6 +10,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h> /* LOG_PROTO 里用 memcpy 拼接结尾的换行+复位色码 */
+#include "float_to_string.h"
 
 #define BUFFER_INDEX 0
 
@@ -100,13 +102,6 @@ uint8_t LogRateLimitAllow(LogRateLimit_t *rl, uint32_t period_ms);
 * @note 文本超过 255 字节时只输出前面放得下的部分，返回值仍为完整所需长度，不代表实际写出数量。
  */
 int PrintLog(const char *fmt, ...);
-
-/** @brief 旧浮点转文字入口，保留原有小数写法，不是日志输出的必要步骤。
-* @param[out] str 足够大的可写数组，不检查 NULL 或容量；本函数不提供长度参数。
-* @param[in] va 待转换值，须能以 int 保存整数部分和小数乘 1000 的部分；不接受 NaN 或无穷大。
-* @note 不补足小数前面的 0，不做四舍五入；日志宏已由 newlib 支持浮点格式化。
- */
-void Float2Str(char *str, float va);
 
 // 默认关闭；开启后由 Daemon 周期打印多种参数和超长行，检查格式化结果及长度处理。
 #ifndef LOG_TEST

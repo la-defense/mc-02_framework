@@ -2,49 +2,44 @@
 
 <p align='right'>neozng1@hnu.edu.cn</p>
 
-## 使用说明
+本文说明 RTT 日志和可单独使用的三位小数文字转换。日志需要先初始化 RTT；`Float2Str()` 不访问硬件，也不需要初始化。
 
-bsp_log是基于segger RTT实现的日志打印模块。
+## 日志输出
 
-推荐使用`bsp_log.h`中提供了三级日志：
-
-```c
-#define LOGINFO(format,...)
-#define LOGWARNING(format,...)
-#define LOGERROR(format,...)
-```
-
-分别用于输出不同等级的日志。注意RTT不支持直接使用`%f`进行浮点格式化,要使用`void Float2Str(char *str, float va);`转化成字符串之后再发送。
-
-**若想启用RTT，必须通过`launch.json`的`debug-jlink`启动调试（不论使用什么调试器）。** 按照`VSCode+Ozone环境配置`完成配置之后的cmsis dap和daplink是可以支持Jlink全家桶的。
-
-另外，若你使用的是cmsis-dap和daplink，**请在 *jlink* 调试任务启动之后再打开`log`任务。**（均在项目文件夹下的.vsocde/task.json中，有注释自行查看）。否则可能出线RTT viewer无法连接客户端的情况。
-
-在ozone中查看log输出，直接打开console调试任务台和terminal调试中断便可看到调试输出。
-
-> 由于ozone版本的原因，可能出现日志不换行或没有颜色。
-
-## 自定义输出
-
-你也可以自定义输出格式，详见Segger RTT的文档。
+`bsp_log.h` 提供 `LOGINFO`、`LOGWARNING`、`LOGERROR`，分别输出信息、警告和错误。当前实现先用 newlib 的 `snprintf()` 准备文字，再调用 `SEGGER_RTT_WriteString()`。CMake 已链接 `_printf_float`，所以可以直接使用 `%f`：
 
 ```c
-int printf_log(const char *fmt, ...);
-void Float2Str(char *str, float va); // 输出浮点需要先用此函数进行转换
+LOGINFO("current=%.3f", (double)current_feedback);
 ```
 
-调用第一个函数，可以通过jlink或dap-link向调试器连接的上位机发送信息，格式和printf相同，示例如下：
+无颜色输出可用 `LOG()`；普通函数入口名称是 `PrintLog()`：
 
 ```c
-printf_log("Hello World!\n");
-printf_log("Motor %d met some problem, error code %d!\n",3,1);
+int required = PrintLog("Motor %d error %d\n", 3, 1);
 ```
 
-第二个函数可以将浮点类型转换成字符串以方便发送：
+`PrintLog()` 返回完整格式化所需字节数，不含结尾0；负值表示格式化失败。当前本地数组最多交付255字节，返回值可能大于实际写出文字长度；它不证明 RTT 查看器已收到或显示。日志宏的数组还要保留换行和颜色复原码空间。
+
+RTT 查看需要支持它的调试器与工具。使用与实际探针匹配的项目配置；本机文字测试不验证 SWD 连接、查看器显示或物理耗时。
+
+## 固定三位小数（BSPMISC-08）
+
+需要独立保存文字时，可包含 `float_to_string.h`；`bsp_log.h` 也会引入该声明：
 
 ```c
-float current_feedback=114.514;
-char* str_buff[64];
-Float2Str(str_buff,current_feedback);
-printf_log("Motor %d met some problem, error code %d!\n",3,1);
+char text[FLOAT2STR_BUFFER_SIZE];
+Float2StrStatus_t status = Float2Str(text, sizeof(text), current_feedback);
+if (status == FLOAT2STR_OK)
+    LOGINFO("current=%s", text);
 ```
+
+`text` 是字符数组。旧示例的 `char *text[64]` 声明的是指针数组，不能用作这个输出数组。
+
+- 固定三位小数并补0，`1.2f` 得到 `1.200`；小数进位会进入整数部分。
+- 舍入到最近的千分之一，恰好半数时远离0；`1.0625f` 得到 `1.063`，`-1.0625f` 得到 `-1.063`。
+- 正负零及舍入后的零均为 `0.000`，小数点固定为 ASCII `.`。
+- 输入和舍入结果须处于 `[-2147483648,2147483647]`。NaN、无穷大和超范围输入分别返回错误。
+- `capacity` 包含结尾0；`FLOAT2STR_BUFFER_SIZE` 为16，可容纳最长结果 `-2147483648.000` 及结尾0。容量不足整条拒绝。
+- 任何失败都保留调用者数组的原字节，调用方只有检查成功后才使用本次结果。
+
+旧的两参数入口已移除，仓库中没有需要迁移的生产调用方。详细范围和返回状态只在 [float_to_string.h](float_to_string.h) 维护；实现无共享历史、动态分配或 RTT 依赖。舍入按传入 float 的实际值计算，十进制字面量不一定能在 float 中精确保存，见[学习笔记18](../../docs/学习笔记/18-一条日志的旅程.md#10-把浮点数写成三位小数文字bspmisc-08)。

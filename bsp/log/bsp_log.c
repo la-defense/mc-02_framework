@@ -1,5 +1,5 @@
 /** @file bsp_log.c
-* @brief 初始化 RTT、决定同类日志能否打印，并实现普通格式化和旧浮点转文字入口。
+* @brief 初始化 RTT、决定同类日志能否打印，并由 PrintLog 格式化和提交文字。
 */
 #include "bsp_log.h"
 #include "main.h"
@@ -47,19 +47,6 @@ int PrintLog(const char *fmt, ...)
         return n; /* 格式化失败: 宁可什么都不输出, 也不输出半截内容 */
     SEGGER_RTT_WriteString(BUFFER_INDEX, buf);
     return n;
-}
-
-void Float2Str(char *str, float va)
-{
-    int flag = va < 0;
-    int head = (int)va;
-    int point = (int)((va - head) * 1000);
-    head = abs(head);
-    point = abs(point);
-    if (flag)
-        sprintf(str, "-%d.%d", head, point);
-    else
-        sprintf(str, "%d.%d", head, point);
 }
 
 #if LOG_TEST

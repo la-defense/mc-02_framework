@@ -173,7 +173,7 @@
 - [ ] **BSPMISC-07** [enhancement] [needs-triage] 核查历史报告提出的 SPI 时序问题是否仍可复现。验收：记录当前配置、目标外设规格及逻辑分析仪波形；确认满足时序，或提交修复和复测结果。
 - [ ] **BUILD-02** [enhancement] [ready-for-agent] 统一为唯一 CMake 构建入口，替代双入口维护方案。验收：删除旧 Makefile 及对应编辑器任务，按平台／车型显式选择源码和头依赖；干净、增量构建选择一致，非法组合拒绝，未选模块不误编入。适配现有增量及 ELF/profile 检查并保持裸板隔离；CubeMX 先人工核对，不新增再生成自动化。关联 MC02-0020／0054，保留 MC02-0032 的远端 CI 待验状态。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [x] **CORE-03** [bug] [ready-for-agent] 将 `BSPInit()` 实现移出公共头，消除多源文件链接时的多重定义。验收：公共头只声明接口、单个源文件提供定义；两个独立调用源文件共同链接生产实现，启动顺序及参数回归通过。详见[验收记录](../docs/workflow/tickets/CORE-03.md)。
-- [ ] **BSPMISC-08** [bug] [needs-triage] 核查 `Float2Str` 的四舍五入、进位和负数边界。验收：正负数、进位、零值和缓冲区边界均有生产函数测试，输出符合明确的精度规则。
+- [x] **BSPMISC-08** [bug] 修复 `Float2Str` 舍入、进位及数组容量检查。验收完成：固定三位小数、最近千分之一且半数远离0，零统一为0.000；检查输入及结果范围，任何失败保留数组原字节。生产接口覆盖正负数、半数两侧、进位、极值、容量及独立数组交错／并发，27035个binary32位形与独立Decimal参考相符。WSL Debug／Release各173/173、Windows支持子集各109/109、ASan／UBSan 4/4通过；六种禁热固件、ELF隔离、非法配置拒绝及CMake增量检查通过，Flash／RAM变化均为0。本轮仅本机验收，见[任务记录](../docs/workflow/tickets/BSPMISC-08.md)和[学习笔记18](../docs/学习笔记/18-一条日志的旅程.md#10-把浮点数写成三位小数文字bspmisc-08)。
 - [x] **MOTOR-04** [bug] 修复 LK9025 注册重复分配与失败资源清理。验收完成：输入配置保持不变；每个 LK 实例只分配一次；PID、Daemon、CAN 按顺序准备，后续失败逐级回滚；每总线最多4个、总计最多12个，重复编号不占资源。WSL Debug／Release 各169/169，ASan／UBSan 注册与回退场景通过。见[任务记录](../docs/workflow/tickets/MOTOR-04-05.md)。
 - [x] **MOTOR-05** [bug] 修复 LK9025 跨 CAN 总线发送归属和编号槽位。验收完成：每条已注册总线独立用 `0x280` 提交一帧；反馈 ID 按编号设置，1～4号固定映射四个小端槽；稀疏／乱序注册、停止、数值失败、忙和 HAL 错误均有主机回归。Windows Debug／Release 支持子集各105/105通过；六种禁热固件、ELF隔离、非法配置拒绝及 CMake 增量检查通过。未连接硬件，实际电机行为未验证。见[任务记录](../docs/workflow/tickets/MOTOR-04-05.md)。
 - [ ] **MOTOR-06** [bug] [needs-triage] 核查舵机实例注册索引与遍历方式，以及 DMA 发送缓冲区共享问题。验收：稀疏 ID 注册不会解引用空槽，多舵机并发发送不会改写传输中的缓冲区。
