@@ -1,100 +1,113 @@
 /** @file bsp_spi.h
-* @brief SPI1、SPI2 设备实例和收发接口；先配置 HAL 外设、片选 GPIO 及所需中断、DMA。
-* @note Transmit、Recv 是旧入口，调用方自行保证同一总线空闲；TransRecv 另检查总线使用和等待条件。
-*       异步期间发送和接收数组必须保留，完成或错误回调结束前不能改写、释放或注销实例。
+ * @brief SPI1／SPI2 设备、独占收发和任务超时处理；先初始化 HAL、GPIO、DWT 和 HAL tick。
+ * @note 同一总线运行时不能混用直接 HAL 调用。注册／注销由启动流程串行执行。
  */
+#ifndef MC02_BSP_SPI_H
+#define MC02_BSP_SPI_H
 #include "spi.h"
-#include "stdint.h"
 #include "gpio.h"
+#include <stdint.h>
 
-/* 根据开发板引出的spi引脚以及CubeMX中的初始化配置设定 */
-#define SPI_DEVICE_CNT 2       // 本封装当前只识别 SPI1、SPI2，两路总线分别保存状态。
-#define MX_SPI_BUS_SLAVE_CNT 4 // 单个spi总线上挂载的从机数目
-
-/* spi transmit recv mode enumerate*/
+#define SPI_DEVICE_CNT 2u
+#define MX_SPI_BUS_SLAVE_CNT 4u // 两条总线合计的设备容量。
+#define SPI_ASYNC_TIMEOUT_DEFAULT_MS 20u
+typedef enum { SPI_BLOCK_MODE = 0, SPI_IT_MODE, SPI_DMA_MODE } SPI_TXRX_MODE_e;
 typedef enum
 {
-    SPI_BLOCK_MODE = 0, // 默认使用阻塞模式
-    SPI_IT_MODE,
-    SPI_DMA_MODE,
-} SPI_TXRX_MODE_e;
-
-/* SPI实例结构体定义 */
-typedef struct spi_ins_temp
-{
-    SPI_HandleTypeDef *spi_handle; // SPI外设handle
-    GPIO_TypeDef *GPIOx;           // 片选信号对应的GPIO,如GPIOA,GPIOB等等
-    uint16_t cs_pin;               // 片选信号对应的引脚号,GPIO_PIN_1,GPIO_PIN_2等等
-
-    SPI_TXRX_MODE_e spi_work_mode; // 传输工作模式
-    uint8_t rx_size;               // 本次接收的数据长度
-    uint8_t *rx_buffer;            // 本次接收的数据缓冲区
-    uint8_t CS_State;                       // 片选信号状态,用于中断模式下的片选控制
-    volatile uint8_t *cs_pin_state;         // 总线忙标志(中断里写、任务里轮询 → 必须 volatile)
-    void (*callback)(struct spi_ins_temp *); // 接收回调函数
-    void *id;                                // 模块指针
-} SPIInstance;
-
-/* 接收回调函数定义,包含SPI的module按照此格式构建回调函数 */
-typedef void (*spi_rx_callback)(SPIInstance *);
-
-// @todo: 这里可以将GPIO_TypeDef *GPIOx; uint16_t cs_pin合并为bsp_gpio以简化代码实现
-/* SPI初始化配置,其实基本和SPIIstance一模一样,为了代码风格统一因此再次定义 */
+    SPI_TRANSFER_IDLE = 0, SPI_TRANSFER_ACTIVE, SPI_TRANSFER_RECOVERING,
+    SPI_TRANSFER_SUCCEEDED, SPI_TRANSFER_FAILED,
+    SPI_TRANSFER_ISOLATED // 停止失败；保留占用，必须重新初始化系统。
+} SPITransferPhase_t;
 typedef struct
 {
-    SPI_HandleTypeDef *spi_handle; // SPI外设handle
-    GPIO_TypeDef *GPIOx;           // 片选信号对应的GPIO,如GPIOA,GPIOB等等
-    uint16_t cs_pin;               // 片选信号对应的引脚号,GPIO_PIN_1,GPIO_PIN_2等等
-
-    SPI_TXRX_MODE_e spi_work_mode; // 传输工作模式
-
-    spi_rx_callback callback; // 接收回调函数
-    void *id;                 // 模块指针
+    SPITransferPhase_t phase;
+    HAL_StatusTypeDef result; // ACTIVE 为 HAL_BUSY；恢复时为原始错误或 HAL_TIMEOUT。
+    uint8_t buffers_released; // 1 才允许复用异步数组；还须检查结果才可使用接收数据。
+} SPITransferState_t;
+typedef struct spi_ins_temp
+{
+    SPI_HandleTypeDef *spi_handle;
+    GPIO_TypeDef *GPIOx;
+    uint16_t cs_pin;
+    SPI_TXRX_MODE_e spi_work_mode;
+    uint8_t rx_size;
+    uint8_t *rx_buffer;
+    uint8_t CS_State;
+    volatile uint8_t *cs_pin_state; // 兼容诊断字段：0 忙、1 空闲，调用方不得写入。
+    void (*callback)(struct spi_ins_temp *);
+    void *id;
+    uint32_t async_timeout_ms;
+    SPITransferState_t transfer; // 仅本模块改写；跨任务读取须使用查询入口。
+} SPIInstance;
+typedef void (*spi_rx_callback)(SPIInstance *);
+typedef struct
+{
+    SPI_HandleTypeDef *spi_handle;
+    GPIO_TypeDef *GPIOx;
+    uint16_t cs_pin; // 一个 GPIO_PIN_x 位，事先配置为输出并拉高。
+    SPI_TXRX_MODE_e spi_work_mode;
+    spi_rx_callback callback; // 可为 NULL；只交付成功的异步接收／全双工。
+    void *id; // 可为 NULL，由业务回调自行解释。
+    uint32_t async_timeout_ms; // 0 使用 20 ms；显式值 1～INT32_MAX ms，阻塞模式不使用。
 } SPI_Init_Config_s;
 
-/** @brief 保存 SPI 配置，返回用于后续操作的实例。
-* @param[in] conf 有效配置；只支持 SPI1、SPI2、非零片选引脚及三种已定义模式。
-* @return 成功返回长期有效对象；参数、重名或分配不符返回 NULL。
-* @note 实例数组只有 SPI_DEVICE_CNT 项（当前 2 项），调用方须遵守该容量，不能按 4 从机宏超额注册。
+/** @brief 复制设备配置，分配一个长期实例。
+ * @param[in] conf 非空；SPI1／SPI2、单片选位、合法模式；总计最多 4 个设备。
+ * @return 成功返回实例；参数、重复、容量或分配失败返回 NULL，不改写旧对象。
+ * @note 启动阶段串行调用；同一总线共用同一 HAL 句柄，同一 GPIO 片选不可重复。
+ * 配置返回后可释放，HAL 句柄须长期有效；实例字段不得自行修改或释放。
  */
-SPIInstance *SPIRegister(SPI_Init_Config_s *conf);
-/** @brief 将片选拉高，移出实例表并释放对象。
-* @param[in] instance 已停止全部传输及回调的对象，成功后不可再使用。
-* @return 1 为已找到并释放，0 为 NULL 或未注册；不负责等待传输完成。
+SPIInstance *SPIRegister(const SPI_Init_Config_s *conf);
+/** @brief 移除空闲实例并释放。
+ * @param[in] instance 已注册实例；注销不与其他任务的提交、查询或注册并行。
+ * @return 1 成功；0 为上下文不符、未注册或本总线仍在传输／回调／恢复，不改写对象。
+ * @note 仅普通任务；成功后不得继续访问。隔离状态不允许注销。
  */
 uint8_t SPIUnregister(SPIInstance *instance);
-
-/** @brief 拉低片选后发送数据，阻塞结束或异步完成后拉高。
-* @param[in] spi_ins 有效实例，不能为 NULL，调用方保证总线空闲。
-* @param[in] ptr_data 至少可读 len 字节；IT、DMA 完成前须保持不变。
-* @param[in] len 字节数。
-* @note 旧入口不报告 HAL 状态；阻塞等待参数为 1000 ms，须保证 HAL 毫秒计时可运行。
+/** @brief 独占总线发送字节。
+ * @param[in,out] spi_ins 已注册的 8 位主机实例。
+ * @param[in] ptr_data 至少 len 字节；异步数组保留到查询确认 buffers_released=1。
+ * @param[in] len 字节数，1～255。
+ * @return HAL_OK 为阻塞完成或异步已接受；HAL_BUSY 为上下文、时钟或异步总线忙；
+ * HAL_TIMEOUT 为阻塞等总线 1000 us 到期或 HAL 超时；其他失败返回 HAL_ERROR／HAL 结果。
+ * @note 三类收发均限普通任务且中断未屏蔽。阻塞 HAL 超时 2 ms，不调用接收回调。
+ * 拒绝请求不改在途数据；提交后失败不能使用接收数据，HAL 可能已写入部分字节。
  */
-void SPITransmit(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len);
-
-/** @brief 拉低片选后接收数据，记录接收数组供异步回调使用。
-* @param[in,out] spi_ins 有效实例，不能为 NULL，调用方保证总线空闲。
-* @param[out] ptr_data 至少可写 len 字节；IT、DMA 完成前须保持有效，不可提前读取。
-* @param[in] len 字节数。
-* @note 旧入口不报告 HAL 状态，失败也不清数组；阻塞等待参数为 1000 ms，不调用完成回调。
+HAL_StatusTypeDef SPITransmit(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len);
+/** @brief 独占总线接收字节，成功异步完成才调用接收回调。
+ * @param[in,out] spi_ins 已注册的 8 位双线主机实例。
+ * @param[out] ptr_data 至少 len 字节；异步期间不得读取、修改或释放。
+ * @param[in] len 字节数，1～255。
+ * @return 与 SPITransmit 相同；HAL_OK 启动异步不代表已完成。
+ * @note 沿用 SPITransmit 的上下文、等待及失败规则；释放后须检查最终 result。
  */
-void SPIRecv(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len);
-
-/** @brief 同时收发同样长度的数据，先检查总线是否能使用。
-* @param[in,out] spi_ins 有效实例；NULL、外设或片选信息不完整时返回 HAL_ERROR。
-* @param[out] ptr_data_rx 至少可写 len 字节，不能为 NULL；异步完成前保持有效。
-* @param[in] ptr_data_tx 至少可读 len 字节，不能为 NULL；异步完成前不得改写。
-* @param[in] len 字节数，不能为 0。
-* @return HAL_OK 表示阻塞完成或异步已启动；HAL_BUSY 表示阻塞条件不满足；
-*         等待总线达到 1000 us 返回 HAL_TIMEOUT，其他 HAL 错误原样返回。
-* @note 阻塞收发的 HAL 等待参数为 2 ms；须在普通任务中且 HAL 毫秒计时可运行，等待期间防止计时被停止。
-*       失败不会清接收数组；异步启动成功还需等待完成回调，不能立即使用接收结果。
+HAL_StatusTypeDef SPIRecv(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len);
+/** @brief 独占总线同时收发等长字节。
+ * @param[in,out] spi_ins 已注册的 8 位双线主机实例。
+ * @param[out] ptr_data_rx 至少 len 字节，不与发送数组重叠；异步期间保持有效。
+ * @param[in] ptr_data_tx 至少 len 字节；异步期间保持不变，不与接收数组重叠。
+ * @param[in] len 字节数，1～255。
+ * @return 与 SPITransmit 相同；失败接收数据不可用，不承诺恢复旧字节。
+ * @note 接收回调通常在中断中执行；HAL 返回前到达的完成延至提交函数内处理。
+ * 回调必须短且不阻塞，结束前保留总线；不得重入提交、注销、改模式或超时服务。
  */
-
 HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len);
-
-/** @brief 改写实例的传输模式，不等待或中断当前传输。
-* @param[in,out] spi_ins 有效实例，不能为 NULL，须在总线空闲时调用。
-* @param[in] spi_mode 阻塞、IT、DMA；其他值会进入持续等待循环。
+/** @brief 修改空闲总线上的实例模式，不自动配置 IRQ 或 DMA。
+ * @param[in,out] spi_ins 已注册实例，仅普通任务调用。
+ * @param[in] mode 三种已定义模式之一。
+ * @return HAL_OK 已修改；HAL_BUSY 上下文或总线忙；HAL_ERROR 参数错误，失败不改模式。
  */
-void SPISetMode(SPIInstance *spi_ins, SPI_TXRX_MODE_e spi_mode);
+HAL_StatusTypeDef SPISetMode(SPIInstance *spi_ins, SPI_TXRX_MODE_e mode);
+/** @brief 检查异步期限及错误，停止硬件后释放本次事务。
+ * @return HAL_OK 检查完成（可包含已处理的失败）；HAL_BUSY 上下文不符；HAL_ERROR 存在隔离总线。
+ * @note 普通任务约每 10 ms 调用；elapsed >= timeout 判超时，使用 HAL_GetTick 毫秒时钟。
+ * 调度和 HAL 停止另有耗时，不保证精确截止。停止失败保留异步数组及占用至系统重新初始化。
+ */
+HAL_StatusTypeDef SPIProcessTimeouts(void);
+/** @brief 复制状态，不消耗结果、不推进超时。
+ * @param[in] spi_ins 已注册且未并行注销的实例。
+ * @param[out] output 非空；失败保持原值。
+ * @return HAL_OK 复制成功，HAL_ERROR 参数错误或未注册。
+ */
+HAL_StatusTypeDef SPIGetTransferState(const SPIInstance *spi_ins, SPITransferState_t *output);
+#endif

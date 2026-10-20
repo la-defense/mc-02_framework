@@ -1,392 +1,436 @@
 /** @file bsp_spi.c
-* @brief 保存 SPI 设备与当前收发对象，管理片选和完成回调；公开参数说明见头文件。
+ * @brief 为 SPI 收发保存唯一使用者，统一片选、回调及任务超时恢复；使用条件见 bsp_spi.h。
  */
 #include "bsp_spi.h"
-#include "memory.h"
-#include "stdlib.h"
 #include "bsp_dwt.h"
-#include "bsp_log.h"
 #include "bsp_hal_tick.h"
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
 
-/* 所有的spi instance保存于此,用于callback时判断中断来源*/
-static SPIInstance *spi_instance[SPI_DEVICE_CNT] = {NULL};
-static uint8_t idx = 0;                         // 配合中断以及初始化
-// 0 表示总线正在传输，1 表示空闲；完成中断会改写，任务会读取，因此使用 volatile。
-volatile uint8_t SPIDeviceOnGoing[SPI_DEVICE_CNT] = {[0 ... SPI_DEVICE_CNT - 1] = 1};
-static SPIInstance *spi_bus_owner[SPI_DEVICE_CNT] = {NULL};
-
-static uint32_t SPIBusEnterCritical(void)
+typedef enum { SPI_OP_TX, SPI_OP_RX, SPI_OP_TXRX } SPIOperation;
+typedef enum { BUS_FREE, BUS_STARTING, BUS_ACTIVE, BUS_CALLBACK, BUS_RECOVERY, BUS_ABORTING, BUS_ISOLATED } SPIBusPhase;
+typedef struct
 {
-    uint32_t previous_primask = __get_PRIMASK();
-    __disable_irq();
-    return previous_primask;
+    SPIInstance *owner;
+    SPIBusPhase phase;
+    SPIOperation operation;
+    uint32_t start_ms;
+    uint8_t lease, completion_pending, error_pending;
+} SPIBus;
+static SPIInstance *spi_instance[MX_SPI_BUS_SLAVE_CNT];
+static uint8_t instance_count;
+static SPIBus buses[SPI_DEVICE_CNT];
+volatile uint8_t SPIDeviceOnGoing[SPI_DEVICE_CNT] = {1u, 1u};
+volatile uint32_t spi_bus_timeout_cnt[SPI_DEVICE_CNT];
+
+static uint32_t SPIEnter(void) { uint32_t saved = __get_PRIMASK(); __disable_irq(); return saved; }
+static void SPIExit(uint32_t saved) { __set_PRIMASK(saved); }
+static uint8_t SPITaskContext(void)
+{
+    return (__get_IPSR() == 0u && __get_PRIMASK() == 0u && __get_BASEPRI() == 0u && __get_FAULTMASK() == 0u);
 }
-
-static void SPIBusExitCritical(uint32_t previous_primask)
+static int SPIBusIndex(const SPI_HandleTypeDef *handle)
 {
-    __set_PRIMASK(previous_primask);
-}
-
-/* SPI 总线忙等待超时(us): 正常一次传输是个位数微秒~百微秒量级, 1ms 足够;
-   超时说明完成中断没来(总线/中断异常), 不能永久卡死在这里。 */
-#define SPI_BUSY_TIMEOUT_US 1000u
-volatile uint32_t spi_bus_timeout_cnt[SPI_DEVICE_CNT] = {0};
-
-static int8_t SPIBusIndexFromHandle(const SPI_HandleTypeDef *spi_handle)
-{
-    if (spi_handle == NULL)
-        return -1;
-    if (spi_handle->Instance == SPI1)
-        return 0;
-    if (spi_handle->Instance == SPI2)
-        return 1;
+    if (handle == NULL) return -1;
+    if (handle->Instance == SPI1) return 0;
+    if (handle->Instance == SPI2) return 1;
     return -1;
 }
-
-static int8_t SPIBusIndex(const SPIInstance *spi_ins)
+// 必须在短临界区内使用；先比较地址，未注册指针不会被解引用。
+static uint8_t SPIRegistered(const SPIInstance *instance)
 {
-    return spi_ins == NULL ? -1 : SPIBusIndexFromHandle(spi_ins->spi_handle);
+    for (uint8_t i = 0u; i < instance_count; ++i)
+        if (spi_instance[i] == instance) return 1u;
+    return 0u;
 }
+static uint8_t SPIValidMode(SPI_TXRX_MODE_e mode)
+{ return mode == SPI_BLOCK_MODE || mode == SPI_IT_MODE || mode == SPI_DMA_MODE; }
+static IRQn_Type SPIIRQ(const SPI_HandleTypeDef *handle)
+{ return handle->Instance == SPI1 ? SPI1_IRQn : SPI2_IRQn; }
 
-// 暂时关普通中断，同时记录忙标记与使用者，防止其他任务中途把同一总线当作空闲。
-static uint8_t SPIBusTryAcquire(SPIInstance *spi_ins, uint8_t bus_idx)
+// H723 的 SPI DMA 使用 DMA1／DMA2 stream；缺失配置不会自动改为另一种模式。
+static IRQn_Type SPIDMAIRQ(const DMA_HandleTypeDef *dma)
 {
-    uint32_t previous_primask = SPIBusEnterCritical();
-    uint8_t acquired = (uint8_t)(SPIDeviceOnGoing[bus_idx] && spi_bus_owner[bus_idx] == NULL);
-    if (acquired)
-    {
-        SPIDeviceOnGoing[bus_idx] = 0u;
-        spi_bus_owner[bus_idx] = spi_ins;
-    }
-    SPIBusExitCritical(previous_primask);
-    return acquired;
+    DMA_Stream_TypeDef *const streams[] = {DMA1_Stream0, DMA1_Stream1, DMA1_Stream2, DMA1_Stream3,
+        DMA1_Stream4, DMA1_Stream5, DMA1_Stream6, DMA1_Stream7, DMA2_Stream0, DMA2_Stream1,
+        DMA2_Stream2, DMA2_Stream3, DMA2_Stream4, DMA2_Stream5, DMA2_Stream6, DMA2_Stream7};
+    const IRQn_Type irqs[] = {DMA1_Stream0_IRQn, DMA1_Stream1_IRQn, DMA1_Stream2_IRQn, DMA1_Stream3_IRQn,
+        DMA1_Stream4_IRQn, DMA1_Stream5_IRQn, DMA1_Stream6_IRQn, DMA1_Stream7_IRQn,
+        DMA2_Stream0_IRQn, DMA2_Stream1_IRQn, DMA2_Stream2_IRQn, DMA2_Stream3_IRQn,
+        DMA2_Stream4_IRQn, DMA2_Stream5_IRQn, DMA2_Stream6_IRQn, DMA2_Stream7_IRQn};
+    if (dma != NULL)
+        for (unsigned i = 0u; i < sizeof(streams) / sizeof(streams[0]); ++i)
+            if (dma->Instance == streams[i]) return irqs[i];
+    return (IRQn_Type)-1;
 }
-
-// 只有登记的使用者才能释放本次总线，不改动其他对象仍在进行的传输。
-static void SPIBusRelease(SPIInstance *spi_ins)
+static uint8_t SPIDMAReady(SPI_HandleTypeDef *handle, DMA_HandleTypeDef *dma, uint32_t direction)
 {
-    int8_t bus_idx = SPIBusIndex(spi_ins);
-    if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
-        return;
-
-    uint32_t previous_primask = SPIBusEnterCritical();
-    if (spi_bus_owner[(uint8_t)bus_idx] == spi_ins)
-    {
-        spi_bus_owner[(uint8_t)bus_idx] = NULL;
-        SPIDeviceOnGoing[(uint8_t)bus_idx] = 1u;
-    }
-    SPIBusExitCritical(previous_primask);
+    IRQn_Type irq = SPIDMAIRQ(dma);
+    return irq >= 0 && NVIC_GetEnableIRQ(irq) && dma->Parent == handle &&
+        HAL_DMA_GetState(dma) == HAL_DMA_STATE_READY && dma->Init.Direction == direction &&
+        dma->Init.Mode == DMA_NORMAL && dma->Init.MemInc == DMA_MINC_ENABLE &&
+        dma->Init.PeriphInc == DMA_PINC_DISABLE && dma->Init.MemDataAlignment == DMA_MDATAALIGN_BYTE &&
+        dma->Init.PeriphDataAlignment == DMA_PDATAALIGN_BYTE;
 }
-
-// 传输出错时释放已登记对象的片选和忙标记，返回该对象供日志定位。
-static SPIInstance *SPIBusAbortOwner(SPI_HandleTypeDef *hspi)
+static uint8_t SPIBackendConfigured(SPIInstance *instance, SPIOperation operation)
 {
-    int8_t bus_idx = SPIBusIndexFromHandle(hspi);
-    if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
-        return NULL;
-
-    uint32_t previous_primask = SPIBusEnterCritical();
-    SPIInstance *owner = spi_bus_owner[(uint8_t)bus_idx];
-    if (owner != NULL && owner->spi_handle == hspi)
-    {
-        HAL_GPIO_WritePin(owner->GPIOx, owner->cs_pin, GPIO_PIN_SET);
-        owner->CS_State = GPIO_PIN_SET;
-        spi_bus_owner[(uint8_t)bus_idx] = NULL;
-        SPIDeviceOnGoing[(uint8_t)bus_idx] = 1u;
-    }
-    else
-    {
-        owner = NULL;
-    }
-    SPIBusExitCritical(previous_primask);
-    return owner;
+    SPI_HandleTypeDef *handle = instance->spi_handle;
+    if (handle->Init.Mode != SPI_MODE_MASTER || handle->Init.DataSize != SPI_DATASIZE_8BIT ||
+        (handle->Init.Direction != SPI_DIRECTION_2LINES &&
+         !(operation == SPI_OP_TX && handle->Init.Direction == SPI_DIRECTION_2LINES_TXONLY))) return 0u;
+    if (instance->spi_work_mode == SPI_BLOCK_MODE) return 1u;
+    if (!NVIC_GetEnableIRQ(SPIIRQ(handle))) return 0u;
+    if (instance->spi_work_mode == SPI_IT_MODE) return 1u;
+    if (operation != SPI_OP_RX && !SPIDMAReady(handle, handle->hdmatx, DMA_MEMORY_TO_PERIPH)) return 0u;
+    if (operation != SPI_OP_TX && !SPIDMAReady(handle, handle->hdmarx, DMA_PERIPH_TO_MEMORY)) return 0u;
+    return 1u;
 }
-
-// 最多等待给定微秒数；超时只返回，不释放仍由其他对象使用的总线。
-static HAL_StatusTypeDef SPIBusAcquire(SPIInstance *spi_ins, uint8_t bus_idx, uint32_t timeout_us)
+// READY 本身不足以证明硬件已停止，还要检查请求位和 DMA stream。
+static uint8_t SPIBackendStopped(SPIBus *bus)
 {
-    uint32_t t0 = DWT_ProbeStart();
-    while (!SPIBusTryAcquire(spi_ins, bus_idx))
+    SPI_HandleTypeDef *handle = bus->owner->spi_handle;
+    if (HAL_SPI_GetState(handle) != HAL_SPI_STATE_READY ||
+        (handle->Instance->CR1 & (SPI_CR1_SPE | SPI_CR1_CSTART)) != 0u ||
+        (handle->Instance->CFG1 & (SPI_CFG1_TXDMAEN | SPI_CFG1_RXDMAEN)) != 0u ||
+        (handle->Instance->IER & (SPI_IT_EOT | SPI_IT_TXP | SPI_IT_RXP | SPI_IT_DXP |
+            SPI_IT_UDR | SPI_IT_OVR | SPI_IT_FRE | SPI_IT_MODF)) != 0u) return 0u;
+    if (bus->owner->spi_work_mode != SPI_DMA_MODE) return 1u;
+    DMA_HandleTypeDef *dma[] = {handle->hdmatx, handle->hdmarx};
+    for (unsigned i = 0u; i < 2u; ++i)
     {
-        if (DWT_ProbeElapsedUs(t0) >= timeout_us)
+        if ((i == 0u && bus->operation == SPI_OP_RX) || (i == 1u && bus->operation == SPI_OP_TX)) continue;
+        if (dma[i] == NULL || HAL_DMA_GetState(dma[i]) != HAL_DMA_STATE_READY ||
+            (((DMA_Stream_TypeDef *)dma[i]->Instance)->CR & DMA_SxCR_EN) != 0u) return 0u;
+    }
+    return 1u;
+}
+// 已确认停止后清除本总线的待处理中断，不影响另一条总线。
+static void SPIClearPending(SPIBus *bus)
+{
+    SPI_HandleTypeDef *handle = bus->owner->spi_handle;
+    NVIC_ClearPendingIRQ(SPIIRQ(handle));
+    if (bus->owner->spi_work_mode == SPI_DMA_MODE)
+    {
+        DMA_HandleTypeDef *dma[] = {handle->hdmatx, handle->hdmarx};
+        for (unsigned i = 0u; i < 2u; ++i)
         {
-            static LogRateLimit_t rl_spi_busy = {0};
-            spi_bus_timeout_cnt[bus_idx]++;
-            if (LogRateLimitAllow(&rl_spi_busy, 1000u))
-                LOGERROR("[bsp_spi] bus busy wait timed out; keeping ownership with active transfer");
-            return HAL_TIMEOUT;
+            if ((i == 0u && bus->operation == SPI_OP_RX) || (i == 1u && bus->operation == SPI_OP_TX)) continue;
+            __HAL_DMA_CLEAR_FLAG(dma[i], __HAL_DMA_GET_TC_FLAG_INDEX(dma[i]) |
+                __HAL_DMA_GET_HT_FLAG_INDEX(dma[i]) | __HAL_DMA_GET_TE_FLAG_INDEX(dma[i]) |
+                __HAL_DMA_GET_DME_FLAG_INDEX(dma[i]) | __HAL_DMA_GET_FE_FLAG_INDEX(dma[i]));
+            NVIC_ClearPendingIRQ(SPIDMAIRQ(dma[i]));
         }
     }
-    return HAL_OK;
+}
+// 调用时已关普通中断；先完成结果、片选与计时释放，再让其他任务取得总线。
+static void SPIFinish(SPIBus *bus, HAL_StatusTypeDef result)
+{
+    SPIInstance *owner = bus->owner;
+    HAL_GPIO_WritePin(owner->GPIOx, owner->cs_pin, GPIO_PIN_SET);
+    owner->CS_State = GPIO_PIN_SET;
+    owner->transfer = (SPITransferState_t){result == HAL_OK ? SPI_TRANSFER_SUCCEEDED : SPI_TRANSFER_FAILED, result, 1u};
+    if (bus->lease) BSP_HALTickReleaseBlockingWait();
+    int index = SPIBusIndex(owner->spi_handle);
+    memset(bus, 0, sizeof(*bus));
+    SPIDeviceOnGoing[index] = 1u;
+}
+// HAL 停止可能等待，只能在临界区外的任务中执行；ABORTING 期间中断不能再次提交结果。
+static uint8_t SPIRecover(SPIBus *bus)
+{
+    HAL_StatusTypeDef stopped = HAL_SPI_Abort(bus->owner->spi_handle);
+    uint32_t saved = SPIEnter();
+    if (stopped == HAL_OK && SPIBackendStopped(bus))
+    {
+        SPIClearPending(bus);
+        SPIFinish(bus, bus->owner->transfer.result);
+        SPIExit(saved);
+        return 1u;
+    }
+    // 不让新请求覆盖可能仍被 DMA 使用的数组，也不反复调用停止。
+    bus->phase = BUS_ISOLATED;
+    bus->owner->transfer.phase = SPI_TRANSFER_ISOLATED;
+    SPIExit(saved);
+    return 0u;
 }
 
-// HAL 的阻塞超时依赖毫秒计时；当前中断状态可能阻止计时运行时，拒绝阻塞传输。
-static uint8_t SPIBlockingContextCanWait(void)
+SPIInstance *SPIRegister(const SPI_Init_Config_s *conf)
 {
-    return (__get_IPSR() == 0u &&
-            __get_PRIMASK() == 0u &&
-            __get_BASEPRI() == 0u &&
-            __get_FAULTMASK() == 0u) ? 1u : 0u;
-}
-
-SPIInstance *SPIRegister(SPI_Init_Config_s *conf)
-{
-    if (conf == NULL || conf->spi_handle == NULL || conf->GPIOx == NULL || conf->cs_pin == 0u ||
-        idx >= MX_SPI_BUS_SLAVE_CNT ||
-        (conf->spi_work_mode != SPI_DMA_MODE && conf->spi_work_mode != SPI_IT_MODE &&
-         conf->spi_work_mode != SPI_BLOCK_MODE))
-        return NULL;
-    if (conf->spi_handle->Instance != SPI1 && conf->spi_handle->Instance != SPI2)
-        return NULL;
-    for (uint8_t i = 0u; i < idx; ++i)
-        if (spi_instance[i]->spi_handle == conf->spi_handle && spi_instance[i]->cs_pin == conf->cs_pin)
-            return NULL;
-    SPIInstance *instance = (SPIInstance *)malloc(sizeof(SPIInstance));
-    if (instance == NULL)
-        return NULL;
-    memset(instance, 0, sizeof(SPIInstance));
-
+    if (!SPITaskContext() || conf == NULL || SPIBusIndex(conf->spi_handle) < 0 || conf->GPIOx == NULL ||
+        conf->cs_pin == 0u || (conf->cs_pin & (conf->cs_pin - 1u)) != 0u ||
+        !SPIValidMode(conf->spi_work_mode) || conf->async_timeout_ms > INT32_MAX) return NULL;
+    uint32_t saved = SPIEnter();
+    uint8_t valid = instance_count < MX_SPI_BUS_SLAVE_CNT;
+    for (uint8_t i = 0u; i < instance_count; ++i)
+    {
+        SPIInstance *old = spi_instance[i];
+        if ((old->GPIOx == conf->GPIOx && old->cs_pin == conf->cs_pin) ||
+            (old->spi_handle->Instance == conf->spi_handle->Instance && old->spi_handle != conf->spi_handle)) valid = 0u;
+    }
+    SPIExit(saved);
+    if (!valid) return NULL;
+    SPIInstance *instance = malloc(sizeof(*instance));
+    if (instance == NULL) return NULL;
+    // 先准备完整候选，再发布指针；启动注册由调用方串行执行。
+    memset(instance, 0, sizeof(*instance));
     instance->spi_handle = conf->spi_handle;
     instance->GPIOx = conf->GPIOx;
     instance->cs_pin = conf->cs_pin;
     instance->spi_work_mode = conf->spi_work_mode;
     instance->callback = conf->callback;
     instance->id = conf->id;
-    if (instance->spi_handle->Instance == SPI1)
-    {
-        instance->cs_pin_state = &SPIDeviceOnGoing[0];
-    }
-    else if (instance->spi_handle->Instance == SPI2)
-    {
-        instance->cs_pin_state = &SPIDeviceOnGoing[1];
-    }
-    spi_instance[idx++] = instance;
+    instance->async_timeout_ms = conf->async_timeout_ms == 0u ? SPI_ASYNC_TIMEOUT_DEFAULT_MS : conf->async_timeout_ms;
+    instance->CS_State = GPIO_PIN_SET;
+    instance->cs_pin_state = &SPIDeviceOnGoing[SPIBusIndex(conf->spi_handle)];
+    instance->transfer = (SPITransferState_t){SPI_TRANSFER_IDLE, HAL_OK, 1u};
+    saved = SPIEnter();
+    spi_instance[instance_count++] = instance;
+    SPIExit(saved);
     return instance;
 }
-
 uint8_t SPIUnregister(SPIInstance *instance)
 {
-    if (instance == NULL)
-        return 0u;
-    for (uint8_t i = 0u; i < idx; ++i)
-    {
-        if (spi_instance[i] != instance)
-            continue;
-        HAL_GPIO_WritePin(instance->GPIOx, instance->cs_pin, GPIO_PIN_SET);
-        // 后面的实例向前移动，保持有效项连续，完成回调查找不会遇到中间空位。
-        for (uint8_t j = (uint8_t)(i + 1u); j < idx; ++j)
-            spi_instance[j - 1u] = spi_instance[j];
-        spi_instance[--idx] = NULL;
-        free(instance);
-        return 1u;
-    }
-    return 0u;
-}
-
-void SPITransmit(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len)
-{
-    // 拉低片选,开始传输(选中从机)
-    HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_RESET);
-    switch (spi_ins->spi_work_mode)
-    {
-    case SPI_DMA_MODE:
-        HAL_SPI_Transmit_DMA(spi_ins->spi_handle, ptr_data, len);
-        break;
-    case SPI_IT_MODE:
-        HAL_SPI_Transmit_IT(spi_ins->spi_handle, ptr_data, len);
-        break;
-    case SPI_BLOCK_MODE:
-        HAL_SPI_Transmit(spi_ins->spi_handle, ptr_data, len, 1000); // 当前 HAL 等待参数为 1000 ms。
-        // 阻塞模式不会调用回调函数,传输完成后直接拉高片选结束
-        HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
-        break;
-    default:
-        while (1)
-            ; // error mode! 请查看是否正确设置模式，或出现指针越界导致模式被异常修改的情况
-        break;
-    }
-}
-
-void SPIRecv(SPIInstance *spi_ins, uint8_t *ptr_data, uint8_t len)
-{
-    // 用于稍后回调使用
-    spi_ins->rx_size = len;
-    spi_ins->rx_buffer = ptr_data;
-    // 拉低片选,开始传输
-    HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_RESET);
-    switch (spi_ins->spi_work_mode)
-    {
-    case SPI_DMA_MODE:
-        HAL_SPI_Receive_DMA(spi_ins->spi_handle, ptr_data, len);
-        break;
-    case SPI_IT_MODE:
-        HAL_SPI_Receive_IT(spi_ins->spi_handle, ptr_data, len);
-        break;
-    case SPI_BLOCK_MODE:
-        HAL_SPI_Receive(spi_ins->spi_handle, ptr_data, len, 1000);
-        // 阻塞模式不会调用回调函数,传输完成后直接拉高片选结束
-        HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
-        break;
-    default:
-        while (1)
-            ; // error mode! 请查看是否正确设置模式，或出现指针越界导致模式被异常修改的情况
-        break;
-    }
-}
-
-HAL_StatusTypeDef SPITransRecv(SPIInstance *spi_ins, uint8_t *ptr_data_rx, uint8_t *ptr_data_tx, uint8_t len)
-{
-    if (spi_ins == NULL || spi_ins->spi_handle == NULL || spi_ins->GPIOx == NULL ||
-        spi_ins->cs_pin_state == NULL || ptr_data_rx == NULL || ptr_data_tx == NULL || len == 0u)
-        return HAL_ERROR;
-
-    int8_t bus_idx = SPIBusIndex(spi_ins);
-    if (bus_idx < 0 || (uint8_t)bus_idx >= SPI_DEVICE_CNT)
-        return HAL_ERROR;
-
-    SPI_TXRX_MODE_e work_mode = spi_ins->spi_work_mode;
-    if (work_mode == SPI_BLOCK_MODE && !SPIBlockingContextCanWait())
-        return HAL_BUSY;
-
-    HAL_StatusTypeDef status = SPIBusAcquire(spi_ins, (uint8_t)bus_idx, SPI_BUSY_TIMEOUT_US);
-    if (status != HAL_OK)
-        return status;
-
-    uint8_t tick_wait_acquired = 0u;
-    if (work_mode == SPI_BLOCK_MODE)
-    {
-        if (!BSP_HALTickTryAcquireBlockingWait())
+    if (!SPITaskContext()) return 0u;
+    uint32_t saved = SPIEnter();
+    if (!SPIRegistered(instance) || buses[SPIBusIndex(instance->spi_handle)].phase != BUS_FREE)
+    { SPIExit(saved); return 0u; }
+    for (uint8_t i = 0u; i < instance_count; ++i)
+        if (spi_instance[i] == instance)
         {
-            SPIBusRelease(spi_ins);
-            return HAL_BUSY;
+            HAL_GPIO_WritePin(instance->GPIOx, instance->cs_pin, GPIO_PIN_SET);
+            memmove(&spi_instance[i], &spi_instance[i + 1u], (instance_count - i - 1u) * sizeof(spi_instance[0]));
+            spi_instance[--instance_count] = NULL;
+            break;
         }
-        tick_wait_acquired = 1u;
-    }
-
-    spi_ins->rx_size = len;
-    spi_ins->rx_buffer = ptr_data_rx;
-    HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_RESET);
-    spi_ins->CS_State = GPIO_PIN_RESET;
-
-    switch (work_mode)
-    {
-    case SPI_DMA_MODE:
-        status = HAL_SPI_TransmitReceive_DMA(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
-        break;
-    case SPI_IT_MODE:
-        status = HAL_SPI_TransmitReceive_IT(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len);
-        break;
-    case SPI_BLOCK_MODE:
-        status = HAL_SPI_TransmitReceive(spi_ins->spi_handle, ptr_data_tx, ptr_data_rx, len, 2u);
-        if (tick_wait_acquired)
-            BSP_HALTickReleaseBlockingWait();
-        HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
-        SPIBusRelease(spi_ins);
-        spi_ins->CS_State = GPIO_PIN_SET;
-        return status;
-    default:
-        status = HAL_ERROR;
-        break;
-    }
-
-    // 异步启动失败不会等到完成回调，必须在这里拉高片选并释放本次总线。
-    if (status != HAL_OK)
-    {
-        HAL_GPIO_WritePin(spi_ins->GPIOx, spi_ins->cs_pin, GPIO_PIN_SET);
-        SPIBusRelease(spi_ins);
-        spi_ins->CS_State = GPIO_PIN_SET;
-    }
-    return status;
+    SPIExit(saved);
+    free(instance);
+    return 1u;
 }
-
-void SPISetMode(SPIInstance *spi_ins, SPI_TXRX_MODE_e spi_mode)
+// 在短临界区内认领完成；任务在 HAL 返回前收到的完成也走同一检查。
+static SPIInstance *SPIClaimCompletion(SPIBus *bus)
 {
-    if (spi_mode != SPI_DMA_MODE && spi_mode != SPI_IT_MODE && spi_mode != SPI_BLOCK_MODE)
-        while (1)
-            ; // error mode! 请查看是否正确设置模式，或出现指针越界导致模式被异常修改的情况
-
-    if (spi_ins->spi_work_mode != spi_mode)
+    uint8_t expired = (uint32_t)(HAL_GetTick() - bus->start_ms) >= bus->owner->async_timeout_ms;
+    if (expired || !SPIBackendStopped(bus))
     {
-        spi_ins->spi_work_mode = spi_mode;
+        bus->phase = BUS_RECOVERY;
+        bus->owner->transfer.phase = SPI_TRANSFER_RECOVERING;
+        bus->owner->transfer.result = expired ? HAL_TIMEOUT : HAL_ERROR;
+        return NULL;
     }
+    SPIClearPending(bus);
+    bus->phase = BUS_CALLBACK;
+    SPIInstance *owner = bus->owner;
+    // 回调前拉高片选，保留占用，避免接收字段被下一次提交覆盖。
+    HAL_GPIO_WritePin(owner->GPIOx, owner->cs_pin, GPIO_PIN_SET);
+    owner->CS_State = GPIO_PIN_SET;
+    return owner;
 }
-
-/**
- * @brief 当SPI接收完成,将会调用此回调函数,可以进行协议解析或其他必须的数据处理等
- *
- * @param hspi spi handle
- */
-void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
+// BUS_CALLBACK 保留占用，临界区外交付数据；此期间超时服务不会停止或释放本次事务。
+static void SPIDeliverCompletion(SPIBus *bus, SPIInstance *owner, SPIOperation operation)
 {
-    for (size_t i = 0; i < idx; i++)
+    if (operation != SPI_OP_TX && owner->callback != NULL) owner->callback(owner);
+    uint32_t saved = SPIEnter();
+    SPIFinish(bus, HAL_OK);
+    SPIExit(saved);
+}
+static void SPIComplete(SPI_HandleTypeDef *handle, SPIOperation operation)
+{
+    int index = SPIBusIndex(handle);
+    if (index < 0) return;
+    SPIBus *bus = &buses[index];
+    uint32_t saved = SPIEnter();
+    if (bus->owner == NULL || bus->owner->spi_handle != handle || bus->operation != operation ||
+        bus->owner->spi_work_mode == SPI_BLOCK_MODE) { SPIExit(saved); return; }
+    if (bus->phase == BUS_STARTING) { bus->completion_pending = 1u; SPIExit(saved); return; }
+    if (bus->phase != BUS_ACTIVE) { SPIExit(saved); return; }
+    SPIInstance *owner = SPIClaimCompletion(bus);
+    SPIExit(saved);
+    if (owner != NULL) SPIDeliverCompletion(bus, owner, operation);
+}
+static HAL_StatusTypeDef SPIStart(SPIInstance *instance, uint8_t *rx, uint8_t *tx, uint8_t len, SPIOperation operation)
+{
+    if (!SPITaskContext()) return HAL_BUSY;
+    if (len == 0u || (operation != SPI_OP_TX && rx == NULL) || (operation != SPI_OP_RX && tx == NULL)) return HAL_ERROR;
+    if (operation == SPI_OP_TXRX && ((uintptr_t)rx <= (uintptr_t)tx ?
+        (uintptr_t)tx - (uintptr_t)rx < len : (uintptr_t)rx - (uintptr_t)tx < len)) return HAL_ERROR;
+    uint32_t wait_start = DWT_ProbeStart();
+    SPIBus *bus;
+    // 每次重新检查注册；到期不释放其他事务，不改变任何片选。
+    for (;;)
     {
-        // 如果是当前spi硬件发出的complete,且cs_pin为低电平(说明正在传输),则尝试调用回调函数
-        if (spi_instance[i]->spi_handle == hspi && // 显然同一时间一条总线只能有一个从机在接收数据
-            HAL_GPIO_ReadPin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin) == GPIO_PIN_RESET)
+        uint32_t saved = SPIEnter();
+        if (!SPIRegistered(instance) || !SPIValidMode(instance->spi_work_mode)) { SPIExit(saved); return HAL_ERROR; }
+        int index = SPIBusIndex(instance->spi_handle);
+        bus = &buses[index];
+        if (bus->phase == BUS_ISOLATED) { SPIExit(saved); return HAL_ERROR; }
+        if (bus->phase == BUS_FREE)
         {
-            // 先拉高片选,结束传输,在判断是否有回调函数,如果有则调用回调函数
-            HAL_GPIO_WritePin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin, GPIO_PIN_SET);
-            spi_instance[i]->CS_State = HAL_GPIO_ReadPin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin);
-            SPIBusRelease(spi_instance[i]);
-            // @todo 后续添加holdon模式,由用户自行决定何时释放片选,允许进行连续传输
-            if (spi_instance[i]->callback != NULL) // 回调函数不为空, 则调用回调函数
-                spi_instance[i]->callback(spi_instance[i]);
-            return;
+            bus->owner = instance;
+            bus->operation = operation;
+            bus->phase = BUS_STARTING;
+            SPIDeviceOnGoing[index] = 0u;
+            SPIExit(saved);
+            break;
+        }
+        uint8_t block = instance->spi_work_mode == SPI_BLOCK_MODE;
+        SPIExit(saved);
+        if (!block) return HAL_BUSY;
+        if (DWT_ProbeElapsedUs(wait_start) >= 1000u)
+        {
+            saved = SPIEnter();
+            spi_bus_timeout_cnt[index]++;
+            SPIExit(saved);
+            return HAL_TIMEOUT;
         }
     }
-}
-
-/**
- * @brief 和RxCpltCallback共用解析即可,这里只是形式上封装一下,不用重复写
- *        这是对HAL库的__weak函数的重写,传输使用IT或DMA模式,在传输完成时会调用此函数
- * @param hspi spi handle
- */
-void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
-{
-    HAL_SPI_RxCpltCallback(hspi); // 直接调用接收完成的回调函数
-}
-
-/**
- * @brief 纯发送(DMA/IT)完成回调: 释放片选,复用与接收完成相同的 CS 释放逻辑
- *
- * @param hspi spi handle
- */
-void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
-{
-    HAL_SPI_RxCpltCallback(hspi);
-}
-
-/**
- * @brief SPI 出错回调: 释放总线忙标志
- *        传输出错时完成回调不会来, 如果不在这里清标志, 总线会永久"忙", 后续所有
- *        SPI 访问都会卡在等待里(尤其 -O2 下再也"碰巧"不过去)。
- */
-void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
-{
-    SPIInstance *owner = SPIBusAbortOwner(hspi);
-    if (owner != NULL)
+    HAL_StatusTypeDef rejection = HAL_ERROR;
+    uint8_t lease = 0u;
+    if (SPIBackendConfigured(instance, operation))
     {
-        for (size_t i = 0; i < idx; ++i)
-        {
-            if (spi_instance[i] == owner)
-            {
-                LOGERROR("[bsp_spi] SPI 传输出错, 已释放总线 (idx %u)", (unsigned)i);
-                return;
-            }
-        }
-        return;
+        rejection = HAL_BUSY;
+        if (HAL_SPI_GetState(instance->spi_handle) == HAL_SPI_STATE_READY)
+            lease = BSP_HALTickTryAcquireBlockingWait();
     }
-
-    // 旧 Transmit、Recv 未登记总线使用者，按句柄和低片选另行查找清理。
-    for (size_t i = 0; i < idx; i++)
+    uint32_t saved = SPIEnter();
+    if (!lease)
     {
-        if (spi_instance[i]->spi_handle == hspi &&
-            HAL_GPIO_ReadPin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin) == GPIO_PIN_RESET)
+        // 尚未启动 HAL，不触碰片选和旧结果，也不停止外部 HAL 操作。
+        memset(bus, 0, sizeof(*bus));
+        SPIDeviceOnGoing[SPIBusIndex(instance->spi_handle)] = 1u;
+        SPIExit(saved);
+        return rejection;
+    }
+    bus->lease = 1u;
+    bus->start_ms = HAL_GetTick();
+    instance->rx_buffer = rx;
+    instance->rx_size = operation == SPI_OP_TX ? 0u : len;
+    instance->transfer = (SPITransferState_t){SPI_TRANSFER_ACTIVE, HAL_BUSY, 0u};
+    HAL_GPIO_WritePin(instance->GPIOx, instance->cs_pin, GPIO_PIN_RESET);
+    instance->CS_State = GPIO_PIN_RESET;
+    SPIExit(saved);
+    SPI_HandleTypeDef *handle = instance->spi_handle;
+    HAL_StatusTypeDef result;
+    if (instance->spi_work_mode == SPI_BLOCK_MODE)
+    {
+        if (operation == SPI_OP_TX) result = HAL_SPI_Transmit(handle, tx, len, 2u);
+        else if (operation == SPI_OP_RX) result = HAL_SPI_Receive(handle, rx, len, 2u);
+        else result = HAL_SPI_TransmitReceive(handle, tx, rx, len, 2u);
+    }
+    else if (instance->spi_work_mode == SPI_IT_MODE)
+    {
+        if (operation == SPI_OP_TX) result = HAL_SPI_Transmit_IT(handle, tx, len);
+        else if (operation == SPI_OP_RX) result = HAL_SPI_Receive_IT(handle, rx, len);
+        else result = HAL_SPI_TransmitReceive_IT(handle, tx, rx, len);
+    }
+    else
+    {
+        if (operation == SPI_OP_TX) result = HAL_SPI_Transmit_DMA(handle, tx, len);
+        else if (operation == SPI_OP_RX) result = HAL_SPI_Receive_DMA(handle, rx, len);
+        else result = HAL_SPI_TransmitReceive_DMA(handle, tx, rx, len);
+    }
+    saved = SPIEnter();
+    uint8_t block = instance->spi_work_mode == SPI_BLOCK_MODE;
+    if (block || result != HAL_OK || bus->error_pending)
+    {
+        HAL_StatusTypeDef final_result = bus->error_pending ? HAL_ERROR : result;
+        instance->transfer.result = final_result;
+        if (SPIBackendStopped(bus))
         {
-            HAL_GPIO_WritePin(spi_instance[i]->GPIOx, spi_instance[i]->cs_pin, GPIO_PIN_SET);
-            spi_instance[i]->CS_State = 1u;
-            LOGERROR("[bsp_spi] SPI 传输出错, 已释放总线 (idx %u)", (unsigned)i);
-            return;
+            SPIClearPending(bus);
+            SPIFinish(bus, final_result);
+        }
+        else
+        {
+            instance->transfer.phase = SPI_TRANSFER_RECOVERING;
+            bus->phase = block ? BUS_ABORTING : BUS_RECOVERY;
+            // 阻塞路径无 DMA／中断继续访问数组，返回后其栈数组可释放。
+            if (block) instance->transfer.buffers_released = 1u;
+        }
+        uint8_t recover_now = bus->phase == BUS_ABORTING;
+        SPIExit(saved);
+        if (recover_now && !SPIRecover(bus)) return HAL_ERROR;
+        return final_result;
+    }
+    bus->phase = BUS_ACTIVE;
+    // 已到的完成必须在开放任务切换前认领，不能稍后把它误用到另一笔事务。
+    SPIInstance *completed = bus->completion_pending ? SPIClaimCompletion(bus) : NULL;
+    SPIExit(saved);
+    if (completed != NULL) SPIDeliverCompletion(bus, completed, operation);
+    return result;
+}
+HAL_StatusTypeDef SPITransmit(SPIInstance *instance, uint8_t *data, uint8_t len)
+{ return SPIStart(instance, NULL, data, len, SPI_OP_TX); }
+HAL_StatusTypeDef SPIRecv(SPIInstance *instance, uint8_t *data, uint8_t len)
+{ return SPIStart(instance, data, NULL, len, SPI_OP_RX); }
+HAL_StatusTypeDef SPITransRecv(SPIInstance *instance, uint8_t *rx, uint8_t *tx, uint8_t len)
+{ return SPIStart(instance, rx, tx, len, SPI_OP_TXRX); }
+HAL_StatusTypeDef SPISetMode(SPIInstance *instance, SPI_TXRX_MODE_e mode)
+{
+    if (!SPITaskContext()) return HAL_BUSY;
+    uint32_t saved = SPIEnter();
+    HAL_StatusTypeDef result = HAL_ERROR;
+    if (SPIRegistered(instance) && SPIValidMode(mode))
+    {
+        result = buses[SPIBusIndex(instance->spi_handle)].phase == BUS_FREE ? HAL_OK : HAL_BUSY;
+        if (result == HAL_OK) instance->spi_work_mode = mode;
+    }
+    SPIExit(saved);
+    return result;
+}
+HAL_StatusTypeDef SPIGetTransferState(const SPIInstance *instance, SPITransferState_t *output)
+{
+    if (output == NULL) return HAL_ERROR;
+    uint32_t saved = SPIEnter();
+    if (!SPIRegistered(instance)) { SPIExit(saved); return HAL_ERROR; }
+    *output = instance->transfer;
+    SPIExit(saved);
+    return HAL_OK;
+}
+HAL_StatusTypeDef SPIProcessTimeouts(void)
+{
+    if (!SPITaskContext()) return HAL_BUSY;
+    HAL_StatusTypeDef result = HAL_OK;
+    // 每条总线独立认领恢复，其他任务或中断不会重复停止同一事务。
+    for (unsigned i = 0u; i < SPI_DEVICE_CNT; ++i)
+    {
+        SPIBus *bus = &buses[i];
+        uint32_t saved = SPIEnter();
+        if (bus->phase == BUS_ACTIVE && (uint32_t)(HAL_GetTick() - bus->start_ms) >= bus->owner->async_timeout_ms)
+        {
+            bus->phase = BUS_RECOVERY;
+            bus->owner->transfer.phase = SPI_TRANSFER_RECOVERING;
+            bus->owner->transfer.result = HAL_TIMEOUT;
+        }
+        uint8_t recover = bus->phase == BUS_RECOVERY;
+        if (recover) bus->phase = BUS_ABORTING;
+        if (bus->phase == BUS_ISOLATED) result = HAL_ERROR;
+        SPIExit(saved);
+        if (recover && !SPIRecover(bus)) result = HAL_ERROR;
+    }
+    return result;
+}
+/** @brief HAL 接收完成入口；仅匹配当前接收事务。 */
+void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *handle) { SPIComplete(handle, SPI_OP_RX); }
+/** @brief HAL 全双工完成入口；迟到或错误完成不发布数据。 */
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *handle) { SPIComplete(handle, SPI_OP_TXRX); }
+/** @brief HAL 发送完成入口；不会调用接收业务回调。 */
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *handle) { SPIComplete(handle, SPI_OP_TX); }
+/** @brief HAL 错误入口；只登记失败，停止流程延至任务。 */
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *handle)
+{
+    int index = SPIBusIndex(handle);
+    if (index < 0) return;
+    uint32_t saved = SPIEnter();
+    SPIBus *bus = &buses[index];
+    if (bus->owner != NULL && bus->owner->spi_handle == handle)
+    {
+        if (bus->phase == BUS_STARTING) bus->error_pending = 1u;
+        else if (bus->phase == BUS_ACTIVE)
+        {
+            bus->phase = BUS_RECOVERY;
+            bus->owner->transfer.phase = SPI_TRANSFER_RECOVERING;
+            bus->owner->transfer.result = HAL_ERROR;
         }
     }
+    SPIExit(saved);
 }

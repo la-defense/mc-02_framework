@@ -537,6 +537,27 @@ add_executable(bmi088_temperature_test bmi088_temperature_test.c)
 target_include_directories(bmi088_temperature_test PRIVATE ../../modules/BMI088)
 add_test(NAME bmi088_temperature_signed_decode COMMAND bmi088_temperature_test)
 
+# 同一生产源码分别验证 Windows 顺序交错和 WSL 真实线程；分配器只在该目标重命名。
+add_library(bsp_spi_host_model STATIC ../../bsp/spi/bsp_spi.c)
+target_include_directories(bsp_spi_host_model BEFORE PRIVATE bsp_spi_fakes)
+target_include_directories(bsp_spi_host_model PRIVATE ../../bsp/spi)
+target_compile_definitions(bsp_spi_host_model PRIVATE malloc=mc02_spi_malloc free=mc02_spi_free)
+add_executable(bsp_spi_status_test bsp_spi_status_test.c)
+target_include_directories(bsp_spi_status_test BEFORE PRIVATE bsp_spi_fakes)
+target_include_directories(bsp_spi_status_test PRIVATE ../../bsp/spi)
+target_link_libraries(bsp_spi_status_test PRIVATE bsp_spi_host_model)
+foreach(spi_case IN ITEMS registration operations invalid ownership wait timeout wrap error isolation false-ready early dirty-start late)
+  add_test(NAME production_spi_${spi_case} COMMAND bsp_spi_status_test ${spi_case})
+  set_tests_properties(production_spi_${spi_case} PROPERTIES TIMEOUT 10)
+endforeach()
+if(UNIX AND NOT APPLE)
+  find_package(Threads REQUIRED)
+  target_compile_definitions(bsp_spi_status_test PRIVATE SPI_TEST_THREADS=1)
+  target_link_libraries(bsp_spi_status_test PRIVATE Threads::Threads)
+  add_test(NAME production_spi_threads COMMAND bsp_spi_status_test threads)
+  set_tests_properties(production_spi_threads PROPERTIES TIMEOUT 10)
+endif()
+
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   find_package(Threads REQUIRED)
   add_executable(
@@ -548,17 +569,6 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   target_compile_options(hal_tick_suspend_test PRIVATE -ffunction-sections -fdata-sections)
   target_link_options(hal_tick_suspend_test PRIVATE -Wl,--gc-sections)
   add_test(NAME production_hal_tick_suspend_and_spi_wait_lease COMMAND hal_tick_suspend_test)
-
-  add_executable(
-    bsp_spi_status_test
-    bsp_spi_status_test.c
-    ../../bsp/spi/bsp_spi.c)
-  target_include_directories(bsp_spi_status_test BEFORE PRIVATE bsp_spi_fakes)
-  target_include_directories(bsp_spi_status_test PRIVATE ../../bsp/spi)
-  target_compile_options(bsp_spi_status_test PRIVATE -ffunction-sections -fdata-sections)
-  target_link_options(bsp_spi_status_test PRIVATE -Wl,--gc-sections)
-  target_link_libraries(bsp_spi_status_test PRIVATE Threads::Threads)
-  add_test(NAME production_spi_status_and_bus_ownership COMMAND bsp_spi_status_test)
 
   add_executable(
     imu_heater_sample_test

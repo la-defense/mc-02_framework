@@ -28,6 +28,7 @@
 
 #include "bsp_log.h"
 #include "bsp_dwt.h"
+#include "bsp_spi.h"
 
 osThreadId insTaskHandle;
 osThreadId robotTaskHandle;
@@ -253,6 +254,8 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
             LogSelfTest();
         }
 #endif
+        // 约每 10 ms 停止出错或到期的异步 SPI，停止失败的总线保持隔离。
+        (void)SPIProcessTimeouts();
         DaemonTask();
         if (buzzer_ready)
             BuzzerTask();
