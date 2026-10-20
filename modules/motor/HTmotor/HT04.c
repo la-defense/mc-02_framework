@@ -19,6 +19,55 @@ static HTMotorInstance *ht_motor_instance[HT_MOTOR_CNT];
 static osThreadId ht_task_handle[HT_MOTOR_CNT];
 static uint8_t zero_buff[6] = {0};
 
+static uint8_t HTFeedbackConfigValid(Feedback_Source_e source, const float *external_feedback)
+{
+    if (source == MOTOR_FEED)
+        return 1u;
+    return (uint8_t)(source == OTHER_FEED && external_feedback != NULL);
+}
+
+static PID_Status_e HTReadFeedback(Feedback_Source_e source, const float *external_feedback,
+                                   float internal_feedback, float *feedback)
+{
+    if (feedback == NULL)
+        return PID_BAD_ARGUMENT;
+
+    float candidate;
+    if (source == MOTOR_FEED)
+        candidate = internal_feedback;
+    else if (source == OTHER_FEED && external_feedback != NULL)
+        candidate = *external_feedback;
+    else
+        return PID_BAD_ARGUMENT;
+
+    if (!isfinite(candidate))
+        return PID_BAD_ARGUMENT;
+    *feedback = candidate;
+    return PID_OK;
+}
+
+static uint8_t HTControlConfigValid(const Motor_Init_Config_s *config)
+{
+    const Motor_Control_Setting_s *setting = &config->controller_setting_init_config;
+    const Motor_Controller_Init_s *controller = &config->controller_param_init_config;
+    uint8_t angle_active = (uint8_t)((setting->close_loop_type & ANGLE_LOOP) != 0u &&
+                                     setting->outer_loop_type == ANGLE_LOOP);
+    uint8_t speed_active = (uint8_t)((setting->close_loop_type & SPEED_LOOP) != 0u &&
+                                     (setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
+
+    if ((angle_active != 0u &&
+         !HTFeedbackConfigValid(setting->angle_feedback_source, controller->other_angle_feedback_ptr)) ||
+        (speed_active != 0u &&
+         (!HTFeedbackConfigValid(setting->speed_feedback_source, controller->other_speed_feedback_ptr) ||
+          ((setting->feedforward_flag & SPEED_FEEDFORWARD) != 0u &&
+           controller->speed_feedforward_ptr == NULL))) ||
+        ((setting->feedforward_flag & CURRENT_FEEDFORWARD) != 0u &&
+         controller->current_feedforward_ptr == NULL))
+        return 0u;
+
+    return 1u;
+}
+
 /**
  * @brief 设置电机模式,报文内容[0xff,0xff,0xff,0xff,0xff,0xff,0xff,cmd]
  *
@@ -120,27 +169,41 @@ void HTMotorCalibEncoder(HTMotorInstance *motor)
 
 HTMotorInstance *HTMotorInit(Motor_Init_Config_s *config)
 {
-    if (config == NULL)
+    if (config == NULL || !HTControlConfigValid(config))
         return NULL;
+
+    const Motor_Control_Setting_s *setting = &config->controller_setting_init_config;
+    uint8_t angle_active = (uint8_t)((setting->close_loop_type & ANGLE_LOOP) != 0u &&
+                                     setting->outer_loop_type == ANGLE_LOOP);
+    uint8_t speed_active = (uint8_t)((setting->close_loop_type & SPEED_LOOP) != 0u &&
+                                     (setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
+    uint8_t current_active = (uint8_t)((setting->close_loop_type & CURRENT_LOOP) != 0u);
+    PIDInstance current_pid = {0};
+    PIDInstance speed_pid = {0};
+    PIDInstance angle_pid = {0};
+    if (MotorPIDInit(&current_pid, &config->controller_param_init_config.current_PID,
+                     current_active) != PID_OK ||
+        MotorPIDInit(&speed_pid, &config->controller_param_init_config.speed_PID,
+                     speed_active) != PID_OK ||
+        MotorPIDInit(&angle_pid, &config->controller_param_init_config.angle_PID,
+                     angle_active) != PID_OK)
+        return NULL;
+
     HTMotorInstance *motor = (HTMotorInstance *)malloc(sizeof(HTMotorInstance));
     if (motor == NULL)
-        return NULL;
-    memset(motor, 0, sizeof(HTMotorInstance));
-
-    motor->motor_settings = config->controller_setting_init_config;
-    // 只检查实际启用的环，失败发生在注册 CAN 和发送模式命令之前。
-    if (MotorPIDInit(&motor->current_PID, &config->controller_param_init_config.current_PID,
-                     (config->controller_setting_init_config.close_loop_type & CURRENT_LOOP) != 0u) != PID_OK ||
-        MotorPIDInit(&motor->speed_PID, &config->controller_param_init_config.speed_PID,
-                     (config->controller_setting_init_config.close_loop_type & SPEED_LOOP) != 0u) != PID_OK ||
-        MotorPIDInit(&motor->angle_PID, &config->controller_param_init_config.angle_PID,
-                     (config->controller_setting_init_config.close_loop_type & ANGLE_LOOP) != 0u) != PID_OK)
     {
-        free(motor);
         return NULL;
     }
+    memset(motor, 0, sizeof(HTMotorInstance));
+
+    motor->motor_settings = *setting;
+    motor->current_PID = current_pid;
+    motor->speed_PID = speed_pid;
+    motor->angle_PID = angle_pid;
     motor->other_angle_feedback_ptr = config->controller_param_init_config.other_angle_feedback_ptr;
     motor->other_speed_feedback_ptr = config->controller_param_init_config.other_speed_feedback_ptr;
+    motor->speed_feedforward_ptr = config->controller_param_init_config.speed_feedforward_ptr;
+    motor->current_feedforward_ptr = config->controller_param_init_config.current_feedforward_ptr;
 
     config->can_init_config.can_module_callback = HTMotorDecode;
     config->can_init_config.id = motor;
@@ -189,35 +252,78 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
         PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
         if (pid_status == PID_OK && (setting->close_loop_type & ANGLE_LOOP) && setting->outer_loop_type == ANGLE_LOOP)
         {
-            if (setting->angle_feedback_source == OTHER_FEED)
-                pid_measure = *motor->other_angle_feedback_ptr;
-            else
-                pid_measure = measure->total_angle;
+            pid_status = HTReadFeedback(setting->angle_feedback_source,
+                                        motor->other_angle_feedback_ptr,
+                                        measure->total_angle, &pid_measure);
             // measure单位是rad,ref是角度,统一到angle下计算,方便建模
             if (pid_status == PID_OK)
-                pid_status = PIDCalculate(&motor->angle_PID, pid_measure * RAD_2_DEGREE, pid_ref, control_dt, &pid_ref);
+            {
+                pid_measure *= RAD_2_DEGREE;
+                if (!isfinite(pid_measure))
+                    pid_status = PID_NUMERIC_ERROR;
+                else
+                    pid_status = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref, control_dt, &pid_ref);
+            }
         }
 
-        if (pid_status == PID_OK && (setting->close_loop_type & SPEED_LOOP) && setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP))
+        if (pid_status == PID_OK && (setting->close_loop_type & SPEED_LOOP) &&
+            (setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
         {
-            if (setting->feedforward_flag & SPEED_FEEDFORWARD)
-                pid_ref += *motor->speed_feedforward_ptr;
+            if ((setting->feedforward_flag & SPEED_FEEDFORWARD) != 0u)
+            {
+                if (motor->speed_feedforward_ptr == NULL)
+                    pid_status = PID_BAD_ARGUMENT;
+                else
+                {
+                    float feedforward = *motor->speed_feedforward_ptr;
+                    if (!isfinite(feedforward))
+                        pid_status = PID_BAD_ARGUMENT;
+                    else
+                    {
+                        pid_ref += feedforward;
+                        if (!isfinite(pid_ref))
+                            pid_status = PID_NUMERIC_ERROR;
+                    }
+                }
+            }
 
-            if (setting->angle_feedback_source == OTHER_FEED)
-                pid_measure = *motor->other_speed_feedback_ptr;
-            else
-                pid_measure = measure->speed_rads;
+            if (pid_status == PID_OK)
+                pid_status = HTReadFeedback(setting->speed_feedback_source,
+                                            motor->other_speed_feedback_ptr,
+                                            measure->speed_rads, &pid_measure);
             // measure单位是rad / s ,ref是angle per sec,统一到angle下计算
             if (pid_status == PID_OK)
-                pid_status = PIDCalculate(&motor->speed_PID, pid_measure * RAD_2_DEGREE, pid_ref, control_dt, &pid_ref);
+            {
+                pid_measure *= RAD_2_DEGREE;
+                if (!isfinite(pid_measure))
+                    pid_status = PID_NUMERIC_ERROR;
+                else
+                    pid_status = PIDCalculate(&motor->speed_PID, pid_measure, pid_ref, control_dt, &pid_ref);
+            }
         }
 
-        if (setting->feedforward_flag & CURRENT_FEEDFORWARD)
-            pid_ref += *motor->current_feedforward_ptr;
-        if (setting->close_loop_type & CURRENT_LOOP)
+        // 当前前馈保留在原来的速度环之后、当前环之前；失败时不再读取后续输入。
+        if (pid_status == PID_OK && (setting->feedforward_flag & CURRENT_FEEDFORWARD) != 0u)
         {
-            if (pid_status == PID_OK)
-                pid_status = PIDCalculate(&motor->current_PID, measure->real_current, pid_ref, control_dt, &pid_ref);
+            if (motor->current_feedforward_ptr == NULL)
+                pid_status = PID_BAD_ARGUMENT;
+            else
+            {
+                float feedforward = *motor->current_feedforward_ptr;
+                if (!isfinite(feedforward))
+                    pid_status = PID_BAD_ARGUMENT;
+                else
+                {
+                    pid_ref += feedforward;
+                    if (!isfinite(pid_ref))
+                        pid_status = PID_NUMERIC_ERROR;
+                }
+            }
+        }
+        if (pid_status == PID_OK && (setting->close_loop_type & CURRENT_LOOP) != 0u)
+        {
+            pid_measure = (float)measure->real_current;
+            pid_status = PIDCalculate(&motor->current_PID, pid_measure, pid_ref, control_dt, &pid_ref);
         }
 
         if (pid_status != PID_OK || !isfinite(pid_ref))

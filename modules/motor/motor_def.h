@@ -93,13 +93,13 @@ typedef struct
 } Motor_Control_Setting_s;
 
 /* 电机控制器,包括其他来源的反馈数据指针,3环控制器和电机的参考输入*/
-// 外部反馈及前馈已通过下列指针提供；启用对应功能前须确保指针长期可读且单位与该驱动一致。
+// 外部反馈及前馈由调用方保存；启用对应分支前须保证指针长期有效、数值有限且单位符合具体驱动。
 typedef struct
 {
-    float *other_angle_feedback_ptr; // 其他反馈来源的反馈数据指针
-    float *other_speed_feedback_ptr;
-    float *speed_feedforward_ptr;
-    float *current_feedforward_ptr;
+    float *other_angle_feedback_ptr; // 外部角度反馈，单位由具体驱动规定。
+    float *other_speed_feedback_ptr; // 外部速度反馈，单位由具体驱动规定。
+    float *speed_feedforward_ptr;    // 速度相关前馈，仅在驱动实际读取的分支使用。
+    float *current_feedforward_ptr;  // 当前输出前馈，仅在驱动实际读取的分支使用。
 
     PIDInstance current_PID;
     PIDInstance speed_PID;
@@ -129,11 +129,11 @@ typedef enum
 typedef struct
 {
     // 配置只保存地址，不复制反馈数值；各驱动实际采用哪些字段须结合其初始化实现阅读。
-    float *other_angle_feedback_ptr; // 角度反馈数据指针,注意电机使用total_angle
-    float *other_speed_feedback_ptr; // 速度反馈数据指针,单位为angle per sec
+    float *other_angle_feedback_ptr; // 外部角度反馈；具体角度单位由驱动决定。
+    float *other_speed_feedback_ptr; // 外部速度反馈；具体速度单位由驱动决定。
 
-    float *speed_feedforward_ptr;   // 速度前馈数据指针
-    float *current_feedforward_ptr; // 电流前馈数据指针
+    float *speed_feedforward_ptr;   // 速度相关前馈；具体加入位置和单位由驱动决定。
+    float *current_feedforward_ptr; // 当前输出前馈；具体加入位置和单位由驱动决定。
 
     PID_Init_Config_s current_PID;
     PID_Init_Config_s speed_PID;

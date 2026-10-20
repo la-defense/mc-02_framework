@@ -161,8 +161,8 @@
 
 旧代码审查报告的未关闭项目已逐条对照本清单。明确重复项映射为：`CORE-10` → `R25-12`；`CORE-04` → `R25-12`（仅在大缓冲重新进入链接产物时处理）；`APP-07` → `R25-15`；`APP-08` → `R25-07`；`VISION-07` → `R25-09`。其余旧项保留原编号并标记 `needs-triage`，先核验当前源码和硬件条件，再决定实施或关闭。
 
-- [ ] **MOTOR-01** [bug] [needs-triage] 核查 LK9025 角度环、速度环和反馈源选择是否仍存在错误。验收：角度环读取总角度，速度环调用速度 PID，速度反馈源按速度字段选择；生产路径边界测试通过。
-- [ ] **MOTOR-02** [bug] [needs-triage] 核查 HT04 速度反馈源选择是否仍误读角度反馈配置。验收：速度反馈选择由速度字段控制，角度/速度反馈源组合测试通过。
+- [x] **MOTOR-01** [bug] 修复 LK9025 闭环反馈源和 PID 选择错误。验收完成：角度环读取 `total_angle`，速度环使用独立 `speed_PID` 和 `speed_feedback_source`；固定数值、CAN 小端帧、失败零输出／恢复、ASan／UBSan、六种禁热固件及 ELF 隔离检查通过。见[实现与验证记录](../docs/workflow/tickets/MOTOR-01-02.md)。
+- [x] **MOTOR-02** [bug] 修复 HT04 速度环误用角度反馈源的问题。验收完成：速度反馈独立由 `speed_feedback_source` 选择，角度与速度来源的四种组合、单位换算、前馈、失败零力矩／恢复及本机回归通过。见[实现与验证记录](../docs/workflow/tickets/MOTOR-01-02.md)。
 - [ ] **MOTOR-03** [bug] [needs-triage] 核查 DM 电机发送力矩时是否使用已限幅、已反转的目标值。验收：编码输入始终在协议范围内，正反转及上下限边界测试通过。
 - [x] **BSPUART-03U1** [enhancement] 统一 UART 只读接收块与协议分帧接口。验收：回调交付实际长度、原RxEvent时间、连续性编号及context，队列直接借用到回调返回；裁判/SP支持跨块、多帧、CRC失败后继续找头，丢块/错误/重启清残帧，坏帧不发布、不续期；DR16保持独立18字节要求及原安全恢复规则。WSL Debug/Release各156/156、Windows支持子集各67/67、地址/未定义行为检查28/28；六种禁热构建、ELF隔离、非法配置拒绝、UART编译选择及CMake增量检查通过，未连接硬件。MC02-0061、MC02-0062、MC02-0094及舵机实际接入保持原范围；[规格](../docs/workflow/specs/robomaster-framework-evolution.md)、[实施与验证](../docs/workflow/tickets/BSPUART-03U1.md)。
 - [x] **BSPSPI-03** [bug] 统一三个 SPI 收发入口的总线占用、片选及错误释放。验收完成：阻塞等总线1000μs／HAL 2ms，异步遇忙拒绝；总计4个设备、回调按使用者和类型派发、20ms默认期限及10ms协作检查，停止确认后释放，停止失败隔离。WSL Debug／Release各200/200、Windows支持子集各136/136、SPI ASan／UBSan 14/14、六种禁热固件及ELF／非法配置／增量检查通过；仅本机，无板上波形或DMA物理时序结论。见[实施证据](../docs/workflow/tickets/BSPSPI-03.md)、[教学03](../docs/学习笔记/03-非阻塞通信与CAN收发技术细节.md#13-spi-超时后为什么不能立即交给下一个设备bspspi-03)。

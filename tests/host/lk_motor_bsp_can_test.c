@@ -7,6 +7,8 @@
 #include "bsp_can.h"
 #include "bsp_dwt.h"
 #include "test_check.h"
+#include <float.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -169,6 +171,16 @@ static Motor_Init_Config_s config_for(uint8_t bus, uint32_t motor_id)
     return config;
 }
 
+static PID_Init_Config_s pid_config(float kp, float max_out)
+{
+    PID_Init_Config_s config = {0};
+    config.Kp = kp;
+    config.MaxOut = max_out;
+    config.DtMin_s = MOTOR_PID_DT_MIN_S;
+    config.DtMax_s = MOTOR_PID_DT_MAX_S;
+    return config;
+}
+
 static void test_production_registration_rollback(void)
 {
     Motor_Init_Config_s config = config_for(2u, 4u);
@@ -250,15 +262,248 @@ static void test_production_can_routing(void)
     TEST_CHECK(tx_accept_count[0] == 5u && tx_frame[0][2] == 0x72u && tx_frame[0][3] == 0xFDu);
 }
 
+static void test_closed_loop_feedback_selection(void)
+{
+    float external_angle = 20.0f;
+    float external_speed = 4.0f;
+    LKMotorInstance *motors[LK_MOTOR_PER_BUS_CNT] = {NULL};
+    static const int16_t expected_current[LK_MOTOR_PER_BUS_CNT] = {14, -46, 8, -52};
+    static const uint8_t expected_frame[8] = {0x0Eu, 0u, 0xD2u, 0xFFu, 0x08u, 0u, 0xCCu, 0xFFu};
+
+    for (uint8_t index = 0u; index < LK_MOTOR_PER_BUS_CNT; ++index)
+    {
+        Motor_Init_Config_s config = config_for(0u, (uint32_t)index + 1u);
+        config.controller_setting_init_config.close_loop_type = ALL_THREE_LOOP;
+        config.controller_setting_init_config.outer_loop_type = ANGLE_LOOP;
+        config.controller_setting_init_config.angle_feedback_source =
+            (index & 1u) != 0u ? OTHER_FEED : MOTOR_FEED;
+        config.controller_setting_init_config.speed_feedback_source =
+            (index & 2u) != 0u ? OTHER_FEED : MOTOR_FEED;
+        config.controller_param_init_config.other_angle_feedback_ptr = &external_angle;
+        config.controller_param_init_config.other_speed_feedback_ptr = &external_speed;
+        config.controller_param_init_config.angle_PID = pid_config(2.0f, 1000.0f);
+        config.controller_param_init_config.speed_PID = pid_config(3.0f, 1000.0f);
+        config.controller_param_init_config.current_PID = pid_config(1.0f, 1000.0f);
+
+        motors[index] = LKMotorInit(&config);
+        TEST_CHECK(motors[index] != NULL);
+        motors[index]->measure.total_angle = 10.0f;
+        motors[index]->measure.speed_rads = 2.0f;
+        motors[index]->measure.real_current = 100;
+        LKMotorSetRef(motors[index], 30.0f);
+    }
+
+    now_us = 0u;
+    LKMotorControl();
+    TEST_CHECK(memcmp(tx_frame[0], (uint8_t[8]){0}, 8u) == 0);
+
+    now_us = 1000u;
+    LKMotorControl();
+    TEST_CHECK(tx_header_id[0] == 0x280u);
+    TEST_CHECK(memcmp(tx_frame[0], expected_frame, sizeof(expected_frame)) == 0);
+    for (uint8_t index = 0u; index < LK_MOTOR_PER_BUS_CNT; ++index)
+        TEST_CHECK((int16_t)((uint16_t)tx_frame[0][index * 2u] |
+                            ((uint16_t)tx_frame[0][index * 2u + 1u] << 8u)) == expected_current[index]);
+}
+
+static void test_feedforward_paths_and_recovery(void)
+{
+    float external_angle = 20.0f;
+    float external_speed = 4.0f;
+    float speed_feedforward = 5.0f;
+    float current_feedforward = 7.0f;
+    static const int16_t expected_current[LK_MOTOR_PER_BUS_CNT] = {14, -31, 15, -30};
+    static const uint8_t expected_frame[8] = {14u, 0u, 0xE1u, 0xFFu, 15u, 0u, 0xE2u, 0xFFu};
+
+    Motor_Init_Config_s invalid = config_for(0u, 1u);
+    invalid.controller_setting_init_config.close_loop_type = ALL_THREE_LOOP;
+    invalid.controller_setting_init_config.outer_loop_type = ANGLE_LOOP;
+    invalid.controller_setting_init_config.feedforward_flag = SPEED_FEEDFORWARD;
+    TEST_CHECK(LKMotorInit(&invalid) == NULL);
+    invalid.controller_setting_init_config.feedforward_flag = CURRENT_FEEDFORWARD;
+    TEST_CHECK(LKMotorInit(&invalid) == NULL);
+    invalid.controller_setting_init_config.feedforward_flag = FEEDFORWARD_NONE;
+    invalid.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
+    TEST_CHECK(LKMotorInit(&invalid) == NULL);
+    invalid.controller_setting_init_config.angle_feedback_source = MOTOR_FEED;
+    invalid.controller_setting_init_config.speed_feedback_source = (Feedback_Source_e)2;
+    TEST_CHECK(LKMotorInit(&invalid) == NULL);
+    TEST_CHECK(filter_count[0] == 0u && bus_start_count[0] == 0u);
+
+    for (uint8_t index = 0u; index < LK_MOTOR_PER_BUS_CNT; ++index)
+    {
+        Motor_Init_Config_s config = config_for(0u, (uint32_t)index + 1u);
+        config.controller_setting_init_config.close_loop_type = ALL_THREE_LOOP;
+        config.controller_setting_init_config.outer_loop_type = ANGLE_LOOP;
+        config.controller_setting_init_config.angle_feedback_source =
+            (index == 1u || index == 3u) ? OTHER_FEED : MOTOR_FEED;
+        config.controller_setting_init_config.speed_feedback_source =
+            (index == 2u || index == 3u) ? OTHER_FEED : MOTOR_FEED;
+        config.controller_setting_init_config.feedforward_flag =
+            index == 1u ? SPEED_FEEDFORWARD : index == 2u ? CURRENT_FEEDFORWARD :
+            index == 3u ? CURRENT_AND_SPEED_FEEDFORWARD : FEEDFORWARD_NONE;
+        config.controller_param_init_config.other_angle_feedback_ptr =
+            (index == 1u || index == 3u) ? &external_angle : NULL;
+        config.controller_param_init_config.other_speed_feedback_ptr =
+            (index == 2u || index == 3u) ? &external_speed : NULL;
+        config.controller_param_init_config.speed_feedforward_ptr =
+            (index == 1u || index == 3u) ? &speed_feedforward : NULL;
+        config.controller_param_init_config.current_feedforward_ptr =
+            (index == 2u || index == 3u) ? &current_feedforward : NULL;
+        config.controller_param_init_config.angle_PID = pid_config(2.0f, 1000.0f);
+        config.controller_param_init_config.speed_PID = pid_config(3.0f, 1000.0f);
+        config.controller_param_init_config.current_PID = pid_config(1.0f, 1000.0f);
+
+        LKMotorInstance *motor = LKMotorInit(&config);
+        TEST_CHECK(motor != NULL);
+        TEST_CHECK(motor->speed_feedforward_ptr == config.controller_param_init_config.speed_feedforward_ptr);
+        TEST_CHECK(motor->current_feedforward_ptr == config.controller_param_init_config.current_feedforward_ptr);
+        motor->measure.total_angle = 10.0f;
+        motor->measure.speed_rads = 2.0f;
+        motor->measure.real_current = 100;
+        LKMotorSetRef(motor, 30.0f);
+    }
+
+    now_us = 0u;
+    LKMotorControl();
+    now_us = 1000u;
+    LKMotorControl();
+    TEST_CHECK(memcmp(tx_frame[0], expected_frame, sizeof(expected_frame)) == 0);
+    for (uint8_t index = 0u; index < LK_MOTOR_PER_BUS_CNT; ++index)
+        TEST_CHECK((int16_t)((uint16_t)tx_frame[0][index * 2u] |
+                            ((uint16_t)tx_frame[0][index * 2u + 1u] << 8u)) == expected_current[index]);
+
+    // 非有限前馈只清本实例槽位；恢复有限输入后新一轮可重新计算。
+    speed_feedforward = NAN;
+    now_us += 1000u;
+    LKMotorControl();
+    TEST_CHECK(tx_frame[0][2] == 0u && tx_frame[0][3] == 0u);
+    TEST_CHECK(tx_frame[0][0] == 14u && tx_frame[0][4] == 15u);
+    TEST_CHECK(tx_frame[0][6] == 0u && tx_frame[0][7] == 0u);
+    speed_feedforward = 5.0f;
+    now_us += 1000u;
+    LKMotorControl();
+    TEST_CHECK(tx_frame[0][2] == 0xE1u && tx_frame[0][3] == 0xFFu);
+    TEST_CHECK(tx_frame[0][6] == 0xE2u && tx_frame[0][7] == 0xFFu);
+}
+
+static void test_feedback_failure_recovery(void)
+{
+    float external_angle = 20.0f;
+    Motor_Init_Config_s invalid = config_for(0u, 1u);
+    invalid.controller_setting_init_config.close_loop_type = ANGLE_LOOP;
+    invalid.controller_setting_init_config.outer_loop_type = ANGLE_LOOP;
+    invalid.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
+    TEST_CHECK(LKMotorInit(&invalid) == NULL);
+    invalid.controller_setting_init_config.angle_feedback_source = (Feedback_Source_e)2;
+    TEST_CHECK(LKMotorInit(&invalid) == NULL);
+    invalid.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
+    invalid.controller_setting_init_config.close_loop_type = ALL_THREE_LOOP;
+    invalid.controller_setting_init_config.speed_feedback_source = OTHER_FEED;
+    invalid.controller_param_init_config.other_angle_feedback_ptr = &external_angle;
+    TEST_CHECK(LKMotorInit(&invalid) == NULL);
+    TEST_CHECK(filter_count[0] == 0u && bus_start_count[0] == 0u);
+
+    Motor_Init_Config_s config = config_for(0u, 1u);
+    config.controller_setting_init_config.close_loop_type = ANGLE_LOOP;
+    config.controller_setting_init_config.outer_loop_type = ANGLE_LOOP;
+    config.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
+    config.controller_setting_init_config.speed_feedback_source = OTHER_FEED;
+    config.controller_param_init_config.other_angle_feedback_ptr = &external_angle;
+    config.controller_param_init_config.angle_PID = pid_config(2.0f, 1000.0f);
+    LKMotorInstance *motor = LKMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+    TEST_CHECK(motor->other_speed_feedback_ptr == NULL);
+    motor->measure.total_angle = 10.0f;
+    LKMotorSetRef(motor, 30.0f);
+
+    now_us = 0u;
+    LKMotorControl();
+    now_us = 1000u;
+    LKMotorControl();
+    TEST_CHECK(tx_frame[0][0] == 20u && tx_frame[0][1] == 0u);
+
+    external_angle = NAN;
+    now_us += 1000u;
+    LKMotorControl();
+    TEST_CHECK(motor->pid_clock.last_status == PID_BAD_ARGUMENT);
+    TEST_CHECK(tx_frame[0][0] == 0u && tx_frame[0][1] == 0u);
+    PID_State_t state = {0};
+    TEST_CHECK(PIDGetState(&motor->angle_PID, &state) == PID_OK);
+    TEST_CHECK(state.Err == 0.0f && state.Last_Err == 0.0f && state.ITerm == 0.0f &&
+               state.Iout == 0.0f && state.Pout == 0.0f && state.Dout == 0.0f &&
+               state.Output == 0.0f);
+
+    external_angle = 10.0f;
+    now_us += 1000u;
+    LKMotorControl();
+    TEST_CHECK(tx_frame[0][0] == 40u && tx_frame[0][1] == 0u);
+
+    motor->motor_settings.angle_feedback_source = (Feedback_Source_e)2;
+    now_us += 1000u;
+    LKMotorControl();
+    TEST_CHECK(motor->pid_clock.last_status == PID_BAD_ARGUMENT);
+    TEST_CHECK(tx_frame[0][0] == 0u && tx_frame[0][1] == 0u);
+    motor->motor_settings.angle_feedback_source = MOTOR_FEED;
+    now_us += 1000u;
+    LKMotorControl();
+    TEST_CHECK(tx_frame[0][0] == 40u && tx_frame[0][1] == 0u);
+
+    motor->motor_settings.close_loop_type = ANGLE_LOOP | SPEED_LOOP;
+    motor->motor_settings.outer_loop_type = SPEED_LOOP;
+    motor->motor_settings.speed_feedback_source = MOTOR_FEED;
+    now_us += 1000u;
+    LKMotorControl();
+    TEST_CHECK(motor->pid_clock.last_status == PID_NOT_INITIALIZED);
+    TEST_CHECK(tx_frame[0][0] == 0u && tx_frame[0][1] == 0u);
+    motor->motor_settings.close_loop_type = ANGLE_LOOP;
+    motor->motor_settings.outer_loop_type = ANGLE_LOOP;
+    now_us += 1000u;
+    LKMotorControl();
+    TEST_CHECK(tx_frame[0][0] == 40u && tx_frame[0][1] == 0u);
+}
+
+static void test_feedforward_overflow(void)
+{
+    float feedforward = FLT_MAX;
+    Motor_Init_Config_s config = config_for(0u, 1u);
+    config.controller_setting_init_config.close_loop_type = ANGLE_LOOP;
+    config.controller_setting_init_config.outer_loop_type = ANGLE_LOOP;
+    config.controller_setting_init_config.feedforward_flag = SPEED_FEEDFORWARD;
+    config.controller_param_init_config.speed_feedforward_ptr = &feedforward;
+    config.controller_param_init_config.angle_PID = pid_config(1.0f, FLT_MAX);
+    LKMotorInstance *motor = LKMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+    motor->measure.total_angle = 0.0f;
+    LKMotorSetRef(motor, FLT_MAX);
+    now_us = 0u;
+    LKMotorControl();
+    now_us = 1000u;
+    LKMotorControl();
+    TEST_CHECK(motor->pid_clock.last_status == PID_NUMERIC_ERROR);
+    TEST_CHECK(tx_frame[0][0] == 0u && tx_frame[0][1] == 0u);
+}
+
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
     if (strcmp(argv[1], "rollback") == 0)
         test_production_registration_rollback();
+    else if (strcmp(argv[1], "routing") == 0)
+        test_production_can_routing();
+    else if (strcmp(argv[1], "feedforward") == 0)
+        test_feedforward_paths_and_recovery();
+    else if (strcmp(argv[1], "feedback_failure") == 0)
+        test_feedback_failure_recovery();
     else
     {
-        TEST_CHECK(strcmp(argv[1], "routing") == 0);
-        test_production_can_routing();
+        if (strcmp(argv[1], "closed_loops") == 0)
+            test_closed_loop_feedback_selection();
+        else
+        {
+            TEST_CHECK(strcmp(argv[1], "feedforward_overflow") == 0);
+            test_feedforward_overflow();
+        }
     }
     return EXIT_SUCCESS;
 }

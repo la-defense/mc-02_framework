@@ -1,6 +1,6 @@
 /** @file HT04.h
-* @brief HT04 独立任务控制接口；注册及独立任务均未接入当前统一初始化失败检查。
-* 接收速度使用每电机独立的五点平均；计算失败时整帧反馈和离线计数保持原样。
+* @brief HT04 独立任务控制接口，公开各电机 PID、反馈和前馈存储。
+* 接收速度使用每电机独立的五点平均；闭环输入失败时当前周期发送零力矩。
  */
 #ifndef HT04_H
 #define HT04_H
@@ -53,10 +53,10 @@ typedef struct
     PIDInstance current_PID;
     PIDInstance speed_PID;
     PIDInstance angle_PID;
-    float *other_angle_feedback_ptr;
-    float *other_speed_feedback_ptr;
-    float *speed_feedforward_ptr;
-    float *current_feedforward_ptr;
+    float *other_angle_feedback_ptr; // 外部角度反馈，单位rad。
+    float *other_speed_feedback_ptr; // 外部速度反馈，单位rad/s。
+    float *speed_feedforward_ptr;    // 速度环前馈，按现有位置加入速度PID参考。
+    float *current_feedforward_ptr;  // 当前PID之前的输出前馈，沿用HT任务原位置。
     float pid_ref;
 
     Motor_Working_Type_e stop_flag; // 启停标志
@@ -75,17 +75,21 @@ typedef enum
     CMD_ZERO_POSITION = 0xfe // 将当前的位置设置为编码器零位
 } HTMotor_Mode_t;
 
-/** @brief 注册 HT04 电机及离线计数，初始化中发送使能和编码器置零命令。
-* @param[in,out] config 有效配置，会改写 CAN 回调及 id；检查空参数、内存及启用 PID 参数；容量和底层注册失败仍待处理。
-* @return 长期保存的对象，无释放入口，最多四个；随后调用 HTMotorControlInit() 创建独立控制任务。
-* @note 已包含实际 CAN 命令和 DWT 等待，先准备外设与计时；外部角度、速度反馈须用 rad、rad/s。
+/** @brief 注册 HT04 电机并准备所选 PID 与外部数据指针。
+* @param[in,out] config 有效配置；会改写 CAN 回调和 id。实际参与控制分支所需 PID 参数须有效，
+*        外部反馈和前馈启用时须提供非空指针。
+* @return 长期保存的对象；空参数、活动来源非法、所需指针缺失或 PID 参数检查失败时返回 NULL；
+*        成功后再调用 HTMotorControlInit() 创建任务。
+* @note 初始化包含真实 CAN 使能、编码器置零命令及 DWT 等待。配置中的外部角度、速度分别使用rad、rad/s；
+*       指针指向的存储须在任务运行期间有效。未参与分支的指针和 PID 配置可以为空或未初始化。
+*       底层 CAN／Daemon 注册失败处理及超过四个实例的回退仍由 MC02-0051 跟踪。
  */
 HTMotorInstance *HTMotorInit(Motor_Init_Config_s *config);
 
 /** @brief 保存目标供独立任务计算。
 * @param[in,out] motor 有效对象，不能为 NULL。
 * @param[in] ref 角度环目标用 deg，速度环目标用 deg/s；直接输出按 T_MIN～T_MAX 的协议力矩数值处理。
-* @note 数值须正常；real_current 由协议力矩区间还原，不能按变量名直接当作 A。
+* @note 数值须有限；否则控制任务本周期发送零力矩并清除 PID 历史。real_current 由协议力矩区间还原，不能按变量名直接当作 A。
  */
 void HTMotorSetRef(HTMotorInstance *motor, float ref);
 
@@ -107,6 +111,7 @@ void HTMotorEnable(HTMotorInstance *motor);
 /** @brief 改写最外层控制环，下一轮任务按设置计算。
 * @param[in,out] motor 有效实例，不能为 NULL。
 * @param[in] type 角度、速度或直接输出的控制类型，须与其余环配置匹配。
+* @note 初始化时未参与计算的 PID 可保持未初始化；切换到该环后若 PID 或所需数据无效，本周期写零力矩并清除环历史。
  */
 void HTMotorOuterLoop(HTMotorInstance *motor, Closeloop_Type_e type);
 

@@ -127,7 +127,13 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
 endif()
 add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test rollback)
 add_test(NAME production_lk_motor_bsp_can_routing COMMAND lk_motor_bsp_can_test routing)
+add_test(NAME production_lk_motor_bsp_can_closed_loops COMMAND lk_motor_bsp_can_test closed_loops)
+add_test(NAME production_lk_motor_bsp_can_feedforward COMMAND lk_motor_bsp_can_test feedforward)
+add_test(NAME production_lk_motor_bsp_can_feedback_failure COMMAND lk_motor_bsp_can_test feedback_failure)
+add_test(NAME production_lk_motor_bsp_can_feedforward_overflow COMMAND lk_motor_bsp_can_test feedforward_overflow)
 set_tests_properties(production_lk_motor_bsp_can_rollback production_lk_motor_bsp_can_routing
+  production_lk_motor_bsp_can_closed_loops production_lk_motor_bsp_can_feedforward
+  production_lk_motor_bsp_can_feedback_failure production_lk_motor_bsp_can_feedforward_overflow
   PROPERTIES TIMEOUT 10)
 # PID 本身只依赖标准 C；Linux 用真实线程检查不同实例同时计算。
 add_executable(pid_test pid_test.c ../../modules/algorithm/controller.c ../../modules/motor/motor_pid.c)
@@ -809,6 +815,21 @@ target_include_directories(ht_numeric_test PRIVATE ../../modules/motor/HTmotor
 target_link_libraries(ht_numeric_test PRIVATE mc02_numeric)
 add_test(NAME production_ht_numeric_feedback COMMAND ht_numeric_test)
 set_tests_properties(production_ht_numeric_feedback PROPERTIES TIMEOUT 10)
+
+# HT04 控制回归捕获生产任务入口，并用有限延时轮次检查反馈源和失败输出。
+add_executable(ht_control_test ht_control_test.c ../../modules/motor/HTmotor/HT04.c
+  ../../modules/motor/motor_pid.c ../../modules/algorithm/controller.c)
+target_include_directories(ht_control_test BEFORE PRIVATE ht_control_fakes ht_numeric_fakes
+  lk_motor_fakes motor_pid_fakes)
+target_include_directories(ht_control_test PRIVATE ../../modules/motor/HTmotor
+  ../../modules/motor ../../modules/daemon .)
+target_link_libraries(ht_control_test PRIVATE mc02_numeric)
+foreach(scenario IN ITEMS feedback_0 feedback_1 feedback_2 feedback_3
+    feedforward_1 feedforward_2 feedforward_3 init_failures runtime_recovery
+    runtime_speed_failure feedforward_overflow)
+  add_test(NAME production_ht_control_${scenario} COMMAND ht_control_test ${scenario})
+  set_tests_properties(production_ht_control_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
 
 # 模长与分配失败注入仅在支持链接包装的Linux运行，其余路径仍执行真实计算。
 if(UNIX AND NOT APPLE)
