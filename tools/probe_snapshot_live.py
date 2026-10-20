@@ -37,7 +37,10 @@ SYMBOL_VALUE_PATTERN = re.compile(r"^(?P<key>[a-z_]+)=0x(?P<value>[0-9a-fA-F]+)$
 MEMORY_VALUE_PATTERN = re.compile(
     r"^\s*0x(?P<address>[0-9a-fA-F]+):\s*(?:0x)?(?P<value>[0-9a-fA-F]+)\b"
 )
-MEMORY_COMMAND_PATTERN = re.compile(r"(?P<command>mdb|mdw) 0x(?P<address>[0-9a-f]{1,8}) 1\Z")
+MEMORY_COMMAND_PATTERN = re.compile(
+    r"(?P<command>mdb|mdw) 0x(?P<address>[0-9a-f]{1,8}) (?P<count>[1-9][0-9]*)\Z"
+)
+MEMORY_WORDS_PATTERN = re.compile(r"^\s*0x(?P<address>[0-9a-fA-F]{1,8}):(?P<values>.*)$")
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 MAX_RESPONSE_BYTES = 65536
 UINT32_MAX = 0xFFFFFFFF
@@ -89,6 +92,7 @@ ADC_SNAPSHOT_FIELDS = {
     "iwdg_reset_flag": SnapshotField("iwdg_reset_flag", "mdb", 8),
 }
 ADC_DIAGNOSTIC_LAYOUT = 0xADC10001
+ADC_DIAGNOSTIC_WORD_COUNT = 15
 
 
 def decode_adc(snapshot: dict[str, int]) -> dict:
@@ -333,6 +337,35 @@ def _parse_memory_value(output: str, expected_address: int, width_bits: int) -> 
     raise ProbeIOError(f"OpenOCD returned no value for RAM address 0x{expected_address:x}")
 
 
+def _parse_memory_words(output: str, start_address: int, count: int) -> list[int]:
+    """解析受限的 mdw 块读取；每行可包含多个连续的 32 位字。"""
+    values: list[int] = []
+    for line in output.replace("\r", "").splitlines():
+        line = line.strip()
+        if line.endswith(">"):
+            line = line[:-1].strip()
+        match = MEMORY_WORDS_PATTERN.fullmatch(line)
+        if not match:
+            continue
+        address = int(match.group("address"), 16)
+        tokens = match.group("values").split()
+        if address != start_address + len(values) * 4:
+            raise ProbeIOError("OpenOCD returned a non-contiguous ADC diagnostic block")
+        for token in tokens:
+            if token == ">":
+                break
+            if token.lower().startswith("0x"):
+                token = token[2:]
+            if not token or len(token) > 8 or not re.fullmatch(r"[0-9a-fA-F]+", token):
+                raise ProbeIOError("OpenOCD returned an invalid ADC diagnostic word")
+            if len(values) >= count:
+                raise ProbeIOError("OpenOCD returned too many ADC diagnostic words")
+            values.append(int(token, 16))
+    if len(values) != count:
+        raise ProbeIOError(f"OpenOCD returned {len(values)} of {count} ADC diagnostic words")
+    return values
+
+
 def _require_running(output: str, when: str) -> None:
     for line in output.splitlines():
         if re.search(r"\bmc02\.cpu0\b", line):
@@ -362,6 +395,8 @@ class OpenOCDTelnetClient:
         self.port = port
         self.timeout = timeout
         _validate_snapshot_addresses(allowed_addresses, fields)
+        self.fields = fields
+        self.allowed_addresses = dict(allowed_addresses)
         self.allowed_reads = frozenset(
             (field.command, allowed_addresses[key])
             for key, field in fields.items()
@@ -399,9 +434,25 @@ class OpenOCDTelnetClient:
         else:
             match = MEMORY_COMMAND_PATTERN.fullmatch(command)
             if match is None:
-                raise ValueError("only targets, mdb, and mdw single-value reads are allowed")
+                raise ValueError("only targets and bounded ELF-resolved memory reads are allowed")
             read = (match.group("command"), int(match.group("address"), 16))
-            if read not in self.allowed_reads:
+            count = int(match.group("count"))
+            single_read = count == 1 and read in self.allowed_reads
+            adc_block_read = (
+                self.fields is ADC_SNAPSHOT_FIELDS
+                and match.group("command") == "mdw"
+                and read[1] == self.allowed_addresses["adc_version"]
+                and count == ADC_DIAGNOSTIC_WORD_COUNT
+                and all(
+                    self.allowed_addresses[f"adc_{key}"] == read[1] + index * 4
+                    for index, key in enumerate((
+                        "version", "layout", "captured_ms", "status", "raw_vcc_in", "raw_key",
+                        "sample_sequence", "sample_timestamp_ms", "error_flags", "hal_error_code",
+                        "voltage_config_valid", "volts_bits", "vref_mv", "full_scale", "divider_milli",
+                    ))
+                )
+            )
+            if not single_read and not adc_block_read:
                 raise ValueError("memory reads must match an ELF-resolved symbol address and width")
         if self._socket is None:
             raise ProbeIOError("OpenOCD Telnet connection is closed")
@@ -486,19 +537,34 @@ def read_snapshot(
             host, port, timeout, allowed_addresses=addresses, fields=fields
         ) as client:
             _require_running(client.command("targets"), "before the snapshot")
-            for key, address in addresses.items():
-                command = _build_read_command(key, address, fields)
-                output = client.command(command)
-                snapshot[key] = _parse_memory_value(
-                    output, address, fields[key].width_bits
-                )
-                _require_running(client.command("targets"), f"after reading {key}")
             if fields is ADC_SNAPSHOT_FIELDS:
-                # 完整记录读完后再读版本；只重复已列入白名单的地址。
                 address = addresses["adc_version"]
-                output = client.command(_build_read_command("adc_version", address, fields))
-                snapshot["adc_version_after"] = _parse_memory_value(output, address, 32)
+                # 块中的首字就是版本号；连续读取后再单独复读，拒绝跨更新的混合数据。
+                block = client.command(f"mdw 0x{address:08x} {ADC_DIAGNOSTIC_WORD_COUNT}")
+                words = _parse_memory_words(block, address, ADC_DIAGNOSTIC_WORD_COUNT)
+                for index, key in enumerate((
+                    "version", "layout", "captured_ms", "status", "raw_vcc_in", "raw_key",
+                    "sample_sequence", "sample_timestamp_ms", "error_flags", "hal_error_code",
+                    "voltage_config_valid", "volts_bits", "vref_mv", "full_scale", "divider_milli",
+                )):
+                    snapshot[f"adc_{key}"] = words[index]
+                after = client.command(_build_read_command("adc_version", address, fields))
+                snapshot["adc_version_after"] = _parse_memory_value(after, address, 32)
+                for key in ("tick_ms", "iwdg_reset_flag"):
+                    field_address = addresses[key]
+                    output = client.command(_build_read_command(key, field_address, fields))
+                    snapshot[key] = _parse_memory_value(
+                        output, field_address, fields[key].width_bits
+                    )
                 _require_running(client.command("targets"), "after checking ADC version")
+            else:
+                for key, address in addresses.items():
+                    command = _build_read_command(key, address, fields)
+                    output = client.command(command)
+                    snapshot[key] = _parse_memory_value(
+                        output, address, fields[key].width_bits
+                    )
+                    _require_running(client.command("targets"), f"after reading {key}")
     except (OSError, ValueError) as error:
         if isinstance(error, ProbeIOError):
             raise

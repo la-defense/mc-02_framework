@@ -1,0 +1,37 @@
+{
+  "result": "not-qualified",
+  "reasons": [
+    "baseline-12-5-board-12-4: 12..24V board range not verified",
+    "baseline-12-5-board-12-4: incomplete error budget: missing meter accuracy percent, meter accuracy digits, reference minimum, reference maximum, ADC maximum counts",
+    "baseline-12-5-board-12-4: missing ADC maximum error source",
+    "baseline-12-5-board-12-4: missing current_a",
+    "baseline-12-5-board-12-4: missing meter accuracy source",
+    "baseline-12-5-board-12-4: missing meter calibration record",
+    "baseline-12-5-board-12-4: missing reference_v",
+    "baseline-12-5-board-12-4: unconfirmed applicable ADC maximum specification",
+    "baseline-12-5-board-12-4: unconfirmed resistor specification",
+    "baseline-12-5-board-12-4: unconfirmed schematic match",
+    "missing measurement points: [('down', 12.0), ('down', 12.5), ('down', 15.0), ('down', 18.0), ('down', 21.0), ('down', 24.0), ('reboot', 12.0), ('reboot', 18.0), ('reboot', 24.0), ('up', 12.0), ('up', 12.5), ('up', 15.0), ('up', 18.0), ('up', 21.0), ('up', 24.0)]"
+  ],
+  "points": [
+    {
+      "point_id": "baseline-12-5-board-12-4",
+      "phase": "baseline",
+      "setpoint_v": 12.5,
+      "records": 30,
+      "meter_v": 12.4,
+      "mean_v": 12.292591571807861,
+      "min_v": 12.28998851776123,
+      "max_v": 12.295527458190918,
+      "stdev_v": 0.0013194712352882995,
+      "mean_error_v": -0.10740842819213903,
+      "relative_error_percent": -0.8661970015495069,
+      "worst_error_v": 0.11001148223876989,
+      "circuit_limit_v": null,
+      "meter_error_v": null,
+      "measurement_error_allowance_v": null,
+      "qualification_reasons": "missing current_a; missing reference_v; missing meter calibration record; missing meter accuracy source; missing ADC maximum error source; unconfirmed schematic match; unconfirmed applicable ADC maximum specification; unconfirmed resistor specification; 12..24V board range not verified; incomplete error budget: missing meter accuracy percent, meter accuracy digits, reference minimum, reference maximum, ADC maximum counts",
+      "result": "not-qualified"
+    }
+  ]
+}

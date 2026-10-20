@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "scope": "exploratory_baseline_not_qualified",
+  "artifacts": [
+    {
+      "file": "baseline-12-5V.csv",
+      "bytes": 9367,
+      "sha256": "7738fd51f083b636a5e62e7ef3174170641a36162e73b22b1efb189e8ded1b48"
+    },
+    {
+      "file": "baseline-12-5V-attempts.jsonl",
+      "bytes": 15641,
+      "sha256": "88b6871825ad5db9200b49d6c72f977bf1c776de2d4bb6760244533d903657c1"
+    },
+    {
+      "file": "baseline-12-5V-session.json",
+      "bytes": 1838,
+      "sha256": "05521300531f3f7f9ab24af6248e0e2bcb7adc12485f9cddab0b14308811508b"
+    },
+    {
+      "file": "baseline-summary.csv",
+      "bytes": 840,
+      "sha256": "a4a04b0dd9b909a98d5a95cf384339e1aee12857b14861f7a8dc889778c44f00"
+    },
+    {
+      "file": "baseline-summary.json",
+      "bytes": 2123,
+      "sha256": "5ca5a3e0fe135195224bdf4eaf1b07b9c50cec0455516a224b49bcbb2454321d"
+    },
+    {
+      "file": "baseline-vin-error.png",
+      "bytes": 43725,
+      "sha256": "969ba7101f42a1ad661326f3b0ef67593ca4808503f858fc9f4a4a5d81e33242"
+    },
+    {
+      "file": "baseline-vin-error.svg",
+      "bytes": 36183,
+      "sha256": "8609ed93b1cc49850c6275f1289e71fc5b8b5ddf00fa03b1faf0c0bb41c2cc80"
+    },
+    {
+      "file": "com14-passive-report.json",
+      "bytes": 791,
+      "sha256": "1c5d5c7d8fe3a2515c4909b323e431768f34fadea6cadc5829d24d80f52ae0de"
+    },
+    {
+      "file": "imu-final-snapshots.jsonl",
+      "bytes": 691,
+      "sha256": "6c766df451b7093cb2fd14e709c771613a83f7a2fd6a9fea9b192d50946e3c8d"
+    },
+    {
+      "file": "safety-final-snapshots.jsonl",
+      "bytes": 817,
+      "sha256": "655bb960a9fe7a039ab931dc09d82edb4c659d0a89abb0cd7c5b9f12c46fbb9e"
+    }
+  ],
+  "serial_raw": {
+    "file": "com14-passive-raw.bin.gz",
+    "bytes_uncompressed": 559103,
+    "sha256_uncompressed": "f00ab3e8e5eb5ec9a84999179db5942efd4eacfe5ee03fc4db0af7b2633ecb24",
+    "bytes_gzip": 315851,
+    "sha256_gzip": "f17fcc4059242229eb903a8de7235f4113408cce64f17448ebf97982f03d95d4"
+  },
+  "firmware": {
+    "source_sha": "b4d97ba38b47fcdcf913d5ef7157b119002ccd68",
+    "elf_sha256": "beeaa77be1d271b0e04061a62e4069b123eae294a71699f8b8ab5d1363f911cb",
+    "flash_verify": "OpenOCD program verify reported success; wrapper then raised a post-success no_save_profile AttributeError",
+    "preflash_full_sha256": "f1c29e0f121723492d642a6c6b7c1a4327b75cd02c13ef1d79669644b5b39b09",
+    "preflash_parameter_sha256": "413f4da1afa9483a6bf156cb7124f05276927eb843ce5d040c85725257120de4",
+    "postflash_parameter_sha256": "413f4da1afa9483a6bf156cb7124f05276927eb843ce5d040c85725257120de4",
+    "parameter_bytes_equal": true
+  },
+  "measurement": {
+    "board_input_meter_v": 12.4,
+    "supply_setting_v": 12.5,
+    "current_limit_a": 2,
+    "current_reading_a": null,
+    "reference_reading_v": null,
+    "meter_accuracy_and_calibration": "unknown / no calibration record",
+    "board_revision": null,
+    "power_supply_model_and_full_range": null,
+    "decision": "not-qualified",
+    "session_sha256": "05521300531f3f7f9ab24af6248e0e2bcb7adc12485f9cddab0b14308811508b",
+    "records": 30,
+    "adc_raw_min": 22188,
+    "adc_raw_max": 22198,
+    "adc_raw_mean": 22192.7,
+    "adc_volts_min": 12.28998851776123,
+    "adc_volts_max": 12.295527458190918,
+    "adc_volts_mean": 12.292591571807861,
+    "adc_volts_stdev": 0.0013194712352882995,
+    "difference_from_reported_meter_v": -0.10740842819213903,
+    "relative_difference_percent": -0.8661970015495082,
+    "qualification_reasons": "missing current_a; missing reference_v; missing meter calibration record; missing meter accuracy source; missing ADC maximum error source; unconfirmed schematic match; unconfirmed applicable ADC maximum specification; unconfirmed resistor specification; 12..24V board range not verified; incomplete error budget: missing meter accuracy percent, meter accuracy digits, reference minimum, reference maximum, ADC maximum counts",
+    "report_result": "not-qualified"
+  }
+}

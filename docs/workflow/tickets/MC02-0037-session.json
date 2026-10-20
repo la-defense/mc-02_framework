@@ -5,7 +5,12 @@
     "revision": null,
     "schematic_match_confirmed": false,
     "verified_range_v": null,
-    "connections": ["LCD", "DR16", "DAPLink", "USB virtual serial"],
+    "connections": [
+      "LCD",
+      "DR16",
+      "DAPLink",
+      "USB virtual serial"
+    ],
     "probe_power_direction": "board_to_probe"
   },
   "meter": {
@@ -21,13 +26,21 @@
     "model": null,
     "baseline_v": 12.5,
     "current_limit_a": 2,
-    "user_reported_range_v": [12, 24],
-    "note": "可调范围包含12～24V，完整范围和型号未知"
+    "user_reported_range_v": [
+      12,
+      24
+    ],
+    "note": "可调范围包含12～24V，完整范围和型号未知",
+    "observed_board_input_v": 12.4,
+    "observed_current_a": null,
+    "observation_note": "User-reported board input reading 12.4 V; current not provided. Exploratory only; meter accuracy unknown."
   },
   "firmware": {
-    "source_sha": null,
-    "elf_sha256": null,
-    "flash_verified": false
+    "source_sha": "b4d97ba38b47fcdcf913d5ef7157b119002ccd68",
+    "elf_sha256": "beeaa77be1d271b0e04061a62e4069b123eae294a71699f8b8ab5d1363f911cb",
+    "flash_verified": true,
+    "verification_method": "OpenOCD program verify; wrapper returned an unrelated post-success AttributeError",
+    "verified_date": "2026-10-20"
   },
   "budget": {
     "source": null,

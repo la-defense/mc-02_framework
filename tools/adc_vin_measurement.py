@@ -181,6 +181,21 @@ def budget_limit(session: dict, measured_v: float, config: dict,
             reasons.append(f"unconfirmed {key}")
     if board.get("verified_range_v") != [12, 24]:
         reasons.append("12..24V board range not verified")
+    numeric_fields = (
+        ("meter accuracy percent", meter.get("accuracy_percent")),
+        ("meter accuracy digits", meter.get("accuracy_digits")),
+        ("reference minimum", budget.get("reference_min_v")),
+        ("reference maximum", budget.get("reference_max_v")),
+        ("top resistor", budget.get("top_ohm")),
+        ("bottom resistor", budget.get("bottom_ohm")),
+        ("top resistor tolerance", budget.get("top_tolerance")),
+        ("bottom resistor tolerance", budget.get("bottom_tolerance")),
+        ("ADC maximum counts", budget.get("adc_max_counts")),
+    )
+    missing_numeric = [name for name, value in numeric_fields if value is None]
+    if missing_numeric:
+        reasons.append("incomplete error budget: missing " + ", ".join(missing_numeric))
+        return None, None, reasons
     try:
         meter_error = (measured_v * finite(meter["accuracy_percent"], "meter percent", 0, 10) / 100
                        + finite(meter["accuracy_digits"], "meter digits", 0, 100)

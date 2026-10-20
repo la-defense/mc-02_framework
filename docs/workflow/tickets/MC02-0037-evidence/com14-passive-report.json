@@ -1,0 +1,28 @@
+{
+  "port": "COM14",
+  "baud": 115200,
+  "passive_receive_only": true,
+  "start_utc": "2026-10-20T12:08:31.699222+00:00",
+  "end_utc": "2026-10-20T12:09:37.008553+00:00",
+  "duration_s": 65.309,
+  "raw_bytes": 559103,
+  "raw_file": "D:\\RoboMasterRelated\\OpenSourseProject\\mc-02\\build\\vin-accuracy\\hardware-backup\\mc02-0037-com14-passive-20261020.bin",
+  "valid_status_frames": 12999,
+  "bad_crc_candidates": 0,
+  "nonfinite_quaternions": 0,
+  "mode_counts": {
+    "0": 12999
+  },
+  "first_finite_quaternion": [
+    0.9577369093894958,
+    -0.007406103890389204,
+    -0.010593191720545292,
+    -0.28143036365509033
+  ],
+  "last_finite_quaternion": [
+    0.9435200691223145,
+    -0.007595900911837816,
+    -0.008402046747505665,
+    -0.32599344849586487
+  ]
+}

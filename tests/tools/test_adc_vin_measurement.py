@@ -110,7 +110,7 @@ def write_point(directory: Path, session_bytes: bytes, elf_digest: str,
 
 
 class ADCRecordTests(unittest.TestCase):
-    def test_fixed_elf_fields_and_live_read_recheck_only_the_version(self):
+    def test_fixed_elf_fields_use_one_bounded_block_and_recheck_the_version(self):
         fields = probe.ADC_SNAPSHOT_FIELDS
         self.assertEqual(fields["adc_raw_vcc_in"].expression, "bsp_adc_diagnostic.raw_vcc_in")
         self.assertEqual(fields["adc_version"].width_bits, 32)
@@ -120,7 +120,7 @@ class ADCRecordTests(unittest.TestCase):
         server = probe_tests.FakeOpenOCDServer(
             addresses=addresses,
             values=server_values,
-            state_responses=["running"] * (len(addresses) + 2),
+            state_responses=["running", "running"],
         )
         try:
             result = probe.read_snapshot(addresses, "127.0.0.1", server.port, 1.0, fields)
@@ -128,10 +128,54 @@ class ADCRecordTests(unittest.TestCase):
             server.close()
         self.assertEqual(result["adc_version_after"], result["adc_version"])
         reads = [c for c in server.commands if c.startswith(("mdw ", "mdb "))]
-        self.assertEqual(len(reads), len(fields) + 1)
-        self.assertEqual(sum(c.startswith("mdw ") for c in reads), len(fields))
+        self.assertEqual(len(reads), 4)
+        self.assertEqual(reads, [
+            f"mdw 0x{addresses['adc_version']:08x} 15",
+            f"mdw 0x{addresses['adc_version']:08x} 1",
+            f"mdw 0x{addresses['tick_ms']:08x} 1",
+            f"mdb 0x{addresses['iwdg_reset_flag']:08x} 1",
+        ])
+        self.assertEqual(server.commands[0], "targets")
+        self.assertEqual(server.commands[-1], "targets")
         self.assertFalse(any(c in {"halt", "reset", "resume"} for c in server.commands))
         self.assertAlmostEqual(probe.decode_adc(result)["adc_volts"], 12.1, places=6)
+
+    def test_fixed_elf_adc_block_rejects_a_version_change_during_read(self):
+        fields = probe.ADC_SNAPSHOT_FIELDS
+        record = adc_record()
+        addresses = {key: 0x24001000 + index * 4 for index, key in enumerate(fields)}
+        server = probe_tests.FakeOpenOCDServer(
+            addresses=addresses,
+            values={key: record[key] for key in fields},
+            state_responses=["running", "running"],
+            update_on_bulk={addresses["adc_version"]: 4},
+        )
+        try:
+            result = probe.read_snapshot(addresses, "127.0.0.1", server.port, 1.0, fields)
+        finally:
+            server.close()
+        self.assertEqual(result["adc_version"], 2)
+        self.assertEqual(result["adc_version_after"], 4)
+        with self.assertRaisesRegex(probe.ProbeIOError, "changed during reading"):
+            probe.decode_adc(result)
+
+    def test_adc_block_read_is_limited_to_the_complete_elf_resolved_record(self):
+        fields = probe.ADC_SNAPSHOT_FIELDS
+        addresses = {key: 0x24001000 + index * 4 for index, key in enumerate(fields)}
+        server = probe_tests.FakeOpenOCDServer(addresses=addresses,
+            values={key: 0 for key in fields})
+        try:
+            with probe.OpenOCDTelnetClient(
+                "127.0.0.1", server.port, timeout=1.0,
+                allowed_addresses=addresses, fields=fields,
+            ) as client:
+                with self.assertRaises(ValueError):
+                    client.command(f"mdw 0x{addresses['adc_version']:08x} 14")
+                with self.assertRaises(ValueError):
+                    client.command("mdw 0x24000000 15")
+        finally:
+            server.close()
+        self.assertEqual(server.commands, [])
 
     def test_decoder_accepts_zero_raw_and_twenty_ms_boundary(self):
         record = adc_record(raw_vcc=0, tick=120, captured=120, timestamp=100)
@@ -272,6 +316,9 @@ class MeasurementToolTests(unittest.TestCase):
         self.assertIsNone(missing_meter)
         self.assertTrue(any("missing meter calibration record" in reason for reason in missing))
         self.assertTrue(any("unconfirmed schematic match" in reason for reason in missing))
+        self.assertTrue(any("incomplete error budget: missing meter accuracy percent" in reason
+                            for reason in missing))
+        self.assertFalse(any("NoneType" in reason for reason in missing))
 
     def test_report_rejects_wrong_identity_raw_mismatch_and_incomplete_points(self):
         session = qualified_session(self.elf_digest)

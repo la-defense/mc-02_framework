@@ -166,7 +166,8 @@ class RemoteProfileTests(unittest.TestCase):
 
 
 class FakeOpenOCDServer:
-    def __init__(self, state_responses=None, initial_delay=0.0, addresses=None, values=None):
+    def __init__(self, state_responses=None, initial_delay=0.0, addresses=None, values=None,
+                 update_on_bulk=None):
         self.commands = []
         self.initial_delay = initial_delay
         self.addresses = addresses if addresses is not None else TEST_ADDRESSES
@@ -177,6 +178,7 @@ class FakeOpenOCDServer:
         self.memory_by_address = {
             address: self.values[key] for key, address in self.addresses.items()
         }
+        self.update_on_bulk = dict(update_on_bulk or {})
 
         owner = self
 
@@ -196,14 +198,29 @@ class FakeOpenOCDServer:
                         state = owner.state_responses.pop(0)
                         response = f"0* mc02.cpu0 cortex_m little mc02.cpu {state}\r\n"
                     else:
-                        match = re.fullmatch(r"(?:mdw|mdb) (0x[0-9a-f]+) 1", command)
+                        match = re.fullmatch(r"(mdw|mdb) (0x[0-9a-f]+) ([1-9][0-9]*)", command)
                         if not match:
                             response = "invalid command\r\n"
                         else:
-                            address = int(match.group(1), 16)
-                            value = owner.memory_by_address[address]
-                            width = 2 if command.startswith("mdb") else 8
-                            response = f"{match.group(1)}: {value:0{width}x}\r\n"
+                            read_command = match.group(1)
+                            address = int(match.group(2), 16)
+                            count = int(match.group(3))
+                            if count == 1:
+                                value = owner.memory_by_address[address]
+                                width = 2 if read_command == "mdb" else 8
+                                response = f"0x{address:08x}: {value:0{width}x}\r\n"
+                            elif read_command == "mdw":
+                                words = [owner.memory_by_address[address + index * 4]
+                                         for index in range(count)]
+                                lines = []
+                                for base_index in range(0, count, 8):
+                                    base = address + base_index * 4
+                                    row = " ".join(f"{word:08x}" for word in words[base_index:base_index + 8])
+                                    lines.append(f"0x{base:08x}: {row}")
+                                response = "\r\n".join(lines) + "\r\n"
+                                owner.memory_by_address.update(owner.update_on_bulk)
+                            else:
+                                response = "invalid command\r\n"
                     self.wfile.write(response.encode("ascii") + b"> ")
                     self.wfile.flush()
 
