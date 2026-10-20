@@ -194,7 +194,7 @@
 - [x] **LCD-10** [enhancement] [wontfix] 不预先扩充未使用的中文字库；当新增 UI 标签确实需要新字符时，随该 UI 任务生成并验证字模。
 - [ ] **PARAM-03** [enhancement] [ready-for-agent] 将保留参数与唯一车型配置、统一参数描述对齐。验收：逐项记录旧 CAN／底盘参数段的保留、接入或废弃理由；保留值经版本／单位／范围及关联约束验证，失败保留旧值，加载／保存／回退与重启生效可验证。关联 APP-10、MC02-0054、MC02-0064，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **PARAM-04** [enhancement] [needs-triage] 评估在 SAFE 状态预擦除非活动 Flash 参数区是否有实际收益。验收：测量提交耗时和擦写风险；若实施，证明掉电回退和写入时限不退化，否则记录不实施理由并关闭。
-- [ ] **LOG-04** [enhancement] [needs-triage] 评估是否把格式串与截断告警升级为编译错误。验收：确认 GCC 版本兼容后启用目标告警选项，工程与主机测试构建无格式错误；若会阻断受支持工具链，记录替代门禁。
+- [x] **LOG-04** [enhancement] 强化格式串与文字长度编译检查。验收完成：自有C源码及主机测试启用选定格式告警并作为错误，第三方策略保持原样；PrintLog／UICharDraw／OLED_printf补齐格式属性，关闭彩色宏仍检查类型且不求值参数、不保留发送引用。ARM GCC 10.3.1、WSL GCC 11.4、MinGW GCC 11.5通过正反例核对；MinGW三个长度诊断缺口如实记录，以必要ARM／WSL检查补充。WSL Debug／Release各187/187、Windows支持子集各123/123、日志ASan／UBSan 5/5通过；实际编译命令、旧Makefile、六种禁热固件、LOG_TEST=1、ELF隔离、非法配置及增量检查通过，常规固件Flash／RAM变化均为0。仅本机验收，见[任务记录](../docs/workflow/tickets/LOG-04.md)、[教学10](../docs/学习笔记/10-可变参数与格式串安全.md#11-让编译器检查可变参数log-04)和[教学18](../docs/学习笔记/18-一条日志的旅程.md#11-编译通过与文字完整是两件事log-04)。
 - [ ] **LOG-06** [enhancement] [needs-info] 实现有限持久崩溃归档，需求已确认。验收：先落实介质、分区和容量，异常仅记录 RAM，重启后在维护授权与总期限内归档；掉电／CRC／擦写失败有回退和诊断，失败不阻止核心恢复，旧记录使用匹配构建 ELF／map 解析。关联 MC02-0063、MC02-0067、MC02-0068，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **LCD-14** [bug] [ready-for-agent] 统一 LCD 页面和冻结状态所有者。验收：lcd_task／lcd_ui 不维护冲突副本，页面／冻结／重绘一致；新严重故障解除冻结并跳故障页，优先级取自 safety／健康状态；清提示不改许可或触发维护，关联0098。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **LCD-15** [bug] [needs-triage] 核查 LCD 连接和 ADC 按键采样抖动的物理根因。验收：记录接线、供电和 ADC 原始值；根因修复后空闲值波动达到项目定义阈值，且按键不会误触发。

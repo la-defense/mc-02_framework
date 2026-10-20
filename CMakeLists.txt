@@ -18,6 +18,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 指定工程名称和语言类型
 project(Basic_Framework_MC02 C ASM)
+include(cmake/mc02_format_diagnostics.cmake)
+mc02_check_format_diagnostics()
 
 set(MC02_PROFILE "bench_safe" CACHE STRING "固件运行配置")
 set_property(CACHE MC02_PROFILE PROPERTY STRINGS bench_safe robot)
@@ -259,6 +261,7 @@ endif ()
 
 # build binary and hex file
 add_executable(${MC02_OUTPUT_BASENAME}.elf  ${SOURCES} ${ASM_SOURCES} ${LINKER_SCRIPT})
+mc02_apply_format_diagnostics(${MC02_OUTPUT_BASENAME}.elf)
 mc02_add_dsp(mc02_dsp FALSE)
 target_link_libraries(${MC02_OUTPUT_BASENAME}.elf PRIVATE mc02_dsp m)
 

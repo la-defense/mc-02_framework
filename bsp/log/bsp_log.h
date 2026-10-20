@@ -11,19 +11,15 @@
 #include <stdint.h>
 #include <string.h> /* LOG_PROTO 里用 memcpy 拼接结尾的换行+复位色码 */
 #include "float_to_string.h"
+#include "format_check.h"
 
 #define BUFFER_INDEX 0
 
-/**
- * @brief 日志系统初始化
- *
+/** @brief 初始化默认RTT通道；在启动阶段串行调用，先于普通日志输出。
+ * @note 无返回状态；调用完成不证明探针或查看器已经连接。
  */
 void BSPLogInit();
 
-/**
- * @brief 日志功能原型,供下面的LOGI,LOGW,LOGE等使用
- *
- */
 // 先由 snprintf 处理全部参数，再写出纯文本；结尾换行和颜色码另行追加，避免混用格式化规则。
 // 每次调用在任务栈上使用 256 字节，超长内容只保留数组放得下的部分。
 // 日志数组还须容纳诊断汇总行，保留 256 字节，并为末尾换行及颜色复原码留空。
@@ -34,6 +30,13 @@ void BSPLogInit();
 _Static_assert(sizeof("\r\n" RTT_CTRL_RESET) <= LOG_BODY_TAIL,
                "LOG_BODY_TAIL 放不下结尾的换行+复位色码");
 
+/** @brief 在局部数组格式化一行并追加换行、颜色复原码，再尝试交给RTT。
+ * @param[in] type 可读的零结尾类型文字，生命周期至少覆盖本次调用。
+ * @param[in] color 可读的零结尾颜色码，生命周期至少覆盖本次调用。
+ * @param[in] format printf格式字面量；后续实参类型和数量必须匹配。
+ * @note 先BSPLogInit；每次使用256字节局部数组，无返回状态，超长时只交付能放下的部分。
+ *       格式化失败仅写换行和颜色复原码。编译检查不能替代动态长度检查，不证明查看器已显示。
+ */
 #define LOG_PROTO(type, color, format, ...)                             \
         do {                                                            \
             char _log_buf[LOG_BUF_SIZE];                                \
@@ -62,13 +65,15 @@ _Static_assert(sizeof("\r\n" RTT_CTRL_RESET) <= LOG_BODY_TAIL,
  *  有颜色格式日志输出,建议使用这些宏来输出日志
  *  @attention newlib-nano 默认**不带**浮点格式化(库里的 `_printf_float` 不会被链进来),
  *             本工程已在 CMake 里加了 `-u _printf_float` 把它显式链上, 所以 %f 能正常打印;
- *             但浮点格式化比较慢(几十 µs 量级), 热路径上仍建议放大成整数打印(如 temp_x100)。
- *  @note 在release版本上车使用时,与makefile中添加的宏DISABLE_LOG_SYSTEM一起使用,可以关闭日志系统
+ *             本轮没有测量板上格式化耗时，实时路径须按实际预算选择格式。
+ *  @note DISABLE_LOG_SYSTEM仅关闭下面三个彩色宏；LOG和PrintLog仍可直接输出。
+ *        关闭宏仍编译检查格式，但不求值参数、不执行发送。
  */
 #if DISABLE_LOG_SYSTEM
-#define LOGINFO(format, ...) 
-#define LOGWARNING(format, ...) 
-#define LOGERROR(format, ...) 
+// 保留可被编译器检查的调用；常假分支不求值参数，也不生成发送代码。
+#define LOGINFO(format, ...) do { if (0) { LOG_PROTO("I:", RTT_CTRL_TEXT_BRIGHT_GREEN, format, ##__VA_ARGS__); } } while (0)
+#define LOGWARNING(format, ...) do { if (0) { LOG_PROTO("W:", RTT_CTRL_TEXT_BRIGHT_YELLOW, format, ##__VA_ARGS__); } } while (0)
+#define LOGERROR(format, ...) do { if (0) { LOG_PROTO("E:", RTT_CTRL_TEXT_BRIGHT_RED, format, ##__VA_ARGS__); } } while (0)
 #else
 // information level
 #define LOGINFO(format, ...) LOG_PROTO("I:", RTT_CTRL_TEXT_BRIGHT_GREEN, format, ##__VA_ARGS__)
@@ -99,16 +104,19 @@ uint8_t LogRateLimitAllow(LogRateLimit_t *rl, uint32_t period_ms);
 * @param[in] fmt 有效 printf 格式串，不能为 NULL。
 * @param[in] ... 与格式串对应的参数。
 * @return 格式化所需字节数，不含结尾 0；负值表示格式化失败且不输出。
-* @note 文本超过 255 字节时只输出前面放得下的部分，返回值仍为完整所需长度，不代表实际写出数量。
+* @note 先成功BSPLogInit，仅从任务调用；格式及所引用对象须在调用期间有效。
+*       文本超过255字节时只输出前面放得下的部分，返回值仍为完整所需长度，不代表实际写出数量。
+*       编译属性检查已知格式的参数类型，不能证明动态文字完整；不得把外部文字直接用作格式串。
  */
-int PrintLog(const char *fmt, ...);
+int PrintLog(const char *fmt, ...) MC02_PRINTF_FORMAT(1, 2);
 
-// 默认关闭；开启后由 Daemon 周期打印多种参数和超长行，检查格式化结果及长度处理。
+// 默认关闭；开启后由Daemon打印合法混排自测，超长输入由主机测试验证。
 #ifndef LOG_TEST
 #define LOG_TEST 0
 #endif
 
 #if LOG_TEST
+/** @brief 初始化RTT后从Daemon任务输出合法混排自测；无返回状态，不证明查看器显示。 */
 void LogSelfTest(void);
 #endif
 

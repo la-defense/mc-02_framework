@@ -14,6 +14,7 @@
 #ifndef OLED_H
 #define OLED_H
 #include <stdint.h>
+#include "format_check.h"
 
 // OLED 的 I2C 从机地址。
 #define OLED_I2C_ADDRESS 0x78
@@ -89,12 +90,13 @@ extern void OLED_show_char(uint8_t row, uint8_t col, uint8_t chr);
 extern void OLED_show_string(uint8_t row, uint8_t col, uint8_t *chr);
 
 /** @brief 格式化文字并绘制在同一行的缓冲区中；不会自动刷新屏幕。
-* @param row 起始行，范围0～4。
-* @param col 起始列，范围0～20。
-* @param fmt printf 格式字符串，后续参数按格式提供。
+* @param[in] row 起始行，范围0～4，超范围直接返回。
+* @param[in] col 起始列，范围0～20，超范围直接返回。
+* @param[in] fmt 非空可读printf格式字符串，后续参数按格式提供，所引用对象保持可读至调用结束。
 * @note 当前行剩余字符以外的内容会被丢弃；格式化结果须连结束标记不超过128字节。
+*       编译属性只检查已知格式的参数，当前实现仍要求调用方保证长度；运行时容量修复由MISC-06跟踪。
  */
-extern void OLED_printf(uint8_t row, uint8_t col, const char *fmt, ...);
+extern void OLED_printf(uint8_t row, uint8_t col, const char *fmt, ...) MC02_PRINTF_FORMAT(3, 4);
 
 
 /** @brief 按页发送整个128×64显存缓冲区到 OLED 面板。 */

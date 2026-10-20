@@ -17,10 +17,14 @@ import time
 
 ROOT_FILES = {
     "CMakeLists.txt",
+    # 配置阶段的格式正反例读取这两份文件，隔离副本也必须提供。
+    "Makefile",
+    "tools/workflow/check_format_diagnostics.py",
     "STM32H723VGTx_FLASH.ld",
     "startup_stm32h723xx.s",
 }
 SOURCE_PREFIXES = (
+    "tests/host/log_fakes/",
     "Core/",
     "USB_DEVICE/",
     "Drivers/STM32H7xx_HAL_Driver/",

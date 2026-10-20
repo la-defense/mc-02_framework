@@ -17,6 +17,7 @@
 #include "stdint.h"
 #include "referee_protocol.h"
 #include "rm_referee.h"
+#include "format_check.h"
 
 /** @brief UI发送身份；由新鲜的0x0201裁判数据重新计算，不能来自可变接收对象。 */
 typedef struct {
@@ -186,7 +187,7 @@ UIStatus_t UIIntDraw(Graph_Data_t *graph, const char *graphname, uint32_t Graph_
 * @note 构图失败保持原对象；不进行发送。
 */
 UIStatus_t UICharDraw(String_Data_t *graph, const char *graphname, uint32_t Graph_Operate, uint32_t Graph_Layer, uint32_t Graph_Color,
-                uint32_t Graph_Size, uint32_t Graph_Width, uint32_t Start_x, uint32_t Start_y, const char *fmt, ...);
+                uint32_t Graph_Size, uint32_t Graph_Width, uint32_t Start_x, uint32_t Start_y, const char *fmt, ...) MC02_PRINTF_FORMAT(10, 11);
 
 /** @brief 把1、2、5或7个检查通过的图形作为一帧提交。
  * @param[in] _id 非空，机器人及选手端ID合法且相互对应，可读至返回。

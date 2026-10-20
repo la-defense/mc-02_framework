@@ -329,6 +329,10 @@ all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET
 # list of objects
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
 vpath %.c $(sort $(dir $(C_SOURCES)))
+# 与CMake共用同一组格式检查行为；仅自有C对象增加选项，不改变厂商源文件策略。
+MC02_FORMAT_FLAGS = -Wformat=2 -Wformat-overflow=2 -Wformat-truncation=2 -Werror=format -Werror=format-security -Werror=format-nonliteral -Werror=format-overflow -Werror=format-truncation
+MC02_OWN_C_SOURCES = $(filter bsp/% modules/% application/% Core/Src/% USB_DEVICE/%,$(C_SOURCES))
+$(addprefix $(BUILD_DIR)/,$(notdir $(MC02_OWN_C_SOURCES:.c=.o))): CFLAGS += $(MC02_FORMAT_FLAGS)
 # list of ASM program objects
 OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.s=.o)))
 vpath %.s $(sort $(dir $(ASM_SOURCES)))
