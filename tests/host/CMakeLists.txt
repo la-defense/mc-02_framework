@@ -160,6 +160,37 @@ set_tests_properties(production_lk_motor_bsp_can_rollback production_lk_motor_bs
   production_lk_motor_bsp_can_closed_loops production_lk_motor_bsp_can_feedforward
   production_lk_motor_bsp_can_feedback_failure production_lk_motor_bsp_can_feedforward_overflow
   PROPERTIES TIMEOUT 10)
+
+# DM 测试链接生产电机、FDCAN 注册和 Daemon；测试仅替换 HAL、RTOS、时间与日志。
+add_executable(dm_motor_test dm_motor_test.c ../../modules/motor/DMmotor/dmmotor.c
+  ../../bsp/can/bsp_can.c ../../modules/daemon/daemon.c)
+target_include_directories(dm_motor_test BEFORE PRIVATE dm_motor_fakes lk_motor_can_fakes .)
+target_include_directories(dm_motor_test PRIVATE ../../modules/motor/DMmotor ../../modules/motor
+  ../../modules/algorithm ../../modules/daemon ../../modules/alarm ../../bsp/can
+  ../../modules/message_center ../../modules)
+# 生产 CAN 中已有一个无符号值与0比较的告警；只在此集成目标内屏蔽该既有告警。
+target_compile_options(dm_motor_test PRIVATE -Wall -Wextra -Werror -Wno-type-limits
+  -ffunction-sections -fdata-sections -fno-builtin-malloc -fno-builtin-free)
+target_link_options(dm_motor_test PRIVATE -Wl,--gc-sections)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
+   (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE))
+  target_compile_definitions(dm_motor_test PRIVATE DM_TEST_ALLOC_WRAP=1)
+  target_link_options(dm_motor_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=free)
+endif()
+if(UNIX)
+  find_package(Threads REQUIRED)
+  target_compile_definitions(dm_motor_test PRIVATE DM_TEST_THREADS=1)
+  target_link_libraries(dm_motor_test PRIVATE Threads::Threads)
+endif()
+foreach(scenario IN ITEMS init config rollback frames reverse edges commands instances quarantine submit-stop resources)
+  add_test(NAME production_dm_motor_${scenario} COMMAND dm_motor_test ${scenario})
+  set_tests_properties(production_dm_motor_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+if(UNIX)
+  add_test(NAME production_dm_motor_threads COMMAND dm_motor_test threads)
+  set_tests_properties(production_dm_motor_threads PROPERTIES TIMEOUT 10)
+endif()
+
 # PID 本身只依赖标准 C；Linux 用真实线程检查不同实例同时计算。
 add_executable(pid_test pid_test.c ../../modules/algorithm/controller.c ../../modules/motor/motor_pid.c)
 target_include_directories(pid_test PRIVATE ../../modules/algorithm ../../modules/motor)
