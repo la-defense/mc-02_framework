@@ -40,12 +40,12 @@ CMake增量检查在`/home/mc02/build/ref03-regeneration/run-20261021-210545-rhc
 
 | 配置 | Flash字节 | 相对基线 | RAM字节 | 相对基线 |
 |---|---:|---:|---:|---:|
-| bench_safe Debug | 198292 | +80 | 111100 | +0 |
-| bench_safe RelWithDebInfo | 189436 | +120 | 111052 | +0 |
-| robot Debug | 229448 | +1148 | 119720 | +440 |
-| robot RelWithDebInfo | 218504 | +1156 | 119696 | +440 |
-| rcdiag Debug | 200520 | +104 | 114268 | +0 |
-| rcdiag RelWithDebInfo | 191556 | +132 | 114220 | +0 |
+| bench_safe Debug | 198316 | +104 | 111100 | +0 |
+| bench_safe RelWithDebInfo | 189452 | +136 | 111052 | +0 |
+| robot Debug | 229472 | +1172 | 119720 | +440 |
+| robot RelWithDebInfo | 218520 | +1172 | 119696 | +440 |
+| rcdiag Debug | 200544 | +128 | 114268 | +0 |
+| rcdiag RelWithDebInfo | 191572 | +148 | 114220 | +0 |
 
 ## 专用裸板回归入口
 
@@ -66,3 +66,15 @@ CMake增量检查在`/home/mc02/build/ref03-regeneration/run-20261021-210545-rhc
 实质更新[学习笔记03](../../学习笔记/03-非阻塞通信与CAN收发技术细节.md)、[学习笔记20](../../学习笔记/20-SP固定帧与CRC校验.md)、[索引](../../学习笔记/README.md)和[裁判模块说明](../../../modules/referee/referee.md)。MC02-0022仍需通用接收／业务接口，MC02-0095仍需车型布局、真实来源与自动重绘。本机和裸板串口均不保证对端接收、客户端显示、精确波形或其他发送者的额度；停止失败的真实DMA物理时序仍需专门台架。
 
 复盘：共享预算放到唯一复制发送入口，调用方不再分别维护序号与CRC；保留原四条存储和任务。验收区分入队、实际启动和本机完成，避免把等待超期误当作客户端显示失败。
+
+
+## 首次上板发现与启动修复
+
+软件提交`45f9c956df289fdda54688d9cb428114fb1dc1b5`的refdiag ELF SHA-256为`2ad749c58332d37f5417d2923c6589e879f3dc36989a8973fc50cdc950d931cf`。技能报告program／verify成功后，在缓存保存阶段因缺失no_save_profile参数退出；未重复烧录，改用独立verify_image确认204244字节一致。参数回读与烧录前逐字节一致，SHA-256保持不变。
+
+初始被动检查未通过：启动诊断stage=3、module=8、reason=2、resource=8，即UART发送任务创建失败，INS尚未启动。没有发送负载。精确复现采用生产uart_tx_worker_test在PRIMASK=1下创建任务，修复前因没有调用RTOS创建而失败。
+
+修复仅调整USARTTxTaskInit的启动检查：调度器启动前Thread模式允许PRIMASK=1，保持原状态；ISR、BASEPRI或FAULTMASK非零拒绝。运行期发送检查不放宽。新增回归覆盖关中断的失败重试与成功、ISR拒绝、中断状态保持。重新执行软件验收后，以新的准确提交和ELF更新板上固件；最终硬件证据另补。第一次失败的基线记录保留，不能计入60秒通过观察。
+
+
+启动修复后的WSL Debug／Release仍各275/275，消毒器66/66；六种常规ARM、UI关闭、备用UART及诊断重新构建通过，隔离和编译选项检查通过。二次烧录前完整回读当前失败诊断固件1MiB，SHA-256为`21c4c1bcd7321b194c44dc48867c91119a0e57ad26c23e0a9e574fd7674dd83e`，参数切片与初始备份仍逐字节一致；未先运行任何串口负载。

@@ -494,3 +494,10 @@ DMA搬完只说明内存搬运结束，UART的TC通知才说明本机这次发�
 [`RefereeGetTxState()`](../../modules/referee/referee_tx.h)复制UART容量、累计事件及最近限流原因；它不推进发送。UI仍保留115ms实际启动节奏和100ms总期限。限流计入期限，尚未启动即超期的UI帧保留刷新标记和初始化步骤，下轮用最新内容再尝试；启动错误、已经开始后的错误／超时或串口隔离仍需显式重新初始化。
 
 [`referee_budget_test.c`](../../tests/host/referee_budget_test.c)运行真实CRC、裁判解析、UI、UART队列与H723后端模型，覆盖FIFO、窗口边界、身份切换、超期、隔离及线程提交。专用[`采集工具`](../../tools/referee_budget_capture.py)保存完整线上字节和MCU只读记录；PC到达时间不作为线端精确时序。具体软件与裸板证据分开记录在[REF-03](../workflow/tickets/REF-03.md)。
+
+
+### 创建任务与运行提交不能共用同一上下文检查
+
+REF-03首次裸板启动记录为阶段TASKS、模块TASKS、原因TASK_CREATE、资源UART_TX，INS尚未运行。原因是`RobotInit()`先保存PRIMASK并关中断，再调用`OSTaskInit()`创建任务；原`USARTTxTaskInit()`误用运行期检查，看到PRIMASK=1就拒绝，根本没有尝试创建任务。
+
+现在只有启动前的任务创建入口允许Thread模式PRIMASK=1，并保持返回后的中断状态；ISR、BASEPRI／FAULTMASK非零仍拒绝。运行期提交、取消、查询和发送推进仍要求普通任务、中断开启，不能因此在启动阶段开始传输。生产任务入口的主机回归在PRIMASK=1下先验证创建失败与重试，再验证成功、重复调用和中断状态保持；修复前该检查失败，修复后通过。这个裸板发现说明：替身返回“创建成功”不能证明实际启动上下文也被接受。

@@ -18,7 +18,9 @@ static void UARTTxTask(void const *argument)
 }
 uint8_t USARTTxTaskInit(void)
 {
-    if (!USARTTxTaskContext())
+    // RobotInit在调度器启动前关中断创建所有任务，PRIMASK=1在此处合法。
+    // 运行期提交仍要求普通任务且中断开启；这里不复用该运行检查。
+    if (__get_IPSR()!=0u || __get_BASEPRI()!=0u || __get_FAULTMASK()!=0u)
         return 0u;
     if (uart_tx_task != NULL)
         return 1u;
