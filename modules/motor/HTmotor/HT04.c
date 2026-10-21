@@ -1,4 +1,4 @@
-/** @file HT04.c
+﻿/** @file HT04.c
 * @brief 解码 HT04 协议，并用每电机独立任务计算所选控制环及发送力矩字段。
  */
 #include "HT04.h"
@@ -131,11 +131,8 @@ static void HTMotorDecode(CANInstance *motor_can)
 static void HTMotorLostCallback(void *motor_ptr)
 {
     HTMotorInstance *motor = (HTMotorInstance *)motor_ptr;
-    static LogRateLimit_t rl_ht_lost = {0};
-    if (LogRateLimitAllow(&rl_ht_lost, 1000u))
-        LOGWARNING("[ht_motor] 电机离线: id %d (累计 %lu 次, 期间限速 %lu 条)",
-                   (int)motor->motor_can_instace->tx_id,
-                   (unsigned long)rl_ht_lost.total, (unsigned long)rl_ht_lost.dropped);
+    BSP_LOG_EVENT_1(EV_MODULES_MOTOR_HTMOTOR_HT04_C_01,
+                    BSP_LOG_FIELD_I32((int)motor->motor_can_instace->tx_id));
     if (++motor->lost_cnt % 10 != 0)
         HTMotorSetMode(CMD_MOTOR_MODE, motor); // 尝试重新让电机进入控制模式
 }

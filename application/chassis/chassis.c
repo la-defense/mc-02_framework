@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file chassis.c
  * @author NeoZeng neozng1@hnu.edu.cn
  * @brief 底盘应用,负责接收robot_cmd的控制命令并根据命令进行运动学解算,得到输出
@@ -98,7 +98,7 @@ uint8_t ChassisInit(void)
 #if MC02_ENABLE_REFEREE_UI
     // UI绑定只服务显示，失败时不撤销已经独立注册的裁判接收。
     UIStatus_t ui_status = UITaskInit(&ui_data);
-    if (ui_status != UI_OK) LOGWARNING("[chassis] referee UI binding failed: %d", (int)ui_status);
+    if (ui_status != UI_OK) BSP_LOG_EVENT_1(EV_APPLICATION_CHASSIS_CHASSIS_C_01, BSP_LOG_FIELD_I32((int)ui_status));
 #endif
 
     SuperCap_Init_Config_s cap_conf = {

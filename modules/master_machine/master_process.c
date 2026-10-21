@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file master_process.c
  * @brief 视觉数据收发, SP+CRC16 协议(与上位机 sp_vision_25 对齐)
  *        支持 USB VCP(VISION_USE_VCP) 和 UART(VISION_USE_UART) 两种传输, 宏切换
@@ -136,7 +136,7 @@ static void VisionOfflineCallback(void *id)
 #ifdef VISION_USE_UART
     USARTServiceInit(vision_usart_instance);
 #endif
-    LOGWARNING("[vision] vision offline, restart communication.");
+    BSP_LOG_EVENT_0(EV_MODULES_MASTER_MACHINE_MASTER_PROCESS_C_01);
 }
 
 void VisionUpdateTx(uint8_t mode,
@@ -216,7 +216,7 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
     }
 #else
     UNUSED(_handle);
-    LOGWARNING("[vision] neither VISION_USE_VCP nor VISION_USE_UART defined");
+    BSP_LOG_EVENT_0(EV_MODULES_MASTER_MACHINE_MASTER_PROCESS_C_02);
     (void)DaemonUnregister(vision_daemon_instance);
     vision_daemon_instance = NULL;
     return NULL;

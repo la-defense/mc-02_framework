@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file bsp_crash.c
  * @brief 保存崩溃现场、复位后检查并输出记录，接口用法见 bsp_crash.h。
  * 故障入口先关闭已知输出，按检查结果读取寄存器和栈，再请求复位；日志只在下次启动时输出。
@@ -322,52 +322,40 @@ void CrashLogInit(void)
     if (!CrashLogValid())
     {
         if (g_crash_log.magic == CRASH_LOG_MAGIC_BUSY)
-            LOGERROR("[crash] 上次崩溃记录写到一半就中断了(第 %lu 步): type=%lu count=%lu, "
-                     "现场不完整已忽略 —— 1=头部 2=寄存器 3=栈帧 4=栈快照",
-                     (unsigned long)g_crash_log.progress,
-                     (unsigned long)g_crash_log.type, (unsigned long)g_crash_log.count);
+            BSP_LOG_EVENT_3(EV_BSP_CRASH_BSP_CRASH_C_01, BSP_LOG_FIELD_U32((unsigned long)g_crash_log.progress), BSP_LOG_FIELD_U32((unsigned long)g_crash_log.type), BSP_LOG_FIELD_U32((unsigned long)g_crash_log.count));
         return;
     }
 
-    LOGERROR("==== 上次运行崩溃现场(累计第 %lu 次) ====",
-             (unsigned long)g_crash_log.count);
-    LOGERROR("[crash] type=%s frame=%s pc=0x%08lX lr=0x%08lX sp=0x%08lX",
-             CrashLogTypeName(g_crash_log.type),
-             (g_crash_log.frame_status == 1u) ? "valid" :
-             (g_crash_log.frame_status == 2u) ? "invalid" : "none",
-             (unsigned long)g_crash_log.pc, (unsigned long)g_crash_log.lr,
-             (unsigned long)g_crash_log.sp);
-    LOGERROR("[crash] CFSR=0x%08lX HFSR=0x%08lX BFAR=0x%08lX MMFAR=0x%08lX DFSR=0x%08lX",
-             (unsigned long)g_crash_log.cfsr, (unsigned long)g_crash_log.hfsr,
-             (unsigned long)g_crash_log.bfar, (unsigned long)g_crash_log.mmfar,
-             (unsigned long)g_crash_log.dfsr);
-    LOGERROR("[crash] R0=%08lX R1=%08lX R2=%08lX R3=%08lX R12=%08lX xPSR=%08lX",
-             (unsigned long)g_crash_log.r0, (unsigned long)g_crash_log.r1,
-             (unsigned long)g_crash_log.r2, (unsigned long)g_crash_log.r3,
-             (unsigned long)g_crash_log.r12, (unsigned long)g_crash_log.xpsr);
-    LOGERROR("[crash] MSP=0x%08lX PSP=0x%08lX",
-             (unsigned long)g_crash_log.msp, (unsigned long)g_crash_log.psp);
+    BSP_LOG_EVENT_1(EV_BSP_CRASH_BSP_CRASH_C_02, BSP_LOG_FIELD_U32((unsigned long)g_crash_log.count));
+    BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_03, BSP_LOG_FIELD_CSTR_LIMIT((CrashLogTypeName(g_crash_log.type)), 37u), BSP_LOG_FIELD_CSTR_LIMIT(((g_crash_log.frame_status == 1u) ? "valid" :
+             (g_crash_log.frame_status == 2u) ? "invalid" : "none"), 37u), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.pc), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.lr), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.sp));
+    BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_04, BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.cfsr), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.hfsr), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.bfar), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.mmfar), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.dfsr));
+    BSP_LOG_EVENT_6(EV_BSP_CRASH_BSP_CRASH_C_05, BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.r0), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.r1), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.r2), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.r3), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.r12), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.xpsr));
+    BSP_LOG_EVENT_2(EV_BSP_CRASH_BSP_CRASH_C_06, BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.msp), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.psp));
 
     // 文件名保存的是地址，输出前再次检查起点和字符，避免直接把旧内容当字符串。
     if (g_crash_log.type == CRASH_TYPE_ASSERT &&
         CrashLogStringPlausible(g_crash_log.arg0))
-        LOGERROR("[crash] assert: %s:%lu", (const char *)g_crash_log.arg0,
-                 (unsigned long)g_crash_log.arg1);
+        BSP_LOG_EVENT_2(EV_BSP_CRASH_BSP_CRASH_C_07, BSP_LOG_FIELD_CSTR_LIMIT(((const char *)g_crash_log.arg0), 48u), BSP_LOG_FIELD_U32((unsigned long)g_crash_log.arg1));
     // 任务名已直接存入记录，栈溢出类型才输出这一项。
     if (g_crash_log.type == CRASH_TYPE_STACK_OVF)
-        LOGERROR("[crash] 任务 '%s' 栈溢出", g_crash_log.task_name);
+        BSP_LOG_EVENT_1(EV_BSP_CRASH_BSP_CRASH_C_08, BSP_LOG_FIELD_CSTR_LIMIT((g_crash_log.task_name), 48u));
 
-    // 每行输出 8 项 uint32_t，行首为相对 sp 的字节数，便于对照 map 文件查找调用位置。
+    // 每次记录4个栈字，保留行偏移并确保字段数据不超过事件容量。
     for (uint32_t row = 0; row < (CRASH_STACK_SNAPSHOT_WORDS / 8u); ++row)
     {
         const uint32_t *s = &g_crash_log.stack_snapshot[row * 8u];
-        LOGINFO("[crash] sp+%02lu: %08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX",
-                (unsigned long)(row * 8u * 4u),
-                (unsigned long)s[0], (unsigned long)s[1], (unsigned long)s[2],
-                (unsigned long)s[3], (unsigned long)s[4], (unsigned long)s[5],
-                (unsigned long)s[6], (unsigned long)s[7]);
+        uint32_t offset = row * 8u * 4u;
+        BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_12,
+                        BSP_LOG_FIELD_U32(offset),
+                        BSP_LOG_FIELD_HEX32(s[0]), BSP_LOG_FIELD_HEX32(s[1]),
+                        BSP_LOG_FIELD_HEX32(s[2]), BSP_LOG_FIELD_HEX32(s[3]));
+        BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_13,
+                        BSP_LOG_FIELD_U32(offset + 16u),
+                        BSP_LOG_FIELD_HEX32(s[4]), BSP_LOG_FIELD_HEX32(s[5]),
+                        BSP_LOG_FIELD_HEX32(s[6]), BSP_LOG_FIELD_HEX32(s[7]));
     }
-    LOGERROR("==== 现场结束(pc 用 arm-none-eabi-addr2line 反查) ====");
+    BSP_LOG_EVENT_0(EV_BSP_CRASH_BSP_CRASH_C_09);
 }
 
 uint8_t CrashLogGetLast(CrashLog_t *out)
@@ -440,7 +428,7 @@ void CrashLogSelfTest(void)
 {
     uint32_t stage = s_crash_test_stage % 3u;
     s_crash_test_stage++;
-    LOGWARNING("[crash] 自测阶段 %lu/3", (unsigned long)stage + 1u);
+    BSP_LOG_EVENT_1(EV_BSP_CRASH_BSP_CRASH_C_10, BSP_LOG_FIELD_U32((unsigned long)stage + 1u));
 
     // 每次启动依次选择三种路径中的一种，第三项后重新从第一项开始。
     switch (stage)
@@ -456,7 +444,6 @@ void CrashLogSelfTest(void)
         break;
     }
 
-    LOGERROR("[crash] 自测阶段 %lu 竟然没触发崩溃, 说明记录链路有问题",
-             (unsigned long)stage + 1u);
+    BSP_LOG_EVENT_1(EV_BSP_CRASH_BSP_CRASH_C_11, BSP_LOG_FIELD_U32((unsigned long)stage + 1u));
 }
 #endif /* CRASH_TEST */

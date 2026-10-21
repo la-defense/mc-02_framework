@@ -1,4 +1,4 @@
-/** @file robot_safety.c
+﻿/** @file robot_safety.c
 * @brief 汇总故障与操作请求并选择状态；控制任务读取结果后决定是否给执行器下发命令。
 */
 #include "robot_safety.h"
@@ -25,9 +25,7 @@ static void RobotSafetySetState(Robot_Status_e new_state)
     if (robot_state == new_state)
         return;
 
-    LOGINFO("[safety] state %s -> %s",
-            RobotSafetyStateName(robot_state),
-            RobotSafetyStateName(new_state));
+    BSP_LOG_EVENT_2(EV_MODULES_SAFETY_ROBOT_SAFETY_C_01, BSP_LOG_FIELD_CSTR_LIMIT((RobotSafetyStateName(robot_state)), 46u), BSP_LOG_FIELD_CSTR_LIMIT((RobotSafetyStateName(new_state)), 46u));
     robot_state = new_state;
 }
 
@@ -71,7 +69,7 @@ void RobotSafetySetImuValid(uint8_t valid)
         RobotFaultReport(ROBOT_FAULT_IMU_INVALID);
         if (!imu_fault_logged)
         {
-            LOGERROR("[safety] IMU invalid, actuators will be degraded");
+            BSP_LOG_EVENT_0(EV_MODULES_SAFETY_ROBOT_SAFETY_C_02);
             imu_fault_logged = 1;
         }
     }
@@ -99,7 +97,7 @@ void RobotSafetySetTaskHealthy(uint8_t healthy)
         RobotFaultReport(ROBOT_FAULT_TASK_TIMEOUT);
         if (!task_fault_logged)
         {
-            LOGERROR("[safety] task monitor timeout, stop feeding IWDG");
+            BSP_LOG_EVENT_0(EV_MODULES_SAFETY_ROBOT_SAFETY_C_03);
             task_fault_logged = 1;
         }
     }
@@ -148,7 +146,7 @@ void EstopRequest(Estop_Reason_e reason)
     estop_latched = 1;
     estop_reason = reason;
     enable_requested = 0;
-    LOGERROR("[safety] ESTOP latched, reason=%d", (int)reason);
+    BSP_LOG_EVENT_1(EV_MODULES_SAFETY_ROBOT_SAFETY_C_04, BSP_LOG_FIELD_I32((int)reason));
 }
 
 uint8_t EstopClear(void)
@@ -163,7 +161,7 @@ uint8_t EstopClear(void)
     estop_latched = 0;
     estop_reason = ESTOP_REASON_NONE;
     enable_requested = 0;
-    LOGINFO("[safety] ESTOP cleared, robot in SAFE state");
+    BSP_LOG_EVENT_0(EV_MODULES_SAFETY_ROBOT_SAFETY_C_05);
     RobotSafetySetState(ROBOT_SAFE);
     return 1;
 }

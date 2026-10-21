@@ -206,8 +206,7 @@ void IMUHeaterInit(void)
         last_vcc_in < IMU_HEATER_MIN_SUPPLY_V || last_vcc_in > IMU_HEATER_MAX_SUPPLY_V)
     {
         // 此处只提示供电尚不可用；Update 会重新检查，初始化的输出始终为0。
-        LOGWARNING("[imu_heat] VCC_IN not ready (%d.%dV), heater disabled until valid supply",
-                   (int)last_vcc_in, (int)(last_vcc_in * 10.0f) % 10);
+        BSP_LOG_EVENT_1(EV_MODULES_IMU_IMU_HEATER_C_01, BSP_LOG_FIELD_F32(last_vcc_in));
     }
 
     // 先写0，启热构建才启动 PWM，避免启动时沿用旧比较值。
@@ -216,10 +215,11 @@ void IMUHeaterInit(void)
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 #endif
 
-    LOGINFO("[imu_heat] init safe: target=%d.%dC max_duty=%u/%u power_cap=%d.%dW",
-            (int)heater_target, (int)(heater_target * 10.0f) % 10,
-            (unsigned)IMU_HEATER_DUTY_NORMAL, (unsigned)IMU_HEATER_ARR,
-            (int)IMU_HEATER_MAX_POWER_W, (int)(IMU_HEATER_MAX_POWER_W * 10.0f) % 10);
+    BSP_LOG_EVENT_4(EV_MODULES_IMU_IMU_HEATER_C_02,
+                    BSP_LOG_FIELD_F32(heater_target),
+                    BSP_LOG_FIELD_U32(IMU_HEATER_DUTY_NORMAL),
+                    BSP_LOG_FIELD_U32(IMU_HEATER_ARR),
+                    BSP_LOG_FIELD_F32(IMU_HEATER_MAX_POWER_W));
 }
 
 void IMUHeaterForceOff(void)
@@ -311,7 +311,7 @@ uint8_t IMUHeaterClearFault(void)
     heater_rearm_sample_sequence = last_valid_sample.sequence;
     heater_rearm_timestamp_ms = last_valid_sample.timestamp_ms;
     heater_require_new_sample = 1u;
-    LOGINFO("[imu_heat] fault cleared; waiting for a new IMU sample");
+    BSP_LOG_EVENT_0(EV_MODULES_IMU_IMU_HEATER_C_03);
     return 1u;
 }
 
@@ -334,12 +334,13 @@ static void IMUHeaterLogStatus(float temperature, uint8_t sensor_valid)
     if ((uint32_t)(now - last_log_ms) >= IMU_HEATER_LOG_PERIOD_MS)
     {
         last_log_ms = now;
-        LOGINFO("[imu_heat] vin=%d.%dV temp=%d.%dC target=%d.%dC duty=%u valid=%u fault=%u",
-                (int)last_vcc_in, (int)(last_vcc_in * 10.0f) % 10,
-                (int)temperature, (int)(temperature * 10.0f) % 10,
-                (int)heater_target, (int)(heater_target * 10.0f) % 10,
-                (unsigned)heater_duty,
-                (unsigned)sensor_valid, (unsigned)heater_fault);
+        BSP_LOG_EVENT_6(EV_MODULES_IMU_IMU_HEATER_C_04,
+                        BSP_LOG_FIELD_F32(last_vcc_in),
+                        BSP_LOG_FIELD_F32(temperature),
+                        BSP_LOG_FIELD_F32(heater_target),
+                        BSP_LOG_FIELD_U32(heater_duty),
+                        BSP_LOG_FIELD_U32(sensor_valid),
+                        BSP_LOG_FIELD_U32(heater_fault));
     }
 }
 
@@ -415,7 +416,7 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
         if ((uint32_t)(now - last_valid_sample_ms) >= IMU_HEATER_SENSOR_TIMEOUT_MS)
         {
             if (IMUHeaterLatchFault(now))
-                LOGERROR("[imu_heat] sensor invalid/timeout, heater latched off");
+                BSP_LOG_EVENT_0(EV_MODULES_IMU_IMU_HEATER_C_05);
         }
     }
     else if (temperature >= IMU_HEATER_OVERTEMP_CUTOFF)
@@ -424,9 +425,9 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
         IMUHeaterForceOff();
         heater_overtemp = 1u;
         if (IMUHeaterLatchFault(now))
-            LOGERROR("[imu_heat] OVERTEMP %d.%dC >= %d.%dC, heater latched off",
-                     (int)temperature, (int)(temperature * 10.0f) % 10,
-                     (int)IMU_HEATER_OVERTEMP_CUTOFF, (int)(IMU_HEATER_OVERTEMP_CUTOFF * 10.0f) % 10);
+            BSP_LOG_EVENT_2(EV_MODULES_IMU_IMU_HEATER_C_06,
+                            BSP_LOG_FIELD_F32(temperature),
+                            BSP_LOG_FIELD_F32(IMU_HEATER_OVERTEMP_CUTOFF));
     }
 
     if (force_off || !temp_ok || heater_fault)
@@ -443,7 +444,7 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
         IMUHeaterForceOff();
         if (!supply_missing_logged)
         {
-            LOGWARNING("[imu_heat] VCC_IN sample invalid or stale, heater disabled");
+            BSP_LOG_EVENT_0(EV_MODULES_IMU_IMU_HEATER_C_07);
             supply_missing_logged = 1u;
         }
         return;
@@ -455,8 +456,8 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
         IMUHeaterForceOff();
         if (!supply_missing_logged)
         {
-            LOGWARNING("[imu_heat] VCC_IN %d.%dV too low (USB-only?), heater disabled",
-                       (int)last_vcc_in, (int)(last_vcc_in * 10.0f) % 10);
+            BSP_LOG_EVENT_1(EV_MODULES_IMU_IMU_HEATER_C_08,
+                            BSP_LOG_FIELD_F32(last_vcc_in));
             supply_missing_logged = 1u;
         }
         return;
@@ -466,8 +467,8 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
         // 高于30V则保留故障，供电恢复后也需要通过清故障检查。
         IMUHeaterForceOff();
         if (IMUHeaterLatchFault(now))
-            LOGERROR("[imu_heat] VCC_IN %d.%dV too high, heater latched off",
-                     (int)last_vcc_in, (int)(last_vcc_in * 10.0f) % 10);
+            BSP_LOG_EVENT_1(EV_MODULES_IMU_IMU_HEATER_C_09,
+                            BSP_LOG_FIELD_F32(last_vcc_in));
         return;
     }
     supply_missing_logged = 0u;
@@ -500,7 +501,7 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
         IMUHeaterForceOff();
         heater_timeout_fault = 1u;
         if (IMUHeaterLatchFault(now))
-            LOGERROR("[imu_heat] max heating time exceeded, heater latched off");
+            BSP_LOG_EVENT_0(EV_MODULES_IMU_IMU_HEATER_C_10);
         return;
     }
 

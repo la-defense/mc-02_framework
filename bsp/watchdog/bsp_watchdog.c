@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file bsp_watchdog.c
  * @brief 实现 IWDG1 的时限换算、喂狗和复位来源记录，接口用法见 bsp_watchdog.h。
  * 配置寄存器时用 DWT 计数等待更新；HAL tick 停止时，只要 DWT 仍计数就能检查等待时间。
@@ -76,7 +76,7 @@ static void IWDG_WritePrescalerAndReload(uint32_t timeout_ms)
     // 写前等上一次更新完成；超时只输出错误，仍会执行下面的寄存器写入。
     if (!IWDG_WaitForUpdateFlags())
     {
-        LOGERROR("[watchdog] IWDG update flags stuck before write");
+        BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_01);
     }
 
     IWDG1->KR = IWDG_KEY_WRITE_ACCESS_ENABLE;
@@ -86,7 +86,7 @@ static void IWDG_WritePrescalerAndReload(uint32_t timeout_ms)
     // 写后再等一次；即使超时，后面仍会执行重载命令。
     if (!IWDG_WaitForUpdateFlags())
     {
-        LOGERROR("[watchdog] IWDG update flags stuck after write");
+        BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_02);
     }
 
     IWDG1->KR = IWDG_KEY_RELOAD;
@@ -103,7 +103,7 @@ void BSP_WatchdogInit(uint32_t timeout_ms)
     watchdog_started = 1;
     BSP_WatchdogFeed();
 
-    LOGINFO("[watchdog] IWDG started, timeout=%ums", (unsigned)timeout_ms);
+    BSP_LOG_EVENT_1(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_03, BSP_LOG_FIELD_U32((unsigned)timeout_ms));
 }
 
 void BSP_WatchdogFeed(void)
@@ -135,25 +135,25 @@ void BSP_WatchdogLogResetReason(void)
     if (rsr & RCC_RSR_IWDG1RSTF)
     {
         iwdg_reset_flag = 1;
-        LOGERROR("[watchdog] reset reason: IWDG1");
+        BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_04);
     }
 #ifdef RCC_RSR_WWD1RSTF
     if (rsr & RCC_RSR_WWD1RSTF) // 窗口看门狗
-        LOGERROR("[watchdog] reset reason: WWDG1");
+        BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_05);
 #endif
     if (rsr & RCC_RSR_PORRSTF) // 上电或掉电相关复位
-        LOGINFO("[watchdog] reset reason: POR/PDR");
+        BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_06);
     if (rsr & RCC_RSR_PINRSTF) // 外部 NRST 引脚
-        LOGINFO("[watchdog] reset reason: NRST pin");
+        BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_07);
     if (rsr & RCC_RSR_BORRSTF) // 欠压复位
-        LOGERROR("[watchdog] reset reason: BOR");
+        BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_08);
 #ifdef RCC_RSR_SFTRSTF
     if (rsr & RCC_RSR_SFTRSTF) // 软件复位
-        LOGINFO("[watchdog] reset reason: software");
+        BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_09);
 #endif
 #ifdef RCC_RSR_LPWRRSTF
     if (rsr & RCC_RSR_LPWRRSTF) // 低功耗相关复位
-        LOGERROR("[watchdog] reset reason: low power");
+        BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_10);
 #endif
 
     // 最后清除硬件标志，避免下次启动重复报告；已保存的软件信息继续保留。

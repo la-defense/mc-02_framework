@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file bsp_usb.c
 * @brief USB CDC 单例收发；中断保存接收内容，任务跳过旧包并调用模块回调。
  * @version 0.1
@@ -30,7 +30,6 @@ static volatile uint16_t vcp_head = 0u; /* 生产者(中断)写 */
 static volatile uint16_t vcp_tail = 0u; /* 消费者(任务)写 */
 static volatile uint32_t vcp_drop = 0u; /* 队列满丢弃帧数 */
 static volatile uint16_t vcp_peak = 0u; /* 历史最大占用 */
-static LogRateLimit_t vcp_log_rl = {0};
 
 volatile DWT_Probe_t vcp_prof_rx_isr = {0};   /* 中断侧入队耗时 */
 volatile DWT_Probe_t vcp_prof_dispatch = {0}; /* 任务侧派发耗时 */
@@ -109,8 +108,8 @@ void VCPProcessRx(void)
         vcp_tail = (uint16_t)((vcp_tail + 1u) % VCP_RXQ_DEPTH);
     }
 
-    if (vcp_drop != 0u && LogRateLimitAllow(&vcp_log_rl, 1000u))
-        LOGWARNING("[bsp_usb] VCP 接收队列满, 已丢帧 %lu 次", (unsigned long)vcp_drop);
+    if (vcp_drop != 0u)
+        BSP_LOG_EVENT_1(EV_BSP_USB_BSP_USB_C_01, BSP_LOG_FIELD_U32((unsigned long)vcp_drop));
 
     vcp_rxq_drop_total = vcp_drop;
     DWT_ProbeDone(&vcp_prof_dispatch, probe);
@@ -127,7 +126,7 @@ uint8_t *USBInit(USB_Init_Config_s usb_conf)
     s_rx_cbk = usb_conf.rx_cbk;
     bsp_usb_rx_buffer = CDCInitRxbufferNcallback(usb_conf.tx_cbk, usb_conf.rx_cbk); // 获取接收数据指针
     // usb的接收回调函数会在这里被设置,并将数据保存在bsp_usb_rx_buffer中
-    LOGINFO("USB init success");
+    BSP_LOG_EVENT_0(EV_BSP_USB_BSP_USB_C_02);
     return bsp_usb_rx_buffer;
 }
 

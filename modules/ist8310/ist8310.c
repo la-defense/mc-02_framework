@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file ist8310.c
  * @brief 初始化可选 IST8310，接到数据就绪通知后读取并换算三轴磁场。
  *
@@ -101,7 +101,7 @@ IST8310Instance *IST8310Init(IST8310_Init_Config_s *config)
         // 配置读回不符时持续打印本项编号，停在这里，不执行后续配置或返回。
         if (check_who_i_am != ist8310_write_reg_data_error[i][1])
             while (1)
-                LOGERROR("[ist8310] init error, code %d", ist8310_write_reg_data_error[i][2]);
+                BSP_LOG_EVENT_1(EV_MODULES_IST8310_IST8310_C_01, BSP_LOG_FIELD_I32(ist8310_write_reg_data_error[i][2]));
     }
 
     ist8310_instance = ist; // 只有 ID 和全部配置检查通过后才更新此记录

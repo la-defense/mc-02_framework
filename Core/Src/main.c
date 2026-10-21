@@ -79,6 +79,8 @@ static __attribute__((noreturn)) void StartupDiagnosticLoop(void)
 {
   for (;;)
   {
+    // 调度器未启动时每轮只推进一条诊断，避免失败循环等待 RTT 空间。
+    (void)BSPLogProcessPending(1u);
     BSP_SafetyStartupLatchOutputsOff();
     BSP_WatchdogFeed();
     InitDiagnosticHeartbeat();
@@ -142,7 +144,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   if (!RobotInit())
     StartupDiagnosticLoop(); // 唯一的初始化函数
-  LOGINFO("[main] SystemInit() and RobotInit() done");
+  BSP_LOG_EVENT_0(EV_CORE_SRC_MAIN_C_01);
   /* USER CODE END 2 */
 
   /* Call init function for freertos objects (in freertos.c) */

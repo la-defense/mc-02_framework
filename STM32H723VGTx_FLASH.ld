@@ -150,6 +150,17 @@ SECTIONS
     _edata = .;        /* define a global symbol at data end */
   } >RAM AT> FLASH
 
+  /* 日志队列由BSPLogInit清零，静态任务栈和控制块由BSPLogPortInit清零。 */
+  .log_workspace (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __log_workspace_start__ = .;
+    KEEP(*(.log_workspace))
+    . = ALIGN(32);
+    __log_workspace_end__ = .;
+  } >DTCMRAM
+  ASSERT(SIZEOF(.log_workspace) <= 0x4000, "logger workspace exceeds 16 KiB DTCM budget")
+
   
   /* Uninitialized data section */
   . = ALIGN(4);

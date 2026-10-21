@@ -1,4 +1,4 @@
-/**
+﻿/**
 * @file ins_task.c
 * @brief 读取 BMI088 样本，更新姿态估计，并向视觉链路提供有效数据。
 * StartINSTASK 在专属任务中初始化本模块；INS_Task 按1kHz运行。
@@ -188,8 +188,7 @@ attitude_t *INS_Init(void)
         INS.q[3] = 0.0f;
         INS.AccelLPF = 0.0085f;
         DWT_GetDeltaT(&INS_DWT_Count);
-        LOGERROR("[INS] BMI088 unavailable; remaining in safe sensor-invalid mode (error=0x%02X retries=%u)",
-                 (unsigned)bmi088_init_error, (unsigned)bmi088_init_retry_count);
+        BSP_LOG_EVENT_2(EV_MODULES_IMU_INS_TASK_C_01, BSP_LOG_FIELD_HEX32((unsigned)bmi088_init_error), BSP_LOG_FIELD_U32((unsigned)bmi088_init_retry_count));
         // 保留姿态存储供任务继续运行，但安全状态会记录传感器无效。
         ins_init_result = 1u;
         return (attitude_t *)&INS.Gyro;

@@ -1,4 +1,4 @@
-/** @file bsp_tools.c
+﻿/** @file bsp_tools.c
 * @brief 保存最多 32 份回调和参数，任务先执行一次，再循环等待自己的信号位。
 */
 #include <stdarg.h>
@@ -43,7 +43,7 @@ uint32_t CreateCallbackTask(char *name, void *cbk, void *ins, osPriority priorit
     // 信号位已经用完时不再增加任务，留在报错循环；当前没有失败返回路径。
     if (sig_idx >= MX_SIG_LIST_SIZE)
         while (1)
-            LOGERROR("[rtos:cbk_register] CreateCallbackTask: sig_idx >= MX_SIG_LIST_SIZE");
+            BSP_LOG_EVENT_0(EV_BSP_BSP_TOOLS_C_01);
 
     cbkinfo_list[sig_idx].callback = cbk;
     cbkinfo_list[sig_idx].sig = tmp_sig << sig_idx;

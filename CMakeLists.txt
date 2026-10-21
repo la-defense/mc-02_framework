@@ -26,6 +26,21 @@ set_property(CACHE MC02_PROFILE PROPERTY STRINGS bench_safe robot)
 option(MC02_ENABLE_HEATER "显式允许机器人配置使用 IMU 加热器" OFF)
 option(MC02_BENCH_RC_DIAGNOSTICS "裸板遥控接收诊断；禁止请求 READY" OFF)
 option(MC02_BENCH_REFEREE_DIAGNOSTICS "裸板裁判有限负载诊断；默认关闭" OFF)
+option(MC02_LOG_ORDINARY "允许普通诊断事件；仅bench_safe显式验证构建可开启" OFF)
+option(MC02_LOG_TEST "编入类型化日志自测事件" OFF)
+if ((MC02_LOG_ORDINARY OR MC02_LOG_TEST) AND NOT MC02_PROFILE STREQUAL "bench_safe")
+    message(FATAL_ERROR "日志普通诊断和自测仅允许bench_safe配置")
+endif ()
+if (MC02_LOG_ORDINARY)
+    add_compile_definitions(MC02_LOG_ORDINARY=1)
+else ()
+    add_compile_definitions(MC02_LOG_ORDINARY=0)
+endif ()
+if (MC02_LOG_TEST)
+    add_compile_definitions(LOG_TEST=1)
+else ()
+    add_compile_definitions(LOG_TEST=0)
+endif ()
 if (MC02_BENCH_REFEREE_DIAGNOSTICS AND (NOT MC02_PROFILE STREQUAL "bench_safe" OR MC02_BENCH_RC_DIAGNOSTICS))
     message(FATAL_ERROR "裁判诊断仅允许独立bench_safe配置")
 endif ()
@@ -242,6 +257,8 @@ list(APPEND SOURCES ${SOURCES_APP})
 # 兜底排除 *_template.c (HAL/USB 目录里的 CubeMX 模板与 Core/Src 下的
 # 实际实现存在重复强符号)。
 list(FILTER SOURCES EXCLUDE REGEX ".*_template\\.c$")
+# 禁用printf封装：应用诊断统一走类型化事件，RTT端口只接收日志核心的整条缓冲。
+list(FILTER SOURCES EXCLUDE REGEX "SEGGER_RTT_printf\\.c$")
 # bsp/flash/bsp_flash.c 是 F1/F4 风格的 Flash 驱动 (FLASH_TYPEPROGRAM_WORD /
 # FLASH_SECTOR_8~11), 与 H723 的 Flash API 不兼容, 且当前没有任何调用方,
 # 先排除出 CMake 构建, 待按 H7 规范重写后再加入。

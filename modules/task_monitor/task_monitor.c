@@ -1,4 +1,4 @@
-/** @file task_monitor.c
+﻿/** @file task_monitor.c
 * @brief 记录各关键任务最近执行时间，处理标定与 Flash 等长操作，并决定是否喂 IWDG。
 */
 #include "task_monitor.h"
@@ -160,7 +160,7 @@ void TaskMonitorTick(void)
             if (!item->fault_logged)
             {
                 BSP_SafetyLatchOutputsOff();
-                LOGERROR("[monitor] task %s timeout (%ums)", item->name, (unsigned)item->timeout_ms);
+                BSP_LOG_EVENT_2(EV_MODULES_TASK_MONITOR_TASK_MONITOR_C_01, BSP_LOG_FIELD_CSTR_LIMIT((item->name), 48u), BSP_LOG_FIELD_U32((unsigned)item->timeout_ms));
                 item->fault_logged = 1;
             }
         }
@@ -214,7 +214,7 @@ uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOpera
             RobotSafetySetTaskHealthy(0u);
             if (!monitor_items[i].fault_logged)
             {
-                LOGERROR("[monitor] long operation refused: task %s is unhealthy", monitor_items[i].name);
+                BSP_LOG_EVENT_1(EV_MODULES_TASK_MONITOR_TASK_MONITOR_C_02, BSP_LOG_FIELD_CSTR_LIMIT((monitor_items[i].name), 48u));
                 monitor_items[i].fault_logged = 1u;
             }
             return 0u;
@@ -291,9 +291,9 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperati
         {
             BSP_SafetyLatchOutputsOff();
             if (!within_limit || operation_fault_latched)
-                LOGERROR("[monitor] bounded long operation exceeded its deadline or another monitor fault occurred");
+                BSP_LOG_EVENT_0(EV_MODULES_TASK_MONITOR_TASK_MONITOR_C_03);
             else
-                LOGERROR("[monitor] another task faulted during bounded long operation");
+                BSP_LOG_EVENT_0(EV_MODULES_TASK_MONITOR_TASK_MONITOR_C_04);
             item->fault_logged = 1u;
         }
         RobotSafetySetTaskHealthy(0u);

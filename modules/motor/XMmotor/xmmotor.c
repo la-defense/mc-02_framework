@@ -1,4 +1,4 @@
-/** @file xmmotor.c
+﻿/** @file xmmotor.c
 * @brief 保存 XM 软件控制结构，扩展帧收发和独立任务仍保留在未启用分支中。
 */
 #include "xmmotor.h"
@@ -133,7 +133,7 @@ XMMotorInstance *XMMotorInit(Motor_Init_Config_s *config)
     motor->motor_daemon = DaemonRegister(&conf);
 #else
     /* 骨架模式: 未启用扩展帧, 不注册 CAN 与 daemon */
-    LOGWARNING("[xmmotor] XM_MOTOR_ENABLE not defined, hardware not initialized");
+    BSP_LOG_EVENT_0(EV_MODULES_MOTOR_XMMOTOR_XMMOTOR_C_01);
 #endif
 
     xm_motor_instance[idx++] = motor;
@@ -152,7 +152,7 @@ void XMMotorChangeFeed(XMMotorInstance *motor, Closeloop_Type_e loop, Feedback_S
     else if (loop == SPEED_LOOP)
         motor->motor_settings.speed_feedback_source = type;
     else
-        LOGERROR("[xmmotor] loop type error, check memory access and func param"); // 检查是否传入了正确的LOOP类型,或发生了指针越界
+        BSP_LOG_EVENT_0(EV_MODULES_MOTOR_XMMOTOR_XMMOTOR_C_02); // 检查是否传入了正确的LOOP类型,或发生了指针越界
 }
 
 void XMMotorEnable(XMMotorInstance *motor)
@@ -287,6 +287,6 @@ void XMMotorControlInit()
 #else
     /* 骨架模式: 不创建任务 */
     if (idx)
-        LOGINFO("[xmmotor] %d XM motor instance registered (skeleton, hardware disabled)", idx);
+        BSP_LOG_EVENT_1(EV_MODULES_MOTOR_XMMOTOR_XMMOTOR_C_03, BSP_LOG_FIELD_I32(idx));
 #endif
 }

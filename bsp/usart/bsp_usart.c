@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file bsp_usart.c
  * @author neozng
 * @brief UART 注册与发送，中断复制入队，任务按接收顺序派发并处理错误恢复。
@@ -38,7 +38,6 @@ typedef struct
     volatile uint8_t need_recover; /* 1 = 中断报告出错, 等任务来恢复 */
     volatile uint32_t recover_count;  /* 成功恢复次数 */
     volatile uint8_t recover_failed;  /* 1 = 连续重试仍失败 */
-    LogRateLimit_t log_rl;         /* 错误日志限速(在任务里打印) */
 } USARTQueue_t;
 
 static USARTQueue_t usart_q[DEVICE_USART_CNT];
@@ -305,14 +304,10 @@ void USARTProcessRx(void)
             usart_q[slot].tail = (uint16_t)((usart_q[slot].tail + 1u) % USART_RXQ_DEPTH);
         }
 
-        /* ③ 错误日志: 中断里只计数, 这里限速打印 */
-        if (usart_q[slot].err_count != 0u &&
-            LogRateLimitAllow(&usart_q[slot].log_rl, 1000u))
+        /* ③ 中断只累加错误；普通任务提交原始计数，由日志核心统一限速。 */
+        if (usart_q[slot].err_count != 0u)
         {
-            LOGWARNING("[bsp_usart] 串口错误 slot=%u err=%lu recover=%lu fail=%u",
-                       (unsigned)slot, (unsigned long)usart_q[slot].err_count,
-                       (unsigned long)usart_q[slot].recover_count,
-                       (unsigned)usart_q[slot].recover_failed);
+            BSP_LOG_EVENT_4(EV_BSP_USART_BSP_USART_C_01, BSP_LOG_FIELD_U32((unsigned)slot), BSP_LOG_FIELD_U32((unsigned long)usart_q[slot].err_count), BSP_LOG_FIELD_U32((unsigned long)usart_q[slot].recover_count), BSP_LOG_FIELD_U32((unsigned)usart_q[slot].recover_failed));
         }
 
         drop_sum += usart_q[slot].drop;

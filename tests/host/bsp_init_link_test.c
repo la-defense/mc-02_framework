@@ -26,14 +26,14 @@ void DWT_Init(uint32_t cpu_mhz)
 
 void BSP_WatchdogInit(uint32_t timeout_ms)
 {
-    TEST_CHECK(step == 1u);
+    TEST_CHECK(step == 2u);
     TEST_CHECK(timeout_ms == 4000u);
     ++step;
 }
 
 void BSPLogInit(void)
 {
-    TEST_CHECK(step == 2u);
+    TEST_CHECK(step == 1u);
     ++step;
 }
 

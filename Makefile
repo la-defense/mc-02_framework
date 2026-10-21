@@ -107,7 +107,6 @@ Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c \
 Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c \
 Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c \
 Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Src/usbd_cdc.c \
-Middlewares/Third_Party/SEGGER/RTT/SEGGER_RTT_printf.c \
 Middlewares/Third_Party/SEGGER/RTT/SEGGER_RTT.c \
 Core/Src/sysmem.c \
 Core/Src/syscalls.c \
@@ -122,6 +121,8 @@ bsp/usart/bsp_usart_tx.c \
 bsp/usart/usart_tx_port.c \
 bsp/usart/usart_tx_task.c \
 bsp/log/bsp_log.c \
+bsp/log/bsp_log_port_stm32.c \
+bsp/log/bsp_log_stdio.c \
 bsp/log/float_to_string.c \
 bsp/bsp_tools.c \
 bsp/bsp_init.c \

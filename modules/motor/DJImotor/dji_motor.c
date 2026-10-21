@@ -1,4 +1,4 @@
-/** @file dji_motor.c
+﻿/** @file dji_motor.c
 * @brief 解码 DJI 电调反馈，逐电机计算参考输出，并按总线与设备编号组成四电机 CAN 帧。
  */
 #include "dji_motor.h"
@@ -130,7 +130,7 @@ static uint8_t MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *c
         {
             if (dji_motor_instance[i]->motor_can_instance->can_handle == config->can_handle && dji_motor_instance[i]->motor_can_instance->rx_id == config->rx_id)
             {
-                LOGERROR("[dji_motor] ID crash. Check in debug mode, add dji_motor_instance to watch to get more information.");
+                BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_01);
                 return 0u;
             }
         }
@@ -156,7 +156,7 @@ static uint8_t MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *c
         {
             if (dji_motor_instance[i]->motor_can_instance->can_handle == config->can_handle && dji_motor_instance[i]->motor_can_instance->rx_id == config->rx_id)
             {
-                LOGERROR("[dji_motor] ID crash. Check in debug mode, add dji_motor_instance to watch to get more information.");
+                BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_02);
                 return 0u;
             }
         }
@@ -209,12 +209,9 @@ static void DJIMotorLostCallback(void *motor_ptr)
 {
     DJIMotorInstance *motor = (DJIMotorInstance *)motor_ptr;
     uint16_t can_bus = motor->motor_can_instance->can_handle == &hcan1 ? 1 : 2;
-    /* 电机离线检测是 20ms 周期触发的: 没接电机时每 20ms 一条, 会把 RTT 缓冲刷爆 → 限速 1 条/秒 */
-    static LogRateLimit_t rl_motor_lost = {0};
-    if (LogRateLimitAllow(&rl_motor_lost, 1000u))
-        LOGWARNING("[dji_motor] 电机离线: bus %d id %d (累计 %lu 次, 期间限速 %lu 条)",
-                   (int)can_bus, (int)motor->motor_can_instance->tx_id,
-                   (unsigned long)rl_motor_lost.total, (unsigned long)rl_motor_lost.dropped);
+    BSP_LOG_EVENT_2(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_03,
+                    BSP_LOG_FIELD_I32((int)can_bus),
+                    BSP_LOG_FIELD_I32((int)motor->motor_can_instance->tx_id));
 }
 
 // 电机初始化,返回一个电机实例
@@ -297,7 +294,7 @@ void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback
     else if (loop == SPEED_LOOP)
         motor->motor_settings.speed_feedback_source = type;
     else
-        LOGERROR("[dji_motor] loop type error, check memory access and func param"); // 检查是否传入了正确的LOOP类型,或发生了指针越界
+        BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_04); // 检查是否传入了正确的LOOP类型,或发生了指针越界
 }
 
 void DJIMotorStop(DJIMotorInstance *motor)
@@ -533,7 +530,7 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
 
     if (idx == 0u || dji_motor_instance[0] == NULL)
     {
-        LOGERROR("[dji_inject] 没有已注册的 DJI 电机, 跳过注入自测");
+        BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_05);
         return 0u;
     }
 
@@ -545,7 +542,7 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
     /* 1. 切内部回环: 帧不会真的上线, 但自己发自己收, 不会干扰总线上的其它设备 */
     if (CANForceMode(s_inject_h, FDCAN_MODE_INTERNAL_LOOPBACK, 0u) == 0u)
     {
-        LOGERROR("[dji_inject] 切内部回环失败, 跳过");
+        BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_06);
         /* CANForceMode 失败时可能已经把总线 Stop 掉了, 这里必须恢复一次,
            否则这条总线上线不了, 后面的电机控制帧全都发不出去。 */
         (void)CANForceMode(s_inject_h, FDCAN_MODE_NORMAL, 0u);
@@ -572,7 +569,7 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
     s_inject_tx = CANRegister(&cfg);
     if (s_inject_tx == NULL)
     {
-        LOGERROR("[dji_inject] 注册注入实例失败");
+        BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_07);
         (void)CANForceMode(s_inject_h, FDCAN_MODE_NORMAL, 0u);
         CANReapplyFilters();
         return 0u;
@@ -633,8 +630,7 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
 
 #if CAN_DJI_INJECT_TEST >= 2
     /* 压测模式: 保留回环与注入实例, 由 daemon 循环持续注入, 用来观察队列深度与丢帧 */
-    LOGINFO("[dji_inject] 压测模式: 保留回环, pass=%lu fail=%lu",
-            (unsigned long)can_dji_inject_pass, (unsigned long)can_dji_inject_fail);
+    BSP_LOG_EVENT_2(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_08, BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_pass), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_fail));
 #else
     /* 收尾: 还原 measure、注销注入实例、切回正常模式并重装滤镜 */
     s_inject_target->measure = s_inject_backup;
@@ -644,10 +640,7 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
     CANReapplyFilters();
 #endif
 
-    LOGINFO("[dji_inject] done: pass=%lu fail=%lu multierr=%lu frames=%lu",
-            (unsigned long)can_dji_inject_pass, (unsigned long)can_dji_inject_fail,
-            (unsigned long)can_dji_inject_multi_turn_err,
-            (unsigned long)can_dji_inject_frame_cnt);
+    BSP_LOG_EVENT_4(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_09, BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_pass), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_fail), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_multi_turn_err), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_frame_cnt));
     return (can_dji_inject_fail == 0u) ? 1u : 0u;
 }
 

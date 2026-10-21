@@ -32,32 +32,23 @@ def policy_flags() -> list[str]:
 
 
 def cases() -> list[tuple[str, str, bool, bool]]:
-    """每份源文件只包含一个错误类别；最后一项说明是否属于长度推断。"""
+    """正例覆盖类型化日志和仍保留的UI格式接口，负例逐项验证边界。"""
     result = [("valid", 'int example(const char *text) {\n'
-               'PrintLog("%s %d %u %ld %zu %.3f %%", text, -2, 3u, 4L, (size_t)5, 1.25);\n'
-               'LOGINFO("%s %u", text, 2u); LOGWARNING("%d", -1); LOGERROR("%s", text);\n'
+               'BSP_LOG_EVENT_1(EV_BSP_USB_BSP_USB_C_01, BSP_LOG_FIELD_U32(2u));\n'
                + UI + '"%s %d",text,2); OLED_printf(0u,0u,"%s %d",text,2); return 0; }', True, False)]
     calls = {
-        "print_type": 'PrintLog("%s",42)',
-        "print_missing": 'PrintLog("%d")',
-        "print_extra": 'PrintLog("ok",42)',
-        "print_security": 'PrintLog(text)',
-        "print_nonliteral": 'PrintLog(text,42)',
+        "legacy_printlog": 'PrintLog("%s",42)',
+        "legacy_log_macro": 'LOGINFO("%s",42)',
         "ui_type": UI + '"%s",42)',
         "ui_missing": UI + '"%d")',
         "oled_type": 'OLED_printf(0u,0u,"%s",42)',
         "oled_missing": 'OLED_printf(0u,0u,"%d")',
-        "info_type": 'LOGINFO("%s",42)',
-        "warning_missing": 'LOGWARNING("%d")',
-        "error_extra": 'LOGERROR("ok",42)',
     }
     for name, call in calls.items():
         result.append((name, f'void example(const char *text) {{ (void)text; {call}; }}', False, False))
-    # 用原自测长度构造编译负例；这份代码不会加入正常固件，也不会运行。
-    long_text = "0123456789abcdef" * 16
+    # 长度负例只检查仍保留的OLED或其他有界格式化入口。
     result.extend([
         ("bounded_length", 'int example(void) { char b[8]; return snprintf(b,sizeof(b),"%s","123456789"); }', False, True),
-        ("log_length", f'void example(void) {{ LOGWARNING("{long_text}"); }}', False, True),
         ("unbounded_length", 'int example(void) { char b[8]; return sprintf(b,"%s","123456789"); }', False, True),
     ])
     return result
@@ -97,7 +88,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--compile-commands", type=Path)
     parser.add_argument("--optimization", choices=("-O0", "-Og", "-O2"), default="-O2")
-    parser.add_argument("--group", choices=("all", "print", "ui_oled", "macros", "length"), default="all")
+    parser.add_argument("--group", choices=("all", "legacy", "ui_oled", "macros", "length"), default="all")
     args = parser.parse_args()
     if args.compile_commands:
         audit_commands(args.compile_commands)
@@ -122,7 +113,7 @@ def main() -> int:
                 ROOT / "modules/referee", ROOT / "modules/oled", ROOT / "bsp/usart"]
     for disabled in (0, 1):
         for name, body, valid, length in cases():
-            group = "length" if length else ("print" if name.startswith("print_") else
+            group = "length" if length else ("legacy" if name.startswith("legacy_") else
                     "ui_oled" if name.startswith(("ui_", "oled_")) else "macros")
             # CTest按组启动，避免一项累计几十次编译而超过10秒；每组仍先编译合法入口。
             if not valid and args.group not in ("all", group):
@@ -134,7 +125,8 @@ def main() -> int:
             source, obj = output / (tag + ".c"), output / (tag + ".o")
             source.write_text(HEADERS + body + "\n", encoding="utf-8")
             command = [compiler, "-std=c11", args.optimization, "-fdiagnostics-color=never",
-                       "-fdiagnostics-show-option", *flags, f"-DDISABLE_LOG_SYSTEM={disabled}"]
+                       "-fdiagnostics-show-option", "-Werror=implicit-function-declaration",
+                       *flags, f"-DDISABLE_LOG_SYSTEM={disabled}"]
             command += ["-I" + str(path) for path in includes]
             command += ["-c", str(source), "-o", str(obj)]
             result = subprocess.run(command, env=env, text=True, encoding="utf-8", errors="replace",
@@ -149,7 +141,10 @@ def main() -> int:
                 outcome = "length-diagnostic-unavailable"
                 report["limitations"].append(tag)
             else:
-                accepted = result.returncode != 0 and format_error
+                if name.startswith("legacy_"):
+                    accepted = result.returncode != 0 and "implicit-function-declaration" in result.stdout
+                else:
+                    accepted = result.returncode != 0 and format_error
                 if length:
                     accepted = accepted and ("format-truncation" in result.stdout or "format-overflow" in result.stdout)
                 outcome = "rejected-with-format-error"

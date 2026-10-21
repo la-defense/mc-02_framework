@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file bsp_adc.c
  * @brief 处理 ADC1 的电源、按键采样，接口用法见 bsp_adc.h。
  * BSP_ADCInit() 启动循环 DMA，完成回调对已采好的半段取平均，BSP_ADCGetSample() 复制结果。
@@ -140,7 +140,7 @@ void BSP_ADCInit(void)
     if (calibration_status != HAL_OK)
     {
         BSP_ADCSetError(BSP_ADC_ERROR_CALIBRATION, (uint32_t)calibration_status);
-        LOGERROR("[adc] calibration failed");
+        BSP_LOG_EVENT_0(EV_BSP_ADC_BSP_ADC_C_01);
         return;
     }
 
@@ -154,12 +154,12 @@ void BSP_ADCInit(void)
     if (dma_start_status != HAL_OK)
     {
         BSP_ADCSetError(BSP_ADC_ERROR_DMA_START, (uint32_t)dma_start_status);
-        LOGERROR("[adc] start DMA failed");
+        BSP_LOG_EVENT_0(EV_BSP_ADC_BSP_ADC_C_02);
         return;
     }
 
     adc_started = 1u;
-    LOGINFO("[adc] VCC_IN sense started (divider=1/11)");
+    BSP_LOG_EVENT_0(EV_BSP_ADC_BSP_ADC_C_03);
 }
 
 BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample)

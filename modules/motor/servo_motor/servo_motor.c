@@ -1,4 +1,4 @@
-/** @file servo_motor.c
+﻿/** @file servo_motor.c
 * @brief 总线固定命令及PWM选择；长期实例通过ServoSetAngle复制提交，结果由任务通知。
 */
 #include "servo_motor.h"
@@ -35,7 +35,7 @@ ServoInstance *ServoInit(Servo_Init_Config_s *Servo_Init_Config)
         servo->pwm_instance = PWMRegister(&Servo_Init_Config->pwm_init_config);
         break;
     default:
-        LOGERROR("Servo type error");
+        BSP_LOG_EVENT_0(EV_MODULES_MOTOR_SERVO_MOTOR_SERVO_MOTOR_C_01);
         break;
     }
     servo->servo_id = Servo_Init_Config->servo_id;

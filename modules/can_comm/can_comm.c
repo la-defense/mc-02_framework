@@ -1,4 +1,4 @@
-/** @file can_comm.c
+﻿/** @file can_comm.c
 * @brief 分片发送固定长度消息，接收时拼包并检查 CRC8，按真正收包时间判断是否仍可使用。
  */
 #include "can_comm.h"
@@ -101,8 +101,7 @@ static void CANCommLostCallback(void *cancomm)
     CANCommInstance *comm = (CANCommInstance *)cancomm;
     CANCommResetRx(comm);
     // 记录实际接收编号，便于区分是哪条链路离线。
-    LOGWARNING("[can_comm] can comm rx[%lu] lost, reset rx state.",
-               (unsigned long)comm->can_ins->rx_id);
+    BSP_LOG_EVENT_1(EV_MODULES_CAN_COMM_CAN_COMM_C_01, BSP_LOG_FIELD_U32((unsigned long)comm->can_ins->rx_id));
 }
 
 CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config)

@@ -91,9 +91,10 @@ static inline void DWT_ProbeDone(volatile DWT_Probe_t *probe, uint32_t start)
         float tstart = DWT_GetTimeline_s();      \
         code;                                    \
         dt = DWT_GetTimeline_s() - tstart;       \
-        /* RTT 的 printf 不支持 %f 且遇到 %f 不消费参数 → 会打崩后面的 %s, */ \
-        /* 所以放大成整数打印(单位 us)。 */                                \
-        LOGINFO("[DWT] " #dt " = %ld us\r\n", (long)(dt * 1000000.0f));    \
+        /* 提交名称和微秒数；日志任务负责把原始数据转换成文字。 */       \
+        BSP_LOG_EVENT_2(EV_BSP_DWT_BSP_DWT_H_01,                            \
+                        BSP_LOG_FIELD_TEXT_LITERAL(#dt),                    \
+                        BSP_LOG_FIELD_U32((uint32_t)((dt) * 1000000.0f)));  \
     } while (0)
 
 /**

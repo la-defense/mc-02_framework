@@ -114,64 +114,113 @@ extern volatile uint32_t can_prof_tx_spins, can_prof_tx_full, can_prof_rx_frames
 
 /* RTOS 计时单位: getRunTimeCounterValue() 返回 CYCCNT/1000, 即"千周期",
    480MHz 下一单位 = 1/480 ms ≈ 2.083us。换算成 us 用 *1000/480。 */
-#define LCD_STATS_UNIT_TO_US(x) ((uint32_t)(((uint64_t)(x) * 1000u) / 480u))
-
 typedef struct
 {
     char name[12];
     uint32_t runtime;
 } LcdTaskPrev_t;
 
-/* 每 5s 打印一次: 第一行各任务占用率(千分比, RTT 不支持浮点), 第二行分段耗时 */
-static void lcd_cpu_report(uint32_t delta_total, const uint32_t *deltas)
-{
-    // 给日志前缀留出空间；只在行数组还有空位时继续追加各任务占用率。
-    char line[208];
-    int off = snprintf(line, sizeof(line), "[cpu] win=%lums ",
-                       (unsigned long)LCD_STATS_UNIT_TO_US(delta_total) / 1000u);
+/* 统计快照拆成12条固定事件，每个200ms循环只提交一条，避免一次占满普通事件额度。 */
+#define LCD_STATS_LOG_GROUPS 12u
+static const BSPLogEventId_t lcd_stats_log_events[LCD_STATS_LOG_GROUPS] = {
+    EV_MODULES_LCD_LCD_STATS_C_01, EV_MODULES_LCD_LCD_STATS_C_02,
+    EV_MODULES_LCD_LCD_STATS_C_03, EV_MODULES_LCD_LCD_STATS_C_04,
+    EV_MODULES_LCD_LCD_STATS_C_05, EV_MODULES_LCD_LCD_STATS_C_06,
+    EV_MODULES_LCD_LCD_STATS_C_07, EV_MODULES_LCD_LCD_STATS_C_08,
+    EV_MODULES_LCD_LCD_STATS_C_09, EV_MODULES_LCD_LCD_STATS_C_10,
+    EV_MODULES_LCD_LCD_STATS_C_11, EV_MODULES_LCD_LCD_STATS_C_12};
+static BSPLogField_t lcd_stats_log_fields[LCD_STATS_LOG_GROUPS][8];
+static uint8_t lcd_stats_log_next_group;
+static uint8_t lcd_stats_log_pending;
 
-    for (uint8_t i = 0; i < lcd_stats_count && off > 0 && off < (int)sizeof(line); ++i)
+static size_t lcd_stats_text_length(const char *text, size_t limit)
+{
+    size_t length = 0u;
+    if (text == NULL)
+        return 0u;
+    while (length < limit && text[length] != '\0')
+        ++length;
+    return length;
+}
+
+static void lcd_stats_set_pair(uint8_t group, uint8_t pair, const char *name,
+                               size_t name_length, uint32_t value)
+{
+    uint8_t field = (uint8_t)(pair * 2u);
+    lcd_stats_log_fields[group][field] = BSP_LOG_FIELD_TEXT(name, name_length);
+    lcd_stats_log_fields[group][field + 1u] = BSP_LOG_FIELD_U32(value);
+}
+
+static void lcd_stats_set_literal(uint8_t group, uint8_t pair, const char *name, uint32_t value)
+{
+    lcd_stats_set_pair(group, pair, name, lcd_stats_text_length(name, BSP_LOG_TEXT_MAX), value);
+}
+
+static void lcd_stats_prepare_logs(uint32_t delta_total, const uint32_t *deltas)
+{
+    static const char *const segment_names[10] = {
+        "mot_all", "mot_dji", "mot_lk", "dji_pid", "dji_send",
+        "ins_all", "ins_read", "ins_ekf", "ins_temp", "lcd_upd"};
+    static const char *const can_names[6] = {
+        "tx_calls", "tx_full", "tx_spins", "tx_max", "rx_frames", "rx_isr_max"};
+    static const char *const lcd_names[4] = {"upd", "clear", "init", "recover"};
+    uint32_t segment_values[10] = {
+        motor_prof_all.last_us, motor_prof_dji.last_us, motor_prof_lk.last_us,
+        dji_prof_pid.last_us, dji_prof_send.last_us, ins_prof_all.last_us,
+        ins_prof_read.last_us, ins_prof_ekf.last_us, ins_prof_temp.last_us,
+        lcd_prof_update_last_us};
+    uint32_t can_values[6] = {
+        can_prof_tx.calls, can_prof_tx_full, can_prof_tx_spins, can_prof_tx.max_us,
+        can_prof_rx_frames, can_prof_rx_isr.max_us};
+    uint32_t lcd_values[4] = {
+        lcd_prof_update_last_us, lcd_prof_clear_us, lcd_prof_init_us, lcd_prof_recover_us};
+
+    for (uint8_t group = 0u; group < LCD_STATS_LOG_GROUPS; ++group)
+    {
+        for (uint8_t pair = 0u; pair < 4u; ++pair)
+        {
+            lcd_stats_log_fields[group][pair * 2u] = BSP_LOG_FIELD_TEXT_LITERAL("");
+            lcd_stats_log_fields[group][pair * 2u + 1u] = BSP_LOG_FIELD_U32(0u);
+        }
+    }
+
+    for (uint8_t i = 0u; i < lcd_stats_count; ++i)
     {
         uint32_t permille = (delta_total != 0u)
                                 ? (uint32_t)(((uint64_t)deltas[i] * 1000u) / delta_total)
                                 : 0u;
-        int w = snprintf(line + off, sizeof(line) - (size_t)off, "%s=%lu ",
-                         (const char *)lcd_stats_name[i], (unsigned long)permille);
-        if (w < 0)
-            break;
-        off += w;
+        lcd_stats_set_pair((uint8_t)(i / 4u), (uint8_t)(i % 4u),
+                           (const char *)lcd_stats_name[i],
+                           lcd_stats_text_length((const char *)lcd_stats_name[i], 11u), permille);
     }
-    LOGINFO("%s (千分比, 1000=100%%)", line);
+    for (uint8_t i = 0u; i < 10u; ++i)
+        lcd_stats_set_literal((uint8_t)(3u + i / 4u), (uint8_t)(i % 4u),
+                              segment_names[i], segment_values[i]);
+    for (uint8_t i = 0u; i < 6u; ++i)
+        lcd_stats_set_literal((uint8_t)(6u + i / 4u), (uint8_t)(i % 4u),
+                              can_names[i], can_values[i]);
+    for (uint8_t i = 0u; i < 4u; ++i)
+        lcd_stats_set_literal(8u, i, lcd_names[i], lcd_values[i]);
+    for (uint8_t i = 0u; i < lcd_stats_count; ++i)
+        lcd_stats_set_pair((uint8_t)(9u + i / 4u), (uint8_t)(i % 4u),
+                           (const char *)lcd_stats_name[i],
+                           lcd_stats_text_length((const char *)lcd_stats_name[i], 11u),
+                           lcd_stats_stack[i]);
 
-    LOGINFO("[seg] mot_all=%lu mot_dji=%lu mot_lk=%lu dji_pid=%lu dji_send=%lu ins_all=%lu ins_read=%lu ins_ekf=%lu ins_temp=%lu lcd_upd=%lu (us, last)",
-            (unsigned long)motor_prof_all.last_us, (unsigned long)motor_prof_dji.last_us,
-            (unsigned long)motor_prof_lk.last_us, (unsigned long)dji_prof_pid.last_us,
-            (unsigned long)dji_prof_send.last_us, (unsigned long)ins_prof_all.last_us,
-            (unsigned long)ins_prof_read.last_us, (unsigned long)ins_prof_ekf.last_us,
-            (unsigned long)ins_prof_temp.last_us, (unsigned long)lcd_prof_update_last_us);
-    LOGINFO("[can] tx_calls=%lu tx_full=%lu tx_spins=%lu tx_max=%lu rx_frames=%lu rx_isr_max=%lu (us)",
-            (unsigned long)can_prof_tx.calls, (unsigned long)can_prof_tx_full,
-            (unsigned long)can_prof_tx_spins, (unsigned long)can_prof_tx.max_us,
-            (unsigned long)can_prof_rx_frames, (unsigned long)can_prof_rx_isr.max_us);
-    LOGINFO("[lcd] upd=%lu clr=%lu init=%lu recover=%lu (us)",
-            (unsigned long)lcd_prof_update_last_us, (unsigned long)lcd_prof_clear_us,
-            (unsigned long)lcd_prof_init_us, (unsigned long)lcd_prof_recover_us);
-
-    /* 各任务"剩余栈最小值"(word, 4 字节/word), 顺序与本段上面 [cpu] 那行一致 ——
-       数字越小越接近溢出(0 = 已经溢出)。改任务栈大小/加日志缓冲前先看它。 */
-    char stk[208];
-    int soff = snprintf(stk, sizeof(stk), "[stk] 剩余栈(word, 顺序同 [cpu]):");
-    for (uint8_t i = 0; i < lcd_stats_count && soff > 0 && soff < (int)sizeof(stk); ++i)
-    {
-        int w = snprintf(stk + soff, sizeof(stk) - (size_t)soff, " %u",
-                         (unsigned)lcd_stats_stack[i]);
-        if (w < 0)
-            break;
-        soff += w;
-    }
-    LOGINFO("%s", stk);
+    lcd_stats_log_next_group = 0u;
+    lcd_stats_log_pending = LCD_STATS_LOG_GROUPS;
 }
 
+static void lcd_stats_log_step(void)
+{
+    if (lcd_stats_log_pending == 0u)
+        return;
+
+    uint8_t group = lcd_stats_log_next_group;
+    (void)BSPLogSubmit(lcd_stats_log_events[group], lcd_stats_log_fields[group], 8u);
+    ++lcd_stats_log_next_group;
+    --lcd_stats_log_pending;
+}
 // 记录各任务计数与剩余栈；第一次只保存基数，从第二次开始报告这一段时间的占用。
 static void lcd_task_stats_snapshot(void)
 {
@@ -224,7 +273,7 @@ static void lcd_task_stats_snapshot(void)
     }
 
     if (prev_cnt != 0u)
-        lcd_cpu_report(delta_total, deltas);
+        lcd_stats_prepare_logs(delta_total, deltas);
 
     // 本次结果作为下一轮的比较起点，名称连同结尾 0 一起保存。
     for (uint8_t i = 0; i < n; ++i)
@@ -358,7 +407,7 @@ static void lcd_module_presence_check(void)
         if (!lcd_module_absent)
         {
             lcd_module_absent = 1u;
-            LOGINFO("[lcd] module absent? raw=%u spread=%u", (unsigned)raw, (unsigned)lcd_key_spread);
+            BSP_LOG_EVENT_2(EV_MODULES_LCD_LCD_TASK_C_01, BSP_LOG_FIELD_U32((unsigned)raw), BSP_LOG_FIELD_U32((unsigned)lcd_key_spread));
         }
     }
     else
@@ -372,7 +421,7 @@ static void lcd_module_presence_check(void)
             present_streak = 0u;
             lcd_module_absent = 0u;
             lcd_recover_count++;
-            LOGINFO("[lcd] module back, re-init panel (recover=%lu)", (unsigned long)lcd_recover_count);
+            BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_02, BSP_LOG_FIELD_U32((unsigned long)lcd_recover_count));
             uint32_t t0 = DWT_ProbeStart();
             LCD_UI_Recover();
             lcd_prof_recover_us = DWT_ProbeElapsedUs(t0);
@@ -398,7 +447,7 @@ static void lcd_key_update(void)
     if (key_event.type == LCD_KEY_EVENT_DOWN)
     {
         lcd_key_last = (uint8_t)key_event.key;
-        LOGINFO("[lcd] key down %u raw=%u", (unsigned)key_event.key, (unsigned)lcd_key_raw);
+        BSP_LOG_EVENT_2(EV_MODULES_LCD_LCD_TASK_C_03, BSP_LOG_FIELD_U32((unsigned)key_event.key), BSP_LOG_FIELD_U32((unsigned)lcd_key_raw));
         return;
     }
     if (key_event.type != LCD_KEY_EVENT_RELEASED)
@@ -417,12 +466,11 @@ static void lcd_key_update(void)
             if (BMI088CalibGetState() == BMI088_RECALIB_BUSY)
                 return; /* 已经在标定中, 忽略本次 */
 
-            LOGINFO("[lcd] long press %s %lums -> request IMU calibration",
-                    (released == LCD_KEY_LEFT) ? "L" : "R", (unsigned long)duration);
+            BSP_LOG_EVENT_2(EV_MODULES_LCD_LCD_TASK_C_04, BSP_LOG_FIELD_CSTR_LIMIT(((released == LCD_KEY_LEFT) ? "L" : "R"), 48u), BSP_LOG_FIELD_U32((unsigned long)duration));
             RobotSafetyRequestCalib(1); /* 先失能: 标定期间电机不能动 */
             if (!BMI088CalibRequest())
             {
-                LOGWARNING("[lcd] calibration request rejected");
+                BSP_LOG_EVENT_0(EV_MODULES_LCD_LCD_TASK_C_05);
                 RobotSafetyRequestCalib(0);
                 return;
             }
@@ -439,7 +487,7 @@ static void lcd_key_update(void)
             // 重置显示时同时解除冻结，使恢复后的数值继续刷新。
             lcd_frozen = 0u;
             LCD_UI_SetFrozen(0u);
-            LOGINFO("[lcd] manual re-init (recover=%lu)", (unsigned long)lcd_recover_count);
+            BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_06, BSP_LOG_FIELD_U32((unsigned long)lcd_recover_count));
             uint32_t t0 = DWT_ProbeStart();
             LCD_UI_Recover();
             lcd_prof_recover_us = DWT_ProbeElapsedUs(t0);
@@ -459,7 +507,7 @@ static void lcd_key_update(void)
     case LCD_KEY_MID:
         lcd_frozen = lcd_frozen ? 0u : 1u;
         LCD_UI_SetFrozen(lcd_frozen);
-        LOGINFO("[lcd] freeze %s", lcd_frozen ? "on" : "off");
+        BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_07, BSP_LOG_FIELD_CSTR_LIMIT((lcd_frozen ? "on" : "off"), 48u));
         return;
     default:
         return;
@@ -469,7 +517,7 @@ static void lcd_key_update(void)
     LCD_UI_DrawStatic(lcd_page);
     LCD_UI_UpdateValues(lcd_page);
     lcd_prof_record(t0, &lcd_prof_draw_last_us, &lcd_prof_draw_max_us);
-    LOGINFO("[lcd] page %u", (unsigned)(lcd_page + 1u));
+    BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_08, BSP_LOG_FIELD_U32((unsigned)(lcd_page + 1u)));
 }
 
 /**
@@ -498,9 +546,7 @@ static void lcd_calib_service(void)
             LCD_UI_ShowCalibMsg((st == BMI088_RECALIB_OK) ? 2u : 3u);
             lcd_calib_msg = 2u;
             lcd_calib_result_until = HAL_GetTick() + LCD_CALIB_RESULT_MS;
-            LOGINFO("[lcd] calib result: %s (rounds=%u)",
-                    (st == BMI088_RECALIB_OK) ? "OK" : "FAIL",
-                    (unsigned)bmi088_calib_attempts);
+            BSP_LOG_EVENT_2(EV_MODULES_LCD_LCD_TASK_C_09, BSP_LOG_FIELD_CSTR_LIMIT(((st == BMI088_RECALIB_OK) ? "OK" : "FAIL"), 48u), BSP_LOG_FIELD_U32((unsigned)bmi088_calib_attempts));
         }
         if ((int32_t)(HAL_GetTick() - lcd_calib_result_until) >= 0)
         {
@@ -508,7 +554,7 @@ static void lcd_calib_service(void)
             RobotSafetyRequestCalib(0); /* 回 SAFE: 必须重新走正常使能流程 */
             lcd_calib_msg = 0u;
             LCD_UI_ShowCalibMsg(0u); /* 清提示并重画整页 */
-            LOGINFO("[lcd] calib UI done, back to normal page");
+            BSP_LOG_EVENT_0(EV_MODULES_LCD_LCD_TASK_C_10);
         }
         return;
     }
@@ -531,7 +577,7 @@ void StartLCDTASK(void const *argument)
     LCD_UI_Init();
     lcd_prof_init_us = DWT_ProbeElapsedUs(t0);
     lcd_init_done = 1;
-    LOGINFO("[lcd] init done, page=%u", (unsigned)(lcd_page + 1u));
+    BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_11, BSP_LOG_FIELD_U32((unsigned)(lcd_page + 1u)));
 
     for (;;)
     {
@@ -559,5 +605,7 @@ void StartLCDTASK(void const *argument)
 
         if ((lcd_heartbeat % LCD_TASK_STATS_PERIOD) == 0u)
             lcd_task_stats_snapshot();
+
+        lcd_stats_log_step();
     }
 }

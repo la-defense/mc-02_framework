@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file rm_referee.c
  * @brief 校验裁判帧、按官方字段解码，并发布带独立期限的命令数据。
  * RefereeInit只注册接收；读取者通过RefereeGetSnapshot取得一致副本。
@@ -380,7 +380,7 @@ static void RefereeLostCallback(void *arg)
     taskEXIT_CRITICAL();
     // 只撤销链路在线标记；各命令旧值及来源时间保留供诊断。
     USARTServiceInit(referee_usart_instance);
-    LOGWARNING("[rm_ref] lost referee data");
+    BSP_LOG_EVENT_0(EV_MODULES_REFEREE_RM_REFEREE_C_01);
 }
 
 static uint8_t RefereeConfigValid(const RefereeConfig_t *config)

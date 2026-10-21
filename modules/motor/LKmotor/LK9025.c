@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file LK9025.c
  * @brief 管理 LK 实例、解析反馈，并按物理 CAN 总线分别提交多电机帧。
  * 实例只在启动阶段登记，资源在运行期间长期保留。
@@ -115,11 +115,9 @@ static void LKMotorDecode(CANInstance *_instance)
 static void LKMotorLostCallback(void *motor_ptr)
 {
     LKMotorInstance *motor = (LKMotorInstance *)motor_ptr;
-    static LogRateLimit_t rl_lk_lost = {0};
-    if (LogRateLimitAllow(&rl_lk_lost, 1000u))
-        LOGWARNING("[LKMotor] 电机离线: id %d (累计 %lu 次, 期间限速 %lu 条)",
-                   (int)motor->motor_id,
-                   (unsigned long)rl_lk_lost.total, (unsigned long)rl_lk_lost.dropped);
+    (void)motor; /* 仅诊断使用的局部指针在关闭日志的主机替身中也保持无告警。 */
+    BSP_LOG_EVENT_1(EV_MODULES_MOTOR_LKMOTOR_LK9025_C_01,
+                    BSP_LOG_FIELD_I32((int)motor->motor_id));
 }
 
 LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)

@@ -1,4 +1,4 @@
-/** @file robot_task.h
+﻿/** @file robot_task.h
 * @brief 任务创建及常驻任务实现，仅由 robot.c 包含；重复包含到其他编译单元会重复定义。
  */
 /* 注意该文件应只用于任务初始化,只能被robot.c包含*/
@@ -77,6 +77,9 @@ uint8_t OSTaskInit(void)
     motorTaskHandle = osThreadCreate(osThread(motortask), NULL);
 
     uint8_t uart_tx_created = USARTTxTaskInit();
+
+    /* 日志任务是辅助诊断能力，创建失败由日志只读状态报告，不阻断核心任务启动。 */
+    (void)BSPLogTaskInit();
 
     // Daemon 内有状态检查与日志，需同时容纳日志行数组和各层调用。
     osThreadDef(daemontask, StartDAEMONTASK, osPriorityNormal, 0, 512);
@@ -167,7 +170,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         }
     }
     InitDiagnosticMarkReady();
-    LOGINFO("[freeRTOS] INS Task Start");
+    BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_01);
     for (;;)
     {
         // 1kHz
@@ -178,16 +181,10 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         ins_dt = (float)DWT_ProbeElapsedUs(ins_probe);
         if (ins_dt > 1000.0f)
         {
-            // 用整数微秒记录超时，每秒最多报告一次，保留总次数和省略次数。
-            static LogRateLimit_t rl_ins_overrun = {0};
-            if (LogRateLimitAllow(&rl_ins_overrun, 1000u))
-            {
-                ins_start = DWT_GetTimeline_ms(); /* 便于 Live Watch 看最近一次超时刻 */
-                (void)ins_start;
-                LOGERROR("[freeRTOS] INS Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
-                         (unsigned long)(uint32_t)ins_dt,
-                         (unsigned long)rl_ins_overrun.total, (unsigned long)rl_ins_overrun.dropped);
-            }
+            ins_start = DWT_GetTimeline_ms(); /* 便于 Live Watch 查看最近一次超时刻 */
+            (void)ins_start;
+            BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_02,
+                            BSP_LOG_FIELD_U32((uint32_t)ins_dt));
         }
         // 视觉上行数据由 INS_Task 内的 VisionUpdateTx() 填充,
         // VisionSend() 统一在 RobotCMDTask(200Hz) 中调用, 避免多任务并发 DMA 发送
@@ -198,7 +195,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
 __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 {
     static float motor_dt;
-    LOGINFO("[freeRTOS] MOTOR Task Start");
+    BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_03);
     for (;;)
     {
         TaskMonitorFeed(TASK_MONITOR_MOTOR);
@@ -207,13 +204,8 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
         motor_dt = (float)DWT_ProbeElapsedUs(motor_probe);
         if (motor_dt > 1000.0f)
         {
-            static LogRateLimit_t rl_motor_overrun = {0};
-            if (LogRateLimitAllow(&rl_motor_overrun, 1000u))
-            {
-                LOGERROR("[freeRTOS] MOTOR Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
-                         (unsigned long)(uint32_t)motor_dt,
-                         (unsigned long)rl_motor_overrun.total, (unsigned long)rl_motor_overrun.dropped);
-            }
+            BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_04,
+                            BSP_LOG_FIELD_U32((uint32_t)motor_dt));
         }
         osDelay(1);
     }
@@ -231,10 +223,9 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         IMUHeaterForceOff();
         BSP_SafetyStartupLatchOutputsOff();
     }
-    LOGINFO("[freeRTOS] Daemon Task Start");
+    BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_05);
 #if LOG_TEST
-    /* 日志格式串安全自测(默认关闭): 见 bsp_log.h 的 LOG_TEST / bsp_log.c 的 LogSelfTest()
-       启动先打一次, 之后每 2s 重打一次(100Hz x 200), 方便临时接上 RTT 抓取。 */
+    /* 类型化日志自测默认关闭；普通事件也需在bench_safe显式开启诊断输出。 */
     LogSelfTest();
 #endif
 #if CAN_SELFTEST_LOOPBACK
@@ -283,13 +274,8 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         daemon_dt = (float)DWT_ProbeElapsedUs(daemon_probe);
         if (daemon_dt > 10000.0f)
         {
-            static LogRateLimit_t rl_daemon_overrun = {0};
-            if (LogRateLimitAllow(&rl_daemon_overrun, 1000u))
-            {
-                LOGERROR("[freeRTOS] Daemon Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
-                         (unsigned long)(uint32_t)daemon_dt,
-                         (unsigned long)rl_daemon_overrun.total, (unsigned long)rl_daemon_overrun.dropped);
-            }
+            BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_06,
+                            BSP_LOG_FIELD_U32((uint32_t)daemon_dt));
         }
         osDelay(10);
     }
@@ -298,7 +284,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
 {
     static float robot_dt;
-    LOGINFO("[freeRTOS] ROBOT core Task Start");
+    BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_07);
     // 200Hz-500Hz,若有额外的控制任务如平衡步兵可能需要提升至1kHz
     for (;;)
     {
@@ -308,13 +294,8 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
         robot_dt = (float)DWT_ProbeElapsedUs(robot_probe);
         if (robot_dt > 5000.0f)
         {
-            static LogRateLimit_t rl_robot_overrun = {0};
-            if (LogRateLimitAllow(&rl_robot_overrun, 1000u))
-            {
-                LOGERROR("[freeRTOS] ROBOT core Task 超时: %luus (累计 %lu 次, 期间限速 %lu 条)",
-                         (unsigned long)(uint32_t)robot_dt,
-                         (unsigned long)rl_robot_overrun.total, (unsigned long)rl_robot_overrun.dropped);
-            }
+            BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_08,
+                            BSP_LOG_FIELD_U32((uint32_t)robot_dt));
         }
         osDelay(5);
     }

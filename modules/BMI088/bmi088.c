@@ -1,4 +1,4 @@
-/**
+﻿/**
 * @file bmi088.c
 * @brief 实现 BMI088 的寄存器读写、采样、启动检查和在线标定。
 * BMI088Acquire 只在整份样本读取成功后更新输出；标定由 INS 任务执行。
@@ -660,21 +660,12 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
         /* 注意: RTT 的 printf 实现不支持 %f, 而且遇到 %f 时**不会消费参数**,
            会让后面的 %s 取到错位的参数(见 LOG_PROTO 的结尾 %s) → 把浮点位模式
            当指针解引用 → BusFault/HardFault。所以这里统一用"放大成整数"打印。 */
-        LOGINFO("[bmi088] online calib OK: round=%u gNorm_x1000=%ld off_x10000=%ld/%ld/%ld temp_x100=%ld",
-                (unsigned)attempt,
-                (long)(_bmi088->gNorm * 1000.0f),
-                (long)(_bmi088->gyro_offset[0] * 10000.0f),
-                (long)(_bmi088->gyro_offset[1] * 10000.0f),
-                (long)(_bmi088->gyro_offset[2] * 10000.0f),
-                (long)(bmi088_calib_temp * 100.0f));
+        BSP_LOG_EVENT_6(EV_MODULES_BMI088_BMI088_C_01, BSP_LOG_FIELD_U32((unsigned)attempt), BSP_LOG_FIELD_I32((long)(_bmi088->gNorm * 1000.0f)), BSP_LOG_FIELD_I32((long)(_bmi088->gyro_offset[0] * 10000.0f)), BSP_LOG_FIELD_I32((long)(_bmi088->gyro_offset[1] * 10000.0f)), BSP_LOG_FIELD_I32((long)(_bmi088->gyro_offset[2] * 10000.0f)), BSP_LOG_FIELD_I32((long)(bmi088_calib_temp * 100.0f)));
     }
     else
     {
         _bmi088->acc_coef = BMI088_ACCEL_6G_SEN;
-        LOGERROR("[bmi088] online calib FAILED: round=%u timed_out=%u gNorm_x1000=%ld elapsed=%lums",
-                 (unsigned)attempt, (unsigned)timed_out,
-                 (long)(_bmi088->gNorm * 1000.0f),
-                 (unsigned long)cali_diag_elapsed_ms);
+        BSP_LOG_EVENT_4(EV_MODULES_BMI088_BMI088_C_02, BSP_LOG_FIELD_U32((unsigned)attempt), BSP_LOG_FIELD_U32((unsigned)timed_out), BSP_LOG_FIELD_I32((long)(_bmi088->gNorm * 1000.0f)), BSP_LOG_FIELD_U32((unsigned long)cali_diag_elapsed_ms));
     }
 
     // 离线标定: 上层显式要求(离线调试)时使用编译期默认值
@@ -764,7 +755,7 @@ static uint8_t BMI088CalibLoad(BMI088Instance *b)
         return 0;
     if (!BMI088CalibSanity(off, gNorm))
     {
-        LOGERROR("[bmi088] Flash 里的标定值超出合理范围, 视为无效");
+        BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_03);
         return 0;
     }
     BMI088ApplyCalib(b, off, gNorm);
@@ -792,7 +783,7 @@ static uint8_t BMI088CalibSave(BMI088Instance *b)
         !ParamSetFloat(PARAM_KEY_IMU_G_NORM, b->gNorm) ||
         !ParamSet(PARAM_KEY_IMU_CALIB_META, &meta, sizeof(meta)))
     {
-        LOGERROR("[bmi088] 标定值写入参数缓存失败");
+        BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_04);
         return 0;
     }
     return ParamCommit();
@@ -814,7 +805,7 @@ static void BMI088CalibInit(BMI088Instance *b, BMI088_Calibrate_Mode_e cfg_mode)
         BMI088ApplyCalib(b, default_off, BMI088_PRE_CALI_G_NORM);
         bmi088_calib_source = BMI088_CALIB_SRC_DEFAULT;
         s_calib_ok = 0;
-        LOGWARNING("[bmi088] cali_mode=LOAD_PRE_CALI: 使用编译期默认标定值");
+        BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_05);
         return;
     }
 
@@ -823,21 +814,19 @@ static void BMI088CalibInit(BMI088Instance *b, BMI088_Calibrate_Mode_e cfg_mode)
         bmi088_calib_source = BMI088_CALIB_SRC_FLASH;
         s_calib_ok = 1;
         RobotSafetySetCalibValid(1);
-        LOGINFO("[bmi088] 使用 Flash 标定记录: gNorm_x1000=%ld off_x10000=%ld/%ld/%ld",
-                (long)(b->gNorm * 1000.0f), (long)(b->gyro_offset[0] * 10000.0f),
-                (long)(b->gyro_offset[1] * 10000.0f), (long)(b->gyro_offset[2] * 10000.0f));
+        BSP_LOG_EVENT_4(EV_MODULES_BMI088_BMI088_C_06, BSP_LOG_FIELD_I32((long)(b->gNorm * 1000.0f)), BSP_LOG_FIELD_I32((long)(b->gyro_offset[0] * 10000.0f)), BSP_LOG_FIELD_I32((long)(b->gyro_offset[1] * 10000.0f)), BSP_LOG_FIELD_I32((long)(b->gyro_offset[2] * 10000.0f)));
         return;
     }
 
     /* 没有有效记录: 首次自动标定(最多 3 轮), 成功即写参数区 */
-    LOGWARNING("[bmi088] 无 Flash 标定记录, 首次自动标定(请保持静止)...");
+    BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_07);
     if (!BMI088CalibrationOperationBegin())
     {
         BMI088ApplyCalib(b, default_off, BMI088_PRE_CALI_G_NORM);
         bmi088_calib_source = BMI088_CALIB_SRC_DEFAULT;
         s_calib_ok = 0u;
         RobotSafetySetCalibValid(0u);
-        LOGERROR("[bmi088] startup calibration refused: monitor or heater guard unavailable");
+        BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_08);
         return;
     }
 
@@ -853,9 +842,9 @@ static void BMI088CalibInit(BMI088Instance *b, BMI088_Calibrate_Mode_e cfg_mode)
         s_calib_ok = 1;
         RobotSafetySetCalibValid(1);
         if (BMI088CalibSave(b))
-            LOGINFO("[bmi088] 首次自动标定成功并已保存(rounds=%u)", (unsigned)bmi088_calib_attempts);
+            BSP_LOG_EVENT_1(EV_MODULES_BMI088_BMI088_C_09, BSP_LOG_FIELD_U32((unsigned)bmi088_calib_attempts));
         else
-            LOGERROR("[bmi088] 首次自动标定成功但保存失败, 下次启动会重新标定");
+            BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_10);
     }
     else
     {
@@ -863,8 +852,7 @@ static void BMI088CalibInit(BMI088Instance *b, BMI088_Calibrate_Mode_e cfg_mode)
         bmi088_calib_source = BMI088_CALIB_SRC_DEFAULT;
         s_calib_ok = 0;
         RobotSafetySetCalibValid(0); /* → ROBOT_FAULT_CALIB_INVALID, 不阻塞启动 */
-        LOGERROR("[bmi088] 首次自动标定失败(rounds=%u), 使用默认值并置 CALIB_INVALID",
-                 (unsigned)bmi088_calib_attempts);
+        BSP_LOG_EVENT_1(EV_MODULES_BMI088_BMI088_C_11, BSP_LOG_FIELD_U32((unsigned)bmi088_calib_attempts));
     }
     if (!BMI088CalibrationOperationEnd(ok))
     {
@@ -872,7 +860,7 @@ static void BMI088CalibInit(BMI088Instance *b, BMI088_Calibrate_Mode_e cfg_mode)
         bmi088_calib_source = BMI088_CALIB_SRC_DEFAULT;
         s_calib_ok = 0u;
         RobotSafetySetCalibValid(0u);
-        LOGERROR("[bmi088] startup calibration exceeded bounded monitoring window");
+        BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_12);
     }
 }
 
@@ -904,7 +892,7 @@ uint8_t BMI088CalibService(void)
         return 1;
     }
 
-    LOGWARNING("[bmi088] 按需标定开始, 请保持静止...");
+    BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_13);
     if (!BMI088CalibrationOperationBegin())
     {
         s_calib_ok = 0u;
@@ -925,17 +913,16 @@ uint8_t BMI088CalibService(void)
         RobotSafetySetCalibValid(1);
         bmi088_calib_source = BMI088_CALIB_SRC_MANUAL;
         if (BMI088CalibSave(b))
-            LOGINFO("[bmi088] 按需标定成功并已保存(rounds=%u)", (unsigned)bmi088_calib_attempts);
+            BSP_LOG_EVENT_1(EV_MODULES_BMI088_BMI088_C_14, BSP_LOG_FIELD_U32((unsigned)bmi088_calib_attempts));
         else
-            LOGERROR("[bmi088] 按需标定成功, 但写参数区失败(重启会退回旧值)");
+            BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_15);
     }
     else
     {
         /* 保留旧值/默认值, 并上报 CALIB_INVALID 阻止进入 READY */
         s_calib_ok = 0;
         RobotSafetySetCalibValid(0);
-        LOGERROR("[bmi088] 按需标定失败(rounds=%u), 保留旧值并置 CALIB_INVALID",
-                 (unsigned)bmi088_calib_attempts);
+        BSP_LOG_EVENT_1(EV_MODULES_BMI088_BMI088_C_16, BSP_LOG_FIELD_U32((unsigned)bmi088_calib_attempts));
     }
 
     if (!BMI088CalibrationOperationEnd(ok))
@@ -979,7 +966,7 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     if (config == NULL || config->work_mode != BMI088_BLOCK_PERIODIC_MODE)
     {
         bmi088_init_error = BMI088_NO_SENSOR;
-        LOGERROR("[bmi088] asynchronous trigger sampling is not supported by the synchronous snapshot API");
+        BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_17);
         return NULL;
     }
 
@@ -1064,10 +1051,7 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
 
     if (error != 0)
     {
-        LOGERROR("[bmi088] init failed after %u retries, error=0x%02X acc_id=0x%02X acc_status=%u gyro_id=0x%02X gyro_status=%u",
-                 (unsigned)init_retry, (unsigned)error,
-                 (unsigned)bmi088_init_acc_chip_id, (unsigned)bmi088_init_acc_status,
-                 (unsigned)bmi088_init_gyro_chip_id, (unsigned)bmi088_init_gyro_status);
+        BSP_LOG_EVENT_6(EV_MODULES_BMI088_BMI088_C_18, BSP_LOG_FIELD_U32((unsigned)init_retry), BSP_LOG_FIELD_HEX32((unsigned)error), BSP_LOG_FIELD_HEX32((unsigned)bmi088_init_acc_chip_id), BSP_LOG_FIELD_U32((unsigned)bmi088_init_acc_status), BSP_LOG_FIELD_HEX32((unsigned)bmi088_init_gyro_chip_id), BSP_LOG_FIELD_U32((unsigned)bmi088_init_gyro_status));
         (void)PWMUnregister(bmi088_instance->heat_pwm);
         (void)SPIUnregister(bmi088_instance->spi_acc);
         (void)SPIUnregister(bmi088_instance->spi_gyro);

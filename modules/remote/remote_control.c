@@ -1,4 +1,4 @@
-/** @file remote_control.c
+﻿/** @file remote_control.c
 * @brief 检查 18 字节 DBUS 帧，分别维护摇杆在线、键鼠更新及按下次数。
 * UART 派发调用接收函数，Daemon 处理离线；命令任务周期读取当前输入和可用标记。
 */
@@ -196,7 +196,7 @@ static void RCLostCallback(void *id)
     RobotSafetySetRcOnline(0u);
     EstopRequest(ESTOP_REASON_RC_OFFLINE);
     USARTServiceInit(rc_usart_instance);
-    LOGWARNING("[rc] remote control lost");
+    BSP_LOG_EVENT_0(EV_MODULES_REMOTE_REMOTE_CONTROL_C_01);
 }
 
 RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)

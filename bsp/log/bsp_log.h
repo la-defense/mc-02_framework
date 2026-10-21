@@ -1,123 +1,241 @@
 /** @file bsp_log.h
-* @brief 声明 BSPLogInit、PrintLog 和日志宏，支持同类日志限速，并引入 Float2Str 声明。
-* @note RTT 日志先调用 BSPLogInit；独立的 Float2Str 不需要日志初始化或硬件。
+ * @brief 声明固定事件目录、有界提交、只读历史和日志任务接口。
+ * @note 先调用 BSPLogInit；提交只允许启动代码和普通任务，事件数据会在返回前复制。
  */
-#ifndef _BSP_LOG_H
-#define _BSP_LOG_H
+#ifndef MC02_BSP_LOG_H
+#define MC02_BSP_LOG_H
 
-#include "SEGGER_RTT.h"
-#include "SEGGER_RTT_Conf.h"
-#include <stdio.h>
+#include <stddef.h>
 #include <stdint.h>
-#include <string.h> /* LOG_PROTO 里用 memcpy 拼接结尾的换行+复位色码 */
-#include "float_to_string.h"
-#include "format_check.h"
 
-#define BUFFER_INDEX 0
+#define BSP_LOG_QUEUE_CAPACITY 32u
+#define BSP_LOG_NORMAL_QUEUE_LIMIT 24u
+#define BSP_LOG_TEXT_MAX 48u
+#define BSP_LOG_PAYLOAD_MAX 96u
+#define BSP_LOG_HISTORY_CAPACITY 16u
+#define BSP_LOG_OUTPUT_CAPACITY 256u
+#define BSP_LOG_MAX_FIELDS 8u
+#define BSP_LOG_SOURCE_CAPACITY 32u
+#define BSP_LOG_WORKSPACE_MAX 16384u
 
-/** @brief 初始化默认RTT通道；在启动阶段串行调用，先于普通日志输出。
- * @note 无返回状态；调用完成不证明探针或查看器已经连接。
- */
-void BSPLogInit();
+#ifndef MC02_LOG_ORDINARY
+#define MC02_LOG_ORDINARY 0
+#endif
 
-// 先由 snprintf 处理全部参数，再写出纯文本；结尾换行和颜色码另行追加，避免混用格式化规则。
-// 每次调用在任务栈上使用 256 字节，超长内容只保留数组放得下的部分。
-// 日志数组还须容纳诊断汇总行，保留 256 字节，并为末尾换行及颜色复原码留空。
-#define LOG_BUF_SIZE 256u /* 整行日志缓冲(放在栈上) */
-#define LOG_BODY_TAIL 8u  /* 给结尾的 "\r\n" + 复位色码预留的位置 */
+typedef enum
+{
+    LOG_SEVERITY_INFO = 0,
+    LOG_SEVERITY_WARNING,
+    LOG_SEVERITY_ERROR
+} BSPLogSeverity_t;
 
-/* 缓冲区尾部预留量必须放得下 "\r\n" + RTT_CTRL_RESET(+结束符) */
-_Static_assert(sizeof("\r\n" RTT_CTRL_RESET) <= LOG_BODY_TAIL,
-               "LOG_BODY_TAIL 放不下结尾的换行+复位色码");
+typedef enum
+{
+    LOG_CATEGORY_FAULT = 0,
+    LOG_CATEGORY_STATUS,
+    LOG_CATEGORY_NORMAL
+} BSPLogCategory_t;
 
-/** @brief 在局部数组格式化一行并追加换行、颜色复原码，再尝试交给RTT。
- * @param[in] type 可读的零结尾类型文字，生命周期至少覆盖本次调用。
- * @param[in] color 可读的零结尾颜色码，生命周期至少覆盖本次调用。
- * @param[in] format printf格式字面量；后续实参类型和数量必须匹配。
- * @note 先BSPLogInit；每次使用256字节局部数组，无返回状态，超长时只交付能放下的部分。
- *       格式化失败仅写换行和颜色复原码。编译检查不能替代动态长度检查，不证明查看器已显示。
- */
-#define LOG_PROTO(type, color, format, ...)                             \
-        do {                                                            \
-            char _log_buf[LOG_BUF_SIZE];                                \
-            int _log_n = snprintf(_log_buf,                             \
-                                  LOG_BUF_SIZE - LOG_BODY_TAIL,         \
-                                  "  %s%s" format,                      \
-                                  color, type, ##__VA_ARGS__);          \
-            if (_log_n < 0)                                             \
-                _log_n = 0; /* 格式化出错: 只留结尾的复位码 */           \
-            else if ((unsigned)_log_n > LOG_BUF_SIZE - LOG_BODY_TAIL - 1u) \
-                _log_n = LOG_BUF_SIZE - LOG_BODY_TAIL - 1u; /* 只保留数组放得下的内容。 */  \
-            memcpy(_log_buf + _log_n, "\r\n" RTT_CTRL_RESET,            \
-                   sizeof("\r\n" RTT_CTRL_RESET));                      \
-            SEGGER_RTT_WriteString(BUFFER_INDEX, _log_buf);             \
-        } while (0)
+typedef enum
+{
+    BSP_LOG_VALUE_U32 = 0,
+    BSP_LOG_VALUE_I32,
+    BSP_LOG_VALUE_F32,
+    BSP_LOG_VALUE_TEXT
+} BSPLogValueType_t;
 
-/*----------------------------------------下面是日志输出的接口-------------------------------------------------*/
+/** @brief 提交、读取和处理接口的结果。 */
+typedef enum
+{
+    BSP_LOG_STATUS_OK = 0,
+    BSP_LOG_STATUS_QUEUED,
+    BSP_LOG_STATUS_MERGED,
+    BSP_LOG_STATUS_RETAINED,
+    BSP_LOG_STATUS_FILTERED,
+    BSP_LOG_STATUS_RATE_LIMITED,
+    BSP_LOG_STATUS_FULL,
+    BSP_LOG_STATUS_BAD_ARGUMENT,
+    BSP_LOG_STATUS_NOT_INITIALIZED,
+    BSP_LOG_STATUS_BAD_CONTEXT,
+    BSP_LOG_STATUS_NOT_FOUND,
+    BSP_LOG_STATUS_EMPTY,
+    BSP_LOG_STATUS_PROCESSED,
+    BSP_LOG_STATUS_TASK_CREATE_FAILED
+} BSPLogStatus_t;
 
-/* 清屏 */
-#define LOG_CLEAR() SEGGER_RTT_WriteString(0, "  " RTT_CTRL_CLEAR)
+typedef enum
+{
+#define BSP_LOG_SOURCE(name, value, module, path) name = value,
+#include "bsp_log_sources.def"
+#undef BSP_LOG_SOURCE
+    BSP_LOG_SOURCE_COUNT = 32
+} BSPLogSourceId_t;
 
-/* 无颜色日志输出 */
-#define LOG(format, ...) LOG_PROTO("", "", format, ##__VA_ARGS__)
+typedef enum
+{
+#define BSP_LOG_EVENT(name, value, source, severity, category, file, message, types, labels, units) name = value,
+#include "bsp_log_events.def"
+#undef BSP_LOG_EVENT
+} BSPLogEventId_t;
 
-/**
- *  有颜色格式日志输出,建议使用这些宏来输出日志
- *  @attention newlib-nano 默认**不带**浮点格式化(库里的 `_printf_float` 不会被链进来),
- *             本工程已在 CMake 里加了 `-u _printf_float` 把它显式链上, 所以 %f 能正常打印;
- *             本轮没有测量板上格式化耗时，实时路径须按实际预算选择格式。
- *  @note DISABLE_LOG_SYSTEM仅关闭下面三个彩色宏；LOG和PrintLog仍可直接输出。
- *        关闭宏仍编译检查格式，但不求值参数、不执行发送。
- */
-#if DISABLE_LOG_SYSTEM
-// 保留可被编译器检查的调用；常假分支不求值参数，也不生成发送代码。
-#define LOGINFO(format, ...) do { if (0) { LOG_PROTO("I:", RTT_CTRL_TEXT_BRIGHT_GREEN, format, ##__VA_ARGS__); } } while (0)
-#define LOGWARNING(format, ...) do { if (0) { LOG_PROTO("W:", RTT_CTRL_TEXT_BRIGHT_YELLOW, format, ##__VA_ARGS__); } } while (0)
-#define LOGERROR(format, ...) do { if (0) { LOG_PROTO("E:", RTT_CTRL_TEXT_BRIGHT_RED, format, ##__VA_ARGS__); } } while (0)
-#else
-// information level
-#define LOGINFO(format, ...) LOG_PROTO("I:", RTT_CTRL_TEXT_BRIGHT_GREEN, format, ##__VA_ARGS__)
-// warning level
-#define LOGWARNING(format, ...) LOG_PROTO("W:", RTT_CTRL_TEXT_BRIGHT_YELLOW, format, ##__VA_ARGS__)
-// error level
-#define LOGERROR(format, ...) LOG_PROTO("E:", RTT_CTRL_TEXT_BRIGHT_RED, format, ##__VA_ARGS__)
-#endif //  DISABLE_LOG_SYSTEM
-
-// 同类事件共用一个清零的计数对象，HAL 毫秒时间达到 period 后才允许报告。
-// 初始 last_ms 为 0；上电未满 period 时首次也不报告，计时不前进时可能一直不报告。
+/** @brief 一次提交使用的字段视图；文本指针只在 BSPLogSubmit() 内读取。 */
 typedef struct
 {
-    uint32_t last_ms; /* 上次真正打印的时间 */
-    uint32_t total;   /* 累计事件数(每次调用 +1) */
-    uint32_t printed; /* 上次打印时的累计数 */
-    uint32_t dropped; /* 允许报告时保存的本段事件数，包含本次，不等于实际省略的条数。 */
-} LogRateLimit_t;
+    const char *data;
+    size_t length;
+} BSPLogTextView_t;
 
-/** @brief 计数一次事件，按时间决定本次是否允许调用方打印。
-* @param[in,out] rl 首次使用前清零；NULL 时始终返回 1，不计数。
-* @param[in] period_ms 最短报告间隔，单位 ms；为 0 时每次允许。
-* @return 达到间隔返回 1 并更新时间，否则为 0；不负责实际输出。
+/** @brief 定长数值或有长度的文本字段。 */
+typedef struct
+{
+    BSPLogValueType_t type;
+    union
+    {
+        uint32_t u32;
+        int32_t i32;
+        float f32;
+        BSPLogTextView_t text;
+    } value;
+} BSPLogField_t;
+
+/** @brief 供只读查询复制的事件记录；payload为内部类型-长度-数据格式。 */
+typedef struct
+{
+    uint32_t sequence;
+    uint32_t first_ms;
+    uint32_t last_ms;
+    uint32_t repeat_count;
+    BSPLogEventId_t event_id;
+    uint8_t category;
+    uint8_t severity;
+    uint8_t flags;
+    uint8_t payload_length;
+    uint8_t payload[BSP_LOG_PAYLOAD_MAX];
+} BSPLogHistoryRecord_t;
+
+/** @brief 日志队列、历史、输出和任务的只读运行状态。 */
+typedef struct
+{
+    uint32_t submitted;
+    uint32_t queued;
+    uint32_t merged;
+    uint32_t filtered;
+    uint32_t rate_limited;
+    uint32_t queue_full;
+    uint32_t evicted_normal;
+    uint32_t retained_only;
+    uint32_t shortened_text_fields;
+    uint32_t format_failures;
+    uint32_t output_failures;
+    uint32_t task_create_failures;
+    uint32_t process_cycles;
+    uint32_t first_fault_sequence;
+    uint16_t queue_depth;
+    uint16_t normal_queue_depth;
+    uint16_t queue_high_water;
+    uint8_t history_count;
+    uint8_t backend_available;
+    uint8_t task_started;
+    uint8_t task_create_pending;
+    uint8_t ordinary_enabled;
+    uint8_t processing;
+} BSPLogState_t;
+
+/** @brief 以整数形式保存的32位字段。 */
+#define BSP_LOG_FIELD_U32(value_) ((BSPLogField_t){.type = BSP_LOG_VALUE_U32, .value.u32 = (uint32_t)(value_)})
+/** @brief 以有符号整数形式保存的32位字段。 */
+#define BSP_LOG_FIELD_I32(value_) ((BSPLogField_t){.type = BSP_LOG_VALUE_I32, .value.i32 = (int32_t)(value_)})
+/** @brief 以IEEE 754单精度保存的字段；NaN和Inf由处理端显示标记。 */
+#define BSP_LOG_FIELD_F32(value_) ((BSPLogField_t){.type = BSP_LOG_VALUE_F32, .value.f32 = (float)(value_)})
+/** @brief 复制指定长度的文本字段；提交后可以复用或释放原缓冲。 */
+#define BSP_LOG_FIELD_TEXT(data_, length_) ((BSPLogField_t){.type = BSP_LOG_VALUE_TEXT, .value.text = {.data = (data_), .length = (length_)}})
+/** @brief 有界读取零结尾文字；来源须可读至结尾，或在limit字节无结尾时额外可读1字节。 */
+#define BSP_LOG_FIELD_CSTR_LIMIT(data_, limit_) BSPLogFieldFromCString((data_), (limit_))
+/** @brief 为已知字符串字面量生成有明确长度的文本字段。 */
+#define BSP_LOG_FIELD_TEXT_LITERAL(text_) BSP_LOG_FIELD_TEXT((text_), sizeof(text_) - 1u)
+/** @brief 十六进制显示的32位字段。 */
+#define BSP_LOG_FIELD_HEX32(value_) BSP_LOG_FIELD_U32(value_)
+
+/** @brief 初始化队列、历史和RTT后端；重复调用保留本次启动的记录。
+ * @note 应在DWT初始化后、看门狗及其诊断之前调用；不创建日志任务。
  */
-uint8_t LogRateLimitAllow(LogRateLimit_t *rl, uint32_t period_ms);
+void BSPLogInit(void);
 
-/** @brief 在本地数组中格式化并尝试写 RTT。
-* @param[in] fmt 有效 printf 格式串，不能为 NULL。
-* @param[in] ... 与格式串对应的参数。
-* @return 格式化所需字节数，不含结尾 0；负值表示格式化失败且不输出。
-* @note 先成功BSPLogInit，仅从任务调用；格式及所引用对象须在调用期间有效。
-*       文本超过255字节时只输出前面放得下的部分，返回值仍为完整所需长度，不代表实际写出数量。
-*       编译属性检查已知格式的参数类型，不能证明动态文字完整；不得把外部文字直接用作格式串。
+/** @brief 创建静态日志任务。
+ * @return 成功返回BSP_LOG_STATUS_OK；创建失败返回TASK_CREATE_FAILED，可在调度器启动前重试。
+ * @note 只在初始化后、调度器启动前从普通启动代码调用；任务创建失败不代表核心初始化失败。
  */
-int PrintLog(const char *fmt, ...) MC02_PRINTF_FORMAT(1, 2);
+BSPLogStatus_t BSPLogTaskInit(void);
 
-// 默认关闭；开启后由Daemon打印合法混排自测，超长输入由主机测试验证。
+/** @brief 提交固定目录中的类型化事件，复制所有字段后立即返回。
+ * @param[in] event_id 固定事件目录编号；未知编号返回BAD_ARGUMENT。
+ * @param[in] fields 字段数组；字段类型和数量必须符合目录，文本指针须在本次调用期间可读。
+ * @param[in] field_count 字段数量，范围0～BSP_LOG_MAX_FIELDS。
+ * @return QUEUED、MERGED、RETAINED或具体过滤、限速、容量、参数、初始化及上下文结果。
+ * @note 只允许启动代码和普通任务。文本字段最多保留48字节并累计缩短次数；单条编码数据最多96字节。失败不保存调用者指针。
+ */
+BSPLogStatus_t BSPLogSubmit(BSPLogEventId_t event_id, const BSPLogField_t *fields, uint8_t field_count);
+
+/** @brief 处理最多指定数量的待发记录。
+ * @param[in] maximum_records 正常任务为1～2；启动失败循环传1。调度器运行后只允许日志任务调用。
+ * @return 本轮处理结果；空队列返回EMPTY，越界、未初始化或调用上下文错误有独立状态。
+ * @note 格式化和RTT写入在临界区外执行。每条记录只尝试写一次；调度器未启动时最多处理一条。
+ */
+BSPLogStatus_t BSPLogProcessPending(uint8_t maximum_records);
+
+/** @brief 复制日志状态；查询不推进队列或刷新事件时间。
+ * @param[out] output 接收副本；NULL或未初始化时保持原内容。
+ * @return 成功返回OK，否则返回参数或初始化错误。
+ */
+BSPLogStatus_t BSPLogGetState(BSPLogState_t *output);
+
+/** @brief 按非零事件序号复制首次故障或最近16条关键记录。
+ * @param[in] sequence 事件序号；序号被覆盖后返回NOT_FOUND。
+ * @param[out] output 接收副本；失败时保持原内容。
+ * @return 成功返回OK，否则返回参数、初始化或未找到。
+ */
+BSPLogStatus_t BSPLogGetHistory(uint32_t sequence, BSPLogHistoryRecord_t *output);
+
+/** @brief 统计零结尾文本的可读前缀；limit为上限，字符串未在上限内结束时会多读1字节。 */
+BSPLogField_t BSPLogFieldFromCString(const char *text, size_t limit);
+
+/* 每个事件都提供固定名称的提交封装，目录校验字段类型和顺序。 */
+#define BSP_LOG_EVENT(name, value, source, severity, category, file, message, types, labels, units) \
+    static inline BSPLogStatus_t BSPLogSubmit_##name(const BSPLogField_t *fields, uint8_t count) \
+    { return BSPLogSubmit((name), fields, count); }
+#include "bsp_log_events.def"
+#undef BSP_LOG_EVENT
+
+/* 字段封装宏不接受格式串，生产者只提交原始值。 */
+#if DISABLE_LOG_SYSTEM
+#define BSP_LOG_EVENT_0(name) do { if (0) (void)BSPLogSubmit_##name(NULL, 0u); } while (0)
+#define BSP_LOG_EVENT_1(name, a) do { if (0) { const BSPLogField_t _f[] = {a}; (void)BSPLogSubmit_##name(_f, 1u); } } while (0)
+#define BSP_LOG_EVENT_2(name, a, b) do { if (0) { const BSPLogField_t _f[] = {a, b}; (void)BSPLogSubmit_##name(_f, 2u); } } while (0)
+#define BSP_LOG_EVENT_3(name, a, b, c) do { if (0) { const BSPLogField_t _f[] = {a, b, c}; (void)BSPLogSubmit_##name(_f, 3u); } } while (0)
+#define BSP_LOG_EVENT_4(name, a, b, c, d) do { if (0) { const BSPLogField_t _f[] = {a, b, c, d}; (void)BSPLogSubmit_##name(_f, 4u); } } while (0)
+#define BSP_LOG_EVENT_5(name, a, b, c, d, e) do { if (0) { const BSPLogField_t _f[] = {a, b, c, d, e}; (void)BSPLogSubmit_##name(_f, 5u); } } while (0)
+#define BSP_LOG_EVENT_6(name, a, b, c, d, e, f) do { if (0) { const BSPLogField_t _f[] = {a, b, c, d, e, f}; (void)BSPLogSubmit_##name(_f, 6u); } } while (0)
+#define BSP_LOG_EVENT_7(name, a, b, c, d, e, f, g) do { if (0) { const BSPLogField_t _f[] = {a, b, c, d, e, f, g}; (void)BSPLogSubmit_##name(_f, 7u); } } while (0)
+#define BSP_LOG_EVENT_8(name, a, b, c, d, e, f, g, h) do { if (0) { const BSPLogField_t _f[] = {a, b, c, d, e, f, g, h}; (void)BSPLogSubmit_##name(_f, 8u); } } while (0)
+#else
+#define BSP_LOG_EVENT_0(name) do { (void)BSPLogSubmit_##name(NULL, 0u); } while (0)
+#define BSP_LOG_EVENT_1(name, a) do { const BSPLogField_t _f[] = {a}; (void)BSPLogSubmit_##name(_f, 1u); } while (0)
+#define BSP_LOG_EVENT_2(name, a, b) do { const BSPLogField_t _f[] = {a, b}; (void)BSPLogSubmit_##name(_f, 2u); } while (0)
+#define BSP_LOG_EVENT_3(name, a, b, c) do { const BSPLogField_t _f[] = {a, b, c}; (void)BSPLogSubmit_##name(_f, 3u); } while (0)
+#define BSP_LOG_EVENT_4(name, a, b, c, d) do { const BSPLogField_t _f[] = {a, b, c, d}; (void)BSPLogSubmit_##name(_f, 4u); } while (0)
+#define BSP_LOG_EVENT_5(name, a, b, c, d, e) do { const BSPLogField_t _f[] = {a, b, c, d, e}; (void)BSPLogSubmit_##name(_f, 5u); } while (0)
+#define BSP_LOG_EVENT_6(name, a, b, c, d, e, f) do { const BSPLogField_t _f[] = {a, b, c, d, e, f}; (void)BSPLogSubmit_##name(_f, 6u); } while (0)
+#define BSP_LOG_EVENT_7(name, a, b, c, d, e, f, g) do { const BSPLogField_t _f[] = {a, b, c, d, e, f, g}; (void)BSPLogSubmit_##name(_f, 7u); } while (0)
+#define BSP_LOG_EVENT_8(name, a, b, c, d, e, f, g, h) do { const BSPLogField_t _f[] = {a, b, c, d, e, f, g, h}; (void)BSPLogSubmit_##name(_f, 8u); } while (0)
+#endif
+
 #ifndef LOG_TEST
 #define LOG_TEST 0
 #endif
 
 #if LOG_TEST
-/** @brief 初始化RTT后从Daemon任务输出合法混排自测；无返回状态，不证明查看器显示。 */
+/** @brief 向固定事件目录提交三条合法类型化自测记录；普通事件需用诊断构建选项允许。 */
 void LogSelfTest(void);
 #endif
 
-#endif
+#endif /* MC02_BSP_LOG_H */

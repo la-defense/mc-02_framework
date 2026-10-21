@@ -1,4 +1,4 @@
-/** @file bsp_can.c
+﻿/** @file bsp_can.c
 * @brief 按实例注册收发 ID；中断查找接收者并复制入队，任务逐帧解析和检查总线状态。
  */
 #include "bsp_can.h"
@@ -50,9 +50,6 @@ typedef struct
     FDCAN_HandleTypeDef *handle;
     CAN_TxStats_t tx;
     CAN_BusStats_t bus;
-    LogRateLimit_t log_rl; /* 限速日志状态(见 bsp_log.h) */
-    LogRateLimit_t log_rl_rx; /* 接收侧日志单独限速, 免得被发送侧告警压掉 */
-
     /* ---- 接收队列(SPSC): 中断入队, 任务用 CANProcessRx() 消费 ---- */
     CANRxItem_t rxq[CAN_RXQ_DEPTH];
     volatile uint16_t rxq_head;    /* 生产者(中断)写 */
@@ -210,26 +207,16 @@ uint32_t CANGetRxQueueDrop(FDCAN_HandleTypeDef *hcan)
     return (bus != NULL) ? bus->rxq_drop : 0u;
 }
 
-/* 限速日志: 同一类消息最多 1 条/秒, 其余只计数(避免日志把 CPU 和 RTT 缓冲吃光)
-   限速逻辑统一用 bsp_log 的 LogRateLimitAllow(), 与其它模块保持一致 */
-static void CANLogRateLimitedEx(CANBusState_t *bus, LogRateLimit_t *rl, const char *tag, uint32_t value)
+/* CAN运行问题作为普通诊断提交，由日志核心统一过滤和限速。 */
+static void CANLogDiagnostic(CANBusState_t *bus, const char *tag, uint32_t value)
 {
-    if (bus == NULL || rl == NULL)
-        return;
-    if (LogRateLimitAllow(rl, 1000u))
-    {
-        LOGWARNING("[bsp_can] %s (值 %lu, 累计 %lu 次, 期间限速 %lu 条)",
-                   tag, (unsigned long)value,
-                   (unsigned long)rl->total, (unsigned long)rl->dropped);
-    }
-}
-
-/* 默认用总线的"发送侧"限速状态(保持既有调用点不变) */
-static void CANLogRateLimited(CANBusState_t *bus, const char *tag, uint32_t value)
-{
+    (void)tag;
+    (void)value;
     if (bus == NULL)
         return;
-    CANLogRateLimitedEx(bus, &bus->log_rl, tag, value);
+    BSP_LOG_EVENT_2(EV_BSP_CAN_BSP_CAN_C_01,
+                    BSP_LOG_FIELD_CSTR_LIMIT(tag, 48u),
+                    BSP_LOG_FIELD_U32(value));
 }
 
 /* ----------------two static function called by CANRegister()-------------------- */
@@ -562,7 +549,7 @@ uint8_t CANRunLoopbackSelfTest(void)
         if (CANForceMode(h, FDCAN_MODE_NORMAL, 0u) == 0u)
         {
             can_selftest_state_err++;
-            LOGERROR("[bsp_can] 自测后恢复 NORMAL 模式失败 (bus %u)", (unsigned)(bus + 1));
+            BSP_LOG_EVENT_1(EV_BSP_CAN_BSP_CAN_C_02, BSP_LOG_FIELD_U32((unsigned)(bus + 1)));
         }
         CANReapplyFilters();
     }
@@ -573,10 +560,7 @@ uint8_t CANRunLoopbackSelfTest(void)
         if (can_selftest_pass_mask & (1u << i))
             passed++;
     }
-    LOGINFO("[bsp_can] 内部回环自测: 通过 %u/%u 条总线, tx_ok=%lu rx_ok=%lu rx_bad=%lu tx_fail=%lu",
-             (unsigned)passed, (unsigned)DEVICE_CAN_CNT,
-             (unsigned long)can_selftest_tx_ok, (unsigned long)can_selftest_rx_ok,
-             (unsigned long)can_selftest_rx_bad, (unsigned long)can_selftest_tx_fail);
+    BSP_LOG_EVENT_6(EV_BSP_CAN_BSP_CAN_C_03, BSP_LOG_FIELD_U32((unsigned)passed), BSP_LOG_FIELD_U32((unsigned)DEVICE_CAN_CNT), BSP_LOG_FIELD_U32((unsigned long)can_selftest_tx_ok), BSP_LOG_FIELD_U32((unsigned long)can_selftest_rx_ok), BSP_LOG_FIELD_U32((unsigned long)can_selftest_rx_bad), BSP_LOG_FIELD_U32((unsigned long)can_selftest_tx_fail));
     return passed;
 }
 
@@ -667,7 +651,7 @@ uint8_t CANTransmit(CANInstance *_instance, float timeout)
         {
             bus->tx.tx_drop++;
             can_prof_tx_full = bus->tx.tx_drop;
-            CANLogRateLimited(bus, "TX FIFO 满, 丢帧(下一周期重发)", bus->tx.tx_drop);
+            CANLogDiagnostic(bus, "TX FIFO满，报文未提交", bus->tx.tx_drop);
         }
         DWT_ProbeDone(&can_prof_tx, probe_start);
         return 0;
@@ -677,7 +661,7 @@ uint8_t CANTransmit(CANInstance *_instance, float timeout)
         if (bus != NULL)
         {
             bus->tx.tx_error++;
-            CANLogRateLimited(bus, "AddMessageToTxFifoQ 失败", bus->tx.tx_error);
+            CANLogDiagnostic(bus, "CAN发送接口失败", bus->tx.tx_error);
         }
         DWT_ProbeDone(&can_prof_tx, probe_start);
         return 0;
@@ -784,7 +768,7 @@ void CANHealthMonitor(void)
             (void)HAL_FDCAN_Start(bus->handle);  /* 清 INIT, 重新上线 */
             HAL_FDCAN_ActivateNotification(bus->handle, FDCAN_RX_ACTIVE_ITS, 0);
             bus->bus.busoff_recover++;
-            CANLogRateLimited(bus, "BusOff/INIT 检测到并尝试恢复", bus->bus.busoff);
+            CANLogDiagnostic(bus, "CAN总线恢复尝试", bus->bus.busoff);
         }
 
         /* 接收侧的异常在这里限速打印(中断里只计数):
@@ -792,9 +776,9 @@ void CANHealthMonitor(void)
            ② rxq_drop: 软件接收队列满(任务消费不及时, 队列深度不够或任务被阻塞)。
            两者都是"帧真的丢了", 一旦出现就该查, 所以放在这里统一告警。 */
         if (bus->bus.rx_lost != 0u)
-            CANLogRateLimitedEx(bus, &bus->log_rl_rx, "RX FIFO 溢出丢帧", bus->bus.rx_lost);
+            CANLogDiagnostic(bus, "CAN硬件接收溢出", bus->bus.rx_lost);
         if (bus->rxq_drop != 0u)
-            CANLogRateLimitedEx(bus, &bus->log_rl_rx, "接收队列满丢帧(任务消费不及时)", bus->rxq_drop);
+            CANLogDiagnostic(bus, "CAN接收队列满", bus->rxq_drop);
     }
 
     /* 接收队列诊断汇总(供 OpenOCD/LCD 读取):
@@ -856,8 +840,7 @@ void CANSetDLC(CANInstance *_instance, uint8_t length)
         if ((uint32_t)(now - dlc_log_ms) >= 1000u)
         {
             dlc_log_ms = now;
-            LOGWARNING("[bsp_can] DLC 参数非法(%u), 已钳位为 1..8; 累计 %lu 次(检查调用方或野指针)",
-                       (unsigned)length, (unsigned long)dlc_err_cnt);
+            BSP_LOG_EVENT_2(EV_BSP_CAN_BSP_CAN_C_04, BSP_LOG_FIELD_U32((unsigned)length), BSP_LOG_FIELD_U32((unsigned long)dlc_err_cnt));
         }
         if (length > 8u)
             length = 8u;

@@ -13,9 +13,9 @@
 void BSPInit(void)
 {
     DWT_Init(480);
+    BSPLogInit();
     // 启动先等待 4000 ms，任务创建成功后由 RobotInit 改为 200 ms。
     BSP_WatchdogInit(4000);
-    BSPLogInit();
     BSP_ADCInit();
     // 复位原因和上次崩溃记录需要通过已初始化的日志输出。
     BSP_WatchdogLogResetReason();

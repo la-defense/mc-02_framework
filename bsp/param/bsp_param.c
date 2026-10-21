@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file bsp_param.c
  * @brief 管理 RAM 参数，完成内部 Flash A/B 记录的读取、保存和清除。
  *
@@ -158,7 +158,7 @@ uint8_t ParamSet(uint16_t key, const void *buf, uint16_t len)
     // 此处才检查剩余空间；若刚才移除了旧条目，失败也不会将它放回 RAM。
     if ((uint32_t)s_payload_len + need > PARAM_MAX_PAYLOAD)
     {
-        LOGERROR("[param] 参数区已满, 写入 key=0x%04X 失败", (unsigned)key);
+        BSP_LOG_EVENT_1(EV_BSP_PARAM_BSP_PARAM_C_01, BSP_LOG_FIELD_HEX32((unsigned)key));
         return 0;
     }
 
@@ -211,8 +211,7 @@ static uint8_t ParamWriteSector(uint32_t sector_addr)
     {
         // 擦除失败也要重新锁定 Flash，再交给上层恢复时限并通知回调。
         HAL_FLASH_Lock();
-        LOGERROR("[param] 扇区擦除失败(0x%08lX, err=%lu)", (unsigned long)sector_addr,
-                 (unsigned long)sector_error);
+        BSP_LOG_EVENT_2(EV_BSP_PARAM_BSP_PARAM_C_02, BSP_LOG_FIELD_HEX32((unsigned long)sector_addr), BSP_LOG_FIELD_U32((unsigned long)sector_error));
         return 0;
     }
 
@@ -223,7 +222,7 @@ static uint8_t ParamWriteSector(uint32_t sector_addr)
                               (uint32_t)(uintptr_t)&buf[off]) != HAL_OK)
         {
             HAL_FLASH_Lock();
-            LOGERROR("[param] 写入失败(off=%lu)", (unsigned long)off);
+            BSP_LOG_EVENT_1(EV_BSP_PARAM_BSP_PARAM_C_03, BSP_LOG_FIELD_U32((unsigned long)off));
             return 0;
         }
     }
@@ -233,7 +232,7 @@ static uint8_t ParamWriteSector(uint32_t sector_addr)
     SCB_InvalidateDCache_by_Addr((uint32_t *)(uintptr_t)sector_addr, (int32_t)total);
     if (memcmp((const void *)(uintptr_t)sector_addr, buf, total) != 0)
     {
-        LOGERROR("[param] 回读校验失败(0x%08lX)", (unsigned long)sector_addr);
+        BSP_LOG_EVENT_1(EV_BSP_PARAM_BSP_PARAM_C_04, BSP_LOG_FIELD_HEX32((unsigned long)sector_addr));
         return 0;
     }
     return 1;
@@ -296,7 +295,7 @@ uint8_t ParamInit(void)
         s_payload_len = 0;
         param_loaded = 0;
         param_seq = 0;
-        LOGWARNING("[param] 未找到有效参数记录(A/B 都无效)");
+        BSP_LOG_EVENT_0(EV_BSP_PARAM_BSP_PARAM_C_05);
         return 0;
     }
 
@@ -306,8 +305,7 @@ uint8_t ParamInit(void)
     param_seq = hdr.seq;
     param_loaded = 1;
     s_dirty = 0;
-    LOGINFO("[param] 载入参数: 区=%c seq=%lu, %u 字节", (param_active_region == 0) ? 'A' : 'B',
-            (unsigned long)param_seq, (unsigned)s_payload_len);
+    BSP_LOG_EVENT_3(EV_BSP_PARAM_BSP_PARAM_C_06, BSP_LOG_FIELD_I32((param_active_region == 0) ? 'A' : 'B'), BSP_LOG_FIELD_U32((unsigned long)param_seq), BSP_LOG_FIELD_U32((unsigned)s_payload_len));
     return 1;
 }
 
@@ -318,7 +316,7 @@ uint8_t ParamCommit(void)
     if (!ParamFlashOperationBegin(&operation_previous_timeout_ms))
     {
         param_commit_fail++;
-        LOGERROR("[param] Flash commit refused: heater or task monitor guard unavailable");
+        BSP_LOG_EVENT_0(EV_BSP_PARAM_BSP_PARAM_C_07);
         return 0u;
     }
 
@@ -337,13 +335,12 @@ uint8_t ParamCommit(void)
         s_dirty = 0;
         param_loaded = 1;
         param_commit_count++;
-        LOGINFO("[param] 提交成功: 区=%c seq=%lu", (target_region == 0) ? 'A' : 'B',
-                (unsigned long)param_seq);
+        BSP_LOG_EVENT_2(EV_BSP_PARAM_BSP_PARAM_C_08, BSP_LOG_FIELD_I32((target_region == 0) ? 'A' : 'B'), BSP_LOG_FIELD_U32((unsigned long)param_seq));
     }
     else
     {
         param_commit_fail++;
-        LOGERROR("[param] 提交失败, 继续使用旧记录(区=%c)", (param_active_region == 0) ? 'A' : 'B');
+        BSP_LOG_EVENT_1(EV_BSP_PARAM_BSP_PARAM_C_09, BSP_LOG_FIELD_I32((param_active_region == 0) ? 'A' : 'B'));
     }
     return (uint8_t)(ok && operation_ok);
 }
@@ -354,7 +351,7 @@ uint8_t ParamReset(void)
     // 与提交使用同一组回调；尚未完成准备时保留 Flash 和 RAM 内容。
     if (!ParamFlashOperationBegin(&operation_previous_timeout_ms))
     {
-        LOGERROR("[param] Flash reset refused: heater or task monitor guard unavailable");
+        BSP_LOG_EVENT_0(EV_BSP_PARAM_BSP_PARAM_C_10);
         return 0u;
     }
 
@@ -380,9 +377,9 @@ uint8_t ParamReset(void)
     {
         // Flash 可能已被擦除，但本次仍报告失败并保留 RAM 参数和记录状态。
         if (ret != HAL_OK)
-            LOGERROR("[param] Flash reset failed, error=%lu", (unsigned long)sector_error);
+            BSP_LOG_EVENT_1(EV_BSP_PARAM_BSP_PARAM_C_11, BSP_LOG_FIELD_U32((unsigned long)sector_error));
         else
-            LOGERROR("[param] Flash reset completed but safety guard failed; retaining RAM cache");
+            BSP_LOG_EVENT_0(EV_BSP_PARAM_BSP_PARAM_C_12);
         return 0u;
     }
 
@@ -391,15 +388,13 @@ uint8_t ParamReset(void)
     s_dirty = 0u;
     param_seq = 0u;
     param_loaded = 0u;
-    LOGWARNING("[param] Flash parameter sectors erased");
+    BSP_LOG_EVENT_0(EV_BSP_PARAM_BSP_PARAM_C_13);
     return operation_ok;
 }
 
 void ParamDumpToLog(void)
 {
-    LOGINFO("[param] dump: loaded=%u region=%c seq=%lu len=%u",
-            (unsigned)param_loaded, (param_active_region == 0) ? 'A' : 'B',
-            (unsigned long)param_seq, (unsigned)s_payload_len);
+    BSP_LOG_EVENT_4(EV_BSP_PARAM_BSP_PARAM_C_14, BSP_LOG_FIELD_U32((unsigned)param_loaded), BSP_LOG_FIELD_I32((param_active_region == 0) ? 'A' : 'B'), BSP_LOG_FIELD_U32((unsigned long)param_seq), BSP_LOG_FIELD_U32((unsigned)s_payload_len));
 
     uint16_t off = 0;
     // 逐条打印 RAM 内容；遇到长度超出已用区域的条目就停止。
@@ -413,8 +408,7 @@ void ParamDumpToLog(void)
         // 每条最多显示前4字节的十六进制内容，不把它当作浮点数解释。
         uint32_t word = 0;
         memcpy(&word, &s_payload[data_off], (entry.len >= 4u) ? 4u : entry.len);
-        LOGINFO("  key=0x%04X len=%u data[0..3]=0x%08lX", (unsigned)entry.key,
-                (unsigned)entry.len, (unsigned long)word);
+        BSP_LOG_EVENT_3(EV_BSP_PARAM_BSP_PARAM_C_15, BSP_LOG_FIELD_HEX32((unsigned)entry.key), BSP_LOG_FIELD_U32((unsigned)entry.len), BSP_LOG_FIELD_HEX32((unsigned long)word));
         off = (uint16_t)(data_off + ParamRoundUp4(entry.len));
     }
 }
