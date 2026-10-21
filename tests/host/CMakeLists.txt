@@ -973,6 +973,91 @@ add_test(NAME production_format_compile_commands
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/workflow/check_format_diagnostics.py
     --compile-commands ${CMAKE_BINARY_DIR}/compile_commands.json)
 set_tests_properties(production_format_compile_commands PROPERTIES TIMEOUT 10)
+# UART队列专项链接生产注册及队列；RX回归只替换硬件接入。
+foreach(rx_target remote_control_test usart_snapshot_test remote_bench_test remote_command_integration_test
+    pc_vision_integration_test uart_stream_test referee_snapshot_test)
+  if(TARGET ${rx_target})
+    target_sources(${rx_target} PRIVATE ../../bsp/usart/bsp_usart_tx.c usart_tx_host_port.c)
+    target_include_directories(${rx_target} PRIVATE ../../Core/Inc)
+  endif()
+endforeach()
+add_executable(uart_tx_test uart_tx_test.c usart_tx_host_port.c
+  ../../bsp/usart/bsp_usart.c ../../bsp/usart/bsp_usart_tx.c)
+target_include_directories(uart_tx_test BEFORE PRIVATE remote_fakes)
+target_include_directories(uart_tx_test PRIVATE . ../../bsp/usart ../../modules/message_center ../../Core/Inc)
+target_compile_definitions(uart_tx_test PRIVATE USART_TX_THREADS=1 USART_TX_ABORT_MODEL=1 USART_TX_LEASE_MODEL=1)
+find_package(Threads REQUIRED)
+target_link_libraries(uart_tx_test PRIVATE Threads::Threads)
+target_compile_options(uart_tx_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario copy capacity ports busy error timeout isolate wrap cancel rx threads)
+  add_test(NAME production_uart_tx_${scenario} COMMAND uart_tx_test ${scenario})
+  set_tests_properties(production_uart_tx_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+
+# UI及协议的纯发送类型已独立，所有相关目标显式获得同一声明。
+foreach(protocol_target crc_protocol_test referee_ui_test)
+  target_include_directories(${protocol_target} PRIVATE ../../bsp/usart)
+endforeach()
+
+
+# 完整H723发送接入：寄存器/IRQ由模型提供，后端条件检查仍运行生产实现。
+add_executable(uart_tx_backend_test uart_tx_backend_test.c uart_tx_hal_model.c
+  ../../bsp/usart/bsp_usart.c ../../bsp/usart/bsp_usart_tx.c ../../bsp/usart/usart_tx_port.c)
+target_include_directories(uart_tx_backend_test BEFORE PRIVATE usart_tx_fakes remote_fakes)
+target_include_directories(uart_tx_backend_test PRIVATE . ../../bsp/usart ../../modules/message_center ../../Core/Inc)
+target_link_libraries(uart_tx_backend_test PRIVATE Threads::Threads)
+target_compile_options(uart_tx_backend_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario arguments guard completion race deadline-race error timeout isolate lost-dmat bounded)
+  add_test(NAME production_uart_backend_${scenario} COMMAND uart_tx_backend_test ${scenario})
+  set_tests_properties(production_uart_backend_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+
+# UI状态机实际消费真实队列结果，身份从生产接收分帧和CRC发布。
+add_executable(uart_ui_integration_test uart_ui_integration_test.c uart_tx_hal_model.c
+  ../../bsp/usart/bsp_usart.c ../../bsp/usart/bsp_usart_tx.c ../../bsp/usart/usart_tx_port.c
+  ../../modules/referee/rm_referee.c ../../modules/referee/referee_UI.c ../../modules/referee/referee_task.c)
+target_include_directories(uart_ui_integration_test BEFORE PRIVATE usart_tx_fakes ../../bsp/usart
+  remote_fakes crc_protocol_fakes can_comm_fakes)
+target_include_directories(uart_ui_integration_test PRIVATE . ../../modules/referee ../../modules/message_center
+  ../../modules/master_machine ../../Core/Inc)
+target_link_libraries(uart_ui_integration_test PRIVATE mc02_software_crc Threads::Threads m)
+target_compile_options(uart_ui_integration_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario identity-before-start old-generation cadence failure latest queue-full partial-init reinit-inflight demo)
+  add_test(NAME production_uart_ui_${scenario} COMMAND uart_ui_integration_test ${scenario})
+  set_tests_properties(production_uart_ui_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+
+# 任务创建和运行入口均为生产实现；只以有限循环替代主机上的RTOS调度。
+add_executable(uart_tx_worker_test uart_tx_worker_test.c uart_tx_hal_model.c
+  ../../bsp/usart/bsp_usart.c ../../bsp/usart/bsp_usart_tx.c ../../bsp/usart/usart_tx_port.c
+  ../../bsp/usart/usart_tx_task.c)
+target_include_directories(uart_tx_worker_test BEFORE PRIVATE usart_tx_fakes remote_fakes)
+target_include_directories(uart_tx_worker_test PRIVATE . ../../bsp/usart ../../Core/Inc ../../modules/message_center ../../modules/task_monitor)
+target_link_libraries(uart_tx_worker_test PRIVATE Threads::Threads)
+target_compile_options(uart_tx_worker_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_uart_tx_worker_creation_and_loop COMMAND uart_tx_worker_test)
+set_tests_properties(production_uart_tx_worker_creation_and_loop PROPERTIES TIMEOUT 10)
+
+add_executable(uart_tx_callers_test uart_tx_callers_test.c uart_tx_hal_model.c
+  ../../bsp/usart/bsp_usart.c ../../bsp/usart/bsp_usart_tx.c ../../bsp/usart/usart_tx_port.c
+  ../../modules/motor/servo_motor/servo_motor.c ../../modules/bluetooth/HC05.c
+  ../../modules/master_machine/master_process.c ../../modules/master_machine/vision_protocol.c
+  ../../modules/master_machine/vision_control.c)
+target_include_directories(uart_tx_callers_test BEFORE PRIVATE usart_tx_fakes ../../bsp/usart
+  remote_fakes crc_protocol_fakes can_comm_fakes)
+target_include_directories(uart_tx_callers_test PRIVATE . ../../Core/Inc ../../modules/motor/servo_motor
+  ../../modules/bluetooth ../../modules/master_machine ../../modules/message_center)
+target_compile_definitions(uart_tx_callers_test PRIVATE VISION_USE_UART=1)
+target_link_libraries(uart_tx_callers_test PRIVATE Threads::Threads mc02_software_crc m)
+target_compile_options(uart_tx_callers_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario servo hc05 vision)
+  add_test(NAME production_uart_caller_${scenario} COMMAND uart_tx_callers_test ${scenario})
+  set_tests_properties(production_uart_caller_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+# 所有HAL模型目标都拦截分配器，启动登记后检查队列及通知没有分配/释放。
+foreach(model_target uart_tx_backend_test uart_ui_integration_test uart_tx_worker_test uart_tx_callers_test)
+  target_link_options(${model_target} PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
+endforeach()
 # 目标定义完成后统一施加；DSP厂商源码不在自有目录范围内。
 get_property(host_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS host_targets)

@@ -413,7 +413,8 @@ static void draw_page0_values(void)
         TaskMonitorGetStatus((TaskMonitor_Id_e)i, &st);
         snprintf(t[i], sizeof(t[i]), "%s", st.alive ? "OK" : "--");
     }
-    snprintf(buf, sizeof(buf), "I:%s M:%s R:%s D:%s", t[0], t[1], t[2], t[3]);
+    // UART发送已独立为第五个监控任务，沿用当前一行的只读状态显示。
+    snprintf(buf, sizeof(buf), "I:%s M:%s R:%s D:%s U:%s", t[0], t[1], t[2], t[3], t[TASK_MONITOR_UART_TX]);
     draw_value_ascii(4, buf);
 
     draw_value_cn(5, online_label(RemoteControlIsOnline()));

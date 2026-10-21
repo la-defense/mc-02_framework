@@ -118,6 +118,9 @@ bsp/spi/bsp_spi.c \
 bsp/iic/bsp_iic.c \
 bsp/can/bsp_can.c \
 bsp/usart/bsp_usart.c \
+bsp/usart/bsp_usart_tx.c \
+bsp/usart/usart_tx_port.c \
+bsp/usart/usart_tx_task.c \
 bsp/log/bsp_log.c \
 bsp/log/float_to_string.c \
 bsp/bsp_tools.c \

@@ -8,6 +8,8 @@
  */
 #include "referee_UI.h"
 #include "crc.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -222,7 +224,18 @@ static UIStatus_t validate_current_id(const referee_id_t *id)
     return UI_OK;
 }
 
-static UIStatus_t send_frame(const referee_id_t *id, uint16_t command, const uint8_t *content, size_t length)
+static USARTTxEvent_t ui_last_default_event;
+static void UICompleteDefault(void *context, const USARTTxEvent_t *event)
+{
+    (void)context;taskENTER_CRITICAL();ui_last_default_event=*event;taskEXIT_CRITICAL();
+}
+UIStatus_t UIGetLastTxEvent(USARTTxEvent_t *output)
+{
+    if(output==NULL)return UI_ERROR_ARGUMENT;
+    taskENTER_CRITICAL();*output=ui_last_default_event;taskEXIT_CRITICAL();return UI_OK;
+}
+
+static UIStatus_t send_frame(const referee_id_t *id, uint16_t command, const uint8_t *content, size_t length, const UITxOptions_t *options)
 {
     if (id == NULL) return UI_ERROR_ARGUMENT;
     if (!valid_id(id)) return UI_ERROR_RANGE;
@@ -242,7 +255,13 @@ static UIStatus_t send_frame(const referee_id_t *id, uint16_t command, const uin
     memcpy(frame+13, content, length);
     if (CRCCompute(CRC16_SP_REFEREE, frame, total-2u, &crc) != CRC_OK) return UI_ERROR_CRC;
     le16(frame+total-2u, (uint16_t)crc);
-    RefereeSendStatus_t status = RefereeSend(frame, (uint16_t)total);
+    uint32_t ignored_id;
+    if (options != NULL && (options->complete == NULL || options->id == NULL)) return UI_ERROR_ARGUMENT;
+    RefereeSendStatus_t status = RefereeSend(frame, (uint16_t)total,
+        options != NULL ? options->complete : UICompleteDefault,
+        options != NULL ? options->guard : NULL,
+        options != NULL ? options->context : NULL,
+        options != NULL ? options->id : &ignored_id);
     // 仅本机接受后推进序号，失败不消费序号，也不冒称客户端已经显示。
     switch (status)
     {
@@ -254,14 +273,14 @@ static UIStatus_t send_frame(const referee_id_t *id, uint16_t command, const uin
     }
 }
 
-UIStatus_t UIDelete(const referee_id_t *id, uint8_t operation, uint8_t layer)
+UIStatus_t UIDelete(const referee_id_t *id, uint8_t operation, uint8_t layer, const UITxOptions_t *options)
 {
     if (operation > 2u || layer > 9u) return UI_ERROR_RANGE;
     uint8_t content[2] = {operation, layer};
-    return send_frame(id, UI_Data_ID_Del, content, sizeof(content));
+    return send_frame(id, UI_Data_ID_Del, content, sizeof(content), options);
 }
 
-UIStatus_t UIGraphRefresh(const referee_id_t *id, const Graph_Data_t *graphs, size_t capacity, size_t count)
+UIStatus_t UIGraphRefresh(const referee_id_t *id, const Graph_Data_t *graphs, size_t capacity, size_t count, const UITxOptions_t *options)
 {
     if (id == NULL || graphs == NULL) return UI_ERROR_ARGUMENT;
     uint16_t command;
@@ -281,10 +300,10 @@ UIStatus_t UIGraphRefresh(const referee_id_t *id, const Graph_Data_t *graphs, si
         if (!valid_graph(&graphs[i], 0)) return UI_ERROR_RANGE;
         encode_graph(content+15u*i, &graphs[i]);
     }
-    return send_frame(id, command, content, count*15u);
+    return send_frame(id, command, content, count*15u, options);
 }
 
-UIStatus_t UICharRefresh(const referee_id_t *id, const String_Data_t *text)
+UIStatus_t UICharRefresh(const referee_id_t *id, const String_Data_t *text, const UITxOptions_t *options)
 {
     if (id == NULL || text == NULL) return UI_ERROR_ARGUMENT;
     if (!valid_graph(&text->Graph_Control, 1)) return UI_ERROR_RANGE;
@@ -292,5 +311,5 @@ UIStatus_t UICharRefresh(const referee_id_t *id, const String_Data_t *text)
     encode_graph(content, &text->Graph_Control);
     // 仅复制声明长度，余下固定文字区保持0；30字节文本无需结束标记。
     memcpy(content+15, text->show_Data, text->Graph_Control.end_angle);
-    return send_frame(id, UI_Data_ID_DrawChar, content, sizeof(content));
+    return send_frame(id, UI_Data_ID_DrawChar, content, sizeof(content), options);
 }

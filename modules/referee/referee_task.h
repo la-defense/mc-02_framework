@@ -15,7 +15,8 @@
 #include "robot_def.h"
 
 /** @brief UI待刷新位；每一位对应一种演示或功率显示内容。 */
-typedef struct {
+typedef struct
+{
     uint32_t chassis_flag : 1;
     uint32_t gimbal_flag : 1;
     uint32_t shoot_flag : 1;
@@ -26,7 +27,8 @@ typedef struct {
 } Referee_Interactive_Flag_t;
 
 /** @brief UI读取的应用状态；调用者需在整个UI服务期间保留该对象。 */
-typedef struct {
+typedef struct
+{
     Referee_Interactive_Flag_t Referee_Interactive_Flag;
     chassis_mode_e chassis_mode;
     gimbal_mode_e gimbal_mode;
@@ -45,29 +47,45 @@ typedef struct {
     float pitch_angle;
 } Referee_Interactive_info_t;
 
-/**
- * @brief 绑定长期保存的应用状态，不注册或修改裁判接收服务。
- * @param[in] UI_data UI要显示的应用状态；必须非NULL并保持到UI停止。
- * @return UI_OK或UI_ERROR_ARGUMENT；失败保留原绑定。
- * @note 先成功RefereeInit再运行UI任务；本入口不证明已收到裁判数据。
+/** @brief UI流程阶段；运行只表示本机初始化帧已完成，不表示客户端已显示。 */
+typedef enum
+{
+    UI_PHASE_UNBOUND,
+    UI_PHASE_WAIT_ID,
+    UI_PHASE_INITIALIZING,
+    UI_PHASE_RUNNING,
+    UI_PHASE_NEED_INIT,
+    UI_PHASE_ERROR
+} UIPhase_t;
+typedef struct
+{
+    UIPhase_t phase;
+    UIStatus_t last_error;
+    uint32_t generation, pending_id;
+    uint8_t init_step;
+} UIState_t;
+/** @brief 绑定UI长期数据，不注册接收；由UI任务串行初始化。
+ * @param[in] UI_data 非NULL、长期保存；当前演示由UI任务独占写入。
+ * @return UI_OK、参数错误或存在未完成报文时BUSY；失败保留原绑定。
+ * @note 将来外部生产者写入必须另外同步，本接口不使任意共享指针自动一致。
  */
 UIStatus_t UITaskInit(Referee_Interactive_info_t *UI_data);
-
-/**
- * @brief 根据最新应用状态逐项提交显示更新。
- * @return 本轮完成返回UI_OK，身份／来源失效、未初始化或提交失败返回具体状态。
- * @note 由一个任务串行调用；实际发送前要求0x0201新鲜且机器人身份与初始化时相同。
+/** @brief 推进一次发送及按115ms步长推进原演示；仅UI任务调用。
+ * @return UI_OK表示本轮没有提交，UI_SUBMITTED表示一条已入队，其他值说明失败。
  */
 UIStatus_t UITask(void);
-
-/** @brief 提交应用状态变化，不执行RobotModeTest演示状态改写。 */
+/** @brief 推进一次初始化／增量发送，不修改演示数据，不等待传输。
+ * @return 与UITask相同；身份过期后停止，恢复需要MyUIInit。
+ */
 UIStatus_t UIRefresh(void);
-
-/**
- * @brief 根据当前新鲜机器人编号重新初始化整套UI图形。
- * @return 所有初始化帧均被本机接受返回UI_SUBMITTED，否则返回具体失败状态。
- * @note 接收服务必须已注册；身份变化或过期后，只有再次显式调用本入口才重新启用UI。
+/** @brief 登记显式初始化请求，不发送、不等待；仅UI任务串行调用。
+ * @return UI_SUBMITTED表示请求已接受，尚未绑定数据则NOT_INITIALIZED。
+ * @note 取消旧代未完成报文，等待新鲜身份后按原顺序分15帧初始化。
  */
 UIStatus_t MyUIInit(void);
-
+/** @brief 复制只读阶段；查询不推进、不发帧。
+ * @param[out] output 非NULL；空指针返回参数错误。
+ * @return UI_OK或UI_ERROR_ARGUMENT。
+ */
+UIStatus_t UIGetState(UIState_t *output);
 #endif

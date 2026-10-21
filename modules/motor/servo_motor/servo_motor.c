@@ -1,9 +1,10 @@
 /** @file servo_motor.c
-* @brief 保留的总线固定命令及 PWM 输出选择，公共数组保存移动、查询和卸载命令。
+* @brief 总线固定命令及PWM选择；长期实例通过ServoSetAngle复制提交，结果由任务通知。
 */
 #include "servo_motor.h"
 #include "stdlib.h"
 #include "memory.h"
+#include <math.h>
 #include "bsp_log.h"
 uint8_t servo_angle_read[6]={0x55 ,0x55 ,0x04, 0x15 ,0x01 ,0x01 ,};
 uint8_t servo_angle_write[16]={0x55 ,0x55, 0x08, 0x03, 0x01 ,0xF4 ,0x01 ,0x01 ,0x20 ,0x03,0x55 ,0x55 ,0x04, 0x15 ,0x01 ,0x01 ,};
@@ -44,25 +45,33 @@ ServoInstance *ServoInit(Servo_Init_Config_s *Servo_Init_Config)
     return servo;
 }
 //@todo PWM舵机的角度设置需要根据相应定时器PWM等参数进行计算(是否需要规范定时器PWM的初始化参数，以便于计算)
-void ServoSetAngle(ServoInstance *servo, float angle)
+static void ServoTxCompleted(void *context,const USARTTxEvent_t *event)
 {
-
-    // 总线分支写原始位置字节，PWM 分支把 angle 直接交给占空比接口。
-    switch (servo->servo_type)
-    {
-    case Bus_Servo:
-        servo_angle_write[8] = (uint16_t)angle&0xff;
-        servo_angle_write[9] = (uint16_t)angle>>8;
-        USARTSend(servo->usart_instance, servo_angle_write, 16, USART_TRANSFER_DMA);
-       // USARTSend(servo->usart_instance, servo_angle_read, 6, USART_TRANSFER_DMA);
-        break;
-    case PWM_Servo:
-        servo->angle = angle;
-        PWMSetDutyRatio(servo->pwm_instance, angle);
-        break;
-    default:
-        break;
+    ServoInstance *servo=context;
+    uint32_t saved=__get_PRIMASK();__disable_irq();servo->last_tx=*event;
+    if(event->result!=USART_TX_COMPLETE)++servo->tx_failures;
+    __set_PRIMASK(saved);
+}
+USARTSendStatus_t ServoSetAngle(ServoInstance *servo, float angle)
+{
+    if(servo==NULL || !isfinite(angle))return USART_SEND_BAD_ARGUMENT;
+    if(servo->servo_type==PWM_Servo) {
+        if(angle<0.0f || angle>1.0f || servo->pwm_instance==NULL)return USART_SEND_BAD_ARGUMENT;
+        servo->angle=angle;PWMSetDutyRatio(servo->pwm_instance,angle);return USART_SEND_ACCEPTED;
     }
+    if(servo->servo_type!=Bus_Servo || angle<0.0f || angle>65535.0f)return USART_SEND_BAD_ARGUMENT;
+    // 保留旧帧和固定设备编号；本次只修复异步数组寿命，协议接入仍由MOTOR-06跟踪。
+    uint8_t frame[16];memcpy(frame,servo_angle_write,sizeof(frame));
+    uint16_t value=(uint16_t)angle;frame[8]=(uint8_t)value;frame[9]=(uint8_t)(value>>8u);
+    USARTTxRequest_t request={frame,sizeof(frame),USART_TRANSFER_DMA,50u,ServoTxCompleted,NULL,servo};
+    uint32_t id;return USARTSubmitTx(servo->usart_instance,&request,&id);
+}
+USARTSendStatus_t ServoGetTxState(const ServoInstance *servo, USARTTxEvent_t *event, uint32_t *failures)
+{
+    if (servo == NULL || event == NULL || failures == NULL) return USART_SEND_BAD_ARGUMENT;
+    uint32_t saved = __get_PRIMASK(); __disable_irq();
+    *event = servo->last_tx; *failures = servo->tx_failures;
+    __set_PRIMASK(saved); return USART_SEND_ACCEPTED;
 }
 
 //@todo 只读取了角度 还有电压，动作是否完成等 且只支持一个串口

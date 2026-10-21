@@ -9,6 +9,7 @@
  *
  */
 #include "bsp_usart.h"
+#include "usart_tx_private.h"
 #include "message_freshness.h"
 #include "bsp_log.h"
 #include "bsp_dwt.h"
@@ -129,6 +130,7 @@ USARTInstance *USARTRegister(USART_Init_Config_s *init_config)
     instance->recv_buff_size = init_config->recv_buff_size;
     instance->module_callback = init_config->module_callback;
     instance->context = init_config->context;
+    instance->tx_guard = init_config->tx_guard;
 
     /* 接收队列内存: 从静态池里按本实例的 recv_buff_size 切一块
        (裁判255、遥控18、备用UART视觉128字节，按实际容量使用池空间)。
@@ -164,59 +166,15 @@ USARTInstance *USARTRegister(USART_Init_Config_s *init_config)
     return instance;
 }
 
-/* @todo 当前仅进行了形式上的封装,后续要进一步考虑是否将module的行为与bsp完全分离 */
-void USARTSend(USARTInstance *_instance, uint8_t *send_buf, uint16_t send_size, USART_TRANSFER_MODE mode)
+// 只比较已登记地址，未注册指针不被解引用。
+int USARTRegisteredIndex(const USARTInstance *instance)
 {
-    switch (mode)
-    {
-    case USART_TRANSFER_BLOCKING:
-        HAL_UART_Transmit(_instance->usart_handle, send_buf, send_size, 100);
-        break;
-    case USART_TRANSFER_IT:
-        HAL_UART_Transmit_IT(_instance->usart_handle, send_buf, send_size);
-        break;
-    case USART_TRANSFER_DMA:
-        HAL_UART_Transmit_DMA(_instance->usart_handle, send_buf, send_size);
-        break;
-    default:
-        while (1)
-            ; // illegal mode! check your code context! 检查定义instance的代码上下文,可能出现指针越界
-        break;
-    }
+    for (uint8_t i = 0u; i < idx; ++i)
+        if (usart_instance[i] == instance && instance->module_callback != NULL) return i;
+    return -1;
 }
-
-USARTSendStatus_t USARTSendChecked(USARTInstance *instance, const uint8_t *data,
-                                 uint16_t length, USART_TRANSFER_MODE mode)
-{
-    if (instance == NULL || instance->usart_handle == NULL || data == NULL || length == 0u)
-        return USART_SEND_BAD_ARGUMENT;
-    HAL_StatusTypeDef status;
-    // 本入口拒绝非法模式，不沿用旧入口的无限等待；HAL接口只借用缓冲区。
-    switch (mode)
-    {
-    case USART_TRANSFER_BLOCKING:
-        status = HAL_UART_Transmit(instance->usart_handle, (uint8_t *)data, length, 100u); break;
-    case USART_TRANSFER_IT:
-        status = HAL_UART_Transmit_IT(instance->usart_handle, (uint8_t *)data, length); break;
-    case USART_TRANSFER_DMA:
-        status = HAL_UART_Transmit_DMA(instance->usart_handle, (uint8_t *)data, length); break;
-    default: return USART_SEND_BAD_ARGUMENT;
-    }
-    switch (status)
-    {
-    case HAL_OK: return USART_SEND_ACCEPTED;
-    case HAL_BUSY: return USART_SEND_BUSY;
-    case HAL_TIMEOUT: return USART_SEND_TIMEOUT;
-    default: return USART_SEND_ERROR;
-    }
-}
-
-/* 串口发送时,gstate会被设为BUSY_TX */
-uint8_t USARTIsReady(USARTInstance *_instance)
-{
-    /* HAL 状态值 READY=0x20 / BUSY_TX=0x21 共享位，位与判断同样恒非 0，需用相等比较 */
-    return (_instance->usart_handle->gState == HAL_UART_STATE_READY) ? 1 : 0;
-}
+USARTInstance *USARTRegisteredAt(unsigned index)
+{ return index < idx ? usart_instance[index] : NULL; }
 
 /**
  * @brief 把本次收到的数据压进队列
@@ -413,6 +371,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
  */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+    USARTTxErrorISR(huart);
     for (uint8_t i = 0; i < idx; ++i)
     {
         if (huart == usart_instance[i]->usart_handle)

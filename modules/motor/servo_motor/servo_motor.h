@@ -41,6 +41,8 @@ typedef struct
     PWMInstance *pwm_instance;
     USARTInstance *usart_instance;
     ServoType_e servo_type;
+    USARTTxEvent_t last_tx;
+    uint32_t tx_failures;
 }ServoInstance;
 
 /** @brief 按类型注册 UART 或 PWM，并保存到本地实例表。
@@ -49,11 +51,18 @@ typedef struct
 * @note 总线接收只支持当前单 UART 方式；公共命令帧内设备编号固定，尚未按 servo_id 改写发送编号。
 */
 ServoInstance *ServoInit(Servo_Init_Config_s *Servo_Init_Config);
-/** @brief 按类型更新舵机输出，接口不返回发送结果。
-* @param[in,out] servo 已注册且所需底层实例有效的对象，不能为 NULL。
-* @param[in] angle 总线类型按可转为 uint16_t 的 0～65535 原始位置写入，实际角度比例须查设备协议；
-*                  PWM 类型直接作为 0～1 占空比，不做角度换算。
-* @note 总线发送共用数组，DMA 完成前不可再次修改；接入设备前还须核对当前固定命令帧。
-*/
-void ServoSetAngle(ServoInstance *servo, float angle);
-#endif // SERVO_MOTOR_H
+/** @brief 更新PWM占空比或复制总线命令入队。
+ * @param[in,out] servo 已初始化实例，NULL返回参数错误；须保存到发送完成。
+ * @param[in] angle PWM为0～1占空比，总线为0～65535有限原始位置数值。
+ * @return 本机接受或明确提交错误；总线接受不表示传输完成，last_tx记录最终事件。
+ * @note 仅普通任务调用；总期限50ms。总线固定设备编号仍未修复，真实比例与动作尚未验收。
+ */
+USARTSendStatus_t ServoSetAngle(ServoInstance *servo, float angle);
+/** @brief 复制本实例最近的总线发送结果；查询不推进发送。
+ * @param[in] servo 长期有效实例，不能为NULL。
+ * @param[out] event 非NULL，id为0表示尚未收到通知。
+ * @param[out] failures 非NULL，失败通知累计次数。
+ * @return ACCEPTED或BAD_ARGUMENT；失败保留输出。
+ */
+USARTSendStatus_t ServoGetTxState(const ServoInstance *servo, USARTTxEvent_t *event, uint32_t *failures);
+#endif

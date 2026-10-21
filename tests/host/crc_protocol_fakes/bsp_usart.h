@@ -1,51 +1,12 @@
 /** @file bsp_usart.h
- * @brief CRC 协议测试的串口替身；只提供调用方实际使用的接收和发送接口。
+ * @brief 协议编码测试的硬件对象模型；发送接口直接复用生产声明，避免签名漂移。
  */
 #ifndef MC02_CRC_TEST_USART_H
 #define MC02_CRC_TEST_USART_H
 #include <stdint.h>
-#include "../../../bsp/usart/usart_rx.h"
-#include "main.h"
 typedef struct { int unused; } UART_HandleTypeDef;
-typedef struct { int unused; } USARTInstance;
-typedef struct {
-    UART_HandleTypeDef *usart_handle;
-    uint8_t recv_buff_size;
-    usart_module_callback module_callback;
-    void *context;
-} USART_Init_Config_s;
-#define USART_TRANSFER_DMA 1
-/** @brief 保存接收回调，供测试送入字节；不会访问硬件。
- * @param[in] config 含有效回调的配置，不能为 NULL。
- * @return 测试持有的固定串口对象，不需要释放。
- */
-USARTInstance *USARTRegister(USART_Init_Config_s *config);
-/** @brief 模拟重新接收，本替身不修改对象。
- * @param[in,out] instance 已注册串口对象。
- * @return 固定1，仅代表替身接受请求。
- */
-uint8_t USARTServiceInit(USARTInstance *instance);
-/** @brief 将发送字节复制到测试记录中。
- * @param[in] instance 已注册串口对象。
- * @param[in] data 至少可读 length 字节，复制后可复用。
- * @param[in] length 字节数，不得超过测试记录容量512字节。
- * @param[in] mode 生产调用传入 USART_TRANSFER_DMA，替身不启动 DMA。
- */
-void USARTSend(USARTInstance *instance, uint8_t *data, uint16_t length, int mode);
-
-/** @brief 模拟HAL启动结果，保持与生产发送状态的枚举值一致。 */
-typedef enum {
-    USART_SEND_ACCEPTED = 0, USART_SEND_BAD_ARGUMENT, USART_SEND_BUSY,
-    USART_SEND_ERROR, USART_SEND_TIMEOUT
-} USARTSendStatus_t;
-/** @brief 将结果交给测试选择；只在接受时保存数据，参数单位为字节。
- * @param[in] instance 注册的替身对象。
- * @param[in] data 至少length个可读字节，替身可保存指针检查在途寿命。
- * @param[in] length 字节数。
- * @param[in] mode DMA模式。
- * @return 测试设定的启动结果，不证明完成。
- */
-USARTSendStatus_t USARTSendChecked(USARTInstance *instance, const uint8_t *data, uint16_t length, int mode);
-/** @brief 返回测试设定的READY值；instance须为测试注册对象。 */
-uint8_t USARTIsReady(USARTInstance *instance);
+#include "../../../bsp/usart/bsp_usart.h"
+static inline uint32_t __get_PRIMASK(void) { return 0u; }
+static inline void __disable_irq(void) {}
+static inline void __set_PRIMASK(uint32_t mask) { (void)mask; }
 #endif

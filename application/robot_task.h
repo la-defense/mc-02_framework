@@ -30,6 +30,7 @@
 #include "bsp_dwt.h"
 #include "bsp_spi.h"
 #include "bsp_adc.h"
+#include "bsp_usart.h"
 
 osThreadId insTaskHandle;
 osThreadId robotTaskHandle;
@@ -61,7 +62,7 @@ void StartROBOTTASK(void const *argument);
 void StartUITASK(void const *argument);
 #endif
 
-/** @brief 创建 INS、电机、Daemon、整车、LCD 及当前配置所需 UI 任务。
+/** @brief 创建INS、电机、UART发送、Daemon、整车、LCD及当前配置所需UI任务。
 * @return 1 为全部创建成功，0 为至少一个失败，并记录失败任务编号；不删除已创建的任务。
 * @note 由 RobotInit() 在调度器启动前调用一次。
  */
@@ -74,6 +75,8 @@ uint8_t OSTaskInit(void)
     // 电机任务还会派发接收并打印日志，栈容量包含回调和格式化所需空间。
     osThreadDef(motortask, StartMOTORTASK, osPriorityNormal, 0, 512);
     motorTaskHandle = osThreadCreate(osThread(motortask), NULL);
+
+    uint8_t uart_tx_created = USARTTxTaskInit();
 
     // Daemon 内有状态检查与日志，需同时容纳日志行数组和各层调用。
     osThreadDef(daemontask, StartDAEMONTASK, osPriorityNormal, 0, 512);
@@ -90,6 +93,11 @@ uint8_t OSTaskInit(void)
     osThreadDef(lcdtask, StartLCDTASK, osPriorityLow, 0, 1024);
     lcdTaskHandle = osThreadCreate(osThread(lcdtask), NULL);
     uint8_t all_created = 1u;
+    if (!uart_tx_created) {
+        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+            INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UART_TX);
+        all_created = 0u;
+    }
     if (insTaskHandle == NULL)
     {
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
@@ -316,22 +324,12 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
 __attribute__((noreturn)) void StartUITASK(void const *argument)
 {
     (void)argument;
-    LOGINFO("[freeRTOS] UI Task Start");
-    RefereeSnapshot_t snapshot;
-    // 只等0x0201自己的期限内数据，其他裁判命令不能替它提供机器人身份。
-    while (RefereeGetSnapshot(&snapshot) == REFEREE_OK &&
-           snapshot.command[REF_CMD_ROBOT_STATE].state != REFEREE_DATA_FRESH)
-        osDelay(100);
-    UIStatus_t ui_status = MyUIInit();
-    if (ui_status == UI_SUBMITTED)
-        LOGINFO("[freeRTOS] UI initial frames accepted locally");
-    else
-        LOGERROR("[freeRTOS] UI disabled after init failure: %d", (int)ui_status);
+    // 只登记一次请求；每轮最多提交一帧，身份失效后由显式MyUIInit恢复。
+    (void)MyUIInit();
     for (;;)
     {
-        // 每给裁判系统发送一包数据会挂起一次,详见UITask函数的refereeSend()
-        (void)UITask(); // 失败保留待刷新项；初始化失败时此入口不会提交数据。
-        osDelay(1); // 即使没有任何UI需要刷新,也挂起一次,防止卡在UITask中无法切换
+        (void)UITask();
+        osDelay(1u);
     }
 }
 #endif

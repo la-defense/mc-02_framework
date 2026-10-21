@@ -118,7 +118,7 @@ def main() -> int:
     report = {"compiler": compiler, "version": version, "machine": machine,
               "optimization": args.optimization, "flags": flags, "cases": [], "limitations": []}
     includes = [ROOT / "tests/host/log_fakes", ROOT / "bsp/log",
-                ROOT / "modules/referee", ROOT / "modules/oled"]
+                ROOT / "modules/referee", ROOT / "modules/oled", ROOT / "bsp/usart"]
     for disabled in (0, 1):
         for name, body, valid, length in cases():
             group = "length" if length else ("print" if name.startswith("print_") else

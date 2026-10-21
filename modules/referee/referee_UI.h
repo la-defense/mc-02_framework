@@ -27,10 +27,16 @@ typedef struct {
     uint16_t Receiver_Robot_ID;
 } referee_id_t;
 
+/** @brief 可选发送通知；NULL选项使用模块最近结果记录。 */
+typedef struct {
+    USARTTxCallback_t complete; /**< 非NULL，普通发送任务调用一次。 */
+    USARTTxGuard_t guard;       /**< 可NULL，实际启动前检查业务身份。 */
+    void *context;              /**< 保存到最终通知结束。 */
+    uint32_t *id;               /**< 非NULL，失败不改写；成功后可释放此输出指针。 */
+} UITxOptions_t;
 /** @brief UI发送帧序号；仅由串行的裁判UI发送路径在本机接受后递增。 */
 extern uint8_t UI_Seq;
-
-/** @brief OK表示本地构图成功，SUBMITTED表示本机接受发送；两者都不证明客户端已显示。 */
+/** @brief OK表示本地构图成功，SUBMITTED表示复制入队；两者都不证明客户端已显示。 */
 typedef enum {
     UI_OK = 0, UI_SUBMITTED = 1,
     UI_ERROR_ARGUMENT = -1, UI_ERROR_RANGE = -2, UI_ERROR_LENGTH = -3,
@@ -38,15 +44,22 @@ typedef enum {
     UI_SEND_BUSY = -7, UI_SEND_ERROR = -8, UI_SEND_TIMEOUT = -9
 } UIStatus_t;
 
+/** @brief 复制未提供options时的最近发送通知；查询不发送、不推进。
+ * @param[out] output 非NULL，初始全部为0且id为0表示尚未通知。
+ * @return UI_OK或空输出时UI_ERROR_ARGUMENT。
+ */
+UIStatus_t UIGetLastTxEvent(USARTTxEvent_t *output);
+
 /**
 * @brief 删除指定图层或全部 UI 图形。
 * @param[in] _id 已确定机器人编号的裁判 ID。
 * @param[in] Del_Operate 0为空操作、1删除图层、2删除全部。
 * @param[in] Del_Layer 图层0～9；即使删除全部也须在范围内。
+* @param[in] options 可为NULL；通知和编号的存储条件见UITxOptions_t。
 * @return 本机接受返回UI_SUBMITTED；否则返回参数、范围、CRC或发送错误，失败不消耗序号。
 * @note 任务、身份和缓冲生命周期条件同UIGraphRefresh；不会确认客户端显示。
 */
-UIStatus_t UIDelete(const referee_id_t *_id, uint8_t Del_Operate, uint8_t Del_Layer);
+UIStatus_t UIDelete(const referee_id_t *_id, uint8_t Del_Operate, uint8_t Del_Layer, const UITxOptions_t *options);
 
 /** @brief 把直线的参数写入图形结构，随后用 UIGraphRefresh 发送。
 * @param[out] graph 接收图形数据的可写对象。
@@ -194,17 +207,19 @@ UIStatus_t UICharDraw(String_Data_t *graph, const char *graphname, uint32_t Grap
  * @param[in] graphs 非空图形数组，可读至返回；不接受字符图形，字符改用UICharRefresh。
  * @param[in] capacity 实际元素容量，不小于count；调用者保证所声明容量真实可读。
  * @param[in] count 仅1、2、5或7，其他值在读取图形之前拒绝。
- * @return 本机接受返回UI_SUBMITTED；其他返回参数、长度、范围、CRC或发送错误，失败不消耗序号。
+ * @param[in] options 可为NULL；通知和编号的存储条件见UITxOptions_t。
+* @return 本机接受返回UI_SUBMITTED；其他返回参数、长度、范围、CRC或发送错误，失败不消耗序号。
  * @note 先成功RefereeInit；由裁判任务串行调用，禁止ISR。传输层复制整帧，输入返回后可复用。
  * 本机接受不表示发送完成或客户端显示；不同提交共享UI_Seq，只在接受后递增并自然回绕。
  */
-UIStatus_t UIGraphRefresh(const referee_id_t *_id, const Graph_Data_t *graphs, size_t capacity, size_t count);
+UIStatus_t UIGraphRefresh(const referee_id_t *_id, const Graph_Data_t *graphs, size_t capacity, size_t count, const UITxOptions_t *options);
 
 /** @brief 提交一份已准备好的文字对象。
  * @param[in] _id 非空且合法的发送者/选手端组合，可读至返回。
  * @param[in] string_Data 非空可读对象，类型必须为字符，声明长度0～30字节；无需NUL。
- * @return 本机接受返回UI_SUBMITTED；否则返回具体错误，失败保持序号，不改输入。
+ * @param[in] options 可为NULL；通知和编号的存储条件见UITxOptions_t。
+* @return 本机接受返回UI_SUBMITTED；否则返回具体错误，失败保持序号，不改输入。
  * @note 任务与存储条件同UIGraphRefresh；只复制声明长度，其余固定文字区发0。
  */
-UIStatus_t UICharRefresh(const referee_id_t *_id, const String_Data_t *string_Data);
+UIStatus_t UICharRefresh(const referee_id_t *_id, const String_Data_t *string_Data, const UITxOptions_t *options);
 #endif

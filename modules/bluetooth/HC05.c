@@ -1,5 +1,5 @@
 /** @file HC05.c
-* @brief 处理固定六字节蓝牙帧，只有帧头、帧尾一致时才更新四字节内容。
+* @brief 处理六字节蓝牙帧；HC05Init成功后发送四字节内容，队列复制并在任务中通知。
 */
 #include "HC05.h"
 #include "bsp_usart.h"
@@ -39,20 +39,28 @@ HC05 *HC05Init(UART_HandleTypeDef *hc05_usart_handle)
     return (HC05*)&hc05_msg;
 }
 
-// HC05串口发送函数，一次最多发送HC05_DATASIZE个数据
-void HC05_SendData(uint8_t *data, uint8_t data_num)
+static void HC05TxCompleted(void *context,const USARTTxEvent_t *event)
 {
-
-    // 发送数据中加入帧头和帧尾
-    hc05_msg.send_data[0] = FRAME_HEAD;
-
-    // 内容放在帧头后；帧尾仍固定在数组末项，因此当前只支持完整的四字节内容。
-    for (int i = 0; i < data_num; i++)
-        hc05_msg.send_data[i+1] = data[i];
-    
-    hc05_msg.send_data[HC05_BUFFERSIZE - 1] = FRAME_END;
-
-    // 发送数据
-    USARTSend(hc05_usart_instance, hc05_msg.send_data, data_num+2, USART_TRANSFER_IT); 
-
+    HC05 *message=context;
+    uint32_t saved=__get_PRIMASK();__disable_irq();message->last_tx=*event;
+    if(event->result!=USART_TX_COMPLETE)++message->tx_failures;
+    __set_PRIMASK(saved);
+}
+USARTSendStatus_t HC05_SendData(const uint8_t *data, uint8_t data_num)
+{
+    if(!hc05_init_flag)return USART_SEND_NOT_READY;
+    if(data==NULL || data_num!=HC05_DATASIZE)return USART_SEND_BAD_ARGUMENT;
+    uint8_t frame[HC05_BUFFERSIZE];frame[0]=FRAME_HEAD;
+    for(unsigned i=0u;i<HC05_DATASIZE;++i)frame[i+1u]=data[i];
+    frame[HC05_BUFFERSIZE-1u]=FRAME_END;
+    USARTTxRequest_t request={frame,sizeof(frame),USART_TRANSFER_IT,50u,HC05TxCompleted,NULL,&hc05_msg};
+    uint32_t id;return USARTSubmitTx(hc05_usart_instance,&request,&id);
+}
+USARTSendStatus_t HC05GetTxState(USARTTxEvent_t *event, uint32_t *failures)
+{
+    if (event == NULL || failures == NULL) return USART_SEND_BAD_ARGUMENT;
+    if (!hc05_init_flag) return USART_SEND_NOT_READY;
+    uint32_t saved = __get_PRIMASK(); __disable_irq();
+    *event = hc05_msg.last_tx; *failures = hc05_msg.tx_failures;
+    __set_PRIMASK(saved); return USART_SEND_ACCEPTED;
 }

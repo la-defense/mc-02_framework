@@ -25,6 +25,7 @@ static TaskMonitorItem_t monitor_items[TASK_MONITOR_COUNT] = {
     [TASK_MONITOR_MOTOR] = {.name = "MOTOR", .timeout_ms = 5},
     [TASK_MONITOR_ROBOT] = {.name = "ROBOT", .timeout_ms = 20},
     [TASK_MONITOR_DAEMON] = {.name = "DAEMON", .timeout_ms = 30},
+    [TASK_MONITOR_UART_TX] = {.name = "UART_TX", .timeout_ms = 30},
 };
 
 static uint8_t monitor_initialized = 0u;

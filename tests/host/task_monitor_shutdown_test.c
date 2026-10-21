@@ -1,3 +1,6 @@
+/** @file task_monitor_shutdown_test.c
+ * @brief 生产任务监控的停输出顺序、长操作及UART发送任务30ms期限回归；不连接硬件。
+ */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -96,6 +99,7 @@ int main(void)
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     TaskMonitorDelayMs(TASK_MONITOR_INS, 3u);
     CHECK(rtos_delay_count == 3u);
     CHECK(dwt_delay_count == 0u);
@@ -152,6 +156,7 @@ int main(void)
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     TaskMonitorTick();
 
     CHECK(reported_task_health == 1u);
@@ -162,6 +167,7 @@ int main(void)
     mc02_test_tick += 6u;
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     TaskMonitorTick();
 
     CHECK(reported_task_health == 0u);
@@ -188,6 +194,7 @@ int main(void)
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     TaskMonitorTick();
 
     CHECK(reported_task_health == 0u);
@@ -198,6 +205,7 @@ int main(void)
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     TaskMonitorTick();
     CHECK(watchdog_feed_count == 0u);
     CHECK(TaskMonitorAllAlive() == 0u);
@@ -228,6 +236,7 @@ int main(void)
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     TaskMonitorTick();
     CHECK(reported_task_health == 1u);
     CHECK(watchdog_feed_count == 1u);
@@ -245,6 +254,7 @@ int main(void)
     mc02_test_tick += 6u;
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     TaskMonitorTick();
     CHECK(reported_task_health == 0u);
     CHECK(watchdog_feed_count == 0u);
@@ -252,6 +262,7 @@ int main(void)
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     TaskMonitorTick();
     CHECK(reported_task_health == 0u);
     CHECK(watchdog_feed_count == 0u);
@@ -270,6 +281,7 @@ int main(void)
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 1u);
     mc02_test_tick += 40u;
     TaskMonitorTick();
@@ -290,11 +302,13 @@ int main(void)
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
     mc02_test_tick += 14900u;
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 1u);
     mc02_test_tick += 200u;
     CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 0u);
@@ -311,6 +325,7 @@ int main(void)
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
     CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 1u);
     mc02_test_tick += 8000u;
     TaskMonitorTick();
@@ -319,6 +334,22 @@ int main(void)
     CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 0u);
     CHECK(TaskMonitorAllAlive() == 0u);
 
+    // 只让UART发送任务停更；其他任务更新不能替它续期，30ms边界仍允许。
+    mc02_test_tick = 12000u;
+    mc02_test_primask = 0u;
+    mc02_test_irq_disabled = 0u;
+    TaskMonitorInit();
+    TaskMonitorFeed(TASK_MONITOR_UART_TX);
+    for (unsigned elapsed = 30u; elapsed <= 31u; ++elapsed)
+    {
+        mc02_test_tick = 12000u + elapsed;
+        TaskMonitorFeed(TASK_MONITOR_INS);
+        TaskMonitorFeed(TASK_MONITOR_MOTOR);
+        TaskMonitorFeed(TASK_MONITOR_ROBOT);
+        TaskMonitorFeed(TASK_MONITOR_DAEMON);
+        TaskMonitorTick();
+        CHECK(TaskMonitorAllAlive() == (elapsed == 30u));
+    }
     puts("PASS: task-monitor fault latches outputs off before logging and watchdog reset");
     return 0;
 }

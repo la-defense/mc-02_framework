@@ -56,6 +56,7 @@ typedef enum
     INIT_RESOURCE_TASK_UI,
     INIT_RESOURCE_TASK_LCD,
     INIT_RESOURCE_TASK_DEFAULT,
+    INIT_RESOURCE_TASK_UART_TX,
 } InitDiagnosticResource_e;
 
 /** @brief 本次启动的诊断记录；调试器按这些字段的类型和顺序读取。 */

@@ -437,3 +437,43 @@ HAL的完成通知没有事务编号。当前实现会拒绝空闲期、传输�
 当前BMI088仍在SPI2使用阻塞收发；LCD在SPI1直接使用HAL。两条总线分别使用，没有把LCD迁入本封装，也没有启用BMI088异步采样。仅设置`SPI_DMA_MODE`不代表外设、中断和DMA已配置；入口会检查必要条件，真实引脚、IRQ处理函数和缓存一致性仍需启用硬件前核对。
 
 [生产接口测试](../../tests/host/bsp_spi_status_test.c)用HAL寄存器模型验证三种操作、三种模式、起始失败、回调抢先到达、期限边界、回绕和停止失败；WSL额外用真实线程竞争同一总线、交错超时和完成。[任务记录](../workflow/tickets/BSPSPI-03.md)保存本机证据。本轮没有开发板，未验证SPI波形、实际DMA停止时序或物理耗时。
+
+## 14. UART先复制，再由专用任务发送（MC02-0061）
+
+DMA发送时借用的数组必须一直存在。以前调用者可能修改在途数组；现在由[`USARTSubmitTx()`](../../bsp/usart/bsp_usart.h)把完整报文复制到每路固定存储。每路最多4条，**包含排队、在途和等待通知的报文**；每条1～128字节，数据32字节对齐，普通`.bss`由当前链接脚本放在DMA可访问的AXI RAM。TX四条都能使用，与本篇第11节RX四槽可用三槽的环形实现不同。
+
+```c
+// 该回调由发送任务调用，context若非NULL必须一直保留到通知结束。
+static void Sent(void *context, const USARTTxEvent_t *event)
+{
+    (void)context;
+    // 按event->id记录结果；event只在本次回调期间可读，不等待对端。
+    (void)event;
+}
+
+static USARTSendStatus_t Submit(USARTInstance *uart)
+{
+    uint8_t bytes[] = {0x11, 0x22};
+    USARTTxRequest_t request = {
+        .data = bytes, .length = sizeof(bytes), .mode = USART_TRANSFER_DMA,
+        .timeout_ms = 50u, .complete = Sent
+    };
+    uint32_t id;
+    return USARTSubmitTx(uart, &request, &id);
+    // ACCEPTED时bytes可以立即复用；拒绝不会产生通知，也不会写id。
+}
+```
+
+先完成HAL、DMA和中断配置，注册UART，再在调度器启动前调用`USARTTxTaskInit()`。专用任务为Normal优先级、512个`StackType_t`，约1ms执行一轮，并纳入30ms任务监控。创建失败保留接收注册，但不接受发送。普通业务只提交、取消和查询；禁止直接HAL发送混用，也不自行调用发送推进入口。关中断或中断上下文会被拒绝。
+
+成功提交返回非零编号。总期限从入队时开始，1～`INT32_MAX`毫秒，**达到期限就过期**；它与裁判接收组“边界仍新鲜”的规则不同。排队及恢复期间保留HAL tick使用许可，避免计时暂停。视觉默认20ms、裁判100ms、舵机和HC05各50ms。HAL_BUSY且尚未启动时继续排队；启动报错、在途报错或超时后本条结束，已经开始的报文不会自动重发。
+
+DMA搬完只说明内存搬运结束，UART的TC通知才说明本机这次发送完成。ISR仅登记结果，专用任务按提交顺序回调一次，再收回名额。回调可以非阻塞提交新报文，但必须短小，不能等待。每轮每路最多通知一条、启动一次，全局最多停止一路；停止路由轮转，其他串口照常推进。任务调度和HAL停止仍有耗时，1ms轮询不构成物理时限保证。
+
+取消排队帧不会启动硬件；取消在途帧先停止TX和对应DMA，已经送出的字节无法收回。普通TX超时不会主动停止RX。确认停止、清完发送标志后才复用内部数组；若无法确认，隔离该路并保留仍可能被DMA访问的数组和计时许可，拒绝新提交，等待系统重新初始化。共享UART的接收中断pending位不被整体清除。HAL错误可能提前清DMAT，因此停止还会检查TX DMA，必要时单独停止它，不能只凭UART状态READY就释放。
+
+`USARTGetTxState()`只复制统计与最近通知，不推进队列。HAL回调没有事务编号，安全复用依靠停止和清理完成；软件编号不能识别任意伪造的旧硬件通知。当前工程未启用DCache；将来启用缓存时，需要重新核对DMA数组的清理策略。
+
+四类调用方都提交局部帧：备用UART视觉、裁判、总线舵机和HC05；默认USB视觉路径未改。HC05只接受4字节内容，仍编码6字节；总线舵机仍保留16字节旧命令及固定设备编号，不代表注册和设备协议问题已解决。各调用方记录最近完成结果和失败计数；HC05及舵机通过复制查询读取，视觉合入`VisionGetStatus()`，裁判用`RefereeGetTxState()`读取本路统计。
+
+[`uart_tx_backend_test.c`](../../tests/host/uart_tx_backend_test.c)直接运行生产H723后端，HAL／寄存器由模型替代；[`uart_tx_callers_test.c`](../../tests/host/uart_tx_callers_test.c)核对四字节HC05内容、舵机固定命令和43字节SP帧。测试区分DMA完成与UART完成，验证取消、计时回绕、停止失败、线程交错及运行期不分配。实际串口波形、DMA物理停止和吞吐没有实测，证据见[任务记录](../workflow/tickets/MC02-0061.md)。

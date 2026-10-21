@@ -74,6 +74,7 @@ typedef struct
 	uint32_t tx_count;
 	uint32_t tx_drop_count;
 	uint32_t crc_error_count;
+	USARTTxEvent_t uart_last_tx; // UART最近完成事件；USB下id为0，不进入SP线格式。
 	float bullet_speed;
 	uint16_t bullet_count;
 } Vision_Status_t;
@@ -89,7 +90,9 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle);
 
 /** @brief 检查旧命令是否到时，再给已准备的状态帧追加 CRC 并尝试发送。
 * @note 先初始化；由命令任务周期调用，状态内容由 INS 调用 VisionUpdateTx() 更新。
-*       不等待忙链路；USB 忙时记录丢弃次数，UART 忙时直接跳过；接口不返回发送结果。
+*       不等待忙链路；USB沿用原发送路径，UART复制入队、总期限20ms，满时拒绝。
+*       接口不返回结果；UART最终事件及提交／传输失败计数通过VisionGetStatus读取。
+*       发送由命令任务串行调用；本次复制不额外保证INS更新各字段时的跨任务一致性。
  */
 void VisionSend(void);
 

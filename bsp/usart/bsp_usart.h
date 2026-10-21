@@ -1,31 +1,19 @@
 /** @file bsp_usart.h
-* @brief UART 注册与发送；接收中断复制数据入队，MotorControlTask 统一派发和恢复错误。
+* @brief UART注册和复制队列；MotorControlTask派发接收，专用UART任务推进发送与通知。
 * @note 先配置 UART、接收 DMA 及对应中断；每个硬件句柄只注册一次。
  */
 #ifndef BSP_RC_H
 #define BSP_RC_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include "usart_rx.h"
 #include "main.h"
 
 #define DEVICE_USART_CNT 8     // MC02串口数量8个，其中
 #define USART_RXBUFF_LIMIT 256 // DMA数组容量，注册容量受uint8_t限制为1～255字节。
 
-/* 发送模式枚举 */
-typedef enum
-{
-    USART_TRANSFER_NONE=0,
-    USART_TRANSFER_BLOCKING,
-    USART_TRANSFER_IT,
-    USART_TRANSFER_DMA,
-} USART_TRANSFER_MODE;
-
-/** @brief 仅报告本机发送启动结果；ACCEPTED不表示传输完成或对端收到。 */
-typedef enum {
-    USART_SEND_ACCEPTED = 0, USART_SEND_BAD_ARGUMENT, USART_SEND_BUSY,
-    USART_SEND_ERROR, USART_SEND_TIMEOUT
-} USARTSendStatus_t;
+#include "usart_tx.h"
 
 // 串口实例结构体,每个module都要包含一个实例.
 // 每个硬件句柄独占注册；业务状态通过context传回，接收数组只供HAL使用。
@@ -38,6 +26,7 @@ typedef struct
     void *context;                        // 调用者长期保存的上下文，不由BSP释放。
     volatile uint32_t rx_sequence;        // BSP内部连续性计数，不得由业务改写。
     volatile uint32_t rx_generation;      // 错误/重启后隔离此前已排队的数据，仅供BSP使用。
+    USARTTxGuard_t tx_guard;              // 注册时固定，实际启动前检查，context复用本实例的长期对象。
 } USARTInstance;
 
 /* usart 初始化配置结构体 */
@@ -47,6 +36,7 @@ typedef struct
     UART_HandleTypeDef *usart_handle;      // 实例对应的usart_handle
     usart_module_callback module_callback; // 解析收到的数据的回调函数
     void *context;                         // 原样传回回调，非空时须长期保存。
+    USARTTxGuard_t tx_guard;                // 可NULL；每次实际启动前调用，禁止等待。
 } USART_Init_Config_s;
 
 /** @brief 注册 UART、分配接收队列并启动 DMA 接收。
@@ -66,31 +56,41 @@ USARTInstance *USARTRegister(USART_Init_Config_s *init_config);
 uint8_t USARTServiceInit(USARTInstance *_instance);
 
 
-/** @brief 按指定模式尝试发送，不返回 HAL 状态，也不提供发送队列。
-* @param[in] _instance 有效实例，不能为 NULL。
-* @param[in] send_buf 至少可读 send_size 字节；IT、DMA 完成前保持不变。
-* @param[in] send_size 字节数。
-* @param[in] mode BLOCKING、IT 或 DMA；NONE 或未知值持续等待。
-* @note 阻塞等待参数为 100 ms；异步发送前检查 USARTIsReady()，忙时 HAL 可能拒绝新发送。
+/** @brief 非阻塞复制提交，队列满立即拒绝；仅普通任务使用。
+ * @param[in] instance 已注册UART，禁止与直接HAL发送混用。
+ * @param[in] request 提交期间有效的完整请求，内容被复制。
+ * @param[out] id 成功交付非零编号；失败保持原值，不通知complete。
+ * @return ACCEPTED或参数、忙、未就绪、隔离、后端错误。
+ * @note 每路4条，包含在途和待通知项；调用方源数据成功后即可释放。
  */
-void USARTSend(USARTInstance *_instance, uint8_t *send_buf, uint16_t send_size,USART_TRANSFER_MODE mode);
-
-/** @brief 检查参数并返回HAL发送启动结果，无队列或内部数据复制。
- * @param[in] instance 非空、持有已初始化UART句柄的实例；同一发送者串行调用。
- * @param[in] data 非空，至少length个可读字节；IT/DMA终止前内容保持不变。
- * @param[in] length 字节数，1～65535。
- * @param[in] mode BLOCKING、IT或DMA；其他值返回BAD_ARGUMENT，不等待。
- * @return ACCEPTED、BAD_ARGUMENT、BUSY、ERROR或TIMEOUT；阻塞模式HAL时限100ms。
- * @note 仅任务上下文使用；异步错误和完成须由后续传输管理处理，本函数不证明完成。
+USARTSendStatus_t USARTSubmitTx(USARTInstance *instance, const USARTTxRequest_t *request, uint32_t *id);
+/** @brief 请求取消指定编号；仅普通任务使用，实际通知仍由发送任务执行。
+ * @param[in] instance 已注册UART。
+ * @param[in] id 成功提交得到的非零编号。
+ * @return ACCEPTED表示找到请求并处理取消；未找到、隔离或参数错误不改变其他事务。
+ * @note 已形成终态或正在通知的请求保留既有结果；以最终通知判断是否取消。
+ * 在途字节无法撤回，必须确认停止后才回收内部缓冲。
  */
-USARTSendStatus_t USARTSendChecked(USARTInstance *instance, const uint8_t *data,
-                                 uint16_t length, USART_TRANSFER_MODE mode);
-
-/** @brief 检查 HAL 的发送状态是否为 READY。
-* @param[in] _instance 有效实例，不能为 NULL。
-* @return 1 为发送句柄空闲，0 为其他状态；不表示对端已接收上次数据。
+USARTSendStatus_t USARTCancelTx(USARTInstance *instance, uint32_t id);
+/** @brief 复制只读发送统计，不推进队列；任务可调用。
+ * @param[in] instance 已注册UART。
+ * @param[out] output 完整副本；失败保持原值，last_event仅保留最近通知。
+ * @return ACCEPTED或BAD_ARGUMENT。
  */
-uint8_t USARTIsReady(USARTInstance *_instance);
+USARTSendStatus_t USARTGetTxState(const USARTInstance *instance, USARTTxState_t *output);
+/** @brief 启动阶段登记发送任务是否创建成功；首次提交前调用，不用于运行期恢复。
+ * @param[in] ready 1为任务已创建，0为创建失败；有在途事务后不得修改。
+ */
+void USARTTxSetServiceReady(uint8_t ready);
+/** @brief 调度器启动前创建唯一发送任务，普通启动上下文串行调用。
+ * @return 1为已创建（重复调用不重复创建），0为上下文或资源错误；失败可在启动前重试。
+ * @note 512个StackType_t、Normal优先级，约1ms推进；创建失败不注销接收对象。
+ */
+uint8_t USARTTxTaskInit(void);
+/** @brief 仅专用发送任务调用；各路最多通知一条、启动一次，全局最多停止一次。
+ * @note 禁止递归。回调和HAL等待均在临界区外；不承诺实际调度或线端耗时。
+ */
+void USARTProcessTx(void);
 
 /**
  * @brief 按接收顺序派发入口时已排队的块，并执行有限错误恢复。

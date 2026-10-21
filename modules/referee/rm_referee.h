@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include "usart.h"
 #include "referee_snapshot.h"
+#include "usart_tx.h"
 
 #define REFEREE_LINK_TIMEOUT_MS 300u
 
@@ -34,7 +35,7 @@ typedef enum {
     REFEREE_ERROR_RESOURCE
 } RefereeStatus_t;
 
-/** @brief 裁判串口提交结果；ACCEPTED只表示本机启动发送。 */
+/** @brief 裁判串口提交结果；ACCEPTED只表示复制入队。 */
 typedef enum {
     REFEREE_SEND_ACCEPTED = 0, REFEREE_SEND_BAD_ARGUMENT,
     REFEREE_SEND_NOT_INITIALIZED, REFEREE_SEND_BUSY,
@@ -60,15 +61,32 @@ RefereeStatus_t RefereeInit(UART_HandleTypeDef *referee_usart_handle, const Refe
  */
 RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output);
 
-/**
- * @brief 复制完整帧到持久缓冲并尝试DMA发送，无队列。
- * @param[in] send 非空，至少tx_len个可读字节；返回后调用者可以复用原数据。
- * @param[in] tx_len 帧字节数，1～128。
- * @return 本机接受、参数错误、未初始化、忙、发送错误或启动超时。
- * @note 先成功RefereeInit；仅裁判任务串行调用，禁止ISR及其他发送者共用该UART。
- *       UART未READY时不覆盖在途缓冲。接受后等待115ms保持既有节奏；延时不证明完成。
- *       失败不等待、不排队、不自动重试，不证明客户端已收到或显示。
+/** @brief 将完整帧复制入队，无等待，不代表对端已收到。
+ * @param[in] send 至少tx_len字节，成功后原数据可立即复用。
+ * @param[in] tx_len 字节数1～128。
+ * @param[in] complete 非NULL，专用发送任务通知一次最终结果，不得等待。
+ * @param[in] guard 可NULL，启动前检查身份，不得等待。
+ * @param[in] context 保存至完成通知结束的调用方对象。
+ * @param[out] id 入队成功的非零编号；拒绝时保持原值。
+ * @return ACCEPTED或参数、未初始化、队列满、后端错误；不自动重发。
+ * @note 先成功RefereeInit，普通任务调用；总期限100ms，达到即到期。
  */
-RefereeSendStatus_t RefereeSend(const uint8_t *send, uint16_t tx_len);
-
+RefereeSendStatus_t RefereeSend(const uint8_t *send, uint16_t tx_len,
+    USARTTxCallback_t complete, USARTTxGuard_t guard, void *context, uint32_t *id);
+/** @brief 请求取消本模块提交的编号；实际停止和通知由发送任务执行。
+ * @param[in] id 成功提交的非零编号。
+ * @return 与USARTCancelTx相同；不能撤回已经发出的字节。
+ */
+USARTSendStatus_t RefereeCancelSend(uint32_t id);
+/** @brief 复制裁判UART的最近完成结果和累计失败数，不推进发送。
+ * @param[out] output 非NULL；failed含错误、超时、取消和隔离，last_event.id为0表示尚无通知。
+ * @return ACCEPTED、NOT_READY或BAD_ARGUMENT；失败保持原输出。
+ * @note 普通任务调用；接收数据与发送诊断独立保存。
+ */
+USARTSendStatus_t RefereeGetTxState(USARTTxState_t *output);
+/** @brief 用0x0201本组期限检查机器人身份，普通任务可调用。
+ * @param[in] robot_id 需要匹配的线上机器人编号。
+ * @return 1为已收到、仍新鲜且编号相同，否则0；不会续期或消费数据。
+ */
+uint8_t RefereeIdentityMatches(uint16_t robot_id);
 #endif

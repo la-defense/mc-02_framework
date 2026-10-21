@@ -1,6 +1,6 @@
 /** @file task_monitor.h
-* @brief 监视 INS、MOTOR、ROBOT、DAEMON 的运行间隔，全部正常时才喂看门狗。
-* @note 时间均为 HAL 毫秒；常规允许间隔分别为 5、5、20、30 ms，等于时限仍允许。
+* @brief 监视 INS、MOTOR、ROBOT、DAEMON及UART_TX运行间隔，全部正常时才喂看门狗。
+* @note 时间均为HAL毫秒；常规允许间隔分别为5、5、20、30、30ms，等于时限仍允许。
 */
 #ifndef TASK_MONITOR_H
 #define TASK_MONITOR_H
@@ -13,6 +13,7 @@ typedef enum
     TASK_MONITOR_MOTOR,
     TASK_MONITOR_ROBOT,
     TASK_MONITOR_DAEMON,
+    TASK_MONITOR_UART_TX,
     TASK_MONITOR_COUNT
 } TaskMonitor_Id_e;
 

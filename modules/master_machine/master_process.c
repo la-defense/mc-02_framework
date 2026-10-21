@@ -238,11 +238,26 @@ static void VisionExpireIfStale(uint32_t now_ms)
     taskEXIT_CRITICAL();
 }
 
+#ifdef VISION_USE_UART
+static USARTTxEvent_t vision_uart_last_tx;
+static void VisionTxCompleted(void *context, const USARTTxEvent_t *event)
+{
+    (void)context;
+    taskENTER_CRITICAL();vision_uart_last_tx=*event;
+    if(event->result!=USART_TX_COMPLETE)++vision_tx_drop_count;
+    taskEXIT_CRITICAL();
+}
+#endif
 void VisionSend(void)
 {
     VisionExpireIfStale(HAL_GetTick());
-    /* DMA 异步发送需要持久缓冲区, 不能用栈局部变量(函数返回后帧数据会被覆盖) */
+#ifdef VISION_USE_VCP
+    // USB仍按原实现借用持久缓冲；本轮不改变默认USB链路的发送方式。
     static Vision_Send_s tx_pkt;
+#else
+    // UART在提交时复制完整报文，本次候选只需保留到提交返回。
+    Vision_Send_s tx_pkt;
+#endif
 
     tx_pkt = send_data;
     tx_pkt.head[0] = 'S';
@@ -261,11 +276,12 @@ void VisionSend(void)
     else if (usb_status == USBD_BUSY)
         vision_tx_drop_count++;
 #elif defined(VISION_USE_UART)
-    /* 发送串口忙时跳过本帧, 避免 HAL_UART_Transmit_DMA 返回 BUSY 丢帧 */
-    if (!USARTIsReady(vision_usart_instance))
-        return;
-    USARTSend(vision_usart_instance, (uint8_t *)&tx_pkt, sizeof(Vision_Send_s), USART_TRANSFER_DMA);
-    vision_tx_count++;
+    uint32_t id;
+    USARTTxRequest_t request={(const uint8_t *)&tx_pkt,sizeof(tx_pkt),USART_TRANSFER_DMA,
+        20u,VisionTxCompleted,NULL,NULL};
+    if(USARTSubmitTx(vision_usart_instance,&request,&id)==USART_SEND_ACCEPTED)
+        vision_tx_count++;
+    else { taskENTER_CRITICAL();++vision_tx_drop_count;taskEXIT_CRITICAL(); }
 #endif
 }
 
@@ -292,6 +308,11 @@ void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status)
         status->tx_count = vision_tx_count;
         status->tx_drop_count = vision_tx_drop_count;
         status->crc_error_count = vision_crc_error_count;
+#ifdef VISION_USE_UART
+        status->uart_last_tx = vision_uart_last_tx;
+#else
+        memset(&status->uart_last_tx,0,sizeof(status->uart_last_tx));
+#endif
         status->bullet_speed = send_data.bullet_speed;
         status->bullet_count = send_data.bullet_count;
     }
