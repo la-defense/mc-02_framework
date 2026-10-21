@@ -2,6 +2,7 @@
 * @file oled.c
 * @brief 维护 OLED 显存缓冲区，并通过 I2C 向面板发送指令和像素数据。
 * 绘图函数只改缓冲区；OLED_refresh_gram 按8页、每页128列发送整屏。
+* 所有入口须由同一调用者串行使用；当前没有接入业务，不保证面板通信成功。
  */
 #include "oled.h"
 #include "oledfont.h"
@@ -12,8 +13,35 @@
 extern I2C_HandleTypeDef hi2c2;
 static uint8_t OLED_GRAM[128][8];
 
+// 先检查画笔，避免非法枚举被当作清除或反转操作。
+static int valid_pen(pen_typedef pen)
+{
+    // 先转成无符号整数，调用方传入枚举外数值时也能明确拒绝。
+    unsigned int value = (unsigned int)pen;
+    return value <= (unsigned int)PEN_INVERSION;
+}
 
-void oled_write_byte(uint8_t dat, uint8_t cmd)
+// 字符网格为5行、每行21格，确认后再计算字模起点。
+static int valid_character_position(uint8_t row, uint8_t col)
+{
+    return row < 5u && col < 21u;
+}
+
+// 只检查本次能够显示的部分，屏幕末端之后不再读取字符串。
+static int visible_text_length(const uint8_t *text, size_t capacity, size_t *length)
+{
+    if (text == NULL) return 0;
+    size_t count = 0u;
+    while (count < capacity && text[count] != '\0')
+    {
+        if (text[count] < 0x20u || text[count] > 0x7eu) return 0;
+        ++count;
+    }
+    *length = count;
+    return 1;
+}
+
+static void oled_write_byte(uint8_t dat, uint8_t cmd)
 {
     static uint8_t cmd_data[2];
     // 控制字节区分指令与显存数据，第二字节才是实际发送内容。
@@ -87,6 +115,8 @@ void OLED_operate_gram(pen_typedef pen)
 {
     uint8_t i, n;
 
+    if (!valid_pen(pen)) return;
+
     // 外层遍历8页，内层遍历每页128列。
     for (i = 0; i < 8; i++)
     {
@@ -102,7 +132,7 @@ void OLED_operate_gram(pen_typedef pen)
             }
             else
             {
-                // 清零和全置1之外的操作按位翻转当前缓冲字节。
+                // 已检查画笔，剩下的操作为逐位反转。
                 OLED_GRAM[n][i] = 0xff - OLED_GRAM[n][i];
             }
         }
@@ -112,6 +142,8 @@ void OLED_operate_gram(pen_typedef pen)
 
 void OLED_set_pos(uint8_t x, uint8_t y)
 {
+    // 第二个参数是页号，不是像素行；错误地址不向面板提交。
+    if (x >= X_WIDTH || y >= Y_WIDTH / 8u) return;
     // 先设页，再把列地址拆成高4位和低4位发送。
     oled_write_byte((0xb0 + y), OLED_CMD);              //set page address y
     oled_write_byte(((x&0xf0)>>4)|0x10, OLED_CMD);      //set column high address
@@ -124,7 +156,8 @@ void OLED_draw_point(int8_t x, int8_t y, pen_typedef pen)
     uint8_t page = 0, row = 0;
 
     // 越界坐标不改写缓冲区。
-    if ((x < 0) || (x > (X_WIDTH - 1)) || (y < 0) || (y > (Y_WIDTH - 1)))
+    // int8_t的正上限就是127，不需要再次比较x是否大于127。
+    if (x < 0 || y < 0 || y >= Y_WIDTH || !valid_pen(pen))
     {
         return;
     }
@@ -151,51 +184,35 @@ void OLED_draw_point(int8_t x, int8_t y, pen_typedef pen)
   
 void OLED_draw_line(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2, pen_typedef pen)
 {
-    uint8_t col = 0, row = 0;
-    uint8_t x_st = 0, x_ed = 0, y_st = 0, y_ed = 0;
-    float k = 0.0f, b = 0.0f;
-
-    if (y1 == y2)
+    // 整条线先检查，避免画了一部分才发现端点越界。
+    if (x1 >= X_WIDTH || x2 >= X_WIDTH || y1 >= Y_WIDTH || y2 >= Y_WIDTH || !valid_pen(pen)) return;
+    // 按列、再按行排序，使交换端点后的半像素选择也完全相同。
+    if (x1 > x2 || (x1 == x2 && y1 > y2))
     {
-        // 水平线沿 x 方向逐点绘制。
-        (x1 <= x2) ? (x_st = x1):(x_st = x2);
-        (x1 <= x2) ? (x_ed = x2):(x_ed = x1);
-
-        for (col = x_st; col <= x_ed; col++)
-        {
-            OLED_draw_point(col, y1, pen);
-        }
+        uint8_t temporary = x1; x1 = x2; x2 = temporary;
+        temporary = y1; y1 = y2; y2 = temporary;
     }
-    else if (x1 == x2)
+    int x = x1, y = y1;
+    int dx = (int)x2 - x1;
+    int dy = y2 >= y1 ? (int)y1 - y2 : (int)y2 - y1;
+    int step_y = y1 < y2 ? 1 : -1;
+    int error = dx + dy;
+    // 每步至少推进一个坐标，最多写128个点；含起点与终点，无浮点除法。
+    for (;;)
     {
-        // 竖直线沿 y 方向逐点绘制。
-        (y1 <= y2) ? (y_st = y1):(y_st = y2);
-        (y1 <= y2) ? (y_ed = y2):(y_ed = y1);
-
-        for (row = y_st; row <= y_ed; row++)
-        {
-            OLED_draw_point(x1, row, pen);
-        }
-    }
-    else
-    {
-        // 斜线按每个 x 位置计算对应 y，再逐列写入像素。
-        k = ((float)(y2 - y1)) / (x2 - x1);
-        b = (float)y1 - k * x1;
-
-        (x1 <= x2) ? (x_st = x1):(x_st = x2);
-        (x1 <= x2) ? (x_ed = x2):(x_ed = x2);
-
-        for (col = x_st; col <= x_ed; col++)
-        {
-            OLED_draw_point(col, (uint8_t)(col * k + b), pen);
-        }
+        OLED_draw_point((int8_t)x, (int8_t)y, pen);
+        if (x == x2 && y == y2) break;
+        int twice_error = 2 * error;
+        if (twice_error >= dy) { error += dy; ++x; }
+        if (twice_error <= dx) { error += dx; y += step_y; }
     }
 }
 
 
 void OLED_show_char(uint8_t row, uint8_t col, uint8_t chr)
 {
+    // 必须在相乘、减去空格之前检查，防止坐标回绕或索引越过字库。
+    if (!valid_character_position(row, col) || chr < 0x20u || chr > 0x7eu) return;
     uint8_t x = col * 6;
     uint8_t y = row * 12;
     uint8_t temp, t, t1;
@@ -230,10 +247,12 @@ void OLED_show_char(uint8_t row, uint8_t col, uint8_t chr)
 
 void OLED_show_string(uint8_t row, uint8_t col, uint8_t *chr)
 {
-    uint8_t n =0;
-
-    // 遇到结束标记停止；列号超过20时换到下一行开头。
-    while (chr[n] != '\0')
+    if (!valid_character_position(row, col)) return;
+    size_t capacity = (5u - row) * 21u - col;
+    size_t length;
+    // 先检查所有待显示字符，失败时不留下已经画出的半段文字。
+    if (!visible_text_length(chr, capacity, &length)) return;
+    for (size_t n = 0u; n < length; ++n)
     {
         OLED_show_char(row, col, chr[n]);
         col++;
@@ -243,7 +262,6 @@ void OLED_show_string(uint8_t row, uint8_t col, uint8_t *chr)
             col = 0;
             row += 1;
         }
-        n++;
     }
 }
 
@@ -251,28 +269,16 @@ void OLED_show_string(uint8_t row, uint8_t col, uint8_t *chr)
 
 void OLED_printf(uint8_t row, uint8_t col, const char *fmt,...)
 {
-    static uint8_t LCD_BUF[128] = {0};
-    static va_list ap;
-    uint8_t remain_size = 0;
-
-    // OLED_printf 只支持字符网格的5行、每行21列。
-    if ((row > 4) || (col > 20) )
-    {
-        return;
-    }
+    if (!valid_character_position(row, col) || fmt == NULL) return;
+    char buffer[22];
+    va_list ap;
+    size_t available = 21u - col;
     va_start(ap, fmt);
-
-    // 格式化结果先写入临时缓冲区，调用者需保证不超过128字节。
-    vsprintf((char *)LCD_BUF, fmt, ap);
-
+    // 多留一个字节保存结束标记；格式化超长时只保留本行放得下的前缀。
+    int result = vsnprintf(buffer, available + 1u, fmt, ap);
     va_end(ap);
-
-    remain_size = 21 - col;
-
-    // 只保留当前行剩余位置能显示的字符。
-    LCD_BUF[remain_size] = '\0';
-
-    OLED_show_string(row, col, LCD_BUF);
+    if (result < 0) return;
+    OLED_show_string(row, col, (uint8_t *)buffer);
 }
 
 
