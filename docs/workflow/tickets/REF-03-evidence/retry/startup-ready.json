@@ -1,0 +1,19 @@
+[
+  {
+    "tick_ms": 740,
+    "init_stage": 9,
+    "init_failure_stage": 0,
+    "init_error": 0,
+    "init_retry_count": 1,
+    "init_acc_status": 0,
+    "init_gyro_status": 0,
+    "init_acc_chip_id": 30,
+    "init_gyro_chip_id": 15,
+    "imu_sample_sequence": 404,
+    "imu_sample_timestamp_ms": 774,
+    "imu_sample_valid": 1,
+    "imu_heater_duty": 0,
+    "startup_init_failed": 0,
+    "startup_init_stage": 5
+  }
+]

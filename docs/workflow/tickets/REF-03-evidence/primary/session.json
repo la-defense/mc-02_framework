@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "firmware": {
+    "source_sha": "ad41d3204b60b3f928dc972e38b76fec818c9ed0",
+    "elf_sha256": "e0737bd4a60bf06878a6acf56bbea196a85466d247687e344a6eb734d4980d63",
+    "flash_verified": true
+  },
+  "load_ranges": [
+    {
+      "address": "0x8000000",
+      "bytes": 201068
+    },
+    {
+      "address": "0x803116c",
+      "bytes": 3192
+    }
+  ],
+  "board": {
+    "supply_v": 12.5,
+    "current_limit_a": 2,
+    "attachments": [
+      "LCD",
+      "DR16"
+    ],
+    "actuators": false,
+    "daplink_power": "board to probe"
+  },
+  "serial": {
+    "port": "COM3",
+    "adapter": "CH340 / user confirmed 3.3V TTL",
+    "tx_to": "PA10",
+    "rx_from": "PA9",
+    "ground": true,
+    "vcc_connected": false
+  },
+  "wrapper_post_success_error": "no_save_profile",
+  "verification": "program verify and independent byte-for-byte application/parameter readback",
+  "parameter_bytes_equal": true,
+  "parameter_sha256": "413f4da1afa9483a6bf156cb7124f05276927eb843ce5d040c85725257120de4",
+  "wrapper_exit_code": 1,
+  "application_bytes": 204260,
+  "application_sha256": "2dbff960e4ba47c8ae724100e2c14dc28dc6f8bad5b7ce4f1a4db3df93611e2c"
+}

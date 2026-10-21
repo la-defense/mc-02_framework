@@ -1,0 +1,23 @@
+{
+  "events": 2177,
+  "results": {
+    "0": 2174,
+    "1": 0,
+    "2": 0,
+    "3": 3,
+    "4": 0
+  },
+  "min_start_interval_ms": 34,
+  "min_ui_interval_ms": 136,
+  "ui_frames": 327,
+  "first_phase_ms": 30000,
+  "mixed_phase_ms": 45000,
+  "sequence_matches_request_id": true,
+  "sequence_wraps": 8,
+  "identity_pause_quiet_window_pc_s": [
+    65.6,
+    66.0
+  ],
+  "old_identity_after_pc_s_70_3": 0,
+  "scope": "PC times are coarse cross-checks; MCU times used for budget"
+}

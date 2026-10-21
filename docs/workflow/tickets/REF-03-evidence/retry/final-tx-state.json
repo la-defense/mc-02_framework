@@ -1,0 +1,17 @@
+{
+  "accepted": 2177,
+  "completed": 2174,
+  "failed": 3,
+  "cancelled": 3,
+  "expired": 0,
+  "errors": 0,
+  "deferrals": 45910,
+  "phase": 3,
+  "used": 0,
+  "active": 0,
+  "isolated": 0,
+  "lease_a": 0,
+  "lease_b": 0,
+  "lease_c": 0,
+  "lease_d": 0
+}

@@ -1,0 +1,34 @@
+📦 固件产物: D:\RoboMasterRelated\OpenSourseProject\mc-02\build\ref03-hardware\verified\Basic_Framework_MC02_refdiag_bench_safe.elf [ELF, 2428.7 KB]
+⚡ 烧录命令: C:\Users\Administrator\AppData\Roaming\Code\User\globalStorage\bmd.stm32-for-vscode\@xpack-dev-tools\openocd\0.12.0-7.1\.content\bin\openocd.EXE -f tools/openocd_running_inspection.cfg -c init; program D:/RoboMasterRelated/OpenSourseProject/mc-02/build/ref03-hardware/verified/Basic_Framework_MC02_refdiag_bench_safe.elf verify reset; exit
+✅ 烧录成功，校验通过
+
+📊 烧录结果: ✅ 烧录成功
+
+  烧录命令:   C:\Users\Administrator\AppData\Roaming\Code\User\globalStorage\bmd.stm32-for-vscode\@xpack-dev-tools\openocd\0.12.0-7.1\.content\bin\openocd.EXE -f tools/openocd_running_inspection.cfg -c init; program D:/RoboMasterRelated/OpenSourseProject/mc-02/build/ref03-hardware/verified/Basic_Framework_MC02_refdiag_bench_safe.elf verify reset; exit
+  固件产物:   D:\RoboMasterRelated\OpenSourseProject\mc-02\build\ref03-hardware\verified\Basic_Framework_MC02_refdiag_bench_safe.elf [elf]
+  校验: 是  复位: 是
+
+📝 证据:
+  Info : CMSIS-DAP: JTAG supported
+  Info : CMSIS-DAP: Atomic commands supported
+  Info : CMSIS-DAP: UART via USB COM port supported
+  Info : CMSIS-DAP: FW Version = Horco v0.2
+  Info : CMSIS-DAP: Interface Initialised (SWD)
+  Info : SWCLK/TCK = 1 SWDIO/TMS = 1 TDI = 1 TDO = 1 nTRST = 0 nRESET = 1
+  Info : CMSIS-DAP: Interface ready
+  Info : clock speed 400 kHz
+  Info : SWD DPIDR 0x6ba02477
+  Info : [mc02.ap2] Examination succeed
+  Info : [mc02.cpu0] Cortex-M7 r1p2 processor detected
+  Warn : [mc02.cpu0] Erratum 3092511: Cortex-M7 can halt in an incorrect address when breakpoint and exception occurs simultaneously
+  Info : [mc02.cpu0] The erratum 3092511 workaround will resume after an incorrect halt
+  Info : [mc02.cpu0] target has 8 breakpoints, 4 watchpoints
+  Info : [mc02.cpu0] Examination succeed
+Traceback (most recent call last):
+  File "C:\Users\Administrator\.codex\skills\flash-openocd\scripts\openocd_flasher.py", line 594, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "C:\Users\Administrator\.codex\skills\flash-openocd\scripts\openocd_flasher.py", line 567, in main
+    if ok and not args.no_save_profile:
+                  ^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Namespace' object has no attribute 'no_save_profile'

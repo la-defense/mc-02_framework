@@ -1,0 +1,16 @@
+{
+  "elapsed_s": 6.858767799999896,
+  "snapshots": 6,
+  "serial": {
+    "frames": 1370,
+    "bad_crc": 0,
+    "nonfinite": 0,
+    "nonzero_mode": 0,
+    "discarded": 0,
+    "norm_min": 0.9983132633260909,
+    "norm_max": 0.9983137725372317
+  },
+  "errors": [],
+  "source_sha": "ad41d3204b60b3f928dc972e38b76fec818c9ed0",
+  "elf_sha256": "e0737bd4a60bf06878a6acf56bbea196a85466d247687e344a6eb734d4980d63"
+}

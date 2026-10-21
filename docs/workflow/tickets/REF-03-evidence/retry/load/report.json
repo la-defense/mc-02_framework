@@ -1,0 +1,9 @@
+{
+  "frames": 2174,
+  "completions": 2177,
+  "max_receiver_window_bytes": 3683,
+  "full_phase_frames": 870,
+  "mixed_phase_frames": 1303,
+  "software_budget_pass": true,
+  "limit": "MCU timestamps; no physical waveform or client-display guarantee"
+}
