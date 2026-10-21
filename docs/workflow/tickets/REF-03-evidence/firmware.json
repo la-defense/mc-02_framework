@@ -2,60 +2,60 @@
   {
     "profile": "bench_safe",
     "config": "Debug",
-    "text": 195144,
+    "text": 195136,
     "data": 3172,
     "bss": 107928,
-    "sha256": "c53460fe372fe078f291580a45777808d133ab0897193623c6dabd77e0954ed1",
+    "sha256": "8b6c635818db256c693f02fce736cc1b5b3561eea6c883fc9bf50c8f8f60652e",
     "ports_addr": "2400ce00",
     "ports_size": 6656
   },
   {
     "profile": "bench_safe",
     "config": "RelWithDebInfo",
-    "text": 186280,
+    "text": 186272,
     "data": 3172,
     "bss": 107880,
-    "sha256": "5831e66c448c1365c9abe72ecb25df11346b35700ea6f489140f20a136662d23",
+    "sha256": "7c85686d2d9a39903414542d8c6f34a613b0fbd969ea33fb2099e299529e9443",
     "ports_addr": "2400cde0",
     "ports_size": 6656
   },
   {
     "profile": "robot",
     "config": "Debug",
-    "text": 225488,
+    "text": 225480,
     "data": 3984,
     "bss": 115736,
-    "sha256": "cb59ef68d6b5c5028b644d51cd91a01f9f79f8667d40a028a1cc9f563605e69c",
+    "sha256": "1480b8ed61d49dfafba18d1c4a193642840533cb88050b241bb4b3976ac59b14",
     "ports_addr": "2400df60",
     "ports_size": 6656
   },
   {
     "profile": "robot",
     "config": "RelWithDebInfo",
-    "text": 214536,
+    "text": 214528,
     "data": 3984,
     "bss": 115712,
-    "sha256": "eecb1a1ab9ceab6798434a7ee119215336d50e90ac60747b4a5802e1d8c43394",
+    "sha256": "6d182c055057f993dc029ec3c516fe50ff374f48e33524416d39ccfa63cc2169",
     "ports_addr": "2400df60",
     "ports_size": 6656
   },
   {
     "profile": "rcdiag",
     "config": "Debug",
-    "text": 197372,
+    "text": 197364,
     "data": 3172,
     "bss": 111096,
-    "sha256": "6525875d0fbac524097d7f4587e57f229ab45f66b7feee09fbff5247a8c47d09",
+    "sha256": "a6a5bd031168c27c32691a5299e0342c53e1fa8da51b1307f13e0a0353e2e4ec",
     "ports_addr": "2400da00",
     "ports_size": 6656
   },
   {
     "profile": "rcdiag",
     "config": "RelWithDebInfo",
-    "text": 188400,
+    "text": 188392,
     "data": 3172,
     "bss": 111048,
-    "sha256": "c23124ccfe27c3bcdfab08f2736f369670f34231ec9cf438a222d080893391ba",
+    "sha256": "aecc5b982350c77af2a267442b7b6abc91a19bb547d64fee062b3a4c22f3cd85",
     "ports_addr": "2400d9e0",
     "ports_size": 6656
   }

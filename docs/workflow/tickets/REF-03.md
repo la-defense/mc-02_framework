@@ -40,12 +40,12 @@ CMake增量检查在`/home/mc02/build/ref03-regeneration/run-20261021-210545-rhc
 
 | 配置 | Flash字节 | 相对基线 | RAM字节 | 相对基线 |
 |---|---:|---:|---:|---:|
-| bench_safe Debug | 198316 | +104 | 111100 | +0 |
-| bench_safe RelWithDebInfo | 189452 | +136 | 111052 | +0 |
-| robot Debug | 229472 | +1172 | 119720 | +440 |
-| robot RelWithDebInfo | 218520 | +1172 | 119696 | +440 |
-| rcdiag Debug | 200544 | +128 | 114268 | +0 |
-| rcdiag RelWithDebInfo | 191572 | +148 | 114220 | +0 |
+| bench_safe Debug | 198308 | +96 | 111100 | +0 |
+| bench_safe RelWithDebInfo | 189444 | +128 | 111052 | +0 |
+| robot Debug | 229464 | +1164 | 119720 | +440 |
+| robot RelWithDebInfo | 218512 | +1164 | 119696 | +440 |
+| rcdiag Debug | 200536 | +120 | 114268 | +0 |
+| rcdiag RelWithDebInfo | 191564 | +140 | 114220 | +0 |
 
 ## 专用裸板回归入口
 
@@ -78,3 +78,9 @@ CMake增量检查在`/home/mc02/build/ref03-regeneration/run-20261021-210545-rhc
 
 
 启动修复后的WSL Debug／Release仍各275/275，消毒器66/66；六种常规ARM、UI关闭、备用UART及诊断重新构建通过，隔离和编译选项检查通过。二次烧录前完整回读当前失败诊断固件1MiB，SHA-256为`21c4c1bcd7321b194c44dc48867c91119a0e57ad26c23e0a9e574fd7674dd83e`，参数切片与初始备份仍逐字节一致；未先运行任何串口负载。
+
+
+第二次观察仍定位UART_TX（提交7485322）：FreeRTOS在调度器启动前的uxCriticalNesting=0xAAAAAAAA，前序任务已创建，scheduler=0、UART任务为NULL，剩余RTOS堆8648字节。该版本仍拒绝BASEPRI非零，未覆盖真实端口启动行为。已扩展复现为PRIMASK=1、BASEPRI=0x50，确认修复前失败；最终启动检查只拒绝ISR或FAULTMASK，并在内核未运行时创建，允许RTOS保留的两种普通中断屏蔽。运行期入口没有放宽。另覆盖调度器已运行和FAULTMASK拒绝，继续复验后使用新软件SHA烧录；前两次短失败检查均不作为通过证据。
+
+
+最终启动检查修复后复验WSL Debug／Release各275/275、消毒器66/66；六种常规ARM与两个附加配置、refdiag再次构建通过。第三次烧录前完整1MiB备份SHA-256为`7dec51e40fcba5b4ab253199b81f9317bdb53ca35b0672e9bff0d50767deb214`，参数切片仍与初始独立备份一致。所有失败观察均保留，不报告为硬件通过。

@@ -88,7 +88,7 @@ USARTSendStatus_t USARTGetTxState(const USARTInstance *instance, USARTTxState_t 
 void USARTTxSetServiceReady(uint8_t ready);
 /** @brief 调度器启动前创建唯一发送任务，普通启动上下文串行调用。
  * @return 1为已创建（重复调用不重复创建），0为上下文或资源错误；失败可在启动前重试。
- * @note 启动前Thread模式允许PRIMASK=1，返回保持原中断状态；ISR、BASEPRI或FAULTMASK非零拒绝。
+ * @note 启动前Thread模式允许PRIMASK和BASEPRI非零；不主动改变屏蔽状态。ISR或FAULTMASK非零拒绝。
  * 512个StackType_t、Normal优先级，约1ms推进；创建失败不注销接收对象。
  */
 uint8_t USARTTxTaskInit(void);

@@ -9,11 +9,11 @@
 #include <setjmp.h>
 static osThreadDef_t captured;
 static unsigned creates, feeds, delays, notifications;
-static uint8_t fail_create;
+static uint8_t fail_create, kernel_running;
 static jmp_buf finished;
 int32_t osKernelRunning(void)
 {
-    return 0;
+    return kernel_running;
 }
 osThreadId osThreadCreate(const osThreadDef_t *definition, void *argument)
 {
@@ -61,22 +61,32 @@ int main(void)
     uint8_t data = 0x68u;
     uint32_t id = 77u;
     USARTTxRequest_t request = {&data, 1u, USART_TRANSFER_DMA, 50u, done, NULL, NULL};
+    kernel_running=1u;
+    TEST_CHECK(!USARTTxTaskInit() && creates==0u);
+    kernel_running=0u;
+    mc02_test_faultmask=1u;
+    TEST_CHECK(!USARTTxTaskInit() && creates==0u);
+    mc02_test_faultmask=0u;
     mc02_test_ipsr=1u;
     TEST_CHECK(!USARTTxTaskInit() && creates==0u);
     mc02_test_ipsr=0u;
     // RobotInit在PRIMASK=1时创建任务；初始化必须保持这一启动状态。
     mc02_test_disable_irq();
+    mc02_test_basepri=0x50u; // 真实FreeRTOS在调度前创建前序任务后保持BASEPRI屏蔽。
     fail_create = 1u;
     TEST_CHECK(!USARTTxTaskInit());
     TEST_CHECK(mc02_test_primask==1u && creates==1u);
     mc02_test_set_primask(0u);
+    mc02_test_basepri=0u;
     TEST_CHECK(USARTSubmitTx(instance, &request, &id) == USART_SEND_NOT_READY && id == 77u &&
                uart_model_calls == 0u);
     fail_create = 0u;
     mc02_test_disable_irq();
+    mc02_test_basepri=0x50u;
     TEST_CHECK(USARTTxTaskInit() && creates == 2u && USARTTxTaskInit() && creates == 2u);
-    TEST_CHECK(mc02_test_primask==1u);
+    TEST_CHECK(mc02_test_primask==1u && mc02_test_basepri==0x50u);
     mc02_test_set_primask(0u);
+    mc02_test_basepri=0u;
     TEST_CHECK(captured.stack_size == 512u && captured.priority == osPriorityNormal &&
                uart_model_calls == 0u);
     TEST_CHECK(USARTSubmitTx(instance, &request, &id) == USART_SEND_ACCEPTED);

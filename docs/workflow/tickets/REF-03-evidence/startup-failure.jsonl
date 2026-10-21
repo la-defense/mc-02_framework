@@ -1,0 +1,2 @@
+{"init_failed": 1, "init_failure_count": 1, "init_heartbeat": 67097, "init_module": 8, "init_reason": 2, "init_resource_id_hi": 0, "init_resource_id_lo": 8, "init_stage": 3, "sample": 1, "status": "baseline", "tick_ms": 2}
+{"init_failed": 1, "init_failure_count": 1, "init_heartbeat": 67123, "init_module": 8, "init_reason": 2, "init_resource_id_hi": 0, "init_resource_id_lo": 8, "init_stage": 3, "sample": 2, "status": "running", "tick_ms": 2}

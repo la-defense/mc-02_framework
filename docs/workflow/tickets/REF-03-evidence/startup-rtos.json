@@ -1,0 +1,8 @@
+{
+  "nesting": 2863311530,
+  "scheduler": 0,
+  "uart_task": 0,
+  "ins_task": 603993408,
+  "motor_task": 603995568,
+  "heap_free": 8648
+}
