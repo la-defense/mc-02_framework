@@ -768,9 +768,12 @@ foreach(scenario IN ITEMS vectors failures instances)
   add_test(NAME production_crc_${scenario} COMMAND crc_test ${scenario})
   set_tests_properties(production_crc_${scenario} PROPERTIES TIMEOUT 15)
 endforeach()
-add_executable(crc_a5_test crc_a5_test.c ../../modules/master_machine/seasky_protocol.c)
-target_include_directories(crc_a5_test PRIVATE ../../modules/master_machine)
-add_test(NAME production_crc_a5_compatibility COMMAND crc_a5_test)
+add_executable(crc_a5_test crc_a5_test.c ../../docs/history/seasky/seasky_protocol.c)
+target_include_directories(crc_a5_test PRIVATE ../../docs/history/seasky)
+# 归档源码只由历史兼容测试编译，仍执行与自有活动源码相同的格式检查。
+target_compile_options(crc_a5_test PRIVATE ${MC02_FORMAT_FLAGS})
+add_test(NAME historical_crc_a5_compatibility COMMAND crc_a5_test)
+set_tests_properties(historical_crc_a5_compatibility PROPERTIES TIMEOUT 10 LABELS historical)
 
 # 传输替身保留真实协议解析；包装只用于让选定的一次 CRC 调用返回失败。
 add_executable(crc_protocol_test crc_protocol_test.c

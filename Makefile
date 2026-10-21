@@ -143,7 +143,6 @@ modules/imu/ins_task.c \
 modules/master_machine/master_process.c \
 modules/master_machine/vision_protocol.c \
 modules/master_machine/vision_control.c \
-modules/master_machine/seasky_protocol.c \
 modules/motor/DJImotor/dji_motor.c \
 modules/motor/HTmotor/HT04.c \
 modules/motor/LKmotor/LK9025.c \

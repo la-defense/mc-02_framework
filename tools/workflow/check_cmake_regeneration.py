@@ -39,6 +39,7 @@ SOURCE_PREFIXES = (
     "bsp/",
     "modules/",
     "application/",
+    "docs/history/seasky/",
 )
 TARGET = "Basic_Framework_MC02_bench_safe.elf"
 
@@ -232,7 +233,7 @@ class Checker:
                 f"missing={sorted(missing)}, unexpected={sorted(unexpected)}, "
                 f"include_directories={include_mismatches}"
             )
-        self.assert_link_excludes(list(removed), label)
+        self.assert_link_excludes(list(removed + excluded), label)
         print(f"[{label}] PASS: {len(current_sources)} source paths and include directories match a clean configure", flush=True)
 
     def write_source(self, relative: str, contents: str) -> None:
@@ -274,7 +275,8 @@ class Checker:
             "initial-build",
             [self.args.cmake, "--build", str(self.incremental), "--parallel", str(self.args.jobs)],
         )
-        self.stage("baseline")
+        # 归档源码会复制进隔离副本，但任何固件配置都不应收集或链接它。
+        self.stage("baseline", excluded=("docs/history/seasky/seasky_protocol.c",))
 
         bsp = "bsp/mc02_cmake_regen_probe.c"
         module = "modules/mc02_cmake_regen_probe.c"

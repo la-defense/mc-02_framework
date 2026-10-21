@@ -199,8 +199,8 @@ MC02-0079迁移后，六个旧CRC文件的链接指向当前统一入口；原�
 | 097 | [modules/imu/BMI088Middleware.c:1](../../../modules/imu/BMI088Middleware.c#L1) | 原有沿用；位置 `6c2f74b` | 一般 | 旧 BMI088 适配文件没有用途或历史保留说明，无法区分它和 modules/BMI088 的现行驱动；单字节收发前提未说明。 | 补旧适配层用途及 SPI 指针需先设置的前提，暂不删除或改实现。 |
 | 098 | [modules/imu/BMI088Middleware.h:18](../../../modules/imu/BMI088Middleware.h#L18) | 原有沿用；位置 `6c2f74b` | 一般 | 公开片选与字节交换入口无注释，BMI088_SPI 由谁设置、输入输出和等待方式不清楚。 | 说明旧接口用途、先设置 SPI 地址和字节交换结果。 |
 | 099 | [modules/imu/BMI088reg.h:1](../../../modules/imu/BMI088reg.h#L1) | 原有沿用；位置 `6c2f74b` | 一般 | 旧寄存器表无文件职责和使用范围，部分分组仅英文，与现行 bmi088_regNdef.h 容易混淆。 | 补保留用途及对应驱动提示，不逐个宏扩写。 |
-| 121 | [modules/master_machine/seasky_protocol.c:122](../../../modules/master_machine/seasky_protocol.c#L122) | 原有沿用；位置 `6c2f74b` | 一般 | 解析中帧头/整帧检查失败后的返回及输出保留缺说明；文件用途未提示它与 SP 视觉协议的关系。 | 说明保留的协议用途和两次检查的作用，接口条件归头文件。 |
-| 122 | [modules/master_machine/seasky_protocol.h:24](../../../modules/master_machine/seasky_protocol.h#L24) | 原有沿用；位置 `6c2f74b` | 重点 | 参数只有行尾短注释，float_length 的个数单位、缓冲区容量、解析失败返回0和输出保留未解释。 | 补中文 Doxygen、调用方准备的数据空间和失败结果。 |
+| 121 | [docs/history/seasky/seasky_protocol.c:122](../../../docs/history/seasky/seasky_protocol.c#L122) | 原有沿用；位置 `6c2f74b` | 一般 | 解析中帧头/整帧检查失败后的返回及输出保留缺说明；文件用途未提示它与 SP 视觉协议的关系。 | 说明保留的协议用途和两次检查的作用，接口条件归头文件。 |
+| 122 | [docs/history/seasky/seasky_protocol.h:24](../../../docs/history/seasky/seasky_protocol.h#L24) | 原有沿用；位置 `6c2f74b` | 重点 | 参数只有行尾短注释，float_length 的个数单位、缓冲区容量、解析失败返回0和输出保留未解释。 | 补中文 Doxygen、调用方准备的数据空间和失败结果。 |
 | 132 | [modules/motor/DMmotor/dmmotor.c:129](../../../modules/motor/DMmotor/dmmotor.c#L129) | 原有沿用；位置 `6c2f74b` | 一般 | 无文件职责，单电机持续发送循环和停止时只发送零力矩的选择缺少说明；部分内部函数无用途说明。 | 说明当前只实现力矩控制及每轮收发目的，保留停止后仍收反馈的原因。 |
 | 133 | [modules/motor/DMmotor/dmmotor.h:65](../../../modules/motor/DMmotor/dmmotor.h#L65) | 原有沿用；位置 `6c2f74b` | 重点 | 公开接口无注释，位置/速度/力矩单位、允许范围和每电机任务创建顺序未解释。 | 补中文 Doxygen，说明当前控制能力、参考值单位和编码器置零行为。 |
 | 139 | [modules/motor/LKmotor/LK9025.h:96](../../../modules/motor/LKmotor/LK9025.h#L96) | 原有沿用；位置 `6c2f74b` | 一般 | 在线接口无说明；停止/使能参数为空，参考值单位未结合角度/速度/电流控制说明。 | 补中文 Doxygen、有效实例前提和在线返回值。 |

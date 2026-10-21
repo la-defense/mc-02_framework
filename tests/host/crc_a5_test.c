@@ -1,5 +1,5 @@
 /** @file crc_a5_test.c
- * @brief 用完整 A5 帧验证生产组包／解析和 CRC 错误拒绝；无硬件依赖。
+ * @brief 用完整 A5 帧验证归档协议组包／解析和 CRC 错误拒绝；无硬件依赖。
  */
 #include "seasky_protocol.h"
 #include "test_check.h"

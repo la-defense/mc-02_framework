@@ -74,7 +74,8 @@ def audit_commands(path: Path) -> None:
         if source.suffix.lower() != ".c":
             continue
         relative = source.resolve().relative_to(ROOT).as_posix()
-        own = relative.startswith(("bsp/", "modules/", "application/", "Core/Src/", "USB_DEVICE/", "tests/"))
+        own = relative.startswith(("bsp/", "modules/", "application/", "Core/Src/", "USB_DEVICE/", "tests/",
+                                   "docs/history/seasky/"))
         command = entry.get("arguments") or shlex.split(entry["command"], posix=os.name != "nt")
         if own:
             if not all(flag in command for flag in flags):
