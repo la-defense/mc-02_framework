@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "date": "2026-10-21",
+  "base_sha": "5c60d927398226cb9b0b6af391002b41af333e3b",
+  "wsl_debug": {
+    "passed": 275,
+    "total": 275
+  },
+  "wsl_release": {
+    "passed": 275,
+    "total": 275
+  },
+  "asan_ubsan_float_cast": {
+    "passed": 66,
+    "total": 66
+  },
+  "capture_tool_unittest": 6,
+  "arm_regular_builds": 6,
+  "additional_builds": [
+    "robot UI off",
+    "robot UART vision",
+    "bench_safe refdiag Debug"
+  ],
+  "illegal_configurations_rejected": [
+    "bench heater",
+    "bench UI",
+    "robot rcdiag",
+    "robot refdiag",
+    "rcdiag and refdiag",
+    "two vision transports"
+  ],
+  "incremental_scenarios": 15,
+  "incremental_baseline_sources": 167,
+  "incremental_evidence": "/home/mc02/build/ref03-regeneration/run-20261021-210545-rhcj1i5z",
+  "gcc": "WSL 11.4.0 / ARM 10.3.1",
+  "format_diagnostics": true,
+  "fast_math": false,
+  "floating_abi": "Cortex-M7 / fpv5-d16 / hard-float",
+  "windows_native_required": false
+}

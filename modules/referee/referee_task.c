@@ -19,7 +19,6 @@ static UIState_t state;
 static uint32_t versions[6], last_start_ms, demo_ms;
 static double seen[6];
 static uint8_t have_start, have_demo, next_group;
-uint8_t UI_Seq;
 typedef struct
 {
     uint32_t id, generation, version;
@@ -316,7 +315,11 @@ UIStatus_t UIRefresh(void)
         }
         if (generation == state.generation)
         {
-            if (event.result != USART_TX_COMPLETE)
+            if (event.result == USART_TX_EXPIRED && !event.started)
+            {
+                // 限流期间旧帧到期：保留版本与初始化步骤，下一次取最新内容。
+            }
+            else if (event.result != USART_TX_COMPLETE)
             {
                 if (event.result == USART_TX_CANCELLED && !RefereeIdentityMatches(ui_identity.Robot_ID))
                     UIPhase(UI_PHASE_NEED_INIT, UI_NOT_INITIALIZED);

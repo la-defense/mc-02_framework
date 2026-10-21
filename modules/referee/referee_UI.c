@@ -7,7 +7,6 @@
  * @copyright Copyright (c) 2022
  */
 #include "referee_UI.h"
-#include "crc.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <stdarg.h>
@@ -180,11 +179,6 @@ static int valid_graph(const Graph_Data_t *g, int text)
     }
 }
 
-static void le16(uint8_t *out, uint16_t value)
-{
-    out[0] = (uint8_t)value; out[1] = (uint8_t)(value >> 8u);
-}
-
 static void le32(uint8_t *out, uint32_t value)
 {
     for (unsigned i = 0; i < 4u; ++i) out[i] = (uint8_t)(value >> (8u*i));
@@ -241,31 +235,18 @@ static UIStatus_t send_frame(const referee_id_t *id, uint16_t command, const uin
     if (!valid_id(id)) return UI_ERROR_RANGE;
     UIStatus_t identity_status = validate_current_id(id);
     if (identity_status != UI_OK) return identity_status;
-    uint8_t frame[120] = {0};
-    size_t total = 15u + length;
-    if (total > sizeof(frame)) return UI_ERROR_LENGTH;
-    frame[0] = REFEREE_SOF;
-    le16(frame+1, (uint16_t)(6u+length));
-    frame[3] = UI_Seq;
-    uint32_t crc;
-    if (CRCCompute(CRC8_REFEREE, frame, 4u, &crc) != CRC_OK) return UI_ERROR_CRC;
-    frame[4] = (uint8_t)crc;
-    le16(frame+5, ID_student_interactive);
-    le16(frame+7, command); le16(frame+9, id->Robot_ID); le16(frame+11, id->Cilent_ID);
-    memcpy(frame+13, content, length);
-    if (CRCCompute(CRC16_SP_REFEREE, frame, total-2u, &crc) != CRC_OK) return UI_ERROR_CRC;
-    le16(frame+total-2u, (uint16_t)crc);
     uint32_t ignored_id;
     if (options != NULL && (options->complete == NULL || options->id == NULL)) return UI_ERROR_ARGUMENT;
-    RefereeSendStatus_t status = RefereeSend(frame, (uint16_t)total,
+    RefereeTxRequest_t request = {id->Cilent_ID, command, content, length, REFEREE_TX_DEFAULT_TIMEOUT_MS,
         options != NULL ? options->complete : UICompleteDefault,
         options != NULL ? options->guard : NULL,
-        options != NULL ? options->context : NULL,
-        options != NULL ? options->id : &ignored_id);
-    // 仅本机接受后推进序号，失败不消费序号，也不冒称客户端已经显示。
+        options != NULL ? options->context : NULL};
+    RefereeSendStatus_t status = RefereeSubmit(&request, options != NULL ? options->id : &ignored_id);
     switch (status)
     {
-    case REFEREE_SEND_ACCEPTED: ++UI_Seq; return UI_SUBMITTED;
+    case REFEREE_SEND_ACCEPTED: return UI_SUBMITTED;
+    case REFEREE_SEND_CRC: return UI_ERROR_CRC;
+    case REFEREE_SEND_IDENTITY: return UI_NOT_INITIALIZED;
     case REFEREE_SEND_NOT_INITIALIZED: return UI_NOT_INITIALIZED;
     case REFEREE_SEND_BUSY: return UI_SEND_BUSY;
     case REFEREE_SEND_TIMEOUT: return UI_SEND_TIMEOUT;

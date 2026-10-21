@@ -243,7 +243,7 @@ static void TxUpdate(TxPort *port, USARTInstance *instance)
     USARTTxExit(saved);
 }
 // 只通知队首，保持提交顺序；业务回调在开中断后执行。
-static void TxNotify(TxPort *port)
+static void TxNotify(TxPort *port, USARTInstance *instance)
 {
     uint32_t saved = USARTTxEnter();
     if (port->count == 0u)
@@ -268,6 +268,8 @@ static void TxNotify(TxPort *port)
     else
         ++port->state.failed;
     USARTTxExit(saved);
+    // 先更新共享业务额度，再交付请求结果；两者均不借出内部数组。
+    if (instance->tx_observer != NULL) instance->tx_observer(instance->context, &event);
     callback(context, &event);
     saved = USARTTxEnter();
     // 通知结束后才回收名额；隔离项只移出通知列表，仍保留数据和lease。
@@ -300,10 +302,19 @@ static void TxStartNext(TxPort *port, USARTInstance *instance)
                          instance->tx_guard(instance->context, entry->data, entry->request.length)) &&
                         (entry->request.guard == NULL ||
                          entry->request.guard(entry->request.context, entry->data, entry->request.length));
+    USARTTxGateResult_t gate = USART_TX_ALLOW;
+    if (permitted && instance->tx_gate != NULL)
+        gate = instance->tx_gate(instance->context, entry->event.id, entry->data, entry->request.length);
     saved = USARTTxEnter();
-    if (!permitted || entry->cancel || TxDue(entry, HAL_GetTick()))
+    if (!permitted || gate == USART_TX_REJECT || entry->cancel || TxDue(entry, HAL_GetTick()))
     {
         TxFinish(entry, TxDue(entry, HAL_GetTick()) ? USART_TX_EXPIRED : USART_TX_CANCELLED, 1u);
+        USARTTxExit(saved);
+        return;
+    }
+    if (gate == USART_TX_DEFER)
+    {
+        entry->phase = TX_QUEUED;
         USARTTxExit(saved);
         return;
     }
@@ -394,7 +405,7 @@ void USARTProcessTx(void)
             }
             USARTTxExit(saved);
         }
-        TxNotify(port);
+        TxNotify(port, instance);
         TxStartNext(port, instance);
         saved = USARTTxEnter();
         port->state.active = 0u;

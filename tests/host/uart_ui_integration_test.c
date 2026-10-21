@@ -8,6 +8,12 @@
 #include "crc.h"
 #include "daemon.h"
 #include <string.h>
+// 序号由生产共享入口维护；测试通过只读副本查询。
+static uint8_t sequence(void)
+{
+    RefereeTxState_t value;
+    return RefereeGetTxState(&value) == USART_SEND_ACCEPTED ? value.next_sequence : 0u;
+}
 static DaemonInstance daemon_instance;
 static Referee_Interactive_info_t data;
 static unsigned delays;
@@ -137,11 +143,11 @@ int main(int argc, char **argv)
         TEST_CHECK(instance);
         for (unsigned i = 0u; i < 4u; ++i)
             TEST_CHECK(USARTSubmitTx(instance, &request, &id) == USART_SEND_ACCEPTED);
-        TEST_CHECK(MyUIInit() == UI_SUBMITTED && UIRefresh() == UI_SEND_BUSY && UI_Seq == 0u &&
+        TEST_CHECK(MyUIInit() == UI_SUBMITTED && UIRefresh() == UI_SEND_BUSY && sequence() == 0u &&
                    state().init_step == 0u);
         for (unsigned i = 0u; i < 5u; ++i)
             USARTProcessTx();
-        TEST_CHECK(UIRefresh() == UI_SUBMITTED && UI_Seq == 1u && uart_model_calls == 0u);
+        TEST_CHECK(UIRefresh() == UI_SUBMITTED && sequence() == 1u && uart_model_calls == 0u);
         USARTProcessTx();
         complete();
         TEST_CHECK(UIRefresh() == UI_OK && state().init_step == 1u);
@@ -171,7 +177,7 @@ int main(int argc, char **argv)
         USARTProcessTx();
         USARTProcessTx();
         TEST_CHECK(UIRefresh() == UI_NOT_INITIALIZED && state().phase == UI_PHASE_ERROR);
-        TEST_CHECK(state().init_step == 1u && UI_Seq == 2u);
+        TEST_CHECK(state().init_step == 1u && sequence() == 2u);
         uart_model_start_result = HAL_OK;
         advance();
         TEST_CHECK(UIRefresh() == UI_NOT_INITIALIZED);
@@ -232,9 +238,9 @@ int main(int argc, char **argv)
         TEST_CHECK(UIRefresh() == UI_NOT_INITIALIZED);
         TEST_CHECK(state().phase == UI_PHASE_ERROR && data.Referee_Interactive_Flag.chassis_flag);
         TEST_CHECK(uart_model_aborts == 1u && uart_model_leases == 0u);
-        USARTTxState_t tx;
+        RefereeTxState_t tx;
         TEST_CHECK(RefereeGetTxState(&tx) == USART_SEND_ACCEPTED);
-        TEST_CHECK(tx.failed == 1u && tx.last_event.result == USART_TX_EXPIRED);
+        TEST_CHECK(tx.uart.failed == 1u && tx.uart.last_event.result == USART_TX_EXPIRED);
         return 0;
     }
     data.chassis_mode = CHASSIS_NO_FOLLOW;

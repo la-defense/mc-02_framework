@@ -1058,6 +1058,30 @@ endforeach()
 foreach(model_target uart_tx_backend_test uart_ui_integration_test uart_tx_worker_test uart_tx_callers_test)
   target_link_options(${model_target} PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
 endforeach()
+# 专用采集工具离线核对CRC、半帧、MCU记录、身份和只读命令范围。
+add_test(NAME referee_budget_capture_tools COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_referee_budget_capture.py)
+set_tests_properties(referee_budget_capture_tools PROPERTIES TIMEOUT 10)
+# 使用真实裁判和UART后端，验证两种业务竞争同一份发送额度。
+add_executable(referee_budget_test referee_budget_test.c uart_tx_hal_model.c
+  ../../bsp/usart/bsp_usart.c ../../bsp/usart/bsp_usart_tx.c ../../bsp/usart/usart_tx_port.c
+  ../../modules/referee/rm_referee.c ../../modules/referee/referee_UI.c ../../modules/referee/referee_task.c)
+target_include_directories(referee_budget_test BEFORE PRIVATE usart_tx_fakes ../../bsp/usart remote_fakes crc_protocol_fakes can_comm_fakes)
+target_include_directories(referee_budget_test PRIVATE . ../../modules/referee ../../modules/message_center ../../modules/master_machine ../../Core/Inc)
+target_link_libraries(referee_budget_test PRIVATE mc02_software_crc Threads::Threads m)
+target_compile_options(referee_budget_test PRIVATE -Wall -Wextra -Werror)
+target_link_options(referee_budget_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
+foreach(scenario arguments fifo threads ui-expire window radar receiver sequence errors wrap-identity cancel-expire busy-isolate)
+  add_test(NAME production_referee_budget_${scenario} COMMAND referee_budget_test ${scenario})
+  set_tests_properties(production_referee_budget_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+# 裁判接收目标也提供共享发送预算，正常路径始终链接生产计算。
+get_property(referee_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(target IN LISTS referee_targets)
+  get_target_property(target_sources ${target} SOURCES)
+  if("${target_sources}" MATCHES "rm_referee[.]c")
+    target_sources(${target} PRIVATE ../../modules/referee/referee_tx_budget.c)
+  endif()
+endforeach()
 # 目标定义完成后统一施加；DSP厂商源码不在自有目录范围内。
 get_property(host_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS host_targets)

@@ -11,7 +11,12 @@
 #include "bsp_usb.h"
 #include <string.h>
 
-uint8_t UI_Seq;
+// 序号由生产共享入口维护；测试通过只读副本查询。
+static uint8_t current_sequence(void)
+{
+    RefereeTxState_t value;
+    return RefereeGetTxState(&value) == USART_SEND_ACCEPTED ? value.next_sequence : 0u;
+}
 static uint32_t now_ms, reloads, usb_sends, uart_sends;
 static uint8_t usb_bytes[64], uart_bytes[255], sent[512];
 static uint16_t sent_length;
@@ -45,8 +50,8 @@ USARTSendStatus_t USARTSubmitTx(USARTInstance *instance,const USARTTxRequest_t *
 // 该目标只检查编码与状态选择；真实发送统计由uart_ui_integration_test覆盖。
 USARTSendStatus_t USARTGetTxState(const USARTInstance *instance, USARTTxState_t *output)
 {
-    (void)instance; (void)output;
-    return USART_SEND_NOT_READY;
+    (void)instance; memset(output,0,sizeof(*output));
+    return USART_SEND_ACCEPTED;
 }
 USARTSendStatus_t USARTCancelTx(USARTInstance *instance,uint32_t id)
 { (void)instance;(void)id;return USART_SEND_NOT_FOUND; }
@@ -157,13 +162,13 @@ int main(void)
     UICharRefresh(&id, &text,NULL); check_referee_frame();
     for (int failure = 0; failure < 2; ++failure)
     {
-        uint32_t previous = uart_sends; uint8_t sequence = UI_Seq;
+        uint32_t previous = uart_sends; uint8_t sequence = current_sequence();
         crc_fail_after = failure; UIDelete(&id, 1u, 0u,NULL);
-        TEST_CHECK(uart_sends == previous && UI_Seq == sequence);
+        TEST_CHECK(uart_sends == previous && current_sequence() == sequence);
         crc_fail_after = failure; UIGraphRefresh(&id, &graph, 1u, 1u,NULL);
-        TEST_CHECK(uart_sends == previous && UI_Seq == sequence);
+        TEST_CHECK(uart_sends == previous && current_sequence() == sequence);
         crc_fail_after = failure; UICharRefresh(&id, &text,NULL);
-        TEST_CHECK(uart_sends == previous && UI_Seq == sequence);
+        TEST_CHECK(uart_sends == previous && current_sequence() == sequence);
     }
     return 0;
 }

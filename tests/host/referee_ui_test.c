@@ -14,6 +14,12 @@
 #include <limits.h>
 #include <math.h>
 
+// 序号由生产共享入口维护；测试通过只读副本查询。
+static uint8_t current_sequence(void)
+{
+    RefereeTxState_t value;
+    return RefereeGetTxState(&value) == USART_SEND_ACCEPTED ? value.next_sequence : 0u;
+}
 static uint8_t rx[255], sent[128];
 static uint16_t sent_length, inflight_length;
 static const uint8_t *inflight;
@@ -60,8 +66,8 @@ USARTSendStatus_t USARTSubmitTx(USARTInstance *i,const USARTTxRequest_t *request
 // 该目标只检查编码与状态选择；真实发送统计由uart_ui_integration_test覆盖。
 USARTSendStatus_t USARTGetTxState(const USARTInstance *instance, USARTTxState_t *output)
 {
-    (void)instance; (void)output;
-    return USART_SEND_NOT_READY;
+    (void)instance; memset(output,0,sizeof(*output));
+    return USART_SEND_ACCEPTED;
 }
 USARTSendStatus_t USARTCancelTx(USARTInstance *i,uint32_t id)
 {
@@ -226,12 +232,12 @@ static void frames(void)
     TEST_CHECK(UIGraphRefresh(&id,graphs,7,1,NULL)==UI_NOT_INITIALIZED && sends==0);
     UART_HandleTypeDef handle={0};TEST_CHECK(RefereeInit(&handle,NULL)==REFEREE_OK);
     now_ms=10u;publish_robot_state(1u);
-    UI_Seq=0;
+
     TEST_CHECK(UIGraphRefresh(&id,graphs,7,1,NULL)==UI_SUBMITTED);
-    TEST_CHECK(sent_length==sizeof(golden) && memcmp(sent,golden,sizeof(golden))==0 && UI_Seq==1);
+    TEST_CHECK(sent_length==sizeof(golden) && memcmp(sent,golden,sizeof(golden))==0 && current_sequence()==1);
     const size_t counts[]={1,2,5,7};
     for(size_t i=0;i<4;++i) {
-        uint8_t sequence=UI_Seq;
+        uint8_t sequence=current_sequence();
         TEST_CHECK(UIGraphRefresh(&id,graphs,7,counts[i],NULL)==UI_SUBMITTED);
         check_frame((uint16_t)(0x101+i),counts[i]*15u,sequence);
     }
@@ -246,7 +252,7 @@ static void frames(void)
     const uint8_t negative_float[]={0x2e,0xfb,0xff,0xff}, min_integer[]={0,0,0,0x80};
     TEST_CHECK(memcmp(sent+13+5*15+11,negative_float,4)==0);
     TEST_CHECK(memcmp(sent+13+6*15+11,min_integer,4)==0);
-    unsigned previous=sends;uint8_t sequence=UI_Seq;
+    unsigned previous=sends;uint8_t sequence=current_sequence();
     size_t bad[]={0,3,4,6,8,256,SIZE_MAX};
     for(size_t i=0;i<7;++i) TEST_CHECK(UIGraphRefresh(&id,graphs,7,bad[i],NULL)==UI_ERROR_LENGTH);
     TEST_CHECK(UIGraphRefresh(&id,graphs,1,2,NULL)==UI_ERROR_LENGTH);
@@ -255,7 +261,7 @@ static void frames(void)
     graphs[1].color=9;
     TEST_CHECK(UIGraphRefresh(&id,graphs,7,2,NULL)==UI_ERROR_RANGE);
     graphs[1]=graphs[0];
-    TEST_CHECK(sends==previous && sequence==UI_Seq);
+    TEST_CHECK(sends==previous && sequence==current_sequence());
     String_Data_t text;
     TEST_CHECK(UICharDraw(&text,"txt",1,0,0,1,1,0,0,"123456789012345678901234567890")==UI_OK);
     TEST_CHECK(UICharRefresh(&id,&text,NULL)==UI_SUBMITTED);
@@ -276,41 +282,42 @@ static void frames(void)
     TEST_CHECK(UIDelete(&wrong,2,9,NULL)==UI_NOT_INITIALIZED);
     wrong.Robot_ID=109;
     TEST_CHECK(UIDelete(&wrong,0,0,NULL)==UI_NOT_INITIALIZED);
-    UI_Seq=255;
-    TEST_CHECK(UIDelete(&id,1,0,NULL)==UI_SUBMITTED && UI_Seq==0);
+    while(current_sequence()!=255u) TEST_CHECK(UIDelete(&id,0,0,NULL)==UI_SUBMITTED);
+    TEST_CHECK(UIDelete(&id,1,0,NULL)==UI_SUBMITTED && current_sequence()==0);
     check_frame(0x100,2,255);
 }
 
 static void transport(void)
 {
     uint8_t bytes[128]={1,2,3};uint32_t ticket=0u;
-    TEST_CHECK(RefereeSend(bytes,3,ignore_result,NULL,NULL,&ticket)==REFEREE_SEND_NOT_INITIALIZED);
-    TEST_CHECK(RefereeSend(NULL,3,ignore_result,NULL,NULL,&ticket)==REFEREE_SEND_BAD_ARGUMENT);
-    TEST_CHECK(RefereeSend(bytes,0,ignore_result,NULL,NULL,&ticket)==REFEREE_SEND_BAD_ARGUMENT);
-    TEST_CHECK(RefereeSend(bytes,129,ignore_result,NULL,NULL,&ticket)==REFEREE_SEND_BAD_ARGUMENT);
+    RefereeTxRequest_t request={2u,0x0200u,bytes,3u,100u,ignore_result,NULL,NULL};
+    TEST_CHECK(RefereeSubmit(&request,&ticket)==REFEREE_SEND_NOT_INITIALIZED);
+    TEST_CHECK(RefereeSubmit(NULL,&ticket)==REFEREE_SEND_BAD_ARGUMENT);
+    request.timeout_ms=0u;TEST_CHECK(RefereeSubmit(&request,&ticket)==REFEREE_SEND_BAD_ARGUMENT);request.timeout_ms=100u;
+    request.length=113u;TEST_CHECK(RefereeSubmit(&request,&ticket)==REFEREE_SEND_BAD_ARGUMENT);request.length=3u;
     UART_HandleTypeDef h={0};TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_OK);
     now_ms=10u;publish_robot_state(1u);
-    USARTSendStatus_t statuses[]={USART_SEND_BUSY,USART_SEND_ERROR,USART_SEND_TIMEOUT,USART_SEND_BAD_ARGUMENT};
-    UIStatus_t expected[]={UI_SEND_BUSY,UI_SEND_ERROR,UI_SEND_TIMEOUT,UI_SEND_ERROR};
+    USARTSendStatus_t statuses[]={USART_SEND_BUSY,USART_SEND_ERROR,USART_SEND_NOT_READY,USART_SEND_BAD_ARGUMENT};
+    UIStatus_t expected[]={UI_SEND_BUSY,UI_SEND_ERROR,UI_NOT_INITIALIZED,UI_SEND_ERROR};
     for(size_t i=0;i<4u;++i) {
         start_status=statuses[i];unsigned previous=sends;
         TEST_CHECK(UIDelete(&id,1,0,NULL)==expected[i]);
-        TEST_CHECK(sends==previous && UI_Seq==0u && delays==0u);
+        TEST_CHECK(sends==previous && current_sequence()==0u && delays==0u);
     }
     start_status=USART_SEND_ACCEPTED;
     for(int failure=0;failure<2;++failure) {
-        crc_fail_after=failure;TEST_CHECK(UIDelete(&id,1,0,NULL)==UI_ERROR_CRC && sends==0u && UI_Seq==0u);
+        crc_fail_after=failure;TEST_CHECK(UIDelete(&id,1,0,NULL)==UI_ERROR_CRC && sends==0u && current_sequence()==0u);
     }
     complete_on_delay=0;
-    TEST_CHECK(UIDelete(&id,1,0,NULL)==UI_SUBMITTED && UI_Seq==1u);
+    TEST_CHECK(UIDelete(&id,1,0,NULL)==UI_SUBMITTED && current_sequence()==1u);
     uint8_t saved[128];memcpy(saved,inflight,inflight_length);uint16_t length=inflight_length;
     TEST_CHECK(inflight!=sent && delays==0u);
     TEST_CHECK(UIDelete(&id,2,9,NULL)==UI_SEND_BUSY);
-    TEST_CHECK(inflight_length==length && memcmp(inflight,saved,length)==0 && UI_Seq==1u);
+    TEST_CHECK(inflight_length==length && memcmp(inflight,saved,length)==0 && current_sequence()==1u);
     notify_result(USART_TX_FAILED);
-    TEST_CHECK(UI_Seq==1u); // 入队后的失败不回退已消费的线上序号。
-    TEST_CHECK(RefereeSend(bytes,sizeof(bytes),ignore_result,NULL,NULL,&ticket)==REFEREE_SEND_ACCEPTED);
-    memset(bytes,0xff,sizeof(bytes));TEST_CHECK(inflight[0]==1u && inflight[1]==2u && inflight[2]==3u);
+    TEST_CHECK(current_sequence()==1u); // 入队后的失败不回退已消费的线上序号。
+    TEST_CHECK(RefereeSubmit(&request,&ticket)==REFEREE_SEND_ACCEPTED);
+    memset(bytes,0xff,sizeof(bytes));TEST_CHECK(inflight[13]==1u && inflight[14]==2u && inflight[15]==3u);
     notify_result(USART_TX_COMPLETE);
 }
 static void advance_ui(void)
@@ -345,8 +352,8 @@ static void task_tests(void)
     start_status=USART_SEND_ACCEPTED;initialize_ui();
     for(unsigned i=0u;i<6u;++i) { advance_ui();TEST_CHECK(UIRefresh()==UI_SUBMITTED);TEST_CHECK(UIRefresh()==UI_OK); }
     data.chassis_mode=CHASSIS_ROTATE;advance_ui();start_status=USART_SEND_BUSY;
-    unsigned previous=sends;uint8_t seq=UI_Seq;
-    TEST_CHECK(UIRefresh()==UI_SEND_BUSY && sends==previous && UI_Seq==seq && data.Referee_Interactive_Flag.chassis_flag);
+    unsigned previous=sends;uint8_t seq=current_sequence();
+    TEST_CHECK(UIRefresh()==UI_SEND_BUSY && sends==previous && current_sequence()==seq && data.Referee_Interactive_Flag.chassis_flag);
     start_status=USART_SEND_ACCEPTED;complete_on_delay=0;
     TEST_CHECK(UIRefresh()==UI_SUBMITTED);TEST_CHECK(data.Referee_Interactive_Flag.chassis_flag);
     data.chassis_mode=CHASSIS_NO_FOLLOW;TEST_CHECK(UIRefresh()==UI_OK);

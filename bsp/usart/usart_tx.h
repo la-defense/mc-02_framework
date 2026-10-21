@@ -51,6 +51,13 @@ typedef void (*USARTTxCallback_t)(void *context, const USARTTxEvent_t *event);
  * @note data只在本次检查期间可读，不可保留地址或修改队列数据。
  */
 typedef uint8_t (*USARTTxGuard_t)(void *context, const uint8_t *data, size_t length);
+/** @brief 启动前的业务调度结果；DEFER保留队首和原期限，不调用HAL。 */
+typedef enum { USART_TX_ALLOW, USART_TX_DEFER, USART_TX_REJECT } USARTTxGateResult_t;
+/** @brief 发送任务调用；id为本次编号，data仅本次可读，不得等待或保存其地址。 */
+typedef USARTTxGateResult_t (*USARTTxGate_t)(void *context, uint32_t id,
+                                            const uint8_t *data, size_t length);
+/** @brief 发送任务在请求回调前观察一次终态；event仅本次可读，不得等待。 */
+typedef void (*USARTTxObserver_t)(void *context, const USARTTxEvent_t *event);
 typedef struct
 {
     const uint8_t *data;        /**< 提交期间可读length字节，成功后可立即复用。 */

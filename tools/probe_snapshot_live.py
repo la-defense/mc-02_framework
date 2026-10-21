@@ -91,6 +91,12 @@ ADC_SNAPSHOT_FIELDS = {
     "tick_ms": SnapshotField("uwTick", "mdw", 32),
     "iwdg_reset_flag": SnapshotField("iwdg_reset_flag", "mdb", 8),
 }
+# REF-03只允许读取此固定诊断对象；布局在固件中由_Static_assert核对。
+REFEREE_DIAGNOSTIC_WORD_COUNT = 456
+REFEREE_SNAPSHOT_FIELDS = {
+    "ref_magic": SnapshotField("referee_bench_diag.magic", "mdw", 32),
+    "ref_count": SnapshotField("referee_bench_diag.write_count", "mdw", 32),
+}
 ADC_DIAGNOSTIC_LAYOUT = 0xADC10001
 ADC_DIAGNOSTIC_WORD_COUNT = 15
 
@@ -452,7 +458,15 @@ class OpenOCDTelnetClient:
                     ))
                 )
             )
-            if not single_read and not adc_block_read:
+            referee_block_read = (
+                self.fields is REFEREE_SNAPSHOT_FIELDS
+                and match.group("command") == "mdw"
+                and read[1] == self.allowed_addresses["ref_magic"]
+                and count == REFEREE_DIAGNOSTIC_WORD_COUNT
+                and self.allowed_addresses["ref_count"] == read[1] + 28
+                and read[1] + count * 4 <= SNAPSHOT_RAM_END
+            )
+            if not single_read and not adc_block_read and not referee_block_read:
                 raise ValueError("memory reads must match an ELF-resolved symbol address and width")
         if self._socket is None:
             raise ProbeIOError("OpenOCD Telnet connection is closed")

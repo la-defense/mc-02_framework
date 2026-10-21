@@ -1,0 +1,14 @@
+{
+  "pre-full-a.bin": {
+    "bytes": 1048576,
+    "sha256": "2a27ff62c44066a64cf74fbbf9dc8bf94e8c1a1917fd96b9b574c777427e2821"
+  },
+  "pre-full-b.bin": {
+    "bytes": 1048576,
+    "sha256": "2a27ff62c44066a64cf74fbbf9dc8bf94e8c1a1917fd96b9b574c777427e2821"
+  },
+  "pre-params.bin": {
+    "bytes": 262144,
+    "sha256": "413f4da1afa9483a6bf156cb7124f05276927eb843ce5d040c85725257120de4"
+  }
+}

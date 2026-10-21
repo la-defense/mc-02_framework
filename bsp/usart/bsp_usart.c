@@ -131,6 +131,8 @@ USARTInstance *USARTRegister(USART_Init_Config_s *init_config)
     instance->module_callback = init_config->module_callback;
     instance->context = init_config->context;
     instance->tx_guard = init_config->tx_guard;
+    instance->tx_gate = init_config->tx_gate;
+    instance->tx_observer = init_config->tx_observer;
 
     /* 接收队列内存: 从静态池里按本实例的 recv_buff_size 切一块
        (裁判255、遥控18、备用UART视觉128字节，按实际容量使用池空间)。

@@ -27,6 +27,8 @@ typedef struct
     volatile uint32_t rx_sequence;        // BSP内部连续性计数，不得由业务改写。
     volatile uint32_t rx_generation;      // 错误/重启后隔离此前已排队的数据，仅供BSP使用。
     USARTTxGuard_t tx_guard;              // 注册时固定，实际启动前检查，context复用本实例的长期对象。
+    USARTTxGate_t tx_gate;                // 可NULL；发送任务调用，暂缓不改变期限及队首。
+    USARTTxObserver_t tx_observer;        // 可NULL；任务中先观察终态，再通知本请求。
 } USARTInstance;
 
 /* usart 初始化配置结构体 */
@@ -37,6 +39,8 @@ typedef struct
     usart_module_callback module_callback; // 解析收到的数据的回调函数
     void *context;                         // 原样传回回调，非空时须长期保存。
     USARTTxGuard_t tx_guard;                // 可NULL；每次实际启动前调用，禁止等待。
+    USARTTxGate_t tx_gate;                 // 可NULL，规则及存储条件见usart_tx.h。
+    USARTTxObserver_t tx_observer;         // 可NULL，与接收共用长期context。
 } USART_Init_Config_s;
 
 /** @brief 注册 UART、分配接收队列并启动 DMA 接收。

@@ -34,8 +34,6 @@ typedef struct {
     void *context;              /**< 保存到最终通知结束。 */
     uint32_t *id;               /**< 非NULL，失败不改写；成功后可释放此输出指针。 */
 } UITxOptions_t;
-/** @brief UI发送帧序号；仅由串行的裁判UI发送路径在本机接受后递增。 */
-extern uint8_t UI_Seq;
 /** @brief OK表示本地构图成功，SUBMITTED表示复制入队；两者都不证明客户端已显示。 */
 typedef enum {
     UI_OK = 0, UI_SUBMITTED = 1,
@@ -210,7 +208,7 @@ UIStatus_t UICharDraw(String_Data_t *graph, const char *graphname, uint32_t Grap
  * @param[in] options 可为NULL；通知和编号的存储条件见UITxOptions_t。
 * @return 本机接受返回UI_SUBMITTED；其他返回参数、长度、范围、CRC或发送错误，失败不消耗序号。
  * @note 先成功RefereeInit；由裁判任务串行调用，禁止ISR。传输层复制整帧，输入返回后可复用。
- * 本机接受不表示发送完成或客户端显示；不同提交共享UI_Seq，只在接受后递增并自然回绕。
+ * 本机接受不表示发送完成或客户端显示；不同提交共享裁判序号，只在接受后递增并自然回绕。
  */
 UIStatus_t UIGraphRefresh(const referee_id_t *_id, const Graph_Data_t *graphs, size_t capacity, size_t count, const UITxOptions_t *options);
 

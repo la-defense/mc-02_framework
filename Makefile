@@ -155,6 +155,8 @@ modules/motor/servo_motor/servo_motor.c \
 modules/motor/motor_task.c \
 modules/oled/oled.c \
 modules/referee/rm_referee.c \
+modules/referee/referee_tx_budget.c \
+modules/referee/referee_bench.c \
 modules/referee/referee_UI.c \
 modules/referee/referee_task.c \
 modules/remote/remote_control.c \

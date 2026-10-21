@@ -20,13 +20,15 @@
 #include "task.h"
 #include "daemon.h"
 #include "bsp_log.h"
-#include "cmsis_os.h"
+#include "referee_tx_private.h"
 
 #define RE_RX_BUFFER_SIZE 255u
 #define REFEREE_CANDIDATE_SIZE 128u
 #define REFEREE_FRAME_OVERHEAD 9u
 #define REFEREE_ASSEMBLY_TIMEOUT_MS 50u
 
+static RefereeTxBudget referee_tx_budget;
+static uint8_t referee_submit_busy;
 static USARTInstance *referee_usart_instance;
 static DaemonInstance *referee_daemon;
 static RefereeConfig_t referee_config;
@@ -98,15 +100,7 @@ static float ReadF32LE(const uint8_t *p)
 }
 
 static uint8_t RefereeIsLegalRobotId(uint16_t id)
-{
-    switch (id) {
-    case 1u: case 2u: case 3u: case 4u: case 5u: case 6u: case 7u: case 9u:
-    case 101u: case 102u: case 103u: case 104u: case 105u: case 106u: case 107u: case 109u:
-        return 1u;
-    default:
-        return 0u;
-    }
-}
+{ return RefereeTxRobotId(id); }
 
 static uint8_t RefereeSameTeam(uint16_t a, uint16_t b)
 {
@@ -404,6 +398,24 @@ static uint8_t RefereeFrameCanStart(void *context, const uint8_t *frame, size_t 
     return length >= 15u && frame[0] == REFEREE_SOF &&
         RefereeIdentityMatches((uint16_t)(frame[9] | ((uint16_t)frame[10] << 8u)));
 }
+// UART只有一个发送推进者；额度先观察当前终态，再尝试下一个队首。
+static USARTTxGateResult_t RefereeTxGate(void *context, uint32_t id, const uint8_t *frame, size_t length)
+{
+    (void)context;
+    if (length < 15u || length > REFEREE_TX_FRAME_MAX) return USART_TX_REJECT;
+    taskENTER_CRITICAL();
+    USARTTxGateResult_t result = RefereeBudgetGate(&referee_tx_budget, id,
+        ReadU16LE(frame + 11u), (uint16_t)length, HAL_GetTick());
+    taskEXIT_CRITICAL();
+    return result;
+}
+static void RefereeTxObserve(void *context, const USARTTxEvent_t *event)
+{
+    (void)context;
+    taskENTER_CRITICAL();
+    RefereeBudgetObserve(&referee_tx_budget, event);
+    taskEXIT_CRITICAL();
+}
 RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *config)
 {
     if (handle == NULL) return REFEREE_ERROR_ARGUMENT;
@@ -436,6 +448,8 @@ RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *c
     uart_conf.usart_handle = handle;
     uart_conf.recv_buff_size = RE_RX_BUFFER_SIZE;
     uart_conf.tx_guard = RefereeFrameCanStart;
+    uart_conf.tx_gate = RefereeTxGate;
+    uart_conf.tx_observer = RefereeTxObserve;
     USARTInstance *instance = USARTRegister(&uart_conf);
     if (instance == NULL) {
         taskENTER_CRITICAL();
@@ -492,29 +506,156 @@ RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output)
     return REFEREE_OK;
 }
 
-RefereeSendStatus_t RefereeSend(const uint8_t *send, uint16_t tx_len,
-    USARTTxCallback_t complete, USARTTxGuard_t guard, void *context, uint32_t *id)
+// UI只开放现有六类；服务器自主决策等子命令不随共享调度接入。
+static int RefereeContentLength(uint16_t command, size_t length)
 {
-    if (send == NULL || tx_len == 0u || tx_len > USART_TX_MAX_BYTES || complete == NULL || id == NULL)
-        return REFEREE_SEND_BAD_ARGUMENT;
-    if (referee_usart_instance == NULL) return REFEREE_SEND_NOT_INITIALIZED;
-    USARTTxRequest_t request = {send, tx_len, USART_TRANSFER_DMA, 100u, complete, guard, context};
-    switch (USARTSubmitTx(referee_usart_instance, &request, id)) {
-    case USART_SEND_ACCEPTED: return REFEREE_SEND_ACCEPTED;
-    case USART_SEND_BUSY: return REFEREE_SEND_BUSY;
-    case USART_SEND_NOT_READY: return REFEREE_SEND_NOT_INITIALIZED;
-    case USART_SEND_TIMEOUT: return REFEREE_SEND_TIMEOUT;
-    default: return REFEREE_SEND_ERROR;
+    switch (command)
+    {
+    case 0x0100u:
+        return length == 2u;
+    case 0x0101u:
+        return length == 15u;
+    case 0x0102u:
+        return length == 30u;
+    case 0x0103u:
+        return length == 75u;
+    case 0x0104u:
+        return length == 105u;
+    case 0x0110u:
+        return length == 45u;
+    default:
+        return command >= 0x0200u && command <= 0x02ffu && length <= REFEREE_TX_CONTENT_MAX;
     }
 }
-USARTSendStatus_t RefereeCancelSend(uint32_t id)
-{ return USARTCancelTx(referee_usart_instance, id); }
-
-USARTSendStatus_t RefereeGetTxState(USARTTxState_t *output)
+static void TxWriteU16(uint8_t *data, uint16_t value)
 {
-    if (output == NULL) return USART_SEND_BAD_ARGUMENT;
-    if (referee_usart_instance == NULL) return USART_SEND_NOT_READY;
-    return USARTGetTxState(referee_usart_instance, output);
+    data[0] = (uint8_t)value;
+    data[1] = (uint8_t)(value >> 8u);
+}
+RefereeSendStatus_t RefereeSubmit(const RefereeTxRequest_t *request, uint32_t *id)
+{
+    if (request == NULL || id == NULL || request->complete == NULL ||
+        (request->content == NULL && request->length != 0u) || request->timeout_ms == 0u ||
+        request->timeout_ms > INT32_MAX || !RefereeContentLength(request->content_id, request->length))
+    {
+        taskENTER_CRITICAL();
+        ++referee_tx_budget.state.validation_rejected;
+        ++referee_tx_budget.state.rejected;
+        taskEXIT_CRITICAL();
+        return REFEREE_SEND_BAD_ARGUMENT;
+    }
+    taskENTER_CRITICAL();
+    if (!referee_initialized)
+    {
+        ++referee_tx_budget.state.rejected;
+        taskEXIT_CRITICAL();
+        return REFEREE_SEND_NOT_INITIALIZED;
+    }
+    const RefereeCommandSnapshot_t *robot = &referee_published.command[REF_CMD_ROBOT_STATE];
+    uint16_t sender = robot->data.robot_state.robot_id;
+    uint8_t fresh = robot->receive_count != 0u && (uint32_t)(HAL_GetTick() - robot->source_rx_ms) <=
+                                                      RefereeTimeoutForIndex(REF_CMD_ROBOT_STATE);
+    uint16_t receiver = request->receiver_id;
+    uint8_t destination;
+    if (request->content_id >= 0x0200u)
+    {
+        destination = RefereeTxRobotId(receiver) && RefereeSameTeam(sender, receiver);
+    }
+    else
+    {
+        uint16_t client = receiver >= 0x100u ? (uint16_t)(receiver - 0x100u) : 0u;
+        destination = ((client >= 1u && client <= 6u) || (client >= 101u && client <= 106u)) &&
+                      RefereeSameTeam(sender, client) && (sender == client || sender == 9u || sender == 109u);
+    }
+    if (!fresh || !RefereeTxRobotId(sender) || !destination)
+    {
+        ++referee_tx_budget.state.validation_rejected;
+        ++referee_tx_budget.state.rejected;
+        taskEXIT_CRITICAL();
+        return REFEREE_SEND_IDENTITY;
+    }
+    // 不在临界区内组帧或调用UART；并发提交争用立即拒绝，成功后才消耗序号。
+    if (referee_submit_busy)
+    {
+        ++referee_tx_budget.state.rejected;
+        taskEXIT_CRITICAL();
+        return REFEREE_SEND_BUSY;
+    }
+    referee_submit_busy = 1u;
+    uint8_t sequence = referee_tx_budget.state.next_sequence;
+    taskEXIT_CRITICAL();
+    uint8_t frame[REFEREE_TX_FRAME_MAX] = {0};
+    size_t total = 15u + request->length;
+    frame[0] = REFEREE_SOF;
+    frame[3] = sequence;
+    TxWriteU16(frame + 1u, (uint16_t)(6u + request->length));
+    TxWriteU16(frame + 5u, ID_student_interactive);
+    TxWriteU16(frame + 7u, request->content_id);
+    TxWriteU16(frame + 9u, sender);
+    TxWriteU16(frame + 11u, receiver);
+    if (request->length)
+        memcpy(frame + 13u, request->content, request->length);
+    uint32_t crc;
+    RefereeSendStatus_t result = REFEREE_SEND_CRC;
+    if (CRCCompute(CRC8_REFEREE, frame, 4u, &crc) == CRC_OK)
+    {
+        frame[4] = (uint8_t)crc;
+        if (CRCCompute(CRC16_SP_REFEREE, frame, total - 2u, &crc) == CRC_OK)
+        {
+            TxWriteU16(frame + total - 2u, (uint16_t)crc);
+            USARTTxRequest_t uart_request = {
+                frame,          total,           USART_TRANSFER_DMA, request->timeout_ms, request->complete,
+                request->guard, request->context};
+            switch (USARTSubmitTx(referee_usart_instance, &uart_request, id))
+            {
+            case USART_SEND_ACCEPTED:
+                result = REFEREE_SEND_ACCEPTED;
+                break;
+            case USART_SEND_BUSY:
+                result = REFEREE_SEND_BUSY;
+                break;
+            case USART_SEND_NOT_READY:
+                result = REFEREE_SEND_NOT_INITIALIZED;
+                break;
+            case USART_SEND_ISOLATED:
+                result = REFEREE_SEND_ISOLATED;
+                break;
+            default:
+                result = REFEREE_SEND_ERROR;
+                break;
+            }
+        }
+    }
+    taskENTER_CRITICAL();
+    if (result == REFEREE_SEND_ACCEPTED)
+        ++referee_tx_budget.state.next_sequence;
+    else
+        ++referee_tx_budget.state.rejected;
+    referee_submit_busy = 0u;
+    taskEXIT_CRITICAL();
+    return result;
+}
+USARTSendStatus_t RefereeCancelSend(uint32_t id)
+{
+    return USARTCancelTx(referee_usart_instance, id);
+}
+USARTSendStatus_t RefereeGetTxState(RefereeTxState_t *output)
+{
+    if (output == NULL)
+        return USART_SEND_BAD_ARGUMENT;
+    if (referee_usart_instance == NULL)
+        return USART_SEND_NOT_READY;
+    USARTTxState_t uart;
+    USARTSendStatus_t result = USARTGetTxState(referee_usart_instance, &uart);
+    if (result != USART_SEND_ACCEPTED)
+        return result;
+    taskENTER_CRITICAL();
+    *output = referee_tx_budget.state;
+    output->uart = uart;
+    if (uart.used == 0u)
+        output->wait_reason = REFEREE_TX_WAIT_NONE;
+    taskEXIT_CRITICAL();
+    return USART_SEND_ACCEPTED;
 }
 
 uint8_t RefereeIdentityMatches(uint16_t robot_id)

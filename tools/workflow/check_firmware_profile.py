@@ -24,7 +24,10 @@ def main():
     parser.add_argument("--profile", choices=("bench_safe", "robot"), required=True)
     parser.add_argument("--nm", default="arm-none-eabi-nm")
     parser.add_argument("--rc-diagnostics", action="store_true")
+    parser.add_argument("--referee-diagnostics", action="store_true")
     args = parser.parse_args()
+    if args.referee_diagnostics and (args.profile != "bench_safe" or "_refdiag_" not in args.elf.name or args.rc_diagnostics):
+        parser.error("referee diagnostics require the separate named bench_safe artifact")
     if args.rc_diagnostics and (args.profile != "bench_safe" or "_rcdiag_" not in args.elf.name):
         parser.error("remote diagnostics require the named bench_safe diagnostic artifact")
     if not args.elf.name.endswith("_" + args.profile + ".elf"):
@@ -41,6 +44,10 @@ def main():
     if args.rc_diagnostics:
         missing |= {"RemoteControlInit", "RemoteBenchInit", "RemoteBenchTask", "RemoteSafetyGesturesUpdate"} - functions
         missing |= {"remote_control_diag", "usart_rx_oversize_total"} - symbols
+    if args.referee_diagnostics:
+        missing |= {"RefereeBenchInit", "RefereeBenchTask", "RefereeInit", "RefereeSubmit", "referee_bench_diag"} - symbols
+    elif "referee_bench_diag" in symbols:
+        raise SystemExit("normal profile contains automatic referee diagnostic traffic")
     forbidden = ACTUATORS & functions if args.profile == "bench_safe" else set()
     if missing or forbidden:
         raise SystemExit(f"profile check failed: missing={sorted(missing)}, forbidden={sorted(forbidden)}")

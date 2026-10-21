@@ -18,6 +18,10 @@
 #include "remote_bench.h"
 #endif
 
+#if MC02_BENCH_REFEREE_DIAGNOSTICS
+#include "referee_bench.h"
+#endif
+
 // 写参数前先关闭加热，再申请 INS 的 Flash 等待时间；第二步失败时按失败结束加热长操作。
 static uint8_t RobotParamFlashOperationBegin(void)
 {
@@ -101,6 +105,10 @@ uint8_t RobotInit(void)
     InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
     ROBOT_INIT_CHECK(VisionInit(&huart9) != NULL, INIT_STAGE_APPLICATION, INIT_MODULE_VISION,
                      INIT_FAILURE_DEPENDENCY, 0u);
+#if MC02_BENCH_REFEREE_DIAGNOSTICS
+    ROBOT_INIT_CHECK(RefereeBenchInit(&huart1), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                     INIT_FAILURE_DEPENDENCY, 0u);
+#endif
 #if MC02_BENCH_RC_DIAGNOSTICS
     ROBOT_INIT_CHECK(RemoteBenchInit(&huart5), INIT_STAGE_APPLICATION, INIT_MODULE_REMOTE,
                      INIT_FAILURE_DEPENDENCY, 0u);
@@ -151,6 +159,9 @@ void RobotTask()
     RemoteBenchTask();
 #else
     RobotSafetyUpdate();
+#endif
+#if MC02_BENCH_REFEREE_DIAGNOSTICS
+    RefereeBenchTask();
 #endif
     VisionSend();
 #else

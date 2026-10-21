@@ -307,11 +307,11 @@ typedef struct
 
 /****************************机器人交互数据****************************/
 /****************************机器人交互数据****************************/
-/* 发送的内容数据段最大为 113 检测是否超出大小限制?实际上图形段不会超，数据段最多30个，也不会超*/
+/* 发送的内容数据段最大112字节；完整0x0301帧最多127字节（2026 V2.0.0）*/
 /* 交互数据头结构 */
 typedef struct
 {
-	uint16_t data_cmd_id; // 由于存在多个内容 ID，但整个cmd_id 上行频率最大为 10Hz，请合理安排带宽。注意交互部分的上行频率
+	uint16_t data_cmd_id; // 由于存在多个内容 ID，但整个cmd_id 上行频率合计最大为 30Hz，请合理安排带宽。注意交互部分的上行频率
 	uint16_t sender_ID;
 	uint16_t receiver_ID;
 } ext_student_interactive_header_data_t;
@@ -370,12 +370,12 @@ typedef enum
 /*
 	学生机器人间通信 cmd_id 0x0301，内容 ID:0x0200~0x02FF
 	自定义交互数据 机器人间通信：0x0301。
-	发送频率：上限 10Hz
+	发送频率：0x0301合计上限30Hz
 */
 // 自定义交互数据协议，可更改，更改后需要修改最上方宏定义数据长度的值
 typedef struct
 {
-	uint8_t data[Communicate_Data_LEN]; // 数据段,n需要小于113
+	uint8_t data[Communicate_Data_LEN]; // 内容段最多112字节
 } robot_interactive_data_t;
 
 // 机器人交互信息_发送
