@@ -489,6 +489,15 @@ class FakeOpenOCDServer:
 
 
 class ProbeSnapshotLiveTests(unittest.TestCase):
+    def test_crash_capture_modes_read_only_fixed_lengths(self):
+        self.assertEqual(
+            probe_snapshot_live.CRASH_V3_SNAPSHOT_FIELDS["crash_v3_words"].count, 63
+        )
+        field = probe_snapshot_live.CRASH_RECORD_SNAPSHOT_FIELDS["crash_record_words"]
+        self.assertEqual((field.expression, field.command, field.width_bits, field.count),
+                         ("g_crash_log", "mdw", 32, 128))
+        self.assertNotIn("mww", probe_snapshot_live.MEMORY_COMMAND_PATTERN.pattern)
+
     def test_summary_and_adc_help_use_complete_chinese_text(self):
         summary, complete = probe_snapshot_live._short_summary(
             [{"status": "running"}],

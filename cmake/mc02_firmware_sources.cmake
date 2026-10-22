@@ -76,6 +76,7 @@ set(MC02_BSP_C_SOURCES
     bsp/crash/bsp_crash.c
     bsp/crash/bsp_crash_frame.c
     bsp/crash/bsp_crash_guard.c
+    bsp/crash/bsp_crash_record.c
     bsp/dwt/bsp_dwt.c
     bsp/gpio/bsp_gpio.c
     bsp/iic/bsp_iic.c

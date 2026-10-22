@@ -238,8 +238,8 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
        配置总线把自测配置覆盖掉), 放在任务上下文里也便于用 HAL_GetTick 做超时 */
     CANRunLoopbackSelfTest();
 #endif
-#if CRASH_TEST
-    /* 崩溃自测(默认关闭)的等待计数: 见下面循环里的用法 */
+#if MC02_BENCH_CRASH_DIAGNOSTICS
+    /* 专用固件启动稳定后才检查许可；许可本身须由匹配Build ID的工具写入。 */
     static uint32_t s_crash_test_wait = 0u;
 #endif
 #if CAN_DJI_INJECT_TEST >= 1
@@ -268,10 +268,12 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
             BuzzerTask();
         CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */
         TaskMonitorTick();
-#if CRASH_TEST
-        // 自测开启时按轮数等待其他任务启动，每轮仍完成监控和喂狗；到数后触发一种异常。
-        if (++s_crash_test_wait >= CRASH_TEST_DELAY_LOOPS)
-            CrashLogSelfTest(); /* 不返回: 记录现场后主动复位 */
+#if MC02_BENCH_CRASH_DIAGNOSTICS
+        // 给其他任务留出启动时间；无许可时检查无副作用，有许可时只消费一次后复位。
+        if (s_crash_test_wait < 100u)
+            ++s_crash_test_wait;
+        else
+            CrashLogSelfTest();
 #endif
 #if CAN_DJI_INJECT_TEST >= 2
         DJIInjectStressTick(); /* 压测模式: 持续往接收队列里灌帧 */

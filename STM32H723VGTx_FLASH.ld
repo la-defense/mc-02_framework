@@ -73,8 +73,31 @@ FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 768K
 /* Define output sections */
 SECTIONS
 {
+  __mc02_flash_start__ = ORIGIN(FLASH);
+  __mc02_flash_end__ = ORIGIN(FLASH) + LENGTH(FLASH);
+  __mc02_dtcm_start__ = ORIGIN(DTCMRAM);
+  __mc02_dtcm_end__ = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);
   __mc02_main_ram_start__ = ORIGIN(RAM);
   __mc02_main_ram_end__ = ORIGIN(RAM) + LENGTH(RAM);
+  __mc02_ram_d2_start__ = ORIGIN(RAM_D2);
+  __mc02_ram_d2_end__ = ORIGIN(RAM_D2) + LENGTH(RAM_D2);
+  __mc02_ram_d3_start__ = ORIGIN(RAM_D3);
+  __mc02_ram_d3_end__ = ORIGIN(RAM_D3) + LENGTH(RAM_D3);
+
+  /* 崩溃记录固定在主RAM起点；启动清零只覆盖 .bss，不触碰这512字节。 */
+  .crash_record ORIGIN(RAM) (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __mc02_crash_record_start__ = .;
+    KEEP(*(.crash_record))
+    KEEP(*(.crash_test_arm))
+    . = __mc02_crash_record_start__ + 0x200;
+    __mc02_crash_record_end__ = .;
+  } >RAM
+  ASSERT(SIZEOF(.crash_record) == 0x200, "崩溃记录保留区必须为512字节")
+  ASSERT(ADDR(.crash_record) == ORIGIN(RAM), "崩溃记录保留区必须从主RAM起点开始")
+  ASSERT(__mc02_crash_record_end__ == ORIGIN(RAM) + 0x200,
+         "崩溃记录保留区结束地址不符合固定布局")
 
   /* The startup code goes first into FLASH */
   .isr_vector :

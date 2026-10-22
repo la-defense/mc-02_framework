@@ -1,194 +1,243 @@
 ﻿/**
  * @file bsp_crash.c
- * @brief 保存崩溃现场、复位后检查并输出记录，接口用法见 bsp_crash.h。
- * 故障入口先关闭已知输出，按检查结果读取寄存器和栈，再请求复位；日志只在下次启动时输出。
+ * @brief 在固定链接保留区保存崩溃现场，启动后校验并交给日志或LCD查询。
+ * 异常处理只读固定寄存器和链接范围内的RAM/Flash，不调用外设、RTOS、日志、分配器或Flash。
+ * @author MC-02 contributors
+ * @license BSD-3-Clause; see LICENSE.
  */
 #include "bsp_crash.h"
+
 #include "bsp_crash_crc.h"
 #include "bsp_crash_frame.h"
 #include "bsp_crash_guard.h"
+#include "bsp_observation.h"
 #include "bsp_safety.h"
 #include "main.h"
 #include "bsp_log.h"
 
-#include <stddef.h> /* offsetof */
+#include <stddef.h>
 
-// FreeRTOS 头文件提供栈溢出回调的参数类型及任务名长度。
 #include "FreeRTOS.h"
 #include "task.h"
 
-// .noinit 不由启动代码清零，供复位后读取；记录过程中只写 RAM，不写 Flash。
-__attribute__((section(".noinit"))) static CrashLog_t g_crash_log;
-// 这个标志在每次启动时清零，同一次记录中再次进入就请求复位。
+#define CRASH_RESET_DRAIN_LOOPS 20000u
+#define GNU_NOTE_TYPE_BUILD_ID 3u
+#define GNU_NOTE_TOTAL_BYTES 36u
+#define GNU_NOTE_BUILD_ID_OFFSET 16u
+#define CRASH_CRC_WORD_COUNT ((sizeof(CrashLog_t) - 2u * sizeof(uint32_t)) / sizeof(uint32_t))
+
+extern const uint8_t __mc02_build_id_note_start__[];
+extern const uint8_t __mc02_build_id_note_end__[];
+extern const uint8_t __mc02_flash_start__[];
+extern const uint8_t __mc02_flash_end__[];
+extern const uint8_t __mc02_dtcm_start__[];
+extern const uint8_t __mc02_dtcm_end__[];
+extern const uint8_t __mc02_main_ram_start__[];
+extern const uint8_t __mc02_main_ram_end__[];
+extern const uint8_t __mc02_ram_d2_start__[];
+extern const uint8_t __mc02_ram_d2_end__[];
+extern const uint8_t __mc02_ram_d3_start__[];
+extern const uint8_t __mc02_ram_d3_end__[];
+extern const BSP_ObservationIdentityTemplate_t bsp_observation_identity_template;
+
+static volatile CrashLog_t g_crash_log
+    __attribute__((section(".crash_record"), used, aligned(32)));
 static volatile uint32_t g_crash_handler_active;
 
-// 编号使用本文件的编译日期、时间和下方配置名；其他文件单独改变时，编号未必改变。
-static const char kCrashBuildStamp[] = __DATE__ " " __TIME__;
+static const CrashMemoryRegion_t g_crash_memory_regions[CRASH_MEMORY_REGION_CAPACITY] = {
+    {(uintptr_t)__mc02_flash_start__, (uintptr_t)__mc02_flash_end__, 0u},
+    {(uintptr_t)__mc02_dtcm_start__, (uintptr_t)__mc02_dtcm_end__, 1u},
+    {(uintptr_t)__mc02_main_ram_start__, (uintptr_t)__mc02_main_ram_end__, 1u},
+    {(uintptr_t)__mc02_ram_d2_start__, (uintptr_t)__mc02_ram_d2_end__, 1u},
+    {(uintptr_t)__mc02_ram_d3_start__, (uintptr_t)__mc02_ram_d3_end__, 1u},
+};
+static const CrashMemoryMap_t g_crash_memory_map = {
+    g_crash_memory_regions,
+    CRASH_MEMORY_REGION_CAPACITY,
+};
 
-// 分别记录诊断裸板、普通裸板和整机配置，便于查询并区分保存记录时的配置。
-#if MC02_BENCH_RC_DIAGNOSTICS
-const char mc02_build_profile[] = "rcdiag_bench_safe";
-#elif defined(MC02_PROFILE_BENCH_SAFE)
-const char mc02_build_profile[] = "bench_safe";
-#else
-const char mc02_build_profile[] = "robot";
+_Static_assert(sizeof(CrashTestPermit_t) == 40u, "工具与固件的自测许可必须都是十个32位字");
+_Static_assert(offsetof(CrashTestPermit_t, crc32) == 36u,
+               "自测许可CRC偏移变化时须同步固定工具");
+_Static_assert(sizeof(CrashLog_t) + sizeof(CrashTestPermit_t) <= CRASH_RECORD_CAPACITY,
+               "崩溃记录和自测许可须装入链接保留区");
+_Static_assert((sizeof(CrashLog_t) % 4u) == 0u, "异常记录须按32位字写入");
+_Static_assert(CRASH_CRC_WORD_COUNT == 82u, "v4 CRC范围变化时须同步格式检查");
+_Static_assert(CRASH_TASK_NAME_LEN >= configMAX_TASK_NAME_LEN,
+               "崩溃记录任务名字段须容纳FreeRTOS任务名");
+
+#if MC02_BENCH_CRASH_DIAGNOSTICS
+volatile CrashTestPermit_t bsp_crash_test_permit
+    __attribute__((section(".crash_test_arm"), used, aligned(4)));
 #endif
 
-// FNV-1a 计算 32 位编号：先逐字符处理配置名，再处理编译时间，各自遇到 '\0' 停止。
-// 用宏在当前位置计算，减少记录过程中的函数调用。
-#define CRASH_FW_ID_COMPUTE(out)                                          \
-    do {                                                                  \
-        const char *_cs = mc02_build_profile;                             \
-        (out) = 2166136261u;                                              \
-        while (*_cs != '\0')                                              \
-        {                                                                 \
-            (out) = ((out) ^ (uint32_t)(uint8_t)(*_cs)) * 16777619u;      \
-            _cs++;                                                        \
-        }                                                                 \
-        _cs = kCrashBuildStamp;                                           \
-        while (*_cs != '\0')                                              \
-        {                                                                 \
-            (out) = ((out) ^ (uint32_t)(uint8_t)(*_cs)) * 16777619u;      \
-            _cs++;                                                        \
-        }                                                                 \
-    } while (0)
-
-// CRC 从 task_name 算到结构体末尾，前面的头部字段不参与计算。
-#define CRASH_PAYLOAD_OFFSET ((uint32_t)offsetof(CrashLog_t, task_name))
-#define CRASH_PAYLOAD_WORDS \
-    (((uint32_t)sizeof(CrashLog_t) - CRASH_PAYLOAD_OFFSET) / 4u)
-
-// 写完记录后、请求复位前的等待次数，给最后的内存写入留出时间。
-#define CRASH_RESET_DRAIN_LOOPS 20000u
-
-// 编译时检查记录长度及 CRC 起点是否为 4 的倍数，以及任务名数组是否足够大。
-_Static_assert(sizeof(CrashLog_t) % 4u == 0u,
-               "崩溃记录长度必须是 4 的整数倍(逐字校验和的前提)");
-_Static_assert(CRASH_PAYLOAD_OFFSET % 4u == 0u, "payload 必须 4 字节对齐");
-_Static_assert(CRASH_TASK_NAME_LEN >= configMAX_TASK_NAME_LEN,
-               "CRASH_TASK_NAME_LEN 放不下 FreeRTOS 的任务名");
-
-// 按下面列出的 Flash、DTCM 和 AXI SRAM 范围检查字符串起始地址，不检查整串数据的范围。
-static uint8_t CrashPtrPlausible(uint32_t p)
+static uint32_t CrashLogReadLE32(const volatile uint8_t *bytes)
 {
-    // 文件名通常在 Flash，RAM 中的字符串也允许进入后面的内容检查。
-    return ((p >= 0x08000000u && p < 0x08200000u) /* Flash */
-            || (p >= 0x20000000u && p < 0x20020000u) /* DTCM */
-            || (p >= 0x24000000u && p < 0x24020000u) /* AXI SRAM */
-            )
-               ? 1u
-               : 0u;
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8u) |
+           ((uint32_t)bytes[2] << 16u) | ((uint32_t)bytes[3] << 24u);
 }
 
-// 最多读 192 字节，检查是否为非空、可打印并以 '\0' 结束的字符串。
-static uint8_t CrashLogStringPlausible(uint32_t p)
+static uint8_t CrashLogBuildIdRead(uint32_t build_id[BSP_OBSERVATION_BUILD_ID_WORDS])
 {
-    const char *s;
+    const volatile uint8_t *note = __mc02_build_id_note_start__;
+    const uintptr_t note_start = (uintptr_t)__mc02_build_id_note_start__;
+    const uintptr_t note_end = (uintptr_t)__mc02_build_id_note_end__;
 
-    // 起点不在允许范围内就跳过内容读取。
-    if (!CrashPtrPlausible(p))
+    if (note_end < note_start || note_end - note_start != GNU_NOTE_TOTAL_BYTES ||
+        !CrashLogRangeReadable(&g_crash_memory_map, note_start, GNU_NOTE_TOTAL_BYTES, 4u) ||
+        CrashLogReadLE32(note) != 4u || CrashLogReadLE32(note + 4u) != 20u ||
+        CrashLogReadLE32(note + 8u) != GNU_NOTE_TYPE_BUILD_ID ||
+        note[12] != 'G' || note[13] != 'N' || note[14] != 'U' || note[15] != 0u)
         return 0u;
 
-    s = (const char *)(uintptr_t)p;
-    // 文件名可能包含完整路径，逐字符检查，遇到结尾或不可打印字符时提前结束。
-    for (uint32_t i = 0u; i < 192u; ++i)
+    // Build ID按原始20字节复制，小端字序与主机工具读取的ELF note一致。
+    for (uint32_t word = 0u; word < BSP_OBSERVATION_BUILD_ID_WORDS; ++word)
     {
-        char c = s[i];
-
-        if (c == '\0')
-            return (i > 0u) ? 1u : 0u; // 空串不作为文件名输出
-        if (c < 0x20 || c > 0x7E)
-            return 0u; // 避免把其他数据当作字符串打印
+        uint32_t value = 0u;
+        for (uint32_t byte = 0u; byte < 4u; ++byte)
+            value |= (uint32_t)note[GNU_NOTE_BUILD_ID_OFFSET + word * 4u + byte] << (byte * 8u);
+        build_id[word] = value;
     }
-    return 0u; // 192 字节内没有结尾，不继续向后读取
+    return 1u;
 }
 
-// 依次核对写入状态、长度、版本、编译编号及 CRC，决定记录能否使用。
-static uint8_t CrashLogValid(void)
+static uint8_t CrashLogTemplateCopy(volatile CrashLog_t *record)
 {
-    uint32_t fw_id;
-    uint32_t crc;
-
-    // 除 OK 外，BUSY 且进度为 4 的记录也继续检查，兼容最后一次状态写入未保留的情况。
-    if (g_crash_log.magic != CRASH_LOG_MAGIC_OK)
-    {
-        if ((g_crash_log.magic != CRASH_LOG_MAGIC_BUSY) ||
-            (g_crash_log.progress != 4u))
-            return 0u;
-    }
-    if (g_crash_log.len != (uint32_t)sizeof(CrashLog_t))
-        return 0u; // 长度不匹配，后面的字段不能按当前结构使用
-    if (g_crash_log.version != CRASH_LOG_VERSION)
-        return 0u; // 记录格式版本不匹配
-
-    CRASH_FW_ID_COMPUTE(fw_id);
-    if (g_crash_log.fw_id != fw_id)
-        return 0u; // 保存时的编译编号与当前编号不匹配
-
-    if (!CrashCRC32Words((const volatile uint32_t *)((const volatile uint8_t *)&g_crash_log +
-                            CRASH_PAYLOAD_OFFSET), CRASH_PAYLOAD_WORDS, &crc))
+    const BSP_ObservationIdentityTemplate_t *identity = &bsp_observation_identity_template;
+    if (identity->magic != BSP_OBSERVATION_IDENTITY_MAGIC ||
+        identity->version != BSP_OBSERVATION_IDENTITY_VERSION ||
+        identity->size_bytes != sizeof(BSP_ObservationIdentity_t) ||
+        identity->layout != BSP_OBSERVATION_IDENTITY_LAYOUT)
         return 0u;
-    return (crc == g_crash_log.crc32) ? 1u : 0u;
+
+    record->profile = identity->profile;
+    record->board_role = identity->role;
+    record->module_mask = identity->module_mask;
+    record->config_version = identity->layout;
+    return 1u;
 }
 
-// 先检查是否重复进入，再关闭普通中断和已知输出，供主动报告故障的入口使用。
+static uint32_t CrashLogCopyText(volatile char *destination, uint32_t capacity,
+                                 uintptr_t source)
+{
+    uint32_t length = 0u;
+    if (destination == NULL || capacity == 0u || source == 0u)
+        return 0u;
+
+    // 每读一个字节都重新核对整段范围，字符串不会跨过链接区或RAM区的末尾。
+    while (length + 1u < capacity && source <= UINTPTR_MAX - length &&
+           CrashLogRangeReadable(&g_crash_memory_map, source + length, 1u, 1u))
+    {
+        char value = (char)*(const volatile uint8_t *)(source + length);
+        if (value == '\0')
+            break;
+        if (value < 0x20 || value > 0x7E)
+            value = '.';
+        destination[length++] = value;
+    }
+    destination[length] = '\0';
+    return length;
+}
+
+static uint8_t CrashLogCopyRecord(CrashLog_t *output)
+{
+    if (output == NULL)
+        return 0u;
+    const volatile uint32_t *source = (const volatile uint32_t *)&g_crash_log;
+    uint32_t *destination = (uint32_t *)output;
+    for (uint32_t index = 0u; index < (sizeof(CrashLog_t) / sizeof(uint32_t)); ++index)
+        destination[index] = source[index];
+    return 1u;
+}
+
+static CrashRecordStatus_t CrashLogValidateCurrent(CrashRecordInfo_t *info)
+{
+    uint8_t bytes[CRASH_RECORD_CAPACITY] = {0u};
+    const volatile uint8_t *source = (const volatile uint8_t *)&g_crash_log;
+    for (uint32_t index = 0u; index < sizeof(CrashLog_t); ++index)
+        bytes[index] = source[index];
+    return CrashLogRecordInspect(bytes, sizeof(CrashLog_t), info);
+}
+
 static void CrashLogBegin(void)
 {
     CrashLogGuardEnter(&g_crash_handler_active);
     BSP_SafetyLatchOutputsOff();
 }
 
-// 调用前须已关闭普通中断和已知输出，并通过重复进入检查；写现场期间不使用日志、HAL 或 RTOS。
-static void CrashLogWriteRecord(uint32_t type, uint32_t *frame, uint32_t exception_return,
-                                uint32_t arg0, uint32_t arg1, uint32_t caller_pc)
+static uint32_t CrashLogPreviousCountRead(void)
 {
-    // 先标记为正在写；途中再次故障时，下次启动可以报告已保存的进度。
-    {
-        uint32_t prev_magic = g_crash_log.magic;
+    uint32_t previous_crc = 0u;
+    const uint32_t magic = g_crash_log.magic;
 
-        g_crash_log.magic = CRASH_LOG_MAGIC_BUSY;
-        g_crash_log.len = (uint32_t)sizeof(CrashLog_t);
-        g_crash_log.version = CRASH_LOG_VERSION;
-        CRASH_FW_ID_COMPUTE(g_crash_log.fw_id);
+    // 只按当前固定布局检查上一条记录，避免异常栈上临时复制整份记录。
+    if ((magic != CRASH_LOG_MAGIC_OK && magic != CRASH_LOG_MAGIC_BUSY) ||
+        g_crash_log.len != sizeof(CrashLog_t) ||
+        g_crash_log.version != CRASH_LOG_VERSION || g_crash_log.progress != 4u ||
+        !CrashCRC32Words((const volatile uint32_t *)&g_crash_log.len,
+                         CRASH_CRC_WORD_COUNT, &previous_crc) ||
+        previous_crc != g_crash_log.crc32)
+        return 0u;
 
-        // 这里只看旧 magic：认得 OK/BUSY 就累加，否则从 1 开始，避免直接使用未初始化的次数。
-        if (prev_magic == CRASH_LOG_MAGIC_OK || prev_magic == CRASH_LOG_MAGIC_BUSY)
-            g_crash_log.count++;
-        else
-            g_crash_log.count = 1u;
-    }
+    return g_crash_log.count;
+}
+
+static void CrashLogWriteRecord(uint32_t type, uint32_t *frame, uint32_t exception_return,
+                                uint32_t arg0, uint32_t arg1, uint32_t caller_pc,
+                                uintptr_t task_name, uintptr_t source_name)
+{
+    uint32_t previous_count = CrashLogPreviousCountRead();
+    uint32_t current_count = 1u;
+
+    // 只有长度、版本、阶段和CRC都正确的旧记录参与累计。
+    if (previous_count != 0u)
+        current_count = previous_count + 1u;
+
+    g_crash_log.magic = CRASH_LOG_MAGIC_BUSY;
+    volatile uint32_t *record_words = (volatile uint32_t *)&g_crash_log;
+    for (uint32_t index = 1u; index < (sizeof(CrashLog_t) / sizeof(uint32_t)); ++index)
+        record_words[index] = 0u;
+
+    g_crash_log.len = sizeof(CrashLog_t);
+    g_crash_log.version = CRASH_LOG_VERSION;
+    g_crash_log.progress = 1u;
+    g_crash_log.count = current_count;
     g_crash_log.type = type;
     g_crash_log.arg0 = arg0;
     g_crash_log.arg1 = arg1;
-    g_crash_log.progress = 1u;
-
-    // 栈溢出入口已经复制任务名；其他类型清空数组，避免留下旧任务名。
-    if (type != CRASH_TYPE_STACK_OVF)
+    uint32_t build_id[BSP_OBSERVATION_BUILD_ID_WORDS] = {0u};
+    if (CrashLogBuildIdRead(build_id))
     {
-        for (uint32_t i = 0u; i < CRASH_TASK_NAME_LEN; ++i)
-            g_crash_log.task_name[i] = '\0';
+        for (uint32_t index = 0u; index < BSP_OBSERVATION_BUILD_ID_WORDS; ++index)
+            g_crash_log.build_id[index] = build_id[index];
+        g_crash_log.identity_flags |= 1u;
     }
+    if (CrashLogTemplateCopy(&g_crash_log))
+        g_crash_log.identity_flags |= 2u;
+    if (task_name != 0u)
+        g_crash_log.task_name_len = CrashLogCopyText(g_crash_log.task_name,
+                                                      CRASH_TASK_NAME_LEN, task_name);
+    if (source_name != 0u)
+        g_crash_log.source_name_len = CrashLogCopyText(g_crash_log.source_name,
+                                                        CRASH_SOURCE_NAME_LEN, source_name);
+    g_crash_log.progress = 2u;
 
-    // 直接读取故障状态寄存器，供复位后判断原因。
     g_crash_log.cfsr = SCB->CFSR;
     g_crash_log.hfsr = SCB->HFSR;
     g_crash_log.bfar = SCB->BFAR;
     g_crash_log.mmfar = SCB->MMFAR;
     g_crash_log.dfsr = SCB->DFSR;
-    g_crash_log.progress = 2u;
-
     g_crash_log.psp = __get_PSP();
     g_crash_log.msp = __get_MSP();
-    uint32_t snapshot_words = 0u;
 
-    // 异常入口提供了原始栈地址时，先检查整个寄存器区域再读取。
+    uint32_t snapshot_words = 0u;
     if (frame != NULL)
     {
         CrashLogFrameView_t frame_view;
         g_crash_log.sp = (uint32_t)(uintptr_t)frame;
-        // 检查通过后，core_frame_address 已跳过可能存在的浮点区域。
-        if (CrashLogFrameResolve((uintptr_t)frame, exception_return, g_crash_log.cfsr,
-                                 &frame_view))
+        g_crash_log.exception_return = exception_return;
+        if (CrashLogFrameResolve(&g_crash_memory_map, (uintptr_t)frame, exception_return,
+                                 g_crash_log.cfsr, &frame_view))
         {
             const volatile uint32_t *core_frame =
                 (const volatile uint32_t *)frame_view.core_frame_address;
@@ -204,246 +253,235 @@ static void CrashLogWriteRecord(uint32_t type, uint32_t *frame, uint32_t excepti
             snapshot_words = frame_view.snapshot_words;
         }
         else
-        {
-            // 地址、返回标记或保存状态不合要求，寄存器填 0，并保持栈读取数量为 0。
-            g_crash_log.r0 = g_crash_log.r1 = g_crash_log.r2 = g_crash_log.r3 = 0u;
-            g_crash_log.r12 = g_crash_log.lr = g_crash_log.pc = g_crash_log.xpsr = 0u;
             g_crash_log.frame_status = 2u;
-        }
     }
     else
     {
-        // 主动报告断言或栈溢出时，使用当前的栈地址，优先取非零 PSP，否则取 MSP。
-        g_crash_log.r0 = g_crash_log.r1 = g_crash_log.r2 = g_crash_log.r3 = 0u;
-        g_crash_log.r12 = g_crash_log.lr = g_crash_log.xpsr = 0u;
+        // 断言和任务钩子没有硬件保存帧；保存调用点和当前栈数据供离线查看。
         g_crash_log.frame_status = 0u;
         g_crash_log.sp = (g_crash_log.psp != 0u) ? g_crash_log.psp : g_crash_log.msp;
-        snapshot_words = CrashLogReadableStackWords((uintptr_t)g_crash_log.sp);
-        // 这条路径没有硬件保存的 PC，使用调用方传入的位置帮助查找报告入口。
         g_crash_log.pc = caller_pc;
+        snapshot_words = CrashLogReadableStackWords(&g_crash_memory_map, g_crash_log.sp);
     }
+    g_crash_log.stack_words = snapshot_words;
     g_crash_log.progress = 3u;
 
-    // 最多复制检查允许的 uint32_t 个数，其余位置填 0，避免读出允许的 RAM 范围。
-    {
-        const volatile uint32_t *p = (const volatile uint32_t *)(uintptr_t)g_crash_log.sp;
-        for (uint32_t i = 0; i < CRASH_STACK_SNAPSHOT_WORDS; ++i)
-            g_crash_log.stack_snapshot[i] = (i < snapshot_words) ? p[i] : 0u;
-    }
+    const volatile uint32_t *stack = (const volatile uint32_t *)(uintptr_t)g_crash_log.sp;
+    for (uint32_t index = 0u; index < CRASH_STACK_SNAPSHOT_WORDS; ++index)
+        g_crash_log.stack_snapshot[index] = (index < snapshot_words) ? stack[index] : 0u;
     g_crash_log.progress = 4u;
 
-    // 先为 task_name 及其后的字段计算 CRC，再写 OK，供下次启动检查。
+    // CRC包含长度、版本、身份、寄存器状态和实际栈长度，排除magic及末尾CRC字段。
+    uint32_t crc = 0u;
+    if (CrashCRC32Words((const volatile uint32_t *)&g_crash_log.len,
+                        CRASH_CRC_WORD_COUNT, &crc))
     {
-        uint32_t crc;
-
-        if (CrashCRC32Words((const volatile uint32_t *)((const volatile uint8_t *)&g_crash_log +
-                                CRASH_PAYLOAD_OFFSET), CRASH_PAYLOAD_WORDS, &crc))
-        {
-            g_crash_log.crc32 = crc;
-            g_crash_log.magic = CRASH_LOG_MAGIC_OK;
-        }
-        // 未算出 CRC 时保留 BUSY，仍按原路径复位，不发布完成标记。
+        g_crash_log.crc32 = crc;
+        __DSB();
+        g_crash_log.magic = CRASH_LOG_MAGIC_OK;
     }
 
-    // 请求复位前等待固定次数，给最后的写入留出时间；读取时仍兼容 BUSY 且进度为 4 的记录。
-    for (volatile uint32_t _drain = 0u; _drain < CRASH_RESET_DRAIN_LOOPS; ++_drain)
-        ;
-
-    // 写完后主动请求复位，下一次启动再输出日志。
+    // 等待最后几笔RAM写入完成后请求复位；异常路径不写Flash。
+    __DSB();
+    for (volatile uint32_t drain = 0u; drain < CRASH_RESET_DRAIN_LOOPS; ++drain)
+        __NOP();
     NVIC_SystemReset();
-
-    // 复位函数正常不会返回；意外返回时停在这里，避免继续执行。
     for (;;)
-        ;
+        __NOP();
 }
 
 void CrashLogRecord(uint32_t type, uint32_t *frame, uint32_t arg0, uint32_t arg1,
                     uint32_t caller_pc)
 {
     CrashLogBegin();
-    CrashLogWriteRecord(type, frame, 0xFFFFFFF9u, arg0, arg1, caller_pc);
+    CrashLogWriteRecord(type, frame, 0xFFFFFFF9u, arg0, arg1, caller_pc, 0u, 0u);
 }
 
-// 保留独立函数调用，让 __builtin_return_address(0) 指向调用本函数的位置。
 __attribute__((noinline)) void CrashLogAssertFail(const char *file, uint32_t line)
 {
-    CrashLogRecord(CRASH_TYPE_ASSERT, NULL, (uint32_t)(uintptr_t)file, line,
-                   (uint32_t)(uintptr_t)__builtin_return_address(0));
+    CrashLogBegin();
+    CrashLogWriteRecord(CRASH_TYPE_ASSERT, NULL, 0xFFFFFFF9u,
+                        (uint32_t)(uintptr_t)file, line,
+                        (uint32_t)(uintptr_t)__builtin_return_address(0), 0u,
+                        (uintptr_t)file);
 }
 
 __attribute__((noinline)) void CrashLogStackOverflow(const char *task_name)
 {
-    // 先检查重复进入并关闭输出，再读取任务名；读取时再次故障会进入复位路径。
     CrashLogBegin();
-
-    // 直接保存任务名字符，避免复位后访问已被重新使用的任务内存；最后一个位置留给 '\0'。
-    for (uint32_t i = 0u; i < CRASH_TASK_NAME_LEN; ++i)
-    {
-        char c = '\0';
-
-        if ((task_name != NULL) && (i < (CRASH_TASK_NAME_LEN - 1u)))
-            c = task_name[i];
-        // 非空且不能打印的字符替换为 '.'，供日志和 LCD 正常显示。
-        if ((c != '\0') && ((c < 0x20) || (c > 0x7E)))
-            c = '.';
-
-        g_crash_log.task_name[i] = c;
-        // 遇到原有结尾、空指针或已用完字符位置时停止复制。
-        if (c == '\0')
-            break;
-    }
-
-    CrashLogWriteRecord(CRASH_TYPE_STACK_OVF, NULL, 0u, 0u, 0u,
-                        (uint32_t)(uintptr_t)__builtin_return_address(0));
+    CrashLogWriteRecord(CRASH_TYPE_STACK_OVF, NULL, 0xFFFFFFF9u, 0u, 0u,
+                        (uint32_t)(uintptr_t)__builtin_return_address(0),
+                        (uintptr_t)task_name, 0u);
 }
 
-/**
- * @brief FreeRTOS 检测到任务栈溢出时调用，复制任务名、保存现场并请求复位，不返回。
- * @param[in] xTask 发生溢出的任务，本实现不使用该参数。
- * @param[in] pcTaskName 任务名字符数组，允许 NULL；交给 CrashLogStackOverflow() 复制。
- * @note 由 configCHECK_FOR_STACK_OVERFLOW=2 启用检测。
- */
-void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)
 {
-    (void)xTask;
-    CrashLogStackOverflow((const char *)pcTaskName);
+    (void)task;
+    CrashLogStackOverflow(task_name);
 }
 
 void CrashLogHandlerC(uint32_t *stack_frame, uint32_t type, uint32_t exception_return)
 {
-    // 汇编入口已关闭中断和已知输出，这里直接检查重复进入，避免再写一遍关断寄存器。
     CrashLogGuardEnter(&g_crash_handler_active);
-    CrashLogWriteRecord(type, stack_frame, exception_return, 0u, 0u, 0u);
+    CrashLogWriteRecord(type, stack_frame, exception_return, 0u, 0u, 0u, 0u, 0u);
 }
 
-void CrashLogInit(void)
+CrashRecordStatus_t CrashLogGetStatus(CrashRecordInfo_t *info)
 {
-    // 未通过检查时跳过完整现场输出；若仍是 BUSY，保留一行进度信息供排查。
-    if (!CrashLogValid())
-    {
-        if (g_crash_log.magic == CRASH_LOG_MAGIC_BUSY)
-            BSP_LOG_EVENT_3(EV_BSP_CRASH_BSP_CRASH_C_01, BSP_LOG_FIELD_U32((unsigned long)g_crash_log.progress), BSP_LOG_FIELD_U32((unsigned long)g_crash_log.type), BSP_LOG_FIELD_U32((unsigned long)g_crash_log.count));
-        return;
-    }
-
-    BSP_LOG_EVENT_1(EV_BSP_CRASH_BSP_CRASH_C_02, BSP_LOG_FIELD_U32((unsigned long)g_crash_log.count));
-    BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_03, BSP_LOG_FIELD_CSTR_LIMIT((CrashLogTypeName(g_crash_log.type)), 37u), BSP_LOG_FIELD_CSTR_LIMIT(((g_crash_log.frame_status == 1u) ? "valid" :
-             (g_crash_log.frame_status == 2u) ? "invalid" : "none"), 37u), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.pc), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.lr), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.sp));
-    BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_04, BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.cfsr), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.hfsr), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.bfar), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.mmfar), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.dfsr));
-    BSP_LOG_EVENT_6(EV_BSP_CRASH_BSP_CRASH_C_05, BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.r0), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.r1), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.r2), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.r3), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.r12), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.xpsr));
-    BSP_LOG_EVENT_2(EV_BSP_CRASH_BSP_CRASH_C_06, BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.msp), BSP_LOG_FIELD_HEX32((unsigned long)g_crash_log.psp));
-
-    // 文件名保存的是地址，输出前再次检查起点和字符，避免直接把旧内容当字符串。
-    if (g_crash_log.type == CRASH_TYPE_ASSERT &&
-        CrashLogStringPlausible(g_crash_log.arg0))
-        BSP_LOG_EVENT_2(EV_BSP_CRASH_BSP_CRASH_C_07, BSP_LOG_FIELD_CSTR_LIMIT(((const char *)g_crash_log.arg0), 48u), BSP_LOG_FIELD_U32((unsigned long)g_crash_log.arg1));
-    // 任务名已直接存入记录，栈溢出类型才输出这一项。
-    if (g_crash_log.type == CRASH_TYPE_STACK_OVF)
-        BSP_LOG_EVENT_1(EV_BSP_CRASH_BSP_CRASH_C_08, BSP_LOG_FIELD_CSTR_LIMIT((g_crash_log.task_name), 48u));
-
-    // 每次记录4个栈字，保留行偏移并确保字段数据不超过事件容量。
-    for (uint32_t row = 0; row < (CRASH_STACK_SNAPSHOT_WORDS / 8u); ++row)
-    {
-        const uint32_t *s = &g_crash_log.stack_snapshot[row * 8u];
-        uint32_t offset = row * 8u * 4u;
-        BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_12,
-                        BSP_LOG_FIELD_U32(offset),
-                        BSP_LOG_FIELD_HEX32(s[0]), BSP_LOG_FIELD_HEX32(s[1]),
-                        BSP_LOG_FIELD_HEX32(s[2]), BSP_LOG_FIELD_HEX32(s[3]));
-        BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_13,
-                        BSP_LOG_FIELD_U32(offset + 16u),
-                        BSP_LOG_FIELD_HEX32(s[4]), BSP_LOG_FIELD_HEX32(s[5]),
-                        BSP_LOG_FIELD_HEX32(s[6]), BSP_LOG_FIELD_HEX32(s[7]));
-    }
-    BSP_LOG_EVENT_0(EV_BSP_CRASH_BSP_CRASH_C_09);
+    if (info == NULL)
+        return CRASH_RECORD_BAD_ARGUMENT;
+    return CrashLogValidateCurrent(info);
 }
 
-uint8_t CrashLogGetLast(CrashLog_t *out)
+uint8_t CrashLogGetLast(CrashLog_t *output)
 {
-    // 空指针或记录未通过检查时直接返回，保留调用方原有的输出内容。
-    if (out == NULL || !CrashLogValid())
+    CrashLog_t candidate;
+    CrashRecordInfo_t info;
+    if (output == NULL || !CrashLogCopyRecord(&candidate))
         return 0u;
-    *out = g_crash_log;
+    CrashRecordStatus_t status = CrashLogRecordInspect((const uint8_t *)&candidate,
+                                                       sizeof(candidate), &info);
+    if (status != CRASH_RECORD_VALID && status != CRASH_RECORD_VALID_BUSY_FINAL)
+        return 0u;
+    *output = candidate;
     return 1u;
 }
 
 void CrashLogClear(void)
 {
-    g_crash_log.magic = 0u; // 只使当前记录失效，其他字段保留
+    g_crash_log.magic = 0u;
+    __DSB();
+}
+
+void CrashLogInit(void)
+{
+    CrashRecordInfo_t info;
+    CrashRecordStatus_t status = CrashLogGetStatus(&info);
+    if (status != CRASH_RECORD_VALID && status != CRASH_RECORD_VALID_BUSY_FINAL)
+    {
+        if (status != CRASH_RECORD_EMPTY)
+            BSP_LOG_EVENT_3(EV_BSP_CRASH_BSP_CRASH_C_01,
+                            BSP_LOG_FIELD_U32(status),
+                            BSP_LOG_FIELD_U32(info.actual_length),
+                            BSP_LOG_FIELD_U32(info.version));
+        return;
+    }
+
+    CrashLog_t record;
+    if (!CrashLogGetLast(&record))
+        return;
+    BSP_LOG_EVENT_1(EV_BSP_CRASH_BSP_CRASH_C_02, BSP_LOG_FIELD_U32(record.count));
+    BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_03,
+                    BSP_LOG_FIELD_CSTR_LIMIT(CrashLogTypeName(record.type), 37u),
+                    BSP_LOG_FIELD_CSTR_LIMIT(record.frame_status == 1u ? "valid" :
+                                              record.frame_status == 2u ? "invalid" : "none", 37u),
+                    BSP_LOG_FIELD_HEX32(record.pc), BSP_LOG_FIELD_HEX32(record.lr),
+                    BSP_LOG_FIELD_HEX32(record.sp));
+    BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_04,
+                    BSP_LOG_FIELD_HEX32(record.cfsr), BSP_LOG_FIELD_HEX32(record.hfsr),
+                    BSP_LOG_FIELD_HEX32(record.bfar), BSP_LOG_FIELD_HEX32(record.mmfar),
+                    BSP_LOG_FIELD_HEX32(record.dfsr));
+    BSP_LOG_EVENT_6(EV_BSP_CRASH_BSP_CRASH_C_05,
+                    BSP_LOG_FIELD_HEX32(record.r0), BSP_LOG_FIELD_HEX32(record.r1),
+                    BSP_LOG_FIELD_HEX32(record.r2), BSP_LOG_FIELD_HEX32(record.r3),
+                    BSP_LOG_FIELD_HEX32(record.r12), BSP_LOG_FIELD_HEX32(record.xpsr));
+    BSP_LOG_EVENT_2(EV_BSP_CRASH_BSP_CRASH_C_06,
+                    BSP_LOG_FIELD_HEX32(record.msp), BSP_LOG_FIELD_HEX32(record.psp));
+    if (record.type == CRASH_TYPE_ASSERT && record.source_name_len != 0u)
+        BSP_LOG_EVENT_2(EV_BSP_CRASH_BSP_CRASH_C_07,
+                        BSP_LOG_FIELD_CSTR_LIMIT(record.source_name, CRASH_SOURCE_NAME_LEN),
+                        BSP_LOG_FIELD_U32(record.arg1));
+    if (record.type == CRASH_TYPE_STACK_OVF && record.task_name_len != 0u)
+        BSP_LOG_EVENT_1(EV_BSP_CRASH_BSP_CRASH_C_08,
+                        BSP_LOG_FIELD_CSTR_LIMIT(record.task_name, CRASH_TASK_NAME_LEN));
+
+    // 只输出确实读取到的栈字，未读取位置不会作为零值现场显示。
+    for (uint32_t index = 0u; index < record.stack_words; index += 4u)
+    {
+        uint32_t remaining = record.stack_words - index;
+        uint32_t count = (remaining > 4u) ? 4u : remaining;
+        if (count == 4u)
+            BSP_LOG_EVENT_5(EV_BSP_CRASH_BSP_CRASH_C_12,
+                            BSP_LOG_FIELD_U32(index * 4u),
+                            BSP_LOG_FIELD_HEX32(record.stack_snapshot[index]),
+                            BSP_LOG_FIELD_HEX32(record.stack_snapshot[index + 1u]),
+                            BSP_LOG_FIELD_HEX32(record.stack_snapshot[index + 2u]),
+                            BSP_LOG_FIELD_HEX32(record.stack_snapshot[index + 3u]));
+    }
+    BSP_LOG_EVENT_0(EV_BSP_CRASH_BSP_CRASH_C_09);
 }
 
 const char *CrashLogTypeName(uint32_t type)
 {
-    // 按类型选择日志名称，未知编号走 default。
     switch (type)
     {
-    case CRASH_TYPE_HARDFAULT:
-        return "HARDFAULT";
-    case CRASH_TYPE_MEMMANAGE:
-        return "MEMMANAGE";
-    case CRASH_TYPE_BUSFAULT:
-        return "BUSFAULT";
-    case CRASH_TYPE_USAGEFAULT:
-        return "USAGEFAULT";
-    case CRASH_TYPE_NMI:
-        return "NMI";
-    case CRASH_TYPE_ASSERT:
-        return "ASSERT";
-    case CRASH_TYPE_STACK_OVF:
-        return "STACKOVF";
-    default:
-        return "NONE";
+    case CRASH_TYPE_HARDFAULT: return "HARDFAULT";
+    case CRASH_TYPE_MEMMANAGE: return "MEMMANAGE";
+    case CRASH_TYPE_BUSFAULT: return "BUSFAULT";
+    case CRASH_TYPE_USAGEFAULT: return "USAGEFAULT";
+    case CRASH_TYPE_NMI: return "NMI";
+    case CRASH_TYPE_ASSERT: return "ASSERT";
+    case CRASH_TYPE_STACK_OVF: return "STACKOVF";
+    default: return "NONE";
     }
 }
 
 const char *CrashLogTypeShort(uint32_t type)
 {
-    // LCD 只显示较短的名称，未知编号用 "---" 占位。
     switch (type)
     {
-    case CRASH_TYPE_HARDFAULT:
-        return "HF";
-    case CRASH_TYPE_MEMMANAGE:
-        return "MM";
-    case CRASH_TYPE_BUSFAULT:
-        return "BUS";
-    case CRASH_TYPE_USAGEFAULT:
-        return "UDF";
-    case CRASH_TYPE_NMI:
-        return "NMI";
-    case CRASH_TYPE_ASSERT:
-        return "ASRT";
-    case CRASH_TYPE_STACK_OVF:
-        return "STK";
-    default:
-        return "---";
+    case CRASH_TYPE_HARDFAULT: return "HF";
+    case CRASH_TYPE_MEMMANAGE: return "MM";
+    case CRASH_TYPE_BUSFAULT: return "BUS";
+    case CRASH_TYPE_USAGEFAULT: return "UDF";
+    case CRASH_TYPE_NMI: return "NMI";
+    case CRASH_TYPE_ASSERT: return "ASRT";
+    case CRASH_TYPE_STACK_OVF: return "STK";
+    default: return "---";
     }
 }
 
-#if CRASH_TEST
-// 保存已选过的自测次数，复位后从下一种故障继续。
-__attribute__((section(".noinit"))) static uint32_t s_crash_test_stage;
-
+#if MC02_BENCH_CRASH_DIAGNOSTICS
 void CrashLogSelfTest(void)
 {
-    uint32_t stage = s_crash_test_stage % 3u;
-    s_crash_test_stage++;
-    BSP_LOG_EVENT_1(EV_BSP_CRASH_BSP_CRASH_C_10, BSP_LOG_FIELD_U32((unsigned long)stage + 1u));
+    if (bsp_crash_test_permit.magic != CRASH_TEST_PERMIT_MAGIC)
+        return;
 
-    // 每次启动依次选择三种路径中的一种，第三项后重新从第一项开始。
-    switch (stage)
+    CrashTestPermit_t permit;
+    volatile uint32_t *source = (volatile uint32_t *)&bsp_crash_test_permit;
+    uint32_t *destination = (uint32_t *)&permit;
+    for (uint32_t index = 0u; index < sizeof(permit) / sizeof(uint32_t); ++index)
+        destination[index] = source[index];
+
+    // 先消费许可；复位后不再执行同一项异常自测。
+    bsp_crash_test_permit.magic = CRASH_TEST_PERMIT_CONSUMED;
+    __DSB();
+    uint32_t build_id[BSP_OBSERVATION_BUILD_ID_WORDS] = {0u};
+    uint32_t permit_crc = 0u;
+    uint8_t valid = (permit.version == 1u && permit.test_case >= CRASH_TEST_CASE_UNDEFINED_INSTRUCTION &&
+                     permit.test_case <= CRASH_TEST_CASE_STACK_HOOK &&
+                     CrashLogBuildIdRead(build_id) &&
+                     CrashCRC32Words((const volatile uint32_t *)&permit.version,
+                                     (offsetof(CrashTestPermit_t, crc32) - sizeof(uint32_t)) / sizeof(uint32_t),
+                                     &permit_crc) && permit_crc == permit.crc32);
+    for (uint32_t index = 0u; valid && index < BSP_OBSERVATION_BUILD_ID_WORDS; ++index)
+        valid = (permit.build_id[index] == build_id[index]);
+    if (!valid)
+        return;
+
+    switch (permit.test_case)
     {
-    case 0u: // 尝试通过写未连接的 FMC 区域触发 BusFault
-        *(volatile uint32_t *)0xC0000000u = 0xDEADBEEFu;
+    case CRASH_TEST_CASE_UNDEFINED_INSTRUCTION:
+        __asm volatile("udf #0" ::: "memory");
         break;
-    case 1u: // 通过 configASSERT 进入断言失败记录
-        configASSERT(0);
+    case CRASH_TEST_CASE_ASSERT:
+        CrashLogAssertFail("MC02-0068", 68u);
         break;
-    default: // 直接调用栈溢出记录入口，检查这条记录路径
-        CrashLogStackOverflow("selftest");
+    case CRASH_TEST_CASE_STACK_HOOK:
+        CrashLogStackOverflow("mc02-test");
+        break;
+    default:
         break;
     }
-
-    BSP_LOG_EVENT_1(EV_BSP_CRASH_BSP_CRASH_C_11, BSP_LOG_FIELD_U32((unsigned long)stage + 1u));
 }
-#endif /* CRASH_TEST */
+#endif

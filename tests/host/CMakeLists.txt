@@ -573,6 +573,15 @@ add_executable(
   ../../bsp/crash/bsp_crash_frame.c)
 target_include_directories(bsp_crash_frame_test PRIVATE ../../bsp/crash)
 add_test(NAME crash_frame_range_and_stacking_errors COMMAND bsp_crash_frame_test)
+set_tests_properties(crash_frame_range_and_stacking_errors PROPERTIES TIMEOUT 10)
+
+add_executable(
+  bsp_crash_record_test
+  bsp_crash_record_test.c
+  ../../bsp/crash/bsp_crash_record.c)
+target_include_directories(bsp_crash_record_test PRIVATE ../../bsp/crash)
+add_test(NAME crash_record_layout_crc_and_legacy_detection COMMAND bsp_crash_record_test)
+set_tests_properties(crash_record_layout_crc_and_legacy_detection PROPERTIES TIMEOUT 10)
 
 add_executable(
   crash_guard_test
@@ -1095,6 +1104,12 @@ add_test(NAME referee_budget_capture_tools COMMAND ${Python3_EXECUTABLE} ${CMAKE
 set_tests_properties(referee_budget_capture_tools PROPERTIES TIMEOUT 10)
 add_test(NAME read_only_live_observation_tool COMMAND ${Python3_EXECUTABLE}
   ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_probe_snapshot_live.py)
+add_test(NAME crash_record_offline_decoder COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_crash_log.py)
+set_tests_properties(crash_record_offline_decoder PROPERTIES TIMEOUT 10)
+add_test(NAME crash_test_permit_fixed_elf_and_one_shot_write COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_crash_test_permit.py)
+set_tests_properties(crash_test_permit_fixed_elf_and_one_shot_write PROPERTIES TIMEOUT 10)
 set_tests_properties(read_only_live_observation_tool PROPERTIES TIMEOUT 10)
 add_test(NAME native_rtt_receive_only_tool COMMAND ${Python3_EXECUTABLE}
   ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_rtt_monitor.py)

@@ -36,7 +36,7 @@ COUNTERS = ("vision_rx_count", "vision_tx_count", "vision_crc_error_count")
 # Live inspection is intentionally limited to this linker RAM region.
 SNAPSHOT_RAM_START = 0x24000000
 SNAPSHOT_RAM_END = 0x24020000  # exclusive
-SYMBOL_VALUE_PATTERN = re.compile(r"^(?P<key>[a-z_]+)=0x(?P<value>[0-9a-fA-F]+)$")
+SYMBOL_VALUE_PATTERN = re.compile(r"^(?P<key>[a-z][a-z0-9_]*)=0x(?P<value>[0-9a-fA-F]+)$")
 MEMORY_VALUE_PATTERN = re.compile(
     r"^\s*0x(?P<address>[0-9a-fA-F]+):\s*(?:0x)?(?P<value>[0-9a-fA-F]+)\b"
 )
@@ -100,6 +100,19 @@ REFEREE_DIAGNOSTIC_WORD_COUNT = 456
 REFEREE_SNAPSHOT_FIELDS = {
     "ref_magic": SnapshotField("referee_bench_diag.magic", "mdw", 32),
     "ref_count": SnapshotField("referee_bench_diag.write_count", "mdw", 32),
+}
+
+# v3 历史记录固定为 252 字节；只用所选 ELF 的 g_crash_log 符号读取。
+CRASH_V3_WORD_COUNT = 63
+CRASH_V3_SNAPSHOT_FIELDS = {
+    "tick_ms": SnapshotField("uwTick", "mdw", 32),
+    "crash_v3_words": SnapshotField("g_crash_log", "mdw", 32, CRASH_V3_WORD_COUNT),
+    "iwdg_reset_flag": SnapshotField("iwdg_reset_flag", "mdb", 8),
+}
+CRASH_RECORD_SNAPSHOT_FIELDS = {
+    "tick_ms": SnapshotField("uwTick", "mdw", 32),
+    "crash_record_words": SnapshotField("g_crash_log", "mdw", 32, 128),
+    "iwdg_reset_flag": SnapshotField("iwdg_reset_flag", "mdb", 8),
 }
 
 # 固定读取 RTOS 任务快照和已登记的 DWT 最大耗时；数组块长度来自固件编译常量。
@@ -853,8 +866,8 @@ def _validate_snapshot_addresses(
     for key, field in fields.items():
         try:
             _validated_address(addresses[key], field.alignment_bytes, ram_bounds)
-            if not 1 <= field.count <= 64:
-                raise ValueError("read length must be between 1 and 64 words")
+            if not 1 <= field.count <= 128:
+                raise ValueError("read length must be between 1 and 128 words")
             if field.count > 1 and field.command != "mdw":
                 raise ValueError("multiword reads must use aligned 32-bit words")
             if addresses[key] + field.count * 4 > ram_bounds[1]:
@@ -1521,6 +1534,8 @@ def main(argv: list[str] | None = None) -> int:
     profile.add_argument("--rc", action="store_true", help="read the fixed remote/safety diagnostic profile")
     profile.add_argument("--rc-input", action="store_true", help="read fixed remote/safety plus keyboard and mouse fields (non-atomic)")
     profile.add_argument("--rtos", action="store_true", help="read the fixed task-stack and timing profile")
+    profile.add_argument("--crash-v3", action="store_true", help="导出所选 ELF 中固定地址的 v3 崩溃记录")
+    profile.add_argument("--crash-record", action="store_true", help="导出固定512字节崩溃记录保留区")
     args = parser.parse_args(argv)
 
     if not 2 <= args.samples <= 8:
@@ -1568,7 +1583,9 @@ def main(argv: list[str] | None = None) -> int:
             "elf_path": str(args.elf.resolve()),
             "elf_sha256": elf_sha256,
             "cmake_configuration": _load_cmake_configuration(args.elf),
-            "mode": "performance" if args.performance else "snapshot",
+            "mode": "performance" if args.performance else (
+                "crash-record" if args.crash_record else ("crash-v3" if args.crash_v3 else "snapshot")
+            ),
         })
 
         identity_info = resolve_observation_identity(args.gdb, args.readelf, str(args.elf), args.timeout)
@@ -1576,6 +1593,8 @@ def main(argv: list[str] | None = None) -> int:
         fields = (
             PERFORMANCE_SNAPSHOT_FIELDS if args.performance else
             RTOS_SNAPSHOT_FIELDS if args.rtos else
+            CRASH_RECORD_SNAPSHOT_FIELDS if args.crash_record else
+            CRASH_V3_SNAPSHOT_FIELDS if args.crash_v3 else
             ADC_SNAPSHOT_FIELDS if args.adc else
             RC_INPUT_SNAPSHOT_FIELDS if args.rc_input else
             RC_SNAPSHOT_FIELDS if args.rc else

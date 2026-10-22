@@ -12,31 +12,68 @@
 #define CRASH_LOG_BASIC_FRAME_WORDS 8u      // R0～R3、R12、LR、PC、xPSR
 #define CRASH_LOG_FP_FRAME_PREFIX_WORDS 18u // 基本寄存器前的浮点相关区域
 
-// 查找允许的 RAM 段，region_end 须可写；地址范围与 STM32H723VGTx_FLASH.ld 保持一致。
-static uint8_t CrashLogGetStackRegionEnd(uintptr_t address, uintptr_t *region_end)
+static uint8_t CrashLogMemoryMapValid(const CrashMemoryMap_t *map)
 {
-    // region_end 是该段末尾后一字节的地址；起点等于它时也能找到该段，但剩余长度为 0。
-    if (address >= (uintptr_t)0x20000000u && address <= (uintptr_t)0x20020000u) // DTCMRAM
+    if (map == NULL || map->regions == NULL || map->region_count == 0u ||
+        map->region_count > CRASH_MEMORY_REGION_CAPACITY)
+        return 0u;
+
+    for (uint32_t index = 0u; index < map->region_count; ++index)
     {
-        *region_end = (uintptr_t)0x20020000u;
-        return 1u;
+        const CrashMemoryRegion_t *region = &map->regions[index];
+        if (region->start >= region->end || region->is_stack_memory > 1u ||
+            (index > 0u && map->regions[index - 1u].end > region->start))
+            return 0u;
     }
-    if (address >= (uintptr_t)0x24000000u && address <= (uintptr_t)0x24020000u) // RAM
+    return 1u;
+}
+
+// 通用读取可以使用只读Flash；异常栈帧还必须落在标记为RAM的区域。
+static uint8_t CrashLogRangeReadableInRegions(const CrashMemoryMap_t *map, uintptr_t address,
+                                             size_t length, size_t alignment,
+                                             uint8_t stack_only)
+{
+    uintptr_t requested_end;
+
+    if (!CrashLogMemoryMapValid(map) || length == 0u ||
+        (alignment != 1u && alignment != 2u && alignment != 4u && alignment != 8u) ||
+        (address % alignment) != 0u || length > UINTPTR_MAX - address)
+        return 0u;
+
+    requested_end = address + length;
+    for (uint32_t index = 0u; index < map->region_count; ++index)
     {
-        *region_end = (uintptr_t)0x24020000u;
-        return 1u;
+        const CrashMemoryRegion_t *region = &map->regions[index];
+
+        if (address >= region->start && requested_end <= region->end &&
+            (!stack_only || region->is_stack_memory != 0u))
+            return 1u;
     }
-    if (address >= (uintptr_t)0x30000000u && address <= (uintptr_t)0x30008000u) // RAM_D2
+    return 0u;
+}
+
+uint8_t CrashLogRangeReadable(const CrashMemoryMap_t *map, uintptr_t address,
+                              size_t length, size_t alignment)
+{
+    return CrashLogRangeReadableInRegions(map, address, length, alignment, 0u);
+}
+
+static uint8_t CrashLogFindReadableRegion(const CrashMemoryMap_t *map, uintptr_t address,
+                                          uint8_t stack_only, uintptr_t *region_end)
+{
+    if (!CrashLogMemoryMapValid(map) || region_end == NULL)
+        return 0u;
+
+    for (uint32_t index = 0u; index < map->region_count; ++index)
     {
-        *region_end = (uintptr_t)0x30008000u;
-        return 1u;
+        const CrashMemoryRegion_t *region = &map->regions[index];
+        if (address >= region->start && address <= region->end &&
+            (!stack_only || region->is_stack_memory != 0u))
+        {
+            *region_end = region->end;
+            return 1u;
+        }
     }
-    if (address >= (uintptr_t)0x38000000u && address <= (uintptr_t)0x38004000u) // RAM_D3
-    {
-        *region_end = (uintptr_t)0x38004000u;
-        return 1u;
-    }
-    // 未落在这四段 RAM 的允许范围内，调用方跳过读取。
     return 0u;
 }
 
@@ -60,13 +97,13 @@ static uint8_t CrashLogExceptionReturnValid(uint32_t exception_return)
     }
 }
 
-uint32_t CrashLogReadableStackWords(uintptr_t stack_pointer)
+uint32_t CrashLogReadableStackWords(const CrashMemoryMap_t *map, uintptr_t stack_pointer)
 {
     uintptr_t region_end;
 
     // 起点须是 4 的倍数，并位于允许的 RAM 范围内，才能按 uint32_t 计算数量。
     if ((stack_pointer & (sizeof(uint32_t) - 1u)) != 0u ||
-        !CrashLogGetStackRegionEnd(stack_pointer, &region_end))
+        !CrashLogFindReadableRegion(map, stack_pointer, 1u, &region_end))
         return 0u;
 
     uintptr_t available_words = (region_end - stack_pointer) / sizeof(uint32_t);
@@ -76,7 +113,8 @@ uint32_t CrashLogReadableStackWords(uintptr_t stack_pointer)
     return (uint32_t)available_words;
 }
 
-uint8_t CrashLogFrameResolve(uintptr_t stack_pointer, uint32_t exception_return,
+uint8_t CrashLogFrameResolve(const CrashMemoryMap_t *map, uintptr_t stack_pointer,
+                             uint32_t exception_return,
                              uint32_t cfsr, CrashLogFrameView_t *view)
 {
     // 保存、恢复寄存器或保存浮点数据时出错，栈上的相关数据可能不完整。
@@ -91,7 +129,6 @@ uint8_t CrashLogFrameResolve(uintptr_t stack_pointer, uint32_t exception_return,
     const uint32_t prefix_words = fp_extended ? CRASH_LOG_FP_FRAME_PREFIX_WORDS : 0u;
     const uintptr_t frame_bytes = (uintptr_t)(prefix_words + CRASH_LOG_BASIC_FRAME_WORDS) *
                                   sizeof(uint32_t);
-    uintptr_t region_end;
 
     // 没有接收结果的位置时直接失败。
     if (view == NULL)
@@ -104,14 +141,11 @@ uint8_t CrashLogFrameResolve(uintptr_t stack_pointer, uint32_t exception_return,
     if ((stack_pointer & 7u) != 0u ||
         !CrashLogExceptionReturnValid(exception_return) ||
         (cfsr & frame_error_mask) != 0u ||
-        !CrashLogGetStackRegionEnd(stack_pointer, &region_end) ||
-        stack_pointer > region_end ||
-        // 用同段 RAM 的剩余字节数比较，避免用起点加长度时超出地址能表示的范围。
-        frame_bytes > (region_end - stack_pointer))
+        !CrashLogRangeReadableInRegions(map, stack_pointer, (size_t)frame_bytes, 8u, 1u))
         return 0u;
 
     // 跳过可能存在的浮点区域得到 R0 的位置；可复制个数仍从原始栈起点计算。
     view->core_frame_address = stack_pointer + ((uintptr_t)prefix_words * sizeof(uint32_t));
-    view->snapshot_words = CrashLogReadableStackWords(stack_pointer);
+    view->snapshot_words = CrashLogReadableStackWords(map, stack_pointer);
     return 1u;
 }

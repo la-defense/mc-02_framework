@@ -4,7 +4,6 @@
  */
 #include "crc.h"
 #include "bsp_crash_crc.h"
-#include "bsp_crash.h"
 #include "test_check.h"
 #include <string.h>
 #ifdef CRC_TEST_THREADS
@@ -78,8 +77,7 @@ static void vectors(void)
     TEST_CHECK(CrashCRC32Words(words, 2u, &crash));
     TEST_CHECK(CRCCompute(CRC32_IEEE, little_endian, sizeof(little_endian), &ordinary) == CRC_OK);
     TEST_CHECK(crash == ordinary && crash == 0x3fca88c5u);
-    // 使用历史记录的完整布局；头部40字节不参与 CRC，余下212字节逐字处理。
-    TEST_CHECK(sizeof(CrashLog_t) == 252u && offsetof(CrashLog_t, task_name) == 40u);
+    // 固定53字逐位参考覆盖旧版崩溃负载长度，不把历史布局耦合到当前记录结构。
     uint32_t record_words[53];
     for (unsigned index = 0u; index < 53u; ++index) record_words[index] = 0x01020304u * index;
     TEST_CHECK(CrashCRC32Words(record_words, 53u, &crash));

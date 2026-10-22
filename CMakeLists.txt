@@ -20,6 +20,7 @@ option(MC02_BENCH_RC_DIAGNOSTICS "裸板遥控接收诊断；禁止请求 READY"
 option(MC02_BENCH_REFEREE_DIAGNOSTICS "裸板裁判有限负载诊断；默认关闭" OFF)
 option(MC02_LOG_ORDINARY "允许普通诊断事件；仅 bench_safe 显式验证构建可开启" OFF)
 option(MC02_LOG_TEST "编入类型化日志自测事件" OFF)
+option(MC02_BENCH_CRASH_DIAGNOSTICS "仅bench_safe固件允许的一次性崩溃记录自测" OFF)
 
 if(NOT MC02_PROFILE STREQUAL "bench_safe" AND NOT MC02_PROFILE STREQUAL "robot")
     message(FATAL_ERROR "MC02_PROFILE 必须是 bench_safe 或 robot")
@@ -84,8 +85,13 @@ endif()
 if((MC02_LOG_ORDINARY OR MC02_LOG_TEST) AND NOT MC02_PROFILE STREQUAL "bench_safe")
     message(FATAL_ERROR "日志普通诊断和自测仅允许 bench_safe 配置")
 endif()
+if(MC02_BENCH_CRASH_DIAGNOSTICS AND
+   (NOT MC02_PROFILE STREQUAL "bench_safe" OR MC02_BOARD_ROLE STREQUAL "gimbal" OR
+    MC02_ENABLE_HEATER OR MC02_BENCH_RC_DIAGNOSTICS OR MC02_BENCH_REFEREE_DIAGNOSTICS))
+    message(FATAL_ERROR "崩溃自测仅允许禁热、无冲突诊断的 bench_safe 单板配置")
+endif()
 
-foreach(option_name IN ITEMS MC02_BENCH_RC_DIAGNOSTICS MC02_BENCH_REFEREE_DIAGNOSTICS MC02_LOG_ORDINARY MC02_LOG_TEST MC02_ENABLE_REFEREE_UI)
+foreach(option_name IN ITEMS MC02_BENCH_RC_DIAGNOSTICS MC02_BENCH_REFEREE_DIAGNOSTICS MC02_LOG_ORDINARY MC02_LOG_TEST MC02_ENABLE_REFEREE_UI MC02_BENCH_CRASH_DIAGNOSTICS)
     if(${option_name})
         if(option_name STREQUAL "MC02_LOG_TEST")
             add_compile_definitions(LOG_TEST=1)
@@ -119,6 +125,8 @@ if(MC02_BENCH_RC_DIAGNOSTICS)
     set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_rcdiag_bench_safe")
 elseif(MC02_BENCH_REFEREE_DIAGNOSTICS)
     set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_refdiag_bench_safe")
+elseif(MC02_BENCH_CRASH_DIAGNOSTICS)
+    set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_crashdiag_bench_safe")
 endif()
 
 if(NOT CMAKE_BUILD_TYPE)
