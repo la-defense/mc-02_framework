@@ -68,6 +68,7 @@ set(MC02_PLATFORM_C_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c)
 
 set(MC02_BSP_C_SOURCES
+    bsp/observation/bsp_observation.c
     bsp/bsp_init.c
     bsp/bsp_tools.c
     bsp/adc/bsp_adc.c
@@ -184,6 +185,23 @@ foreach(source IN LISTS MC02_SELECTED_SOURCES)
         message(FATAL_ERROR "源码清单中的文件不存在：${source}")
     endif()
 endforeach()
+
+# 观测模块只引用当前配置登记的源码，避免诊断功能强行链接未选驱动。
+function(mc02_set_observation_source_flag flag source)
+    list(FIND MC02_SELECTED_SOURCES "${source}" source_index)
+    if(source_index EQUAL -1)
+        add_compile_definitions(${flag}=0)
+    else()
+        add_compile_definitions(${flag}=1)
+    endif()
+endfunction()
+mc02_set_observation_source_flag(MC02_OBS_HAS_INS modules/imu/ins_task.c)
+mc02_set_observation_source_flag(MC02_OBS_HAS_MOTOR modules/motor/motor_task.c)
+mc02_set_observation_source_flag(MC02_OBS_HAS_DJI modules/motor/DJImotor/dji_motor.c)
+mc02_set_observation_source_flag(MC02_OBS_HAS_CAN bsp/can/bsp_can.c)
+mc02_set_observation_source_flag(MC02_OBS_HAS_UART bsp/usart/usart_tx_task.c)
+mc02_set_observation_source_flag(MC02_OBS_HAS_USB bsp/usb/bsp_usb.c)
+mc02_set_observation_source_flag(MC02_OBS_HAS_LCD modules/lcd/lcd_task.c)
 set(MC02_EXTRA_INCLUDE_DIRS
     application
     application/config

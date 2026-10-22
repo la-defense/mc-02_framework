@@ -399,6 +399,15 @@ static void test_production_can_routing(void)
     now_us += 1000u;
     LKMotorControl();
     TEST_CHECK(tx_accept_count[0] == 5u && tx_frame[0][2] == 0x72u && tx_frame[0][3] == 0xFDu);
+
+    CAN_ObservationCounters_t observation = {0};
+    TEST_CHECK(CANGetObservationCounters(2u, &observation) == 1u);
+    TEST_CHECK(observation.active == 1u && observation.tx_ok == 5u && observation.tx_drop == 1u);
+    TEST_CHECK(CANGetObservationCounters(0u, &observation) == 1u);
+    TEST_CHECK(observation.tx_error == 1u && observation.tx_ok == 5u);
+    CAN_ObservationCounters_t unchanged = {.tx_ok = 0xA5A5A5A5u};
+    TEST_CHECK(CANGetObservationCounters(DEVICE_CAN_CNT, &unchanged) == 0u);
+    TEST_CHECK(unchanged.tx_ok == 0xA5A5A5A5u);
 }
 
 static void test_closed_loop_feedback_selection(void)

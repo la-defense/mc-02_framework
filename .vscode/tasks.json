@@ -85,23 +85,31 @@
             "problemMatcher": []
         },
         {
-            "label": "wait for rtt",
+            "label": "wait after flash",
             "type": "process",
             "command": "powershell.exe",
             "args": ["-NoProfile", "-Command", "Start-Sleep -Seconds 3"],
             "problemMatcher": []
         },
         {
-            "label": "flash and wait",
-            "dependsOn": ["download dap", "wait for rtt"],
+            "label": "flash and startup wait",
+            "dependsOn": ["download dap", "wait after flash"],
             "dependsOrder": "sequence",
             "problemMatcher": []
         },
         {
-            "label": "log (JLink RTT Client)",
+            "label": "RTT receive only (OpenOCD native)",
             "type": "process",
-            "command": "JlinkRTTClient",
-            "args": [],
+            "command": "py",
+            "args": [
+                "-3",
+                "${workspaceFolder}/tools/rtt_monitor.py",
+                "--openocd", "${config:cortex-debug.openocdPath}",
+                "--elf", "${workspaceFolder}/build/wsl/bench-debug/Basic_Framework_MC02_bench_safe.elf",
+                "--seconds", "60"
+            ],
+            "options": {"cwd": "${workspaceFolder}"},
+            "presentation": {"reveal": "always", "panel": "dedicated"},
             "problemMatcher": []
         }
     ]

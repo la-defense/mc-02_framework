@@ -9,6 +9,7 @@
 #include "bsp_adc.h"
 #include "bsp_log.h"
 #include "bsp_dwt.h"
+#include "bsp_observation.h"
 #include "cmsis_os.h"
 #include "main.h"
 #include "task.h"
@@ -98,6 +99,8 @@ volatile uint32_t lcd_prof_cycles = 0;
 #define LCD_TASK_STATS_LAYOUT 0x52543102u
 volatile uint32_t lcd_stats_layout = LCD_TASK_STATS_LAYOUT;
 volatile uint32_t lcd_stats_generation = 0u;
+volatile uint32_t lcd_stats_sample_id = 0u;
+volatile uint32_t lcd_stats_captured_ms = 0u;
 volatile uint32_t lcd_stats_task_total = 0u;
 volatile uint8_t lcd_stats_truncated = 0u;
 volatile uint32_t lcd_stats_total = 0;
@@ -264,6 +267,10 @@ static void lcd_task_stats_snapshot(void)
     lcd_stats_count = (uint8_t)n;
     lcd_stats_task_total = (uint32_t)task_total;
     lcd_stats_truncated = (uint8_t)(task_total > n);
+    lcd_stats_captured_ms = HAL_GetTick();
+    ++lcd_stats_sample_id;
+    if (lcd_stats_sample_id == 0u)
+        lcd_stats_sample_id = 1u;
 
     uint32_t deltas[LCD_TASK_STATS_MAX] = {0};
     uint32_t delta_total = 0;
@@ -319,6 +326,7 @@ static void lcd_task_stats_snapshot(void)
 
     __DMB();
     lcd_stats_generation = generation + 1u;
+    BSPObservationCapture();
 }
 
 // 保存本次耗时及历史最大耗时，并加入 LCD 操作的累计时间。

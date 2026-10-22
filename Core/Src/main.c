@@ -33,6 +33,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "bsp_observation.h"
 #include "robot.h"
 #include "bsp_log.h"
 #include "bsp_watchdog.h"
@@ -99,6 +100,10 @@ int main(void)
 {
   /* USER CODE BEGIN 1 */
   BSP_SafetyStartupLatchOutputsOff();
+  if (!BSPObservationInitEarly())
+  {
+    Error_Handler();
+  }
 
   /* USER CODE END 1 */
 

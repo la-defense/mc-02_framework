@@ -393,7 +393,7 @@ modules/        安全管理、任务监控、消息、来源监控、电机、�
 | S4-1 | 主机回归入口与环境 | Linux/WSL完整基线、Windows可移植子集；保留Debug/Release及负向检查器控制；声明跳过原因、每类用例有限超时和统一命令 | [MC02-0020](../../../.Doc/TODO.md)、[MC02-0085](../../../.Doc/TODO.md) |
 | S4-2 | 平台解耦后的测试分层 | 业务测试通过框架接口可控替身调用生产逻辑；H723后端测试保留局部HAL/寄存器模型；避免测试复制公共业务结构、明确无操作临界区/成功替身的覆盖边界 | [MC02-0086](../../../.Doc/TODO.md)、[MC02-0087](../../../.Doc/TODO.md)、[MC02-0088](../../../.Doc/TODO.md)、[MC02-0070](../../../.Doc/TODO.md) |
 | S4-3 | 已选功能的必要行为回归与依据 | 为已批准安全/协议/算法改造补相应生产接口回归；数值验收使用实际执行运算的后端与可核对结果；保留初始化故障注入；记录替身边界和实物验收差异，不建设整车模拟/回放 | [MC02-0056](../../../.Doc/TODO.md)、[MC02-0076](../../../.Doc/TODO.md)、[MC02-0078](../../../.Doc/TODO.md)、[MC02-0079](../../../.Doc/TODO.md)、[MC02-0080](../../../.Doc/TODO.md)、[MC02-0082](../../../.Doc/TODO.md)、[MC02-0083](../../../.Doc/TODO.md) |
-| S5-1 | 只读观测整合与旧入口退役 | 将已有性能/任务/CAN/LCD查询迁移probe_snapshot_live；保持有限白名单/运行状态检查，平台及链接边界/匹配构建身份对齐；删除旧probe_snapshot.py并退役rtt_dump.py，RTT用标准客户端；文档入口迁移，历史证据保留；不扩展R11 | [MC02-0100](../../../.Doc/TODO.md) |
+| S5-1 | 只读观测整合与旧入口退役 | MC02-0100软件实现及WSL／ARM验收已完成；24V禁热裸板验收待执行。性能/任务/CAN/LCD查询进入probe_snapshot_live；保留有限白名单、运行状态与ELF身份／布局核对；旧探针已删除，RTT由OpenOCD原生接收客户端提供；不扩展R11 | [MC02-0100](../../../.Doc/TODO.md)；[任务记录](../../workflow/tickets/MC02-0100.md) |
 | S5-2 | 裸板输入与最小协议测试帧 | SP与新版协议的最小禁火测试帧；明确物理量/单位、显式设备/端口、有界参数/发送/错误停止和结果；不改生产上位机，不建设整车模拟回放；保留DT7身份/输入租约/两帧全松开恢复规则并纠正固定UI端口说明，不给live虚构180s上限 | [MC02-0101](../../../.Doc/TODO.md) |
 | S5-3 | 设备监听与字模生成维护 | USB-CAN仅维护已观测私有格式，校验类型/长度/DLC/ID、有限读取与异常退出，不宣称通用CAN/主动收发/扩展帧能力；字体和输出路径可指定，先验证标签/字体再交付整组生成结果，保持枚举/字节约定并记录生成依据，不扩未用字库 | [MC02-0102](../../../.Doc/TODO.md) |
 | S5-4 | 现有工作流检查适配 | ELF/profile检查按选中车型模块及平台产生期望，保持bench隔离与诊断身份；增量与干净配置一致性跟随新CMake入口/源码选择/输入布局；保留TODO契约与课程局部链接/可选构建；说明命令/依赖/产物，新的CubeMX自动检查后置 | [BUILD-02](../../../.Doc/TODO.md)、[MC02-0020](../../../.Doc/TODO.md)、[MC02-0054](../../../.Doc/TODO.md)、[MC02-0032](../../../.Doc/TODO.md) |
@@ -535,10 +535,10 @@ modules/        安全管理、任务监控、消息、来源监控、电机、�
 |---|---|---|
 | [tools/dt7_input.py](../../../tools/dt7_input.py) | 裸板DT7键鼠转发；list/replay/live，输入状态、心跳、释放、日志及设备身份校验 | 保留已验收MC02-0049；UI标题COM4固定，应显示实际端口；180s只适用于replay，勿声称live已有总时限；其两帧全松开恢复规则与新版USB业务无强制握手是不同来源规则 |
 | [tools/examples/dt7_bench_replay.json](../../../tools/examples/dt7_bench_replay.json) | 18秒固定键鼠回放输入 | 保留独立裸板诊断样例；不赋予执行器运行许可 |
-| [tools/probe_snapshot_live.py](../../../tools/probe_snapshot_live.py) | 离线ELF解析+运行中SWD白名单RAM读数，输出有限JSON快照 | 保留bounded读取/逐次running检查/loopback；固定H723 RAM/符号/target名需随平台适配与构建标识对齐；动态逐字段读取并非原子整车快照 |
+| [tools/probe_snapshot_live.py](../../../tools/probe_snapshot_live.py) | 离线ELF解析+运行中SWD白名单RAM读数，输出性能或诊断会话JSONL | 先核对Build ID、身份布局及RAM边界；保留有限读取/逐次running检查/loopback；动态逐字段读取并非原子整车快照，归MC02-0100 |
 | [tools/openocd_running_inspection.cfg](../../../tools/openocd_running_inspection.cfg) | H723+CMSIS-DAP运行中观测服务配置 | 保持关闭GDB/Tcl、禁止控制/写入命令，按选中后端分离配置，不宣称其他硬件已经验证 |
-| [tools/probe_snapshot.py](../../../tools/probe_snapshot.py) | 旧性能探针、任务占用率、CAN/LCD统计 | 将已有统计合入只读 live 工具后删除，归0100；不扩 R11。 |
-| [tools/rtt_dump.py](../../../tools/rtt_dump.py) | 旧OpenOCD读取并消费RTT上行缓冲 | 退役，改用标准 RTT 客户端，归0100；不能放宽只读白名单。 |
+| tools/probe_snapshot.py（已退役） | 旧性能探针、任务占用率、CAN/LCD统计 | 已由 `tools/probe_snapshot_live.py --performance` 替代；不扩 R11。详见 [MC02-0100记录](../../workflow/tickets/MC02-0100.md)。 |
+| tools/rtt_dump.py（已退役） | 旧OpenOCD读取并消费RTT上行缓冲 | 已改用 `tools/rtt_monitor.py` 与 OpenOCD 原生RTT服务；客户端只接收，不改写RTT环形缓冲。 |
 | [tools/vision_sim.py](../../../tools/vision_sim.py) | SP视觉帧串口发生器 | 始终禁火，明确单位／端口及发送期限；支持 SP 与新版协议最小测试帧，归0101。 |
 | [tools/usbcan_serial_monitor.py](../../../tools/usbcan_serial_monitor.py) | 观测特定USB-CAN私有串口输出，统计ID和帧率 | 只维护已核对私有格式，补类型／长度／DLC／ID及有界读取，不新增主动收发，归0102。 |
 | [tools/lcd_font/gen_cn_font.py](../../../tools/lcd_font/gen_cn_font.py) | 按固定标签集生成16×16中文字模与枚举 | 参数化字体／输出路径，先验证再交付整组，保留枚举和字节约定，归0102。 |

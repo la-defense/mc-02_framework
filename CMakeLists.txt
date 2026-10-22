@@ -155,7 +155,7 @@ else()
 endif()
 add_compile_options("-fdebug-prefix-map=${CMAKE_SOURCE_DIR}=${MC02_DEBUG_SOURCE_ROOT}")
 
-add_link_options(-pipe ${MCU_FLAGS} -T${LINKER_SCRIPT} ${MC02_LINKER_OPTIONS} -lm -lc -Wl,--gc-sections -specs=nano.specs
+add_link_options(-pipe ${MCU_FLAGS} -T${LINKER_SCRIPT} ${MC02_LINKER_OPTIONS} -lm -lc -Wl,--gc-sections -Wl,--build-id=sha1 -specs=nano.specs
     -Wl,-Map=${PROJECT_BINARY_DIR}/${MC02_OUTPUT_BASENAME}.map -Wl,--cref -Wl,--print-memory-usage)
 if(ENABLE_PRINTF_FLOAT)
     add_link_options(-u _printf_float)

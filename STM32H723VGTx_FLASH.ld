@@ -73,12 +73,25 @@ FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 768K
 /* Define output sections */
 SECTIONS
 {
+  __mc02_main_ram_start__ = ORIGIN(RAM);
+  __mc02_main_ram_end__ = ORIGIN(RAM) + LENGTH(RAM);
+
   /* The startup code goes first into FLASH */
   .isr_vector :
   {
     . = ALIGN(4);
     KEEP(*(.isr_vector)) /* Startup code */
     . = ALIGN(4);
+  } >FLASH
+
+  /* 链接器生成的 Build ID 保存在 Flash，启动时复制到 RAM 身份记录。 */
+  .note.gnu.build-id :
+  {
+    . = ALIGN(4);
+    __mc02_build_id_note_start__ = .;
+    KEEP(*(.note.gnu.build-id))
+    . = ALIGN(4);
+    __mc02_build_id_note_end__ = .;
   } >FLASH
 
   /* The program code and other data goes into FLASH */
@@ -102,6 +115,7 @@ SECTIONS
   .rodata :
   {
     . = ALIGN(4);
+    KEEP(*(.rodata.mc02_observation_identity))
     *(.rodata)         /* .rodata sections (constants, strings, etc.) */
     *(.rodata*)        /* .rodata* sections (constants, strings, etc.) */
     . = ALIGN(4);

@@ -1,11 +1,7 @@
 {
-    // 调试说明：
-    // 1. 推荐：直接选 "DAPlink (flash + attach)" 按 F5，会自动编译→烧录→等待固件初始化 RTT→attach，
-    //    RTT 日志与 Live Watch 都能正常工作（规避 cortex-debug 在复位阶段 RTT 启动失败会连带跳过 Live Watch 的问题）。
-    // 2. 使用 J-Link 选 "JLink"（需要安装 SEGGER J-Link 软件，且 JLinkGDBServer 在 PATH 中）。
-    // 3. RTT 日志：调试启动后会自动打开 "RTT Log" 终端，显示 bsp_log 输出的下位机日志，无需再开 RTT Viewer。
-    // 4. 实时变量：在 CORTEX LIVE WATCH 添加全局/静态变量（static 变量需用 '文件.c'::变量 限定），
-    //    配合 liveWatch 实时刷新；FreeRTOS 任务列表可看任务状态。
+    // 调试入口只负责匹配 ELF 的构建、烧录或连接，不自动启动 RTT 客户端。
+    // 需要观察运行态时，使用独立任务“RTT receive only (OpenOCD native)”；它只接收日志。
+    // 实时变量通过 Live Watch 查看；MC02-0100 的正式观测使用身份校验后的有限快照工具。
     "version": "0.2.0",
     "configurations": [
         {
@@ -25,21 +21,6 @@
             "liveWatch": {
                 "enabled": true,
                 "samplesPerSecond": 4
-            },
-            "rttConfig": {
-                "enabled": true,
-                "address": "auto",
-                "clearSearch": true,
-                "rtt_start_retry": 1000,
-                "polling_interval": 500,
-                "decoders": [
-                    {
-                        "type": "console",
-                        "port": 0,
-                        "label": "RTT Log",
-                        "noprompt": true
-                    }
-                ]
             }
         },
         {
@@ -54,26 +35,11 @@
             "configFiles": [
                 "openocd_dap.cfg"
             ],
-            "preLaunchTask": "flash and wait",
+            "preLaunchTask": "flash and startup wait",
             "rtos": "FreeRTOS",
             "liveWatch": {
                 "enabled": true,
                 "samplesPerSecond": 4
-            },
-            "rttConfig": {
-                "enabled": true,
-                "address": "auto",
-                "clearSearch": true,
-                "rtt_start_retry": 1000,
-                "polling_interval": 500,
-                "decoders": [
-                    {
-                        "type": "console",
-                        "port": 0,
-                        "label": "RTT Log",
-                        "noprompt": true
-                    }
-                ]
             }
         },
         {
@@ -131,19 +97,6 @@
             "liveWatch": {
                 "enabled": true,
                 "samplesPerSecond": 4
-            },
-            "rttConfig": {
-                "enabled": true,
-                "address": "auto",
-                "clearSearch": true,
-                "decoders": [
-                    {
-                        "type": "console",
-                        "port": 0,
-                        "label": "RTT Log",
-                        "noprompt": true
-                    }
-                ]
             }
         },
         {
@@ -162,21 +115,6 @@
             "liveWatch": {
                 "enabled": true,
                 "samplesPerSecond": 4
-            },
-            "rttConfig": {
-                "enabled": true,
-                "address": "auto",
-                "clearSearch": true,
-                "rtt_start_retry": 1000,
-                "polling_interval": 500,
-                "decoders": [
-                    {
-                        "type": "console",
-                        "port": 0,
-                        "label": "RTT Log",
-                        "noprompt": true
-                    }
-                ]
             }
         },
         {
@@ -193,19 +131,6 @@
             "liveWatch": {
                 "enabled": true,
                 "samplesPerSecond": 4
-            },
-            "rttConfig": {
-                "enabled": true,
-                "address": "auto",
-                "clearSearch": true,
-                "decoders": [
-                    {
-                        "type": "console",
-                        "port": 0,
-                        "label": "RTT Log",
-                        "noprompt": true
-                    }
-                ]
             }
         }
     ]

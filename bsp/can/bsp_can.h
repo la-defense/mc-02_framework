@@ -139,6 +139,26 @@ typedef struct
     CAN_Status_e status;          /* 当前状态 */
 } CAN_BusStats_t;
 
+/* 观测记录需要的纯软件计数；不触发 HAL 查询或总线恢复。 */
+typedef struct
+{
+    uint32_t active;
+    uint32_t tx_ok;
+    uint32_t tx_drop;
+    uint32_t tx_error;
+    uint32_t tx_done;
+    uint32_t tx_fifo_empty_events;
+    uint32_t busoff;
+    uint32_t busoff_recover;
+    uint32_t rx_lost;
+    uint32_t rx_frames;
+    uint32_t rx_queue_drop;
+    uint32_t rx_queue_peak;
+    uint32_t tx_error_count;
+    uint32_t rx_error_count;
+    uint32_t status;
+} CAN_ObservationCounters_t;
+
 /** @brief 注册标准 CAN ID，按需启动服务并添加接收过滤规则。
 * @param[in] config 有效总线、非空回调及 0～0x7ff 的收发 ID；id 指向的模块须长期有效。
 * @return 成功返回长期有效实例，参数、重复接收 ID、容量、分配或 HAL 配置失败返回 NULL。
@@ -176,6 +196,14 @@ void CANGetTxStats(FDCAN_HandleTypeDef *hcan, CAN_TxStats_t *stats);
 * @param[out] stats 输出对象，NULL 或句柄未知时保持原值。
  */
 void CANGetBusStats(FDCAN_HandleTypeDef *hcan, CAN_BusStats_t *stats);
+
+/** @brief 复制指定总线的纯软件计数，不读取寄存器、不执行恢复。
+* @param[in] bus_index 总线编号，范围 0～DEVICE_CAN_CNT-1。
+* @param[out] counters 输出对象；成功时整体更新，参数错误时保持原值。
+* @return 1 表示复制成功，0 表示总线编号或输出指针无效。
+* @note 普通任务上下文调用；复制期间短暂屏蔽中断。
+ */
+uint8_t CANGetObservationCounters(uint8_t bus_index, CAN_ObservationCounters_t *counters);
 
 /* ---------------- 接收队列(ISR 入队 / 任务派发, BSPCAN-02) ----------------
    接收中断现在只把帧压进每条总线各自的环形队列, 由 CANProcessRx() 在任务上下文

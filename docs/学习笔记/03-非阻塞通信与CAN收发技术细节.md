@@ -331,10 +331,10 @@ void CANHealthMonitor(void)
 
 ```powershell
 # 占用率与分段耗时对比（推荐 30s 以上）
-python tools\probe_snapshot.py --seconds 30
+python tools\probe_snapshot_live.py --performance --duration 30 --elf build\wsl\bench-debug\Basic_Framework_MC02_bench_safe.elf
 
-# 看 / 抓 RTT 日志（本机 OpenOCD 没编 rtt 命令，工具直读环形缓冲）
-python tools\rtt_dump.py --seconds 20
+# 通过 OpenOCD 原生 RTT 服务接收日志；工具不读写 RTT 环形缓冲
+py -3 tools\rtt_monitor.py --openocd "<OpenOCD可执行文件>" --elf build\wsl\bench-debug\Basic_Framework_MC02_bench_safe.elf --seconds 20
 ```
 
 ### 8.1 本机那台 USB-CAN 适配器的实测结论（2026-09）
@@ -501,3 +501,9 @@ DMA搬完只说明内存搬运结束，UART的TC通知才说明本机这次发�
 REF-03首次裸板启动记录为阶段TASKS、模块TASKS、原因TASK_CREATE、资源UART_TX，INS尚未运行。原因是`RobotInit()`先保存PRIMASK并关中断，再调用`OSTaskInit()`创建任务；原`USARTTxTaskInit()`误用运行期检查，看到PRIMASK=1就拒绝，根本没有尝试创建任务。
 
 现在只有启动前的任务创建入口允许Thread模式PRIMASK和BASEPRI非零，不主动改变屏蔽状态；ISR或FAULTMASK非零仍拒绝。运行期提交、取消、查询和发送推进仍要求普通任务、中断开启，不能因此在启动阶段开始传输。FreeRTOS端口的uxCriticalNesting在启动前为0xAAAAAAAA，创建前序任务后可能保持BASEPRI；只放宽PRIMASK仍不足。生产任务入口的主机回归在PRIMASK=1、BASEPRI=0x50下先验证创建失败与重试，再验证成功、重复调用和中断状态保持；修复前该检查失败，修复后通过。这个裸板发现说明：替身返回“创建成功”不能证明实际启动上下文也被接受。
+
+## 16. 只读观测也要先核对固件身份（MC02-0100）
+
+性能工具先从 ELF 读取 Build ID、布局和 RAM 边界，再从运行中的板读取固定身份记录。只有身份、记录版本和地址范围全部匹配，才读取任务、DWT、CAN 与 LCD 字段。每组记录有独立发布时间和更新编号；重复编号不是新样本，缺失模块显示“未启用”，计数为零显示“未采样”。
+
+`--performance --duration 30` 每秒进行一次有限读取并保存 `raw.jsonl` 与 `summary.txt`。工具不暂停目标、不写内存，也不把任务运行计数比例叫作精确 CPU 占用率。RTT 日志使用 VSCode 的“RTT receive only (OpenOCD native)”任务；它只收字节，不自行修改 RTT 环形缓冲。

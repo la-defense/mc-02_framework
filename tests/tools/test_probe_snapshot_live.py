@@ -1,10 +1,14 @@
+"""验证只读快照工具的身份校验、固定字段读取与报告边界。"""
+
 import contextlib
 import io
 import json
 import re
 import socketserver
+import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -105,6 +109,8 @@ def _rtos_fixture():
         stats_layout=probe_snapshot_live.RTOS_TASK_STATS_LAYOUT,
         stats_generation_before=8,
         stats_generation_after=8,
+        stats_sample_id=1,
+        stats_captured_ms=123456,
         stats_count=2,
         stats_task_total=2,
         stats_truncated=0,
@@ -135,6 +141,171 @@ def _rtos_fixture():
     return addresses, values
 
 
+def _test_identity_info():
+    build_id = "0123456789abcdef0123456789abcdef01234567"
+    build_id_bytes = bytes.fromhex(build_id)
+    expected = {
+        "magic": probe_snapshot_live.OBSERVATION_IDENTITY_MAGIC,
+        "version": probe_snapshot_live.OBSERVATION_IDENTITY_VERSION,
+        "size_bytes": probe_snapshot_live.OBSERVATION_IDENTITY_WORDS * 4,
+        "layout": probe_snapshot_live.OBSERVATION_IDENTITY_LAYOUT,
+        "build_id_words": [int.from_bytes(build_id_bytes[i:i + 4], "little")
+                            for i in range(0, len(build_id_bytes), 4)],
+        "profile": 1,
+        "role": 1,
+        "module_mask": sum(probe_snapshot_live.OBSERVATION_MODULES.values()),
+        "build_id": build_id,
+        "profile_name": "bench_safe",
+        "role_name": "single",
+    }
+    return {
+        "expected": expected,
+        "identity_address": 0x24001000,
+        "ram_bounds": (probe_snapshot_live.SNAPSHOT_RAM_START, probe_snapshot_live.SNAPSHOT_RAM_END),
+    }
+
+
+def _identity_words(expected):
+    return [
+        expected["magic"], expected["version"], expected["size_bytes"], expected["layout"],
+        *expected["build_id_words"], expected["profile"], expected["role"], expected["module_mask"],
+    ]
+
+
+def _write_identity_elf(path, template_values=None):
+    if template_values is None:
+        expected = _test_identity_info()["expected"]
+        template_values = [expected[key] for key in (
+            "magic", "version", "size_bytes", "layout", "profile", "role", "module_mask",
+        )]
+    section_names = b"\0.shstrtab\0.strtab\0.symtab\0.rodata\0.bss\0"
+    section_name_offsets = {
+        ".shstrtab": section_names.index(b".shstrtab"),
+        ".strtab": section_names.index(b".strtab"),
+        ".symtab": section_names.index(b".symtab"),
+        ".rodata": section_names.index(b".rodata"),
+        ".bss": section_names.index(b".bss"),
+    }
+    symbol_names = b"\0bsp_observation_identity_template\0bsp_observation_identity\0"
+    template_name = symbol_names.index(b"bsp_observation_identity_template")
+    identity_name = symbol_names.index(b"bsp_observation_identity", template_name + 1)
+    shstr_offset = 52
+    strtab_offset = shstr_offset + len(section_names)
+    symtab_offset = (strtab_offset + len(symbol_names) + 3) & ~3
+    symtab = bytes(16) + struct.pack("<IIIBBH", template_name, 0x08001000, 28, 0x11, 0, 4)
+    symtab += struct.pack("<IIIBBH", identity_name, 0x24001000, 48, 0x11, 0, 5)
+    rodata_offset = (symtab_offset + len(symtab) + 3) & ~3
+    template_data = struct.pack("<7I", *template_values)
+    bss_offset = rodata_offset + len(template_data)
+    section_offset = (bss_offset + 3) & ~3
+    section_headers = [bytes(40)]
+    section_headers.append(struct.pack("<IIIIIIIIII", section_name_offsets[".shstrtab"], 3, 0, 0,
+                                       shstr_offset, len(section_names), 0, 0, 1, 0))
+    section_headers.append(struct.pack("<IIIIIIIIII", section_name_offsets[".strtab"], 3, 0, 0,
+                                       strtab_offset, len(symbol_names), 0, 0, 1, 0))
+    section_headers.append(struct.pack("<IIIIIIIIII", section_name_offsets[".symtab"], 2, 0, 0,
+                                       symtab_offset, len(symtab), 2, 1, 4, 16))
+    section_headers.append(struct.pack("<IIIIIIIIII", section_name_offsets[".rodata"], 1, 2,
+                                       0x08001000, rodata_offset, len(template_data), 0, 0, 4, 0))
+    section_headers.append(struct.pack("<IIIIIIIIII", section_name_offsets[".bss"], 8, 3,
+                                       0x24001000, bss_offset, 48, 0, 0, 4, 0))
+    ident = b"\x7fELF" + bytes([1, 1, 1]) + bytes(9)
+    header = struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, 0, 0, section_offset, 0,
+                         52, 0, 0, 40, len(section_headers), 1)
+    image = bytearray(ident + header)
+    image.extend(section_names)
+    image.extend(symbol_names)
+    image.extend(bytes(symtab_offset - len(image)))
+    image.extend(symtab)
+    image.extend(bytes(rodata_offset - len(image)))
+    image.extend(template_data)
+    image.extend(bytes(section_offset - len(image)))
+    for section in section_headers:
+        image.extend(section)
+    path.write_bytes(image)
+
+
+def _performance_raw(sample_id, tick_ms, base, module_mask=None):
+    if module_mask is None:
+        module_mask = sum(probe_snapshot_live.OBSERVATION_MODULES.values())
+    fields = probe_snapshot_live.PERFORMANCE_SNAPSHOT_FIELDS
+    raw = {
+        key: ([0] * field.count if field.count > 1 else 0)
+        for key, field in fields.items()
+    }
+    names = bytearray(12 * probe_snapshot_live.RTOS_TASK_CAPACITY)
+    names[:4] = b"IDLE"
+    names[12:23] = b"defaultTask"
+    priorities = bytes([0, 3] + [0] * 10)
+    stacks = [120, 100] + [0] * 10
+    stack_bytes = b"".join(value.to_bytes(2, "little") for value in stacks)
+    generation = sample_id * 2
+    raw.update({
+        "tick_ms": tick_ms,
+        "iwdg_reset_flag": 0,
+        "stats_layout": probe_snapshot_live.RTOS_TASK_STATS_LAYOUT,
+        "stats_generation_before": generation,
+        "stats_generation_after": generation,
+        "stats_sample_id": sample_id,
+        "stats_captured_ms": tick_ms,
+        "stats_count": 2,
+        "stats_task_total": 2,
+        "stats_truncated": 0,
+        "stats_names_words": _pack_u32(names),
+        "stats_runtime": [base * 10, base * 15] + [0] * 10,
+        "stats_priority_words": _pack_u32(priorities),
+        "stats_stack_words": _pack_u32(stack_bytes),
+    })
+    probes = []
+    for index in range(len(probe_snapshot_live.OBSERVATION_PROBE_NAMES)):
+        probes.extend([10 + index, 30 + index, base * 100 + index, base * 10])
+    raw.update({
+        "timing_generation_before": generation,
+        "timing_generation_after": generation,
+        "timing_words": [
+            probe_snapshot_live.OBSERVATION_TIMING_LAYOUT, generation, sample_id,
+            tick_ms, module_mask, *probes,
+        ],
+    })
+    buses = []
+    for index in range(probe_snapshot_live.OBSERVATION_CAN_BUS_COUNT):
+        bus = {key: 0 for key in probe_snapshot_live.OBSERVATION_CAN_FIELDS}
+        if index == 0:
+            bus.update(active=1, tx_ok=base * 5, tx_done=base * 5,
+                       rx_frames=base * 3, status=0)
+        buses.extend(bus[key] for key in probe_snapshot_live.OBSERVATION_CAN_FIELDS)
+    active_mask = 1 if module_mask & probe_snapshot_live.OBSERVATION_MODULES["can"] else 0
+    raw.update({
+        "can_generation_before": generation if active_mask else 0,
+        "can_generation_after": generation if active_mask else 0,
+        "can_words": ([probe_snapshot_live.OBSERVATION_CAN_LAYOUT, generation, sample_id,
+                       tick_ms, active_mask, *buses] if active_mask else [0] * probe_snapshot_live.OBSERVATION_CAN_WORDS),
+    })
+    lcd_values = {key: 0 for key in probe_snapshot_live.OBSERVATION_LCD_FIELDS}
+    lcd_values.update(sample_last_us=10 + base, sample_max_us=20 + base,
+                      update_last_us=30 + base, update_max_us=40 + base,
+                      draw_last_us=50 + base, draw_max_us=60 + base,
+                      busy_us=base * 1000, cycles=base * 2, rows=base * 3,
+                      spi_bytes=base * 4, spi_errors=base, recover_count=base,
+                      init_done=1)
+    lcd_enabled = bool(module_mask & probe_snapshot_live.OBSERVATION_MODULES["lcd"])
+    raw.update({
+        "lcd_generation_before": generation if lcd_enabled else 0,
+        "lcd_generation_after": generation if lcd_enabled else 0,
+        "lcd_words": ([probe_snapshot_live.OBSERVATION_LCD_LAYOUT, generation, sample_id,
+                       tick_ms, module_mask, *[lcd_values[key] for key in probe_snapshot_live.OBSERVATION_LCD_FIELDS]]
+                      if lcd_enabled else [0] * probe_snapshot_live.OBSERVATION_LCD_WORDS),
+    })
+    return raw
+
+
+def _performance_record(sample_id, tick_ms, base, identity):
+    decoded = probe_snapshot_live.decode_performance_snapshot(
+        _performance_raw(sample_id, tick_ms, base), identity
+    )
+    return {"tick_ms": tick_ms, **{key: decoded[key] for key in ("task", "timing", "can", "lcd")}}
+
+
 class RemoteProfileTests(unittest.TestCase):
     def test_rc_input_preserves_raw_z_and_decodes_signed_boundary(self):
         fields = probe_snapshot_live.RC_INPUT_SNAPSHOT_FIELDS
@@ -156,19 +327,30 @@ class RemoteProfileTests(unittest.TestCase):
         fields = probe_snapshot_live.RC_INPUT_SNAPSHOT_FIELDS
         values = {key: 0 for key in fields}
         values.update(mouse_x_lo=0xfe, mouse_x_hi=0xff, key_bitmap_hi=2)
+        identity_info = _test_identity_info()
+        target_words = _identity_words(identity_info["expected"])
         output = io.StringIO()
-        with patch.object(probe_snapshot_live, "resolve_symbol_addresses", return_value={}) as resolve, \
-             patch.object(probe_snapshot_live, "read_snapshot", return_value=values) as read, \
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        output_root = temporary.name
+        with patch.object(probe_snapshot_live, "resolve_observation_identity", return_value=identity_info), \
+             patch.object(probe_snapshot_live, "resolve_symbol_addresses", return_value={}) as resolve, \
+             patch.object(probe_snapshot_live, "read_verified_snapshot", return_value=(values, target_words)) as read, \
              contextlib.redirect_stdout(output):
-            result = probe_snapshot_live.main(["--rc-input", "--elf", __file__, "--samples", "2", "--interval", "0"])
+            result = probe_snapshot_live.main([
+                "--rc-input", "--elf", __file__, "--samples", "2", "--interval", "0",
+                "--output-root", output_root,
+            ])
         self.assertEqual(result, 0)
         self.assertIs(resolve.call_args.args[3], fields)
-        self.assertIs(read.call_args.args[4], fields)
-        rows = [json.loads(line) for line in output.getvalue().splitlines()]
-        self.assertEqual([row["status"] for row in rows], ["baseline", "running"])
-        self.assertEqual(rows[0]["key_bitmap"], 512)
-        self.assertEqual(rows[0]["mouse_x"], -2)
-        self.assertEqual(rows[0]["mouse_x_hi"], 255)
+        self.assertIs(read.call_args.args[6], fields)
+        session = next((Path(output_root) / "observations").iterdir())
+        rows = [json.loads(line) for line in (session / "raw.jsonl").read_text(encoding="utf-8").splitlines()]
+        samples = [row for row in rows if row["type"] == "sample"]
+        self.assertEqual([row["status"] for row in samples], ["baseline", "running"])
+        self.assertEqual(samples[0]["decoded"]["key_bitmap"], 512)
+        self.assertEqual(samples[0]["decoded"]["mouse_x"], -2)
+        self.assertEqual(samples[0]["decoded"]["mouse_x_hi"], 255)
 
     def test_rc_input_reads_byte_pairs_and_decodes_signed_mouse(self):
         fields = probe_snapshot_live.RC_INPUT_SNAPSHOT_FIELDS
@@ -307,6 +489,240 @@ class FakeOpenOCDServer:
 
 
 class ProbeSnapshotLiveTests(unittest.TestCase):
+    def test_summary_and_adc_help_use_complete_chinese_text(self):
+        summary, complete = probe_snapshot_live._short_summary(
+            [{"status": "running"}],
+            {"profile_name": "bench_safe", "role_name": "single", "build_id": "abc"},
+            None,
+        )
+        self.assertTrue(complete)
+        self.assertIn("观测摘要", summary)
+        self.assertIn("原始样本数：1", summary)
+        self.assertNotIn("???", summary)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit):
+            probe_snapshot_live.main(["--help"])
+        self.assertIn("读取固定 ADC 诊断字段", output.getvalue())
+
+    def test_performance_window_skips_missed_samples_without_catch_up(self):
+        identity_info = _test_identity_info()
+
+        class FakeClock:
+            now = 0.0
+
+            def monotonic(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.now += seconds
+
+        clock = FakeClock()
+        target_words = _identity_words(identity_info["expected"])
+        reads = []
+
+        def slow_snapshot(*_args):
+            clock.now += 2.5
+            reads.append(clock.now)
+            return {}, target_words
+
+        with tempfile.TemporaryDirectory() as output_root:
+            with patch.object(probe_snapshot_live, "resolve_observation_identity",
+                              return_value=identity_info), \
+                 patch.object(probe_snapshot_live, "resolve_symbol_addresses", return_value={}), \
+                 patch.object(probe_snapshot_live, "read_verified_snapshot", side_effect=slow_snapshot), \
+                 patch.object(probe_snapshot_live, "decode_performance_snapshot",
+                              return_value={"tick_ms": 100}), \
+                 patch.object(probe_snapshot_live, "classify_change", return_value="running"), \
+                 patch.object(probe_snapshot_live, "summarize_performance",
+                              return_value=("complete\n", True)), \
+                 patch.object(probe_snapshot_live.time, "monotonic", side_effect=clock.monotonic), \
+                 patch.object(probe_snapshot_live.time, "sleep", side_effect=clock.sleep), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                result = probe_snapshot_live.main([
+                    "--performance", "--duration", "5", "--interval", "1", "--elf", __file__,
+                    "--output-root", output_root,
+                ])
+            self.assertEqual(result, 0)
+            self.assertEqual(reads, [2.5, 5.5])
+            session = next((Path(output_root) / "observations").iterdir())
+            samples = [
+                json.loads(line) for line in (session / "raw.jsonl").read_text(encoding="utf-8").splitlines()
+                if json.loads(line)["type"] == "sample"
+            ]
+            self.assertEqual([item["missed_schedule_slots_before_sample"] for item in samples], [0, 2])
+
+    def test_performance_window_rejects_duration_outside_limits(self):
+        for duration in ("4.99", "300.01"):
+            with tempfile.TemporaryDirectory() as output_root:
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                    probe_snapshot_live.main([
+                        "--performance", "--duration", duration, "--elf", __file__,
+                        "--output-root", output_root,
+                    ])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertFalse((Path(output_root) / "observations").exists())
+
+    def test_identity_record_validates_fixed_layout_and_build_id_words(self):
+        expected = _test_identity_info()["expected"]
+        actual = probe_snapshot_live.decode_identity_words(_identity_words(expected))
+        self.assertEqual(actual["build_id_words"], expected["build_id_words"])
+        self.assertEqual(actual["module_mask"], expected["module_mask"])
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.decode_identity_words(_identity_words(expected)[:-1])
+        invalid = _identity_words(expected)
+        invalid[0] ^= 1
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.decode_identity_words(invalid)
+
+    def test_offline_identity_resolver_reads_build_id_template_and_ram_layout(self):
+        identity = _test_identity_info()["expected"]
+        template = [identity[key] for key in (
+            "magic", "version", "size_bytes", "layout", "profile", "role", "module_mask",
+        )]
+        with tempfile.TemporaryDirectory() as temporary:
+            elf = Path(temporary) / "identity.elf"
+            _write_identity_elf(elf, template)
+            gdb_output = "\n".join((
+                "identity_words=0x24001000", "ram_start=0x24000000",
+                "ram_end=0x24020000", "template_address=0x8001000",
+            ))
+            readelf_result = subprocess.CompletedProcess([], 0, f"Build ID: {identity['build_id']}\n", "")
+            with patch.object(probe_snapshot_live.subprocess, "run", return_value=readelf_result), \
+                 patch.object(probe_snapshot_live, "_run_gdb", return_value=gdb_output):
+                resolved = probe_snapshot_live.resolve_observation_identity("gdb", "readelf", str(elf), 1.0)
+            self.assertEqual(resolved["expected"]["build_id"], identity["build_id"])
+            self.assertEqual(resolved["expected"]["module_mask"], identity["module_mask"])
+            self.assertEqual(resolved["identity_address"], 0x24001000)
+
+            invalid_template = list(template)
+            invalid_template[3] ^= 1
+            _write_identity_elf(elf, invalid_template)
+            with patch.object(probe_snapshot_live.subprocess, "run", return_value=readelf_result), \
+                 patch.object(probe_snapshot_live, "_run_gdb", return_value=gdb_output), \
+                 self.assertRaisesRegex(probe_snapshot_live.ProbeIOError, "layout"):
+                probe_snapshot_live.resolve_observation_identity("gdb", "readelf", str(elf), 1.0)
+
+    def test_target_identity_mismatch_stops_before_business_field_reads(self):
+        identity_info = _test_identity_info()
+        wrong_words = _identity_words(identity_info["expected"])
+        wrong_words[9] = 2
+        identity_address = identity_info["identity_address"]
+        business_address = identity_address + 0x100
+        fields = {"tick_ms": probe_snapshot_live.SnapshotField("uwTick", "mdw", 32)}
+        addresses = {"tick_ms": business_address}
+        server = FakeOpenOCDServer(
+            state_responses=["running"] * 8,
+            addresses={"identity_words": identity_address, "tick_ms": business_address},
+            values={"identity_words": wrong_words, "tick_ms": 99},
+        )
+        try:
+            with self.assertRaisesRegex(probe_snapshot_live.ProbeIOError, "does not match"):
+                probe_snapshot_live.read_verified_snapshot(
+                    addresses, identity_address, identity_info["expected"],
+                    "127.0.0.1", server.port, 1.0, fields, identity_info["ram_bounds"],
+                )
+        finally:
+            server.close()
+        self.assertEqual(server.commands[0], "targets")
+        self.assertEqual(server.commands[1], f"mdw 0x{identity_address:08x} 12")
+        self.assertNotIn(f"mdw 0x{business_address:08x} 1", server.commands)
+
+    def test_performance_decoder_unpacks_all_four_groups_and_publication_time(self):
+        identity = _test_identity_info()["expected"]
+        decoded = probe_snapshot_live.decode_performance_snapshot(
+            _performance_raw(3, 15000, 7), identity
+        )
+        self.assertEqual(decoded["task"]["sample_id"], 3)
+        self.assertEqual(decoded["task"]["captured_ms"], 15000)
+        self.assertEqual(decoded["timing"]["sample_id"], 3)
+        self.assertEqual(decoded["timing"]["probes"]["motor_task"]["calls"], 70)
+        self.assertEqual(decoded["can"]["buses"][0]["tx_ok"], 35)
+        self.assertEqual(decoded["lcd"]["values"]["draw_last_us"], 57)
+
+    def test_performance_decoder_distinguishes_unpublished_and_disabled_groups(self):
+        identity = _test_identity_info()["expected"]
+        raw = _performance_raw(1, 1000, 1)
+        raw.update(stats_generation_before=0, stats_generation_after=0,
+                   stats_sample_id=0, stats_captured_ms=0, stats_count=0,
+                   stats_task_total=0, stats_truncated=0)
+        raw["timing_generation_before"] = raw["timing_generation_after"] = 0
+        raw["timing_words"] = [0] * probe_snapshot_live.OBSERVATION_TIMING_WORDS
+        decoded = probe_snapshot_live.decode_performance_snapshot(raw, identity)
+        self.assertEqual(decoded["task"]["status"], "not-published")
+        self.assertEqual(decoded["timing"]["status"], "not-published")
+
+        mask = identity["module_mask"] & ~probe_snapshot_live.OBSERVATION_MODULES["can"]
+        raw = _performance_raw(2, 6000, 2, module_mask=mask)
+        disabled = dict(identity, module_mask=mask)
+        decoded = probe_snapshot_live.decode_performance_snapshot(raw, disabled)
+        self.assertEqual(decoded["can"]["status"], "not-enabled")
+        self.assertEqual(decoded["can"]["buses"], [])
+
+    def test_performance_summary_ignores_duplicate_publication_and_recomputes_from_jsonl(self):
+        identity = _test_identity_info()["expected"]
+        first_raw = _performance_raw(1, 1000, 10)
+        duplicate_raw = _performance_raw(1, 3000, 50)
+        last_raw = _performance_raw(2, 6000, 20)
+        decoded = [probe_snapshot_live.decode_performance_snapshot(raw, identity)
+                   for raw in (first_raw, duplicate_raw, last_raw)]
+        rows = []
+        for index, item in enumerate(decoded):
+            rows.append({"type": "sample", "tick_ms": item["tick_ms"], "decoded": item,
+                         "raw_words": (first_raw, duplicate_raw, last_raw)[index]})
+        with tempfile.TemporaryDirectory() as temporary:
+            raw_path = Path(temporary) / "raw.jsonl"
+            raw_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            saved = [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()]
+        recompute_records = [{"tick_ms": row["decoded"]["tick_ms"], **row["decoded"]} for row in saved]
+        summary, complete = probe_snapshot_live.summarize_performance(recompute_records, identity)
+        self.assertTrue(complete)
+        self.assertIn("40.0%", summary)
+        self.assertIn('"tx_ok": 50', summary)
+        self.assertIn("窗口增加 20", summary)
+        self.assertEqual(probe_snapshot_live._counter_delta(0xFFFFFFFE, 3), 5)
+
+    def test_performance_summary_rejects_one_record_or_stale_publication(self):
+        identity = _test_identity_info()["expected"]
+        decoded = probe_snapshot_live.decode_performance_snapshot(
+            _performance_raw(1, 1000, 1), identity
+        )
+        summary, complete = probe_snapshot_live.summarize_performance(
+            [{"tick_ms": 13000, **decoded}], identity
+        )
+        self.assertFalse(complete)
+        self.assertIn("不可计算", summary)
+
+    def test_observation_session_saves_identity_failure_and_interruption(self):
+        with tempfile.TemporaryDirectory() as output_root:
+            with patch.object(probe_snapshot_live, "resolve_observation_identity",
+                              side_effect=probe_snapshot_live.ProbeIOError("no Build ID")), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                result = probe_snapshot_live.main([
+                    "--elf", __file__, "--output-root", output_root,
+                ])
+            self.assertEqual(result, 2)
+            session = next((Path(output_root) / "observations").iterdir())
+            self.assertIn("no Build ID", (session / "summary.txt").read_text(encoding="utf-8"))
+            rows = [json.loads(line) for line in (session / "raw.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(rows[-1]["type"], "error")
+
+        identity_info = _test_identity_info()
+        target_words = _identity_words(identity_info["expected"])
+        with tempfile.TemporaryDirectory() as output_root:
+            with patch.object(probe_snapshot_live, "resolve_observation_identity", return_value=identity_info), \
+                 patch.object(probe_snapshot_live, "resolve_symbol_addresses", return_value={}), \
+                 patch.object(probe_snapshot_live, "read_verified_snapshot", side_effect=KeyboardInterrupt), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                result = probe_snapshot_live.main([
+                    "--performance", "--duration", "5", "--interval", "10", "--elf", __file__,
+                    "--output-root", output_root,
+                ])
+            self.assertEqual(result, 130)
+            session = next((Path(output_root) / "observations").iterdir())
+            rows = [json.loads(line) for line in (session / "raw.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(rows[-1]["type"], "interrupted")
+            self.assertTrue((session / "summary.txt").is_file())
     def test_rtos_profile_unpacks_stack_runtime_and_fixed_task_names(self):
         addresses, values = _rtos_fixture()
         decoded = probe_snapshot_live.decode_rtos_snapshot(values)
@@ -399,17 +815,27 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
 
     def test_init_cli_selects_fixed_profile(self):
         fields = probe_snapshot_live.INIT_SNAPSHOT_FIELDS
-        output = io.StringIO()
-        with patch.object(probe_snapshot_live, "resolve_symbol_addresses", return_value=TEST_INIT_ADDRESSES) as resolve, \
-             patch.object(probe_snapshot_live, "read_snapshot", return_value=TEST_INIT_VALUES) as read, \
-             contextlib.redirect_stdout(output):
-            result = probe_snapshot_live.main(["--init", "--elf", __file__, "--samples", "2", "--interval", "0"])
+        identity_info = _test_identity_info()
+        target_words = _identity_words(identity_info["expected"])
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        output_root = temporary.name
+        with patch.object(probe_snapshot_live, "resolve_observation_identity", return_value=identity_info), \
+             patch.object(probe_snapshot_live, "resolve_symbol_addresses", return_value=TEST_INIT_ADDRESSES) as resolve, \
+             patch.object(probe_snapshot_live, "read_verified_snapshot", return_value=(TEST_INIT_VALUES, target_words)) as read, \
+             contextlib.redirect_stdout(io.StringIO()):
+            result = probe_snapshot_live.main([
+                "--init", "--elf", __file__, "--samples", "2", "--interval", "0",
+                "--output-root", output_root,
+            ])
         self.assertEqual(result, 0)
         self.assertIs(resolve.call_args.args[3], fields)
-        self.assertIs(read.call_args.args[4], fields)
-        rows = [json.loads(line) for line in output.getvalue().splitlines()]
-        self.assertEqual(rows[-1]["init_failure_count"], 3)
-        self.assertEqual(rows[-1]["status"], "running")
+        self.assertIs(read.call_args.args[6], fields)
+        session = next((Path(output_root) / "observations").iterdir())
+        rows = [json.loads(line) for line in (session / "raw.jsonl").read_text(encoding="utf-8").splitlines()]
+        samples = [row for row in rows if row["type"] == "sample"]
+        self.assertEqual(samples[-1]["decoded"]["init_failure_count"], 3)
+        self.assertEqual(samples[-1]["status"], "running")
 
     def test_gdb_command_resolves_addresses_offline_without_target_connection(self):
         command = probe_snapshot_live.build_symbol_command("arm-none-eabi-gdb", "firmware.elf")

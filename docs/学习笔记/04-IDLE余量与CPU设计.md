@@ -108,7 +108,7 @@ __weak unsigned long getRunTimeCounterValue(void)
 |---|---|---|
 | 计时回调是空实现 | 所有任务占用率恒为 0 | 工程模板里 `getRunTimeCounterValue()` 是 `return 0` 的弱符号。本工程的 **CORE-05** 就是这样：宏开了、数据全是 0。修法：接 DWT |
 | 计数器回绕 | 隔几十秒读两次，算出的增量是错的 | 32bit 周期计数器 480MHz 下 **8.94s 就回绕**；把它除以 1000 变成"约 2µs 单位"后，累计值 4295s 才回绕，跨分钟比较才安全 |
-| 任务顺序会变 | 某次测量某个任务突然占 99% | `uxTaskGetSystemState()` 返回的任务顺序不保证稳定；**必须按任务名配对**再求差，不能按下标。本工程工具 `tools/probe_snapshot.py` 为此专门修过一次 |
+| 任务顺序会变 | 某次测量某个任务突然占 99% | `uxTaskGetSystemState()` 返回的任务顺序不保证稳定；**必须按任务名配对**再求差，不能按下标。本工程工具 `tools/probe_snapshot_live.py --performance` 为此专门修过一次 |
 
 ### 3.3 一个重要细节：中断时间算在谁头上
 
@@ -259,8 +259,8 @@ FreeRTOS 允许注册 `vApplicationIdleHook()`，在 IDLE 里做后台工作（�
 | 想知道什么 | 看哪里 |
 |---|---|
 | 各任务占用率 / IDLE 余量 | `lcd_stats_runtime[]`、`lcd_stats_name[]`（Live Watch 直接挂变量） |
-| 每 5s 的汇总行 | RTT 里的 `[cpu] …`（用 `python tools\rtt_dump.py --seconds 20` 抓） |
-| 优化前后对比 | `python tools\probe_snapshot.py --seconds 30` |
+| 每 5s 的汇总行 | RTT 里的 `[cpu] …`（用 `VSCode任务“RTT receive only (OpenOCD native)”` 抓） |
+| 优化前后对比 | `py -3 tools\probe_snapshot_live.py --performance --duration 30 --elf build\wsl\bench-debug\Basic_Framework_MC02_bench_safe.elf` |
 | 分段耗时 | `motor_prof_*` / `dji_prof_*` / `ins_prof_*` / `can_prof_*` / `lcd_prof_*` 这些探针变量 |
 | 相关历史与数据 | `docs/代码审查报告_MC-02.md` 的“CPU 饱和排查”章节 |
 
@@ -273,3 +273,9 @@ FreeRTOS 允许注册 `vApplicationIdleHook()`，在 IDLE 里做后台工作（�
 R25-12 的 `bench_safe` 固件关闭加热、UI和执行器；通过生产 CAN 队列和生产 DJI 解码器的 WSL 压力测试检查多总线满队列解析。最终的栈余量和运行最大值以 [任务票据](../workflow/tickets/R25-12.md) 中的板端记录为准；若任务表截断或发布版本不一致，不能用该次快照做验收。
 
 本轮完整快照为10/10任务，`defaultTask` 历史最少余量48/128 word（192字节），是观察到的最低值；其他任务和分段最大值见票据。它表示该固件、本次运行以来水位填充值的最低剩余量，不代表其余所有路径都已执行，也没有通用“安全百分比”作为验收线。遇到低水位时，应先确认任务创建深度、具体调用栈和实际负载，再用有针对性的压力场景复测；不能只因一次最大值就推断WCET或随意改栈。
+
+## MC02-0100：把观测窗口和证据一起保存
+
+当前运行态性能入口是 `tools/probe_snapshot_live.py --performance`。默认观测30秒、每秒读取一次，写入独立会话目录中的 `raw.jsonl` 和 `summary.txt`。开始读取任务与计时字段前，工具先核对 ELF Build ID、固件 RAM 身份记录及布局；旧固件缺少身份时会停止，不猜测字段地址。
+
+任务按名称配对，窗口至少需要两份不同发布编号。FreeRTOS 运行计数会回绕，工具按32位增量解释，但结果只是本次场景观测；DWT最大值不是形式化 WCET，任务运行计数比例也不是精确 CPU 百分比。详细限制和固定字段见 [MC02-0100任务记录](../workflow/tickets/MC02-0100.md)。

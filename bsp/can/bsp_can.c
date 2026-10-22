@@ -726,6 +726,36 @@ void CANGetBusStats(FDCAN_HandleTypeDef *hcan, CAN_BusStats_t *stats)
     *stats = bus->bus;
 }
 
+uint8_t CANGetObservationCounters(uint8_t bus_index, CAN_ObservationCounters_t *counters)
+{
+    if (bus_index >= DEVICE_CAN_CNT || counters == NULL)
+        return 0u;
+
+    CANBusState_t *bus = &can_bus[bus_index];
+    CAN_ObservationCounters_t candidate;
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    candidate.active = can_service_started ? 1u : 0u;
+    candidate.tx_ok = bus->tx.tx_ok;
+    candidate.tx_drop = bus->tx.tx_drop;
+    candidate.tx_error = bus->tx.tx_error;
+    candidate.tx_done = bus->tx.tx_done;
+    candidate.tx_fifo_empty_events = bus->tx.tx_fifo_empty_events;
+    candidate.busoff = bus->bus.busoff;
+    candidate.busoff_recover = bus->bus.busoff_recover;
+    candidate.rx_lost = bus->bus.rx_lost;
+    candidate.rx_frames = bus->bus.rx_frames;
+    candidate.rx_queue_drop = bus->rxq_drop;
+    candidate.rx_queue_peak = bus->rxq_peak;
+    candidate.tx_error_count = bus->bus.tx_error_count;
+    candidate.rx_error_count = bus->bus.rx_error_count;
+    candidate.status = (uint32_t)bus->bus.status;
+    if (primask == 0u)
+        __enable_irq();
+    *counters = candidate;
+    return 1u;
+}
+
 /**
  * @brief CAN 总线健康检查 + BusOff 恢复
  *        空总线(没有从机应答)会让 TEC 迅速累计到 256 进入 BusOff, 而 BusOff 后

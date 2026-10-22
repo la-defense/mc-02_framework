@@ -490,15 +490,17 @@ VSCode `ctrl+,`进入设置，通过`搜索`找到cortex-debug插件的设置。
 
 > **如果你希望在编译之后立刻启动调试**，不要分两次点击，你可以在`launch.json`中添加一个`prelaunchtask`（意为在启动调试之前要运行的任务），将他设置为我们在[编译章节](###编译)介绍的构建任务。我们已经提供了这个选项，取消注释即可使用。
 >
-> 如果你想在VSCode中也使用segger RTT viewer的功能（即bsp_log提供的日志功能），请参阅[附录2](##附录2：在VSCode中启用SEGGER RTT日志)。
+> 当前工程的RTT日志和只读性能观测入口见下文“MC-02运行态观测”。旧 RTT Viewer 配置仅作历史背景，不代表当前任务配置。
 >
 > 如果想直接下载代码不想调试，参阅[附录4](##附录4：VSCode直接烧录代码)。
 
-### RTT Viewer日志功能
+### MC-02运行态观测
 
-> 2023/07/23：补充，Cortex-Debug插件最近似乎集成了RTT Viewer的支持，只需要设置好RTT client的路径，便可以一键启动RTT终端，查看串行调试器中发送的内容。还支持以一定的格式将RTT发来的内容进行可视化（示波器），但支持程度不如Ozone。可以自行查看插件的wiki和文档进行配置。
+当前 `.vscode/tasks.json` 提供独立任务“RTT receive only (OpenOCD native)”。它从匹配 ELF 的 `_SEGGER_RTT` 符号取得控制块地址，启动 OpenOCD 原生 RTT 服务，客户端只接收字节；不依赖 J-Link Viewer，也不直接读写 RTT 环形缓冲。使用前关闭其他占用同一 DAPLink 的调试会话。
 
-本框架添加了vscode下Segger RTT client的支持。在`.vscode/task.json`中已经添加了启动rtt viewer client的任务。你也可以将此任务作为附加启动任务和调试一起启动，方便查看日志。要使用日志，请包含`bsp_log.h`。注意，需要将jlink的安装目录添加到环境变量中。
+任务、DWT、CAN、LCD 的性能快照使用 `tools/probe_snapshot_live.py --performance`。默认窗口30秒，开始读取业务字段前核对板上 Build ID、身份记录和 RAM 布局；失败时保存部分 JSONL 并以非零状态退出。构建身份匹配不等于整片 Flash 校验。详细参数见 [MC02-0100任务记录](../workflow/tickets/MC02-0100.md)。
+
+下面的旧 RTT Viewer 说明、Makefile 和 F4 命令仅供历史阅读，当前 H723 工作流以本节、根目录 README、CMake 预设及 `.vscode/` 活动配置为准。
 
 ### 更好的编辑体验
 
@@ -713,13 +715,11 @@ CPU选项卡可以查看CPU的寄存器。
 
 windows菜单搜索J-link license manager，点击添加license，将注册机生成的五个license依次复制黏贴并添加到的license manager中即可。
 
-## 附录2：在VSCode中启用SEGGER RTT日志
+## 附录2：旧 RTT Viewer 流程（历史）
 
-若使用Jlink进行调试，只需要在开始调试之前把`log`任务启动，便可以在终端中看到jlink rtt viewer的日志输出。
+以下说明记录的是上游 J-Link／RTT Viewer 工作流，不适用于当前 MC-02 H723 配置。当前使用方式见前文[MC-02运行态观测](#mc-02运行态观测)：VSCode 任务通过 OpenOCD 原生 RTT 服务只接收日志；性能数据使用 `tools/probe_snapshot_live.py`，先核对匹配 ELF 和固件身份。
 
-若使用daplink/cmsis-dap调试，**请使用Jlink调试任务启动**，并且在**调试任务启动之后再打开`log`任务**。
-
-`bsp_log.h`中提供了不同的日志输出接口，包括封装好的三种层级的日志（info warning error），和用户可以自定义输出格式的`PrintLog()`。还提供了一些简单的将浮点数据转化为字符串的函数方便进行日志输出。
+当前日志接口是固定目录类型化事件，见 [学习笔记18](../学习笔记/18-一条日志的旅程.md)；旧 `PrintLog()` 和旧格式化接口已退役。
 
 ## 附录3：Makefile指令介绍
 
