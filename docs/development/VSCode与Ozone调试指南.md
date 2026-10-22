@@ -1,6 +1,21 @@
 # VSCode+Ozone开发STM32的方法
 
-> **适用说明：**本指南源自 2023 年上游 basic_framework，包含 STM32F4 和旧工具链的设置示例；当前工程主控为 STM32H723。这里的概念和 Ozone 操作可作参考，构建、烧录目标、调试器配置和硬件安全要求以根目录 README、`.vscode/`、当前 CMake/Makefile 及 `.Doc/TODO.md` 为准。不要直接照搬 F4 的引脚、链接脚本或下载命令。
+> **适用说明：**本指南源自 2023 年上游 basic_framework，包含 STM32F4 和旧工具链的设置示例；当前工程主控为 STM32H723。这里的概念和 Ozone 操作可作参考，当前构建只使用 CMake；构建、烧录目标、调试器配置和硬件安全要求以根目录 README、`.vscode/`、CMake 预设及 `.Doc/TODO.md` 为准。不要直接照搬 F4 的引脚、链接脚本或下载命令。
+
+## 当前 MC-02 H723 构建方式
+
+保留 Windows VSCode 窗口时，任务通过参数数组调用 `wsl.exe`，在 WSL 中运行 CMake 和 ARM GCC。默认任务构建加热关闭的 `bench_safe` Debug：
+
+```sh
+cmake --preset bench-debug
+cmake --build --preset bench-debug
+```
+
+正式角色预设为 `robot-single-*`、`robot-chassis-*` 和 `robot-gimbal-*`，后缀 `debug` 表示 Debug，`rel` 表示 RelWithDebInfo。预设固定使用 Ninja，并把产物放在 `build/wsl/<预设名>/`，例如 `build/wsl/robot-chassis-debug/Basic_Framework_MC02_chassis_robot.elf`。VSCode 的默认下载任务只使用 `bench-debug` 产物；选择其他角色调试时，应同步选择匹配的 ELF 和硬件配置。
+
+源码由 `cmake/mc02_firmware_sources.cmake` 显式登记。新增固件 `.c` 文件必须加入对应清单；未登记文件不会自动编入。`MC02_BOARD_ROLE` 选择唯一板角色，`MC02_VISION_TRANSPORT` 选择 USB VCP 或备用 UART，不能通过额外编译宏覆盖预设。
+
+旧版 Makefile 章节从下一节开始保留作历史阅读，不能用于当前 H723 工程。
 
 <center><b><font face="楷体">neozng1@hnu.edu.cn</font></b></center>
 

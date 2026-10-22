@@ -1,0 +1,26 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {"major": 3, "minor": 21, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "host-debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../../build/wsl/host-debug",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug"}
+    },
+    {
+      "name": "host-release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../../build/wsl/host-release",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
+    }
+  ],
+  "buildPresets": [
+    {"name": "host-debug", "configurePreset": "host-debug", "jobs": 4},
+    {"name": "host-release", "configurePreset": "host-release", "jobs": 4}
+  ],
+  "testPresets": [
+    {"name": "host-debug", "configurePreset": "host-debug", "output": {"outputOnFailure": true}},
+    {"name": "host-release", "configurePreset": "host-release", "output": {"outputOnFailure": true}}
+  ]
+}

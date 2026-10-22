@@ -17,9 +17,13 @@
 #include "referee_task.h"
 #include "rm_referee.h"
 #include "lcd_referee_rows.h"
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
 #include "chassis.h"
+#endif
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
 #include "gimbal.h"
 #include "shoot.h"
+#endif
 #include "bsp_can.h"
 #include "fdcan.h"
 #include "bmi088.h"
@@ -574,29 +578,40 @@ static void draw_page3_static(void)
 static void draw_page3_values(void)
 {
     char buf[48];
-    Chassis_Motor_Summary_t cs;
-    Gimbal_Motor_Summary_t gs;
-    Shoot_Motor_Summary_t ss;
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
+    Chassis_Motor_Summary_t cs = {0};
     Chassis_GetMotorSummary(&cs);
+#else
+    // 当前角色不编译底盘应用，用占位避免LCD引用未选择的驱动入口。
+    draw_value_ascii(0, "--");
+    draw_value_ascii(3, "--");
+#endif
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
+    Gimbal_Motor_Summary_t gs = {0};
+    Shoot_Motor_Summary_t ss = {0};
     Gimbal_GetMotorSummary(&gs);
     Shoot_GetMotorSummary(&ss);
 
-    snprintf(buf, sizeof(buf), "%s %s %s %s", cs.lf.online ? "1" : "0", cs.rf.online ? "1" : "0",
-             cs.lb.online ? "1" : "0", cs.rb.online ? "1" : "0");
-    draw_value_ascii(0, buf);
-
     snprintf(buf, sizeof(buf), "Y:%s P:%s", gs.yaw.online ? "1" : "0", gs.pitch.online ? "1" : "0");
     draw_value_ascii(1, buf);
-
     snprintf(buf, sizeof(buf), "FL:%s FR:%s LDR:%s", ss.friction_l.online ? "1" : "0",
              ss.friction_r.online ? "1" : "0", ss.loader.online ? "1" : "0");
     draw_value_ascii(2, buf);
-
-    snprintf(buf, sizeof(buf), "spd:%ld cur:%d", (long)cs.lf.speed_aps, (int)cs.lf.current);
-    draw_value_ascii(3, buf);
-
     snprintf(buf, sizeof(buf), "spd:%ld cur:%d", (long)gs.yaw.speed_aps, (int)gs.yaw.current);
     draw_value_ascii(4, buf);
+#else
+    // 当前角色不编译云台和发射应用，显示占位并保持其余总线诊断可用。
+    draw_value_ascii(1, "--");
+    draw_value_ascii(2, "--");
+    draw_value_ascii(4, "--");
+#endif
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
+    snprintf(buf, sizeof(buf), "%s %s %s %s", cs.lf.online ? "1" : "0", cs.rf.online ? "1" : "0",
+             cs.lb.online ? "1" : "0", cs.rb.online ? "1" : "0");
+    draw_value_ascii(0, buf);
+    snprintf(buf, sizeof(buf), "spd:%ld cur:%d", (long)cs.lf.speed_aps, (int)cs.lf.current);
+    draw_value_ascii(3, buf);
+#endif
 
     CAN_Status_t c1, c2, c3;
     CANGetStatus(&hfdcan1, &c1);

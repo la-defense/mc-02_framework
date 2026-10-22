@@ -4,7 +4,18 @@
 
 主要改动有：修改BSP层，如设置FDCAN兼容CAN2.0标准的设置、适配M7内核的DSP库等。
 
-目前还没适配：Flash模块和USB模块，因此在Makefile里去掉了相关编译选项。
+当前 H723 固件只使用 CMake 入口；源码清单、板卡角色和视觉传输方式都由 CMake 配置明确选择。Windows VSCode 任务通过 WSL 调用 CMake，ARM 产物位于 `build/wsl/<预设名>/`。
+
+## 当前固件构建入口
+
+需要 WSL 中安装 CMake 3.21 以上、Ninja 和 `arm-none-eabi-gcc`。默认安全构建为 `bench_safe`，加热关闭：
+
+```sh
+cmake --preset bench-debug
+cmake --build --preset bench-debug
+```
+
+机器人单板、底盘板和云台板使用 `robot-single-debug`、`robot-chassis-debug`、`robot-gimbal-debug`；Release 证据使用名称末尾为 `-rel` 的 RelWithDebInfo 预设。主机测试预设位于 `tests/host/`。板角色与视觉 USB／UART 选择见 [BUILD-02 任务记录](docs/workflow/tickets/BUILD-02.md) 和 [VSCode／Ozone 指南](docs/development/VSCode与Ozone调试指南.md)。历史 Makefile 教程仅作为上游资料，不是当前构建方法。
 
 原始仓库的Gitee链接：https://gitee.com/hnuyuelurm/basic_framework
 
@@ -263,7 +274,7 @@ app、module和bsp都有相应的rtos任务。其中bsp为创建任务提供了�
 
 ### IDE?
 
-使用**VSCode**作为“IDE”，也支持 Clion/Visual Studio 等工具（需要自行配置）。工具链与调试参考[VSCode 与 Ozone 调试指南](docs/development/VSCode与Ozone调试指南.md)；具体构建和调试目标以本仓库 CMake、Makefile、`.vscode/` 配置为准。
+使用**VSCode**作为“IDE”，也支持 Clion/Visual Studio 等工具（需要自行配置）。Windows VSCode 保持编辑和调试界面，通过任务调用 WSL 构建；工具链与调试参考[VSCode 与 Ozone 调试指南](docs/development/VSCode与Ozone调试指南.md)，具体目标以本仓库 CMake 预设和 `.vscode/` 配置为准。
 
 `Git`集成与gitlens/gitgraph/githistory额外插件补充让版本管理和协作从未如此简单，`live share`把你的伙伴们聚在一起集思广益，一同对抗困难的bug。更多好用的插件、特性和开发技巧请参考"**如何使用本框架**"章节。
 

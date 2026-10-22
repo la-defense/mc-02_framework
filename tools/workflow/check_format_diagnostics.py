@@ -18,16 +18,12 @@ UI = 'UICharDraw((String_Data_t *)0,"abc",0u,0u,0u,1u,1u,0u,0u,'
 
 
 def policy_flags() -> list[str]:
-    """从共用CMake声明读取选项，并检查旧Makefile没有少加或改变选项。"""
+    """从唯一固件 CMake 声明读取自有源码使用的格式检查选项。"""
     cmake = (ROOT / "cmake/mc02_format_diagnostics.cmake").read_text(encoding="utf-8")
     match = re.search(r"set\(MC02_FORMAT_FLAGS\s+([^)]*)\)", cmake)
     if match is None:
         raise RuntimeError("MC02_FORMAT_FLAGS is missing")
     flags = match.group(1).split()
-    make = (ROOT / "Makefile").read_text(encoding="utf-8")
-    match = re.search(r"^MC02_FORMAT_FLAGS\s*=\s*(.+)$", make, re.M)
-    if match is None or flags != match.group(1).split():
-        raise RuntimeError("Makefile and CMake format flags differ")
     return flags
 
 

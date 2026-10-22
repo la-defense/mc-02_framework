@@ -17,8 +17,9 @@ import time
 
 ROOT_FILES = {
     "CMakeLists.txt",
-    # 配置阶段的格式正反例读取这两份文件，隔离副本也必须提供。
-    "Makefile",
+    "cmake/arm-none-eabi-toolchain.cmake",
+    "cmake/mc02_firmware_sources.cmake",
+    "CMakePresets.json",
     "tools/workflow/check_format_diagnostics.py",
     "STM32H723VGTx_FLASH.ld",
     "startup_stm32h723xx.s",
@@ -108,7 +109,7 @@ class Checker:
         if result.returncode:
             raise CheckFailure(f"git ls-files failed: {result.stderr.decode(errors='replace')}")
 
-        paths = []
+        paths = set()
         for raw_path in result.stdout.split(b"\0"):
             if not raw_path:
                 continue
@@ -116,7 +117,11 @@ class Checker:
             relevant = relative in ROOT_FILES or relative.startswith(SOURCE_PREFIXES)
             source_path = self.root / Path(*PurePosixPath(relative).parts)
             if relevant and source_path.is_file():
-                paths.append(relative)
+                paths.add(relative)
+        # 配置入口在当前工作副本中新建时也要纳入隔离回归，无需先暂存文件。
+        for relative in ROOT_FILES:
+            if (self.root / Path(*PurePosixPath(relative).parts)).is_file():
+                paths.add(relative)
         return sorted(paths)
 
     def create_snapshot(self) -> None:
@@ -137,8 +142,12 @@ class Checker:
             "-S", str(self.source),
             "-B", str(build_dir),
             "-G", self.args.generator,
+            f"-DCMAKE_TOOLCHAIN_FILE={self.source / 'cmake/arm-none-eabi-toolchain.cmake'}",
             f"-DCMAKE_BUILD_TYPE={self.args.build_type}",
             "-DMC02_PROFILE=bench_safe",
+            "-DMC02_BOARD_ROLE=single",
+            "-DMC02_VISION_TRANSPORT=usb",
+            "-DMC02_ENABLE_REFEREE_UI=OFF",
             "-DMC02_ENABLE_HEATER=OFF",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
         ]
@@ -243,6 +252,13 @@ class Checker:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(contents, encoding="utf-8")
 
+    def edit_manifest(self, old: str, new: str) -> None:
+        manifest = self.source / "cmake/mc02_firmware_sources.cmake"
+        contents = manifest.read_text(encoding="utf-8")
+        if old not in contents:
+            raise CheckFailure(f"manifest entry was not found: {old}")
+        manifest.write_text(contents.replace(old, new, 1), encoding="utf-8")
+
     @staticmethod
     def unique_source(relative: str) -> str:
         symbol = re.sub(r"[^A-Za-z0-9_]", "_", relative)
@@ -275,28 +291,32 @@ class Checker:
             "initial-build",
             [self.args.cmake, "--build", str(self.incremental), "--parallel", str(self.args.jobs)],
         )
-        # 归档源码会复制进隔离副本，但任何固件配置都不应收集或链接它。
-        self.stage("baseline", excluded=("docs/history/seasky/seasky_protocol.c",))
+        # 新文件只有登记到显式清单后才加入；历史归档和模板始终排除。
+        history_source = "docs/history/seasky/seasky_protocol.c"
+        self.stage("baseline", excluded=(history_source,))
 
-        bsp = "bsp/mc02_cmake_regen_probe.c"
-        module = "modules/mc02_cmake_regen_probe.c"
-        application = "application/mc02_cmake_regen_probe.c"
-        for name, path in (("bsp", bsp), ("modules", module), ("application", application)):
-            self.write_source(path, self.unique_source(path))
-            self.stage(f"add-{name}", added=(path,))
+        unlisted = "application/mc02_cmake_regen_probe.c"
+        self.write_source(unlisted, self.unique_source(unlisted))
+        self.stage("ignore-unlisted-source", excluded=(unlisted,))
 
-        for name, path in (("application", application), ("modules", module), ("bsp", bsp)):
-            self.remove_file(path)
-            self.stage(f"remove-{name}", removed=(path,))
+        common_marker = "set(MC02_APPLICATION_COMMON_C_SOURCES\n"
+        self.edit_manifest(common_marker, common_marker + f"    {unlisted}\n")
+        self.stage("register-source", added=(unlisted,))
+        self.edit_manifest(f"    {unlisted}\n", "")
+        self.remove_file(unlisted)
+        self.stage("unregister-source", removed=(unlisted,))
 
-        nested = "modules/mc02_cmake_regen/nested/probe.c"
-        self.write_source(nested, self.unique_source(nested))
-        self.stage("add-multilevel-module", added=(nested,))
-        moved = "application/mc02_cmake_regen/moved_probe.c"
-        self.move_file(nested, moved)
-        self.stage("move-module-source", added=(moved,), removed=(nested,))
-        self.remove_file(moved)
-        self.stage("remove-moved-module-source", removed=(moved,))
+        old_source = "application/mc02_cmake_regen/nested/probe.c"
+        new_source = "modules/mc02_cmake_regen/moved_probe.c"
+        self.write_source(old_source, self.unique_source(old_source))
+        self.edit_manifest(common_marker, common_marker + f"    {old_source}\n")
+        self.stage("register-nested-source", added=(old_source,))
+        self.move_file(old_source, new_source)
+        self.edit_manifest(f"    {old_source}\n", f"    {new_source}\n")
+        self.stage("move-registered-source", added=(new_source,), removed=(old_source,))
+        self.edit_manifest(f"    {new_source}\n", "")
+        self.remove_file(new_source)
+        self.stage("remove-registered-source", removed=(new_source,))
 
         header_a = "modules/mc02_cmake_header_a"
         header_b = "modules/mc02_cmake_header_b"
@@ -308,18 +328,23 @@ class Checker:
             f'#include "{header_name}"\nint mc02_cmake_regen_header_user(void) '
             "{ return MC02_CMAKE_REGEN_VALUE; }\n",
         )
-        self.stage("add-header-directory-and-user", added=(header_source,))
+        self.edit_manifest(common_marker, common_marker + f"    {header_source}\n")
+        include_marker = "set(MC02_EXTRA_INCLUDE_DIRS\n"
+        self.edit_manifest(include_marker, include_marker + f"    {header_a}\n")
+        self.stage("register-header-source-and-directory", added=(header_source,))
         self.move_file(f"{header_a}/{header_name}", f"{header_b}/{header_name}")
-        self.stage("move-header-only-directory")
+        self.edit_manifest(f"    {header_a}\n", f"    {header_b}\n")
+        self.stage("move-registered-header-directory")
+        self.edit_manifest(f"    {header_source}\n", "")
+        self.edit_manifest(f"    {header_b}\n", "")
         self.remove_file(header_source)
         self.remove_file(f"{header_b}/{header_name}")
-        self.stage("remove-header-fixture", removed=(header_source,))
+        self.stage("remove-header-source-and-directory", removed=(header_source,))
 
         template = "Core/Src/mc02_cmake_regen_probe_template.c"
         self.write_source(template, self.unique_source(template))
-        self.stage("add-excluded-template", excluded=(template,))
+        self.stage("ignore-unlisted-template", excluded=(template,))
         self.remove_file(template)
-        self.stage("remove-excluded-template")
 
 
 def main() -> int:

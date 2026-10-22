@@ -4,7 +4,7 @@
 *                         www.segger.com                             *
 **********************************************************************
 
-File          : D:/STM32_RM/MovetoH7/basic_framework_MC02_1/h723ozone.jdebug
+File          : $(ProjectDir)/h723ozone.jdebug
 Created       : 20 Aug 2024 17:21
 Ozone Version : V3.30c
 */
@@ -24,7 +24,7 @@ void OnProjectLoad (void) {
   //
   //Project.AddPathSubstitute ("$(ProjectDir)");
   Project.SetDevice ("STM32H723VG");
-  Project.SetHostIF ("USB", "20781320");
+  Project.SetHostIF ("USB");
   Project.SetTargetIF ("SWD");
   Project.SetTIFSpeed ("4 MHz");
   Project.AddSvdFile ("$(InstallDir)/Config/CPU/Cortex-M7F.svd");
@@ -32,8 +32,8 @@ void OnProjectLoad (void) {
   //
   // User settings
   //
-  Project.SetOSPlugin ("C:\Program Files\SEGGER\Ozone\Plugins\OS\FreeRTOSPlugin_CM7.js");
-  File.Open ("$(ProjectDir)/build/Basic_Framework_MC02.elf");
+  Project.SetOSPlugin ("$(InstallDir)/Plugins/OS/FreeRTOSPlugin_CM7.js");
+  File.Open ("$(ProjectDir)/build/wsl/bench-debug/Basic_Framework_MC02_bench_safe.elf");
 }
 
 /*********************************************************************

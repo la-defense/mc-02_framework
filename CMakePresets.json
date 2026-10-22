@@ -1,0 +1,172 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "arm-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "toolchainFile": "${sourceDir}/cmake/arm-none-eabi-toolchain.cmake",
+      "binaryDir": "${sourceDir}/build/wsl/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "MC02_ENABLE_HEATER": "OFF",
+        "MC02_ENABLE_REFEREE_UI": "OFF",
+        "MC02_BENCH_RC_DIAGNOSTICS": "OFF",
+        "MC02_BENCH_REFEREE_DIAGNOSTICS": "OFF",
+        "MC02_LOG_ORDINARY": "OFF",
+        "MC02_LOG_TEST": "OFF"
+      }
+    },
+    {
+      "name": "bench-debug",
+      "displayName": "MC-02 bench_safe Debug",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MC02_PROFILE": "bench_safe",
+        "MC02_BOARD_ROLE": "single",
+        "MC02_VISION_TRANSPORT": "usb"
+      }
+    },
+    {
+      "name": "bench-rel",
+      "displayName": "MC-02 bench_safe RelWithDebInfo",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "MC02_PROFILE": "bench_safe",
+        "MC02_BOARD_ROLE": "single",
+        "MC02_VISION_TRANSPORT": "usb"
+      }
+    },
+    {
+      "name": "rcdiag-debug",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MC02_PROFILE": "bench_safe",
+        "MC02_BOARD_ROLE": "single",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_BENCH_RC_DIAGNOSTICS": "ON"
+      }
+    },
+    {
+      "name": "rcdiag-rel",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "MC02_PROFILE": "bench_safe",
+        "MC02_BOARD_ROLE": "single",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_BENCH_RC_DIAGNOSTICS": "ON"
+      }
+    },
+    {
+      "name": "refdiag-debug",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MC02_PROFILE": "bench_safe",
+        "MC02_BOARD_ROLE": "single",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_BENCH_REFEREE_DIAGNOSTICS": "ON"
+      }
+    },
+    {
+      "name": "refdiag-rel",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "MC02_PROFILE": "bench_safe",
+        "MC02_BOARD_ROLE": "single",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_BENCH_REFEREE_DIAGNOSTICS": "ON"
+      }
+    },
+    {
+      "name": "robot-single-debug",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MC02_PROFILE": "robot",
+        "MC02_BOARD_ROLE": "single",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_ENABLE_REFEREE_UI": "ON"
+      }
+    },
+    {
+      "name": "robot-single-rel",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "MC02_PROFILE": "robot",
+        "MC02_BOARD_ROLE": "single",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_ENABLE_REFEREE_UI": "ON"
+      }
+    },
+    {
+      "name": "robot-chassis-debug",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MC02_PROFILE": "robot",
+        "MC02_BOARD_ROLE": "chassis",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_ENABLE_REFEREE_UI": "ON"
+      }
+    },
+    {
+      "name": "robot-chassis-rel",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "MC02_PROFILE": "robot",
+        "MC02_BOARD_ROLE": "chassis",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_ENABLE_REFEREE_UI": "ON"
+      }
+    },
+    {
+      "name": "robot-gimbal-debug",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MC02_PROFILE": "robot",
+        "MC02_BOARD_ROLE": "gimbal",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_ENABLE_REFEREE_UI": "OFF"
+      }
+    },
+    {
+      "name": "robot-gimbal-rel",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "MC02_PROFILE": "robot",
+        "MC02_BOARD_ROLE": "gimbal",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_ENABLE_REFEREE_UI": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "bench-debug", "configurePreset": "bench-debug", "jobs": 4},
+    {"name": "bench-rel", "configurePreset": "bench-rel", "jobs": 4},
+    {"name": "rcdiag-debug", "configurePreset": "rcdiag-debug", "jobs": 4},
+    {"name": "rcdiag-rel", "configurePreset": "rcdiag-rel", "jobs": 4},
+    {"name": "refdiag-debug", "configurePreset": "refdiag-debug", "jobs": 4},
+    {"name": "refdiag-rel", "configurePreset": "refdiag-rel", "jobs": 4},
+    {"name": "robot-single-debug", "configurePreset": "robot-single-debug", "jobs": 4},
+    {"name": "robot-single-rel", "configurePreset": "robot-single-rel", "jobs": 4},
+    {"name": "robot-chassis-debug", "configurePreset": "robot-chassis-debug", "jobs": 4},
+    {"name": "robot-chassis-rel", "configurePreset": "robot-chassis-rel", "jobs": 4},
+    {"name": "robot-gimbal-debug", "configurePreset": "robot-gimbal-debug", "jobs": 4},
+    {"name": "robot-gimbal-rel", "configurePreset": "robot-gimbal-rel", "jobs": 4}
+  ]
+}
