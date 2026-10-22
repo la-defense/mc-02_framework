@@ -643,14 +643,16 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
     def test_performance_snapshot_retries_transient_publication_update(self):
         identity_info = _test_identity_info()
         expected = identity_info["expected"]
-        unstable = _performance_raw(1, 1000, 1)
-        unstable["can_generation_before"] = 3
+        unstable_rtos = _performance_raw(1, 1000, 1)
+        unstable_rtos["stats_generation_before"] = 3
+        unstable_can = _performance_raw(2, 2000, 2)
+        unstable_can["can_generation_before"] = 3
         stable = _performance_raw(2, 2000, 2)
         calls = []
 
         def read_snapshot(*args):
             calls.append(args[5])
-            raw = unstable if len(calls) == 1 else stable
+            raw = (unstable_rtos, unstable_can, stable)[min(len(calls) - 1, 2)]
             return raw, _identity_words(expected)
 
         with patch.object(probe_snapshot_live, "read_verified_snapshot", side_effect=read_snapshot):
@@ -660,7 +662,7 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
                 identity_info["ram_bounds"],
             )
 
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         self.assertLess(calls[1], calls[0])
         self.assertEqual(raw["can_generation_before"], raw["can_generation_after"])
         self.assertEqual(target_words, _identity_words(expected))
@@ -670,7 +672,7 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
         identity_info = _test_identity_info()
         calls = []
         unstable = _performance_raw(1, 1000, 1)
-        unstable["timing_generation_before"] = 3
+        unstable["stats_generation_before"] = 3
 
         def keep_publishing(*args):
             calls.append(args[5])

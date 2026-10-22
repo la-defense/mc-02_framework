@@ -246,7 +246,7 @@ def decode_rtos_snapshot(
     if snapshot["stats_layout"] != RTOS_TASK_STATS_LAYOUT:
         raise ProbeIOError("RTOS task table layout mismatch: use the verified firmware ELF")
     if before != after or before & 1:
-        raise ProbeIOError("RTOS task table changed during reading or is being published")
+        raise ObservationSnapshotChangedError("RTOS task table changed during reading or is being published")
     unpublished = (
         "stats_sample_id" in snapshot
         and snapshot["stats_sample_id"] == 0
