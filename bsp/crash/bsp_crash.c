@@ -355,6 +355,17 @@ void CrashLogClear(void)
 
 void CrashLogInit(void)
 {
+#if MC02_BENCH_CRASH_DIAGNOSTICS
+    const uint32_t stored_magic = bsp_crash_test_permit.magic;
+    const uint32_t normalized_magic = CrashTestPermitMagicNormalize(stored_magic);
+    if (normalized_magic != stored_magic)
+    {
+        // 保留待执行和已消费状态；只清理NOLOAD区的随机残留，避免工具盲目覆盖。
+        bsp_crash_test_permit.magic = normalized_magic;
+        __DSB();
+    }
+#endif
+
     CrashRecordInfo_t info;
     CrashRecordStatus_t status = CrashLogGetStatus(&info);
     if (status != CRASH_RECORD_VALID && status != CRASH_RECORD_VALID_BUSY_FINAL)

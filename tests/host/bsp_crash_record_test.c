@@ -96,9 +96,21 @@ static void TestV3AndMalformedRecords(void)
     TEST_CHECK(CrashLogRecordInspect(bytes, sizeof(bytes), &info) == CRASH_RECORD_BAD_CRC);
 }
 
+static void TestCrashPermitMagicNormalization(void)
+{
+    TEST_CHECK(CrashTestPermitMagicNormalize(0u) == 0u);
+    TEST_CHECK(CrashTestPermitMagicNormalize(CRASH_TEST_PERMIT_MAGIC) ==
+               CRASH_TEST_PERMIT_MAGIC);
+    TEST_CHECK(CrashTestPermitMagicNormalize(CRASH_TEST_PERMIT_CONSUMED) ==
+               CRASH_TEST_PERMIT_CONSUMED);
+    TEST_CHECK(CrashTestPermitMagicNormalize(0x0802ADE0u) == 0u);
+    TEST_CHECK(CrashTestPermitMagicNormalize(UINT32_MAX) == 0u);
+}
+
 int main(void)
 {
     TestFixedV4VectorAndBusyFinal();
     TestV3AndMalformedRecords();
+    TestCrashPermitMagicNormalization();
     return 0;
 }

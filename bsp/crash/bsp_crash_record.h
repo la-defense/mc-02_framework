@@ -15,6 +15,8 @@
 #define CRASH_LOG_V3_VERSION 3u
 #define CRASH_LOG_MAGIC_BUSY 0x34495342u
 #define CRASH_LOG_MAGIC_OK 0x344F5243u
+#define CRASH_TEST_PERMIT_MAGIC 0x4D524550u
+#define CRASH_TEST_PERMIT_CONSUMED 0x4D4F4E45u
 #define CRASH_TASK_NAME_LEN 16u
 #define CRASH_SOURCE_NAME_LEN 32u
 #define CRASH_STACK_SNAPSHOT_WORDS 32u
@@ -103,5 +105,13 @@ typedef struct
  */
 CrashRecordStatus_t CrashLogRecordInspect(const uint8_t *bytes, size_t capacity,
                                           CrashRecordInfo_t *info);
+
+/**
+ * @brief 将NOLOAD许可区中的无效magic归一为空闲状态。
+ * @param[in] stored_magic 当前32位标记。
+ * @return 有效待执行或已消费标记原样保留；其他值返回0。
+ * @note 纯计算，不访问硬件或修改输入；只能在启动时用于许可标记检查。
+ */
+uint32_t CrashTestPermitMagicNormalize(uint32_t stored_magic);
 
 #endif

@@ -141,3 +141,12 @@ CrashRecordStatus_t CrashLogRecordInspect(const uint8_t *bytes, size_t capacity,
     *info = result;
     return result.status;
 }
+
+uint32_t CrashTestPermitMagicNormalize(uint32_t stored_magic)
+{
+    if (stored_magic == CRASH_TEST_PERMIT_MAGIC ||
+        stored_magic == CRASH_TEST_PERMIT_CONSUMED)
+        return stored_magic;
+
+    return 0u;
+}
