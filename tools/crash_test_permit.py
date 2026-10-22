@@ -137,7 +137,8 @@ def build_permit(build_id: bytes, case_value: int, nonce: int | None = None) -> 
 
 def decode_openocd_words(output: str, start_address: int, count: int) -> list[int]:
     values = []
-    for line in output.replace("\r", "").splitlines():
+    # OpenOCD Telnet会在首条内存行前返回NUL提示字节，先去掉再按地址顺序核对。
+    for line in output.replace("\x00", "").replace("\r", "").splitlines():
         line = line.strip()
         if line.endswith(">"):
             line = line[:-1].strip()
@@ -206,7 +207,7 @@ class FixedOpenOCDClient:
     def command(self, command: str) -> str:
         if self.connection is None:
             raise PermitError("OpenOCD连接未打开")
-        if command == "poll":
+        if command == "targets":
             pass
         elif command.startswith("mdw 0x"):
             parts = command.split()
@@ -308,7 +309,8 @@ def arm_permit(elf: Path, cache: Path, case_name: str, host: str = "127.0.0.1",
         raise PermitError("ELF观测身份符号不在批准的固定RAM布局")
 
     with client_factory(host, port, timeout, identity_address, permit_address) as client:
-        state = client.command("poll")
+        # poll只报告后台轮询开关；targets才包含每个目标的运行状态。
+        state = client.command("targets")
         if "running" not in state.lower():
             raise PermitError("目标未处于运行状态，未写入许可")
         identity_words = decode_openocd_words(

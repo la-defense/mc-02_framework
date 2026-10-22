@@ -53,7 +53,9 @@ class FakeClient:
     def command(self, command):
         self.commands.append(command)
         if command == "poll":
-            return "target state: running\n>"
+            return "poll\r\n\x00background polling: on\r\nTAP: mc02.cpu (enabled)\r\n> "
+        if command == "targets":
+            return "TargetName Type Endian TapName State\n0* stm32h7x.cpu0 cortex_m little mc02.cpu running\n>"
         _, address_text, count_text = command.split()
         address = int(address_text, 16)
         count = int(count_text)
@@ -66,8 +68,10 @@ class FakeClient:
             words = self.permit_words[1:]
         else:
             raise AssertionError("测试客户端收到未批准的读取范围")
-        return "".join(f"0x{address + index * 4:08x}: 0x{value:08x}\n"
-                       for index, value in enumerate(words)) + ">"
+        return "\x00" + "".join(
+            f"0x{address + index * 4:08x}: 0x{value:08x}\n"
+            for index, value in enumerate(words)
+        ) + ">"
 
     def write_permit_word(self, address, value):
         self.writes.append((address, value))
@@ -77,6 +81,17 @@ class FakeClient:
 
 
 class CrashTestPermitTests(unittest.TestCase):
+    def test_openocd_word_decoder_accepts_telnet_nul_prefix(self):
+        output = (
+            "mdw 0x24001000 2\r\n\x00"
+            "0x24001000: 0x12345678\r\n"
+            "0x24001004: 0x90abcdef\r\n> "
+        )
+        self.assertEqual(
+            crash_test_permit.decode_openocd_words(output, 0x24001000, 2),
+            [0x12345678, 0x90ABCDEF],
+        )
+
     def test_fixed_permit_vector_and_case_rejection(self):
         raw = crash_test_permit.build_permit(bytes(range(20)), 1, 0x12345678)
         self.assertEqual(len(raw), 40)
@@ -115,7 +130,9 @@ class CrashTestPermitTests(unittest.TestCase):
 
         client.connection = FakeSocket()
         with patch.object(client, "_read_prompt", return_value="target state: running\n>"):
-            client.command("poll")
+            client.command("targets")
+            with self.assertRaises(crash_test_permit.PermitError):
+                client.command("poll")
             client.command("mdw 0x24001000 12")
             with self.assertRaises(crash_test_permit.PermitError):
                 client.command("reset run")
@@ -124,7 +141,7 @@ class CrashTestPermitTests(unittest.TestCase):
             with self.assertRaises(crash_test_permit.PermitError):
                 client.write_permit_word(0x24000000, 0)
         self.assertEqual(client.connection.sent,
-                         [b"poll\n", b"mdw 0x24001000 12\n"])
+                         [b"targets\n", b"mdw 0x24001000 12\n"])
 
     def test_matching_elf_and_identity_publish_magic_last(self):
         elf = ROOT / "build/wsl/crashdiag-debug/Basic_Framework_MC02_crashdiag_bench_safe.elf"
@@ -159,8 +176,8 @@ class CrashTestPermitTests(unittest.TestCase):
         self.assertEqual([value for _, value in fake.writes[:-1]],
                          list(struct.unpack("<10I", permit)[1:]))
         self.assertEqual(fake.permit_words, list(struct.unpack("<10I", permit)))
-        self.assertEqual(fake.commands[0], "poll")
-        self.assertTrue(all(command.startswith("mdw 0x") or command == "poll"
+        self.assertEqual(fake.commands[0], "targets")
+        self.assertTrue(all(command.startswith("mdw 0x") or command == "targets"
                             for command in fake.commands))
 
     def test_identity_mismatch_never_writes_permit(self):
@@ -187,6 +204,11 @@ class CrashTestPermitTests(unittest.TestCase):
                     elf, cache, "assert", timeout=2.0,
                     client_factory=lambda *_args: fake)
         self.assertEqual(fake.writes, [])
+        self.assertEqual(fake.commands[0], "targets")
+        self.assertEqual(fake.commands[1],
+                         f"mdw 0x{identity_address:08x} 12")
+        self.assertFalse(any(command.startswith(f"mdw 0x{0x24000150:08x}")
+                             for command in fake.commands))
         self.assertEqual(crash_test_permit.elf_build_id(elf_bytes), build_id)
 
 
