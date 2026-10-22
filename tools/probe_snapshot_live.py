@@ -1240,7 +1240,10 @@ def _group_is_fresh(group: dict, tick_ms: int) -> bool:
 
 
 def summarize_performance(records: list[dict], expected_identity: dict) -> tuple[str, bool]:
-    """按组独立去重和配对，给出可从 JSONL 重算的窗口统计。"""
+    """接受内存样本或 JSONL 样本，按组去重并重算窗口统计。"""
+    # 运行时保留完整样本行以便写入 JSONL；统计字段实际放在 decoded 中。
+    # 同时接受已经解码的记录，便于从保存的 JSONL 重算摘要。
+    records = [record.get("decoded", record) for record in records]
     lines = [
         "MC02 运行观测摘要",
         f"固件：{expected_identity['profile_name']} / {expected_identity['role_name']}",

@@ -674,8 +674,7 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
             raw_path = Path(temporary) / "raw.jsonl"
             raw_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
             saved = [json.loads(line) for line in raw_path.read_text(encoding="utf-8").splitlines()]
-        recompute_records = [{"tick_ms": row["decoded"]["tick_ms"], **row["decoded"]} for row in saved]
-        summary, complete = probe_snapshot_live.summarize_performance(recompute_records, identity)
+        summary, complete = probe_snapshot_live.summarize_performance(saved, identity)
         self.assertTrue(complete)
         self.assertIn("40.0%", summary)
         self.assertIn('"tx_ok": 50', summary)
