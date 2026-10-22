@@ -4,6 +4,7 @@
  * @note HAL、时间与日志由测试替身提供；每种场景单独启动，测试不连接设备。
  */
 #include "LK9025.h"
+#include "dji_motor.h"
 #include "bsp_can.h"
 #include "bsp_dwt.h"
 #include "test_check.h"
@@ -17,6 +18,7 @@ FDCAN_HandleTypeDef hfdcan1 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdca
 FDCAN_HandleTypeDef hfdcan2 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdcan_registers[1]};
 FDCAN_HandleTypeDef hfdcan3 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdcan_registers[2]};
 volatile uint32_t dwt_cpu_freq_mhz = 480u;
+extern volatile DWT_Probe_t can_prof_rx_dispatch;
 
 static uint64_t now_us;
 static uint32_t filter_fail_once;
@@ -29,6 +31,16 @@ static uint32_t tx_attempt_count[DEVICE_CAN_CNT];
 static uint32_t tx_accept_count[DEVICE_CAN_CNT];
 static uint32_t tx_header_id[DEVICE_CAN_CNT];
 static uint8_t tx_frame[DEVICE_CAN_CNT][8];
+typedef struct
+{
+    FDCAN_RxHeaderTypeDef header;
+    uint8_t data[8];
+} TestRxFrame_t;
+static TestRxFrame_t rx_frames[DEVICE_CAN_CNT][64];
+static uint8_t rx_frame_count[DEVICE_CAN_CNT];
+static uint8_t rx_frame_read[DEVICE_CAN_CNT];
+static uint32_t burst_rx_count[DEVICE_CAN_CNT];
+static uint32_t burst_rx_bad[DEVICE_CAN_CNT];
 
 #if defined(LK_TEST_ALLOC_WRAP)
 static unsigned malloc_calls;
@@ -150,14 +162,141 @@ uint32_t HAL_FDCAN_GetErrorCounters(FDCAN_HandleTypeDef *handle, FDCAN_ErrorCoun
 }
 uint32_t HAL_FDCAN_GetRxFifoFillLevel(FDCAN_HandleTypeDef *handle, uint32_t fifo)
 {
-    (void)handle; (void)fifo;
-    return 0u;
+    (void)fifo;
+    uint8_t bus = bus_for_handle(handle);
+    return bus < DEVICE_CAN_CNT ? (uint32_t)(rx_frame_count[bus] - rx_frame_read[bus]) : 0u;
 }
 uint32_t HAL_FDCAN_GetRxMessage(FDCAN_HandleTypeDef *handle, uint32_t fifo,
                                 FDCAN_RxHeaderTypeDef *header, uint8_t *data)
 {
-    (void)handle; (void)fifo; (void)header; (void)data;
-    return HAL_ERROR;
+    (void)fifo;
+    uint8_t bus = bus_for_handle(handle);
+    if (bus >= DEVICE_CAN_CNT || rx_frame_read[bus] >= rx_frame_count[bus])
+        return HAL_ERROR;
+    TestRxFrame_t *frame = &rx_frames[bus][rx_frame_read[bus]++];
+    *header = frame->header;
+    memcpy(data, frame->data, sizeof(frame->data));
+    return HAL_OK;
+}
+
+static void burst_rx_callback(CANInstance *instance)
+{
+    uint8_t bus = bus_for_handle(instance->can_handle);
+    if (bus >= DEVICE_CAN_CNT || instance->rx_len != 8u || instance->rx_buff[0] != burst_rx_count[bus])
+    {
+        if (bus < DEVICE_CAN_CNT)
+            ++burst_rx_bad[bus];
+        return;
+    }
+    ++burst_rx_count[bus];
+}
+
+static void test_production_can_receive_burst(void)
+{
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+    {
+        CAN_Init_Config_s config = {0};
+        config.can_handle = bus == 0u ? &hfdcan1 : bus == 1u ? &hfdcan2 : &hfdcan3;
+        config.tx_id = 0x300u + bus;
+        config.rx_id = 0x320u + bus;
+        config.can_module_callback = burst_rx_callback;
+        TEST_CHECK(CANRegister(&config) != NULL);
+
+        rx_frame_count[bus] = 32u;
+        rx_frame_read[bus] = 0u;
+        for (uint8_t frame = 0u; frame < rx_frame_count[bus]; ++frame)
+        {
+            TestRxFrame_t *item = &rx_frames[bus][frame];
+            memset(item, 0, sizeof(*item));
+            item->header.Identifier = config.rx_id;
+            item->header.DataLength = 8u << 16u;
+            item->header.RxFrameType = FDCAN_DATA_FRAME;
+            item->header.IdType = FDCAN_STANDARD_ID;
+            item->data[0] = frame;
+        }
+        HAL_FDCAN_RxFifo0Callback(config.can_handle, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+        TEST_CHECK(rx_frame_read[bus] == 32u);
+        TEST_CHECK(CANGetRxQueueDrop(config.can_handle) == 1u);
+    }
+
+    now_us = 0u;
+    CANProcessRx();
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+    {
+        TEST_CHECK(burst_rx_count[bus] == 31u);
+        TEST_CHECK(burst_rx_bad[bus] == 0u);
+    }
+    TEST_CHECK(can_prof_rx_dispatch.calls == 1u);
+    TEST_CHECK(can_prof_rx_dispatch.max_us >= can_prof_rx_dispatch.last_us);
+}
+
+/* 通过生产 CAN 派发器调用真实 DJI 解码回调，连续压入三条总线的满队列。 */
+static void test_production_dji_receive_burst(void)
+{
+    DJIMotorInstance *motors[DEVICE_CAN_CNT] = {0};
+    FDCAN_HandleTypeDef *handles[DEVICE_CAN_CNT] = {&hfdcan1, &hfdcan2, &hfdcan3};
+    uint32_t expected_accepted[DEVICE_CAN_CNT] = {0u};
+
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+    {
+        Motor_Init_Config_s config = {0};
+        config.motor_type = M3508;
+        config.can_init_config.can_handle = handles[bus];
+        config.can_init_config.tx_id = 1u;
+        config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
+        motors[bus] = DJIMotorInit(&config);
+        TEST_CHECK(motors[bus] != NULL);
+        TEST_CHECK(motors[bus]->motor_can_instance->rx_id == 0x201u);
+    }
+
+    for (uint8_t batch = 0u; batch < 24u; ++batch)
+    {
+        for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+        {
+            CANInstance *can = motors[bus]->motor_can_instance;
+            rx_frame_count[bus] = 32u;
+            rx_frame_read[bus] = 0u;
+            for (uint8_t frame = 0u; frame < rx_frame_count[bus]; ++frame)
+            {
+                TestRxFrame_t *item = &rx_frames[bus][frame];
+                uint16_t ecd = (uint16_t)((7000u + batch * 73u + frame) % 8192u);
+                int16_t rpm = (int16_t)((int16_t)(batch * 31u) - (int16_t)(frame * 3u));
+                int16_t current = (int16_t)((int16_t)(frame * 17u) - (int16_t)(batch * 11u));
+                memset(item, 0, sizeof(*item));
+                item->header.Identifier = can->rx_id;
+                item->header.DataLength = 8u << 16u;
+                item->header.RxFrameType = FDCAN_DATA_FRAME;
+                item->header.IdType = FDCAN_STANDARD_ID;
+                item->data[0] = (uint8_t)(ecd >> 8u);
+                item->data[1] = (uint8_t)ecd;
+                item->data[2] = (uint8_t)((uint16_t)rpm >> 8u);
+                item->data[3] = (uint8_t)rpm;
+                item->data[4] = (uint8_t)((uint16_t)current >> 8u);
+                item->data[5] = (uint8_t)current;
+                item->data[6] = (uint8_t)(batch + frame);
+            }
+            HAL_FDCAN_RxFifo0Callback(handles[bus], FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+            TEST_CHECK(rx_frame_read[bus] == 32u);
+            expected_accepted[bus] += 31u;
+        }
+
+        now_us = (uint64_t)batch * 1000u;
+        CANProcessRx();
+    }
+
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+    {
+        DJIMotorInstance *motor = motors[bus];
+        uint16_t expected_ecd = (uint16_t)((7000u + 23u * 73u + 30u) % 8192u);
+        TEST_CHECK(motor->feed_cnt == expected_accepted[bus]);
+        TEST_CHECK(motor->measure.ecd == expected_ecd);
+        TEST_CHECK(motor->measure.temperature == (uint8_t)(23u + 30u));
+        TEST_CHECK(isfinite(motor->measure.angle_single_round));
+        TEST_CHECK(isfinite(motor->measure.speed_aps));
+        TEST_CHECK(isfinite(motor->measure.total_angle));
+        TEST_CHECK(CANGetRxQueueDrop(handles[bus]) == 24u);
+    }
+    TEST_CHECK(can_prof_rx_dispatch.calls == 24u);
 }
 
 static Motor_Init_Config_s config_for(uint8_t bus, uint32_t motor_id)
@@ -495,6 +634,10 @@ int main(int argc, char **argv)
         test_feedforward_paths_and_recovery();
     else if (strcmp(argv[1], "feedback_failure") == 0)
         test_feedback_failure_recovery();
+    else if (strcmp(argv[1], "rx-burst") == 0)
+        test_production_can_receive_burst();
+    else if (strcmp(argv[1], "dji-rx-burst") == 0)
+        test_production_dji_receive_burst();
     else
     {
         if (strcmp(argv[1], "closed_loops") == 0)

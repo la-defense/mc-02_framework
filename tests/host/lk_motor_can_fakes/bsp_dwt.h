@@ -27,6 +27,8 @@ static inline void DWT_ProbeDone(volatile DWT_Probe_t *probe, uint32_t start)
     if (probe != NULL)
     {
         probe->last_us = 1u;
+        if (probe->last_us > probe->max_us)
+            probe->max_us = probe->last_us;
         probe->total_us++;
         probe->calls++;
     }

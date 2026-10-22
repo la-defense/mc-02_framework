@@ -14,7 +14,8 @@
 #undef BSP_LOG_EVENT_8
 #define BSP_LOG_EVENT_0(...) ((void)0)
 #define BSP_LOG_EVENT_1(...) ((void)0)
-#define BSP_LOG_EVENT_2(...) ((void)0)
+#define BSP_LOG_EVENT_2(event, field0, field1) \
+    do { (void)(event); (void)sizeof(field0); (void)sizeof(field1); } while (0)
 #define BSP_LOG_EVENT_3(...) ((void)0)
 #define BSP_LOG_EVENT_4(...) ((void)0)
 #define BSP_LOG_EVENT_5(...) ((void)0)

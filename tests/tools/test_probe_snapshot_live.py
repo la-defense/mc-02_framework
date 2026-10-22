@@ -77,6 +77,64 @@ TEST_INIT_VALUES = {
 }
 
 
+def _pack_u32(byte_values):
+    return [int.from_bytes(bytes(byte_values[index:index + 4]), "little")
+            for index in range(0, len(byte_values), 4)]
+
+
+def _rtos_fixture():
+    fields = probe_snapshot_live.RTOS_SNAPSHOT_FIELDS
+    names = bytearray(12 * probe_snapshot_live.RTOS_TASK_CAPACITY)
+    names[:4] = b"IDLE"
+    names[12:21] = b"motortask"
+    priorities = bytes([0, 3] + [0] * 10)
+    stacks = [120, 80] + [0] * 10
+    stack_bytes = b"".join(value.to_bytes(2, "little") for value in stacks)
+    values = {}
+    address = 0x24005000
+    addresses = {}
+    for key, field in fields.items():
+        addresses[key] = address
+        address += field.count * 4 + 4
+        if field.count > 1:
+            values[key] = [0] * field.count
+        else:
+            values[key] = 0
+    values.update(
+        tick_ms=123456,
+        stats_layout=probe_snapshot_live.RTOS_TASK_STATS_LAYOUT,
+        stats_generation_before=8,
+        stats_generation_after=8,
+        stats_count=2,
+        stats_task_total=2,
+        stats_truncated=0,
+        stats_names_words=_pack_u32(names),
+        stats_runtime=[11, 22] + [0] * 10,
+        stats_priority_words=_pack_u32(priorities),
+        stats_stack_words=_pack_u32(stack_bytes),
+        motor_task_max_us=125,
+        motor_task_calls=1000,
+        ins_task_max_us=600,
+        ins_task_calls=1000,
+        daemon_task_max_us=220,
+        daemon_task_calls=100,
+        robot_task_max_us=1100,
+        robot_task_calls=200,
+        uart_tx_task_max_us=85,
+        uart_tx_task_calls=1000,
+        motor_control_max_us=123,
+        ins_compute_max_us=490,
+        can_rx_dispatch_max_us=700,
+        can_rx_dispatch_calls=31,
+        can_rx_drop_total=0,
+        can_rx_peak_max=31,
+        lcd_sample_max_us=72,
+        lcd_update_max_us=300,
+        lcd_draw_max_us=620,
+    )
+    return addresses, values
+
+
 class RemoteProfileTests(unittest.TestCase):
     def test_rc_input_preserves_raw_z_and_decodes_signed_boundary(self):
         fields = probe_snapshot_live.RC_INPUT_SNAPSHOT_FIELDS
@@ -175,9 +233,12 @@ class FakeOpenOCDServer:
         self.state_responses = list(
             state_responses if state_responses is not None else ["running"] * (len(self.addresses) + 1)
         )
-        self.memory_by_address = {
-            address: self.values[key] for key, address in self.addresses.items()
-        }
+        self.memory_by_address = {}
+        for key, address in self.addresses.items():
+            value = self.values[key]
+            values = value if isinstance(value, list) else [value]
+            for index, word in enumerate(values):
+                self.memory_by_address[address + index * 4] = word
         self.update_on_bulk = dict(update_on_bulk or {})
 
         owner = self
@@ -246,6 +307,72 @@ class FakeOpenOCDServer:
 
 
 class ProbeSnapshotLiveTests(unittest.TestCase):
+    def test_rtos_profile_unpacks_stack_runtime_and_fixed_task_names(self):
+        addresses, values = _rtos_fixture()
+        decoded = probe_snapshot_live.decode_rtos_snapshot(values)
+        self.assertEqual(decoded["task_count"], 2)
+        self.assertEqual(decoded["task_total"], 2)
+        self.assertFalse(decoded["task_table_truncated"])
+        self.assertEqual(decoded["tasks"], [
+            {"name": "IDLE", "runtime_counter": 11, "priority": 0,
+             "stack_high_water_words": 120, "stack_high_water_bytes": 480,
+             "stack_capacity_words": 128, "stack_margin_permille": 937},
+            {"name": "motortask", "runtime_counter": 22, "priority": 3,
+             "stack_high_water_words": 80, "stack_high_water_bytes": 320,
+             "stack_capacity_words": 512, "stack_margin_permille": 156},
+        ])
+        self.assertEqual(decoded["can_rx_dispatch_max_us"], 700)
+
+    def test_rtos_profile_reads_only_fixed_ram_blocks_while_running(self):
+        fields = probe_snapshot_live.RTOS_SNAPSHOT_FIELDS
+        addresses, values = _rtos_fixture()
+        server = FakeOpenOCDServer(addresses=addresses, values=values)
+        try:
+            raw = probe_snapshot_live.read_snapshot(
+                addresses, "127.0.0.1", server.port, timeout=2.0, fields=fields
+            )
+        finally:
+            server.close()
+        self.assertEqual(raw, values)
+        self.assertIn(f"mdw 0x{addresses['stats_names_words']:08x} 36", server.commands)
+        self.assertIn(f"mdw 0x{addresses['stats_runtime']:08x} 12", server.commands)
+        self.assertTrue(all(command == "targets" or command.startswith(("mdb ", "mdw "))
+                            for command in server.commands))
+        self.assertFalse(any(command in {"halt", "resume", "reset"} for command in server.commands))
+
+    def test_rtos_profile_rejects_changed_or_unpublished_task_table(self):
+        _, values = _rtos_fixture()
+        changed = dict(values, stats_generation_after=10)
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.decode_rtos_snapshot(changed)
+        unpublished = dict(values, stats_generation_before=9, stats_generation_after=9)
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.decode_rtos_snapshot(unpublished)
+
+    def test_rtos_profile_reports_twelve_entry_truncation_without_claiming_completeness(self):
+        _, values = _rtos_fixture()
+        values.update(stats_count=12, stats_task_total=13, stats_truncated=1)
+        decoded = probe_snapshot_live.decode_rtos_snapshot(values)
+        self.assertTrue(decoded["task_table_truncated"])
+        self.assertEqual(len(decoded["tasks"]), 12)
+        values["stats_truncated"] = 0
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.decode_rtos_snapshot(values)
+
+    def test_rtos_profile_rejects_layout_and_capacity_mismatch(self):
+        _, values = _rtos_fixture()
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.decode_rtos_snapshot(dict(values, stats_layout=0))
+        too_much_free_stack = dict(values)
+        too_much_free_stack["stats_stack_words"] = [129 | (80 << 16)] + [0] * 5
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.decode_rtos_snapshot(too_much_free_stack)
+        addresses, _ = _rtos_fixture()
+        addresses["stats_names_words"] = probe_snapshot_live.SNAPSHOT_RAM_END - 4
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live._validate_snapshot_addresses(addresses,
+                                                              probe_snapshot_live.RTOS_SNAPSHOT_FIELDS)
+
     def test_init_profile_resolves_fixed_startup_diagnostics(self):
         fields = probe_snapshot_live.INIT_SNAPSHOT_FIELDS
         command = probe_snapshot_live.build_symbol_command("arm-none-eabi-gdb", "firmware.elf", fields)

@@ -139,10 +139,11 @@ endforeach()
 # 这组回归链接生产 BSP CAN 注册与发送实现，仅替换 HAL、时间和日志。
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_pid.c
+  ../../modules/motor/DJImotor/dji_motor.c
   ../../modules/algorithm/controller.c ../../modules/daemon/daemon.c ../../bsp/can/bsp_can.c)
 target_include_directories(lk_motor_bsp_can_test BEFORE PRIVATE ../../bsp/can lk_motor_can_fakes
   lk_motor_fakes . ../../modules/motor/LKmotor ../../modules/motor ../../modules
-  ../../modules/algorithm ../../modules/daemon ../../modules/message_center)
+  ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/message_center)
 target_compile_options(lk_motor_bsp_can_test PRIVATE -Wall -Wextra -Werror
   -Wno-type-limits -ffunction-sections -fdata-sections -fno-builtin-malloc -fno-builtin-free)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
@@ -160,6 +161,10 @@ set_tests_properties(production_lk_motor_bsp_can_rollback production_lk_motor_bs
   production_lk_motor_bsp_can_closed_loops production_lk_motor_bsp_can_feedforward
   production_lk_motor_bsp_can_feedback_failure production_lk_motor_bsp_can_feedforward_overflow
   PROPERTIES TIMEOUT 10)
+add_test(NAME production_can_full_queue_burst COMMAND lk_motor_bsp_can_test rx-burst)
+set_tests_properties(production_can_full_queue_burst PROPERTIES TIMEOUT 10)
+add_test(NAME production_dji_parser_full_queue_burst COMMAND lk_motor_bsp_can_test dji-rx-burst)
+set_tests_properties(production_dji_parser_full_queue_burst PROPERTIES TIMEOUT 10)
 
 # DM 测试链接生产电机、FDCAN 注册和 Daemon；测试仅替换 HAL、RTOS、时间与日志。
 add_executable(dm_motor_test dm_motor_test.c ../../modules/motor/DMmotor/dmmotor.c
@@ -1088,6 +1093,9 @@ endforeach()
 # 专用采集工具离线核对CRC、半帧、MCU记录、身份和只读命令范围。
 add_test(NAME referee_budget_capture_tools COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_referee_budget_capture.py)
 set_tests_properties(referee_budget_capture_tools PROPERTIES TIMEOUT 10)
+add_test(NAME read_only_rtos_snapshot_tool COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_probe_snapshot_live.py)
+set_tests_properties(read_only_rtos_snapshot_tool PROPERTIES TIMEOUT 10)
 # 使用真实裁判和UART后端，验证两种业务竞争同一份发送额度。
 add_executable(referee_budget_test referee_budget_test.c uart_tx_hal_model.c
   ../../bsp/usart/bsp_usart.c ../../bsp/usart/bsp_usart_tx.c ../../bsp/usart/usart_tx_port.c

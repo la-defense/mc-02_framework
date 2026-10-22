@@ -95,15 +95,20 @@ volatile uint32_t lcd_prof_cycles = 0;
 // 原始计数来自 getRunTimeCounterValue()，当前返回 CYCCNT/1000。
 #define LCD_TASK_STATS_PERIOD 25u /* 25 个 200ms 周期 = 5s */
 #define LCD_TASK_STATS_MAX 12u
+#define LCD_TASK_STATS_LAYOUT 0x52543102u
+volatile uint32_t lcd_stats_layout = LCD_TASK_STATS_LAYOUT;
+volatile uint32_t lcd_stats_generation = 0u;
+volatile uint32_t lcd_stats_task_total = 0u;
+volatile uint8_t lcd_stats_truncated = 0u;
 volatile uint32_t lcd_stats_total = 0;
 volatile uint8_t lcd_stats_count = 0;
-volatile uint32_t lcd_stats_runtime[LCD_TASK_STATS_MAX] = {0};
-volatile uint8_t lcd_stats_prio[LCD_TASK_STATS_MAX] = {0};
-volatile char lcd_stats_name[LCD_TASK_STATS_MAX][12] = {{0}};
+_Alignas(uint32_t) volatile uint32_t lcd_stats_runtime[LCD_TASK_STATS_MAX] = {0};
+_Alignas(uint32_t) volatile uint8_t lcd_stats_prio[LCD_TASK_STATS_MAX] = {0};
+_Alignas(uint32_t) volatile char lcd_stats_name[LCD_TASK_STATS_MAX][12] = {{0}};
 /* 各任务"历史最小剩余栈"（word, 4 字节/word；0 = 已经溢出）。
    来源: uxTaskGetSystemState() 填的 TaskStatus_t.usStackHighWaterMark。
    顺序与 lcd_stats_name[] / [cpu] 那一行一致 —— 改动任务栈大小前先看这个数字。 */
-volatile uint16_t lcd_stats_stack[LCD_TASK_STATS_MAX] = {0};
+_Alignas(uint32_t) volatile uint16_t lcd_stats_stack[LCD_TASK_STATS_MAX] = {0};
 
 /* 其它模块的分段探针(定义见各自的 .c), 用于 RTT 汇总行 */
 extern volatile DWT_Probe_t motor_prof_all, motor_prof_dji, motor_prof_lk;
@@ -229,9 +234,26 @@ static void lcd_task_stats_snapshot(void)
     static uint8_t prev_cnt = 0;
     uint32_t total = 0;
 
+    if (lcd_stats_layout != LCD_TASK_STATS_LAYOUT)
+        return;
+
+    uint32_t generation = lcd_stats_generation + 1u;
+    if ((generation & 1u) == 0u)
+        ++generation;
+    lcd_stats_generation = generation;
+    __DMB();
+
+    UBaseType_t tasks_before = uxTaskGetNumberOfTasks();
     UBaseType_t n = uxTaskGetSystemState(st, LCD_TASK_STATS_MAX, &total);
+    UBaseType_t tasks_after = uxTaskGetNumberOfTasks();
     if (n > LCD_TASK_STATS_MAX)
         n = LCD_TASK_STATS_MAX;
+
+    UBaseType_t task_total = tasks_before;
+    if (tasks_after > task_total)
+        task_total = tasks_after;
+    if (n > task_total)
+        task_total = n;
 
     // 总量取各任务累计计数之和，计数单位沿用 CYCCNT/1000，下面按同名任务求差。
     (void)total;
@@ -240,6 +262,8 @@ static void lcd_task_stats_snapshot(void)
         sum += st[i].ulRunTimeCounter;
     lcd_stats_total = sum;
     lcd_stats_count = (uint8_t)n;
+    lcd_stats_task_total = (uint32_t)task_total;
+    lcd_stats_truncated = (uint8_t)(task_total > n);
 
     uint32_t deltas[LCD_TASK_STATS_MAX] = {0};
     uint32_t delta_total = 0;
@@ -283,6 +307,18 @@ static void lcd_task_stats_snapshot(void)
         prev[i].runtime = lcd_stats_runtime[i];
     }
     prev_cnt = (uint8_t)n;
+
+    /* 清掉旧任务留下的尾项，避免调试器把缩短后的列表误读成完整快照。 */
+    for (UBaseType_t i = n; i < LCD_TASK_STATS_MAX; ++i)
+    {
+        lcd_stats_runtime[i] = 0u;
+        lcd_stats_prio[i] = 0u;
+        lcd_stats_stack[i] = 0u;
+        memset((void *)lcd_stats_name[i], 0, sizeof(lcd_stats_name[i]));
+    }
+
+    __DMB();
+    lcd_stats_generation = generation + 1u;
 }
 
 // 保存本次耗时及历史最大耗时，并加入 LCD 操作的累计时间。

@@ -32,6 +32,14 @@
 #include "bsp_adc.h"
 #include "bsp_usart.h"
 
+#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_ROBOT)
+/* 保留完整任务轮次最大耗时，供固定只读快照与任务栈数据一起核对。 */
+volatile DWT_Probe_t r25_task_ins = {0};
+volatile DWT_Probe_t r25_task_motor = {0};
+volatile DWT_Probe_t r25_task_daemon = {0};
+volatile DWT_Probe_t r25_task_robot = {0};
+#endif
+
 osThreadId insTaskHandle;
 osThreadId robotTaskHandle;
 osThreadId motorTaskHandle;
@@ -152,7 +160,6 @@ uint8_t OSTaskInit(void)
 __attribute__((noreturn)) void StartINSTASK(void const *argument)
 {
     static volatile float ins_start;
-    static float ins_dt;
     TaskMonitorFeed(TASK_MONITOR_INS);
     if (INS_Init() == NULL)
     {
@@ -178,13 +185,13 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         /* 用轻量周期计数代替 DWT_GetTimeline_ms(): 后者内部有 64bit 除法, 1kHz 下也不便宜 */
         uint32_t ins_probe = DWT_ProbeStart();
         INS_Task();
-        ins_dt = (float)DWT_ProbeElapsedUs(ins_probe);
-        if (ins_dt > 1000.0f)
+        DWT_ProbeDone(&r25_task_ins, ins_probe);
+        if (r25_task_ins.last_us > 1000u)
         {
             ins_start = DWT_GetTimeline_ms(); /* 便于 Live Watch 查看最近一次超时刻 */
             (void)ins_start;
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_02,
-                            BSP_LOG_FIELD_U32((uint32_t)ins_dt));
+                            BSP_LOG_FIELD_U32(r25_task_ins.last_us));
         }
         // 视觉上行数据由 INS_Task 内的 VisionUpdateTx() 填充,
         // VisionSend() 统一在 RobotCMDTask(200Hz) 中调用, 避免多任务并发 DMA 发送
@@ -194,18 +201,17 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
 
 __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 {
-    static float motor_dt;
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_03);
     for (;;)
     {
         TaskMonitorFeed(TASK_MONITOR_MOTOR);
         uint32_t motor_probe = DWT_ProbeStart();
         MotorControlTask();
-        motor_dt = (float)DWT_ProbeElapsedUs(motor_probe);
-        if (motor_dt > 1000.0f)
+        DWT_ProbeDone(&r25_task_motor, motor_probe);
+        if (r25_task_motor.last_us > 1000u)
         {
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_04,
-                            BSP_LOG_FIELD_U32((uint32_t)motor_dt));
+                            BSP_LOG_FIELD_U32(r25_task_motor.last_us));
         }
         osDelay(1);
     }
@@ -213,7 +219,6 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 
 __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 {
-    static float daemon_dt;
     uint8_t buzzer_ready = BuzzerInit();
     if (!buzzer_ready)
     {
@@ -271,11 +276,11 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 #if CAN_DJI_INJECT_TEST >= 2
         DJIInjectStressTick(); /* 压测模式: 持续往接收队列里灌帧 */
 #endif
-        daemon_dt = (float)DWT_ProbeElapsedUs(daemon_probe);
-        if (daemon_dt > 10000.0f)
+        DWT_ProbeDone(&r25_task_daemon, daemon_probe);
+        if (r25_task_daemon.last_us > 10000u)
         {
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_06,
-                            BSP_LOG_FIELD_U32((uint32_t)daemon_dt));
+                            BSP_LOG_FIELD_U32(r25_task_daemon.last_us));
         }
         osDelay(10);
     }
@@ -283,7 +288,6 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 
 __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
 {
-    static float robot_dt;
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_07);
     // 200Hz-500Hz,若有额外的控制任务如平衡步兵可能需要提升至1kHz
     for (;;)
@@ -291,11 +295,11 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
         TaskMonitorFeed(TASK_MONITOR_ROBOT);
         uint32_t robot_probe = DWT_ProbeStart();
         RobotTask();
-        robot_dt = (float)DWT_ProbeElapsedUs(robot_probe);
-        if (robot_dt > 5000.0f)
+        DWT_ProbeDone(&r25_task_robot, robot_probe);
+        if (r25_task_robot.last_us > 5000u)
         {
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_08,
-                            BSP_LOG_FIELD_U32((uint32_t)robot_dt));
+                            BSP_LOG_FIELD_U32(r25_task_robot.last_us));
         }
         osDelay(5);
     }

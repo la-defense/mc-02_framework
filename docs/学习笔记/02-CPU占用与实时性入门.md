@@ -157,3 +157,15 @@ DJI 电机的反馈是**电机自己按 1kHz 发的**，我们改不了：
 无符号相减能处理跨过一次零点的短间隔，若两次读取相隔多个计数周期，单凭差值无法还原真实耗时。
 累计时间也要在一个周期内至少更新一次，三个 Timeline 入口各自调用内部累计函数，并非调用 `DWT_SysTimeUpdate()`。
 `DWT_GetDeltaT()` 会把传入的旧周期数改成当前读数，调用方要长期保留这份变量。
+
+## 12. R25-12：任务栈和最大观测耗时
+
+R25-12 在 `StartINSTASK()`、`StartMOTORTASK()`、`StartDAEMONTASK()`、`StartROBOTTASK()` 和 UART 发送任务中保留 `DWT_Probe_t`。其中 `max_us` 是本次上电以来、指定函数主体的最大观测耗时，单位为微秒；它不等于形式化 WCET，也不包含任务被更高优先级工作抢占的完整响应时间。LCD 另有采样、更新和绘制分段最大值。
+
+`lcd_task_stats_snapshot()` 每约 5 秒发布一次 FreeRTOS 任务名、累计运行计数、优先级和历史最小剩余栈。`lcd_stats_generation` 在写入期间为奇数，写完后变为偶数；离线 GDB 先从匹配 ELF 找地址，运行中 OpenOCD 只读 RAM，并对照前后代号。`tools/probe_snapshot_live.py --rtos` 会拒绝布局不符、表格更新中、地址越界和栈剩余量大于已知配置的记录；任务超过12个时会明确报告截断，不能当作完整清单。
+
+FreeRTOS 栈水位的单位是 `StackType_t` 个数，H723 每项4字节。本工程的 CMSIS-RTOS v1 `osThreadCreate()` 将 `stacksize` 原样传给 `xTaskCreate()`；FreeRTOS 把该参数解释为栈字数。因此本轮按实际传入的数值字数计算余量，并在票据中记录这一实现细节，不能只按 CMSIS 文档的“字节”注释推算。
+
+FreeRTOS 运行计数由 `DWT->CYCCNT / 1000` 产生；480 MHz 时每个计数约为2.083微秒。它适合在不同快照间按任务名配对求差，不代表整数微秒。R25-12 的栈和耗时结论以已说明的 `bench_safe`、LCD＋DR16和本轮运行场景为边界；电机解析压力由生产 DJI 解码器主机测试覆盖，不把板上禁热配置说成电机实测。
+
+详见 [R25-12 记录](../workflow/tickets/R25-12.md)、[探针工具](../../tools/probe_snapshot_live.py) 和 [LCD 任务快照](../../modules/lcd/lcd_task.c)。

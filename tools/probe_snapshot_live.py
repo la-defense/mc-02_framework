@@ -51,6 +51,7 @@ class SnapshotField:
     expression: str
     command: str
     width_bits: int
+    count: int = 1
 
     @property
     def alignment_bytes(self) -> int:
@@ -97,6 +98,117 @@ REFEREE_SNAPSHOT_FIELDS = {
     "ref_magic": SnapshotField("referee_bench_diag.magic", "mdw", 32),
     "ref_count": SnapshotField("referee_bench_diag.write_count", "mdw", 32),
 }
+
+# 固定读取 RTOS 任务快照和已登记的 DWT 最大耗时；数组块长度来自固件编译常量。
+RTOS_SNAPSHOT_FIELDS = {
+    "tick_ms": SnapshotField("uwTick", "mdw", 32),
+    "stats_layout": SnapshotField("lcd_stats_layout", "mdw", 32),
+    "stats_generation_before": SnapshotField("lcd_stats_generation", "mdw", 32),
+    "stats_count": SnapshotField("lcd_stats_count", "mdb", 8),
+    "stats_task_total": SnapshotField("lcd_stats_task_total", "mdw", 32),
+    "stats_truncated": SnapshotField("lcd_stats_truncated", "mdb", 8),
+    "stats_names_words": SnapshotField("((uint32_t *)&lcd_stats_name[0][0])[0]", "mdw", 32, 36),
+    "stats_runtime": SnapshotField("((uint32_t *)&lcd_stats_runtime[0])[0]", "mdw", 32, 12),
+    "stats_priority_words": SnapshotField("((uint32_t *)&lcd_stats_prio[0])[0]", "mdw", 32, 3),
+    "stats_stack_words": SnapshotField("((uint32_t *)&lcd_stats_stack[0])[0]", "mdw", 32, 6),
+    "motor_task_max_us": SnapshotField("r25_task_motor.max_us", "mdw", 32),
+    "motor_task_calls": SnapshotField("r25_task_motor.calls", "mdw", 32),
+    "ins_task_max_us": SnapshotField("r25_task_ins.max_us", "mdw", 32),
+    "ins_task_calls": SnapshotField("r25_task_ins.calls", "mdw", 32),
+    "daemon_task_max_us": SnapshotField("r25_task_daemon.max_us", "mdw", 32),
+    "daemon_task_calls": SnapshotField("r25_task_daemon.calls", "mdw", 32),
+    "robot_task_max_us": SnapshotField("r25_task_robot.max_us", "mdw", 32),
+    "robot_task_calls": SnapshotField("r25_task_robot.calls", "mdw", 32),
+    "uart_tx_task_max_us": SnapshotField("usart_tx_task_probe.max_us", "mdw", 32),
+    "uart_tx_task_calls": SnapshotField("usart_tx_task_probe.calls", "mdw", 32),
+    "motor_control_max_us": SnapshotField("motor_prof_all.max_us", "mdw", 32),
+    "ins_compute_max_us": SnapshotField("ins_prof_all.max_us", "mdw", 32),
+    "can_rx_dispatch_max_us": SnapshotField("can_prof_rx_dispatch.max_us", "mdw", 32),
+    "can_rx_dispatch_calls": SnapshotField("can_prof_rx_dispatch.calls", "mdw", 32),
+    "can_rx_drop_total": SnapshotField("can_rxq_drop_total", "mdw", 32),
+    "can_rx_peak_max": SnapshotField("can_rxq_peak_max", "mdw", 32),
+    "lcd_sample_max_us": SnapshotField("lcd_prof_sample_max_us", "mdw", 32),
+    "lcd_update_max_us": SnapshotField("lcd_prof_update_max_us", "mdw", 32),
+    "lcd_draw_max_us": SnapshotField("lcd_prof_draw_max_us", "mdw", 32),
+    "stats_generation_after": SnapshotField("lcd_stats_generation", "mdw", 32),
+}
+RTOS_TASK_CAPACITY = 12
+RTOS_TASK_STATS_LAYOUT = 0x52543102
+RTOS_TASK_STACK_WORDS = {
+    "defaultTask": 128,
+    "IDLE": 128,
+    "Tmr Svc": 256,
+    "instask": 1024,
+    "motortask": 512,
+    "uarttxtask": 512,
+    "logtask": 1024,
+    "daemontask": 512,
+    "robottask": 1024,
+    "uitask": 512,
+    "lcdtask": 1024,
+}
+
+
+def decode_rtos_snapshot(snapshot: dict[str, int | list[int]]) -> dict:
+    """Validate the published task table and unpack its fixed-width arrays."""
+    if set(snapshot) != set(RTOS_SNAPSHOT_FIELDS):
+        raise ProbeIOError("RTOS record has missing or unexpected fields")
+    for key, field in RTOS_SNAPSHOT_FIELDS.items():
+        value = snapshot[key]
+        values = value if field.count > 1 else [value]
+        if not isinstance(values, list) or len(values) != field.count:
+            raise ProbeIOError(f"RTOS field {key} has an invalid word count")
+        if any(type(word) is not int or not 0 <= word <= UINT32_MAX for word in values):
+            raise ProbeIOError(f"RTOS field {key} contains an invalid unsigned word")
+
+    before = snapshot["stats_generation_before"]
+    after = snapshot["stats_generation_after"]
+    if snapshot["stats_layout"] != RTOS_TASK_STATS_LAYOUT:
+        raise ProbeIOError("RTOS task table layout mismatch: use the verified firmware ELF")
+    if before != after or before & 1:
+        raise ProbeIOError("RTOS task table changed during reading or is being published")
+    count = snapshot["stats_count"]
+    total = snapshot["stats_task_total"]
+    truncated = snapshot["stats_truncated"]
+    if count > RTOS_TASK_CAPACITY or total < count or truncated not in (0, 1):
+        raise ProbeIOError("RTOS task counts are inconsistent")
+    if bool(truncated) != (total > count):
+        raise ProbeIOError("RTOS truncation flag disagrees with the task counts")
+
+    name_bytes = b"".join(word.to_bytes(4, "little") for word in snapshot["stats_names_words"])
+    priority_bytes = b"".join(word.to_bytes(4, "little") for word in snapshot["stats_priority_words"])
+    stack_bytes = b"".join(word.to_bytes(4, "little") for word in snapshot["stats_stack_words"])
+    stacks = struct.unpack("<12H", stack_bytes)
+    tasks = []
+    for index in range(count):
+        raw_name = name_bytes[index * 12:(index + 1) * 12]
+        name = raw_name.split(b"\0", 1)[0].decode("ascii", errors="replace")
+        stack_words = stacks[index]
+        stack_capacity_words = RTOS_TASK_STACK_WORDS.get(name)
+        if stack_capacity_words is not None and stack_words > stack_capacity_words:
+            raise ProbeIOError(f"task {name} reports more free stack than its configured depth")
+        tasks.append({
+            "name": name,
+            "runtime_counter": snapshot["stats_runtime"][index],
+            "priority": priority_bytes[index],
+            "stack_high_water_words": stack_words,
+            "stack_high_water_bytes": stack_words * 4,
+            "stack_capacity_words": stack_capacity_words,
+            "stack_margin_permille": (
+                (stack_words * 1000) // stack_capacity_words
+                if stack_capacity_words is not None else None
+            ),
+        })
+    return {
+        **{key: value for key, value in snapshot.items()
+           if key != "stats_layout" and not key.startswith("stats_")},
+        "snapshot_generation": after,
+        "task_count": count,
+        "task_total": total,
+        "task_table_capacity": RTOS_TASK_CAPACITY,
+        "task_table_truncated": bool(truncated),
+        "tasks": tasks,
+    }
 ADC_DIAGNOSTIC_LAYOUT = 0xADC10001
 ADC_DIAGNOSTIC_WORD_COUNT = 15
 
@@ -314,6 +426,12 @@ def _validate_snapshot_addresses(
     for key, field in fields.items():
         try:
             _validated_address(addresses[key], field.alignment_bytes)
+            if not 1 <= field.count <= 64:
+                raise ValueError("read length must be between 1 and 64 words")
+            if field.count > 1 and field.command != "mdw":
+                raise ValueError("multiword reads must use aligned 32-bit words")
+            if addresses[key] + field.count * 4 > SNAPSHOT_RAM_END:
+                raise ValueError("read extends beyond the approved linker RAM region")
         except ValueError as error:
             raise ProbeIOError(f"ELF symbol {key} has an invalid address: {error}") from error
 
@@ -325,7 +443,7 @@ def _build_read_command(
         raise ValueError(f"unsupported snapshot field: {key}")
     field = fields[key]
     validated = _validated_address(address, field.alignment_bytes)
-    return f"{field.command} 0x{validated:08x} 1"
+    return f"{field.command} 0x{validated:08x} {field.count}"
 
 
 def _parse_memory_value(output: str, expected_address: int, width_bits: int) -> int:
@@ -356,19 +474,19 @@ def _parse_memory_words(output: str, start_address: int, count: int) -> list[int
         address = int(match.group("address"), 16)
         tokens = match.group("values").split()
         if address != start_address + len(values) * 4:
-            raise ProbeIOError("OpenOCD returned a non-contiguous ADC diagnostic block")
+            raise ProbeIOError("OpenOCD returned a non-contiguous fixed diagnostic block")
         for token in tokens:
             if token == ">":
                 break
             if token.lower().startswith("0x"):
                 token = token[2:]
             if not token or len(token) > 8 or not re.fullmatch(r"[0-9a-fA-F]+", token):
-                raise ProbeIOError("OpenOCD returned an invalid ADC diagnostic word")
+                raise ProbeIOError("OpenOCD returned an invalid fixed diagnostic word")
             if len(values) >= count:
-                raise ProbeIOError("OpenOCD returned too many ADC diagnostic words")
+                raise ProbeIOError("OpenOCD returned too many fixed diagnostic words")
             values.append(int(token, 16))
     if len(values) != count:
-        raise ProbeIOError(f"OpenOCD returned {len(values)} of {count} ADC diagnostic words")
+        raise ProbeIOError(f"OpenOCD returned {len(values)} of {count} fixed diagnostic words")
     return values
 
 
@@ -404,7 +522,7 @@ class OpenOCDTelnetClient:
         self.fields = fields
         self.allowed_addresses = dict(allowed_addresses)
         self.allowed_reads = frozenset(
-            (field.command, allowed_addresses[key])
+            (field.command, allowed_addresses[key], field.count)
             for key, field in fields.items()
         )
         self._socket: socket.socket | None = None
@@ -443,7 +561,7 @@ class OpenOCDTelnetClient:
                 raise ValueError("only targets and bounded ELF-resolved memory reads are allowed")
             read = (match.group("command"), int(match.group("address"), 16))
             count = int(match.group("count"))
-            single_read = count == 1 and read in self.allowed_reads
+            fixed_read = (*read, count) in self.allowed_reads
             adc_block_read = (
                 self.fields is ADC_SNAPSHOT_FIELDS
                 and match.group("command") == "mdw"
@@ -466,7 +584,7 @@ class OpenOCDTelnetClient:
                 and self.allowed_addresses["ref_count"] == read[1] + 28
                 and read[1] + count * 4 <= SNAPSHOT_RAM_END
             )
-            if not single_read and not adc_block_read and not referee_block_read:
+            if not fixed_read and not adc_block_read and not referee_block_read:
                 raise ValueError("memory reads must match an ELF-resolved symbol address and width")
         if self._socket is None:
             raise ProbeIOError("OpenOCD Telnet connection is closed")
@@ -542,10 +660,10 @@ def read_snapshot(
     port: int,
     timeout: float,
     fields: dict[str, SnapshotField] = SNAPSHOT_FIELDS,
-) -> dict[str, int]:
+) -> dict[str, int | list[int]]:
     _validate_snapshot_addresses(addresses, fields)
 
-    snapshot: dict[str, int] = {}
+    snapshot: dict[str, int | list[int]] = {}
     try:
         with OpenOCDTelnetClient(
             host, port, timeout, allowed_addresses=addresses, fields=fields
@@ -575,9 +693,12 @@ def read_snapshot(
                 for key, address in addresses.items():
                     command = _build_read_command(key, address, fields)
                     output = client.command(command)
-                    snapshot[key] = _parse_memory_value(
-                        output, address, fields[key].width_bits
-                    )
+                    if fields[key].count > 1:
+                        snapshot[key] = _parse_memory_words(output, address, fields[key].count)
+                    else:
+                        snapshot[key] = _parse_memory_value(
+                            output, address, fields[key].width_bits
+                        )
                     _require_running(client.command("targets"), f"after reading {key}")
     except (OSError, ValueError) as error:
         if isinstance(error, ProbeIOError):
@@ -630,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
     profile.add_argument("--init", action="store_true", help="read the fixed startup-failure diagnostic profile")
     profile.add_argument("--rc", action="store_true", help="read the fixed remote/safety diagnostic profile")
     profile.add_argument("--rc-input", action="store_true", help="read fixed remote/safety plus keyboard and mouse fields (non-atomic)")
+    profile.add_argument("--rtos", action="store_true", help="read the fixed task-stack and timing profile")
     args = parser.parse_args(argv)
 
     if not 2 <= args.samples <= 8:
@@ -645,7 +767,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"ELF file does not exist: {args.elf}")
 
     try:
-        fields = (ADC_SNAPSHOT_FIELDS if args.adc else RC_INPUT_SNAPSHOT_FIELDS if args.rc_input else RC_SNAPSHOT_FIELDS if args.rc
+        fields = (RTOS_SNAPSHOT_FIELDS if args.rtos else ADC_SNAPSHOT_FIELDS if args.adc else RC_INPUT_SNAPSHOT_FIELDS if args.rc_input else RC_SNAPSHOT_FIELDS if args.rc
                   else INIT_SNAPSHOT_FIELDS if args.init else IMU_SNAPSHOT_FIELDS if args.imu
                   else SNAPSHOT_FIELDS)
         addresses = resolve_symbol_addresses(args.gdb, str(args.elf), args.timeout, fields)
@@ -661,6 +783,8 @@ def main(argv: list[str] | None = None) -> int:
                 current = decode_rc_input(current)
             elif args.adc:
                 current = decode_adc(current)
+            elif args.rtos:
+                current = decode_rtos_snapshot(current)
             status = "baseline" if previous is None else classify_change(previous, current)
             print(json.dumps({"sample": index + 1, "status": status, **current}, sort_keys=True))
             previous = current

@@ -263,3 +263,11 @@ FreeRTOS 允许注册 `vApplicationIdleHook()`，在 IDLE 里做后台工作（�
 | 优化前后对比 | `python tools\probe_snapshot.py --seconds 30` |
 | 分段耗时 | `motor_prof_*` / `dji_prof_*` / `ins_prof_*` / `can_prof_*` / `lcd_prof_*` 这些探针变量 |
 | 相关历史与数据 | `docs/代码审查报告_MC-02.md` 的“CPU 饱和排查”章节 |
+
+## 9. R25-12：报告栈余量和最大观测值
+
+`lcd_stats_stack[]` 给出各任务历史最少剩余的 `StackType_t` 数；H723 上每项4字节。要算余量比例，必须按实际创建深度换算。本工程 CMSIS-RTOS v1 包装层把 `osThreadDef(..., stacksz)` 的数值原样交给 FreeRTOS，而 FreeRTOS 按栈字数解释，所以当前任务栈深度以创建调用中的数值为字数核对。任务名不在工具的已知清单内时，工具只报告剩余字数，不猜测总容量。
+
+`r25_task_*` 和 `usart_tx_task_probe` 保存任务主体的历史最大微秒值及调用数；`can_prof_rx_dispatch`、`motor_prof_all`、`ins_prof_all` 和 `lcd_prof_*` 补充接收派发、传感器、电机控制和屏幕分段。每个最大值只说明已观测场景。它会在更广的输入、总线负载或中断组合下增长，不能称为 WCET。
+
+R25-12 的 `bench_safe` 固件关闭加热、UI和执行器；通过生产 CAN 队列和生产 DJI 解码器的 WSL 压力测试检查多总线满队列解析。最终的栈余量和运行最大值以 [任务票据](../workflow/tickets/R25-12.md) 中的板端记录为准；若任务表截断或发布版本不一致，不能用该次快照做验收。
