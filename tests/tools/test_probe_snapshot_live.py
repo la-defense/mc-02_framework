@@ -640,6 +640,54 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
         self.assertEqual(decoded["can"]["buses"][0]["tx_ok"], 35)
         self.assertEqual(decoded["lcd"]["values"]["draw_last_us"], 57)
 
+    def test_performance_snapshot_retries_transient_publication_update(self):
+        identity_info = _test_identity_info()
+        expected = identity_info["expected"]
+        unstable = _performance_raw(1, 1000, 1)
+        unstable["can_generation_before"] = 3
+        stable = _performance_raw(2, 2000, 2)
+        calls = []
+
+        def read_snapshot(*args):
+            calls.append(args[5])
+            raw = unstable if len(calls) == 1 else stable
+            return raw, _identity_words(expected)
+
+        with patch.object(probe_snapshot_live, "read_verified_snapshot", side_effect=read_snapshot):
+            raw, target_words, decoded = probe_snapshot_live.read_verified_performance_snapshot(
+                {}, identity_info["identity_address"], expected,
+                "127.0.0.1", 4444, 0.5, probe_snapshot_live.PERFORMANCE_SNAPSHOT_FIELDS,
+                identity_info["ram_bounds"],
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertLess(calls[1], calls[0])
+        self.assertEqual(raw["can_generation_before"], raw["can_generation_after"])
+        self.assertEqual(target_words, _identity_words(expected))
+        self.assertEqual(decoded["can"]["sample_id"], 2)
+
+    def test_performance_snapshot_retry_obeys_one_total_timeout(self):
+        identity_info = _test_identity_info()
+        calls = []
+        unstable = _performance_raw(1, 1000, 1)
+        unstable["timing_generation_before"] = 3
+
+        def keep_publishing(*args):
+            calls.append(args[5])
+            time.sleep(0.03)
+            return unstable, _identity_words(identity_info["expected"])
+
+        with patch.object(probe_snapshot_live, "read_verified_snapshot", side_effect=keep_publishing):
+            with self.assertRaisesRegex(probe_snapshot_live.ProbeIOError, "stable snapshot"):
+                probe_snapshot_live.read_verified_performance_snapshot(
+                    {}, identity_info["identity_address"], identity_info["expected"],
+                    "127.0.0.1", 4444, 0.05, probe_snapshot_live.PERFORMANCE_SNAPSHOT_FIELDS,
+                    identity_info["ram_bounds"],
+                )
+
+        self.assertEqual(len(calls), 2)
+        self.assertLess(calls[1], calls[0])
+
     def test_performance_decoder_distinguishes_unpublished_and_disabled_groups(self):
         identity = _test_identity_info()["expected"]
         raw = _performance_raw(1, 1000, 1)

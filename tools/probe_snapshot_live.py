@@ -426,6 +426,10 @@ class ProbeIOError(RuntimeError):
     """The OpenOCD connection, state check, or bounded memory read failed."""
 
 
+class ObservationSnapshotChangedError(ProbeIOError):
+    """A publication seqlock changed during a group read."""
+
+
 def build_symbol_command(
     gdb: str,
     elf: str,
@@ -702,7 +706,7 @@ def _decode_observation_group(
     if before == after == generation == words[2] == words[3] == 0:
         return 0, 0, 0, 0, []
     if before != after or before != generation or generation == 0 or generation & 1:
-        raise ProbeIOError(f"{name} observation block changed while it was read")
+        raise ObservationSnapshotChangedError(f"{name} observation block changed while it was read")
     if words[0] != expected_layout:
         raise ProbeIOError(f"{name} observation layout mismatch")
     if words[2] == 0:
@@ -1188,6 +1192,34 @@ def _read_snapshot(
     return snapshot, identity_words
 
 
+def read_verified_performance_snapshot(
+    addresses: dict[str, int],
+    identity_address: int,
+    expected_identity: dict,
+    host: str,
+    port: int,
+    timeout: float,
+    fields: dict[str, SnapshotField],
+    ram_bounds: tuple[int, int],
+) -> tuple[dict[str, int | list[int]], list[int], dict]:
+    """Retry a seqlock collision within one total snapshot timeout."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProbeIOError("timed out waiting for a stable snapshot")
+        try:
+            raw, target_identity_words = read_verified_snapshot(
+                addresses, identity_address, expected_identity, host, port,
+                remaining, fields, ram_bounds,
+            )
+            decoded = decode_performance_snapshot(raw, expected_identity)
+            return raw, target_identity_words, decoded
+        except ObservationSnapshotChangedError as error:
+            if time.monotonic() >= deadline:
+                raise ProbeIOError("timed out waiting for a stable snapshot") from error
+
+
 def _small_decrease(old: int, new: int) -> bool:
     return new < old and old - new < 0x80000000
 
@@ -1576,12 +1608,11 @@ def main(argv: list[str] | None = None) -> int:
                     time.sleep(deadline - now)
                 if time.monotonic() > window_end:
                     break
-                raw, target_words = read_verified_snapshot(
+                raw, target_words, decoded = read_verified_performance_snapshot(
                     addresses, identity_info["identity_address"], identity,
                     args.host, args.telnet_port, args.timeout, fields,
                     identity_info["ram_bounds"],
                 )
-                decoded = decode_performance_snapshot(raw, identity)
                 status = "baseline" if previous is None else classify_change(previous, decoded)
                 sample = {
                     "type": "sample",
