@@ -10,7 +10,7 @@
 // 以下数量均以 uint32_t 计，每项 4 字节。
 #define CRASH_LOG_SNAPSHOT_WORDS 32u        // 崩溃记录最多保存的栈数据个数
 #define CRASH_LOG_BASIC_FRAME_WORDS 8u      // R0～R3、R12、LR、PC、xPSR
-#define CRASH_LOG_FP_FRAME_PREFIX_WORDS 18u // 基本寄存器前的浮点相关区域
+#define CRASH_LOG_FP_FRAME_WORDS 18u // 扩展帧中的浮点寄存器、FPSCR和保留字
 
 static uint8_t CrashLogMemoryMapValid(const CrashMemoryMap_t *map)
 {
@@ -124,10 +124,10 @@ uint8_t CrashLogFrameResolve(const CrashMemoryMap_t *map, uintptr_t stack_pointe
                                       (1u << 11u) | /* BFSR.UNSTKERR */
                                       (1u << 12u) | /* BFSR.STKERR */
                                       (1u << 13u);  /* BFSR.LSPERR */
-    // bit4 为 0 时，8 项基本寄存器前面还有 18 项浮点相关区域，检查长度时也要算上。
+    // 扩展帧共占26字；Cortex-M7最低地址仍是R0，18字浮点区位于基本帧之后。
     const uint32_t fp_extended = (exception_return & (1u << 4u)) == 0u;
-    const uint32_t prefix_words = fp_extended ? CRASH_LOG_FP_FRAME_PREFIX_WORDS : 0u;
-    const uintptr_t frame_bytes = (uintptr_t)(prefix_words + CRASH_LOG_BASIC_FRAME_WORDS) *
+    const uint32_t extension_words = fp_extended ? CRASH_LOG_FP_FRAME_WORDS : 0u;
+    const uintptr_t frame_bytes = (uintptr_t)(extension_words + CRASH_LOG_BASIC_FRAME_WORDS) *
                                   sizeof(uint32_t);
 
     // 没有接收结果的位置时直接失败。
@@ -144,8 +144,8 @@ uint8_t CrashLogFrameResolve(const CrashMemoryMap_t *map, uintptr_t stack_pointe
         !CrashLogRangeReadableInRegions(map, stack_pointer, (size_t)frame_bytes, 8u, 1u))
         return 0u;
 
-    // 跳过可能存在的浮点区域得到 R0 的位置；可复制个数仍从原始栈起点计算。
-    view->core_frame_address = stack_pointer + ((uintptr_t)prefix_words * sizeof(uint32_t));
+    // SP指向最低地址的R0；扩展浮点区在后方，只扩大完整性检查范围。
+    view->core_frame_address = stack_pointer;
     view->snapshot_words = CrashLogReadableStackWords(map, stack_pointer);
     return 1u;
 }

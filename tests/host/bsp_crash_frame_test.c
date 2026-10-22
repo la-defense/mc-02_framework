@@ -42,8 +42,16 @@ static int TestExtendedFloatingPointFrame(void)
 {
     CrashLogFrameView_t view = {0};
     CHECK(CrashLogFrameResolve(&kMap, 0x24001000u, 0xFFFFFFEDu, 0u, &view));
-    CHECK(view.core_frame_address == 0x24001048u);
+    CHECK(view.core_frame_address == 0x24001000u);
     CHECK(view.snapshot_words == 32u);
+
+    // RAM末尾刚好容纳26字扩展帧时应通过；少4字节就必须拒绝。
+    CHECK(CrashLogFrameResolve(&kMap, 0x2401FF98u, 0xFFFFFFEDu, 0u, &view));
+    CHECK(view.core_frame_address == 0x2401FF98u);
+    CHECK(view.snapshot_words == 26u);
+    CHECK(!CrashLogFrameResolve(&kMap, 0x2401FFA0u, 0xFFFFFFEDu, 0u, &view));
+    CHECK(view.core_frame_address == 0u);
+    CHECK(view.snapshot_words == 0u);
     return 0;
 }
 

@@ -42,7 +42,8 @@ typedef struct
  * @param[in] cfsr 当时的 CFSR 故障状态，用于检查保存或恢复寄存器时是否出错。
  * @param[out] view 接收读取位置和数量；为 NULL 时返回 0，非空时先将两个字段清零。
  * @return 1 表示地址、返回标记、相关错误位和整个区域长度均通过检查；0 表示失败。
- * @note 基本寄存器数据共 8 项（32 字节）；包含浮点区域时，前面另有 18 项（72 字节）。
+ * @note 基本寄存器数据共 8 项（32 字节）。Cortex-M7 扩展帧的浮点区另占 18 项，位于基本帧之后；
+ *       两种布局的 R0 都从 stack_pointer 开始。扩展帧会检查完整 26 项都在允许 RAM 内。
  *       失败时非空 view 的两个字段保持为 0，调用方跳过读取。
  */
 uint8_t CrashLogFrameResolve(const CrashMemoryMap_t *map, uintptr_t stack_pointer,
