@@ -4,7 +4,11 @@ import importlib.util
 import math
 from pathlib import Path
 import struct
+import sys
+import tempfile
+from types import ModuleType, SimpleNamespace
 import unittest
+from unittest import mock
 
 TOOL = Path(__file__).resolve().parents[2] / "tools" / "usb_lifecycle_capture.py"
 SPEC = importlib.util.spec_from_file_location("usb_lifecycle_capture", TOOL)
@@ -33,6 +37,37 @@ class UsbLifecycleCaptureTest(unittest.TestCase):
         self.assertIn("2", diagnostic)
         self.assertNotIn("--write", diagnostic)
         self.assertTrue(any(item.endswith("probe_snapshot_live.py") for item in diagnostic))
+
+    def test_identity_mismatch_exits_before_opening_cdc_port(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            elf = root / "firmware.elf"
+            elf.write_bytes(b"test ELF")
+            output = root / "session"
+            port = SimpleNamespace(device="MC02", vid=capture.USB_VID,
+                                   pid=capture.USB_PID, serial_number="board-serial")
+            serial_module = ModuleType("serial")
+            serial_module.Serial = mock.Mock(side_effect=AssertionError("CDC opened before identity passed"))
+            tools_module = ModuleType("serial.tools")
+            list_ports_module = ModuleType("serial.tools.list_ports")
+            list_ports_module.comports = lambda: [port]
+            serial_module.tools = tools_module
+            tools_module.list_ports = list_ports_module
+
+            with mock.patch.dict(sys.modules, {
+                    "serial": serial_module,
+                    "serial.tools": tools_module,
+                    "serial.tools.list_ports": list_ports_module,
+            }), mock.patch.object(capture.subprocess, "run",
+                                  return_value=SimpleNamespace(returncode=2, stdout="", stderr="身份不匹配")):
+                result = capture.main([
+                    "--port", "MC02", "--elf", str(elf), "--source-sha", "a" * 40,
+                    "--output", str(output),
+                ])
+
+            self.assertEqual(result, 2)
+            serial_module.Serial.assert_not_called()
+            self.assertIn("returncode=2", (output / "identity_preflight.txt").read_text(encoding="utf-8"))
 
     def test_status_parser_handles_split_and_multiple_frames(self):
         body = b"SP\x00" + bytes(36) + b"\x34\x12"
