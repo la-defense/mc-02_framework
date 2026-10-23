@@ -35,6 +35,12 @@ endif()
 
 
 if(UNIX AND NOT APPLE)
+  add_executable(lcd_diag_state_test lcd_diag_state_test.c)
+  target_include_directories(lcd_diag_state_test BEFORE PRIVATE lcd_spi_fakes)
+  target_include_directories(lcd_diag_state_test PRIVATE ../../modules/lcd)
+  add_test(NAME production_lcd_diagnostic_failure_releases_ui COMMAND lcd_diag_state_test)
+  set_tests_properties(production_lcd_diagnostic_failure_releases_ui PROPERTIES TIMEOUT 10)
+
   add_executable(lcd_spi_timing_test lcd_spi_timing_test.c ../../Core/Src/spi.c ../../modules/lcd/lcd.c)
   target_include_directories(lcd_spi_timing_test BEFORE PRIVATE lcd_spi_fakes)
   target_include_directories(lcd_spi_timing_test PRIVATE ../../modules/lcd)

@@ -6,6 +6,7 @@
 #include "lcd_ui.h"
 #include "lcd_buf.h"
 #include "lcd_key_input.h"
+#include "lcd_task_diag_state.h"
 #include "bsp_adc.h"
 #include "bsp_log.h"
 #include "bsp_dwt.h"
@@ -419,8 +420,7 @@ LCDStatus_t LCDTaskGetDiagnosticState(LCDTaskDiagnosticState_t *output)
 static uint8_t lcd_bench_diag_active(void)
 {
 #if MC02_BENCH_LCD_DIAGNOSTICS
-    return (uint8_t)(lcd_bench_diag_state == LCD_TASK_DIAG_RUNNING ||
-                     lcd_bench_diag_state == LCD_TASK_DIAG_FAILED);
+    return LCDTaskDiagnosticOwnsUi(lcd_bench_diag_state);
 #else
     return 0u;
 #endif
@@ -429,9 +429,8 @@ static uint8_t lcd_bench_diag_active(void)
 static uint8_t lcd_bench_diag_service(void)
 {
 #if MC02_BENCH_LCD_DIAGNOSTICS
-    if (lcd_bench_diag_state == LCD_TASK_DIAG_FAILED)
-        return 1u;
-    if (lcd_bench_diag_state != LCD_TASK_DIAG_RUNNING)
+    // 自测失败后停止测试，让用户仍可用中键恢复面板和继续翻页。
+    if (!LCDTaskDiagnosticOwnsUi(lcd_bench_diag_state))
         return 0u;
 
     LCDState_t state;
