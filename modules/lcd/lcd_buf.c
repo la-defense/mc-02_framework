@@ -1,259 +1,342 @@
 /**
-* @file lcd_buf.c
-* @brief 逐行组合颜色和字模，再通过 SPI1 发送；公开接口用法见 lcd_buf.h。
-* lcd_line_buf 只存一行，画完即复用；LCD_Address_Set() 负责绘图区到面板的坐标换算。
-*/
+ * @file lcd_buf.c
+ * @brief 用固定单行 RGB565 缓冲准备绘图数据，并检查尺寸后交给 LCD SPI 实现发送。
+ * @note 绘图入口由单显示任务顺序调用；失败可能已经写出前面的完整行。
+ */
 #include "lcd_buf.h"
-#include "lcd.h"
+
+#include "lcd_internal.h"
 #include "lcdfont.h"
-#include "spi.h"
-#include "main.h"
 #include "bsp_dwt.h"
-#include "string.h"
-#include "stdio.h"
+
+#include <limits.h>
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
 
 #define LCD_BUF_MAX_W 280u
+#define LCD_DRAW_BUDGET_MS 250u
+#define LCD_TEXT_BUDGET_MS 20u
 
 static uint16_t lcd_line_buf[LCD_BUF_MAX_W];
 
 _Static_assert(LCD_PANEL_W <= LCD_BUF_MAX_W, "行缓冲必须能装下整屏一行像素");
 
-/* 调试用: 统计 SPI 发送失败的次数(热插拔/总线异常时可以看出来) */
-volatile uint32_t lcd_spi_errors = 0;
-/* 调试用: 累计发送字节数, 用于换算 LCD 实际 SPI 吞吐 */
-volatile uint32_t lcd_spi_bytes = 0;
-/* 调试用: 最近一次行传输的耗时(us)与字节数, 用于反推实际 SCK */
-volatile uint32_t lcd_prof_row_us = 0;
-volatile uint16_t lcd_prof_row_bytes = 0;
-/* 调试用: 累计 SPI 传输时间(us)与行调用次数, 用于区分"真正在传数据"和"被高优先级任务抢占" */
-volatile uint32_t lcd_prof_spi_us = 0;
-volatile uint32_t lcd_prof_rows = 0;
-/* 调试用: 整屏清屏最近一次耗时 */
-volatile uint32_t lcd_prof_clear_us = 0;
+volatile uint32_t lcd_spi_bytes = 0u;
+volatile uint32_t lcd_prof_row_us = 0u;
+volatile uint16_t lcd_prof_row_bytes = 0u;
+volatile uint32_t lcd_prof_spi_us = 0u;
+volatile uint32_t lcd_prof_rows = 0u;
+volatile uint32_t lcd_prof_clear_us = 0u;
 
-// 设置像素窗口后保持片选为低，后续整行数据可以连续发送。
-static void LCD_BufBegin(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
+static uint32_t lcd_sat_add(uint32_t value, uint32_t amount)
 {
-    LCD_Address_Set(x1, y1, x2, y2);
-    LCD_DC_Set();
-    LCD_CS_Clr();
+    return (UINT32_MAX - value < amount) ? UINT32_MAX : value + amount;
 }
 
-// 发送已准备的一行；调用前须将行数组按 LCD 所需的字节顺序填好。
-static void LCD_BufWriteRow(uint16_t pixels)
+static void lcd_profile_row(uint32_t started, uint16_t bytes, LCDStatus_t status)
 {
-    uint32_t t0 = DWT_ProbeStart();
-    if (HAL_SPI_Transmit(&hspi1, (uint8_t *)lcd_line_buf, (uint16_t)(pixels * 2u), 20) != HAL_OK)
-    {
-        /* 失败后 HAL 句柄可能停在 BUSY, 中止掉, 免得后面所有发送都失败 */
-        lcd_spi_errors++;
-        HAL_SPI_Abort(&hspi1);
-    }
-    lcd_prof_row_us = DWT_ProbeElapsedUs(t0); /* 直接读 CYCCNT, 不经过时间轴 */
-    lcd_prof_row_bytes = (uint16_t)(pixels * 2u);
-    lcd_prof_spi_us += lcd_prof_row_us;
-    lcd_prof_rows++;
-    lcd_spi_bytes += (uint32_t)pixels * 2u;
+    uint32_t elapsed = DWT_ProbeElapsedUs(started);
+    lcd_prof_row_us = elapsed;
+    lcd_prof_row_bytes = bytes;
+    lcd_prof_spi_us = lcd_sat_add(lcd_prof_spi_us, elapsed);
+    lcd_prof_rows = lcd_sat_add(lcd_prof_rows, 1u);
+    if (status == LCD_OK)
+        lcd_spi_bytes = lcd_sat_add(lcd_spi_bytes, bytes);
 }
 
-// 一块区域的所有行发完后释放片选。
-static void LCD_BufEnd(void)
+static LCDStatus_t lcd_set_panel_address(void)
 {
-    LCD_CS_Set();
+    LCDStatus_t status = LCD_InternalWriteCommand(0x2Au);
+    if (status == LCD_OK) status = LCD_InternalWriteData8((uint8_t)(LCD_PANEL_X0 >> 8));
+    if (status == LCD_OK) status = LCD_InternalWriteData8((uint8_t)LCD_PANEL_X0);
+    if (status == LCD_OK) status = LCD_InternalWriteData8((uint8_t)((LCD_PANEL_X0 + LCD_PANEL_W - 1) >> 8));
+    if (status == LCD_OK) status = LCD_InternalWriteData8((uint8_t)(LCD_PANEL_X0 + LCD_PANEL_W - 1));
+    if (status == LCD_OK) status = LCD_InternalWriteCommand(0x2Bu);
+    if (status == LCD_OK) status = LCD_InternalWriteData8((uint8_t)(LCD_PANEL_Y0 >> 8));
+    if (status == LCD_OK) status = LCD_InternalWriteData8((uint8_t)LCD_PANEL_Y0);
+    if (status == LCD_OK) status = LCD_InternalWriteData8((uint8_t)((LCD_PANEL_Y0 + LCD_PANEL_H - 1) >> 8));
+    if (status == LCD_OK) status = LCD_InternalWriteData8((uint8_t)(LCD_PANEL_Y0 + LCD_PANEL_H - 1));
+    if (status == LCD_OK) status = LCD_InternalWriteCommand(0x2Cu);
+    return status;
 }
 
-// 整块面板坐标已含 20 像素偏移，直接写地址，避免再次换算后漏清边缘。
-static void LCD_BufBeginPanel(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
+LCDStatus_t LCD_BufClearPanel(void)
 {
-    LCD_WR_REG(0x2a);
-    LCD_WR_DATA(x1);
-    LCD_WR_DATA(x2);
-    LCD_WR_REG(0x2b);
-    LCD_WR_DATA(y1);
-    LCD_WR_DATA(y2);
-    LCD_WR_REG(0x2c);
-    LCD_DC_Set();
-    LCD_CS_Clr();
-}
+    uint32_t started = DWT_ProbeStart();
+    LCDStatus_t status = LCD_InternalBegin(LCD_DRAW_BUDGET_MS, 0u);
+    if (status != LCD_OK)
+        return status;
 
-// 连四周留白一起清理，避免旧画面残留在正常绘图区之外。
-void LCD_BufClearPanel(void)
-{
-    uint32_t probe_start = DWT_ProbeStart();
-    // 一行黑色准备一次，随后每行重复发送这份数据。
-    for (uint16_t i = 0; i < (uint16_t)LCD_PANEL_W; ++i)
+    LCDState_t panel_state;
+    status = LCDGetState(&panel_state);
+    if (status == LCD_OK && !panel_state.panel_initialized)
+        status = LCD_NOT_INITIALIZED;
+    if (status != LCD_OK)
+        return LCD_InternalEnd(status);
+
+    // 同一条黑色行缓冲重复发送，避免为整屏清理分配帧缓冲。
+    for (uint16_t i = 0u; i < LCD_PANEL_W; ++i)
         lcd_line_buf[i] = BLACK;
 
-    LCD_BufBeginPanel(LCD_PANEL_X0, LCD_PANEL_Y0,
-                      (uint16_t)(LCD_PANEL_X0 + LCD_PANEL_W - 1u),
-                      (uint16_t)(LCD_PANEL_Y0 + LCD_PANEL_H - 1u));
-    for (uint16_t row = 0; row < (uint16_t)LCD_PANEL_H; ++row)
-        LCD_BufWriteRow((uint16_t)LCD_PANEL_W);
-    LCD_BufEnd();
-    lcd_prof_clear_us = DWT_ProbeElapsedUs(probe_start);
+    status = lcd_set_panel_address();
+    if (status == LCD_OK)
+        status = LCD_InternalBeginPixelData();
+
+    uint16_t row_bytes = (uint16_t)(LCD_PANEL_W * sizeof(lcd_line_buf[0]));
+    // 任一行发送失败就停止，后面的像素不能在错误状态下继续写。
+    for (uint16_t row = 0u; status == LCD_OK && row < LCD_PANEL_H; ++row)
+    {
+        uint32_t row_started = DWT_ProbeStart();
+        status = LCD_InternalWritePixelData((const uint8_t *)lcd_line_buf, row_bytes);
+        lcd_profile_row(row_started, row_bytes, status);
+    }
+    LCD_InternalEndPixelData();
+    lcd_prof_clear_us = DWT_ProbeElapsedUs(started);
+    return LCD_InternalEnd(status);
 }
 
-void LCD_BufFill(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color)
+static LCDStatus_t lcd_fill(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color)
 {
-    // 不修改传入范围；有一个坐标不合要求就整块跳过。
-    if (x1 >= LCD_W || y1 >= LCD_H || x2 >= LCD_W || y2 >= LCD_H || x1 > x2 || y1 > y2)
-        return;
-
     uint16_t width = (uint16_t)(x2 - x1 + 1u);
-    for (uint16_t i = 0; i < width; ++i)
-        lcd_line_buf[i] = color;
+    uint16_t row_bytes = (uint16_t)(width * sizeof(lcd_line_buf[0]));
+    // 先把矩形的一行填好，再循环发送到包含 y1 和 y2 的所有行。
+    for (uint16_t col = 0u; col < width; ++col)
+        lcd_line_buf[col] = color;
 
-    LCD_BufBegin(x1, y1, x2, y2);
-    for (uint16_t row = y1; row <= y2; ++row)
-        LCD_BufWriteRow(width);
-    LCD_BufEnd();
+    LCDStatus_t status = LCD_InternalSetAddress(x1, y1, x2, y2);
+    if (status == LCD_OK)
+        status = LCD_InternalBeginPixelData();
+    for (uint16_t row = y1; status == LCD_OK && row <= y2; ++row)
+    {
+        uint32_t row_started = DWT_ProbeStart();
+        status = LCD_InternalWritePixelData((const uint8_t *)lcd_line_buf, row_bytes);
+        lcd_profile_row(row_started, row_bytes, status);
+    }
+    LCD_InternalEndPixelData();
+    return status;
 }
 
-void LCD_BufShowAscii(uint16_t x, uint16_t y, const char *str, uint16_t fc, uint16_t bc, uint8_t sizey)
+LCDStatus_t LCD_BufFill(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color)
 {
-    if (str == NULL)
-        return;
-
-    const uint8_t *font;
-    uint8_t sizex;
-    if (sizey == 16)
-    {
-        font = (const uint8_t *)ascii_1608;
-        sizex = 8;
-    }
-    else if (sizey == 12)
-    {
-        font = (const uint8_t *)ascii_1206;
-        sizex = 6;
-    }
+    LCDStatus_t status = LCD_InternalBegin(LCD_DRAW_BUDGET_MS, 0u);
+    if (status != LCD_OK)
+        return status;
+    if (x1 >= LCD_W || x2 >= LCD_W || y1 >= LCD_H || y2 >= LCD_H || x1 > x2 || y1 > y2)
+        status = LCD_OUT_OF_RANGE;
     else
+        status = lcd_fill(x1, y1, x2, y2, color);
+    return LCD_InternalEnd(status);
+}
+
+static uint8_t lcd_ascii_font(uint8_t sizey, const uint8_t **font, uint8_t *width)
+{
+    if (sizey == 16u)
     {
-        return;
+        *font = (const uint8_t *)ascii_1608;
+        *width = 8u;
+        return 1u;
+    }
+    if (sizey == 12u)
+    {
+        *font = (const uint8_t *)ascii_1206;
+        *width = 6u;
+        return 1u;
+    }
+    return 0u;
+}
+
+LCDStatus_t LCD_BufShowAscii(uint16_t x, uint16_t y, const char *str, size_t length,
+                             uint16_t fc, uint16_t bc, uint8_t sizey)
+{
+    LCDStatus_t status = LCD_InternalBegin(LCD_TEXT_BUDGET_MS, 0u);
+    if (status != LCD_OK)
+        return status;
+
+    const uint8_t *font = NULL;
+    uint8_t char_width = 0u;
+    if (!lcd_ascii_font(sizey, &font, &char_width))
+        status = LCD_OUT_OF_RANGE;
+    else if (length != 0u && str == NULL)
+        status = LCD_BAD_ARGUMENT;
+    else if (length > LCD_BUF_MAX_W / char_width)
+        status = LCD_OUT_OF_RANGE;
+    else if (length != 0u && (length * char_width > (size_t)LCD_W || (size_t)x >= (size_t)LCD_W ||
+                              (size_t)y >= (size_t)LCD_H ||
+                              (size_t)x > (size_t)LCD_W - length * char_width ||
+                              (size_t)sizey > (size_t)LCD_H - y))
+        status = LCD_OUT_OF_RANGE;
+
+    // 先检查全部字节，非法字符不会留下已经画出的前缀。
+    for (size_t i = 0u; status == LCD_OK && i < length; ++i)
+    {
+        uint8_t ch = (uint8_t)str[i];
+        if (ch < 0x20u || ch > 0x7Eu)
+            status = LCD_BAD_TEXT;
     }
 
-    uint16_t len = (uint16_t)strlen(str);
-    uint16_t width = (uint16_t)(len * sizex);
-    if (width == 0 || width > LCD_BUF_MAX_W || x + width > LCD_W || y + sizey > LCD_H)
-        return;
+    if (status != LCD_OK || length == 0u)
+        return LCD_InternalEnd(status);
 
-    const uint8_t bytes_per_row = (uint8_t)((sizex + 7u) / 8u);
-    const uint8_t bytes_per_char = (uint8_t)(bytes_per_row * sizey);
-    LCD_BufBegin(x, y, (uint16_t)(x + width - 1u), (uint16_t)(y + sizey - 1u));
+    uint16_t width = (uint16_t)(length * char_width);
+    uint8_t bytes_per_row = (uint8_t)((char_width + 7u) / 8u);
+    uint8_t bytes_per_char = (uint8_t)(bytes_per_row * sizey);
+    status = LCD_InternalSetAddress(x, y, (uint16_t)(x + width - 1u),
+                                    (uint16_t)(y + sizey - 1u));
+    if (status == LCD_OK)
+        status = LCD_InternalBeginPixelData();
 
-    // 先拼好所有字符的同一行，再发送一次，避免每个像素单独调用 SPI。
-    for (uint8_t row = 0; row < sizey; ++row)
+    // 每次先拼完整一行所有字符的像素，发送成功后再处理下一行。
+    for (uint8_t row = 0u; status == LCD_OK && row < sizey; ++row)
     {
-        for (uint16_t ci = 0; ci < len; ++ci)
+        for (size_t ci = 0u; ci < length; ++ci)
         {
             uint8_t ch = (uint8_t)str[ci];
-            if (ch < 32u || ch > 126u)// 字库只覆盖可打印 ASCII，其他字节用空格替代。
-                ch = (uint8_t)' ';
-            const uint8_t *glyph = font + (uint32_t)(ch - 32u) * bytes_per_char;
-
-            for (uint8_t col = 0; col < sizex; ++col)
+            const uint8_t *glyph = font + (size_t)(ch - 0x20u) * bytes_per_char;
+            for (uint8_t col = 0u; col < char_width; ++col)
             {
-                // ASCII 字模按行排列，每字节最低位对应左侧像素。
-                uint8_t byte_index = (uint8_t)(row * bytes_per_row + (col / 8u));
+                uint8_t byte_index = (uint8_t)(row * bytes_per_row + col / 8u);
                 uint8_t mask = (uint8_t)(1u << (col % 8u));
-                lcd_line_buf[ci * sizex + col] = (glyph[byte_index] & mask) ? fc : bc;
+                lcd_line_buf[ci * char_width + col] = (glyph[byte_index] & mask) ? fc : bc;
             }
         }
-        LCD_BufWriteRow(width);
+        uint32_t row_started = DWT_ProbeStart();
+        uint16_t row_bytes = (uint16_t)(width * sizeof(lcd_line_buf[0]));
+        status = LCD_InternalWritePixelData((const uint8_t *)lcd_line_buf, row_bytes);
+        lcd_profile_row(row_started, row_bytes, status);
     }
-    LCD_BufEnd();
+    LCD_InternalEndPixelData();
+    return LCD_InternalEnd(status);
 }
 
-void LCD_BufShowCnString(uint16_t x, uint16_t y, const Lcd_CnChar_e *str, uint16_t fc, uint16_t bc)
+LCDStatus_t LCD_BufShowCnString(uint16_t x, uint16_t y, const Lcd_CnChar_e *glyphs, size_t count,
+                                uint16_t fc, uint16_t bc)
 {
-    if (str == NULL)
-        return;
+    LCDStatus_t status = LCD_InternalBegin(LCD_TEXT_BUDGET_MS, 0u);
+    if (status != LCD_OK)
+        return status;
 
-    uint16_t len = 0;
-    // 先数到结束标记；此处先读数组再检查 32 字上限，调用方必须保证地址可读。
-    while (str[len] != LCD_CN_COUNT && len < 32u)
-        len++;
-    if (len == 0)
-        return;
+    if (count != 0u && glyphs == NULL)
+        status = LCD_BAD_ARGUMENT;
+    else if (count > LCD_BUF_MAX_W / 16u)
+        status = LCD_OUT_OF_RANGE;
+    else if (count != 0u && (count * 16u > (size_t)LCD_W || (size_t)x >= (size_t)LCD_W ||
+                             (size_t)y >= (size_t)LCD_H ||
+                             (size_t)x > (size_t)LCD_W - count * 16u ||
+                             16u > (size_t)LCD_H - y))
+        status = LCD_OUT_OF_RANGE;
 
-    uint16_t width = (uint16_t)(len * 16u);
-    if (x + width > LCD_W || y + 16u > LCD_H)
-        return;
-
-    LCD_BufBegin(x, y, (uint16_t)(x + width - 1u), (uint16_t)(y + 15u));
-    // 将所有字形的同一行拼成一行像素，逐行发完这串文字。
-    for (uint8_t row = 0; row < 16u; ++row)
+    for (size_t i = 0u; status == LCD_OK && i < count; ++i)
     {
-        for (uint16_t gi = 0; gi < len; ++gi)
+        if ((unsigned)glyphs[i] >= (unsigned)LCD_CN_COUNT)
+            status = LCD_BAD_GLYPH;
+    }
+
+    if (status != LCD_OK || count == 0u)
+        return LCD_InternalEnd(status);
+
+    uint16_t width = (uint16_t)(count * 16u);
+    status = LCD_InternalSetAddress(x, y, (uint16_t)(x + width - 1u), (uint16_t)(y + 15u));
+    if (status == LCD_OK)
+        status = LCD_InternalBeginPixelData();
+    // 中文字模按列存储，逐个像素组合出16行后写入同一块窗口。
+    for (uint8_t row = 0u; status == LCD_OK && row < 16u; ++row)
+    {
+        for (size_t gi = 0u; gi < count; ++gi)
         {
-            const uint8_t *glyph = lcd_cn_font16[str[gi]];
-            for (uint8_t col = 0; col < 16u; ++col)
+            const uint8_t *glyph = lcd_cn_font16[glyphs[gi]];
+            for (uint8_t col = 0u; col < 16u; ++col)
             {
-                // 中文字模按列保存，每列两字节，低位对应上方像素。
-                uint8_t byte_index = (uint8_t)(col * 2u + (row / 8u));
+                uint8_t byte_index = (uint8_t)(col * 2u + row / 8u);
                 uint8_t mask = (uint8_t)(1u << (row % 8u));
                 lcd_line_buf[gi * 16u + col] = (glyph[byte_index] & mask) ? fc : bc;
             }
         }
-        LCD_BufWriteRow(width);
+        uint32_t row_started = DWT_ProbeStart();
+        uint16_t row_bytes = (uint16_t)(width * sizeof(lcd_line_buf[0]));
+        status = LCD_InternalWritePixelData((const uint8_t *)lcd_line_buf, row_bytes);
+        lcd_profile_row(row_started, row_bytes, status);
     }
-    LCD_BufEnd();
+    LCD_InternalEndPixelData();
+    return LCD_InternalEnd(status);
 }
 
-void LCD_BufShowCnChar(uint16_t x, uint16_t y, Lcd_CnChar_e ch, uint16_t fc, uint16_t bc)
+LCDStatus_t LCD_BufShowCnChar(uint16_t x, uint16_t y, Lcd_CnChar_e ch, uint16_t fc, uint16_t bc)
 {
-    Lcd_CnChar_e str[2] = {ch, LCD_CN_COUNT};
-    LCD_BufShowCnString(x, y, str, fc, bc);
+    return LCD_BufShowCnString(x, y, &ch, 1u, fc, bc);
 }
 
-void LCD_BufShowInt(uint16_t x, uint16_t y, int32_t value, uint16_t fc, uint16_t bc, uint8_t sizey)
+LCDStatus_t LCD_BufShowInt(uint16_t x, uint16_t y, int32_t value,
+                           uint16_t fc, uint16_t bc, uint8_t sizey)
 {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%ld", (long)value);
-    LCD_BufShowAscii(x, y, buf, fc, bc, sizey);
+    char text[16];
+    int written = snprintf(text, sizeof(text), "%ld", (long)value);
+    if (written < 0 || (size_t)written >= sizeof(text))
+        return LCD_BAD_TEXT;
+    return LCD_BufShowAscii(x, y, text, (size_t)written, fc, bc, sizey);
 }
 
-void LCD_BufShowFloat(uint16_t x, uint16_t y, float value, uint8_t decimals, uint16_t fc, uint16_t bc, uint8_t sizey)
+LCDStatus_t LCD_BufFormatFloat(float value, uint8_t decimals, char *output,
+                               size_t capacity, size_t *length)
 {
+    if (output == NULL || length == NULL)
+        return LCD_BAD_ARGUMENT;
+    if (!isfinite(value))
+        return LCD_NONFINITE;
     if (decimals > 3u)
-        decimals = 3u;
+        return LCD_OUT_OF_RANGE;
 
-    // 乘以 10 的小数位次方，把小数部分也转成可逐位处理的整数。
     uint32_t scale = 1u;
-    for (uint8_t i = 0; i < decimals; ++i)
+    // 小数位最多三位，逐次扩大十进制比例。
+    for (uint8_t i = 0u; i < decimals; ++i)
         scale *= 10u;
 
-    // 正数加 0.5、负数减 0.5 后取整数，实现两种符号的四舍五入。
-    int32_t scaled = (int32_t)(value * (float)scale + (value >= 0.0f ? 0.5f : -0.5f));
-    uint8_t negative = (scaled < 0) ? 1u : 0u;
+    double rounded = round((double)value * (double)scale);
+    if (!isfinite(rounded))
+        return LCD_OUT_OF_RANGE;
+    if (rounded < (double)INT32_MIN || rounded > (double)INT32_MAX)
+        return LCD_OUT_OF_RANGE;
+
+    int32_t scaled = (int32_t)rounded;
+    uint8_t negative = (uint8_t)(scaled < 0);
+    uint32_t magnitude = (scaled < 0) ? (uint32_t)(-(int64_t)scaled) : (uint32_t)scaled;
+    uint32_t integer = magnitude / scale;
+    uint32_t fraction = magnitude % scale;
+    char candidate[16];
+    size_t used = 0u;
+
     if (negative)
-        scaled = -scaled;
-
-    uint32_t integer = (uint32_t)(scaled / (int32_t)scale);
-    uint32_t fraction = (uint32_t)(scaled % (int32_t)scale);
-
-    char buf[24];
-    char *p = buf;
-    if (negative)
-        *p++ = '-';
-
-    char intbuf[12];
-    snprintf(intbuf, sizeof(intbuf), "%lu", (unsigned long)integer);
-    for (char *q = intbuf; *q; ++q)
-        *p++ = *q;
-
-    if (decimals > 0u)
+        candidate[used++] = '-';
+    int count = snprintf(candidate + used, sizeof(candidate) - used, "%lu", (unsigned long)integer);
+    if (count < 0 || (size_t)count >= sizeof(candidate) - used)
+        return LCD_BAD_TEXT;
+    used += (size_t)count;
+    if (decimals != 0u)
     {
-        // 固定画足指定的小数位数，包括小数部分前面的 0。
-        *p++ = '.';
-        for (uint8_t i = 0; i < decimals; ++i)
+        candidate[used++] = '.';
+        uint32_t divisor = scale / 10u;
+        for (uint8_t i = 0u; i < decimals; ++i)
         {
-            uint32_t div = 1u;
-            for (uint8_t j = 0; j < (uint8_t)(decimals - 1u - i); ++j)
-                div *= 10u;
-            *p++ = (char)('0' + (fraction / div) % 10u);
+            candidate[used++] = (char)('0' + (fraction / divisor) % 10u);
+            divisor /= 10u;
         }
     }
-    *p = '\0';
+    candidate[used] = '\0';
+    if (capacity <= used)
+        return LCD_OUT_OF_RANGE;
 
-    LCD_BufShowAscii(x, y, buf, fc, bc, sizey);
+    memcpy(output, candidate, used + 1u);
+    *length = used;
+    return LCD_OK;
+}
+
+LCDStatus_t LCD_BufShowFloat(uint16_t x, uint16_t y, float value, uint8_t decimals,
+                             uint16_t fc, uint16_t bc, uint8_t sizey)
+{
+    char text[16];
+    size_t length = 0u;
+    LCDStatus_t status = LCD_BufFormatFloat(value, decimals, text, sizeof(text), &length);
+    if (status != LCD_OK)
+        return status;
+    return LCD_BufShowAscii(x, y, text, length, fc, bc, sizey);
 }

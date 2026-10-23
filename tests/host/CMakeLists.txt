@@ -42,6 +42,27 @@ if(UNIX AND NOT APPLE)
   target_link_options(lcd_spi_timing_test PRIVATE -Wl,--gc-sections)
   add_test(NAME production_lcd_rising_edge_timing COMMAND lcd_spi_timing_test)
   add_test(NAME production_lcd_select_clock_boundary COMMAND lcd_spi_timing_test --select-boundary)
+  add_executable(lcd_bounds_test lcd_bounds_test.c ../../modules/lcd/lcd.c
+    ../../modules/lcd/lcd_buf.c ../../modules/lcd/lcd_font_cn.c ../../modules/lcd/lcd_ui.c
+    ../../modules/lcd/lcd_referee_rows.c)
+  target_include_directories(lcd_bounds_test BEFORE PRIVATE lcd_spi_fakes)
+  target_include_directories(lcd_bounds_test BEFORE PRIVATE lcd_ui_fakes)
+  target_include_directories(lcd_bounds_test PRIVATE ../../modules/lcd ../../Core/Inc ../../application
+    ../../modules/safety ../../modules/algorithm ../../modules/imu ../../modules/remote
+    ../../modules/master_machine ../../modules/referee ../../modules/task_monitor ../../modules/BMI088
+    ../../modules/message_center ../../bsp/adc ../../bsp/watchdog ../../bsp/can ../../bsp/crash ../../bsp/usart
+    ../../Drivers/STM32H7xx_HAL_Driver/Inc ../../Drivers/CMSIS/Device/ST/STM32H7xx/Include
+    ../../Drivers/CMSIS/Include ../../Middlewares/Third_Party/CMSIS-DSP-1.7.0/Include
+    ../../Middlewares/Third_Party/FreeRTOS/Source/include
+    ../../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS)
+  target_compile_options(lcd_bounds_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+  target_compile_options(lcd_bounds_test PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(lcd_bounds_test PRIVATE -Wl,--gc-sections)
+  target_link_libraries(lcd_bounds_test PRIVATE m)
+  foreach(scenario boundaries invalid numbers send-failure deadline-stop timeout-context ui-status ui-last-send-failure ui-cache-recovery)
+    add_test(NAME production_lcd_${scenario} COMMAND lcd_bounds_test ${scenario})
+    set_tests_properties(production_lcd_${scenario} PROPERTIES TIMEOUT 10)
+  endforeach()
   foreach(profile IN ITEMS bench_safe robot_disabled robot_enabled)
     set(target tim_profile_${profile})
     add_executable(${target} tim_profile_test.c ../../Core/Src/tim.c)

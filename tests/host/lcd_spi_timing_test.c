@@ -10,6 +10,8 @@ GPIO_TypeDef fake_gpiob, fake_gpioc, fake_gpiod, fake_gpioe;
 static unsigned setup_violations, bytes_sent, sleep_out, display_on, bus_errors;
 static unsigned check_select_boundary, unexpected_rising_edges, wire_sck, released_sck_level;
 static uint8_t last_command;
+static uint32_t fake_tick;
+static unsigned tick_leases;
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
@@ -26,8 +28,30 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32_t pins, uint32_t value)
 {
     if (value) port->ODR |= pins; else port->ODR &= ~pins;
 }
-void HAL_Delay(uint32_t ms) { (void)ms; }
+void HAL_Delay(uint32_t ms) { fake_tick += ms; }
 void Error_Handler(void) { abort(); }
+uint32_t HAL_GetTick(void) { return fake_tick; }
+uint32_t __get_IPSR(void) { return 0u; }
+HAL_SPI_StateTypeDef HAL_SPI_GetState(SPI_HandleTypeDef *handle)
+{
+    (void)handle;
+    return HAL_SPI_STATE_READY;
+}
+HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *handle)
+{
+    (void)handle;
+    return HAL_OK;
+}
+uint8_t BSP_HALTickTryAcquireBlockingWait(void)
+{
+    tick_leases++;
+    return 1u;
+}
+void BSP_HALTickReleaseBlockingWait(void)
+{
+    if (tick_leases > 0u)
+        tick_leases--;
+}
 
 HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *handle, uint8_t *data, uint16_t size, uint32_t timeout)
 {
@@ -63,7 +87,7 @@ HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *handle, uint8_t *data, uin
             if (last_command == 0x29) ++display_on;
         }
     }
-    /* SPI_CloseTransfer disables SPE before LCD_Writ_Bus raises CS. */
+    /* SPI_CloseTransfer disables SPE before the LCD driver raises CS. */
     wire_sck = handle->Init.MasterKeepIOState == SPI_MASTER_KEEP_IO_STATE_ENABLE
                    ? sck : released_sck_level;
     return HAL_OK; /* HAL success does not prove external setup/hold compliance. */
@@ -77,9 +101,10 @@ int main(int argc, char **argv)
     {
         setup_violations = bytes_sent = sleep_out = display_on = bus_errors = 0;
         unexpected_rising_edges = 0;
+        fake_tick = 0u;
         released_sck_level = repeat; /* Exercise both low and high released-line states. */
         MX_SPI1_Init();
-        LCD_Init();
+        CHECK(LCD_Init() == LCD_OK);
         CHECK(bytes_sent > 0 && sleep_out == 1 && display_on == 1 && last_command == 0x29);
         CHECK(bus_errors == 0);
         if (setup_violations)
@@ -92,6 +117,7 @@ int main(int argc, char **argv)
             CHECK(unexpected_rising_edges == 0);
         }
     }
+    CHECK(tick_leases == 0u);
     puts("PASS: production LCD init and repeat init keep MOSI stable at panel sampling edges");
     return 0;
 }

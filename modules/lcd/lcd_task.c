@@ -77,6 +77,17 @@ volatile uint8_t lcd_module_absent = 0;
 volatile uint16_t lcd_key_spread = 0;
 volatile uint32_t lcd_recover_count = 0;
 volatile uint8_t lcd_task_entered = 0; /* 1 = 任务体已开始执行(排查任务是否被创建/调度) */
+static volatile LCDTaskDiagnosticState_t lcd_bench_diag_state =
+#if MC02_BENCH_LCD_DIAGNOSTICS
+    LCD_TASK_DIAG_IDLE;
+#else
+    LCD_TASK_DIAG_DISABLED;
+#endif
+#if MC02_BENCH_LCD_DIAGNOSTICS
+static uint8_t lcd_bench_diag_pattern;
+static uint32_t lcd_bench_diag_started_ms;
+static uint8_t lcd_bench_diag_ignore_release;
+#endif
 
 /* ---- 性能测量(供 OpenOCD 读取, 单位 us / 字节) ----
    lcd_prof_*_last/max: 单次操作耗时; lcd_prof_busy_us: 累计占用时间;
@@ -397,6 +408,66 @@ static uint8_t lcd_raw_valid_level(uint16_t raw)
     return 0u;
 }
 
+LCDStatus_t LCDTaskGetDiagnosticState(LCDTaskDiagnosticState_t *output)
+{
+    if (output == NULL)
+        return LCD_BAD_ARGUMENT;
+    *output = lcd_bench_diag_state;
+    return LCD_OK;
+}
+
+static uint8_t lcd_bench_diag_active(void)
+{
+#if MC02_BENCH_LCD_DIAGNOSTICS
+    return (uint8_t)(lcd_bench_diag_state == LCD_TASK_DIAG_RUNNING ||
+                     lcd_bench_diag_state == LCD_TASK_DIAG_FAILED);
+#else
+    return 0u;
+#endif
+}
+
+static uint8_t lcd_bench_diag_service(void)
+{
+#if MC02_BENCH_LCD_DIAGNOSTICS
+    if (lcd_bench_diag_state == LCD_TASK_DIAG_FAILED)
+        return 1u;
+    if (lcd_bench_diag_state != LCD_TASK_DIAG_RUNNING)
+        return 0u;
+
+    LCDState_t state;
+    if (LCDGetState(&state) != LCD_OK || !state.ui_usable)
+    {
+        lcd_bench_diag_state = LCD_TASK_DIAG_FAILED;
+        return 1u;
+    }
+
+    uint32_t now = HAL_GetTick();
+    if ((uint32_t)(now - lcd_bench_diag_started_ms) < 15000u)
+        return 1u;
+
+    if (lcd_bench_diag_pattern < 3u)
+    {
+        lcd_bench_diag_pattern++;
+        if (LCD_UI_DrawDiagnosticPattern(lcd_bench_diag_pattern) != LCD_OK)
+            lcd_bench_diag_state = LCD_TASK_DIAG_FAILED;
+        else
+            lcd_bench_diag_started_ms = now;
+        return 1u;
+    }
+
+    LCDStatus_t status = LCD_UI_DrawStatic(0u);
+    if (status == LCD_OK)
+        status = LCD_UI_UpdateValues(0u);
+    if (status == LCD_OK)
+        lcd_bench_diag_state = LCD_TASK_DIAG_COMPLETE;
+    else
+        lcd_bench_diag_state = LCD_TASK_DIAG_FAILED;
+    return 1u;
+#else
+    return 0u;
+#endif
+}
+
 // 检查最近采样的电平，记住拔出状态；连续确认接入后重新初始化屏幕。
 static void lcd_module_presence_check(void)
 {
@@ -420,6 +491,8 @@ static void lcd_module_presence_check(void)
     if (!lcd_raw_valid_level(raw))
     {
         invalid = 1u;
+        if (lcd_bench_diag_state == LCD_TASK_DIAG_RUNNING)
+            lcd_bench_diag_state = LCD_TASK_DIAG_FAILED;
     }
     else if (hist_filled)
     {
@@ -467,7 +540,8 @@ static void lcd_module_presence_check(void)
             lcd_recover_count++;
             BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_02, BSP_LOG_FIELD_U32((unsigned long)lcd_recover_count));
             uint32_t t0 = DWT_ProbeStart();
-            LCD_UI_Recover();
+            LCDStatus_t status = LCD_UI_Recover();
+            lcd_init_done = (uint8_t)(status == LCD_OK);
             lcd_prof_recover_us = DWT_ProbeElapsedUs(t0);
         }
     }
@@ -491,10 +565,28 @@ static void lcd_key_update(void)
     if (key_event.type == LCD_KEY_EVENT_DOWN)
     {
         lcd_key_last = (uint8_t)key_event.key;
+#if MC02_BENCH_LCD_DIAGNOSTICS
+        if (lcd_bench_diag_state == LCD_TASK_DIAG_RUNNING)
+            lcd_bench_diag_ignore_release = 1u;
+#endif
         BSP_LOG_EVENT_2(EV_MODULES_LCD_LCD_TASK_C_03, BSP_LOG_FIELD_U32((unsigned)key_event.key), BSP_LOG_FIELD_U32((unsigned)lcd_key_raw));
         return;
     }
     if (key_event.type != LCD_KEY_EVENT_RELEASED)
+        return;
+
+#if MC02_BENCH_LCD_DIAGNOSTICS
+    // 诊断期间开始的按键即使在画面结束后才松开，也不转成翻页或标定请求。
+    if (lcd_bench_diag_ignore_release != 0u)
+    {
+        lcd_bench_diag_ignore_release = 0u;
+        lcd_key_last = 0u;
+        return;
+    }
+#endif
+
+    // 诊断画面按固定时长展示；期间按键只采样，不切页或请求标定。
+    if (lcd_bench_diag_active())
         return;
 
     LcdKey_e released = key_event.key;
@@ -519,7 +611,7 @@ static void lcd_key_update(void)
                 return;
             }
             /* 立刻出提示, 不等标定真正跑起来 —— 一开标定 CPU 就被抢走了 */
-            LCD_UI_ShowCalibMsg(1u);
+            (void)LCD_UI_ShowCalibMsg(1u);
             lcd_calib_msg = 1u;
             return;
         }
@@ -530,10 +622,11 @@ static void lcd_key_update(void)
             lcd_recover_count++;
             // 重置显示时同时解除冻结，使恢复后的数值继续刷新。
             lcd_frozen = 0u;
-            LCD_UI_SetFrozen(0u);
+            (void)LCD_UI_SetFrozen(0u);
             BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_06, BSP_LOG_FIELD_U32((unsigned long)lcd_recover_count));
             uint32_t t0 = DWT_ProbeStart();
-            LCD_UI_Recover();
+            LCDStatus_t status = LCD_UI_Recover();
+            lcd_init_done = (uint8_t)(status == LCD_OK);
             lcd_prof_recover_us = DWT_ProbeElapsedUs(t0);
         }
         return;
@@ -550,7 +643,7 @@ static void lcd_key_update(void)
         break;
     case LCD_KEY_MID:
         lcd_frozen = lcd_frozen ? 0u : 1u;
-        LCD_UI_SetFrozen(lcd_frozen);
+        (void)LCD_UI_SetFrozen(lcd_frozen);
         BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_07, BSP_LOG_FIELD_CSTR_LIMIT((lcd_frozen ? "on" : "off"), 48u));
         return;
     default:
@@ -558,8 +651,11 @@ static void lcd_key_update(void)
     }
 
     uint32_t t0 = DWT_ProbeStart();
-    LCD_UI_DrawStatic(lcd_page);
-    LCD_UI_UpdateValues(lcd_page);
+    LCDStatus_t status = LCD_UI_DrawStatic(lcd_page);
+    if (status == LCD_OK)
+        status = LCD_UI_UpdateValues(lcd_page);
+    if (status != LCD_OK)
+        LCD_UI_InvalidateValueCache();
     lcd_prof_record(t0, &lcd_prof_draw_last_us, &lcd_prof_draw_max_us);
     BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_08, BSP_LOG_FIELD_U32((unsigned)(lcd_page + 1u)));
 }
@@ -577,7 +673,7 @@ static void lcd_calib_service(void)
     {
         if (lcd_calib_msg != 1u)
         {
-            LCD_UI_ShowCalibMsg(1u); /* 标定被别的路径触发时也能补上提示 */
+            (void)LCD_UI_ShowCalibMsg(1u); /* 标定被别的路径触发时也能补上提示 */
             lcd_calib_msg = 1u;
         }
         return;
@@ -587,7 +683,7 @@ static void lcd_calib_service(void)
     {
         if (lcd_calib_msg != 2u)
         {
-            LCD_UI_ShowCalibMsg((st == BMI088_RECALIB_OK) ? 2u : 3u);
+            (void)LCD_UI_ShowCalibMsg((st == BMI088_RECALIB_OK) ? 2u : 3u);
             lcd_calib_msg = 2u;
             lcd_calib_result_until = HAL_GetTick() + LCD_CALIB_RESULT_MS;
             BSP_LOG_EVENT_2(EV_MODULES_LCD_LCD_TASK_C_09, BSP_LOG_FIELD_CSTR_LIMIT(((st == BMI088_RECALIB_OK) ? "OK" : "FAIL"), 48u), BSP_LOG_FIELD_U32((unsigned)bmi088_calib_attempts));
@@ -597,7 +693,7 @@ static void lcd_calib_service(void)
             BMI088CalibAckResult();
             RobotSafetyRequestCalib(0); /* 回 SAFE: 必须重新走正常使能流程 */
             lcd_calib_msg = 0u;
-            LCD_UI_ShowCalibMsg(0u); /* 清提示并重画整页 */
+            (void)LCD_UI_ShowCalibMsg(0u); /* 清提示并重画整页 */
             BSP_LOG_EVENT_0(EV_MODULES_LCD_LCD_TASK_C_10);
         }
         return;
@@ -608,7 +704,7 @@ static void lcd_calib_service(void)
     {
         lcd_calib_msg = 0u;
         RobotSafetyRequestCalib(0);
-        LCD_UI_ShowCalibMsg(0u);
+        (void)LCD_UI_ShowCalibMsg(0u);
     }
 }
 
@@ -618,10 +714,24 @@ void StartLCDTASK(void const *argument)
 
     lcd_task_entered = 1;
     uint32_t t0 = DWT_ProbeStart();
-    LCD_UI_Init();
+    LCDStatus_t init_status = LCD_UI_Init();
     lcd_prof_init_us = DWT_ProbeElapsedUs(t0);
-    lcd_init_done = 1;
-    BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_11, BSP_LOG_FIELD_U32((unsigned)(lcd_page + 1u)));
+    lcd_init_done = (uint8_t)(init_status == LCD_OK);
+    if (init_status == LCD_OK)
+        BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_11, BSP_LOG_FIELD_U32((unsigned)(lcd_page + 1u)));
+#if MC02_BENCH_LCD_DIAGNOSTICS
+    if (init_status == LCD_OK && LCD_UI_DrawDiagnosticPattern(0u) == LCD_OK)
+    {
+        lcd_bench_diag_pattern = 0u;
+        lcd_bench_diag_started_ms = HAL_GetTick();
+        lcd_bench_diag_ignore_release = 0u;
+        lcd_bench_diag_state = LCD_TASK_DIAG_RUNNING;
+    }
+    else
+    {
+        lcd_bench_diag_state = LCD_TASK_DIAG_FAILED;
+    }
+#endif
 
     for (;;)
     {
@@ -636,13 +746,19 @@ void StartLCDTASK(void const *argument)
             osDelay(50);
         }
 
-        lcd_calib_service();
+        if (!lcd_bench_diag_active())
+            lcd_calib_service();
+        uint8_t diagnostic_active = lcd_bench_diag_service();
 
         /* 标定提示正在显示时不刷新数值区, 否则会把提示盖掉 */
-        if (!lcd_frozen && !lcd_module_absent && lcd_calib_msg == 0u)
+        LCDState_t lcd_state;
+        uint8_t lcd_usable = (uint8_t)(LCDGetState(&lcd_state) == LCD_OK && lcd_state.ui_usable);
+        if (!diagnostic_active && lcd_usable && !lcd_frozen && !lcd_module_absent && lcd_calib_msg == 0u)
         {
             uint32_t tu = DWT_ProbeStart();
-            LCD_UI_UpdateValues(lcd_page);
+            LCDStatus_t update_status = LCD_UI_UpdateValues(lcd_page);
+            if (update_status != LCD_OK)
+                LCD_UI_InvalidateValueCache();
             lcd_prof_record(tu, &lcd_prof_update_last_us, &lcd_prof_update_max_us);
             lcd_prof_cycles++;
         }

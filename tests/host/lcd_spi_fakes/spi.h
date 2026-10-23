@@ -2,6 +2,7 @@
 #define MC02_LCD_SPI_FAKE_H
 #include <stdint.h>
 typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
+typedef enum { HAL_SPI_STATE_RESET, HAL_SPI_STATE_READY, HAL_SPI_STATE_BUSY_TX, HAL_SPI_STATE_ERROR } HAL_SPI_StateTypeDef;
 typedef struct { uint32_t ODR; } GPIO_TypeDef;
 extern GPIO_TypeDef fake_gpiob, fake_gpioc, fake_gpiod, fake_gpioe;
 #define GPIOB (&fake_gpiob)
@@ -72,6 +73,10 @@ extern SPI_HandleTypeDef hspi1, hspi2;
 #define __HAL_RCC_GPIOD_CLK_ENABLE() ((void)0)
 HAL_StatusTypeDef HAL_SPI_Init(SPI_HandleTypeDef *);
 HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *, uint8_t *, uint16_t, uint32_t);
+HAL_SPI_StateTypeDef HAL_SPI_GetState(SPI_HandleTypeDef *);
+HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *);
+uint32_t HAL_GetTick(void);
+uint32_t __get_IPSR(void);
 HAL_StatusTypeDef HAL_RCCEx_PeriphCLKConfig(RCC_PeriphCLKInitTypeDef *);
 void HAL_GPIO_Init(GPIO_TypeDef *, GPIO_InitTypeDef *);
 void HAL_GPIO_DeInit(GPIO_TypeDef *, uint32_t);

@@ -17,6 +17,7 @@
 #include "referee_task.h"
 #include "rm_referee.h"
 #include "lcd_referee_rows.h"
+#include "lcd_internal.h"
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
 #include "chassis.h"
 #endif
@@ -30,6 +31,11 @@
 #include "bsp_crash.h"
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
+
+#define LCD_CN_LENGTH(array) (sizeof(array) / sizeof((array)[0]) - 1u)
+#define LCD_ASCII_LENGTH(text) (sizeof(text) - 1u)
+#define LCD_TEXT_MAX 48u
 
 /* 按键诊断(定义在 lcd_task.c): 上电以来见过的最小原始 ADC 值 */
 extern volatile uint16_t lcd_key_raw_min;
@@ -92,23 +98,30 @@ static uint8_t lcd_frozen = 0;
 volatile uint8_t lcd_init_stage = 0;
 
 // 将整车状态换成标签；未知状态显示“否”，不改变整车状态。
-static const Lcd_CnChar_e *state_label(Robot_Status_e state)
+static const Lcd_CnChar_e *state_label(Robot_Status_e state, size_t *count)
 {
     switch (state)
     {
     case ROBOT_INIT:
+        *count = LCD_CN_LENGTH(L_INIT);
         return L_INIT;
     case ROBOT_SAFE:
+        *count = LCD_CN_LENGTH(L_SAFE);
         return L_SAFE;
     case ROBOT_CALIB:
+        *count = LCD_CN_LENGTH(L_CALIB);
         return L_CALIB;
     case ROBOT_READY:
+        *count = LCD_CN_LENGTH(L_READY);
         return L_READY;
     case ROBOT_FAULT:
+        *count = LCD_CN_LENGTH(L_ERROR);
         return L_ERROR;
     case ROBOT_ESTOP:
+        *count = LCD_CN_LENGTH(L_ESTOP);
         return L_ESTOP;
     default:
+        *count = LCD_CN_LENGTH(L_NO);
         return L_NO;
     }
 }
@@ -134,30 +147,32 @@ static const char *can_status_str(CAN_Status_e status)
     }
 }
 
-/* 数一个以 LCD_CN_COUNT 结尾的中文字符串有几个字(用于居中) */
-static uint8_t cn_len(const Lcd_CnChar_e *str)
+/* 界面文字来自常量或本地定长数组；最多读到 LCD_TEXT_MAX 字节。 */
+static size_t lcd_ascii_length(const char *text)
 {
-    uint8_t n = 0;
-    while (str[n] != LCD_CN_COUNT && n < 32u)
-        ++n;
-    return n;
+    size_t length = 0u;
+    if (text == NULL)
+        return 0u;
+    while (length < LCD_TEXT_MAX && text[length] != '\0')
+        ++length;
+    return length;
 }
 
 // 用底色重画标题栏，同时显示页号和冻结提示，不清理下面的值区。
-static void draw_title(const Lcd_CnChar_e *title_cn, const char *title_ascii)
+static void draw_title(const Lcd_CnChar_e *title_cn, size_t title_count, const char *title_ascii)
 {
     LCD_BufFill(0, 0, LCD_W - 1u, 23u, BLUE);
     if (title_cn != NULL)
-        LCD_BufShowCnString(4, 4, title_cn, WHITE, BLUE);
+        LCD_BufShowCnString(4, 4, title_cn, title_count, WHITE, BLUE);
     else
-        LCD_BufShowAscii(4, 4, title_ascii, WHITE, BLUE, 16);
+        LCD_BufShowAscii(4, 4, title_ascii, lcd_ascii_length(title_ascii), WHITE, BLUE, 16);
 
     char page_buf[8];
     snprintf(page_buf, sizeof(page_buf), "%u/%u", (unsigned)(lcd_page + 1u), (unsigned)LCD_PAGE_COUNT);
-    LCD_BufShowAscii((uint16_t)(LCD_W - 28u), 4, page_buf, CYAN, BLUE, 16);
+    LCD_BufShowAscii((uint16_t)(LCD_W - 28u), 4, page_buf, lcd_ascii_length(page_buf), CYAN, BLUE, 16);
 
     if (lcd_frozen)
-        LCD_BufShowCnString((uint16_t)(LCD_W - 68u), 4, L_FREEZE, YELLOW, BLUE);
+        LCD_BufShowCnString((uint16_t)(LCD_W - 68u), 4, L_FREEZE, LCD_CN_LENGTH(L_FREEZE), YELLOW, BLUE);
 }
 
 // 按页号选择标题；独立重画可让冻结提示变化时只更新顶部。
@@ -167,46 +182,44 @@ static void draw_page_title(uint8_t page)
     {
     case 0u:
 #if defined(MC02_PROFILE_BENCH_SAFE)
-        draw_title(NULL, "SAFE BENCH");
+        draw_title(NULL, 0u, "SAFE BENCH");
 #else
-        draw_title(L_SYS, NULL);
+        draw_title(L_SYS, LCD_CN_LENGTH(L_SYS), NULL);
 #endif
         break;
     case 1u:
-        draw_title(NULL, "IMU");
+        draw_title(NULL, 0u, "IMU");
         break;
     case 2u:
-        draw_title(L_POWER, NULL);
+        draw_title(L_POWER, LCD_CN_LENGTH(L_POWER), NULL);
         break;
     default:
-        draw_title(L_MOTOR, NULL);
+        draw_title(L_MOTOR, LCD_CN_LENGTH(L_MOTOR), NULL);
         break;
     }
 }
 
 // 在固定标签列绘制一行中文标签，row 从 0 开始。
-static void draw_label(uint8_t row, const Lcd_CnChar_e *label)
+static void draw_label(uint8_t row, const Lcd_CnChar_e *label, size_t count)
 {
-    LCD_BufShowCnString(COL_LABEL_X, ROW_Y(row), label, WHITE, BLACK);
+    LCD_BufShowCnString(COL_LABEL_X, ROW_Y(row), label, count, WHITE, BLACK);
 }
 
 // 在固定标签列绘制一行 ASCII 标签。
 static void draw_label_ascii(uint8_t row, const char *label)
 {
-    LCD_BufShowAscii(COL_LABEL_X, ROW_Y(row), label, WHITE, BLACK, 16);
+    LCD_BufShowAscii(COL_LABEL_X, ROW_Y(row), label, lcd_ascii_length(label), WHITE, BLACK, 16);
 }
 
 // 只清指定行的值区，覆盖旧文本可能留下的较长尾部。
-static void clear_value(uint8_t row)
+static LCDStatus_t clear_value(uint8_t row)
 {
-    LCD_BufFill(COL_VALUE_X, ROW_Y(row), LCD_W - 1u, ROW_Y(row) + 15u, BLACK);
+    return LCD_BufFill(COL_VALUE_X, ROW_Y(row), LCD_W - 1u, ROW_Y(row) + 15u, BLACK);
 }
 
 // 按“页、行”保存最后绘制的内容；相同内容无需再次清背景和发送像素。
 // 整页内容被覆盖后要清除这些记录，避免下次把已消失的值误当成还在屏上。
 #define LCD_ROW_COUNT 9u
-#define LCD_TEXT_MAX 48u
-
 /* 行内容类型: 0=空(没画过) 1=ASCII 2=中文标签 3=浮点+单位 */
 #define VALUE_KIND_NONE 0u
 #define VALUE_KIND_ASCII 1u
@@ -215,7 +228,6 @@ static void clear_value(uint8_t row)
 
 static char s_last_text[LCD_PAGE_COUNT][LCD_ROW_COUNT][LCD_TEXT_MAX];
 static const Lcd_CnChar_e *s_last_cn[LCD_PAGE_COUNT][LCD_ROW_COUNT];
-static float s_last_float[LCD_PAGE_COUNT][LCD_ROW_COUNT];
 static uint8_t s_last_decimals[LCD_PAGE_COUNT][LCD_ROW_COUNT];
 static uint8_t s_last_kind[LCD_PAGE_COUNT][LCD_ROW_COUNT];
 
@@ -237,7 +249,7 @@ static uint8_t value_unchanged(uint8_t row, uint8_t kind, const void *data, uint
     case VALUE_KIND_CN:
         return (s_last_cn[lcd_page][row] == (const Lcd_CnChar_e *)data) ? 1u : 0u;
     case VALUE_KIND_FLOAT:
-        return ((s_last_float[lcd_page][row] == *(const float *)data) &&
+        return ((strcmp(s_last_text[lcd_page][row], (const char *)data) == 0) &&
                 (s_last_decimals[lcd_page][row] == decimals)) ? 1u : 0u;
     default:
         return 0u;
@@ -254,6 +266,7 @@ static void value_mark_drawn(uint8_t row, uint8_t kind, const void *data, uint8_
     switch (kind)
     {
     case VALUE_KIND_ASCII:
+    case VALUE_KIND_FLOAT:
     {
         char *destination = s_last_text[lcd_page][row];
         const char *source = (const char *)data;
@@ -262,14 +275,11 @@ static void value_mark_drawn(uint8_t row, uint8_t kind, const void *data, uint8_
             ++length;
         memcpy(destination, source, length);
         memset(destination + length, '\0', LCD_TEXT_MAX - length);
+        s_last_decimals[lcd_page][row] = decimals;
         break;
     }
     case VALUE_KIND_CN:
         s_last_cn[lcd_page][row] = (const Lcd_CnChar_e *)data;
-        break;
-    case VALUE_KIND_FLOAT:
-        s_last_float[lcd_page][row] = *(const float *)data;
-        s_last_decimals[lcd_page][row] = decimals;
         break;
     default:
         break;
@@ -282,10 +292,37 @@ void LCD_UI_InvalidateValueCache(void)
     memset(s_last_kind, 0, sizeof(s_last_kind));
 }
 
-static void draw_value_ascii(uint8_t row, const char *str)
+static LCDStatus_t lcd_ui_begin(uint32_t budget_ms, uint8_t recovery)
 {
+    LCDStatus_t status = LCD_InternalBegin(budget_ms, recovery);
+    if (status != LCD_OK)
+        LCD_UI_InvalidateValueCache();
+    return status;
+}
+
+static LCDStatus_t lcd_ui_end(LCDStatus_t status)
+{
+    status = LCD_InternalEnd(status);
+    if (status != LCD_OK)
+        LCD_UI_InvalidateValueCache();
+    return status;
+}
+
+static LCDStatus_t draw_value_ascii(uint8_t row, const char *str)
+{
+    if (row >= LCD_ROW_COUNT)
+        return LCD_OUT_OF_RANGE;
     // 文本过长先改用 12 像素字高，仍放不下时只保留能显示的部分并加 ~。
-    size_t len = strlen(str);
+    if (str == NULL)
+        return LCD_BAD_ARGUMENT;
+    size_t len = lcd_ascii_length(str);
+    if (len == LCD_TEXT_MAX)
+        return LCD_BAD_TEXT;
+    for (size_t i = 0u; i < len; ++i)
+    {
+        if ((uint8_t)str[i] < 0x20u || (uint8_t)str[i] > 0x7Eu)
+            return LCD_BAD_TEXT;
+    }
     uint16_t avail = (uint16_t)(LCD_W - COL_VALUE_X);
     uint8_t sizey = 16u;
     uint8_t char_w = 8u;
@@ -317,41 +354,100 @@ static void draw_value_ascii(uint8_t row, const char *str)
     if (value_unchanged(row, VALUE_KIND_ASCII, buf, 0u))
     {
         lcd_rows_skipped++;
-        return;
+        return LCD_OK;
     }
 
-    clear_value(row);
-    LCD_BufShowAscii(COL_VALUE_X, ROW_Y(row), buf, CYAN, BLACK, sizey);
+    LCDStatus_t status = clear_value(row);
+    if (status != LCD_OK)
+        return status;
+    size_t display_length = lcd_ascii_length(buf);
+    status = LCD_BufShowAscii(COL_VALUE_X, ROW_Y(row), buf, display_length, CYAN, BLACK, sizey);
+    if (status != LCD_OK)
+        return status;
     value_mark_drawn(row, VALUE_KIND_ASCII, buf, 0u);
+    return LCD_OK;
 }
 
-static void draw_value_cn(uint8_t row, const Lcd_CnChar_e *str)
+static LCDStatus_t draw_value_cn(uint8_t row, const Lcd_CnChar_e *str, size_t count)
 {
+    if (row >= LCD_ROW_COUNT)
+        return LCD_OUT_OF_RANGE;
+    if (count > 0u && str == NULL)
+        return LCD_BAD_ARGUMENT;
+    if (count > (LCD_W - COL_VALUE_X) / 16u)
+        return LCD_OUT_OF_RANGE;
+    for (size_t i = 0u; i < count; ++i)
+    {
+        if ((unsigned)str[i] >= (unsigned)LCD_CN_COUNT)
+            return LCD_BAD_GLYPH;
+    }
+
     /* 中文值都是标签数组(如"在线"/"离线"), 比指针就够 —— 同一内容每次传的是同一个数组 */
     if (value_unchanged(row, VALUE_KIND_CN, str, 0u))
     {
         lcd_rows_skipped++;
-        return;
+        return LCD_OK;
     }
 
-    clear_value(row);
-    LCD_BufShowCnString(COL_VALUE_X, ROW_Y(row), str, CYAN, BLACK);
+    LCDStatus_t status = clear_value(row);
+    if (status != LCD_OK)
+        return status;
+    status = LCD_BufShowCnString(COL_VALUE_X, ROW_Y(row), str, count, CYAN, BLACK);
+    if (status != LCD_OK)
+        return status;
     value_mark_drawn(row, VALUE_KIND_CN, str, 0u);
+    return LCD_OK;
 }
 
-static void draw_value_float_unit(uint8_t row, float value, uint8_t decimals, const char *unit)
+static LCDStatus_t draw_value_float_unit(uint8_t row, float value, uint8_t decimals, const char *unit)
 {
-    // 同一行单位固定，只比较数值和小数位数；数字文本由 LCD_BufShowFloat() 准备。
-    if (value_unchanged(row, VALUE_KIND_FLOAT, &value, decimals))
+    if (row >= LCD_ROW_COUNT)
+        return LCD_OUT_OF_RANGE;
+    if (unit == NULL)
+        return LCD_BAD_ARGUMENT;
+    char text[16];
+    size_t text_length = 0u;
+    LCDStatus_t format_status = LCD_BufFormatFloat(value, decimals, text, sizeof(text), &text_length);
+    if (format_status != LCD_OK)
     {
-        lcd_rows_skipped++;
-        return;
+        memcpy(text, "--", 3u);
+        text_length = 2u;
+    }
+    size_t unit_length = lcd_ascii_length(unit);
+    size_t unit_capacity = (size_t)(LCD_W - COL_VALUE_X - 8u * 8u) / 8u;
+    if (unit_length == LCD_TEXT_MAX)
+        return LCD_BAD_TEXT;
+    for (size_t i = 0u; i < unit_length; ++i)
+    {
+        if ((uint8_t)unit[i] < 0x20u || (uint8_t)unit[i] > 0x7Eu)
+            return LCD_BAD_TEXT;
+    }
+    // 数值固定占八个字宽，先确认单位及最终文本都放得下，再清理旧值。
+    if (text_length > 8u || unit_length > unit_capacity)
+    {
+        memcpy(text, "--", 3u);
+        text_length = 2u;
     }
 
-    clear_value(row);
-    LCD_BufShowFloat(COL_VALUE_X, ROW_Y(row), value, decimals, CYAN, BLACK, 16);
-    LCD_BufShowAscii(COL_VALUE_X + 8u * 8u, ROW_Y(row), unit, GRAY, BLACK, 16);
-    value_mark_drawn(row, VALUE_KIND_FLOAT, &value, decimals);
+    // 缓存比较最终显示的文字；多个无效数值都会显示同一个占位符。
+    if (value_unchanged(row, VALUE_KIND_FLOAT, text, decimals))
+    {
+        lcd_rows_skipped++;
+        return LCD_OK;
+    }
+
+    LCDStatus_t status = clear_value(row);
+    if (status != LCD_OK)
+        return status;
+    status = LCD_BufShowAscii(COL_VALUE_X, ROW_Y(row), text, text_length, CYAN, BLACK, 16u);
+    if (status != LCD_OK)
+        return status;
+    status = LCD_BufShowAscii(COL_VALUE_X + 8u * 8u, ROW_Y(row), unit,
+                              unit_length, GRAY, BLACK, 16u);
+    if (status != LCD_OK)
+        return status;
+    value_mark_drawn(row, VALUE_KIND_FLOAT, text, decimals);
+    return LCD_OK;
 }
 
 // 在调用方提供的文本空间内写故障编号，并追加已知故障的简称。
@@ -377,21 +473,23 @@ static void build_fault_string(uint32_t faults, char *buf, size_t len)
 // 第 0 页标签：整车状态、故障、输入在线情况和上次异常。
 static void draw_page0_static(void)
 {
-    draw_label(0, L_STATE);
-    draw_label(1, L_FAULT);
-    draw_label(2, L_ESTOP);
-    draw_label(3, L_VOLT);
-    draw_label(4, L_TASK);
-    draw_label(5, L_RC);
-    draw_label(6, L_VISION);
-    draw_label(7, L_WATCHDOG);
+    draw_label(0, L_STATE, LCD_CN_LENGTH(L_STATE));
+    draw_label(1, L_FAULT, LCD_CN_LENGTH(L_FAULT));
+    draw_label(2, L_ESTOP, LCD_CN_LENGTH(L_ESTOP));
+    draw_label(3, L_VOLT, LCD_CN_LENGTH(L_VOLT));
+    draw_label(4, L_TASK, LCD_CN_LENGTH(L_TASK));
+    draw_label(5, L_RC, LCD_CN_LENGTH(L_RC));
+    draw_label(6, L_VISION, LCD_CN_LENGTH(L_VISION));
+    draw_label(7, L_WATCHDOG, LCD_CN_LENGTH(L_WATCHDOG));
     draw_label_ascii(8, "CRASH"); /* 上次崩溃(异常/断言/栈溢出)现场, 没崩过显示 -- */
 }
 
 // 第 0 页读取系统信息；逐项检查任务是否超时，异常记录不存在时显示 --。
 static void draw_page0_values(void)
 {
-    draw_value_cn(0, state_label(RobotSafetyGetState()));
+    size_t state_count = 0u;
+    const Lcd_CnChar_e *state_text = state_label(RobotSafetyGetState(), &state_count);
+    draw_value_cn(0, state_text, state_count);
 
     char buf[40];
     build_fault_string(RobotSafetyGetFaults(), buf, sizeof(buf));
@@ -421,7 +519,7 @@ static void draw_page0_values(void)
     snprintf(buf, sizeof(buf), "I:%s M:%s R:%s D:%s U:%s", t[0], t[1], t[2], t[3], t[TASK_MONITOR_UART_TX]);
     draw_value_ascii(4, buf);
 
-    draw_value_cn(5, online_label(RemoteControlIsOnline()));
+    draw_value_cn(5, online_label(RemoteControlIsOnline()), LCD_CN_LENGTH(L_ONLINE));
 
     Vision_Status_t vs;
     VisionGetStatus(&vs);
@@ -453,11 +551,11 @@ static void draw_page0_values(void)
 // 第 1 页标签：温度、加热输出、姿态和标定来源。
 static void draw_page1_static(void)
 {
-    draw_label(0, L_TEMP);
-    draw_label(1, L_TARGET);
-    draw_label(2, L_DUTY);
-    draw_label(3, L_HEAT);
-    draw_label(4, L_VALID);
+    draw_label(0, L_TEMP, LCD_CN_LENGTH(L_TEMP));
+    draw_label(1, L_TARGET, LCD_CN_LENGTH(L_TARGET));
+    draw_label(2, L_DUTY, LCD_CN_LENGTH(L_DUTY));
+    draw_label(3, L_HEAT, LCD_CN_LENGTH(L_HEAT));
+    draw_label(4, L_VALID, LCD_CN_LENGTH(L_VALID));
     draw_label_ascii(5, "YAW");
     draw_label_ascii(6, "PIT");
     draw_label_ascii(7, "ROL");
@@ -470,7 +568,7 @@ static void draw_page1_values(void)
     IMUHeaterStatus_t hs;
     IMUHeaterGetStatus(&hs);
 
-    // 显示标定来源及温度；手工拆出一位小数，避免依赖浮点格式化。
+    // 显示标定来源及温度；共用绘图模块的有限值和舍入检查。
     char cal_buf[24];
     const char *src;
     switch (bmi088_calib_source)
@@ -491,13 +589,15 @@ static void draw_page1_values(void)
         src = "--";
         break;
     }
-    if (bmi088_calib_temp > -40.0f && bmi088_calib_temp < 100.0f && bmi088_calib_temp != 0.0f)
+    char temperature[16];
+    size_t temperature_length = 0u;
+    LCDStatus_t temperature_status = LCD_BufFormatFloat(bmi088_calib_temp, 1u,
+                                                        temperature, sizeof(temperature),
+                                                        &temperature_length);
+    if (temperature_status == LCD_OK && bmi088_calib_temp > -40.0f &&
+        bmi088_calib_temp < 100.0f && bmi088_calib_temp != 0.0f && temperature_length < sizeof(temperature))
     {
-        int32_t t10 = (int32_t)(bmi088_calib_temp * 10.0f + 0.5f);
-        if (t10 < 0)
-            t10 = 0; /* 手算取整在负数上会不对称, 这里温度不会为负, 直接钳到 0 */
-        snprintf(cal_buf, sizeof(cal_buf), "%s %ld.%ldC", src,
-                 (long)(t10 / 10), (long)(t10 % 10));
+        snprintf(cal_buf, sizeof(cal_buf), "%s %sC", src, temperature);
     }
     else
     {
@@ -521,7 +621,7 @@ static void draw_page1_values(void)
         snprintf(buf, sizeof(buf), "%s", hs.heating ? "ON" : "OFF");
     draw_value_ascii(3, buf);
 
-    draw_value_cn(4, hs.sensor_valid ? L_VALID : L_INVALID);
+    draw_value_cn(4, hs.sensor_valid ? L_VALID : L_INVALID, LCD_CN_LENGTH(L_VALID));
 
     attitude_t *att = INS_GetAttitude();
     if (att == NULL)
@@ -539,15 +639,15 @@ static void draw_page1_values(void)
 // 第 2 页标签：裁判状态、功率和弹量。
 static void draw_page2_static(void)
 {
-    draw_label(0, L_REFEREE);
-    draw_label(1, L_STAGE);
-    draw_label(2, L_HP);
-    draw_label(3, L_POWER);
-    draw_label(4, L_BUFFER);
-    draw_label(5, L_HEATQ);
-    draw_label(6, L_AMMO);
-    draw_label(7, L_BULLET_SPEED);
-    draw_label(8, L_COIN);
+    draw_label(0, L_REFEREE, LCD_CN_LENGTH(L_REFEREE));
+    draw_label(1, L_STAGE, LCD_CN_LENGTH(L_STAGE));
+    draw_label(2, L_HP, LCD_CN_LENGTH(L_HP));
+    draw_label(3, L_POWER, LCD_CN_LENGTH(L_POWER));
+    draw_label(4, L_BUFFER, LCD_CN_LENGTH(L_BUFFER));
+    draw_label(5, L_HEATQ, LCD_CN_LENGTH(L_HEATQ));
+    draw_label(6, L_AMMO, LCD_CN_LENGTH(L_AMMO));
+    draw_label(7, L_BULLET_SPEED, LCD_CN_LENGTH(L_BULLET_SPEED));
+    draw_label(8, L_COIN, LCD_CN_LENGTH(L_COIN));
 }
 
 // 裁判离线或尚无数据对象时，逐行清掉旧值并显示 --。
@@ -555,7 +655,7 @@ static void draw_page2_values(void)
 {
     RefereeSnapshot_t ref = {0};
     uint8_t available = (uint8_t)(RefereeGetSnapshot(&ref) == REFEREE_OK);
-    draw_value_cn(0, online_label((uint8_t)(available && ref.link_online)));
+    draw_value_cn(0, online_label((uint8_t)(available && ref.link_online)), LCD_CN_LENGTH(L_ONLINE));
     char values[LCD_REFEREE_VALUE_COUNT][LCD_REFEREE_VALUE_SIZE];
     LCDRefereeFormatRows(available ? &ref : NULL, values);
     for (uint8_t i=0u;i<LCD_REFEREE_VALUE_COUNT;++i) draw_value_ascii((uint8_t)(i+1u),values[i]);
@@ -564,13 +664,13 @@ static void draw_page2_values(void)
 // 第 3 页标签：各电机在线情况、CAN、视觉和按键读数。
 static void draw_page3_static(void)
 {
-    draw_label(0, L_CHASSIS);
-    draw_label(1, L_GIMBAL);
-    draw_label(2, L_SHOOT);
+    draw_label(0, L_CHASSIS, LCD_CN_LENGTH(L_CHASSIS));
+    draw_label(1, L_GIMBAL, LCD_CN_LENGTH(L_GIMBAL));
+    draw_label(2, L_SHOOT, LCD_CN_LENGTH(L_SHOOT));
     draw_label_ascii(3, "LF");
     draw_label_ascii(4, "YAW");
-    draw_label(5, L_BUS);
-    draw_label(6, L_LINK);
+    draw_label(5, L_BUS, LCD_CN_LENGTH(L_BUS));
+    draw_label(6, L_LINK, LCD_CN_LENGTH(L_LINK));
     draw_label_ascii(7, "KEY");
 }
 
@@ -640,8 +740,12 @@ static void draw_page3_values(void)
     draw_value_ascii(7, buf);
 }
 
-void LCD_UI_DrawStatic(uint8_t page)
+LCDStatus_t LCD_UI_DrawStatic(uint8_t page)
 {
+    LCDStatus_t status = lcd_ui_begin(250u, 0u);
+    if (status != LCD_OK)
+        return status;
+
     /* 整页重画会覆盖/清空整个值区: 必须让值缓存失效,
        否则下一次 UpdateValues() 会因为"内容没变"而跳过, 屏幕就一直空着。 */
     LCD_UI_InvalidateValueCache();
@@ -667,10 +771,15 @@ void LCD_UI_DrawStatic(uint8_t page)
         draw_page3_static();
         break;
     }
+    status = LCD_InternalCurrentStatus();
+    return lcd_ui_end(status);
 }
 
-void LCD_UI_UpdateValues(uint8_t page)
+LCDStatus_t LCD_UI_UpdateValues(uint8_t page)
 {
+    LCDStatus_t status = lcd_ui_begin(20u, 0u);
+    if (status != LCD_OK)
+        return status;
     lcd_page = page % LCD_PAGE_COUNT;
 
     switch (lcd_page)
@@ -688,74 +797,123 @@ void LCD_UI_UpdateValues(uint8_t page)
         draw_page3_values();
         break;
     }
+    status = LCD_InternalCurrentStatus();
+    return lcd_ui_end(status);
 }
 
-void LCD_UI_Init(void)
+LCDStatus_t LCD_UI_Init(void)
 {
+    LCDStatus_t status = lcd_ui_begin(1000u, 0u);
+    if (status != LCD_OK)
+        return status;
+
     lcd_page = 0;
     lcd_frozen = 0;
     lcd_init_stage = 1;
-    LCD_Init();
-    lcd_init_stage = 2;
-    /* 先按玻璃物理范围整屏刷黑，擦掉上一版固件留在内缩区之外的残留像素 */
-    LCD_BufClearPanel();
-    lcd_init_stage = 3;
-    LCD_BufFill(0, 0, LCD_W - 1u, LCD_H - 1u, BLACK);
-    lcd_init_stage = 4;
-    LCD_UI_DrawStatic(0);
-    lcd_init_stage = 5;
-    LCD_UI_UpdateValues(0);
-    lcd_init_stage = 6;
-}
-
-// 面板重新上电后配置可能丢失，需要重发初始化命令再恢复当前页面。
-void LCD_UI_Recover(void)
-{
-    if (HAL_SPI_GetState(&hspi1) != HAL_SPI_STATE_READY)
+    LCD_UI_InvalidateValueCache();
+    status = LCD_Init();
+    if (status == LCD_OK)
     {
-        HAL_SPI_Abort(&hspi1);
-        MX_SPI1_Init();
+        lcd_init_stage = 2;
+        status = LCD_BufClearPanel();
     }
+    if (status == LCD_OK)
+    {
+        lcd_init_stage = 3;
+        status = LCD_BufFill(0, 0, LCD_W - 1u, LCD_H - 1u, BLACK);
+    }
+    if (status == LCD_OK)
+    {
+        lcd_init_stage = 4;
+        status = LCD_UI_DrawStatic(0u);
+    }
+    if (status == LCD_OK)
+    {
+        lcd_init_stage = 5;
+        status = LCD_UI_UpdateValues(0u);
+    }
+    if (status == LCD_OK)
+        status = LCD_InternalCommitUI();
+    if (status == LCD_OK)
+        lcd_init_stage = 6;
 
-    LCD_Init();
-    LCD_BufClearPanel();
-    LCD_UI_DrawStatic(lcd_page);
-    LCD_UI_UpdateValues(lcd_page);
+    return lcd_ui_end(status);
 }
 
-void LCD_UI_SetFrozen(uint8_t frozen)
+// 面板重新上电后配置可能丢失；确认 SPI 停止后再重置面板并重画。
+LCDStatus_t LCD_UI_Recover(void)
 {
+    LCDStatus_t status = lcd_ui_begin(1000u, 1u);
+    if (status != LCD_OK)
+        return status;
+
+    status = LCD_InternalStopForRecovery();
+    if (status == LCD_OK)
+        LCD_UI_InvalidateValueCache();
+    if (status == LCD_OK)
+        status = LCD_Init();
+    if (status == LCD_OK)
+        status = LCD_BufClearPanel();
+    if (status == LCD_OK)
+        status = LCD_BufFill(0, 0, LCD_W - 1u, LCD_H - 1u, BLACK);
+    if (status == LCD_OK)
+        status = LCD_UI_DrawStatic(lcd_page);
+    if (status == LCD_OK)
+        status = LCD_UI_UpdateValues(lcd_page);
+    if (status == LCD_OK)
+        status = LCD_InternalCommitUI();
+    return lcd_ui_end(status);
+}
+
+LCDStatus_t LCD_UI_SetFrozen(uint8_t frozen)
+{
+    LCDStatus_t status = lcd_ui_begin(250u, 0u);
+    if (status != LCD_OK)
+        return status;
     lcd_frozen = frozen ? 1u : 0u;
     // 只重画标题，让冻结标记出现或消失；值区更新由 LCD 任务决定。
     draw_page_title(lcd_page);
+    status = LCD_InternalCurrentStatus();
+    return lcd_ui_end(status);
 }
 
 // 只覆盖页面中间一块，减少标定期间显示所需的发送时间。
-void LCD_UI_ShowCalibMsg(uint8_t msg)
+LCDStatus_t LCD_UI_ShowCalibMsg(uint8_t msg)
 {
+    LCDStatus_t status = lcd_ui_begin(250u, 0u);
+    if (status != LCD_OK)
+        return status;
+
     if (msg == 0u)
     {
-        LCD_UI_DrawStatic(lcd_page);
-        LCD_UI_UpdateValues(lcd_page);
-        return;
+        status = LCD_UI_DrawStatic(lcd_page);
+        if (status == LCD_OK)
+            status = LCD_UI_UpdateValues(lcd_page);
+        return lcd_ui_end(status);
     }
 
     const Lcd_CnChar_e *title;
     const Lcd_CnChar_e *sub = NULL;
+    size_t title_count;
+    size_t sub_count = 0u;
     uint16_t color;
     switch (msg)
     {
     case 1u:
         title = L_CAL_RUN;
         sub = L_CAL_HOLD;
+        title_count = LCD_CN_LENGTH(L_CAL_RUN);
+        sub_count = LCD_CN_LENGTH(L_CAL_HOLD);
         color = YELLOW;
         break;
     case 2u:
         title = L_CAL_OK;
+        title_count = LCD_CN_LENGTH(L_CAL_OK);
         color = GREEN;
         break;
     default:
         title = L_CAL_FAIL;
+        title_count = LCD_CN_LENGTH(L_CAL_FAIL);
         color = RED;
         break;
     }
@@ -766,18 +924,66 @@ void LCD_UI_ShowCalibMsg(uint8_t msg)
         y1 = (uint16_t)(LCD_H - 1u);
 
     /* 底色 + 上下两条彩线, 不用整屏重画 */
-    LCD_BufFill(0, y0, (uint16_t)(LCD_W - 1u), y1, BLACK);
-    LCD_BufFill(0, y0, (uint16_t)(LCD_W - 1u), (uint16_t)(y0 + 1u), color);
-    LCD_BufFill(0, (uint16_t)(y1 - 1u), (uint16_t)(LCD_W - 1u), y1, color);
+    status = LCD_BufFill(0, y0, (uint16_t)(LCD_W - 1u), y1, BLACK);
+    if (status == LCD_OK)
+        status = LCD_BufFill(0, y0, (uint16_t)(LCD_W - 1u), (uint16_t)(y0 + 1u), color);
+    if (status == LCD_OK)
+        status = LCD_BufFill(0, (uint16_t)(y1 - 1u), (uint16_t)(LCD_W - 1u), y1, color);
 
-    uint8_t n = cn_len(title);
-    uint16_t tx = (uint16_t)((LCD_W - (uint16_t)n * 16u) / 2u);
-    LCD_BufShowCnString(tx, (uint16_t)(y0 + 14u), title, color, BLACK);
+    uint16_t tx = (uint16_t)((LCD_W - title_count * 16u) / 2u);
+    if (status == LCD_OK)
+        status = LCD_BufShowCnString(tx, (uint16_t)(y0 + 14u), title, title_count, color, BLACK);
 
-    if (sub != NULL)
+    if (status == LCD_OK && sub != NULL)
     {
-        uint8_t m = cn_len(sub);
-        tx = (uint16_t)((LCD_W - (uint16_t)m * 16u) / 2u);
-        LCD_BufShowCnString(tx, (uint16_t)(y0 + 44u), sub, WHITE, BLACK);
+        tx = (uint16_t)((LCD_W - sub_count * 16u) / 2u);
+        status = LCD_BufShowCnString(tx, (uint16_t)(y0 + 44u), sub, sub_count, WHITE, BLACK);
     }
+    return lcd_ui_end(status);
 }
+
+#if MC02_BENCH_LCD_DIAGNOSTICS
+LCDStatus_t LCD_UI_DrawDiagnosticPattern(uint8_t pattern)
+{
+    LCDStatus_t status = lcd_ui_begin(250u, 0u);
+    if (status != LCD_OK)
+        return status;
+    if (pattern > 3u)
+        return lcd_ui_end(LCD_OUT_OF_RANGE);
+
+    status = LCD_BufFill(0u, 0u, LCD_W - 1u, LCD_H - 1u, BLACK);
+    if (status == LCD_OK && pattern == 0u)
+    {
+        status = LCD_BufFill(0u, 0u, LCD_W - 1u, 1u, RED);
+        if (status == LCD_OK) status = LCD_BufFill(0u, LCD_H - 2u, LCD_W - 1u, LCD_H - 1u, GREEN);
+        if (status == LCD_OK) status = LCD_BufFill(0u, 0u, 1u, LCD_H - 1u, BLUE);
+        if (status == LCD_OK) status = LCD_BufFill(LCD_W - 2u, 0u, LCD_W - 1u, LCD_H - 1u, YELLOW);
+        if (status == LCD_OK) status = LCD_BufFill(12u, 18u, 58u, 42u, MAGENTA);
+        if (status == LCD_OK) status = LCD_BufFill(64u, 18u, 110u, 42u, CYAN);
+    }
+    else if (status == LCD_OK && pattern == 1u)
+    {
+        static const char first[] = "ASCII 12px 0123456789";
+        static const char second[] = "ASCII 16px AaZz!?";
+        status = LCD_BufShowAscii(8u, 72u, first, LCD_ASCII_LENGTH(first), WHITE, BLACK, 12u);
+        if (status == LCD_OK)
+            status = LCD_BufShowAscii(8u, 100u, second, LCD_ASCII_LENGTH(second), CYAN, BLACK, 16u);
+    }
+    else if (status == LCD_OK && pattern == 2u)
+    {
+        status = LCD_BufShowCnString(12u, 72u, L_INIT, LCD_CN_LENGTH(L_INIT), WHITE, BLACK);
+        if (status == LCD_OK)
+            status = LCD_BufShowCnString(12u, 104u, L_CAL_OK, LCD_CN_LENGTH(L_CAL_OK), GREEN, BLACK);
+    }
+    else if (status == LCD_OK && pattern == 3u)
+    {
+        status = LCD_BufShowInt(8u, 44u, INT32_MIN, WHITE, BLACK, 12u);
+        if (status == LCD_OK) status = LCD_BufShowInt(8u, 68u, INT32_MAX, CYAN, BLACK, 12u);
+        if (status == LCD_OK) status = LCD_BufShowFloat(8u, 96u, 1.25f, 1u, GREEN, BLACK, 16u);
+        if (status == LCD_OK) status = LCD_BufShowFloat(8u, 124u, -1.25f, 1u, YELLOW, BLACK, 16u);
+        if (status == LCD_OK) status = LCD_BufShowFloat(8u, 152u, 0.0f, 3u, WHITE, BLACK, 12u);
+    }
+
+    return lcd_ui_end(status);
+}
+#endif

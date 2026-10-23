@@ -1,681 +1,420 @@
 /**
  * @file lcd.c
- * @brief 默认通过 SPI1 写 LCD 命令和像素，实现初始化、图形、字库和数字绘制。
- *
- * LCD_Init() 准备屏幕，绘图入口先用 LCD_Address_Set() 选区域，再发送颜色。
- * lcd_buf.c 也调用这里的底层接口；参数和使用条件集中在 lcd.h。
+ * @brief 负责 LCD 面板初始化、SPI1 发送期限、故障隔离和状态查询。
+ * @note 绘图由 lcd_buf.c 和 lcd_ui.c 调用内部入口；运行时只允许单任务串行访问。
  */
-#include "lcd.h"
-#include "lcdfont.h"
+#include "lcd_internal.h"
 
+#include "bsp_hal_tick.h"
 
-void LCD_Writ_Bus(uint8_t dat) 
-{	
-	LCD_CS_Clr();
-#if USE_ANALOG_SPI
-	// 软件发送时先发最高位，每次循环送出一位，共发送 8 位。
-	for(uint8_t i=0;i<8;i++) {			  
-		LCD_SCLK_Clr();
-		if(dat&0x80) {
-		   LCD_MOSI_Set();
-		} else {
-		   LCD_MOSI_Clr();
-		}
-		LCD_SCLK_Set();
-		dat<<=1;
-	}
-#else
-	// 硬件 SPI 阻塞发送一个字节；当前接口未处理 HAL 返回的发送状态。
-	HAL_SPI_Transmit(&hspi1, &dat, 1, 0xffff);
-#endif	
-  LCD_CS_Set();	
+#include <limits.h>
+#include <string.h>
+
+volatile uint32_t lcd_spi_errors = 0u;
+
+#define LCD_HAL_SEND_TIMEOUT_MS 2u
+#define LCD_INIT_BUDGET_MS 1000u
+
+static LCDState_t lcd_state;
+static uint8_t operation_depth;
+static uint8_t operation_active;
+static uint8_t recovery_operation;
+static uint8_t stop_isolated;
+static uint32_t operation_deadline_ms;
+static LCDStatus_t operation_status;
+
+static uint32_t saturating_add(uint32_t value, uint32_t amount)
+{
+    return (UINT32_MAX - value < amount) ? UINT32_MAX : value + amount;
 }
 
-void LCD_WR_DATA8(uint8_t dat)
+static uint8_t is_io_failure(LCDStatus_t status)
 {
-	LCD_Writ_Bus(dat);
+    return (uint8_t)(status == LCD_SEND_BUSY || status == LCD_SEND_ERROR ||
+                     status == LCD_SEND_TIMEOUT || status == LCD_DEADLINE_EXPIRED ||
+                     status == LCD_STOP_FAILED);
 }
 
-void LCD_WR_DATA(uint16_t dat)
+static void lcd_latch_failure(LCDStatus_t status)
 {
-	// RGB565 像素按高字节、低字节的顺序发送。
-	LCD_Writ_Bus(dat>>8);
-	LCD_Writ_Bus(dat);
-}
+    if (!is_io_failure(status))
+        return;
 
-void LCD_WR_REG(uint8_t dat)
-{
-	LCD_DC_Clr();// 本次发送命令。
-	LCD_Writ_Bus(dat);
-	LCD_DC_Set();// 随后的字节恢复为命令参数或像素数据。
-}
-
-void LCD_Address_Set(uint16_t x1,uint16_t y1,uint16_t x2,uint16_t y2)
-{
-	// 竖屏的行坐标、横屏的列坐标要加 20；四个方向都加上绘图区留白。
-	if(USE_HORIZONTAL==0)
-	{
-		LCD_WR_REG(0x2a);//列地址设置
-		LCD_WR_DATA(x1+LCD_MARGIN_X);
-		LCD_WR_DATA(x2+LCD_MARGIN_X);
-		LCD_WR_REG(0x2b);//行地址设置
-		LCD_WR_DATA(y1+20+LCD_MARGIN_Y);
-		LCD_WR_DATA(y2+20+LCD_MARGIN_Y);
-		LCD_WR_REG(0x2c);// 接下来发送本区域的像素。
-	}
-	else if(USE_HORIZONTAL==1)
-	{
-		LCD_WR_REG(0x2a);//列地址设置
-		LCD_WR_DATA(x1+LCD_MARGIN_X);
-		LCD_WR_DATA(x2+LCD_MARGIN_X);
-		LCD_WR_REG(0x2b);//行地址设置
-		LCD_WR_DATA(y1+20+LCD_MARGIN_Y);
-		LCD_WR_DATA(y2+20+LCD_MARGIN_Y);
-		LCD_WR_REG(0x2c);// 接下来发送本区域的像素。
-	}
-	else if(USE_HORIZONTAL==2)
-	{
-		LCD_WR_REG(0x2a);//列地址设置
-		LCD_WR_DATA(x1+20+LCD_MARGIN_X);
-		LCD_WR_DATA(x2+20+LCD_MARGIN_X);
-		LCD_WR_REG(0x2b);//行地址设置
-		LCD_WR_DATA(y1+LCD_MARGIN_Y);
-		LCD_WR_DATA(y2+LCD_MARGIN_Y);
-		LCD_WR_REG(0x2c);// 接下来发送本区域的像素。
-	}
-	else
-	{
-		LCD_WR_REG(0x2a);//列地址设置
-		LCD_WR_DATA(x1+20+LCD_MARGIN_X);
-		LCD_WR_DATA(x2+20+LCD_MARGIN_X);
-		LCD_WR_REG(0x2b);//行地址设置
-		LCD_WR_DATA(y1+LCD_MARGIN_Y);
-		LCD_WR_DATA(y2+LCD_MARGIN_Y);
-		LCD_WR_REG(0x2c);// 接下来发送本区域的像素。
-	}
-}
-
-void LCD_Fill(uint16_t xsta,uint16_t ysta,uint16_t xend,uint16_t yend,uint16_t color)
-{          
-	uint16_t i,j; 
-	// 地址窗口包含末端，而本函数不画末端行、列，因此各减 1。
-	LCD_Address_Set(xsta,ysta,xend-1,yend-1);
-	// 按行、列发出相同颜色，填满选中的矩形。
-	for(i=ysta;i<yend;i++)
-	{													   	 	
-		for(j=xsta;j<xend;j++)
-		{
-			LCD_WR_DATA(color);
-		}
-	} 					  	    
-}
-
-void LCD_DrawPoint(uint16_t x,uint16_t y,uint16_t color)
-{
-	LCD_Address_Set(x,y,x,y);// 起点和终点相同，只选中一个像素。
-	LCD_WR_DATA(color);
-} 
-
-void LCD_DrawLine(uint16_t x1,uint16_t y1,uint16_t x2,uint16_t y2,uint16_t color)
-{
-	uint16_t t; 
-	int xerr=0,yerr=0,delta_x,delta_y,distance;
-	int incx,incy,uRow,uCol;
-	delta_x=x2-x1;
-	delta_y=y2-y1;
-	uRow=x1;
-	uCol=y1;
-	// 根据终点位置选择向左、向右或保持 x；y 方向同样处理。
-	if(delta_x>0)incx=1;
-	else if (delta_x==0)incx=0;
-	else {incx=-1;delta_x=-delta_x;}
-	if(delta_y>0)incy=1;
-	else if (delta_y==0)incy=0;
-	else {incy=-1;delta_y=-delta_y;}
-	// 取较大的坐标差作为循环次数的依据，另一方向按累计值决定何时移动。
-	if(delta_x>delta_y)distance=delta_x;
-	else distance=delta_y;
-	// 沿用原有的 > 比较：非零长度时起点会重复画，循环后不补画终点。
-	for(t=0;t<distance+1;t++)
-	{
-		LCD_DrawPoint(uRow,uCol,color);
-		xerr+=delta_x;
-		yerr+=delta_y;
-		// 累计值超过 distance 时，该方向前进一个像素，并扣除本次用掉的部分。
-		if(xerr>distance)
-		{
-			xerr-=distance;
-			uRow+=incx;
-		}
-		if(yerr>distance)
-		{
-			yerr-=distance;
-			uCol+=incy;
-		}
-	}
-}
-
-void LCD_DrawRectangle(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2,uint16_t color)
-{
-	LCD_DrawLine(x1,y1,x2,y1,color);
-	LCD_DrawLine(x1,y1,x1,y2,color);
-	LCD_DrawLine(x1,y2,x2,y2,color);
-	LCD_DrawLine(x2,y1,x2,y2,color);
-}
-
-void Draw_Circle(uint16_t x0,uint16_t y0,uint8_t r,uint16_t color)
-{
-	int a,b;
-	a=0;b=r;	  
-	// 只计算八分之一圆周，每轮利用上下、左右对称画出八个点。
-	while(a<=b)
-	{
-		LCD_DrawPoint(x0-b,y0-a,color);
-		LCD_DrawPoint(x0+b,y0-a,color);
-		LCD_DrawPoint(x0-a,y0+b,color);
-		LCD_DrawPoint(x0-a,y0-b,color);
-		LCD_DrawPoint(x0+b,y0+a,color);
-		LCD_DrawPoint(x0+a,y0-b,color);
-		LCD_DrawPoint(x0+a,y0+b,color);
-		LCD_DrawPoint(x0-b,y0+a,color);
-		a++;
-		if((a*a+b*b)>(r*r))// 新位置超过半径时，向圆心收回一个像素。
-		{
-			b--;
-		}
-	}
-}
-
-void LCD_ShowChinese(uint16_t x,uint16_t y,uint8_t *s,uint16_t fc,uint16_t bc,uint8_t sizey,uint8_t mode)
-{
-	// 每次处理两字节索引，遇到 0 停止；这里不解码 UTF-8，也不自动换行。
-	while(*s!=0)
-	{
-		if(sizey==12) LCD_ShowChinese12x12(x,y,s,fc,bc,sizey,mode);
-		else if(sizey==16) LCD_ShowChinese16x16(x,y,s,fc,bc,sizey,mode);
-		else if(sizey==24) LCD_ShowChinese24x24(x,y,s,fc,bc,sizey,mode);
-		else if(sizey==32) LCD_ShowChinese32x32(x,y,s,fc,bc,sizey,mode);
-		else return;// 没有对应字号时停止绘制。
-		s+=2;
-		// 没在字库中找到的字也占一个字宽，保持后续位置不变。
-		x+=sizey;
-	}
-}
-
-void LCD_ShowChinese12x12(uint16_t x,uint16_t y,uint8_t *s,uint16_t fc,uint16_t bc,uint8_t sizey,uint8_t mode)
-{
-	uint8_t i,j,m=0;
-	uint16_t k;
-	uint16_t HZnum;// 当前字号的字库项数。
-	uint16_t TypefaceNum;// 字模总字节数；每行不足 8 位的部分也占一个字节。
-	uint16_t x0=x;
-	TypefaceNum=(sizey/8+((sizey%8)?1:0))*sizey;
-	                         
-	HZnum=sizeof(tfont12)/sizeof(typFNT_GB12);
-	// 逐项比较索引的前两个字节；没有匹配项时不画任何内容。
-	for(k=0;k<HZnum;k++) 
-	{
-		if((tfont12[k].Index[0]==*(s))&&(tfont12[k].Index[1]==*(s+1)))
-		{ 	
-			LCD_Address_Set(x,y,x+sizey-1,y+sizey-1);
-			// 逐字节读取字模，每个字节从低位开始决定要画哪些像素。
-			for(i=0;i<TypefaceNum;i++)
-			{
-				for(j=0;j<8;j++)
-				{	
-					if(!mode)// mode 为 0：字模位为 1 画字色，为 0 画背景色。
-					{
-						if(tfont12[k].Msk[i]&(0x01<<j))LCD_WR_DATA(fc);
-						else LCD_WR_DATA(bc);
-						m++;
-						// 已写够一行时跳过本字节剩下的位，避免把行尾补位画出来。
-						if(m%sizey==0)
-						{
-							m=0;
-							break;
-						}
-					}
-					else// 只画字形；字模位为 0 时保留屏上原有颜色。
-					{
-						if(tfont12[k].Msk[i]&(0x01<<j))	LCD_DrawPoint(x,y,fc);
-						x++;
-						// 到达行末后回到左侧，下一字节从下一行继续画。
-						if((x-x0)==sizey)
-						{
-							x=x0;
-							y++;
-							break;
-						}
-					}
-				}
-			}
-		}				  	
-		continue;// 继续检查后续字库项，匹配后也不会提前退出。
-	}
-} 
-
-void LCD_ShowChinese16x16(uint16_t x,uint16_t y,uint8_t *s,uint16_t fc,uint16_t bc,uint8_t sizey,uint8_t mode)
-{
-	uint8_t i,j,m=0;
-	uint16_t k;
-	uint16_t HZnum;// 当前字号的字库项数。
-	uint16_t TypefaceNum;// 字模总字节数；每行不足 8 位的部分也占一个字节。
-	uint16_t x0=x;
-  TypefaceNum=(sizey/8+((sizey%8)?1:0))*sizey;
-	HZnum=sizeof(tfont16)/sizeof(typFNT_GB16);
-	// 逐项比较索引的前两个字节；没有匹配项时不画任何内容。
-	for(k=0;k<HZnum;k++) 
-	{
-		if ((tfont16[k].Index[0]==*(s))&&(tfont16[k].Index[1]==*(s+1)))
-		{ 	
-			LCD_Address_Set(x,y,x+sizey-1,y+sizey-1);
-			// 逐字节读取字模，每个字节从低位开始决定要画哪些像素。
-			for(i=0;i<TypefaceNum;i++)
-			{
-				for(j=0;j<8;j++)
-				{	
-					if(!mode)// mode 为 0：字模位为 1 画字色，为 0 画背景色。
-					{
-						if(tfont16[k].Msk[i]&(0x01<<j))LCD_WR_DATA(fc);
-						else LCD_WR_DATA(bc);
-						m++;
-						// 已写够一行时跳过本字节剩下的位，避免把行尾补位画出来。
-						if(m%sizey==0)
-						{
-							m=0;
-							break;
-						}
-					}
-					else// 只画字形；字模位为 0 时保留屏上原有颜色。
-					{
-						if(tfont16[k].Msk[i]&(0x01<<j))	LCD_DrawPoint(x,y,fc);
-						x++;
-						// 到达行末后回到左侧，下一字节从下一行继续画。
-						if((x-x0)==sizey)
-						{
-							x=x0;
-							y++;
-							break;
-						}
-					}
-				}
-			}
-		}				  	
-		continue;// 继续检查后续字库项，匹配后也不会提前退出。
-	}
-} 
-
-void LCD_ShowChinese24x24(uint16_t x,uint16_t y,uint8_t *s,uint16_t fc,uint16_t bc,uint8_t sizey,uint8_t mode)
-{
-	uint8_t i,j,m=0;
-	uint16_t k;
-	uint16_t HZnum;// 当前字号的字库项数。
-	uint16_t TypefaceNum;// 字模总字节数；每行不足 8 位的部分也占一个字节。
-	uint16_t x0=x;
-	TypefaceNum=(sizey/8+((sizey%8)?1:0))*sizey;
-	HZnum=sizeof(tfont24)/sizeof(typFNT_GB24);
-	// 逐项比较索引的前两个字节；没有匹配项时不画任何内容。
-	for(k=0;k<HZnum;k++) 
-	{
-		if ((tfont24[k].Index[0]==*(s))&&(tfont24[k].Index[1]==*(s+1)))
-		{ 	
-			LCD_Address_Set(x,y,x+sizey-1,y+sizey-1);
-			// 逐字节读取字模，每个字节从低位开始决定要画哪些像素。
-			for(i=0;i<TypefaceNum;i++)
-			{
-				for(j=0;j<8;j++)
-				{	
-					if(!mode)// mode 为 0：字模位为 1 画字色，为 0 画背景色。
-					{
-						if(tfont24[k].Msk[i]&(0x01<<j))LCD_WR_DATA(fc);
-						else LCD_WR_DATA(bc);
-						m++;
-						// 已写够一行时跳过本字节剩下的位，避免把行尾补位画出来。
-						if(m%sizey==0)
-						{
-							m=0;
-							break;
-						}
-					}
-					else// 只画字形；字模位为 0 时保留屏上原有颜色。
-					{
-						if(tfont24[k].Msk[i]&(0x01<<j))	LCD_DrawPoint(x,y,fc);
-						x++;
-						// 到达行末后回到左侧，下一字节从下一行继续画。
-						if((x-x0)==sizey)
-						{
-							x=x0;
-							y++;
-							break;
-						}
-					}
-				}
-			}
-		}				  	
-		continue;// 继续检查后续字库项，匹配后也不会提前退出。
-	}
-} 
-
-void LCD_ShowChinese32x32(uint16_t x,uint16_t y,uint8_t *s,uint16_t fc,uint16_t bc,uint8_t sizey,uint8_t mode)
-{
-	uint8_t i,j,m=0;
-	uint16_t k;
-	uint16_t HZnum;// 当前字号的字库项数。
-	uint16_t TypefaceNum;// 字模总字节数；每行不足 8 位的部分也占一个字节。
-	uint16_t x0=x;
-	TypefaceNum=(sizey/8+((sizey%8)?1:0))*sizey;
-	HZnum=sizeof(tfont32)/sizeof(typFNT_GB32);
-	// 逐项比较索引的前两个字节；没有匹配项时不画任何内容。
-	for(k=0;k<HZnum;k++) 
-	{
-		if ((tfont32[k].Index[0]==*(s))&&(tfont32[k].Index[1]==*(s+1)))
-		{ 	
-			LCD_Address_Set(x,y,x+sizey-1,y+sizey-1);
-			// 逐字节读取字模，每个字节从低位开始决定要画哪些像素。
-			for(i=0;i<TypefaceNum;i++)
-			{
-				for(j=0;j<8;j++)
-				{	
-					if(!mode)// mode 为 0：字模位为 1 画字色，为 0 画背景色。
-					{
-						if(tfont32[k].Msk[i]&(0x01<<j))LCD_WR_DATA(fc);
-						else LCD_WR_DATA(bc);
-						m++;
-						// 已写够一行时跳过本字节剩下的位，避免把行尾补位画出来。
-						if(m%sizey==0)
-						{
-							m=0;
-							break;
-						}
-					}
-					else// 只画字形；字模位为 0 时保留屏上原有颜色。
-					{
-						if(tfont32[k].Msk[i]&(0x01<<j))	LCD_DrawPoint(x,y,fc);
-						x++;
-						// 到达行末后回到左侧，下一字节从下一行继续画。
-						if((x-x0)==sizey)
-						{
-							x=x0;
-							y++;
-							break;
-						}
-					}
-				}
-			}
-		}				  	
-		continue;// 继续检查后续字库项，匹配后也不会提前退出。
-	}
-}
-
-void LCD_ShowChar(uint16_t x,uint16_t y,uint8_t num,uint16_t fc,uint16_t bc,uint8_t sizey,uint8_t mode)
-{
-	uint8_t temp,sizex,t,m=0;
-	uint16_t i,TypefaceNum;// 字模总字节数，行尾不足 8 位也按一个字节计。
-	uint16_t x0=x;
-	sizex=sizey/2;
-	TypefaceNum=(sizex/8+((sizex%8)?1:0))*sizey;
-	num=num-' ';    // 字库从空格开始排列，减去空格的编号后得到数组下标。
-	LCD_Address_Set(x,y,x+sizex-1,y+sizey-1);
-	// 按字号选字库，逐字节取出点阵；调用方须先保证 num 在支持范围内。
-	for(i=0;i<TypefaceNum;i++)
-	{ 
-		if(sizey==12)temp=ascii_1206[num][i];		       //调用6x12字体
-		else if(sizey==16)temp=ascii_1608[num][i];		 //调用8x16字体
-		else if(sizey==24)temp=ascii_2412[num][i];		 //调用12x24字体
-		else if(sizey==32)temp=ascii_3216[num][i];		 //调用16x32字体
-		else return;// 字号不支持，停止读取字模。
-		// 每个字节先读低位；不足一个字节的行尾由下面的 break 跳过。
-		for(t=0;t<8;t++)
-		{
-			if(!mode)// 覆盖绘制：每个像素都写入字色或背景色。
-			{
-				if(temp&(0x01<<t))LCD_WR_DATA(fc);
-				else LCD_WR_DATA(bc);
-				m++;
-				if(m%sizex==0)
-				{
-					m=0;
-					break;
-				}
-			}
-			else// 保留背景：只给字模中为 1 的位置画点。
-			{
-				if(temp&(0x01<<t))LCD_DrawPoint(x,y,fc);
-				x++;
-				// 画够一个字符宽度后回到下一行左侧。
-				if((x-x0)==sizex)
-				{
-					x=x0;
-					y++;
-					break;
-				}
-			}
-		}
-	}   	 	  
-}
-
-void LCD_ShowString(uint16_t x,uint16_t y,const uint8_t *p,uint16_t fc,uint16_t bc,uint8_t sizey,uint8_t mode)
-{         
-	// 每次画一个 ASCII 字符，遇到字符串结尾停止，位置始终向右移动。
-	while(*p!='\0')
-	{       
-		LCD_ShowChar(x,y,*p,fc,bc,sizey,mode);
-		x+=sizey/2;
-		p++;
-	}  
-}
-
-uint32_t mypow(uint8_t m,uint8_t n)
-{
-	uint32_t result=1;	 
-	// 乘 n 次；n 为 0 时不进入循环，保留初值 1。
-	while(n--)result*=m;
-	return result;
-}
-
-void LCD_ShowIntNum(uint16_t x,uint16_t y,uint16_t num,uint8_t len,uint16_t fc,uint16_t bc,uint8_t sizey)
-{         	
-	uint8_t t,temp;
-	uint8_t enshow=0;
-	uint8_t sizex=sizey/2;
-	// 从高位向低位取十进制数字；len 小于实际位数时，高位不会画出。
-	for(t=0;t<len;t++)
-	{
-		temp=(num/mypow(10,len-t-1))%10;
-		// 首个非零数字之前用空格清背景，末位始终显示，保证 0 不会全空。
-		if(enshow==0&&t<(len-1))
-		{
-			if(temp==0)
-			{
-				LCD_ShowChar(x+t*sizex,y,' ',fc,bc,sizey,0);
-				continue;
-			}else enshow=1; 
-		 	 
-		}
-	 	LCD_ShowChar(x+t*sizex,y,temp+48,fc,bc,sizey,0);
-	}
-} 
-
-void LCD_ShowFloatNum(uint16_t x, uint16_t y, float num, uint8_t len, uint8_t decimal, uint16_t fc, uint16_t bc, uint8_t sizey)
-{
-		int16_t num_int;
-		uint8_t t, temp, sizex;
-    sizex = sizey / 2;
-    // 放大小数后存为 int16_t，小数余下的部分直接舍去；这里不检查数值范围。
-    num_int = num * mypow(10, decimal);
-
-    // 首格画负号或空格，数字从右侧开始；两条分支都会把 len 加 1。
-    if (num < 0)
+    LCD_CS_Set();
+    LCD_RES_Set();
+    LCD_BLK_Clr(0);
+    lcd_state.backlight_on = 0u;
+    lcd_state.ui_usable = 0u;
+    lcd_state.failure_latched = 1u;
+    if (status == LCD_STOP_FAILED)
     {
-        LCD_ShowChar(x, y, '-', fc, bc, sizey, 0);
-        num_int = -num_int;
-        x += sizex;
-        len++;
+        stop_isolated = 1u;
+        lcd_state.stop_isolated = 1u;
     }
+    lcd_state.last_result = status;
+    lcd_state.last_failure_ms = HAL_GetTick();
+    if (lcd_state.failure_count != UINT32_MAX)
+        lcd_state.failure_count++;
+    if (lcd_spi_errors != UINT32_MAX)
+        lcd_spi_errors++;
+}
+
+static LCDStatus_t lcd_set_operation_error(LCDStatus_t status)
+{
+    if (operation_status == LCD_OK && status != LCD_OK)
+    {
+        operation_status = status;
+        lcd_state.last_result = status;
+        lcd_latch_failure(status);
+    }
+    return operation_status;
+}
+
+static LCDStatus_t lcd_check_context(void)
+{
+    if (__get_IPSR() != 0u)
+        return LCD_BAD_CONTEXT;
+    if (!operation_active)
+        return LCD_BAD_CONTEXT;
+    return operation_status;
+}
+
+LCDStatus_t LCD_InternalBegin(uint32_t budget_ms, uint8_t recovery)
+{
+    if (budget_ms == 0u || budget_ms > INT32_MAX)
+        return LCD_OUT_OF_RANGE;
+    if (__get_IPSR() != 0u)
+        return LCD_BAD_CONTEXT;
+
+    if (operation_active)
+    {
+        if (operation_status != LCD_OK)
+            return operation_status;
+        if (operation_depth == UINT8_MAX)
+            return LCD_BUSY;
+        operation_depth++;
+        return LCD_OK;
+    }
+
+    if (stop_isolated != 0u)
+        return LCD_STOP_FAILED;
+    if (lcd_state.failure_latched && recovery == 0u)
+        return LCD_UNAVAILABLE;
+    if (hspi1.Instance != SPI1)
+        return LCD_NOT_INITIALIZED;
+    if (BSP_HALTickTryAcquireBlockingWait() == 0u)
+        return LCD_TIMEBASE_UNAVAILABLE;
+
+    operation_active = 1u;
+    operation_depth = 1u;
+    recovery_operation = recovery ? 1u : 0u;
+    operation_status = LCD_OK;
+    operation_deadline_ms = HAL_GetTick() + budget_ms;
+    return LCD_OK;
+}
+
+LCDStatus_t LCD_InternalEnd(LCDStatus_t result)
+{
+    if (!operation_active || operation_depth == 0u)
+        return LCD_BAD_CONTEXT;
+    if (result != LCD_OK && operation_status == LCD_OK)
+    {
+        operation_status = result;
+        lcd_state.last_result = result;
+        lcd_latch_failure(result);
+    }
+
+    operation_depth--;
+    if (operation_depth != 0u)
+        return operation_status;
+
+    LCDStatus_t final_status = operation_status;
+    operation_active = 0u;
+    recovery_operation = 0u;
+    operation_status = LCD_OK;
+    lcd_state.last_result = final_status;
+    BSP_HALTickReleaseBlockingWait();
+    return final_status;
+}
+
+LCDStatus_t LCD_InternalCurrentStatus(void)
+{
+    if (!operation_active)
+        return LCD_BAD_CONTEXT;
+    return operation_status;
+}
+
+LCDStatus_t LCD_InternalCheckDeadline(void)
+{
+    LCDStatus_t status = lcd_check_context();
+    if (status != LCD_OK)
+        return status;
+
+    if ((int32_t)(HAL_GetTick() - operation_deadline_ms) >= 0)
+        return lcd_set_operation_error(LCD_DEADLINE_EXPIRED);
+    return LCD_OK;
+}
+
+static LCDStatus_t lcd_transfer(uint8_t *data, size_t length)
+{
+    LCDStatus_t status = LCD_InternalCheckDeadline();
+    if (status != LCD_OK)
+        return status;
+    if (data == NULL || length == 0u || length > UINT16_MAX)
+        return lcd_set_operation_error(LCD_BAD_ARGUMENT);
+
+    uint32_t remaining_ms = operation_deadline_ms - HAL_GetTick();
+    uint32_t timeout_ms = (remaining_ms < LCD_HAL_SEND_TIMEOUT_MS)
+                              ? remaining_ms
+                              : LCD_HAL_SEND_TIMEOUT_MS;
+    if (timeout_ms == 0u)
+        return lcd_set_operation_error(LCD_DEADLINE_EXPIRED);
+
+    HAL_StatusTypeDef hal_status = HAL_SPI_Transmit(&hspi1, data, (uint16_t)length, timeout_ms);
+    if (hal_status == HAL_BUSY)
+        status = LCD_SEND_BUSY;
+    else if (hal_status == HAL_TIMEOUT)
+        status = LCD_SEND_TIMEOUT;
+    else if (hal_status != HAL_OK)
+        status = LCD_SEND_ERROR;
     else
     {
-        LCD_ShowChar(x, y, ' ', fc, bc, sizey, 0);
-        num_int = num_int;
-        x += sizex;
-        len++;
+        if (lcd_state.send_count != UINT32_MAX)
+            lcd_state.send_count++;
+        lcd_state.sent_bytes = saturating_add(lcd_state.sent_bytes, (uint32_t)length);
+        status = LCD_InternalCheckDeadline();
     }
 
-    // 先清理数字区，避免旧数字残留；清理范围还包含字形下面的一行。
-    LCD_Fill(x, y, x + len * sizex + decimal + 1, y + sizey + 1, bc);
+    if (status != LCD_OK)
+        return lcd_set_operation_error(status);
+    return LCD_OK;
+}
 
-    // 从高位向低位画数；len 已在上面增加，不能只按传入值理解总位数。
-    for (t = 0; t < len; t++)
+static LCDStatus_t lcd_write_byte(uint8_t value, uint8_t command)
+{
+    LCDStatus_t status = LCD_InternalCheckDeadline();
+    if (status != LCD_OK)
+        return status;
+
+    if (command)
+        LCD_DC_Clr();
+    else
+        LCD_DC_Set();
+    LCD_CS_Clr();
+    status = lcd_transfer(&value, sizeof(value));
+    LCD_CS_Set();
+    LCD_DC_Set();
+    return status;
+}
+
+LCDStatus_t LCD_InternalWriteCommand(uint8_t command)
+{
+    return lcd_write_byte(command, 1u);
+}
+
+LCDStatus_t LCD_InternalWriteData8(uint8_t value)
+{
+    return lcd_write_byte(value, 0u);
+}
+
+static LCDStatus_t lcd_write_data16(uint16_t value)
+{
+    LCDStatus_t status = LCD_InternalWriteData8((uint8_t)(value >> 8));
+    if (status != LCD_OK)
+        return status;
+    return LCD_InternalWriteData8((uint8_t)value);
+}
+
+LCDStatus_t LCD_InternalSetAddress(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
+{
+    if (!lcd_state.panel_initialized)
+        return lcd_set_operation_error(LCD_NOT_INITIALIZED);
+    if (x1 >= LCD_W || x2 >= LCD_W || y1 >= LCD_H || y2 >= LCD_H || x1 > x2 || y1 > y2)
+        return lcd_set_operation_error(LCD_OUT_OF_RANGE);
+
+    uint16_t x_offset = (uint16_t)(LCD_MARGIN_X + ((USE_HORIZONTAL >= 2) ? 20u : 0u));
+    uint16_t y_offset = (uint16_t)(LCD_MARGIN_Y + ((USE_HORIZONTAL < 2) ? 20u : 0u));
+    LCDStatus_t status = LCD_InternalWriteCommand(0x2Au);
+    if (status == LCD_OK) status = lcd_write_data16((uint16_t)(x1 + x_offset));
+    if (status == LCD_OK) status = lcd_write_data16((uint16_t)(x2 + x_offset));
+    if (status == LCD_OK) status = LCD_InternalWriteCommand(0x2Bu);
+    if (status == LCD_OK) status = lcd_write_data16((uint16_t)(y1 + y_offset));
+    if (status == LCD_OK) status = lcd_write_data16((uint16_t)(y2 + y_offset));
+    if (status == LCD_OK) status = LCD_InternalWriteCommand(0x2Cu);
+    return status;
+}
+
+LCDStatus_t LCD_InternalBeginPixelData(void)
+{
+    LCDStatus_t status = LCD_InternalCheckDeadline();
+    if (status != LCD_OK)
+        return status;
+    LCD_DC_Set();
+    LCD_CS_Clr();
+    return LCD_OK;
+}
+
+LCDStatus_t LCD_InternalWritePixelData(const uint8_t *data, size_t length)
+{
+    if (data == NULL || length == 0u)
+        return lcd_set_operation_error(LCD_BAD_ARGUMENT);
+    return lcd_transfer((uint8_t *)data, length);
+}
+
+LCDStatus_t LCD_InternalEndPixelData(void)
+{
+    LCD_CS_Set();
+    return LCD_InternalCurrentStatus();
+}
+
+LCDStatus_t LCD_InternalBeginPanelInit(void)
+{
+    LCDStatus_t status = lcd_check_context();
+    if (status != LCD_OK)
+        return status;
+    if (lcd_state.failure_latched && !recovery_operation)
+        return LCD_UNAVAILABLE;
+
+    LCD_BLK_Clr(0);
+    LCD_CS_Set();
+    lcd_state.backlight_on = 0u;
+    lcd_state.panel_initialized = 0u;
+    lcd_state.ui_usable = 0u;
+    return LCD_OK;
+}
+
+LCDStatus_t LCD_InternalMarkPanelInitialized(void)
+{
+    LCDStatus_t status = LCD_InternalCheckDeadline();
+    if (status != LCD_OK)
+        return status;
+    lcd_state.panel_initialized = 1u;
+    lcd_state.failure_latched = 0u;
+    return LCD_OK;
+}
+
+LCDStatus_t LCD_InternalCommitUI(void)
+{
+    LCDStatus_t status = LCD_InternalCheckDeadline();
+    if (status != LCD_OK)
+        return status;
+    if (!lcd_state.panel_initialized)
+        return lcd_set_operation_error(LCD_NOT_INITIALIZED);
+
+    LCD_BLK_Set(0);
+    lcd_state.backlight_on = 1u;
+    lcd_state.ui_usable = 1u;
+    lcd_state.failure_latched = 0u;
+    lcd_state.last_result = LCD_OK;
+    return LCD_OK;
+}
+
+LCDStatus_t LCD_InternalStopForRecovery(void)
+{
+    LCDStatus_t status = lcd_check_context();
+    if (status != LCD_OK)
+        return status;
+    if (!recovery_operation)
+        return lcd_set_operation_error(LCD_BAD_CONTEXT);
+
+    if (HAL_SPI_GetState(&hspi1) != HAL_SPI_STATE_READY)
     {
-        if (t == (len - decimal))
-        {
-            // 小数点占一格，跳过这一格，并增加长度以保留后面的小数位。
-            LCD_ShowChar(x + (len - decimal) * sizex, y, '.', fc, bc, sizey, 0);
-            t++;
-            len += 1;
-        }
-        temp = ((num_int / mypow(10, len - t - 1)) % 10) + '0';
-        LCD_ShowChar(x + t * sizex, y, temp, fc, bc, sizey, 0);
+        if (HAL_SPI_Abort(&hspi1) != HAL_OK || HAL_SPI_GetState(&hspi1) != HAL_SPI_STATE_READY)
+            return lcd_set_operation_error(LCD_STOP_FAILED);
     }
+
+    LCD_CS_Set();
+    LCD_BLK_Clr(0);
+    lcd_state.backlight_on = 0u;
+    lcd_state.panel_initialized = 0u;
+    lcd_state.ui_usable = 0u;
+    lcd_state.failure_latched = 0u;
+    return LCD_InternalCheckDeadline();
 }
 
-void LCD_ShowFloatNum1(uint16_t x, uint16_t y, float num, uint8_t len, uint8_t decimal, uint16_t fc, uint16_t bc, uint8_t sizey)
+LCDStatus_t LCDGetState(LCDState_t *output)
 {
-		int16_t num_int;
-		uint8_t t, temp, sizex;
-    sizex = sizey / 2;
-    // 此入口供非负数使用，放大后须能存入 int16_t；不做四舍五入或范围检查。
-    num_int = num * mypow(10, decimal);
+    if (output == NULL)
+        return LCD_BAD_ARGUMENT;
+    if (__get_IPSR() != 0u)
+        return LCD_BAD_CONTEXT;
 
-
-		// 与带符号入口对齐，先空出一格；这一格保留原画面。
-		num_int = num_int;
-		x += sizex;
-		len++;
-
-    // 仅清理数字区，包含字形下面的一行，不清理左侧预留位置。
-    LCD_Fill(x, y, x + len * sizex + decimal + 1, y + sizey + 1, bc);
-
-    // 与带符号入口一样，从高位向低位画数，并在需要的位置插入小数点。
-    for (t = 0; t < len; t++)
-    {
-        if (t == (len - decimal))
-        {
-            // 小数点占一格，后面的数字向右顺延，仍保留指定的小数位数。
-            LCD_ShowChar(x + (len - decimal) * sizex, y, '.', fc, bc, sizey, 0);
-            t++;
-            len += 1;
-        }
-        temp = ((num_int / mypow(10, len - t - 1)) % 10) + '0';
-        LCD_ShowChar(x + t * sizex, y, temp, fc, bc, sizey, 0);
-    }
+    LCDState_t candidate = lcd_state;
+    *output = candidate;
+    return LCD_OK;
 }
 
-void LCD_ShowPicture(uint16_t x,uint16_t y,uint16_t length,uint16_t width,const uint8_t pic[])
+static LCDStatus_t lcd_send_register(uint8_t command, const uint8_t *values, size_t count)
 {
-	uint16_t i,j;
-	uint32_t k=0;
-	LCD_Address_Set(x,y,x+length-1,y+width-1);
-	// 两层循环共发送 length*width 个像素；k 始终按数组顺序递增。
-	for(i=0;i<length;i++)
-	{
-		for(j=0;j<width;j++)
-		{
-			// 一个像素两个字节，数组已按高字节在前准备，不在此处换顺序。
-			LCD_WR_DATA8(pic[k*2]);
-			LCD_WR_DATA8(pic[k*2+1]);
-			k++;
-		}
-	}			
+    LCDStatus_t status = LCD_InternalWriteCommand(command);
+    // 前一个命令或数据发送失败后停止，避免继续写入错位的寄存器值。
+    for (size_t i = 0u; status == LCD_OK && i < count; ++i)
+        status = LCD_InternalWriteData8(values[i]);
+    return status;
 }
 
-void LCD_Init(void)
+LCDStatus_t LCD_Init(void)
 {
-	
-	// 拉低复位脚后再释放，两次等待给模组留出复位和恢复时间。
-	LCD_RES_Clr();
-	HAL_Delay(100);
-	LCD_RES_Set();
-	HAL_Delay(100);
-	
-	LCD_BLK_Set();// 打开背光后再等待 100 ms。
-  HAL_Delay(100);
-	
-	LCD_WR_REG(0x11);// 退出休眠，等 120 ms 后再继续配置。
-	HAL_Delay(120);
-	// 显示方向要与 LCD_Address_Set() 的坐标偏移保持一致。
-	LCD_WR_REG(0x36);
-	if(USE_HORIZONTAL==0)LCD_WR_DATA8(0x00);
-	else if(USE_HORIZONTAL==1)LCD_WR_DATA8(0xC0);
-	else if(USE_HORIZONTAL==2)LCD_WR_DATA8(0x70);
-	else LCD_WR_DATA8(0xA0);
+    LCDStatus_t status = LCD_InternalBegin(LCD_INIT_BUDGET_MS, 0u);
+    if (status != LCD_OK)
+        return status;
 
-	LCD_WR_REG(0x3A);// 每像素使用 RGB565 两字节颜色。
-	LCD_WR_DATA8(0x05);
+    status = LCD_InternalBeginPanelInit();
+    if (status != LCD_OK)
+        goto done;
 
-	// 沿用本模组原有显示参数，设置扫描、电压和刷新相关寄存器。
-	LCD_WR_REG(0xB2);
-	LCD_WR_DATA8(0x0C);
-	LCD_WR_DATA8(0x0C); 
-	LCD_WR_DATA8(0x00); 
-	LCD_WR_DATA8(0x33); 
-	LCD_WR_DATA8(0x33); 			
+    LCD_RES_Clr();
+    HAL_Delay(100u);
+    status = LCD_InternalCheckDeadline();
+    if (status != LCD_OK) goto done;
+    LCD_RES_Set();
+    HAL_Delay(100u);
+    status = LCD_InternalCheckDeadline();
+    if (status != LCD_OK) goto done;
+    HAL_Delay(100u);
+    status = LCD_InternalCheckDeadline();
+    if (status != LCD_OK) goto done;
 
-	LCD_WR_REG(0xB7);			
-	LCD_WR_DATA8(0x35);
+    status = LCD_InternalWriteCommand(0x11u);
+    if (status != LCD_OK) goto done;
+    HAL_Delay(120u);
+    status = LCD_InternalCheckDeadline();
+    if (status != LCD_OK) goto done;
 
-	LCD_WR_REG(0xBB);			
-	LCD_WR_DATA8(0x32);
-					
-	LCD_WR_REG(0xC2);
-	LCD_WR_DATA8(0x01);
+    uint8_t orientation = (USE_HORIZONTAL == 0) ? 0x00u :
+                          (USE_HORIZONTAL == 1) ? 0xC0u :
+                          (USE_HORIZONTAL == 2) ? 0x70u : 0xA0u;
+    status = LCD_InternalWriteCommand(0x36u);
+    if (status == LCD_OK) status = LCD_InternalWriteData8(orientation);
+    if (status == LCD_OK) status = LCD_InternalWriteCommand(0x3Au);
+    if (status == LCD_OK) status = LCD_InternalWriteData8(0x05u);
 
-	LCD_WR_REG(0xC3);			
-	LCD_WR_DATA8(0x15);
-				
-	LCD_WR_REG(0xC4);			
-	LCD_WR_DATA8(0x20);
+    static const uint8_t reg_b2[] = {0x0Cu, 0x0Cu, 0x00u, 0x33u, 0x33u};
+    static const uint8_t reg_b7[] = {0x35u};
+    static const uint8_t reg_bb[] = {0x32u};
+    static const uint8_t reg_c2[] = {0x01u};
+    static const uint8_t reg_c3[] = {0x15u};
+    static const uint8_t reg_c4[] = {0x20u};
+    static const uint8_t reg_c6[] = {0x0Fu};
+    static const uint8_t reg_d0[] = {0xA4u, 0xA1u};
+    static const uint8_t reg_e0[] = {0xD0u, 0x08u, 0x0Eu, 0x09u, 0x09u, 0x05u, 0x31u,
+                                     0x33u, 0x48u, 0x17u, 0x14u, 0x15u, 0x31u, 0x34u};
+    static const uint8_t reg_e1[] = {0xD0u, 0x08u, 0x0Eu, 0x09u, 0x09u, 0x15u, 0x31u,
+                                     0x33u, 0x48u, 0x17u, 0x14u, 0x15u, 0x31u, 0x34u};
+    if (status == LCD_OK) status = lcd_send_register(0xB2u, reg_b2, sizeof(reg_b2));
+    if (status == LCD_OK) status = lcd_send_register(0xB7u, reg_b7, sizeof(reg_b7));
+    if (status == LCD_OK) status = lcd_send_register(0xBBu, reg_bb, sizeof(reg_bb));
+    if (status == LCD_OK) status = lcd_send_register(0xC2u, reg_c2, sizeof(reg_c2));
+    if (status == LCD_OK) status = lcd_send_register(0xC3u, reg_c3, sizeof(reg_c3));
+    if (status == LCD_OK) status = lcd_send_register(0xC4u, reg_c4, sizeof(reg_c4));
+    if (status == LCD_OK) status = lcd_send_register(0xC6u, reg_c6, sizeof(reg_c6));
+    if (status == LCD_OK) status = lcd_send_register(0xD0u, reg_d0, sizeof(reg_d0));
+    if (status == LCD_OK) status = lcd_send_register(0xE0u, reg_e0, sizeof(reg_e0));
+    if (status == LCD_OK) status = lcd_send_register(0xE1u, reg_e1, sizeof(reg_e1));
+    if (status == LCD_OK) status = LCD_InternalWriteCommand(0x21u);
+    if (status == LCD_OK) status = LCD_InternalWriteCommand(0x29u);
+    if (status == LCD_OK) status = LCD_InternalMarkPanelInitialized();
 
-	LCD_WR_REG(0xC6);			
-	LCD_WR_DATA8(0x0F);
-
-	LCD_WR_REG(0xD0);			
-	LCD_WR_DATA8(0xA4);
-	LCD_WR_DATA8(0xA1); 
-
-	// 两组亮度曲线参数配套使用，保持本模组原有配置。
-	LCD_WR_REG(0xE0);
-	LCD_WR_DATA8(0xD0);   
-	LCD_WR_DATA8(0x08);   
-	LCD_WR_DATA8(0x0E);   
-	LCD_WR_DATA8(0x09);   
-	LCD_WR_DATA8(0x09);   
-	LCD_WR_DATA8(0x05);   
-	LCD_WR_DATA8(0x31);   
-	LCD_WR_DATA8(0x33);   
-	LCD_WR_DATA8(0x48);   
-	LCD_WR_DATA8(0x17);   
-	LCD_WR_DATA8(0x14);   
-	LCD_WR_DATA8(0x15);   
-	LCD_WR_DATA8(0x31);   
-	LCD_WR_DATA8(0x34);   
-
-	LCD_WR_REG(0xE1);     
-	LCD_WR_DATA8(0xD0);   
-	LCD_WR_DATA8(0x08);   
-	LCD_WR_DATA8(0x0E);   
-	LCD_WR_DATA8(0x09);   
-	LCD_WR_DATA8(0x09);   
-	LCD_WR_DATA8(0x15);   
-	LCD_WR_DATA8(0x31);   
-	LCD_WR_DATA8(0x33);   
-	LCD_WR_DATA8(0x48);   
-	LCD_WR_DATA8(0x17);   
-	LCD_WR_DATA8(0x14);   
-	LCD_WR_DATA8(0x15);   
-	LCD_WR_DATA8(0x31);   
-	LCD_WR_DATA8(0x34);
-	LCD_WR_REG(0x21);// 按本模组配置开启显示反色，与文字绘制的 mode 无关。
-
-	LCD_WR_REG(0x29);// 打开显示；清屏和界面重画由上层执行。
+done:
+    return LCD_InternalEnd(status);
 }
-
