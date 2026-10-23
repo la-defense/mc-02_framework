@@ -22,6 +22,7 @@ option(MC02_LOG_ORDINARY "允许普通诊断事件；仅 bench_safe 显式验证
 option(MC02_LOG_TEST "编入类型化日志自测事件" OFF)
 option(MC02_BENCH_CRASH_DIAGNOSTICS "仅bench_safe固件允许的一次性崩溃记录自测" OFF)
 option(MC02_BENCH_LCD_DIAGNOSTICS "仅bench_safe固件运行四页LCD绘图自测" OFF)
+option(MC02_BENCH_USB_DIAGNOSTICS "仅bench_safe固件运行有限USB完成通知丢失诊断" OFF)
 
 if(NOT MC02_PROFILE STREQUAL "bench_safe" AND NOT MC02_PROFILE STREQUAL "robot")
     message(FATAL_ERROR "MC02_PROFILE 必须是 bench_safe 或 robot")
@@ -98,7 +99,14 @@ if(MC02_BENCH_LCD_DIAGNOSTICS AND
     message(FATAL_ERROR "LCD自测仅允许禁热、无其他硬件自测的 bench_safe 单板配置")
 endif()
 
-foreach(option_name IN ITEMS MC02_BENCH_RC_DIAGNOSTICS MC02_BENCH_REFEREE_DIAGNOSTICS MC02_LOG_ORDINARY MC02_LOG_TEST MC02_ENABLE_REFEREE_UI MC02_BENCH_CRASH_DIAGNOSTICS MC02_BENCH_LCD_DIAGNOSTICS)
+if(MC02_BENCH_USB_DIAGNOSTICS AND
+   (NOT MC02_PROFILE STREQUAL "bench_safe" OR NOT MC02_BOARD_ROLE STREQUAL "single" OR
+    NOT MC02_VISION_TRANSPORT STREQUAL "usb" OR MC02_ENABLE_HEATER OR MC02_BENCH_RC_DIAGNOSTICS OR
+    MC02_BENCH_REFEREE_DIAGNOSTICS OR MC02_BENCH_CRASH_DIAGNOSTICS OR MC02_BENCH_LCD_DIAGNOSTICS))
+    message(FATAL_ERROR "USB诊断仅允许禁热、无冲突诊断的bench_safe/single/usb配置")
+endif()
+
+foreach(option_name IN ITEMS MC02_BENCH_RC_DIAGNOSTICS MC02_BENCH_REFEREE_DIAGNOSTICS MC02_LOG_ORDINARY MC02_LOG_TEST MC02_ENABLE_REFEREE_UI MC02_BENCH_CRASH_DIAGNOSTICS MC02_BENCH_LCD_DIAGNOSTICS MC02_BENCH_USB_DIAGNOSTICS)
     if(${option_name})
         if(option_name STREQUAL "MC02_LOG_TEST")
             add_compile_definitions(LOG_TEST=1)
@@ -136,6 +144,8 @@ elseif(MC02_BENCH_CRASH_DIAGNOSTICS)
     set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_crashdiag_bench_safe")
 elseif(MC02_BENCH_LCD_DIAGNOSTICS)
     set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_lcdtest_bench_safe")
+elseif(MC02_BENCH_USB_DIAGNOSTICS)
+    set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_usbtest_bench_safe")
 endif()
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -215,6 +225,10 @@ set(MC02_ASM_SOURCES
 set_source_files_properties(${MC02_ASM_SOURCES} PROPERTIES COMPILE_FLAGS "-x assembler-with-cpp")
 
 add_executable(${MC02_OUTPUT_BASENAME}.elf ${MC02_SELECTED_SOURCES} ${MC02_ASM_SOURCES} ${LINKER_SCRIPT})
+# 保留USB任务和恢复后端的静态栈使用报告，配合裸板历史最小余量核对。
+set_source_files_properties(Core/Src/freertos.c bsp/usb/usb_transport.c
+    bsp/usb/usb_transport_port_stm32.c USB_DEVICE/Target/usbd_conf.c
+    PROPERTIES COMPILE_OPTIONS "-fstack-usage")
 target_include_directories(${MC02_OUTPUT_BASENAME}.elf PRIVATE ${MC02_INCLUDE_DIRS})
 mc02_apply_format_diagnostics(${MC02_OUTPUT_BASENAME}.elf)
 mc02_add_dsp(mc02_dsp FALSE)

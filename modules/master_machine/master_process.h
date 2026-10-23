@@ -83,16 +83,17 @@ typedef struct
 * @param[in] _handle UART 配置时须提供有效句柄；USB VCP 配置时忽略，可以为 NULL。
 * @return 成功返回模块内部接收对象地址，长期有效且不可释放；任一注册失败返回 NULL。
 * @note 控制任务应使用 VisionGetSnapshot() 复制读取；失败时已申请的离线计时会撤销。
-* UART以29字节候选处理跨块及同块多帧，首个组成块的RxEvent毫秒值作为来源时间；
-* 连续性中断或组帧超过50ms时清残帧。USB继续沿用独立接收片段扫描。
+* UART和USB都以29字节候选处理跨块及同块多帧，首个组成块的原接收毫秒值作为来源时间；
+* 缺块、USB连接变化或组帧超过50ms时清残帧。USB实际启动由既有defaultTask推进。
  */
 Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle);
 
 /** @brief 检查旧命令是否到时，再给已准备的状态帧追加 CRC 并尝试发送。
 * @note 先初始化；由命令任务周期调用，状态内容由 INS 调用 VisionUpdateTx() 更新。
-*       不等待忙链路；USB沿用原发送路径，UART复制入队、总期限20ms，满时拒绝。
-*       接口不返回结果；UART最终事件及提交／传输失败计数通过VisionGetStatus读取。
-*       发送由命令任务串行调用；本次复制不额外保证INS更新各字段时的跨任务一致性。
+*       不等待忙链路；USB复制到唯一在途数组、100ms未完成即失败，忙时拒绝；
+*       UART复制入队、总期限20ms，满时拒绝。两种方式都不重放旧状态帧。
+*       接口不返回结果；提交／传输失败计数通过VisionGetStatus读取，USB详细结果通过
+*       USBTransportGetState读取。发送由命令任务串行调用，准备状态与复制均用短临界区。
  */
 void VisionSend(void);
 
@@ -105,6 +106,7 @@ void VisionGetStatus(Vision_Status_t *status);
 * @param[out] frame 可为 NULL；命令超过 50 ms 未更新时先清零，等于 50 ms 仍保留。
 * @param[out] status 可为 NULL；online 还要求离线计时未到，last_rx_ms 使用原RxEvent通知时间。
 * @note 单纯到时会保留上次接收时间，但 has_valid_frame 清零；离线回调另将时间清零。
+*       USB连接代号失效时，即使尚未执行连接通知，也立即撤销旧命令。
  */
 void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status);
 

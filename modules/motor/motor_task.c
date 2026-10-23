@@ -8,7 +8,7 @@
 #include "dji_motor.h"
 #include "bsp_can.h"
 #include "bsp_usart.h"
-#include "bsp_usb.h"
+#include "usb_transport.h"
 
 /* ---------------- 性能探针(2026-09, CPU 占用排查) ---------------- */
 volatile DWT_Probe_t motor_prof_all = {0};
@@ -27,7 +27,7 @@ void MotorControlTask()
     CANProcessRx();
     // UART 和 USB 也在这里运行模块解析，避免将协议计算放在中断里；排队过时的数据由 BSP 跳过。
     USARTProcessRx();
-    VCPProcessRx();
+    (void)USBTransportProcessRx();
 
     probe_seg = DWT_ProbeStart();
 #if !defined(MC02_PROFILE_BENCH_SAFE)

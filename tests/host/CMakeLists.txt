@@ -35,6 +35,46 @@ endif()
 
 
 if(UNIX AND NOT APPLE)
+  add_executable(usb_diagnostic_test usb_backend_test.c ../../bsp/usb/usb_transport.c
+    ../../bsp/usb/usb_transport_port_stm32.c ../../bsp/usb/usb_diagnostic.c
+    ../../USB_DEVICE/App/usbd_cdc_if.c)
+  target_include_directories(usb_diagnostic_test BEFORE PRIVATE usb_backend_fakes)
+  target_include_directories(usb_diagnostic_test PRIVATE ../../bsp/usb ../../USB_DEVICE/App)
+  target_compile_definitions(usb_diagnostic_test PRIVATE MC02_BENCH_USB_DIAGNOSTICS=1
+    MC02_PROFILE_BENCH_SAFE=1 MC02_HEATER_ENABLED=0)
+  target_compile_options(usb_diagnostic_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME production_usb_diagnostic_finite_recovery COMMAND usb_diagnostic_test diagnostic)
+  set_tests_properties(production_usb_diagnostic_finite_recovery PROPERTIES TIMEOUT 10)
+
+  add_executable(usb_backend_test usb_backend_test.c ../../bsp/usb/usb_transport.c
+    ../../bsp/usb/usb_transport_port_stm32.c ../../USB_DEVICE/App/usbd_cdc_if.c)
+  target_include_directories(usb_backend_test BEFORE PRIVATE usb_backend_fakes)
+  target_include_directories(usb_backend_test PRIVATE ../../bsp/usb ../../USB_DEVICE/App)
+  target_compile_options(usb_backend_test PRIVATE -Wall -Wextra -Werror)
+  foreach(scenario completion fifo-failure stop rearm-error)
+    add_test(NAME production_usb_backend_${scenario} COMMAND usb_backend_test ${scenario})
+    set_tests_properties(production_usb_backend_${scenario} PROPERTIES TIMEOUT 10)
+  endforeach()
+
+  add_executable(vision_sp_stream_test vision_sp_stream_test.c
+    ../../modules/master_machine/vision_protocol.c)
+  target_include_directories(vision_sp_stream_test PRIVATE ../../modules/master_machine)
+  target_link_libraries(vision_sp_stream_test PRIVATE mc02_software_crc)
+  add_test(NAME production_vision_sp_stream_blocks COMMAND vision_sp_stream_test)
+  set_tests_properties(production_vision_sp_stream_blocks PROPERTIES TIMEOUT 10)
+
+  # USB核心直接使用生产实现；端点模型与线程只在独立测试进程中存在。
+  add_executable(usb_transport_test usb_transport_test.c ../../bsp/usb/usb_transport.c)
+  target_include_directories(usb_transport_test PRIVATE ../../bsp/usb)
+  target_link_libraries(usb_transport_test PRIVATE Threads::Threads)
+  target_compile_options(usb_transport_test PRIVATE -Wall -Wextra -Werror)
+  target_link_options(usb_transport_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
+  foreach(scenario arguments queue time-generation sending timeout stop-failure start-error exhaustion retry
+      late-completion cancel-resume transfer-error init-failure enumeration wrap transmit-only receive-only stable-gap threads)
+    add_test(NAME production_usb_transport_${scenario} COMMAND usb_transport_test ${scenario})
+    set_tests_properties(production_usb_transport_${scenario} PROPERTIES TIMEOUT 10)
+  endforeach()
+
   add_executable(lcd_diag_state_test lcd_diag_state_test.c)
   target_include_directories(lcd_diag_state_test BEFORE PRIVATE lcd_spi_fakes)
   target_include_directories(lcd_diag_state_test PRIVATE ../../modules/lcd)
@@ -414,10 +454,6 @@ if(UNIX AND NOT APPLE)
 endif()
 add_test(NAME production_uart_immutable_dispatch COMMAND usart_snapshot_test)
 set_tests_properties(production_uart_immutable_dispatch PROPERTIES TIMEOUT 10)
-add_executable(vcp_queue_freshness_test vcp_queue_freshness_test.c ../../bsp/usb/bsp_usb.c)
-target_include_directories(vcp_queue_freshness_test BEFORE PRIVATE vcp_fakes)
-target_include_directories(vcp_queue_freshness_test PRIVATE ../../bsp/usb ../../modules/message_center)
-add_test(NAME production_vcp_immutable_dispatch_and_expiry COMMAND vcp_queue_freshness_test)
 add_executable(remote_bench_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
   ../../modules/remote/remote_bench.c ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c)
@@ -547,7 +583,7 @@ if(UNIX AND NOT APPLE)
     set(target motor_profile_${profile})
     add_executable(${target} motor_profile_test.c ../../modules/motor/motor_task.c)
     target_include_directories(${target} BEFORE PRIVATE motor_profile_fakes)
-    target_include_directories(${target} PRIVATE ../../modules/motor)
+    target_include_directories(${target} PRIVATE ../../modules/motor ../../bsp/usb)
     if(profile STREQUAL "bench_safe")
       target_compile_definitions(${target} PRIVATE MC02_PROFILE_BENCH_SAFE=1)
     else()
@@ -818,11 +854,12 @@ set_tests_properties(historical_crc_a5_compatibility PROPERTIES TIMEOUT 10 LABEL
 
 # 传输替身保留真实协议解析；包装只用于让选定的一次 CRC 调用返回失败。
 add_executable(crc_protocol_test crc_protocol_test.c
+  ../../bsp/usb/usb_transport.c
   ../../modules/master_machine/master_process.c ../../modules/master_machine/vision_protocol.c
   ../../modules/referee/rm_referee.c ../../modules/referee/referee_UI.c)
 target_include_directories(crc_protocol_test BEFORE PRIVATE crc_protocol_fakes can_comm_fakes)
 target_include_directories(crc_protocol_test PRIVATE ../../modules/master_machine ../../modules/referee
-  ../../modules/message_center)
+  ../../modules/message_center ../../bsp/usb)
 add_test(NAME production_crc_protocol_failure_and_compatibility COMMAND crc_protocol_test)
 
 # UI使用生产构图、组帧和任务逻辑；只替代传输与时钟，包装用于选定的一次计算失败。
@@ -1129,6 +1166,8 @@ endforeach()
 # 专用采集工具离线核对CRC、半帧、MCU记录、身份和只读命令范围。
 add_test(NAME referee_budget_capture_tools COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_referee_budget_capture.py)
 set_tests_properties(referee_budget_capture_tools PROPERTIES TIMEOUT 10)
+add_test(NAME usb_lifecycle_capture_tools COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_usb_lifecycle_capture.py)
+set_tests_properties(usb_lifecycle_capture_tools PROPERTIES TIMEOUT 10)
 add_test(NAME read_only_live_observation_tool COMMAND ${Python3_EXECUTABLE}
   ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_probe_snapshot_live.py)
 add_test(NAME crash_record_offline_decoder COMMAND ${Python3_EXECUTABLE}

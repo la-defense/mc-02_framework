@@ -8,8 +8,9 @@
 #include "master_process.h"
 #include "referee_UI.h"
 #include "daemon.h"
-#include "bsp_usb.h"
+#include "usb_transport_port.h"
 #include <string.h>
+#include <math.h>
 
 // 序号由生产共享入口维护；测试通过只读副本查询。
 static uint8_t current_sequence(void)
@@ -20,7 +21,6 @@ static uint8_t current_sequence(void)
 static uint32_t now_ms, reloads, usb_sends, uart_sends;
 static uint8_t usb_bytes[64], uart_bytes[255], sent[512];
 static uint16_t sent_length;
-static void (*usb_callback)(uint16_t);
 static usart_module_callback uart_callback;
 static void *uart_context;
 static uint32_t uart_sequence;
@@ -56,13 +56,23 @@ USARTSendStatus_t USARTGetTxState(const USARTInstance *instance, USARTTxState_t 
 USARTSendStatus_t USARTCancelTx(USARTInstance *instance,uint32_t id)
 { (void)instance;(void)id;return USART_SEND_NOT_FOUND; }
 void osDelay(uint32_t milliseconds) { (void)milliseconds; }
-uint8_t *USBInit(USB_Init_Config_s config) { usb_callback = config.rx_cbk; return usb_bytes; }
-const uint8_t *VCPGetCurrentRxData(void) { return usb_bytes; }
-uint32_t VCPGetCurrentRxTimestamp(void) { return now_ms; }
-uint8_t USBTransmit(const uint8_t *data, uint16_t length)
+uint32_t USBPortNowMs(void) { return now_ms; }
+uint32_t USBPortEnter(void) { return 0u; }
+void USBPortExit(uint32_t saved) { (void)saved; }
+uint8_t USBPortInISR(void) { return 0u; }
+uint8_t USBPortAcquireTick(void) { return 1u; }
+void USBPortReleaseTick(void) {}
+USBStatus_t USBPortStart(void) { return USB_OK; }
+USBStatus_t USBPortStop(void) { return USB_OK; }
+USBStatus_t USBPortSubmit(const uint8_t *data, size_t length)
 {
     TEST_CHECK(length <= sizeof(sent));
-    memcpy(sent, data, length); sent_length = length; ++usb_sends; return USBD_OK;
+    memcpy(sent, data, length); sent_length = (uint16_t)length; ++usb_sends; return USB_ACCEPTED;
+}
+static void deliver_usb(size_t length)
+{
+    USBTransportOnReceive(usb_bytes, length);
+    TEST_CHECK(USBTransportProcessRx() == USB_OK);
 }
 
 // 用固定协议参数逐位计算对照值，避免组包与验包共享查表错误。
@@ -102,21 +112,48 @@ int main(void)
     const uint8_t legacy_status[] = {0x53, 0x50, 0x00, 0x91, 0x47, 0x7f, 0x3f, 0x2c, 0x1f, 0xe4, 0xbb, 0xe9, 0x6d, 0x4b, 0xbc, 0xa8, 0x5d, 0x39, 0xbd, 0x45, 0x0e, 0xba, 0xbd, 0x58, 0xa0, 0x8b, 0xba, 0x6a, 0x8f, 0x52, 0xbc, 0x58, 0xa0, 0x0b, 0xbb, 0x00, 0x00, 0xf0, 0x41, 0x00, 0x00, 0xd9, 0x8e};
     TEST_CHECK(VisionProtocolCheckCRC16(legacy_status, sizeof(legacy_status)));
     TEST_CHECK(VisionInit(NULL) != NULL);
+    TEST_CHECK(USBTransportProcess() == USB_OK);
+    USBTransportOnLink(USB_LINK_CONFIGURED, 1u);
+    TEST_CHECK(USBTransportProcess() == USB_OK);
     Vision_Recv_s command = {0};
     command.head[0] = 'S'; command.head[1] = 'P';
     command.crc16 = (uint16_t)reference((const uint8_t *)&command, sizeof(command) - 2u, 0x8408u, 0xffffu);
     memcpy(usb_bytes, &command, sizeof(command));
-    now_ms = 10u; usb_callback(sizeof(command));
+    now_ms = 10u; deliver_usb(sizeof(command));
     Vision_Status_t status;
     VisionGetStatus(&status);
     TEST_CHECK(status.last_rx_ms == 10u && status.rx_count == 1u);
     uint32_t old_reloads = reloads;
-    crc_fail_after = 0; now_ms = 11u; usb_callback(sizeof(command));
+    crc_fail_after = 0; now_ms = 11u; deliver_usb(sizeof(command));
     VisionGetStatus(&status);
     TEST_CHECK(reloads == old_reloads && status.last_rx_ms == 10u && status.rx_count == 1u);
     crc_fail_after = 0; VisionSend(); TEST_CHECK(usb_sends == 0u);
     VisionSend(); TEST_CHECK(usb_sends == 1u && sent_length == 43u);
     TEST_CHECK(reference(sent, 41u, 0x8408u, 0xffffu) == ((uint16_t)sent[41] | ((uint16_t)sent[42] << 8u)));
+    USBTransportOnTxComplete();
+    TEST_CHECK(USBTransportProcess() == USB_OK);
+
+    // 连接通知未执行时，查询也必须立即撤销旧连接的命令。
+    USBTransportOnLink(USB_LINK_RESET, 1u);
+    VisionGetStatus(&status); TEST_CHECK(!status.has_valid_frame);
+    USBTransportOnLink(USB_LINK_CONFIGURED, 1u);
+    memcpy(usb_bytes,&command,sizeof(command)); now_ms=12u; deliver_usb(sizeof(command));
+    // 新连接首帧先于普通任务通知到来，迟来的通知不能把新帧清掉。
+    TEST_CHECK(USBTransportProcess()==USB_OK);
+    VisionGetStatus(&status); TEST_CHECK(status.has_valid_frame && status.last_rx_ms==12u && status.rx_count==2u);
+    command.yaw=NAN;
+    command.crc16=(uint16_t)reference((const uint8_t *)&command,sizeof(command)-2u,0x8408u,0xffffu);
+    memcpy(usb_bytes,&command,sizeof(command)); now_ms=13u; deliver_usb(sizeof(command));
+    VisionGetStatus(&status); TEST_CHECK(status.last_rx_ms==12u && status.rx_count==2u);
+    command.yaw=0.0f;
+    command.crc16=(uint16_t)reference((const uint8_t *)&command,sizeof(command)-2u,0x8408u,0xffffu);
+    memcpy(usb_bytes,&command,10u); now_ms=14u; deliver_usb(10u);
+    memcpy(usb_bytes,((const uint8_t *)&command)+10u,sizeof(command)-10u); now_ms=15u;
+    deliver_usb(sizeof(command)-10u);
+    VisionGetStatus(&status); TEST_CHECK(status.last_rx_ms==14u && status.rx_count==3u);
+    memcpy(usb_bytes,&command,sizeof(command)); memcpy(usb_bytes+sizeof(command),&command,sizeof(command));
+    now_ms=16u; deliver_usb(2u*sizeof(command));
+    VisionGetStatus(&status); TEST_CHECK(status.last_rx_ms==16u && status.rx_count==5u);
 
     UART_HandleTypeDef handle = {0};
     TEST_CHECK(RefereeInit(&handle, NULL) == REFEREE_OK);

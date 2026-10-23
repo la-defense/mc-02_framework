@@ -12,7 +12,7 @@ ACTUATORS = {
     "HTMotorInit", "HTMotorControlInit", "DMMotorInit", "DMMotorControlInit",
     "XMMotorInit", "XMMotorControlInit", "ServoInit", "ServoSetAngle",
 }
-CONSUMERS = {"CANProcessRx", "USARTProcessRx", "VCPProcessRx", "MotorControlTask"}
+CONSUMERS = {"CANProcessRx", "USARTProcessRx", "USBTransportProcessRx", "USBTransportProcess", "MotorControlTask"}
 ROLE_INITIALIZERS = {
     "single": {"ChassisInit", "GimbalInit", "ShootInit", "RobotCMDInit"},
     "chassis": {"ChassisInit"},
@@ -65,7 +65,12 @@ def main():
     parser.add_argument("--nm", default="arm-none-eabi-nm")
     parser.add_argument("--rc-diagnostics", action="store_true")
     parser.add_argument("--referee-diagnostics", action="store_true")
+    parser.add_argument("--usb-diagnostics", action="store_true")
     args = parser.parse_args()
+    if args.usb_diagnostics and (args.profile != "bench_safe" or args.role != "single" or
+                                args.vision_transport != "usb" or "_usbtest_" not in args.elf.name or
+                                args.rc_diagnostics or args.referee_diagnostics):
+        parser.error("USB diagnostics require the separate named bench_safe/single/usb artifact")
     if args.referee_diagnostics and (args.profile != "bench_safe" or "_refdiag_" not in args.elf.name or args.rc_diagnostics):
         parser.error("referee diagnostics require the separate named bench_safe artifact")
     if args.rc_diagnostics and (args.profile != "bench_safe" or "_rcdiag_" not in args.elf.name):
@@ -78,11 +83,18 @@ def main():
     symbols = {line.split()[-1] for line in result.stdout.splitlines() if len(line.split()) >= 3}
     functions = {line.split()[-1] for line in result.stdout.splitlines() if len(line.split()) >= 3 and line.split()[-2] in ("T", "t")}
     missing = CONSUMERS - functions
-    if "mc02_build_profile" not in symbols:
-        missing.add("mc02_build_profile")
+    # 当前工程用 ELF 文件名和 CMake 选择报告标识配置；旧的全局标记从未由源码定义。
     missing |= STARTUP_DIAGNOSTICS - symbols
     if args.profile == "robot":
         missing |= ROLE_INITIALIZERS[args.role] - functions
+    if args.usb_diagnostics:
+        missing |= {"USBTransportDiagnosticPoll", "USBTransportDiagnosticSuppressCompletion"} - functions
+        missing |= {"usb_diagnostic_record"} - symbols
+    elif "usb_diagnostic_record" in symbols:
+        raise SystemExit("normal profile contains USB fault-injection diagnostics")
+    legacy_usb = {"USBTransmit", "USBInit", "CDC_Transmit_HS", "CDCInitRxbufferNcallback"} & functions
+    if legacy_usb:
+        raise SystemExit(f"legacy borrowed USB interface remains linked: {sorted(legacy_usb)}")
     if args.rc_diagnostics:
         missing |= {"RemoteControlInit", "RemoteBenchInit", "RemoteBenchTask", "RemoteSafetyGesturesUpdate"} - functions
         missing |= {"remote_control_diag", "usart_rx_oversize_total"} - symbols

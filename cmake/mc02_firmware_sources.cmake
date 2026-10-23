@@ -89,7 +89,8 @@ set(MC02_BSP_C_SOURCES
     bsp/safety/bsp_safety.c
     bsp/safety/bsp_safety_error.c
     bsp/spi/bsp_spi.c
-    bsp/usb/bsp_usb.c
+    bsp/usb/usb_transport.c
+    bsp/usb/usb_transport_port_stm32.c
     bsp/usart/bsp_usart.c
     bsp/usart/bsp_usart_tx.c
     bsp/usart/usart_tx_port.c
@@ -179,6 +180,9 @@ else()
     if(MC02_BENCH_REFEREE_DIAGNOSTICS)
         list(APPEND MC02_SELECTED_SOURCES modules/referee/referee_bench.c)
     endif()
+    if(MC02_BENCH_USB_DIAGNOSTICS)
+        list(APPEND MC02_SELECTED_SOURCES bsp/usb/usb_diagnostic.c)
+    endif()
 endif()
 
 foreach(source IN LISTS MC02_SELECTED_SOURCES)
@@ -201,7 +205,7 @@ mc02_set_observation_source_flag(MC02_OBS_HAS_MOTOR modules/motor/motor_task.c)
 mc02_set_observation_source_flag(MC02_OBS_HAS_DJI modules/motor/DJImotor/dji_motor.c)
 mc02_set_observation_source_flag(MC02_OBS_HAS_CAN bsp/can/bsp_can.c)
 mc02_set_observation_source_flag(MC02_OBS_HAS_UART bsp/usart/usart_tx_task.c)
-mc02_set_observation_source_flag(MC02_OBS_HAS_USB bsp/usb/bsp_usb.c)
+mc02_set_observation_source_flag(MC02_OBS_HAS_USB bsp/usb/usb_transport.c)
 mc02_set_observation_source_flag(MC02_OBS_HAS_LCD modules/lcd/lcd_task.c)
 set(MC02_EXTRA_INCLUDE_DIRS
     application

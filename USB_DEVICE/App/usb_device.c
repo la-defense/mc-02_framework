@@ -27,7 +27,7 @@
 #include "usbd_cdc_if.h"
 
 /* USER CODE BEGIN Includes */
-
+#include "usb_transport.h"
 /* USER CODE END Includes */
 
 /* USER CODE BEGIN PV */
@@ -64,29 +64,13 @@ USBD_HandleTypeDef hUsbDeviceHS;
 void MX_USB_DEVICE_Init(void)
 {
   /* USER CODE BEGIN USB_DEVICE_Init_PreTreatment */
-
+  // 业务回调已在调度前注册；未选视觉业务时登记无回调配置。
+  // 所有实际启动／重建统一由defaultTask内的USBTransportProcess执行。
+  (void)USBTransportInit(NULL);
   /* USER CODE END USB_DEVICE_Init_PreTreatment */
 
-  /* Init Device Library, add supported class and start the library. */
-  if (USBD_Init(&hUsbDeviceHS, &HS_Desc, DEVICE_HS) != USBD_OK)
-  {
-    Error_Handler();
-  }
-  if (USBD_RegisterClass(&hUsbDeviceHS, &USBD_CDC) != USBD_OK)
-  {
-    Error_Handler();
-  }
-  if (USBD_CDC_RegisterInterface(&hUsbDeviceHS, &USBD_Interface_fops_HS) != USBD_OK)
-  {
-    Error_Handler();
-  }
-  if (USBD_Start(&hUsbDeviceHS) != USBD_OK)
-  {
-    Error_Handler();
-  }
-
   /* USER CODE BEGIN USB_DEVICE_Init_PostTreatment */
-  HAL_PWREx_EnableUSBVoltageDetector();
+  // 电压检测、时钟、IRQ及外设启动由可返回结果的USB后端执行。
 
   /* USER CODE END USB_DEVICE_Init_PostTreatment */
 }

@@ -68,4 +68,41 @@ bool VisionProtocolCheckCRC16(const uint8_t *data, size_t length);
 bool VisionProtocolFindCommandFrame(const uint8_t *data, size_t length,
                                     Vision_Recv_s *frame, uint32_t *crc_errors);
 
+// 实例由接收调用方独占；仅接收解析任务修改，其他任务通过请求标记要求其清历史。
+typedef struct {
+    uint8_t bytes[VISION_COMMAND_FRAME_SIZE];
+    uint32_t time_ms[VISION_COMMAND_FRAME_SIZE];
+    size_t used;
+    uint32_t sequence, generation;
+    uint8_t have_sequence;
+} VisionSPStream_t;
+
+typedef void (*VisionSPFrameCallback_t)(void *context, const Vision_Recv_s *frame,
+                                       uint32_t received_ms, uint32_t generation);
+
+/** @brief 清除未收齐的SP候选及连续性历史，不产生业务帧。
+ * @param[in,out] stream 调用方长期保存的状态，NULL时不操作；首次Feed前调用。
+ * @note 仅解析任务串行调用，不能在另一任务解析过程中直接清除。
+ */
+void VisionProtocolStreamReset(VisionSPStream_t *stream);
+
+/** @brief 处理1～255字节，按顺序交付全部CRC正确的29字节帧。
+ * @param[in,out] stream 已清零的长期状态，同一状态只由一个解析任务使用。
+ * @param[in] data 至少可读length字节，回调返回后不再借用。
+ * @param[in] length 接收块字节数，允许1～255。
+ * @param[in] received_ms 原接收毫秒值，0合法。
+ * @param[in] sequence 每接收块递增的编号；UINT32_MAX后允许0。
+ * @param[in] generation 连接代号，变化时丢弃旧候选。
+ * @param[in] now_ms 同一毫秒时基的当前时间，允许回绕；来源和组帧期限50ms，边界允许。
+ * @param[in] complete 同步处理完整帧的入口，不能为NULL；不得保留frame指针。
+ * @param[in] context 原样交付回调，允许NULL。
+ * @param[out] crc_errors 可选，合法调用时写本次CRC错误数；参数错误保持原值。
+ * @return true为已处理本块；false为参数错误或过期。过期清候选，参数错误不改状态。
+ * @note CRC正确只表示线上校验通过，业务仍须检查字段、连接代号和当前许可。
+ */
+bool VisionProtocolStreamFeed(VisionSPStream_t *stream, const uint8_t *data, size_t length,
+                              uint32_t received_ms, uint32_t sequence, uint32_t generation,
+                              uint32_t now_ms, VisionSPFrameCallback_t complete,
+                              void *context, uint32_t *crc_errors);
+
 #endif

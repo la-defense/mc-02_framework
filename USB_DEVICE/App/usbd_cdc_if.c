@@ -23,7 +23,8 @@
 #include <string.h>
 
 /* USER CODE BEGIN INCLUDE */
-#include "bsp_usb.h" /* VCPQueuePush: 接收中断只入队, 解析交给任务里的 VCPProcessRx() */
+#include "usb_transport_port_stm32.h" // 中断只登记数据，任务执行解析和完成通知。
+#include "usb_diagnostic.h"
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -33,8 +34,6 @@
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
 
-static USBCallback usb_tx_callback = NULL;
-static USBCallback usb_rx_callback = NULL;
 
 /* USER CODE END PV */
 
@@ -161,6 +160,7 @@ static int8_t CDC_Init_HS(void)
   /* Set Application Buffers */
   USBD_CDC_SetTxBuffer(&hUsbDeviceHS, UserTxBufferHS, 0);
   USBD_CDC_SetRxBuffer(&hUsbDeviceHS, UserRxBufferHS);
+  USBPortOnConfigured();
   return (USBD_OK);
   /* USER CODE END 8 */
 }
@@ -173,6 +173,7 @@ static int8_t CDC_Init_HS(void)
 static int8_t CDC_DeInit_HS(void)
 {
   /* USER CODE BEGIN 9 */
+  USBPortOnLifecycle(USB_LINK_DECONFIGURED);
   return (USBD_OK);
   /* USER CODE END 9 */
 }
@@ -187,6 +188,9 @@ static int8_t CDC_DeInit_HS(void)
 static int8_t CDC_Control_HS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 {
   /* USER CODE BEGIN 10 */
+  // 当前CDC不使用物理串口参数，也不以DTR或波特率授予业务许可。
+  (void)pbuf;
+  (void)length;
   switch(cmd)
   {
   case CDC_SEND_ENCAPSULATED_COMMAND:
@@ -268,57 +272,19 @@ static int8_t CDC_Control_HS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_HS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 11 */
-  /* 只入队, 不在中断里解析(BSPUART-02): 解析(视觉的滑动找帧 + CRC16)由任务里的
-     VCPProcessRx() 逐包执行。必须拷贝而不是传指针 —— 下面重新武装接收之后,
-     这个端点缓冲随时会被下一包数据覆盖。 */
-  VCPQueuePush(Buf, (uint16_t)(*Len));
+  // 先检查指针和完整长度，再入队；重新武装后端点数组可能立即被下一包覆盖。
+  if (Buf == NULL || Len == NULL) return USBD_FAIL;
+  USBTransportOnReceive(Buf, (size_t)*Len);
   USBD_CDC_SetRxBuffer(&hUsbDeviceHS, &Buf[0]);
-  USBD_CDC_ReceivePacket(&hUsbDeviceHS);
-  return (USBD_OK);
+  uint8_t result = USBD_CDC_ReceivePacket(&hUsbDeviceHS);
+  if (result != USBD_OK) USBPortOnLifecycle(USB_LINK_TRANSFER_ERROR);
+  return (int8_t)result;
   /* USER CODE END 11 */
 }
 
-/**
-  * @brief  Data to send over USB IN endpoint are sent over CDC interface
-  *         through this function.
-  * @param  Buf: Buffer of data to be sent
-  * @param  Len: Number of data to be sent (in bytes)
-  * @retval Result of the operation: USBD_OK if all operations are OK else USBD_FAIL or USBD_BUSY
-  */
-uint8_t CDC_Transmit_HS(uint8_t* Buf, uint16_t Len)
-{
-  uint8_t result = USBD_OK;
-  /* USER CODE BEGIN 12 */
-  USBD_CDC_HandleTypeDef *hcdc;
-
-  if ((Buf == NULL) || (Len == 0U) || (Len > APP_TX_DATA_SIZE))
-  {
-    return USBD_FAIL;
-  }
-  if (hUsbDeviceHS.dev_state != USBD_STATE_CONFIGURED)
-  {
-    return USBD_BUSY;
-  }
-
-  hcdc = (USBD_CDC_HandleTypeDef *)hUsbDeviceHS.pClassData;
-  if (hcdc == NULL)
-  {
-    return USBD_BUSY;
-  }
-  if (hcdc->TxState != 0U)
-  {
-    return USBD_BUSY;
-  }
-
-  if (Buf != UserTxBufferHS)
-  {
-    memcpy(UserTxBufferHS, Buf, Len);
-  }
-  USBD_CDC_SetTxBuffer(&hUsbDeviceHS, UserTxBufferHS, Len);
-  result = USBD_CDC_TransmitPacket(&hUsbDeviceHS);
-  /* USER CODE END 12 */
-  return result;
-}
+/* USER CODE BEGIN 12 */
+// 发送只由USBPortSubmit提交，禁止其他入口绕过唯一持久数组和完成登记。
+/* USER CODE END 12 */
 
 /**
   * @brief  CDC_TransmitCplt_HS
@@ -338,22 +304,18 @@ static int8_t CDC_TransmitCplt_HS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
   /* USER CODE BEGIN 14 */
   UNUSED(Buf);
   UNUSED(epnum);
-  if ((usb_tx_callback != NULL) && (Len != NULL))
-  {
-    usb_tx_callback((uint16_t)(*Len));
-  }
+  UNUSED(Len);
+#if MC02_BENCH_USB_DIAGNOSTICS
+  if (!USBTransportDiagnosticSuppressCompletion()) USBTransportOnTxComplete();
+#else
+  USBTransportOnTxComplete();
+#endif
   /* USER CODE END 14 */
   return result;
 }
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
-uint8_t *CDCInitRxbufferNcallback(USBCallback tx_cbk, USBCallback rx_cbk)
-{
-  usb_tx_callback = tx_cbk;
-  usb_rx_callback = rx_cbk;
-  return UserRxBufferHS;
-}
 
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 

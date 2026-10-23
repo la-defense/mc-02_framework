@@ -12,6 +12,7 @@
 #include "string.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include <math.h>
 
 static Vision_Recv_s recv_data;
 static Vision_Send_s send_data;
@@ -22,102 +23,74 @@ static uint32_t vision_tx_drop_count = 0;
 static uint32_t vision_crc_error_count = 0;
 static uint32_t vision_last_rx_ms = 0;
 static uint8_t vision_has_valid_frame;
+static VisionSPStream_t vision_stream;
+static volatile uint8_t vision_stream_reset_requested;
 
 #ifdef VISION_USE_UART
 #include "bsp_usart.h"
 static USARTInstance *vision_usart_instance;
-typedef struct {
-    uint8_t bytes[sizeof(Vision_Recv_s)];
-    uint32_t time[sizeof(Vision_Recv_s)];
-    size_t used;
-    uint32_t sequence;
-    uint8_t have_sequence;
-    volatile uint8_t reset_requested;
-} VisionUartStream;
-static VisionUartStream vision_stream;
 #endif
 
 #ifdef VISION_USE_VCP
-#include "bsp_usb.h"
-static uint8_t *vis_recv_buff;
+#include "usb_transport.h"
+static uint32_t vision_usb_generation;
 #endif
 
-/* 从接收缓冲中滑动寻找 SP 帧并解码 */
-#ifdef VISION_USE_VCP
-static void DecodeVision(const uint8_t *rx_data, uint16_t recv_len, uint32_t rx_timestamp_ms)
+// 线上CRC通过后继续检查实际字段；解析不授予使能，控制端仍检查范围和当前许可。
+static void VisionFrameReceived(void *context, const Vision_Recv_s *packet,
+                                uint32_t received_ms, uint32_t generation)
 {
-    // 按真正接收时刻检查这片数据，排队超过 50 ms 后不再采用。
-    if (rx_data == NULL || (uint32_t)(HAL_GetTick() - rx_timestamp_ms) > MESSAGE_DEFAULT_MAX_AGE_MS)
+    (void)context;
+    if (packet->mode > 2u || !isfinite(packet->yaw) || !isfinite(packet->yaw_vel) ||
+        !isfinite(packet->yaw_acc) || !isfinite(packet->pitch) || !isfinite(packet->pitch_vel) ||
+        !isfinite(packet->pitch_acc))
         return;
-    Vision_Recv_s packet;
-    uint32_t crc_errors = 0u;
-    const uint8_t found = VisionProtocolFindCommandFrame(
-        rx_data, recv_len, &packet, &crc_errors);
-
     taskENTER_CRITICAL();
-    vision_crc_error_count += crc_errors;
-    if (found)
+    uint8_t current = (uint8_t)(vision_stream_reset_requested == 0u &&
+        (uint32_t)(HAL_GetTick() - received_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS);
+#ifdef VISION_USE_VCP
+    current = (uint8_t)(current && USBTransportGenerationIsCurrent(generation));
+#else
+    (void)generation;
+#endif
+    if (current)
     {
-        recv_data = packet;
+        recv_data = *packet;
         vision_rx_count++;
-        vision_last_rx_ms = rx_timestamp_ms;
+        vision_last_rx_ms = received_ms;
         vision_has_valid_frame = 1u;
+#ifdef VISION_USE_VCP
+        vision_usb_generation = generation;
+        USBTransportReportValidCommand(generation, received_ms);
+#endif
         DaemonReload(vision_daemon_instance);
     }
     taskEXIT_CRITICAL();
 }
 
-#endif
-#ifdef VISION_USE_UART
-static void VisionShift(VisionUartStream *stream, size_t count)
+// 只有解析调用者清理候选数组；其他任务只置请求标志，避免清零与解析交错。
+static void VisionFeedBlock(const uint8_t *data, size_t length, uint32_t received_ms,
+                            uint32_t sequence, uint32_t generation)
 {
-    stream->used -= count;
-    memmove(stream->bytes, stream->bytes + count, stream->used);
-    memmove(stream->time, stream->time + count, stream->used * sizeof(stream->time[0]));
+    taskENTER_CRITICAL();
+    uint8_t reset = vision_stream_reset_requested;
+    vision_stream_reset_requested = 0u;
+    taskEXIT_CRITICAL();
+    if (reset) VisionProtocolStreamReset(&vision_stream);
+    uint32_t errors = 0u;
+    (void)VisionProtocolStreamFeed(&vision_stream, data, length, received_ms, sequence,
+        generation, HAL_GetTick(), VisionFrameReceived, NULL, &errors);
+    taskENTER_CRITICAL();
+    vision_crc_error_count += errors;
+    taskEXIT_CRITICAL();
 }
 
+#ifdef VISION_USE_UART
 static void VisionUartRxCallback(void *context, const USART_RxBlock_t *block)
 {
-    VisionUartStream *stream = context;
-    if (stream == NULL || block == NULL) return;
-    taskENTER_CRITICAL();
-    if (stream->reset_requested) { stream->used = 0u; stream->reset_requested = 0u; }
-    taskEXIT_CRITICAL();
-    if (block->data == NULL || block->length == 0u || block->length > 255u)
-    { stream->used = 0u; return; }
-    if ((stream->have_sequence && block->sequence != stream->sequence + 1u) ||
-        (stream->used && (uint32_t)(HAL_GetTick() - stream->time[0]) > 50u))
-        stream->used = 0u;
-    stream->sequence = block->sequence;
-    stream->have_sequence = 1u;
-    if ((uint32_t)(HAL_GetTick() - block->received_ms) > 50u)
-    { stream->used = 0u; return; }
-    // 固定29字节候选；坏头或CRC失败后移动一字节，同一块内的完整帧按顺序全部处理。
-    for (size_t i = 0u; i < block->length; ++i)
-    {
-        if (stream->reset_requested) return;
-        stream->bytes[stream->used] = block->data[i];
-        stream->time[stream->used++] = block->received_ms;
-        while (stream->used)
-        {
-            if (stream->bytes[0] != 'S' || (stream->used >= 2u && stream->bytes[1] != 'P'))
-            { VisionShift(stream, 1u); continue; }
-            if (stream->used < sizeof(Vision_Recv_s)) break;
-            if (!VisionProtocolCheckCRC16(stream->bytes, sizeof(Vision_Recv_s)))
-            { ++vision_crc_error_count; VisionShift(stream, 1u); continue; }
-            taskENTER_CRITICAL();
-            if (!stream->reset_requested && (uint32_t)(HAL_GetTick() - stream->time[0]) <= 50u)
-            {
-                memcpy(&recv_data, stream->bytes, sizeof(recv_data));
-                ++vision_rx_count;
-                vision_last_rx_ms = stream->time[0];
-                vision_has_valid_frame = 1u;
-                DaemonReload(vision_daemon_instance);
-            }
-            taskEXIT_CRITICAL();
-            VisionShift(stream, sizeof(Vision_Recv_s));
-        }
-    }
+    (void)context;
+    if (block == NULL) return;
+    VisionFeedBlock(block->data, block->length, block->received_ms, block->sequence, 1u);
 }
 #endif
 
@@ -129,9 +102,7 @@ static void VisionOfflineCallback(void *id)
     memset(&recv_data, 0, sizeof(recv_data));
     vision_last_rx_ms = 0u;
     vision_has_valid_frame = 0u;
-#ifdef VISION_USE_UART
-    vision_stream.reset_requested = 1u;
-#endif
+    vision_stream_reset_requested = 1u;
     taskEXIT_CRITICAL();
 #ifdef VISION_USE_UART
     USARTServiceInit(vision_usart_instance);
@@ -145,6 +116,7 @@ void VisionUpdateTx(uint8_t mode,
                     float pitch, float pitch_vel,
                     float bullet_speed, uint16_t bullet_count)
 {
+    taskENTER_CRITICAL();
     send_data.head[0] = 'S';
     send_data.head[1] = 'P';
     send_data.mode = mode;
@@ -160,12 +132,36 @@ void VisionUpdateTx(uint8_t mode,
     send_data.pitch_vel = pitch_vel;
     send_data.bullet_speed = bullet_speed;
     send_data.bullet_count = bullet_count;
+    taskEXIT_CRITICAL();
 }
 
 #ifdef VISION_USE_VCP
-static void VisionVcpRxCallback(uint16_t recv_len)
+static void VisionVcpRxCallback(void *context, const USBRxBlock_t *block)
 {
-    DecodeVision(VCPGetCurrentRxData(), recv_len, VCPGetCurrentRxTimestamp());
+    (void)context;
+    if (block == NULL) return;
+    VisionFeedBlock(block->data, block->length, block->received_ms, block->sequence, block->generation);
+}
+static void VisionVcpLinkChanged(void *context, uint32_t generation, USBLinkReason_t reason)
+{
+    (void)context; (void)generation; (void)reason;
+    taskENTER_CRITICAL();
+    // 新连接可能已先收到首帧；迟一点执行的连接通知不能再清掉这份新数据。
+    if (!vision_has_valid_frame || vision_usb_generation != generation ||
+        !USBTransportGenerationIsCurrent(generation))
+    {
+        memset(&recv_data, 0, sizeof(recv_data));
+        vision_has_valid_frame = 0u;
+        vision_last_rx_ms = 0u;
+        vision_stream_reset_requested = 1u;
+    }
+    taskEXIT_CRITICAL();
+}
+static void VisionVcpTxCompleted(void *context, const USBTxEvent_t *event)
+{
+    (void)context;
+    if (event->result != USB_TX_COMPLETE)
+    { taskENTER_CRITICAL(); ++vision_tx_drop_count; taskEXIT_CRITICAL(); }
 }
 #endif
 
@@ -175,6 +171,8 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
     memset(&send_data, 0, sizeof(send_data));
     vision_last_rx_ms = 0u;
     vision_has_valid_frame = 0u;
+    VisionProtocolStreamReset(&vision_stream);
+    vision_stream_reset_requested = 0u;
 
     Daemon_Init_Config_s daemon_conf = {
         .callback = VisionOfflineCallback,
@@ -186,10 +184,9 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
         return NULL;
 
 #ifdef VISION_USE_VCP
-    UNUSED(_handle);
-    USB_Init_Config_s conf = {.rx_cbk = VisionVcpRxCallback};
-    vis_recv_buff = USBInit(conf);
-    if (vis_recv_buff == NULL)
+    (void)_handle;
+    USBTransportConfig_t conf = {VisionVcpRxCallback, VisionVcpTxCompleted, VisionVcpLinkChanged, NULL};
+    if (USBTransportInit(&conf) != USB_OK)
     {
         (void)DaemonUnregister(vision_daemon_instance);
         vision_daemon_instance = NULL;
@@ -215,7 +212,7 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
         return NULL;
     }
 #else
-    UNUSED(_handle);
+    (void)_handle;
     BSP_LOG_EVENT_0(EV_MODULES_MASTER_MACHINE_MASTER_PROCESS_C_02);
     (void)DaemonUnregister(vision_daemon_instance);
     vision_daemon_instance = NULL;
@@ -229,8 +226,11 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
 static void VisionExpireIfStale(uint32_t now_ms)
 {
     taskENTER_CRITICAL();
-    if (vision_has_valid_frame != 0u &&
-        (uint32_t)(now_ms - vision_last_rx_ms) > MESSAGE_DEFAULT_MAX_AGE_MS)
+    uint8_t expired = (uint8_t)((uint32_t)(now_ms - vision_last_rx_ms) > MESSAGE_DEFAULT_MAX_AGE_MS);
+#ifdef VISION_USE_VCP
+    expired = (uint8_t)(expired || !USBTransportGenerationIsCurrent(vision_usb_generation));
+#endif
+    if (vision_has_valid_frame != 0u && expired)
     {
         memset(&recv_data, 0, sizeof(recv_data));
         vision_has_valid_frame = 0u;
@@ -251,15 +251,11 @@ static void VisionTxCompleted(void *context, const USARTTxEvent_t *event)
 void VisionSend(void)
 {
     VisionExpireIfStale(HAL_GetTick());
-#ifdef VISION_USE_VCP
-    // USB仍按原实现借用持久缓冲；本轮不改变默认USB链路的发送方式。
-    static Vision_Send_s tx_pkt;
-#else
-    // UART在提交时复制完整报文，本次候选只需保留到提交返回。
+    // 两种传输都在提交时复制；组包使用本次独占的局部内容。
     Vision_Send_s tx_pkt;
-#endif
-
+    taskENTER_CRITICAL();
     tx_pkt = send_data;
+    taskEXIT_CRITICAL();
     tx_pkt.head[0] = 'S';
     tx_pkt.head[1] = 'P';
     uint32_t crc;
@@ -270,11 +266,14 @@ void VisionSend(void)
     tx_pkt.crc16 = (uint16_t)crc;
 
 #ifdef VISION_USE_VCP
-    uint8_t usb_status = USBTransmit((const uint8_t *)&tx_pkt, sizeof(Vision_Send_s));
-    if (usb_status == USBD_OK)
+    uint32_t id;
+    USBStatus_t usb_status = USBTransportSubmit((const uint8_t *)&tx_pkt, sizeof(tx_pkt), &id);
+    taskENTER_CRITICAL();
+    if (usb_status == USB_ACCEPTED)
         vision_tx_count++;
-    else if (usb_status == USBD_BUSY)
+    else
         vision_tx_drop_count++;
+    taskEXIT_CRITICAL();
 #elif defined(VISION_USE_UART)
     uint32_t id;
     USARTTxRequest_t request={(const uint8_t *)&tx_pkt,sizeof(tx_pkt),USART_TRANSFER_DMA,

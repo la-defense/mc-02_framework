@@ -237,11 +237,97 @@ RTOS_TASK_STACK_WORDS = {
     "lcdtask": 1024,
 }
 
+# USB只读记录为固定RAM对象；分块仍遵守每次最多128word的读取限制。
+USB_SNAPSHOT_FIELDS = {
+    "tick_ms": SNAPSHOT_FIELDS["tick_ms"],
+    "iwdg_reset_flag": SNAPSHOT_FIELDS["iwdg_reset_flag"],
+    "usb_generation_before": SnapshotField("usb_observation.publication_generation", "mdw", 32),
+    "usb_words": SnapshotField("((uint32_t *)&usb_observation)[0]", "mdw", 32, 31),
+    "usb_generation_after": SnapshotField("usb_observation.publication_generation", "mdw", 32),
+}
+USB_DIAGNOSTIC_SNAPSHOT_FIELDS = {
+    "tick_ms": SNAPSHOT_FIELDS["tick_ms"],
+    "iwdg_reset_flag": SNAPSHOT_FIELDS["iwdg_reset_flag"],
+    "usb_generation_before": SnapshotField("usb_diagnostic_record.publication_generation", "mdw", 32),
+    "usb_header": SnapshotField("((uint32_t *)&usb_diagnostic_record)[0]", "mdw", 32, 23),
+    "usb_events_a": SnapshotField("((uint32_t *)&usb_diagnostic_record)[23]", "mdw", 32, 96),
+    "usb_events_b": SnapshotField("((uint32_t *)&usb_diagnostic_record)[119]", "mdw", 32, 96),
+    "usb_generation_after": SnapshotField("usb_diagnostic_record.publication_generation", "mdw", 32),
+}
+USB_PHASE_NAMES = ("stopped", "starting", "waiting-configuration", "ready", "stopping",
+                   "disconnect-wait", "retry-wait", "exhausted", "isolated")
+
+
+def decode_usb_snapshot(snapshot: dict, diagnostic: bool = False) -> dict:
+    """只解释固定布局和完整发布；与其他组的发布时间分别保留，不声称整板同刻读取。"""
+    fields = USB_DIAGNOSTIC_SNAPSHOT_FIELDS if diagnostic else USB_SNAPSHOT_FIELDS
+    if set(snapshot) != set(fields):
+        raise ProbeIOError("USB record has missing or unexpected fields")
+    for key, field in fields.items():
+        value = snapshot[key]
+        values = value if field.count > 1 else [value]
+        if not isinstance(values, list) or len(values) != field.count or any(
+            type(word) is not int or not 0 <= word <= UINT32_MAX for word in values
+        ):
+            raise ProbeIOError("USB record has an invalid word count or value")
+    words = snapshot["usb_header"] if diagnostic else snapshot["usb_words"]
+    before, after = snapshot["usb_generation_before"], snapshot["usb_generation_after"]
+    if before == 0 or before & 1 or before != after or before != words[3]:
+        raise ObservationSnapshotChangedError("USB record changed while it was read or is unpublished")
+    expected_magic, expected_size = (0x55444231, 215 * 4) if diagnostic else (0x55425331, 31 * 4)
+    if (words[0] != expected_magic or (not diagnostic and words[1] != 0x00010001) or
+            words[2] != expected_size):
+        raise ProbeIOError("USB record layout mismatch")
+    if diagnostic and words[1] != 1:
+        raise ProbeIOError("USB diagnostic record version mismatch")
+    result = {"tick_ms": snapshot["tick_ms"], "iwdg_reset_flag": snapshot["iwdg_reset_flag"],
+              "usb_published_ms": words[4], "usb_publication_generation": before}
+    if diagnostic:
+        if words[5] > 4 or words[6] > 4 or words[7] > 4 or words[9] >= len(USB_PHASE_NAMES) or words[11] > 3:
+            raise ProbeIOError("USB diagnostic state is outside the supported range")
+        result.update(usb_diagnostic_phase=words[5], usb_remaining=words[6], usb_suppressed=words[7],
+                      usb_event_count=words[8], usb_phase=words[9], usb_connection_generation=words[10],
+                      usb_attempts=words[11], usb_restarts=words[12], usb_exhausted=words[13],
+                      usb_timeouts=words[14], usb_completed=words[15], usb_rx_blocks=words[16],
+                      usb_rx_dropped=words[17], usb_tx_errors=words[18], usb_last_tx_id=words[19],
+                      usb_last_tx_submitted_ms=words[20], usb_last_tx_completed_ms=words[21],
+                      usb_last_tx_result=words[22])
+        events = snapshot["usb_events_a"] + snapshot["usb_events_b"]
+        result["usb_events"] = [dict(zip(("sequence", "time_ms", "phase", "connection_generation", "attempts", "suppressed"),
+                                               events[i:i + 6]))
+                                for i in range(0, len(events), 6) if events[i] != 0]
+        seen = set()
+        for event in result["usb_events"]:
+            if (event["sequence"] in seen or event["phase"] >= len(USB_PHASE_NAMES) or
+                    event["attempts"] > 3 or event["suppressed"] > 4 or
+                    ((words[8] - event["sequence"]) & UINT32_MAX) > 32):
+                raise ProbeIOError("USB diagnostic event has invalid fields or sequence")
+            seen.add(event["sequence"])
+        result["usb_events"].sort(key=lambda event: ((words[8] - event["sequence"]) & UINT32_MAX), reverse=True)
+    else:
+        if (words[5] >= len(USB_PHASE_NAMES) or words[6] > 7 or words[7] > 10 or words[12] > 4 or
+                words[14] > 3 or (words[30] & 0xff) != 1 or ((words[30] >> 8) & 0xff) > 8 or
+                ((words[30] >> 16) & 0xff) > 1 or ((words[30] >> 24) & 0xff) > 1):
+            raise ProbeIOError("USB state is outside the supported range")
+        result.update(usb_phase=words[5], usb_link_reason=words[6], usb_last_error=words[7],
+                      usb_last_tx_id=words[8], usb_last_tx_submitted_ms=words[9],
+                      usb_last_tx_completed_ms=words[10], usb_last_tx_result=words[12],
+                      usb_last_tx_connection_generation=words[11],
+                      usb_connection_generation=words[13], usb_attempts=words[14], usb_restarts=words[15],
+                      usb_exhausted=words[16], usb_accepted=words[17], usb_completed=words[18],
+                      usb_rejected=words[19], usb_cancelled=words[20], usb_timeouts=words[21],
+                      usb_tx_errors=words[22], usb_rx_blocks=words[23], usb_rx_dropped=words[24],
+                      usb_rx_oversized=words[25], usb_rx_expired=words[26], usb_rx_dispatched=words[27],
+                      usb_stable_since_ms=words[29], usb_tx_buffer_held=(words[30] >> 16) & 0xff)
+    result["usb_phase_name"] = USB_PHASE_NAMES[result["usb_phase"]]
+    return result
+
 
 def decode_rtos_snapshot(
     snapshot: dict[str, int | list[int]],
     fields: dict[str, SnapshotField] = RTOS_SNAPSHOT_FIELDS,
     allow_unpublished: bool = False,
+    stack_capacities: dict[str, int] | None = None,
 ) -> dict:
     """Validate the published task table and unpack its fixed-width arrays."""
     if set(snapshot) != set(fields):
@@ -288,7 +374,7 @@ def decode_rtos_snapshot(
         raw_name = name_bytes[index * 12:(index + 1) * 12]
         name = raw_name.split(b"\0", 1)[0].decode("ascii", errors="replace")
         stack_words = stacks[index]
-        stack_capacity_words = RTOS_TASK_STACK_WORDS.get(name)
+        stack_capacity_words = (stack_capacities or RTOS_TASK_STACK_WORDS).get(name)
         if stack_capacity_words is not None and stack_words > stack_capacity_words:
             raise ProbeIOError(f"task {name} reports more free stack than its configured depth")
         tasks.append({
@@ -594,6 +680,25 @@ def _read_elf_symbol(elf: str, symbol_name: str) -> tuple[int, int, bytes]:
     raise ProbeIOError(f"ELF is missing required symbol: {symbol_name}")
 
 
+def _task_stacks_from_elf(elf: str) -> tuple[dict[str, int], str]:
+    """离线读取新USB任务深度；旧版受支持固件保留原128word映射并明确来源。"""
+    capacities = dict(RTOS_TASK_STACK_WORDS)
+    symbol = "mc02_usb_task_stack_words"
+    try:
+        _address, size, data = _read_elf_symbol(elf, symbol)
+    except ProbeIOError as error:
+        if str(error) != f"ELF is missing required symbol: {symbol}":
+            raise
+        return capacities, "legacy_fixed_profile"
+    if size != 4 or len(data) != 4:
+        raise ProbeIOError("ELF USB task stack metadata has an invalid size")
+    words = struct.unpack("<I", data)[0]
+    if not 64 <= words <= 8192:
+        raise ProbeIOError("ELF USB task stack metadata is outside the supported range")
+    capacities["defaultTask"] = words
+    return capacities, "matched_elf_usb_stack"
+
+
 def resolve_observation_identity(
     gdb: str, readelf: str, elf: str, timeout: float
 ) -> dict:
@@ -669,6 +774,7 @@ def resolve_observation_identity(
         "profile_name": OBSERVATION_PROFILE_NAMES[template["profile"]],
         "role_name": OBSERVATION_ROLE_NAMES[template["role"]],
     }
+    expected["task_stack_capacities"], expected["task_stack_basis"] = _task_stacks_from_elf(elf)
     return {
         "expected": expected,
         "identity_address": addresses["identity_words"],
@@ -733,7 +839,8 @@ def decode_performance_snapshot(snapshot: dict, expected_identity: dict) -> dict
     if set(snapshot) != expected_keys:
         raise ProbeIOError("performance record has missing or unexpected fields")
     task_raw = {key: snapshot[key] for key in PERFORMANCE_TASK_FIELDS}
-    tasks = decode_rtos_snapshot(task_raw, PERFORMANCE_TASK_FIELDS, allow_unpublished=True)
+    tasks = decode_rtos_snapshot(task_raw, PERFORMANCE_TASK_FIELDS, allow_unpublished=True,
+                                stack_capacities=expected_identity.get("task_stack_capacities"))
     timing_generation, timing_id, timing_ms, timing_mask, timing_values = _decode_observation_group(
         snapshot["timing_words"], snapshot["timing_generation_before"],
         snapshot["timing_generation_after"], OBSERVATION_TIMING_WORDS,
@@ -1496,12 +1603,17 @@ def _short_summary(records: list[dict], identity: dict, error: str | None) -> tu
     lines = [
         "MC02 观测摘要",
         f"固件配置：{identity['profile_name']} / {identity['role_name']}",
-        f"Build ID?{identity['build_id']}",
+        f"Build ID：{identity['build_id']}",
         f"原始样本数：{len(records)}",
     ]
     complete = bool(records) and error is None
     if records:
         lines.append(f"窗口状态：{records[-1]['status']}")
+        usb = records[-1].get("decoded", {})
+        if "usb_phase_name" in usb:
+            lines.append(f"USB：{usb['usb_phase_name']}，累计重启{usb['usb_restarts']}，已消耗额度{usb['usb_attempts']}/3")
+            if "usb_suppressed" in usb:
+                lines.append(f"有限诊断：丢弃完成通知{usb['usb_suppressed']}/4，阶段{usb['usb_diagnostic_phase']}")
     if error:
         lines.append(f"错误：{error}")
     lines.append("地址仅依据所选 ELF 的 RAM 布局；身份匹配不等于整片 Flash 校验。")
@@ -1534,6 +1646,8 @@ def main(argv: list[str] | None = None) -> int:
     profile.add_argument("--rc", action="store_true", help="read the fixed remote/safety diagnostic profile")
     profile.add_argument("--rc-input", action="store_true", help="read fixed remote/safety plus keyboard and mouse fields (non-atomic)")
     profile.add_argument("--rtos", action="store_true", help="read the fixed task-stack and timing profile")
+    profile.add_argument("--usb", action="store_true", help="读取USB固定只读状态记录")
+    profile.add_argument("--usb-diagnostic", action="store_true", help="读取具名USB诊断固件的有限注入记录")
     profile.add_argument("--crash-v3", action="store_true", help="导出所选 ELF 中固定地址的 v3 崩溃记录")
     profile.add_argument("--crash-record", action="store_true", help="导出固定512字节崩溃记录保留区")
     args = parser.parse_args(argv)
@@ -1591,6 +1705,8 @@ def main(argv: list[str] | None = None) -> int:
         identity_info = resolve_observation_identity(args.gdb, args.readelf, str(args.elf), args.timeout)
         identity = identity_info["expected"]
         fields = (
+            USB_DIAGNOSTIC_SNAPSHOT_FIELDS if args.usb_diagnostic else
+            USB_SNAPSHOT_FIELDS if args.usb else
             PERFORMANCE_SNAPSHOT_FIELDS if args.performance else
             RTOS_SNAPSHOT_FIELDS if args.rtos else
             CRASH_RECORD_SNAPSHOT_FIELDS if args.crash_record else
@@ -1668,12 +1784,14 @@ def main(argv: list[str] | None = None) -> int:
                     args.host, args.telnet_port, args.timeout, fields,
                     identity_info["ram_bounds"],
                 )
-                if args.rc_input:
+                if args.usb or args.usb_diagnostic:
+                    decoded = decode_usb_snapshot(raw, args.usb_diagnostic)
+                elif args.rc_input:
                     decoded = decode_rc_input(raw)
                 elif args.adc:
                     decoded = decode_adc(raw)
                 elif args.rtos:
-                    decoded = decode_rtos_snapshot(raw)
+                    decoded = decode_rtos_snapshot(raw, stack_capacities=identity.get("task_stack_capacities"))
                 else:
                     decoded = raw
                 status = "baseline" if previous is None else classify_change(previous, decoded)

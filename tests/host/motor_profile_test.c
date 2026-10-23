@@ -1,10 +1,15 @@
+/** @file motor_profile_test.c
+ * @brief 检查生产电机任务仍推进接收，并遵循裸板与robot的输出隔离。
+ * @note 只替换收发和驱动入口，不连接执行器；USB声明使用生产头文件。
+ */
 #include <stdio.h>
 #include "motor_task.h"
 #include "profile_io.h"
+#include "usb_transport.h"
 static unsigned can_pending, uart_pending, usb_pending, dji_outputs, lk_outputs;
 void CANProcessRx(void) { if (can_pending) --can_pending; }
 void USARTProcessRx(void) { if (uart_pending) --uart_pending; }
-void VCPProcessRx(void) { if (usb_pending) --usb_pending; }
+USBStatus_t USBTransportProcessRx(void) { if (usb_pending) --usb_pending; return USB_OK; }
 void DJIMotorControl(void) { ++dji_outputs; }
 void LKMotorControl(void) { ++lk_outputs; }
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)

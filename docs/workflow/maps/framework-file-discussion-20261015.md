@@ -85,8 +85,8 @@ modules/        安全管理、任务监控、消息、来源监控、电机、�
 | 33 | [bsp/usart/bsp_usart.c](../../../bsp/usart/bsp_usart.c) | 串口 DMA／中断收发封装 | 每串口有界发送缓冲和队列，提交时复制数据，完成或超时后释放并反馈状态。 |
 | 34 | [bsp/usart/bsp_usart.h](../../../bsp/usart/bsp_usart.h) | 串口注册与收发接口 | BSP 交付不可变字节块，包含实际长度、原始接收时间和上下文；协议模块负责拼帧、拆帧与校验。 |
 | 35 | [bsp/usart/bsp_usart.md](../../../bsp/usart/bsp_usart.md) | 串口接入与异常输入说明 | 短暂坏帧不刷新有效数据时间；上一合法快照在原期限内有效，过期撤销对应控制。 |
-| 36 | [bsp/usb/bsp_usb.c](../../../bsp/usb/bsp_usb.c) | USB CDC 业务通信封装 | USB 当前用于上下位机业务通信；调参和诊断另外走独立串口。 |
-| 37 | [bsp/usb/bsp_usb.h](../../../bsp/usb/bsp_usb.h) | USB 收发及链路接口 | 正式自主中 USB 失效时撤销旧移动、瞄准和开火命令，停止平移、禁发射，继续原地自旋与本地三轴索敌；恢复只使用新有效命令。 |
+| 36 | [usb_transport.c（原bsp/usb/bsp_usb.c）](../../../bsp/usb/usb_transport.c) | USB CDC 业务通信封装 | 原讨论意图保留；MC02-0062迁移为复制收发及有限恢复。USB用于上下位机业务；独立诊断串口由0004接入。 |
+| 37 | [usb_transport.h（原bsp/usb/bsp_usb.h）](../../../bsp/usb/usb_transport.h) | USB 收发及链路接口 | 正式自主中 USB 失效时撤销旧移动、瞄准和开火命令，停止平移、禁发射，继续原地自旋与本地三轴索敌；恢复只使用新有效命令。原讨论意图不表示本轮已实现全部新版业务。 |
 | 38 | [bsp/usb/bsp_usb.md](../../../bsp/usb/bsp_usb.md) | USB 接入与生成代码协调说明 | 补齐自定义代码位置、接入说明及 CubeMX 重新生成后的通信验证流程。 |
 | 39 | [bsp/spi/bsp_spi.c](../../../bsp/spi/bsp_spi.c) | SPI 设备、片选及总线传输封装 | 加入有界事务队列，按配置优先级与期限调度，统一占用、完成、错误、超时释放与结果。 |
 | 40 | [bsp/spi/bsp_spi.h](../../../bsp/spi/bsp_spi.h) | SPI 事务与缓冲区接口 | BSP 使用有界事务缓冲，复制发送数据，完成后交付只读接收结果；超时／取消后确认硬件已结束再复用。 |

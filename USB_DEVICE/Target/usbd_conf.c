@@ -26,7 +26,7 @@
 #include "usbd_cdc.h"
 
 /* USER CODE BEGIN Includes */
-
+#include "usb_transport_port_stm32.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -74,12 +74,8 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
 
   /** Initializes the peripherals clock
   */
-    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USB;
-    PeriphClkInitStruct.UsbClockSelection = RCC_USBCLKSOURCE_HSI48;
-    if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
-    {
-      Error_Handler();
-    }
+    // 时钟配置已移到可返回失败的USBD_LL_Init，避免void MSP入口进入整板异常。
+    (void)PeriphClkInitStruct;
 
   /** Enable USB Voltage detector
   */
@@ -197,13 +193,15 @@ void HAL_PCD_ResetCallback(PCD_HandleTypeDef *hpcd)
   }
   else
   {
-    Error_Handler();
+    USBPortOnLifecycle(USB_LINK_TRANSFER_ERROR);
+    return;
   }
     /* Set Speed. */
   USBD_LL_SetSpeed((USBD_HandleTypeDef*)hpcd->pData, speed);
 
   /* Reset Device. */
   USBD_LL_Reset((USBD_HandleTypeDef*)hpcd->pData);
+  USBPortOnLifecycle(USB_LINK_RESET);
 }
 
 /**
@@ -220,6 +218,7 @@ void HAL_PCD_SuspendCallback(PCD_HandleTypeDef *hpcd)
 {
   /* Inform USB library that core enters in suspend Mode. */
   USBD_LL_Suspend((USBD_HandleTypeDef*)hpcd->pData);
+  USBPortOnLifecycle(USB_LINK_SUSPENDED);
   __HAL_PCD_GATE_PHYCLOCK(hpcd);
   /* Enter in STOP mode. */
   /* USER CODE BEGIN 2 */
@@ -247,6 +246,7 @@ void HAL_PCD_ResumeCallback(PCD_HandleTypeDef *hpcd)
 
   /* USER CODE END 3 */
   USBD_LL_Resume((USBD_HandleTypeDef*)hpcd->pData);
+  USBPortOnLifecycle(USB_LINK_RESUMED);
 }
 
 /**
@@ -305,6 +305,7 @@ void HAL_PCD_DisconnectCallback(PCD_HandleTypeDef *hpcd)
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
 {
   USBD_LL_DevDisconnected((USBD_HandleTypeDef*)hpcd->pData);
+  USBPortOnLifecycle(USB_LINK_DISCONNECTED);
 }
 
 /*******************************************************************************
@@ -320,6 +321,11 @@ USBD_StatusTypeDef USBD_LL_Init(USBD_HandleTypeDef *pdev)
 {
   /* Init USB Ip. */
   if (pdev->id == DEVICE_HS) {
+  // 可失败的时钟准备先返回结果，再进入无返回值的HAL MSP初始化。
+  RCC_PeriphCLKInitTypeDef clocks = {0};
+  clocks.PeriphClockSelection = RCC_PERIPHCLK_USB;
+  clocks.UsbClockSelection = RCC_USBCLKSOURCE_HSI48;
+  if (HAL_RCCEx_PeriphCLKConfig(&clocks) != HAL_OK) return USBD_FAIL;
   /* Link the driver to the stack. */
   hpcd_USB_OTG_HS.pData = pdev;
   pdev->pData = &hpcd_USB_OTG_HS;
@@ -337,7 +343,7 @@ USBD_StatusTypeDef USBD_LL_Init(USBD_HandleTypeDef *pdev)
   hpcd_USB_OTG_HS.Init.use_external_vbus = DISABLE;
   if (HAL_PCD_Init(&hpcd_USB_OTG_HS) != HAL_OK)
   {
-    Error_Handler( );
+    return USBD_FAIL;
   }
 
 #if (USE_HAL_PCD_REGISTER_CALLBACKS == 1U)

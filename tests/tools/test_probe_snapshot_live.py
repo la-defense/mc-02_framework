@@ -841,11 +841,72 @@ class ProbeSnapshotLiveTests(unittest.TestCase):
         too_much_free_stack["stats_stack_words"] = [129 | (80 << 16)] + [0] * 5
         with self.assertRaises(probe_snapshot_live.ProbeIOError):
             probe_snapshot_live.decode_rtos_snapshot(too_much_free_stack)
+        # 新USB任务由匹配ELF提供256word；旧记录仍按原128word核对，不猜测深度。
+        capacities = dict(probe_snapshot_live.RTOS_TASK_STACK_WORDS, defaultTask=256)
+        new_usb_stack = dict(too_much_free_stack)
+        names = bytearray(b"".join(word.to_bytes(4, "little") for word in values["stats_names_words"]))
+        names[:12] = b"defaultTask\0"
+        new_usb_stack["stats_names_words"] = _pack_u32(names)
+        decoded = probe_snapshot_live.decode_rtos_snapshot(new_usb_stack,
+                                                          stack_capacities=capacities)
+        self.assertEqual(decoded["tasks"][0]["stack_capacity_words"], 256)
         addresses, _ = _rtos_fixture()
         addresses["stats_names_words"] = probe_snapshot_live.SNAPSHOT_RAM_END - 4
         with self.assertRaises(probe_snapshot_live.ProbeIOError):
             probe_snapshot_live._validate_snapshot_addresses(addresses,
                                                               probe_snapshot_live.RTOS_SNAPSHOT_FIELDS)
+
+    def test_usb_stack_metadata_is_read_only_from_selected_elf(self):
+        with patch.object(probe_snapshot_live, "_read_elf_symbol", return_value=(0x08010000, 4, struct.pack("<I", 256))):
+            capacities, basis = probe_snapshot_live._task_stacks_from_elf("firmware.elf")
+            self.assertEqual(capacities["defaultTask"], 256)
+            self.assertEqual(basis, "matched_elf_usb_stack")
+        missing = probe_snapshot_live.ProbeIOError("ELF is missing required symbol: mc02_usb_task_stack_words")
+        with patch.object(probe_snapshot_live, "_read_elf_symbol", side_effect=missing):
+            capacities, basis = probe_snapshot_live._task_stacks_from_elf("legacy.elf")
+            self.assertEqual(capacities["defaultTask"], 128)
+            self.assertEqual(basis, "legacy_fixed_profile")
+        with patch.object(probe_snapshot_live, "_read_elf_symbol", return_value=(0x08010000, 4, b"\x00"*4)):
+            with self.assertRaises(probe_snapshot_live.ProbeIOError):
+                probe_snapshot_live._task_stacks_from_elf("invalid.elf")
+
+    def test_usb_fixed_record_and_publication_checks(self):
+        words = [0] * 31
+        words[:5] = [0x55425331, 0x10001, 124, 2, 0]
+        words[5] = 3
+        words[13:16] = [9, 2, 2]
+        words[30] = 1 | (2 << 8) | (1 << 24)
+        raw = dict(tick_ms=100, iwdg_reset_flag=0, usb_generation_before=2,
+                   usb_words=words, usb_generation_after=2)
+        decoded = probe_snapshot_live.decode_usb_snapshot(raw)
+        self.assertEqual(decoded["usb_phase_name"], "ready")
+        self.assertEqual(decoded["usb_attempts"], 2)
+        self.assertEqual(decoded["usb_published_ms"], 0)
+        with self.assertRaises(probe_snapshot_live.ObservationSnapshotChangedError):
+            probe_snapshot_live.decode_usb_snapshot(dict(raw, usb_generation_after=4))
+        invalid = list(words)
+        invalid[30] = 1 | (9 << 8)
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.decode_usb_snapshot(dict(raw, usb_words=invalid))
+        invalid = list(words)
+        invalid[2] = 128
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.decode_usb_snapshot(dict(raw, usb_words=invalid))
+        self.assertTrue(all(field.count <= 128 for field in probe_snapshot_live.USB_SNAPSHOT_FIELDS.values()))
+
+    def test_usb_diagnostic_records_are_bounded_and_validate_events(self):
+        header = [0x55444231, 1, 860, 2, 60000, 4, 0, 4, 2, 3, 9, 0, 3, 1, 4, 800, 6000, 0, 0, 806, 59990, 59991, 1]
+        first = [1, 5000, 3, 2, 0, 0, 2, 5100, 5, 3, 1, 1] + [0]*84
+        raw = dict(tick_ms=60001, iwdg_reset_flag=0, usb_generation_before=2,
+                   usb_header=header, usb_events_a=first, usb_events_b=[0]*96, usb_generation_after=2)
+        decoded = probe_snapshot_live.decode_usb_snapshot(raw, True)
+        self.assertEqual(decoded["usb_suppressed"], 4)
+        self.assertEqual([event["sequence"] for event in decoded["usb_events"]], [1, 2])
+        self.assertTrue(all(field.count <= 128 for field in probe_snapshot_live.USB_DIAGNOSTIC_SNAPSHOT_FIELDS.values()))
+        invalid = list(first)
+        invalid[8] = 99
+        with self.assertRaises(probe_snapshot_live.ProbeIOError):
+            probe_snapshot_live.decode_usb_snapshot(dict(raw, usb_events_a=invalid), True)
 
     def test_init_profile_resolves_fixed_startup_diagnostics(self):
         fields = probe_snapshot_live.INIT_SNAPSHOT_FIELDS

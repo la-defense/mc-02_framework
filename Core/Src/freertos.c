@@ -25,7 +25,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "usb_transport.h"
+#include "usb_diagnostic.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,7 +46,9 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-
+// 观测工具从匹配ELF读取总深度，避免将新版任务的余量按旧128word换算。
+const uint32_t mc02_usb_task_stack_words
+  __attribute__((used, section(".rodata.mc02_observation_identity"))) = USB_TRANSPORT_TASK_STACK_WORDS;
 /* USER CODE END Variables */
 osThreadId defaultTaskHandle;
 
@@ -143,7 +146,8 @@ uint8_t MX_FREERTOS_Init(void) {
 
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
+  // USB生命周期和故障停止路径增加调用深度；运行回归还需检查实际历史最小余量。
+  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, USB_TRANSPORT_TASK_STACK_WORDS);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
   if (defaultTaskHandle == NULL)
     return 0u;
@@ -169,6 +173,11 @@ void StartDefaultTask(void const * argument)
   /* Infinite loop */
   for(;;)
   {
+    // 唯一USB生命周期推进者；断开／等待主机配置跨多轮处理，不在控制任务内等待。
+    (void)USBTransportProcess();
+#if MC02_BENCH_USB_DIAGNOSTICS
+    USBTransportDiagnosticPoll();
+#endif
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */

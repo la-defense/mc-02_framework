@@ -19,6 +19,7 @@
         "MC02_BENCH_RC_DIAGNOSTICS": "OFF",
         "MC02_BENCH_REFEREE_DIAGNOSTICS": "OFF",
         "MC02_BENCH_LCD_DIAGNOSTICS": "OFF",
+        "MC02_BENCH_USB_DIAGNOSTICS": "OFF",
         "MC02_LOG_ORDINARY": "OFF",
         "MC02_LOG_TEST": "OFF"
       }
@@ -67,6 +68,18 @@
         "MC02_BOARD_ROLE": "single",
         "MC02_VISION_TRANSPORT": "usb",
         "MC02_BENCH_LCD_DIAGNOSTICS": "ON"
+      }
+    },
+    {
+      "name": "usbtest-debug",
+      "displayName": "MC-02 bench_safe USB limited recovery diagnostic",
+      "inherits": "arm-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MC02_PROFILE": "bench_safe",
+        "MC02_BOARD_ROLE": "single",
+        "MC02_VISION_TRANSPORT": "usb",
+        "MC02_BENCH_USB_DIAGNOSTICS": "ON"
       }
     },
     {
@@ -185,6 +198,7 @@
     {"name": "bench-rel", "configurePreset": "bench-rel", "jobs": 4},
     {"name": "crashdiag-debug", "configurePreset": "crashdiag-debug", "jobs": 4},
     {"name": "lcdtest-debug", "configurePreset": "lcdtest-debug", "jobs": 4},
+    {"name": "usbtest-debug", "configurePreset": "usbtest-debug", "jobs": 4},
     {"name": "rcdiag-debug", "configurePreset": "rcdiag-debug", "jobs": 4},
     {"name": "rcdiag-rel", "configurePreset": "rcdiag-rel", "jobs": 4},
     {"name": "refdiag-debug", "configurePreset": "refdiag-debug", "jobs": 4},
