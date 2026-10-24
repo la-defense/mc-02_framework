@@ -7,6 +7,7 @@
 #include "robot_cmd.h"
 #include "robot_safety.h"
 #include "message_center.h"
+#include "topics/robot_topics.h"
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"line %d: %s\n",__LINE__,#c); exit(1); } } while(0)
 UART_HandleTypeDef huart5,huart9;
 static DMA_HandleTypeDef huart5_dma, huart9_dma;
@@ -41,16 +42,16 @@ static void pc_input(uint16_t heartbeat,uint16_t keys,uint16_t x)
     dma[14]=(uint8_t)keys; dma[15]=(uint8_t)(keys>>8);
     HAL_UARTEx_RxEventCallback(&huart5,18); USARTProcessRx();
 }
-static Subscriber_t *gimbal,*shoot,*chassis;
-static Publisher_t *feedback;
+static MessageSubscriber_t *gimbal,*shoot,*chassis;
+static MessagePublisher_t *feedback;
 static Gimbal_Ctrl_Cmd_s observed_gimbal;
 static Shoot_Ctrl_Cmd_s observed_shoot;
 static Chassis_Ctrl_Cmd_s observed_chassis;
 static void cycle(uint8_t neutral)
 {
-    Gimbal_Upload_Data_s pose={0}; PubPushMessage(feedback,&pose); RobotCMDTask();
+    Gimbal_Upload_Data_s pose={0}; MessagePublishNow(feedback, &pose); RobotCMDTask();
     Gimbal_Ctrl_Cmd_s g; Shoot_Ctrl_Cmd_s s; Chassis_Ctrl_Cmd_s c;
-    CHECK(SubGetMessage(gimbal,&g) && SubGetMessage(shoot,&s) && SubGetMessage(chassis,&c));
+    CHECK(MessageReadSnapshot(gimbal, &g, sizeof(g), HAL_GetTick(), NULL) == MESSAGE_OK && MessageReadSnapshot(shoot, &s, sizeof(s), HAL_GetTick(), NULL) == MESSAGE_OK && MessageReadSnapshot(chassis, &c, sizeof(c), HAL_GetTick(), NULL) == MESSAGE_OK);
     observed_gimbal=g; observed_shoot=s; observed_chassis=c;
     if(neutral) {
         CHECK(g.gimbal_mode==GIMBAL_ZERO_FORCE && g.yaw==0 && g.pitch==0 && g.yaw_vel==0 && g.pitch_acc==0);
@@ -62,10 +63,10 @@ int main(int argc,char **argv)
 {
     huart5.hdmarx=&huart5_dma; huart9.hdmarx=&huart9_dma;
     RobotSafetyInit(); RobotCMDInit();
-    feedback=PubRegister("gimbal_feed",sizeof(Gimbal_Upload_Data_s));
-    gimbal=SubRegister("gimbal_cmd",sizeof(Gimbal_Ctrl_Cmd_s));
-    shoot=SubRegister("shoot_cmd",sizeof(Shoot_Ctrl_Cmd_s));
-    chassis=SubRegister("chassis_cmd",sizeof(Chassis_Ctrl_Cmd_s));
+    feedback=MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_GIMBAL);
+    gimbal=MessageSubscriberRegister(ROBOT_TOPIC_GIMBAL_COMMAND, ROBOT_TOPIC_ENDPOINT_GIMBAL);
+    shoot=MessageSubscriberRegister(ROBOT_TOPIC_SHOOT_COMMAND, ROBOT_TOPIC_ENDPOINT_SHOOT);
+    chassis=MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_CHASSIS);
     cycle(1); CHECK(!RemoteControlIsOnline() && EstopIsLatched());
     frame(3,3,17,0); cycle(1); CHECK(!RemoteControlIsOnline());
     RobotSafetySetImuValid(1); RobotSafetySetCalibValid(1);

@@ -5,6 +5,7 @@
 #include "robot_def.h"
 #include "config.h"
 #include "message_center.h"
+#include "topics/robot_topics.h"
 
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "FAIL:%d %s\n", __LINE__, #condition); return 1; \
@@ -54,9 +55,11 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     return MOTOR_FEEDBACK_OK;
 }
 
-static void publish(Publisher_t *publisher, Shoot_Ctrl_Cmd_s *command, uint32_t timestamp)
+static MessageStatus_t publish(MessagePublisher_t *publisher,
+                               const Shoot_Ctrl_Cmd_s *command, uint32_t timestamp)
 {
-    (void)PubPushMessageAt(publisher, command, timestamp);
+    return MessagePublishAt(publisher, command, timestamp, timestamp, timestamp,
+                            MESSAGE_CLOCK_LOCAL);
 }
 
 int main(void)
@@ -65,8 +68,8 @@ int main(void)
     CHECK(ShootInit() == 1u);
     CHECK(shoot_fake_motor_init_count == 3u);
     CHECK((shoot_fake_motors[2].close_loop_type & ANGLE_LOOP) != 0);
-    Subscriber_t *observer = SubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
-    Publisher_t *publisher = PubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
+    MessageSubscriber_t *observer = MessageSubscriberRegister(ROBOT_TOPIC_SHOOT_COMMAND, ROBOT_TOPIC_ENDPOINT_SHOOT);
+    MessagePublisher_t *publisher = MessagePublisherRegister(ROBOT_TOPIC_SHOOT_COMMAND, ROBOT_TOPIC_ENDPOINT_COMMAND);
     CHECK(observer != NULL && publisher != NULL);
 
     Shoot_Ctrl_Cmd_s command = {
@@ -77,7 +80,12 @@ int main(void)
         .bullet_speed = (Bullet_Speed_e)99,
     };
     now_ms = 0u;
-    publish(publisher, &command, now_ms);
+    CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK);
+    Shoot_Ctrl_Cmd_s published_command = {0};
+    const MessageStatus_t read_status = MessageReadSnapshot(observer, &published_command,
+        sizeof(published_command), now_ms, NULL);
+    CHECK(read_status == MESSAGE_OK);
+    CHECK(memcmp(&published_command, &command, sizeof(command)) == 0);
     ShootTask();
     CHECK(shoot_fake_motors[0].enabled && shoot_fake_motors[1].enabled && shoot_fake_motors[2].enabled);
     const float friction_speed = 30000.0f * 0.01745329252f / 19.0f;
@@ -89,7 +97,7 @@ int main(void)
     command.load_mode = LOAD_1_BULLET;
     now_ms = 1u;
     timeline_ms = 1001.0f;
-    publish(publisher, &command, now_ms);
+    CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK);
     ShootTask();
     const float expected_one_bullet_target =
         102.0f * 0.01745329252f / 36.0f + 0.62831853072f;
@@ -107,20 +115,20 @@ int main(void)
     /* A shot cannot re-arm from an old trigger; a fresh LOAD_STOP is required first. */
     command.load_mode = LOAD_1_BULLET;
     now_ms = 53u;
-    publish(publisher, &command, now_ms);
+    CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK);
     ShootTask();
     CHECK(shoot_fake_motors[2].ref == 0.0f);
 
     command.load_mode = LOAD_STOP;
     now_ms = 54u;
-    publish(publisher, &command, now_ms);
+    CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK);
     ShootTask();
     CHECK(shoot_fake_motors[2].ref == 0.0f);
 
     command.load_mode = LOAD_3_BULLET;
     now_ms = 55u;
     timeline_ms = 1300.0f;
-    publish(publisher, &command, now_ms);
+    CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK);
     ShootTask();
     const float expected_three_bullet_target =
         102.0f * 0.01745329252f / 36.0f + 3.0f * 0.62831853072f;

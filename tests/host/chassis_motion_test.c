@@ -91,7 +91,13 @@ int main(void)
     in = input(CHASSIS_MOTION_MODE_NO_FOLLOW, 0.0f, 0.0f, 0.0f);
     in.requested_wz_deg_s = 4.0f;
     CHECK(ChassisMotionCalculate(&in, &geometry, &limits, &out));
-    CHECK(out.wz_deg_s == 0.0f);
+    CHECK(out.wz_deg_s == 4.0f);
+    in.requested_wz_deg_s = 40.0f;
+    CHECK(ChassisMotionCalculate(&in, &geometry, &limits, &out));
+    CHECK(out.wz_deg_s == limits.max_wz_deg_s);
+    in.requested_wz_deg_s = -40.0f;
+    CHECK(ChassisMotionCalculate(&in, &geometry, &limits, &out));
+    CHECK(out.wz_deg_s == -limits.max_wz_deg_s);
     in = input(CHASSIS_MOTION_MODE_ROTATE, 0.0f, 0.0f, 0.0f);
     CHECK(ChassisMotionCalculate(&in, &geometry, &limits, &out));
     CHECK(out.wz_deg_s == limits.rotate_wz_deg_s);

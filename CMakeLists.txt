@@ -6,7 +6,6 @@ project(Basic_Framework_MC02 C ASM)
 include(cmake/mc02_format_diagnostics.cmake)
 mc02_check_format_diagnostics()
 include(cmake/mc02_dsp.cmake)
-include(cmake/mc02_firmware_sources.cmake)
 
 set(MC02_PROFILE "bench_safe" CACHE STRING "固件运行配置")
 set_property(CACHE MC02_PROFILE PROPERTY STRINGS bench_safe robot)
@@ -14,6 +13,8 @@ set(MC02_BOARD_ROLE "single" CACHE STRING "机器人板卡角色")
 set_property(CACHE MC02_BOARD_ROLE PROPERTY STRINGS single chassis gimbal)
 set(MC02_VISION_TRANSPORT "usb" CACHE STRING "视觉链路传输方式")
 set_property(CACHE MC02_VISION_TRANSPORT PROPERTY STRINGS usb uart)
+set(MC02_VISION_PROTOCOL "sp" CACHE STRING "视觉业务协议")
+set_property(CACHE MC02_VISION_PROTOCOL PROPERTY STRINGS sp v2)
 
 option(MC02_ENABLE_HEATER "显式允许机器人配置使用 IMU 加热器" OFF)
 option(MC02_BENCH_RC_DIAGNOSTICS "裸板遥控接收诊断；禁止请求 READY" OFF)
@@ -32,6 +33,13 @@ if(NOT MC02_BOARD_ROLE MATCHES "^(single|chassis|gimbal)$")
 endif()
 if(NOT MC02_VISION_TRANSPORT MATCHES "^(usb|uart)$")
     message(FATAL_ERROR "MC02_VISION_TRANSPORT 必须是 usb 或 uart")
+endif()
+if(NOT MC02_VISION_PROTOCOL MATCHES "^(sp|v2)$")
+    message(FATAL_ERROR "MC02_VISION_PROTOCOL 必须是 sp 或 v2")
+endif()
+if(MC02_VISION_PROTOCOL STREQUAL "v2" AND
+   (NOT MC02_PROFILE STREQUAL "robot" OR NOT MC02_BOARD_ROLE STREQUAL "single"))
+    message(FATAL_ERROR "V2视觉控制目前仅允许robot/single；其它角色缺少经验证的裁判与跨板许可快照")
 endif()
 
 # 板卡角色和视觉链路只由下方选项生成宏，避免旧缓存或用户 CFLAGS 注入第二种布局。
@@ -126,6 +134,14 @@ if(MC02_VISION_TRANSPORT STREQUAL "usb")
 else()
     add_compile_definitions(VISION_USE_UART)
 endif()
+if(MC02_VISION_PROTOCOL STREQUAL "v2")
+    add_compile_definitions(MC02_VISION_PROTOCOL_V2=1)
+else()
+    add_compile_definitions(MC02_VISION_PROTOCOL_SP=1)
+endif()
+
+# 源码清单读取已经解析并校验过的配置，确保协议和板级角色只编译所选实现。
+include(cmake/mc02_firmware_sources.cmake)
 
 if(MC02_PROFILE STREQUAL "bench_safe")
     set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_bench_safe")
@@ -240,7 +256,7 @@ add_custom_command(TARGET ${MC02_OUTPUT_BASENAME}.elf POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${MC02_OUTPUT_BASENAME}.elf> ${PROJECT_BINARY_DIR}/${MC02_OUTPUT_BASENAME}.bin
     COMMAND ${SIZE} $<TARGET_FILE:${MC02_OUTPUT_BASENAME}.elf>)
 
-file(WRITE "${CMAKE_BINARY_DIR}/mc02-selected-sources.txt" "profile=${MC02_PROFILE}\nrole=${MC02_BOARD_ROLE}\nvision=${MC02_VISION_TRANSPORT}\ntarget=${MC02_OUTPUT_BASENAME}.elf\n")
+file(WRITE "${CMAKE_BINARY_DIR}/mc02-selected-sources.txt" "profile=${MC02_PROFILE}\nrole=${MC02_BOARD_ROLE}\nvision=${MC02_VISION_TRANSPORT}\nvision_protocol=${MC02_VISION_PROTOCOL}\ntarget=${MC02_OUTPUT_BASENAME}.elf\n")
 foreach(source IN LISTS MC02_SELECTED_SOURCES)
     file(APPEND "${CMAKE_BINARY_DIR}/mc02-selected-sources.txt" "${source}\n")
 endforeach()

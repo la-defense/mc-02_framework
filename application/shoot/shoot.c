@@ -7,6 +7,7 @@
 
 #include "dji_motor.h"
 #include "message_center.h"
+#include "topics/robot_topics.h"
 #include "bsp_dwt.h"
 #include "general_def.h"
 #include "main.h"
@@ -25,13 +26,15 @@ static loader_mode_e last_load_mode = LOAD_STOP; // 上次处理的模式，用�
 static uint8_t require_load_stop = 1u; // 数据中断后先等一次停止供弹，再允许新的单发或三发。
 
 static Shoot_Ctrl_Cmd_s shoot_cmd_recv; // 来自cmd的发射控制信息
-static Subscriber_t *shoot_sub;
+static MessageSubscriber_t *shoot_sub;
 
 // dwt定时,计算冷却用
 static float hibernate_time = 0, dead_time = 0;
 
 uint8_t ShootInit(void)
 {
+    if (!RobotTopicsInit())
+        return 0u;
     shoot_config = ShootConfigFeed(); // 电机输出轴减速比也使用同一份已准备配置。
     if (shoot_config == NULL)
         return 0u;
@@ -132,7 +135,8 @@ uint8_t ShootInit(void)
     };
     loader = DJIMotorInit(&loader_config);
 
-    shoot_sub = SubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
+    shoot_sub = MessageSubscriberRegister(ROBOT_TOPIC_SHOOT_COMMAND,
+                                          ROBOT_TOPIC_ENDPOINT_SHOOT);
     return (uint8_t)(friction_l != NULL && friction_r != NULL && loader != NULL &&
                      shoot_config != NULL && shoot_sub != NULL);
 }
@@ -141,8 +145,8 @@ uint8_t ShootInit(void)
 void ShootTask()
 {
     // 从cmd获取控制数据
-    const uint8_t command_fresh = SubGetSnapshot(shoot_sub, &shoot_cmd_recv,
-        sizeof(shoot_cmd_recv), HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL);
+    const uint8_t command_fresh = (uint8_t)(MessageReadSnapshot(shoot_sub, &shoot_cmd_recv,
+        sizeof(shoot_cmd_recv), HAL_GetTick(), NULL) == MESSAGE_OK);
     if (!command_fresh)
     {
         memset(&shoot_cmd_recv, 0, sizeof(shoot_cmd_recv));

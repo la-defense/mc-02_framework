@@ -1,5 +1,6 @@
 #include "chassis.h"
 #include "message_center.h"
+#include "topics/robot_topics.h"
 #include "robot_def.h"
 #include "referee_task.h"
 #include "super_cap.h"
@@ -50,12 +51,12 @@ int main(void)
         CHECK(motor_configs[i].output_axis.direction == MOTOR_AXIS_DIRECTION_REVERSE);
         CHECK(motor_configs[i].controller_param_init_config.speed_PID.Kp > 10.0f);
     }
-    Publisher_t *commands = PubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
+    MessagePublisher_t *commands = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_COMMAND);
     Chassis_Ctrl_Cmd_s command = {
         .vx = 100.0f, .vy = 0.0f, .wz = 0.0f, .offset_angle = 0.0f,
         .chassis_mode = CHASSIS_NO_FOLLOW,
     };
-    PubPushMessage(commands, &command);
+    MessagePublishNow(commands, &command);
     ChassisTask();
 #if CHASSIS_TASK_EXPECT_CONFIGURED
     CHECK(motors[0].enabled && motors[1].enabled && motors[2].enabled && motors[3].enabled);
@@ -70,11 +71,11 @@ int main(void)
     CHECK(motors[0].ref > 0.0f && motors[2].ref < 0.0f);
     command = (Chassis_Ctrl_Cmd_s){.offset_angle = 0.5f,
                                    .chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW};
-    PubPushMessage(commands, &command);
+    MessagePublishNow(commands, &command);
     ChassisTask();
     for (unsigned i = 0; i < 4; ++i) CHECK(motors[i].ref < 0.0f);
     command.offset_angle = -0.5f;
-    PubPushMessage(commands, &command);
+    MessagePublishNow(commands, &command);
     ChassisTask();
     for (unsigned i = 0; i < 4; ++i) CHECK(motors[i].ref > 0.0f);
 #else
@@ -83,7 +84,7 @@ int main(void)
 
     /* A zero-force command must clear old references as well as stop output. */
     command.chassis_mode = CHASSIS_ZERO_FORCE;
-    PubPushMessage(commands, &command);
+    MessagePublishNow(commands, &command);
     ChassisTask();
     for (unsigned i = 0; i < 4; ++i)
         CHECK(!motors[i].enabled && motors[i].ref == 0.0f && motors[i].stop_count > 0);
@@ -91,7 +92,7 @@ int main(void)
 #if CHASSIS_TASK_EXPECT_CONFIGURED
     /* Re-entry computes new bounded references before enabling the motors. */
     command = (Chassis_Ctrl_Cmd_s){.vx = 100000.0f, .chassis_mode = CHASSIS_NO_FOLLOW};
-    PubPushMessage(commands, &command);
+    MessagePublishNow(commands, &command);
     ChassisTask();
     for (unsigned i = 0; i < 4; ++i) {
         CHECK(motors[i].enabled);
@@ -102,13 +103,13 @@ int main(void)
         CHECK(motors[i].ref <= max_output_rad_s && motors[i].ref >= -max_output_rad_s);
     }
     command = (Chassis_Ctrl_Cmd_s){.vx = 20.0f, .chassis_mode = (chassis_mode_e)99};
-    PubPushMessage(commands, &command);
+    MessagePublishNow(commands, &command);
     ChassisTask();
     for (unsigned i = 0; i < 4; ++i)
         CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
     command = (Chassis_Ctrl_Cmd_s){.vx = 20.0f, .offset_angle = 181.0f,
                                    .chassis_mode = CHASSIS_NO_FOLLOW};
-    PubPushMessage(commands, &command);
+    MessagePublishNow(commands, &command);
     ChassisTask();
     for (unsigned i = 0; i < 4; ++i)
         CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
@@ -117,7 +118,7 @@ int main(void)
     /* The 50 ms edge remains valid and the following millisecond revokes output. */
     test_tick = 100u;
     command = (Chassis_Ctrl_Cmd_s){.vx = 100.0f, .chassis_mode = CHASSIS_NO_FOLLOW};
-    PubPushMessage(commands, &command);
+    MessagePublishNow(commands, &command);
     test_tick = 150u;
     ChassisTask();
 #if CHASSIS_TASK_EXPECT_CONFIGURED
@@ -128,7 +129,7 @@ int main(void)
     for (unsigned i = 0; i < 4; ++i)
         CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
     test_tick = 152u;
-    PubPushMessage(commands, &command);
+    MessagePublishNow(commands, &command);
     ChassisTask();
 #if CHASSIS_TASK_EXPECT_CONFIGURED
     CHECK(motors[0].enabled && motors[0].ref != 0.0f);

@@ -63,6 +63,36 @@ if(UNIX AND NOT APPLE)
   add_test(NAME production_vision_sp_stream_blocks COMMAND vision_sp_stream_test)
   set_tests_properties(production_vision_sp_stream_blocks PROPERTIES TIMEOUT 10)
 
+  add_executable(vision_protocol_v2_test vision_protocol_v2_test.c
+    ../../modules/master_machine/vision_protocol_v2.c)
+  target_include_directories(vision_protocol_v2_test PRIVATE
+    ../../modules/master_machine ../../modules/algorithm)
+  target_link_libraries(vision_protocol_v2_test PRIVATE mc02_software_crc m)
+  target_compile_options(vision_protocol_v2_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+  add_test(NAME production_vision_v2_vectors_and_streaming COMMAND vision_protocol_v2_test)
+  set_tests_properties(production_vision_v2_vectors_and_streaming PROPERTIES TIMEOUT 10)
+
+  # MasterProcess、消息中心和V2编解码共同运行；仅替换USB、Daemon与毫秒时钟。
+  add_executable(vision_v2_link_test vision_v2_link_test.c
+    ../../modules/master_machine/master_process.c
+    ../../modules/master_machine/vision_protocol.c
+    ../../modules/master_machine/vision_protocol_v2.c
+    ../../application/topics/robot_topics.c
+    ../../modules/message_center/message_center.c)
+  target_include_directories(vision_v2_link_test BEFORE PRIVATE
+    vision_v2_link_fakes crc_protocol_fakes)
+  target_include_directories(vision_v2_link_test PRIVATE
+    ../../bsp/usb ../../bsp/usart ../../application ../../application/topics ../../modules/master_machine
+    ../../modules/message_center ../../modules/referee ../../modules/daemon ../../modules/algorithm)
+  target_compile_definitions(vision_v2_link_test PRIVATE VISION_USE_VCP=1
+    MC02_VISION_PROTOCOL_V2=1)
+  target_compile_options(vision_v2_link_test PRIVATE -Wall -Wextra -Werror
+    -fno-fast-math -ffunction-sections -fdata-sections)
+  target_link_options(vision_v2_link_test PRIVATE -Wl,--gc-sections)
+  target_link_libraries(vision_v2_link_test PRIVATE mc02_software_crc m)
+  add_test(NAME production_v2_master_receive_topics_and_reports COMMAND vision_v2_link_test)
+  set_tests_properties(production_v2_master_receive_topics_and_reports PROPERTIES TIMEOUT 10)
+
   # USB核心直接使用生产实现；端点模型与线程只在独立测试进程中存在。
   add_executable(usb_transport_test usb_transport_test.c ../../bsp/usb/usb_transport.c)
   target_include_directories(usb_transport_test PRIVATE ../../bsp/usb)
@@ -383,6 +413,24 @@ add_executable(message_freshness_test message_freshness_test.c ../../modules/mes
 target_include_directories(message_freshness_test BEFORE PRIVATE init_resource_fakes)
 target_include_directories(message_freshness_test PRIVATE ../../modules/message_center)
 add_test(NAME message_freshness_age_and_snapshot_consistency COMMAND message_freshness_test)
+set_tests_properties(message_freshness_age_and_snapshot_consistency PROPERTIES TIMEOUT 10)
+add_executable(message_center_capacity_test message_center_capacity_test.c
+  ../../modules/message_center/message_center.c)
+target_include_directories(message_center_capacity_test BEFORE PRIVATE init_resource_fakes)
+target_include_directories(message_center_capacity_test PRIVATE ../../modules/message_center)
+add_test(NAME production_message_center_payload_storage_capacity COMMAND message_center_capacity_test)
+set_tests_properties(production_message_center_payload_storage_capacity PROPERTIES TIMEOUT 10)
+if(UNIX AND NOT APPLE)
+  find_package(Threads REQUIRED)
+  add_executable(message_center_thread_test message_center_thread_test.c
+    ../../modules/message_center/message_center.c)
+  target_include_directories(message_center_thread_test BEFORE PRIVATE message_center_thread_fakes)
+  target_include_directories(message_center_thread_test PRIVATE ../../modules/message_center)
+  target_link_libraries(message_center_thread_test PRIVATE Threads::Threads)
+  target_compile_options(message_center_thread_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME production_message_center_cross_thread_snapshot COMMAND message_center_thread_test)
+  set_tests_properties(production_message_center_cross_thread_snapshot PROPERTIES TIMEOUT 10)
+endif()
 add_executable(can_comm_freshness_test can_comm_freshness_test.c ../../modules/can_comm/can_comm.c)
 target_include_directories(can_comm_freshness_test BEFORE PRIVATE can_comm_fakes)
 target_include_directories(can_comm_freshness_test PRIVATE ../../modules/can_comm ../../modules/message_center)
@@ -502,6 +550,7 @@ add_test(NAME production_remote_bench_never_ready COMMAND remote_bench_test)
 add_executable(remote_command_integration_test remote_command_integration_test.c
   ../../bsp/usart/bsp_usart.c ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
   ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
+  ../../application/topics/robot_topics.c
   ../../modules/message_center/message_center.c ../../modules/master_machine/vision_control.c)
 target_include_directories(remote_command_integration_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
 target_include_directories(remote_command_integration_test PRIVATE ../../application ../../application/cmd
@@ -516,6 +565,7 @@ add_test(NAME production_pc_command_expiry_and_remote_handoff COMMAND remote_com
 add_executable(pc_vision_integration_test remote_command_integration_test.c
   ../../bsp/usart/bsp_usart.c ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
   ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
+  ../../application/topics/robot_topics.c
   ../../modules/message_center/message_center.c ../../modules/master_machine/vision_control.c)
 target_include_directories(pc_vision_integration_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
 target_include_directories(pc_vision_integration_test PRIVATE ../../application ../../application/cmd
@@ -545,6 +595,7 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
   set(target chassis_task_${chassis_limits_profile}_test)
   add_executable(${target} chassis_task_test.c
     ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
+    ../../application/topics/robot_topics.c
     ../../modules/message_center/message_center.c)
   target_include_directories(${target} BEFORE PRIVATE chassis_fakes)
   target_include_directories(${target} PRIVATE ../../application ../../application/chassis
@@ -567,6 +618,7 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
 endforeach()
 add_executable(robot_cmd_task_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c
+  ../../application/topics/robot_topics.c
   ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
   ../../modules/master_machine/vision_control.c)
 target_include_directories(robot_cmd_task_test BEFORE PRIVATE robot_cmd_fakes)
@@ -582,6 +634,7 @@ add_test(NAME production_shoot_manual_source_switches COMMAND robot_cmd_task_tes
 add_test(NAME production_remote_gesture_tick_zero COMMAND robot_cmd_task_test gesture-zero)
 add_executable(robot_cmd_vision_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c
+  ../../application/topics/robot_topics.c
   ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
   ../../modules/master_machine/vision_control.c)
 target_include_directories(robot_cmd_vision_test BEFORE PRIVATE robot_cmd_fakes)
@@ -598,8 +651,29 @@ endif()
 add_test(NAME production_command_task_vision_handoff COMMAND robot_cmd_vision_test)
 add_test(NAME production_command_task_vision_fault_recovery COMMAND robot_cmd_vision_test faults)
 add_test(NAME production_shoot_vision_source_switches COMMAND robot_cmd_vision_test shoot-switches)
+add_executable(robot_cmd_v2_test robot_cmd_v2_test.c ../../application/cmd/robot_cmd.c
+  ../../modules/remote/remote_safety.c ../../application/topics/robot_topics.c
+  ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
+  ../../modules/master_machine/vision_control.c)
+target_include_directories(robot_cmd_v2_test BEFORE PRIVATE robot_cmd_fakes init_resource_fakes)
+target_include_directories(robot_cmd_v2_test PRIVATE . ../../application ../../application/cmd
+  ../../application/config ../../modules ../../modules/remote ../../modules/imu
+  ../../modules/master_machine ../../modules/message_center ../../modules/referee
+  ../../modules/safety ../../bsp/usart)
+target_compile_definitions(robot_cmd_v2_test PRIVATE MC02_VISION_PROTOCOL_V2=1
+  VISION_LIMITS_CONFIGURED=1 VISION_YAW_CONSTRAINT=VISION_YAW_BOUNDED
+  VISION_YAW_MIN_DEG=-180.0f VISION_YAW_MAX_DEG=180.0f
+  PITCH_MIN_ANGLE=-30.0f PITCH_MAX_ANGLE=30.0f VISION_PITCH_ZERO_OFFSET_DEG=0.0f
+  CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=360.0f)
+target_compile_options(robot_cmd_v2_test PRIVATE -Wall -Wextra -Werror)
+if(UNIX)
+  target_link_libraries(robot_cmd_v2_test PRIVATE m)
+endif()
+add_test(NAME production_command_task_v2_independent_topics COMMAND robot_cmd_v2_test)
+set_tests_properties(production_command_task_v2_independent_topics PROPERTIES TIMEOUT 10)
 add_executable(robot_cmd_dual_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c ../../modules/safety/robot_safety.c
+  ../../application/topics/robot_topics.c
   ../../modules/message_center/message_center.c ../../modules/master_machine/vision_control.c)
 target_include_directories(robot_cmd_dual_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_cmd_dual_test PRIVATE ../../application ../../application/cmd ../../application/config
@@ -611,9 +685,14 @@ if(UNIX)
 endif()
 add_test(NAME production_dual_board_command_snapshot_path COMMAND robot_cmd_dual_test dual-board)
 add_executable(shoot_freshness_test shoot_freshness_test.c
-  ../../application/shoot/shoot.c ../../modules/message_center/message_center.c)
+  ../../application/shoot/shoot.c ../../application/topics/robot_topics.c
+  ../../modules/message_center/message_center.c)
 target_include_directories(shoot_freshness_test BEFORE PRIVATE shoot_fakes init_resource_fakes)
-target_include_directories(shoot_freshness_test PRIVATE ../../application/shoot ../../modules/message_center)
+target_include_directories(shoot_freshness_test PRIVATE ../../application ../../application/shoot
+  ../../modules ../../modules/message_center ../../modules/master_machine ../../modules/imu
+  ../../modules/algorithm ../../modules/BMI088
+  ../../Middlewares/Third_Party/CMSIS-DSP-1.7.0/Include ../../Drivers/CMSIS/Include
+  ../../Drivers/CMSIS/Device/ST/STM32H7xx/Include ../../bsp/usart)
 add_test(NAME production_shoot_init_and_expired_command_rearm COMMAND shoot_freshness_test)
 if(UNIX AND NOT APPLE)
   foreach(profile IN ITEMS bench_safe robot)

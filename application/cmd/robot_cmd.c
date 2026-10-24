@@ -12,11 +12,17 @@ static RemoteSafetyGestures_s remote_gestures;
 #include "ins_task.h"
 #include "master_process.h"
 #include "message_center.h"
+#include "topics/robot_topics.h"
 #include "general_def.h"
 #include "dji_motor.h"
 #include "bmi088.h"
 #include "robot_safety.h"
 #include "vision_control.h"
+#if defined(MC02_VISION_PROTOCOL_V2)
+#include "vision_protocol_v2.h"
+#include "referee_snapshot.h"
+#include "rm_referee.h"
+#endif
 #include <string.h>
 #include <math.h>
 
@@ -57,8 +63,8 @@ static uint8_t manual_reference_ready;
 static CANCommInstance *cmd_can_comm; // 双板通信
 #endif
 #ifdef ONE_BOARD
-static Publisher_t *chassis_cmd_pub;   // 底盘控制消息发布者
-static Subscriber_t *chassis_feed_sub; // 底盘反馈信息订阅者
+static MessagePublisher_t *chassis_cmd_pub;   // 底盘控制消息发布者
+static MessageSubscriber_t *chassis_feed_sub; // 底盘反馈信息订阅者
 #endif                                 // ONE_BOARD
 
 static Chassis_Ctrl_Cmd_s chassis_cmd_send;      // 发送给底盘应用的信息,包括控制信息和UI绘制相关
@@ -69,32 +75,59 @@ static Chassis_Upload_Data_s chassis_fetch_data; // 从底盘应用接收的反�
 static RemoteControlSnapshot_s remote_snapshot;
 static RC_ctrl_t *const rc_data = &remote_snapshot.input;
 static uint8_t remote_initialized;
+#if !defined(MC02_VISION_PROTOCOL_V2)
 static Vision_Recv_s vision_recv_snapshot;
+#endif
 static Vision_Status_t vision_status_snapshot;
+#if defined(MC02_VISION_PROTOCOL_V2)
+static VisionV2AimCommand_t vision_v2_aim_snapshot;
+static VisionV2NavigationCommand_t vision_v2_navigation_snapshot;
+static MessageFreshness_t vision_v2_aim_freshness;
+static MessageFreshness_t vision_v2_navigation_freshness;
+static MessageSubscriber_t *vision_v2_aim_subscriber;
+static MessageSubscriber_t *vision_v2_navigation_subscriber;
+static uint8_t vision_v2_aim_valid;
+static uint8_t vision_v2_navigation_valid;
+#endif
 
-static Publisher_t *gimbal_cmd_pub;            // 云台控制消息发布者
-static Subscriber_t *gimbal_feed_sub;          // 云台反馈信息订阅者
+static MessagePublisher_t *gimbal_cmd_pub;            // 云台控制消息发布者
+static MessageSubscriber_t *gimbal_feed_sub;          // 云台反馈信息订阅者
 static Gimbal_Ctrl_Cmd_s gimbal_cmd_send;      // 传递给云台的控制信息
 static Gimbal_Upload_Data_s gimbal_fetch_data; // 从云台获取的反馈信息
 
-static Publisher_t *shoot_cmd_pub;           // 发射控制消息发布者
+static MessagePublisher_t *shoot_cmd_pub;           // 发射控制消息发布者
 static Shoot_Ctrl_Cmd_s shoot_cmd_send;      // 传递给发射的控制信息
 
 BMI088Instance *bmi088_test; // 云台IMU
 BMI088_Data_t bmi088_data;
 uint8_t RobotCMDInit(void)
 {
+    if (!RobotTopicsInit())
+        return 0u;
     RemoteSafetyGesturesInit(&remote_gestures);
     remote_initialized = (uint8_t)(RemoteControlInit(&huart5) != NULL);
     if (!remote_initialized || VisionInit(&huart9) == NULL)
         return 0u;
+#if defined(MC02_VISION_PROTOCOL_V2)
+    vision_v2_aim_subscriber = MessageSubscriberRegister(ROBOT_TOPIC_VISION_AIM,
+        ROBOT_TOPIC_ENDPOINT_COMMAND);
+    vision_v2_navigation_subscriber = MessageSubscriberRegister(ROBOT_TOPIC_VISION_NAVIGATION,
+        ROBOT_TOPIC_ENDPOINT_COMMAND);
+    if (vision_v2_aim_subscriber == NULL || vision_v2_navigation_subscriber == NULL)
+        return 0u;
+#endif
 
-    gimbal_cmd_pub = PubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
-    gimbal_feed_sub = SubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
-    shoot_cmd_pub = PubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
+    gimbal_cmd_pub = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_COMMAND,
+                                               ROBOT_TOPIC_ENDPOINT_COMMAND);
+    gimbal_feed_sub = MessageSubscriberRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK,
+                                                 ROBOT_TOPIC_ENDPOINT_COMMAND);
+    shoot_cmd_pub = MessagePublisherRegister(ROBOT_TOPIC_SHOOT_COMMAND,
+                                              ROBOT_TOPIC_ENDPOINT_COMMAND);
 #ifdef ONE_BOARD // 双板兼容
-    chassis_cmd_pub = PubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
-    chassis_feed_sub = SubRegister("chassis_feed", sizeof(Chassis_Upload_Data_s));
+    chassis_cmd_pub = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND,
+                                                ROBOT_TOPIC_ENDPOINT_COMMAND);
+    chassis_feed_sub = MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_FEEDBACK,
+                                                  ROBOT_TOPIC_ENDPOINT_COMMAND);
 #endif // ONE_BOARD
 #ifdef GIMBAL_BOARD
     CANComm_Init_Config_s comm_conf = {
@@ -159,7 +192,8 @@ static void CalcOffsetAngle()
 #endif
 }
 
-// 将本轮一起读取的帧和链路状态配成输入，保留接收时间，机械范围由配置提供。
+#if !defined(MC02_VISION_PROTOCOL_V2)
+// 将本轮一起读取的旧协议帧和链路状态配成输入。
 static VisionControlInput_s GetVisionControlInput(void)
 {
     const VisionControlInput_s input = {
@@ -178,6 +212,82 @@ static VisionControlInput_s GetVisionControlInput(void)
     };
     return input;
 }
+#else
+// 瞄准快照只按其接收时间失效，导航帧不能替它续期。
+static VisionControlInput_s GetVisionV2ControlInput(void)
+{
+    const VisionControlInput_s input = {
+        .online = (uint8_t)(vision_status_snapshot.online && vision_v2_aim_valid),
+        .mode = vision_v2_aim_valid ? vision_v2_aim_snapshot.mode : 0u,
+        .last_rx_ms = vision_v2_aim_freshness.received_time_ms,
+        .now_ms = HAL_GetTick(),
+        .max_age_ms = VISION_V2_AIM_MAX_AGE_MS,
+        .limits = &vision_limits,
+        .yaw = vision_v2_aim_snapshot.yaw_rad,
+        .yaw_vel = vision_v2_aim_snapshot.yaw_rate_rad_s,
+        .yaw_acc = vision_v2_aim_snapshot.yaw_accel_rad_s2,
+        .pitch = vision_v2_aim_snapshot.pitch_rad,
+        .pitch_vel = vision_v2_aim_snapshot.pitch_rate_rad_s,
+        .pitch_acc = vision_v2_aim_snapshot.pitch_accel_rad_s2,
+    };
+    return input;
+}
+
+static uint8_t VisionV2NavigationAllowed(uint8_t autonomous_selected)
+{
+    if (autonomous_selected == 0u || vision_status_snapshot.online == 0u ||
+        vision_v2_navigation_valid == 0u || RobotSafetyIsReady() == 0u ||
+        CHASSIS_MOTION_LIMITS_CONFIGURED == 0u)
+        return 0u;
+
+    RefereeSnapshot_t referee;
+    if (RefereeGetSnapshot(&referee) != REFEREE_OK)
+        return 0u;
+    const RefereeCommandSnapshot_t *robot = &referee.command[REF_CMD_ROBOT_STATE];
+    const RefereeCommandSnapshot_t *power = &referee.command[REF_CMD_POWER_HEAT];
+    return (uint8_t)(robot->state == REFEREE_DATA_FRESH &&
+        power->state == REFEREE_DATA_FRESH &&
+        (robot->data.robot_state.power_output_bits & REFEREE_OUTPUT_CHASSIS_MASK) != 0u);
+}
+
+static void ApplyVisionV2Navigation(void)
+{
+    const uint8_t flags = vision_v2_navigation_snapshot.valid_flags;
+    const float vx_m_s = (flags & VISION_V2_NAV_TRANSLATION_VALID) != 0u ?
+                         vision_v2_navigation_snapshot.vx_m_s : 0.0f;
+    const float vy_m_s = (flags & VISION_V2_NAV_TRANSLATION_VALID) != 0u ?
+                         vision_v2_navigation_snapshot.vy_m_s : 0.0f;
+    const float wz_rad_s = (flags & VISION_V2_NAV_YAW_RATE_VALID) != 0u ?
+                           vision_v2_navigation_snapshot.yaw_rate_rad_s : 0.0f;
+    const float vx_mm_s = vx_m_s * 1000.0f;
+    const float vy_mm_s = vy_m_s * 1000.0f;
+    const float wz_deg_s = wz_rad_s * RAD_2_DEGREE;
+    if (!isfinite(vx_mm_s) || !isfinite(vy_mm_s) || !isfinite(wz_deg_s) ||
+        fabsf(wz_deg_s) > CHASSIS_MAX_WZ_DEG_S)
+    {
+        chassis_cmd_send.vx = 0.0f;
+        chassis_cmd_send.vy = 0.0f;
+        chassis_cmd_send.wz = 0.0f;
+        chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE;
+        return;
+    }
+    chassis_cmd_send.vx = vx_mm_s;
+    chassis_cmd_send.vy = vy_mm_s;
+    chassis_cmd_send.wz = wz_deg_s;
+    chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
+}
+
+static void ApplyVisionV2GimbalHold(void)
+{
+    gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+    gimbal_cmd_send.yaw = gimbal_fetch_data.gimbal_imu_data.YawTotalAngle;
+    gimbal_cmd_send.pitch = gimbal_fetch_data.gimbal_imu_data.Pitch;
+    gimbal_cmd_send.yaw_vel = 0.0f;
+    gimbal_cmd_send.yaw_acc = 0.0f;
+    gimbal_cmd_send.pitch_vel = 0.0f;
+    gimbal_cmd_send.pitch_acc = 0.0f;
+}
+#endif
 
 // 把已选择的发射请求转换为应用枚举；最终是否允许仍由 EmergencyHandler() 检查。
 static void ApplyShootCommand(const VisionControlShootCommand_s *command)
@@ -206,6 +316,7 @@ static void ApplyVisionGimbal(const VisionControlGimbalCommand_s *command)
  */
 static void RemoteControlSet(uint8_t vision_active)
 {
+    chassis_cmd_send.wz = 0.0f;
     if (!vision_active)
     {
         // 纯遥控器拨杆控制云台角度增量
@@ -234,9 +345,13 @@ static void RemoteControlSet(uint8_t vision_active)
 
     // 发射参数
     if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],弹舱打开
-        ;                                            // 弹舱舵机控制,待添加servo_motor模块,开启
+    {
+        /* 舵机模块尚未接入，本分支保持无动作。 */
+    }
     else
-        ; // 弹舱舵机控制,待添加servo_motor模块,关闭
+    {
+        /* 舵机模块尚未接入，本分支保持无动作。 */
+    }
 
     // 摩擦轮控制,拨轮向上打为负,向下为正
     VisionControlShootCommand_s manual_command;
@@ -250,6 +365,7 @@ static void RemoteControlSet(uint8_t vision_active)
  */
 static void MouseKeySet(uint8_t vision_active)
 {
+    chassis_cmd_send.wz = 0.0f;
     // 键盘模式直接使用陀螺仪反馈模式控制云台, 避免初值 GIMBAL_ZERO_FORCE 导致云台停电机
     gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
     chassis_cmd_send.vx = rc_data[TEMP].key[KEY_PRESS].w * 300 - rc_data[TEMP].key[KEY_PRESS].s * 300; // 系数待测
@@ -354,8 +470,8 @@ void RobotCMDTask()
    // BMI088Acquire(bmi088_test,&bmi088_data) ;
     // 从其他应用获取回传数据
 #ifdef ONE_BOARD
-    if (!SubGetSnapshot(chassis_feed_sub, &chassis_fetch_data, sizeof(chassis_fetch_data),
-                        HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL))
+    if (MessageReadSnapshot(chassis_feed_sub, &chassis_fetch_data, sizeof(chassis_fetch_data),
+                            HAL_GetTick(), NULL) != MESSAGE_OK)
         memset(&chassis_fetch_data, 0, sizeof(chassis_fetch_data));
 #endif // ONE_BOARD
 #ifdef GIMBAL_BOARD
@@ -363,15 +479,27 @@ void RobotCMDTask()
                             HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL))
         memset(&chassis_fetch_data, 0, sizeof(chassis_fetch_data));
 #endif // GIMBAL_BOARD
-    const uint8_t feedback_received = SubGetSnapshot(gimbal_feed_sub, &gimbal_fetch_data,
-        sizeof(gimbal_fetch_data), HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL);
+    const uint8_t feedback_received = (uint8_t)(MessageReadSnapshot(gimbal_feed_sub,
+        &gimbal_fetch_data, sizeof(gimbal_fetch_data), HAL_GetTick(), NULL) == MESSAGE_OK);
 
     // 每轮读取一次输入，即使没有新帧也会检查键鼠是否超过使用时间。
     if (remote_initialized) RemoteControlGetSnapshot(&remote_snapshot);
     else memset(&remote_snapshot, 0, sizeof(remote_snapshot));
 
-    // 帧和链路状态一起复制，避免一份来自更新前、另一份来自更新后。
+    // 新协议分别复制瞄准与导航快照；彼此的更新不能替对方续期。
+#if defined(MC02_VISION_PROTOCOL_V2)
+    VisionGetStatus(&vision_status_snapshot);
+    const uint32_t vision_now_ms = HAL_GetTick();
+    vision_v2_aim_valid = (uint8_t)(MessageReadSnapshot(vision_v2_aim_subscriber,
+        &vision_v2_aim_snapshot, sizeof(vision_v2_aim_snapshot), vision_now_ms,
+        &vision_v2_aim_freshness) == MESSAGE_OK);
+    vision_v2_navigation_valid = (uint8_t)(MessageReadSnapshot(vision_v2_navigation_subscriber,
+        &vision_v2_navigation_snapshot, sizeof(vision_v2_navigation_snapshot), vision_now_ms,
+        &vision_v2_navigation_freshness) == MESSAGE_OK);
+#else
+    // SP旧协议帧和链路状态一起复制，避免一份来自更新前、另一份来自更新后。
     VisionGetSnapshot(&vision_recv_snapshot, &vision_status_snapshot);
+#endif
     // 没有当前姿态或角度为 NaN、无穷大时，不建立手动参考，先发布停止命令。
     if (!feedback_received || !isfinite(gimbal_fetch_data.gimbal_imu_data.YawTotalAngle) ||
         !isfinite(gimbal_fetch_data.gimbal_imu_data.Pitch))
@@ -383,26 +511,38 @@ void RobotCMDTask()
         ApplySafeCommands();
         VisionSend();
 #ifdef ONE_BOARD
-        PubPushMessage(chassis_cmd_pub, (void *)&chassis_cmd_send);
+        (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
 #endif
 #ifdef GIMBAL_BOARD
         CANCommSend(cmd_can_comm, (void *)&chassis_cmd_send);
 #endif
-        PubPushMessage(shoot_cmd_pub, (void *)&shoot_cmd_send);
-        PubPushMessage(gimbal_cmd_pub, (void *)&gimbal_cmd_send);
+        (void)MessagePublishNow(shoot_cmd_pub, &shoot_cmd_send);
+        (void)MessagePublishNow(gimbal_cmd_pub, &gimbal_cmd_send);
         return;
     }
 
     // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
     CalcOffsetAngle();
+    const uint8_t remote_online = remote_snapshot.remote_online;
+#if defined(MC02_VISION_PROTOCOL_V2)
+    const uint8_t autonomous_selected = (uint8_t)(remote_online &&
+        switch_is_up(rc_data[TEMP].rc.switch_left) && remote_snapshot.pc_valid);
+    VisionControlInput_s vision_input = GetVisionV2ControlInput();
+    vision_input.online = (uint8_t)(vision_input.online && autonomous_selected);
+#else
     const VisionControlInput_s vision_input = GetVisionControlInput();
+#endif
     VisionControlGimbalCommand_s vision_gimbal;
     const uint8_t vision_active = VisionControlBuildGimbalCommand(&vision_input, &vision_gimbal);
-    const uint8_t remote_online = remote_snapshot.remote_online;
     RobotSafetySetRcOnline(remote_online);
+#if defined(MC02_VISION_PROTOCOL_V2)
+    const uint8_t manual_control_active = (uint8_t)(remote_online &&
+        switch_is_down(rc_data[TEMP].rc.switch_left));
+#else
     const uint8_t manual_control_active =
         (uint8_t)(remote_online && (switch_is_down(rc_data[TEMP].rc.switch_left) ||
                                    (switch_is_up(rc_data[TEMP].rc.switch_left) && remote_snapshot.pc_valid)));
+#endif
     gimbal_cmd_send.yaw_vel = gimbal_cmd_send.yaw_acc = 0.0f;
     gimbal_cmd_send.pitch_vel = gimbal_cmd_send.pitch_acc = 0.0f;
     uint8_t manual_allowed = manual_control_active;
@@ -431,6 +571,21 @@ void RobotCMDTask()
         ApplySafeCommands();
     if (vision_active)
         ApplyVisionGimbal(&vision_gimbal);
+#if defined(MC02_VISION_PROTOCOL_V2)
+    else if (autonomous_selected && RobotSafetyIsReady())
+        ApplyVisionV2GimbalHold();
+
+    if (VisionV2NavigationAllowed(autonomous_selected))
+        ApplyVisionV2Navigation();
+    else if (autonomous_selected)
+    {
+        // 自主模式缺少新导航或裁判许可时，清掉上周期的平移和角速度。
+        chassis_cmd_send.vx = 0.0f;
+        chassis_cmd_send.vy = 0.0f;
+        chassis_cmd_send.wz = 0.0f;
+        chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE;
+    }
+#endif
 
     const VisionControlShootCommand_s manual_shoot_command = {
         .shoot_enabled = (uint8_t)(shoot_cmd_send.shoot_mode == SHOOT_ON),
@@ -439,9 +594,16 @@ void RobotCMDTask()
         .shoot_rate = shoot_cmd_send.shoot_rate,
     };
     VisionControlShootCommand_s selected_shoot_command;
+#if defined(MC02_VISION_PROTOCOL_V2)
+    // 新协议没有击发字段；视觉只能给云台目标，发射仍只接收本地手动输入。
+    VisionControlSelectShootCommand(NULL,
+                                    manual_control_active ? &manual_shoot_command : NULL,
+                                    &selected_shoot_command);
+#else
     VisionControlSelectShootCommand(&vision_input,
                                     manual_allowed ? &manual_shoot_command : NULL,
                                     &selected_shoot_command);
+#endif
     ApplyShootCommand(&selected_shoot_command);
 
     EmergencyHandler(remote_online); // 最终安全状态始终覆盖命令选择
@@ -454,11 +616,11 @@ void RobotCMDTask()
     // 推送消息,双板通信等
     // 其他应用所需的控制数据在remotecontrolsetmode和mousekeysetmode中完成设置
 #ifdef ONE_BOARD
-    PubPushMessage(chassis_cmd_pub, (void *)&chassis_cmd_send);
+    (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
 #endif // ONE_BOARD
 #ifdef GIMBAL_BOARD
     CANCommSend(cmd_can_comm, (void *)&chassis_cmd_send);
 #endif // GIMBAL_BOARD
-    PubPushMessage(shoot_cmd_pub, (void *)&shoot_cmd_send);
-    PubPushMessage(gimbal_cmd_pub, (void *)&gimbal_cmd_send);
+    (void)MessagePublishNow(shoot_cmd_pub, &shoot_cmd_send);
+    (void)MessagePublishNow(gimbal_cmd_pub, &gimbal_cmd_send);
 }

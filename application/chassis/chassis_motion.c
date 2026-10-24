@@ -61,8 +61,12 @@ uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
     float wz_deg_s;
     switch (input->mode)
     {
-    case CHASSIS_MOTION_MODE_NO_FOLLOW: // 只计算平移，不主动转动。
-        wz_deg_s = 0.0f;
+    case CHASSIS_MOTION_MODE_NO_FOLLOW: // 不跟随云台，保留调用方明确给出的底盘角速度。
+        wz_deg_s = input->requested_wz_deg_s;
+        if (wz_deg_s > limits->max_wz_deg_s)
+            wz_deg_s = limits->max_wz_deg_s;
+        else if (wz_deg_s < -limits->max_wz_deg_s)
+            wz_deg_s = -limits->max_wz_deg_s;
         break;
     case CHASSIS_MOTION_MODE_FOLLOW: // 按角度差选择跟随方向和转速。
         wz_deg_s = -1.5f * input->offset_angle_deg * fabsf(input->offset_angle_deg);

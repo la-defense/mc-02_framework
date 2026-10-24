@@ -35,6 +35,7 @@ typedef enum { FRICTION_OFF = 0, FRICTION_ON } friction_mode_e;
 typedef enum { LOAD_STOP = 0, LOAD_REVERSE, LOAD_1_BULLET, LOAD_3_BULLET, LOAD_BURSTFIRE } loader_mode_e;
 typedef enum { LID_OPEN = 0, LID_CLOSE } lid_mode_e;
 typedef enum { SMALL_AMU_15 = 0, SMALL_AMU_18, SMALL_AMU_30 } Bullet_Speed_e;
+#pragma pack(push, 1)
 typedef struct {
     shoot_mode_e shoot_mode;
     loader_mode_e load_mode;
@@ -44,6 +45,7 @@ typedef struct {
     uint8_t rest_heat;
     float shoot_rate;
 } Shoot_Ctrl_Cmd_s;
+#pragma pack(pop)
 typedef struct {
     uint8_t loader_slot_num;
     float loader_gearbox_ratio, loader_disk_ratio;

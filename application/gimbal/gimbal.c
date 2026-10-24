@@ -6,6 +6,7 @@
 #include "dji_motor.h"
 #include "ins_task.h"
 #include "message_center.h"
+#include "topics/robot_topics.h"
 #include "general_def.h"
 #include <string.h>
 
@@ -72,13 +73,15 @@ static Motor_Feedback_Status_e ReadGimbalSignal(const void *context,
     return MOTOR_FEEDBACK_OK;
 }
 
-static Publisher_t *gimbal_pub;                   // 云台应用消息发布者(云台反馈给cmd)
-static Subscriber_t *gimbal_sub;                  // cmd控制消息订阅者
+static MessagePublisher_t *gimbal_pub;             // 云台应用消息发布者(云台反馈给cmd)
+static MessageSubscriber_t *gimbal_sub;            // cmd控制消息订阅者
 static Gimbal_Upload_Data_s gimbal_feedback_data; // 回传给cmd的云台状态信息
 static Gimbal_Ctrl_Cmd_s gimbal_cmd_recv;         // 来自cmd的控制信息
 
 uint8_t GimbalInit(void)
 {   
+    if (!RobotTopicsInit())
+        return 0u;
     gimba_IMU_data = INS_GetStorage(); // INS 由调度器启动后的专属任务初始化
     // YAW
     Motor_Init_Config_s yaw_config = {
@@ -177,8 +180,10 @@ uint8_t GimbalInit(void)
     yaw_motor = DJIMotorInit(&yaw_config);
     pitch_motor = DJIMotorInit(&pitch_config);
 
-    gimbal_pub = PubRegister("gimbal_feed", sizeof(Gimbal_Upload_Data_s));
-    gimbal_sub = SubRegister("gimbal_cmd", sizeof(Gimbal_Ctrl_Cmd_s));
+    gimbal_pub = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK,
+                                          ROBOT_TOPIC_ENDPOINT_GIMBAL);
+    gimbal_sub = MessageSubscriberRegister(ROBOT_TOPIC_GIMBAL_COMMAND,
+                                           ROBOT_TOPIC_ENDPOINT_GIMBAL);
     return (uint8_t)(gimba_IMU_data != NULL && yaw_motor != NULL && pitch_motor != NULL &&
                      gimbal_pub != NULL && gimbal_sub != NULL);
 }
@@ -187,8 +192,8 @@ uint8_t GimbalInit(void)
 void GimbalTask()
 {
     // 只采用不超过 50 ms 的控制消息；失败清零后进入停机分支。
-    if (!SubGetSnapshot(gimbal_sub, &gimbal_cmd_recv, sizeof(gimbal_cmd_recv),
-                        HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL))
+    if (MessageReadSnapshot(gimbal_sub, &gimbal_cmd_recv, sizeof(gimbal_cmd_recv),
+                            HAL_GetTick(), NULL) != MESSAGE_OK)
         memset(&gimbal_cmd_recv, 0, sizeof(gimbal_cmd_recv));
 
     // 电机单圈角度仍用于计算底盘与云台的偏转方向；控制反馈目前选外部 IMU。
@@ -241,7 +246,7 @@ void GimbalTask()
     gimbal_feedback_data.yaw_motor_single_round_angle = yaw_motor->measure.angle_single_round;
 
     // 推送消息
-    PubPushMessage(gimbal_pub, (void *)&gimbal_feedback_data);
+    (void)MessagePublishNow(gimbal_pub, &gimbal_feedback_data);
 }
 
 void Gimbal_GetMotorSummary(Gimbal_Motor_Summary_t *summary)

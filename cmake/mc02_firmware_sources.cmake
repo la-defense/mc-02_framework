@@ -122,7 +122,6 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/lcd/lcd_ui.c
     modules/master_machine/master_process.c
     modules/master_machine/vision_control.c
-    modules/master_machine/vision_protocol.c
     modules/message_center/message_center.c
     modules/motor/DJImotor/dji_motor.c
     modules/motor/HTmotor/HT04.c
@@ -160,6 +159,15 @@ set(MC02_APPLICATION_GIMBAL_C_SOURCES
     application/cmd/robot_cmd.c
     application/gimbal/gimbal.c
     application/shoot/shoot.c)
+
+if(MC02_PROFILE STREQUAL "robot")
+    list(APPEND MC02_APPLICATION_COMMON_C_SOURCES application/topics/robot_topics.c)
+endif()
+if(MC02_VISION_PROTOCOL STREQUAL "v2")
+    list(APPEND MC02_COMMON_MODULE_C_SOURCES modules/master_machine/vision_protocol_v2.c)
+else()
+    list(APPEND MC02_COMMON_MODULE_C_SOURCES modules/master_machine/vision_protocol.c)
+endif()
 
 # 按配置追加确实被入口调用的可选实现；其他保留模块不进入固件。
 set(MC02_SELECTED_SOURCES ${MC02_PLATFORM_C_SOURCES} ${MC02_BSP_C_SOURCES} ${MC02_COMMON_MODULE_C_SOURCES} ${MC02_APPLICATION_COMMON_C_SOURCES})

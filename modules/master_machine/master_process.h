@@ -79,21 +79,21 @@ typedef struct
 	uint16_t bullet_count;
 } Vision_Status_t;
 
-/** @brief 注册视觉通信及离线计时，清空收发帧；仅在初始化阶段调用一次。
+/** @brief 注册当前构建选定的视觉协议及传输，并启动链路离线计时。
 * @param[in] _handle UART 配置时须提供有效句柄；USB VCP 配置时忽略，可以为 NULL。
-* @return 成功返回模块内部接收对象地址，长期有效且不可释放；任一注册失败返回 NULL。
-* @note 控制任务应使用 VisionGetSnapshot() 复制读取；失败时已申请的离线计时会撤销。
-* UART和USB都以29字节候选处理跨块及同块多帧，首个组成块的原接收毫秒值作为来源时间；
-* 缺块、USB连接变化或组帧超过50ms时清残帧。USB实际启动由既有defaultTask推进。
+* @return 成功返回兼容接收对象地址，长期有效且不可释放；任一注册失败返回NULL。
+* @note 仅初始化阶段调用一次；控制任务用VisionGetSnapshot()复制读取。
+* SP构建沿用固定帧解析；V2构建使用12字节头、精确负载长度和CRC16，
+* 以组成帧首块的本机接收时刻记录来源接收时间，块中断、连接代号变化或组帧超时会清残帧。
+* V2命令通过消息中心话题读取，返回对象只为保持初始化调用兼容。
  */
 Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle);
 
-/** @brief 检查旧命令是否到时，再给已准备的状态帧追加 CRC 并尝试发送。
-* @note 先初始化；由命令任务周期调用，状态内容由 INS 调用 VisionUpdateTx() 更新。
-*       不等待忙链路；USB复制到唯一在途数组、100ms未完成即失败，忙时拒绝；
-*       UART复制入队、总期限20ms，满时拒绝。两种方式都不重放旧状态帧。
-*       接口不返回结果；提交／传输失败计数通过VisionGetStatus读取，USB详细结果通过
-*       USBTransportGetState读取。发送由命令任务串行调用，准备状态与复制均用短临界区。
+/** @brief 按当前协议周期发送状态；V2交替发送姿态和裁判摘要。
+* @note 先初始化，由命令任务周期调用。SP状态由VisionUpdateTx()准备并按原帧格式发送；
+*       V2以50ms节奏交替编码两类状态，字段各自保留源时刻和有效位。
+*       USB使用单份在途复制缓冲，UART使用复制队列；忙时拒绝本次，不积压旧状态。
+*       接口不返回结果，提交和传输计数由VisionGetStatus读取。
  */
 void VisionSend(void);
 

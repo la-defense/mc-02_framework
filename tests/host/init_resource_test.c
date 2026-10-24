@@ -77,69 +77,51 @@ static void check_invalid_and_exhausted_daemon(void)
 
 static void check_message_topic_contract(void)
 {
-    Publisher_t *invalid = PubRegister(NULL, 1u);
-    TEST_CHECK(invalid == NULL);
-    invalid = PubRegister("", 1u);
-    TEST_CHECK(invalid == NULL);
-    invalid = PubRegister("zero-size", 0u);
-    TEST_CHECK(invalid == NULL);
+    const MessageTopicDescriptor_t valid = {
+        .topic_id = 17u,
+        .payload_size = sizeof(uint32_t),
+        .max_age_ms = 50u,
+        .capacity = 1u,
+        .delivery = MESSAGE_DELIVERY_SNAPSHOT,
+        .overflow = MESSAGE_OVERFLOW_REPLACE_OLDEST,
+        .source_clock = MESSAGE_CLOCK_LOCAL,
+        .publisher_mask = 1u,
+        .subscriber_mask = 2u,
+    };
+    MessageTopicDescriptor_t invalid = valid;
+    invalid.payload_size = 0u;
+    TEST_CHECK(MessageCenterInit(&invalid, 1u) == MESSAGE_ERR_DIRECTORY);
+    invalid = valid;
+    invalid.capacity = MESSAGE_CENTER_MAX_QUEUE_DEPTH + 1u;
+    TEST_CHECK(MessageCenterInit(&invalid, 1u) == MESSAGE_ERR_DIRECTORY);
+    invalid = valid;
+    invalid.topic_id = 0u;
+    TEST_CHECK(MessageCenterInit(&invalid, 1u) == MESSAGE_ERR_DIRECTORY);
 
-    Publisher_t *original = PubRegister("stable", 4u);
-    TEST_CHECK(original != NULL);
-    Publisher_t *same = PubRegister("stable", 4u);
-    TEST_CHECK(same == original);
-    size_t before = live_allocations;
-    invalid = PubRegister("stable", 5u);
-    TEST_CHECK(invalid == NULL);
+    const size_t before = live_allocations;
+    TEST_CHECK(MessageCenterInit(&valid, 1u) == MESSAGE_OK);
+    TEST_CHECK(MessageCenterInit(&valid, 1u) == MESSAGE_OK);
     TEST_CHECK(live_allocations == before);
+    MessagePublisher_t *publisher = MessagePublisherRegister(17u, 1u);
+    MessageSubscriber_t *subscriber = MessageSubscriberRegister(17u, 2u);
+    TEST_CHECK(publisher != NULL && subscriber != NULL);
+    TEST_CHECK(MessagePublisherRegister(17u, 3u) == NULL);
+    TEST_CHECK(MessageSubscriberRegister(17u, 3u) == NULL);
+    TEST_CHECK(MessagePublisherRegister(17u, 1u) == publisher);
+    TEST_CHECK(MessageSubscriberRegister(17u, 2u) == subscriber);
 
-    char too_long[MAX_TOPIC_NAME_LEN + 1u];
-    memset(too_long, 'x', sizeof(too_long));
-    too_long[sizeof(too_long) - 1u] = '\0';
-    invalid = PubRegister(too_long, 1u);
-    TEST_CHECK(invalid == NULL);
-
-    for (unsigned i = 0; i < MAX_TOPIC_COUNT - 2u; ++i)
-    {
-        char name[16];
-        (void)snprintf(name, sizeof(name), "topic-%u", i);
-        Publisher_t *topic = PubRegister(name, 1u);
-        TEST_CHECK(topic != NULL);
-    }
-    before = live_allocations;
-    invalid = PubRegister("overflow", 1u);
-    TEST_CHECK(invalid == NULL);
+    uint32_t sent = 0x12345678u, received = 0u;
+    TEST_CHECK(MessagePublishAt(publisher, &sent, 0u, 0u, 1u,
+                                MESSAGE_CLOCK_LOCAL) == MESSAGE_OK);
     TEST_CHECK(live_allocations == before);
-}
-
-static void check_subscriber_allocation_rollback(void)
-{
-    Publisher_t *existing = PubRegister("queue", sizeof(uint32_t));
-    TEST_CHECK(existing != NULL);
-    size_t before = live_allocations;
-
-    allocation_countdown = 1; /* Subscriber allocation succeeds; queue allocation fails. */
-    Subscriber_t *failed_subscriber = SubRegister("queue", sizeof(uint32_t));
-    TEST_CHECK(failed_subscriber == NULL);
-    allocation_countdown = -1;
-    TEST_CHECK(live_allocations == before);
-    TEST_CHECK(existing->first_subs == NULL);
-
-    Subscriber_t *sub = SubRegister("queue", sizeof(uint32_t));
-    TEST_CHECK(sub != NULL && existing->first_subs == sub);
-    uint32_t sent = 0x12345678u;
-    uint32_t received = 0u;
-    uint8_t published = PubPushMessage(existing, &sent);
-    TEST_CHECK(published == 1u);
-    uint8_t consumed = SubGetMessage(sub, &received);
-    TEST_CHECK(consumed == 1u);
-    TEST_CHECK(received == sent);
+    TEST_CHECK(MessageReadSnapshot(subscriber, &received, sizeof(received), 0u,
+                                   NULL) == MESSAGE_OK);
+    TEST_CHECK(received == sent && live_allocations == before);
 }
 
 int main(void)
 {
     check_invalid_and_exhausted_daemon();
-    check_subscriber_allocation_rollback();
     check_message_topic_contract();
     return 0;
 }

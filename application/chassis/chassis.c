@@ -17,6 +17,7 @@
 #include "dji_motor.h"
 #include "super_cap.h"
 #include "message_center.h"
+#include "topics/robot_topics.h"
 #include "referee_task.h"
 #include "bsp_log.h"
 #include "general_def.h"
@@ -30,8 +31,8 @@ static CANCommInstance *chasiss_can_comm; // 双板通信CAN comm
 attitude_t *Chassis_IMU_data;
 #endif // CHASSIS_BOARD
 #ifdef ONE_BOARD
-static Publisher_t *chassis_pub;                    // 用于发布底盘的数据
-static Subscriber_t *chassis_sub;                   // 用于订阅底盘的控制命令
+static MessagePublisher_t *chassis_pub;              // 用于发布底盘的数据
+static MessageSubscriber_t *chassis_sub;             // 用于订阅底盘的控制命令
 #endif                                              // !ONE_BOARD
 static Chassis_Ctrl_Cmd_s chassis_cmd_recv;         // 底盘接收到的控制命令
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
@@ -45,6 +46,8 @@ static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left righ
 
 uint8_t ChassisInit(void)
 {
+    if (!RobotTopicsInit())
+        return 0u;
     // 四个轮子的参数一样,改tx_id和反转标志位即可
     Motor_Init_Config_s chassis_motor_config = {
         .can_init_config.can_handle = &hcan1,
@@ -126,8 +129,10 @@ uint8_t ChassisInit(void)
 #endif                                          // CHASSIS_BOARD
 
 #ifdef ONE_BOARD // 单板控制整车,则通过pubsub来传递消息
-    chassis_sub = SubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
-    chassis_pub = PubRegister("chassis_feed", sizeof(Chassis_Upload_Data_s));
+    chassis_sub = MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,
+                                            ROBOT_TOPIC_ENDPOINT_CHASSIS);
+    chassis_pub = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_FEEDBACK,
+                                           ROBOT_TOPIC_ENDPOINT_CHASSIS);
 #endif // ONE_BOARD
     if (motor_lf == NULL || motor_rf == NULL || motor_lb == NULL || motor_rb == NULL ||
         referee_status != REFEREE_OK || cap == NULL)
@@ -172,8 +177,8 @@ void ChassisTask()
     // 单板消息和双板通信都按 50 ms 检查命令，失败后清零，不沿用旧速度。
     uint8_t command_fresh = 0u;
 #ifdef ONE_BOARD
-    command_fresh = SubGetSnapshot(chassis_sub, &chassis_cmd_recv, sizeof(chassis_cmd_recv),
-                                   HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL);
+    command_fresh = (uint8_t)(MessageReadSnapshot(chassis_sub, &chassis_cmd_recv,
+        sizeof(chassis_cmd_recv), HAL_GetTick(), NULL) == MESSAGE_OK);
 #endif
 #ifdef CHASSIS_BOARD
     command_fresh = CANCommGetSnapshot(chasiss_can_comm, &chassis_cmd_recv,
@@ -253,7 +258,7 @@ void ChassisTask()
 
     // 推送反馈消息
 #ifdef ONE_BOARD
-    PubPushMessage(chassis_pub, (void *)&chassis_feedback_data);
+    (void)MessagePublishNow(chassis_pub, &chassis_feedback_data);
 #endif
 #ifdef CHASSIS_BOARD
     CANCommSend(chasiss_can_comm, (void *)&chassis_feedback_data);

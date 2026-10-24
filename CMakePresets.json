@@ -149,6 +149,20 @@
       }
     },
     {
+      "name": "robot-single-v2-debug",
+      "inherits": "robot-single-debug",
+      "cacheVariables": {
+        "MC02_VISION_PROTOCOL": "v2"
+      }
+    },
+    {
+      "name": "robot-single-v2-rel",
+      "inherits": "robot-single-rel",
+      "cacheVariables": {
+        "MC02_VISION_PROTOCOL": "v2"
+      }
+    },
+    {
       "name": "robot-chassis-debug",
       "inherits": "arm-base",
       "cacheVariables": {
@@ -205,6 +219,8 @@
     {"name": "refdiag-rel", "configurePreset": "refdiag-rel", "jobs": 4},
     {"name": "robot-single-debug", "configurePreset": "robot-single-debug", "jobs": 4},
     {"name": "robot-single-rel", "configurePreset": "robot-single-rel", "jobs": 4},
+    {"name": "robot-single-v2-debug", "configurePreset": "robot-single-v2-debug", "jobs": 4},
+    {"name": "robot-single-v2-rel", "configurePreset": "robot-single-v2-rel", "jobs": 4},
     {"name": "robot-chassis-debug", "configurePreset": "robot-chassis-debug", "jobs": 4},
     {"name": "robot-chassis-rel", "configurePreset": "robot-chassis-rel", "jobs": 4},
     {"name": "robot-gimbal-debug", "configurePreset": "robot-gimbal-debug", "jobs": 4},
