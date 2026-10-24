@@ -62,6 +62,11 @@ uint64_t DWT_GetTimeline_us(void)
     return now_us;
 }
 
+uint32_t HAL_GetTick(void)
+{
+    return (uint32_t)(now_us / 1000u);
+}
+
 float DWT_GetDeltaT(uint32_t *counter)
 {
     ++*counter;
@@ -120,6 +125,7 @@ static Motor_Init_Config_s config_for(uint8_t bus, uint32_t motor_id)
 {
     Motor_Init_Config_s config = {0};
     config.motor_type = LK9025;
+    config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL};
     config.can_init_config.can_handle = handle_for_bus(bus);
     config.can_init_config.tx_id = motor_id;
     config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
@@ -375,13 +381,13 @@ static void test_sparse_routing(void)
     LKMotorInstance *bus0_id2 = LKMotorInit(&config);
     TEST_CHECK(bus0_id2 != NULL);
     config = config_for(0u, 1u);
-    config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
+    config.output_axis.direction = MOTOR_AXIS_DIRECTION_REVERSE;
     LKMotorInstance *bus0_id1_reverse = LKMotorInit(&config);
     TEST_CHECK(bus0_id1_reverse != NULL);
 
     LKMotorSetRef(bus0_id4, 444.0f);
     LKMotorSetRef(bus0_id2, -222.0f);
-    LKMotorSetRef(bus0_id1_reverse, -32768.0f);
+    LKMotorSetRef(bus0_id1_reverse, 32768.0f);
     LKMotorSetRef(bus1_id4, -444.0f);
     now_us = 0u;
     LKMotorControl();

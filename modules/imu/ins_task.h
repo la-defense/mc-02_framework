@@ -65,6 +65,18 @@ typedef struct
     uint8_t init;
 } INS_t;
 
+/** @brief 电机外部反馈使用的 INS 一致快照，角度为 rad、角速度为 rad/s。 */
+typedef struct
+{
+    float yaw_rad; /**< 当前偏航角，单位 rad。 */
+    float yaw_total_rad; /**< 启动基准后的多圈偏航角，单位 rad。 */
+    float pitch_rad; /**< 当前俯仰角，单位 rad。 */
+    float gyro_rad_s[3]; /**< 机体系 x/y/z 角速度，单位 rad/s。 */
+    uint32_t timestamp_ms; /**< 对应 BMI088 样本的本机接收时刻，允许为0。 */
+    uint32_t sequence; /**< 对应 BMI088 样本序号，0 表示尚无有效样本。 */
+    uint8_t valid; /**< 姿态和角速度均通过本轮有限值检查时为1。 */
+} INS_Control_Snapshot_s;
+
 /* 用于修正安装误差的参数 */
 typedef struct
 {
@@ -100,6 +112,14 @@ attitude_t *INS_GetAttitude(void);
 
 /** @brief 在 INS 任务启动前取得长期有效的内部存储地址；此时内容尚未准备好。 */
 attitude_t *INS_GetStorage(void);
+
+/**
+ * @brief 复制一份供电机控制读取的姿态／角速度快照。
+ * @param[out] snapshot 接收输出；空指针返回0，非空时复制当前快照，包括无效标记。
+ * @return 快照当前有效时返回1；尚未初始化、采样无效或输出为空时返回0。
+ * @note 读取不会刷新样本时间；调用者还须检查快照年龄。函数在短临界区内复制。
+ */
+uint8_t INSGetControlSnapshot(INS_Control_Snapshot_s *snapshot);
 
 /**
 * @brief 根据陀螺仪角速度推进四元数。

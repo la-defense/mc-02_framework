@@ -82,6 +82,7 @@ typedef struct
 typedef struct
 {
     DJI_Motor_Measure_s measure;            // 电机测量值
+    Motor_Output_Axis_Config_s output_axis; // 控制与公开位置／速度均按此配置换算。
     Motor_Control_Setting_s motor_settings; // 电机设置
     MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
     Motor_Controller_s motor_controller;    // 电机控制器
@@ -112,6 +113,9 @@ typedef struct
     uint8_t current_filter_started;
     uint8_t speed_filter_needs_rebuild;
     uint8_t current_filter_needs_rebuild;
+    uint8_t encoder_baseline_valid;
+    uint8_t output_position_trusted;
+    uint32_t feedback_sequence;
 } DJIMotorInstance;
 
 typedef struct
@@ -137,9 +141,11 @@ typedef struct
 /** @brief 注册 DJI 电机、CAN 接收与离线计数，成功后保持停止输出。
 * @param[in] config 有效配置；支持 M2006、M3508、GM6020，当前检查设备编号 1～8，按型号分别计算接收 ID。
 * @return 成功返回长期有效对象，参数、重复 ID、容量或注册分配失败返回 NULL，并清理本次已分配资源。
-* @note 先配置 BSP，再在应用初始化阶段注册；外部反馈和前馈指针须长期有效，数据单位由调用方匹配。
+* @note 先配置BSP，再在应用初始化阶段注册；output_axis须明确减速比与方向。
+*       角度／速度闭环的参考、反馈和PID输入分别使用输出轴rad、rad/s；电流环保留设备电流数值。
+*       外部来源上下文须在实例使用期间有效，回调复制带单位、参考系、时刻、序号和有效标记的快照。
  */
-DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config);
+DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config);
 
 /** @brief 使用独立反馈滤波配置注册 DJI 电机，滤波历史由返回实例长期保存。
 * @param[in] config 有效电机配置；函数不修改输入，成功实例长期保存 CAN 与 Daemon 资源。
@@ -156,15 +162,15 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
 
 /** @brief 保存目标，供下一轮 DJIMotorControl() 计算，不直接发送。
 * @param[in,out] motor 有效实例，不能为 NULL。
-* @param[in] ref 正常数值；使用电机反馈时，角度目标为 deg、速度目标为 deg/s，直接输出为电调原始数值。
-* @note 外部反馈不会自动换单位；目标、反馈和 PID 配置须配套，不可直接把原始电调值当作 A。
+* @param[in] ref 有限参考；角度外环使用输出轴rad，速度外环使用输出轴rad/s，直接输出仍为电调设备数值。
+* @note 外部来源须声明匹配单位和参考系；电调原始电流不自动换算为A。
  */
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
 
 /** @brief 改写角度或速度反馈来源，下一轮控制生效。
 * @param[in,out] motor 有效实例，不能为 NULL。
 * @param[in] loop ANGLE_LOOP 或 SPEED_LOOP，其他值只打印错误。
-* @param[in] type MOTOR_FEED 用电机反馈，OTHER_FEED 用初始化时保存的有效指针。
+* @param[in] type MOTOR_FEED 用本机反馈，OTHER_FEED 用初始化时保存且本轮有效的快照来源。
  */
 void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback_Source_e type);
 
@@ -201,9 +207,24 @@ void DJIMotorCloseLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop);
 /** @brief 复制在线、运行及当前测量值，供显示读取。
 * @param[in] motor 电机实例，NULL 时不处理。
 * @param[out] summary 输出对象，NULL 时不处理；失败时保持原值，不自动清零。
-* @note 角度用 deg，速度用 deg/s，温度用摄氏度，current 为电调原始反馈整数。
+* @note 兼容摘要的angle／speed保留设备侧deg、deg/s；控制闭环及统一反馈接口使用输出轴rad、rad/s。
+*       温度用摄氏度，current为电调原始反馈整数，不代表安培。
  */
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);
+
+/** @brief 以当前有效编码器读数为新的相对零点，显式恢复多圈位置可信度。 */
+Motor_Feedback_Status_e DJIMotorRebaseReference(DJIMotorInstance *motor, uint32_t now_ms);
+
+/**
+ * @brief 复制统一反馈快照；读取不刷新样本时间或滤波状态。
+ * @param[in] motor 已注册实例。
+ * @param[in] now_ms 调用方毫秒时刻，允许0和回绕。
+ * @param[out] snapshot 输出对象；参数或换算失败时保持原值。
+ * @return MOTOR_FEEDBACK_OK 表示已收到样本；各字段是否可用由字段 valid 表示。
+ */
+Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *motor,
+                                                     uint32_t now_ms,
+                                                     Motor_Feedback_Snapshot_s *snapshot);
 
 /* ============================================================================
    DJI 假反馈注入自测(默认关闭)

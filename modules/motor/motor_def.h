@@ -15,6 +15,7 @@
 #include "controller.h"
 #include "motor_pid.h"
 #include "bsp_can.h"
+#include "motor_feedback.h"
 #include "stdint.h"
 
 #define LIMIT_MIN_MAX(x, min, max) (x) = (((x) <= (min)) ? (min) : (((x) >= (max)) ? (max) : (x)))
@@ -44,7 +45,7 @@ typedef enum
     CURRENT_AND_SPEED_FEEDFORWARD = CURRENT_FEEDFORWARD | SPEED_FEEDFORWARD,
 } Feedfoward_Type_e;
 
-/* 反馈来源设定,若设为OTHER_FEED则需要指定数据来源指针,详见Motor_Controller_s*/
+/* 外部反馈来源由只读回调复制完整快照，不向控制器暴露可写数据地址。 */
 typedef enum
 {
     MOTOR_FEED = 0,
@@ -52,9 +53,9 @@ typedef enum
 } Feedback_Source_e;
 
 /*
- * @brief 电机方向设置。
- * LK、HT04 的角度／速度外环先按 motor_reverse_flag 翻转目标，
- * 开环和电流外环沿用输出端翻转；其他驱动按各自实现处理。
+ * @brief 旧驱动方向兼容字段。
+ * DJI、LK9025 和 HT04 要求保持 NORMAL；方向统一配置在 output_axis.direction。
+ * DM 的直接力矩协议仍使用 motor_reverse_flag。
  */
 typedef enum
 {
@@ -63,8 +64,8 @@ typedef enum
 } Motor_Reverse_Flag_e;
 
 /*
- * @brief 角度／速度外环的最终输出方向设置。
- * LK、HT04 在串级 PID 与前馈之后应用；开环和电流外环忽略该标志。
+ * @brief 旧反馈输出方向兼容字段。
+ * DJI、LK9025 和 HT04 要求保持 NORMAL；新配置使用 output_axis.direction。
  */
 typedef enum
 {
@@ -85,13 +86,13 @@ typedef enum
     MOTOR_OFFLINE = 1,
 } Motor_Online_Flag_e;
 
-/* 电机控制设置,包括闭环类型,反转标志和反馈来源 */
+/* 电机控制设置包含闭环和来源；三类已迁移驱动的方向只由输出轴配置管理。 */
 typedef struct
 {
     Closeloop_Type_e outer_loop_type;              // 最外层的闭环,未设置时默认为最高级的闭环
     Closeloop_Type_e close_loop_type;              // 使用几个闭环(串级)
-    Motor_Reverse_Flag_e motor_reverse_flag;       // LK／HT 轴向外环先翻转目标；默认值 NORMAL 保持旧方向。
-    Feedback_Reverse_Flag_e feedback_reverse_flag; // LK／HT 轴向外环最后翻转结果；开环／电流外环不使用。
+    Motor_Reverse_Flag_e motor_reverse_flag;       // DJI／LK／HT须为NORMAL；DM直接力矩仍读取此字段。
+    Feedback_Reverse_Flag_e feedback_reverse_flag; // DJI／LK／HT须为NORMAL；方向使用output_axis.direction。
     Feedback_Source_e angle_feedback_source;       // 角度反馈类型
     Feedback_Source_e speed_feedback_source;       // 速度反馈类型
     Feedfoward_Type_e feedforward_flag;            // 前馈标志
@@ -99,59 +100,46 @@ typedef struct
 
 } Motor_Control_Setting_s;
 
-/* 电机控制器,包括其他来源的反馈数据指针,3环控制器和电机的参考输入*/
-// 外部反馈及前馈由调用方保存；启用对应分支前须保证指针长期有效、数值有限且单位符合具体驱动。
+/* 电机控制器保存外部快照来源、三环PID和本实例参考值。 */
 typedef struct
 {
-    float *other_angle_feedback_ptr; // 外部角度反馈，单位由具体驱动规定。
-    float *other_speed_feedback_ptr; // 外部速度反馈，单位由具体驱动规定。
-    float *speed_feedforward_ptr;    // 速度相关前馈，仅在驱动实际读取的分支使用。
-    float *current_feedforward_ptr;  // 当前输出前馈，仅在驱动实际读取的分支使用。
+    Motor_Signal_Source_s other_angle_feedback; // 角度来源；输出轴环使用 rad 与显式参考系。
+    Motor_Signal_Source_s other_speed_feedback; // 速度来源；输出轴环使用 rad/s 与显式参考系。
+    Motor_Signal_Source_s speed_feedforward; // 速度前馈，目标及反馈同为输出轴 rad/s。
+    Motor_Signal_Source_s current_feedforward; // 当前／力矩前馈，单位由驱动能力声明。
 
     PIDInstance current_PID;
     PIDInstance speed_PID;
     PIDInstance angle_PID;
 
-    float pid_ref; // 参考值从所选最外层进入，后续计算依次作为内层目标；单位取决于驱动及反馈来源。
+    float pid_ref; // 角度／速度环使用输出轴rad或rad/s；电流环使用设备电流量纲。
 } Motor_Controller_s;
 
-/* 电机类型枚举 */
-typedef enum
-{
-    MOTOR_TYPE_NONE = 0,
-    GM6020,
-    M3508,
-    M2006,
-    LK9025,
-    HT04,
-    DR04,
-    XMCY,
-} Motor_Type_e;
-
 /**
- * @brief 电机控制器初始化结构体,包括三环PID的配置以及两个反馈数据来源指针
- *        如果不需要某个控制环,可以不设置对应的pid config
- *        需要其他数据来源进行反馈闭环,不仅要设置这里的指针还需要在Motor_Control_Setting_s启用其他数据来源标志
+ * @brief 电机控制器初始化结构体，包含三环 PID 参数及可选的外部快照来源。
+ * @note DJI、LK9025、HT04 的角度环使用 rad、速度环使用 rad/s；PID measure 与 ref 必须同单位，
+ *       增益、死区、积分限幅及输出限幅也按各 PID 输入／输出单位解释。仅实际参与的环须提供有效 PID。
+ *       选择 OTHER_FEED 或启用前馈时，来源单位和参考系须匹配；来源上下文须长于电机实例生命周期。
  */
 typedef struct
 {
-    // 配置只保存地址，不复制反馈数值；各驱动实际采用哪些字段须结合其初始化实现阅读。
-    float *other_angle_feedback_ptr; // 外部角度反馈；具体角度单位由驱动决定。
-    float *other_speed_feedback_ptr; // 外部速度反馈；具体速度单位由驱动决定。
-
-    float *speed_feedforward_ptr;   // 速度相关前馈；具体加入位置和单位由驱动决定。
-    float *current_feedforward_ptr; // 当前输出前馈；具体加入位置和单位由驱动决定。
+    // 来源回调复制带单位、参考系、采样时间和有效标记的值；上下文由调用方长期保存。
+    Motor_Signal_Source_s other_angle_feedback;
+    Motor_Signal_Source_s other_speed_feedback;
+    Motor_Signal_Source_s speed_feedforward;
+    Motor_Signal_Source_s current_feedforward;
 
     PID_Init_Config_s current_PID;
     PID_Init_Config_s speed_PID;
     PID_Init_Config_s angle_PID;
 } Motor_Controller_Init_s;
 
-/* 用于初始化CAN电机的结构体,各类电机通用 */
+/** @brief 电机驱动初始化配置；传给驱动的 const 接口，初始化成功后实例会复制所需字段。 */
 typedef struct
 {
     Motor_Controller_Init_s controller_param_init_config;
     Motor_Control_Setting_s controller_setting_init_config;
+    Motor_Output_Axis_Config_s output_axis; // 减速比为转子／输出轴，角度／速度闭环映射到输出轴坐标。
     Motor_Type_e motor_type;
     CAN_Init_Config_s can_init_config;
 } Motor_Init_Config_s;

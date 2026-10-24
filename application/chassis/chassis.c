@@ -19,6 +19,7 @@
 #include "message_center.h"
 #include "referee_task.h"
 #include "bsp_log.h"
+#include "general_def.h"
 #include <string.h>
 
 /* 底盘应用包含的模块和信息存储,底盘是单例模式,因此不需要为底盘建立单独的结构体 */
@@ -51,10 +52,11 @@ uint8_t ChassisInit(void)
             .speed_PID = {
                 .DtMin_s = MOTOR_PID_DT_MIN_S,
                 .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 10, // 4.5
+                /* 转子 deg/s 改为输出轴 rad/s，按同一物理速度缩放 PID 输入单位。 */
+                .Kp = 10.0f * RAD_2_DEGREE * REDUCTION_RATIO_WHEEL,
                 .Ki = 0,  // 0
                 .Kd = 0,  // 0
-                .IntegralLimit = 3000,
+                .IntegralLimit = 3000.0f * DEGREE_2_RAD / REDUCTION_RATIO_WHEEL,
                 .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
                 .MaxOut = 12000,
             },
@@ -74,24 +76,22 @@ uint8_t ChassisInit(void)
             .speed_feedback_source = MOTOR_FEED,
             .outer_loop_type = SPEED_LOOP,
             .close_loop_type = SPEED_LOOP | CURRENT_LOOP,
+            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
         },
+        .output_axis = {REDUCTION_RATIO_WHEEL, MOTOR_AXIS_DIRECTION_REVERSE},
         .motor_type = M3508,
     };
-    // 每个电机使用相同配置，注册前分别填写编号和转向标记。
+    // 每个电机使用相同的输出轴单位和方向映射，编号仍按CAN反馈ID登记。
     chassis_motor_config.can_init_config.tx_id = 1;
-    chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
     motor_lf = DJIMotorInit(&chassis_motor_config);
 
     chassis_motor_config.can_init_config.tx_id = 2;
-    chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
     motor_rf = DJIMotorInit(&chassis_motor_config);
 
     chassis_motor_config.can_init_config.tx_id = 4;
-    chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
     motor_lb = DJIMotorInit(&chassis_motor_config);
 
     chassis_motor_config.can_init_config.tx_id = 3;
-    chassis_motor_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
     motor_rb = DJIMotorInit(&chassis_motor_config);
 
     RefereeStatus_t referee_status = RefereeInit(&huart1, NULL);
@@ -232,10 +232,11 @@ void ChassisTask()
     }
     else
     {
-        DJIMotorSetRef(motor_lf, motion_output.motor_speed_deg_s[0]);
-        DJIMotorSetRef(motor_rf, motion_output.motor_speed_deg_s[1]);
-        DJIMotorSetRef(motor_lb, motion_output.motor_speed_deg_s[2]);
-        DJIMotorSetRef(motor_rb, motion_output.motor_speed_deg_s[3]);
+        const float rotor_to_output = -DEGREE_2_RAD / REDUCTION_RATIO_WHEEL;
+        DJIMotorSetRef(motor_lf, motion_output.motor_speed_deg_s[0] * rotor_to_output);
+        DJIMotorSetRef(motor_rf, motion_output.motor_speed_deg_s[1] * rotor_to_output);
+        DJIMotorSetRef(motor_lb, motion_output.motor_speed_deg_s[2] * rotor_to_output);
+        DJIMotorSetRef(motor_rb, motion_output.motor_speed_deg_s[3] * rotor_to_output);
         DJIMotorEnable(motor_lf);
         DJIMotorEnable(motor_rf);
         DJIMotorEnable(motor_lb);

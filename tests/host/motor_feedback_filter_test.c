@@ -8,6 +8,7 @@
  */
 #include "bsp_dwt.h"
 #include "dji_motor.h"
+#include "motor_feedback_test_support.h"
 #include "test_check.h"
 
 #include <math.h>
@@ -27,6 +28,7 @@ static DaemonInstance daemon;
 static uint8_t sent[8];
 
 uint64_t DWT_GetTimeline_us(void) { return now_us; }
+uint32_t HAL_GetTick(void) { return (uint32_t)(now_us / 1000u); }
 float DWT_GetDeltaT(uint32_t *count) { ++*count; return 0.001f; }
 uint32_t DWT_ProbeStart(void) { return 0u; }
 void DWT_ProbeDone(volatile DWT_Probe_t *probe, uint32_t start) { (void)probe; (void)start; }
@@ -61,6 +63,7 @@ static Motor_Init_Config_s motor_config(uint8_t id)
     Motor_Init_Config_s config = {
         .can_init_config = {.can_handle = &hcan1, .tx_id = id},
         .motor_type = M3508,
+        .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
         .controller_setting_init_config = {
             .outer_loop_type = SPEED_LOOP,
             .close_loop_type = SPEED_LOOP | CURRENT_LOOP,
@@ -288,7 +291,9 @@ static int channel_independence(void)
     config = motor_config(2u);
     config.controller_setting_init_config.speed_feedback_source = OTHER_FEED;
     config.controller_setting_init_config.close_loop_type = SPEED_LOOP;
-    config.controller_param_init_config.other_speed_feedback_ptr = &external_speed;
+    config.controller_param_init_config.other_speed_feedback = MotorFeedbackTestMakeSource(
+        &external_speed, MotorFeedbackTestReadRadSExternal, MOTOR_UNIT_RAD_S,
+        MOTOR_REFERENCE_EXTERNAL);
     filter = filter_config(DJI_MOTOR_FILTER_TIME_CONSTANT);
     motor = DJIMotorInitWithFilter(&config, &filter);
     TEST_CHECK(motor != NULL);

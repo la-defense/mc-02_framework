@@ -79,9 +79,18 @@ int main(int argc,char **argv)
     (void)argc;
 #endif
     TEST_CHECK(INS_Init()!=NULL);tick();TEST_CHECK(valid && mode==1);
+    INS_Control_Snapshot_s control_snapshot = {0};
+    TEST_CHECK(INSGetControlSnapshot(&control_snapshot) == 1u);
+    TEST_CHECK(control_snapshot.valid == 1u && control_snapshot.sequence == seq &&
+               control_snapshot.timestamp_ms == now);
+    TEST_CHECK(isfinite(control_snapshot.yaw_rad) && isfinite(control_snapshot.yaw_total_rad) &&
+               isfinite(control_snapshot.pitch_rad));
+    for (unsigned axis = 0u; axis < 3u; ++axis)
+        TEST_CHECK(isfinite(control_snapshot.gyro_rad_s[axis]));
     scenario=1;
     for(unsigned i=1;i<=20;i++){tick();TEST_CHECK(valid && QEKF_INS.IMU_QuaternionEKF.result.mode==KF_PREDICTION);}
     tick();invalid();TEST_CHECK(force_off);
+    TEST_CHECK(INSGetControlSnapshot(&control_snapshot) == 0u && control_snapshot.valid == 0u);
     scenario=0;tick();TEST_CHECK(valid && mode==1 && QEKF_INS.IMU_QuaternionEKF.result.mode==KF_CORRECTED);
     scenario=3;tick();invalid();scenario=0;tick();TEST_CHECK(valid);
     // 调度或原始采样延迟超过20ms时，正常预测加新鲜校正仍应恢复，不能附加dt故障。

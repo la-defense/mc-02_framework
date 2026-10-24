@@ -25,6 +25,8 @@ typedef struct CANInstance
     uint8_t tx_buff[8];
     uint8_t rx_buff[8];
     uint8_t rx_len;
+    uint32_t rx_timestamp_ms;
+    uint32_t rx_timestamp_cycles;
     void (*can_module_callback)(struct CANInstance *);
     void *id;
 } CANInstance;

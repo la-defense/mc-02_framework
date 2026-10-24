@@ -2,6 +2,7 @@
 * @brief 保存移入的哨兵配置，供 RobotConfigInit() 选择；来源说明保留如下。
  */
 #include "sentinel_config.h"
+#include "general_def.h"
 
 /*
  * 哨兵机器人配置. hcan1/hcan2 直接映射到本地 hfdcan1/hfdcan2
@@ -34,10 +35,10 @@ Robot_Config_s *SentinelConfigInit(void)
                     .speed_PID = {
                         .DtMin_s = MOTOR_PID_DT_MIN_S,
                         .DtMax_s = MOTOR_PID_DT_MAX_S,
-                        .Kp = 5.0,
-                        .Ki = 1.0,
+                        .Kp = 5.0f * RAD_2_DEGREE * 19.0f,
+                        .Ki = 1.0f * RAD_2_DEGREE * 19.0f,
                         .Kd = 0.0,
-                        .IntegralLimit = 3000,
+                        .IntegralLimit = 3000.0f * DEGREE_2_RAD / 19.0f,
                         .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
                         .MaxOut = 12000,
                     },
@@ -57,7 +58,9 @@ Robot_Config_s *SentinelConfigInit(void)
                     .speed_feedback_source = MOTOR_FEED,
                     .outer_loop_type = SPEED_LOOP,
                     .close_loop_type = CURRENT_LOOP | SPEED_LOOP,
+                    .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
                 },
+                .output_axis = {19.0f, MOTOR_AXIS_DIRECTION_REVERSE},
                 .motor_type = M3508,
             }
         },
@@ -84,10 +87,10 @@ Robot_Config_s *SentinelConfigInit(void)
                         .Kp = 10.0,
                         .Ki = 0.0,
                         .Kd = 0.7,
-                        .DeadBand = 0.1,
+                        .DeadBand = 0.1f * DEGREE_2_RAD,
                         .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                        .IntegralLimit = 100,
-                        .MaxOut = 500,
+                        .IntegralLimit = 100.0f * DEGREE_2_RAD,
+                        .MaxOut = 500.0f * DEGREE_2_RAD,
                     },
                     .speed_PID = {
                         .DtMin_s = MOTOR_PID_DT_MIN_S,
@@ -107,8 +110,8 @@ Robot_Config_s *SentinelConfigInit(void)
                     .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
                     .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
                     .feedback_reverse_flag = FEEDBACK_DIRECTION_NORMAL,
-                    .feedforward_flag = SPEED_FEEDFORWARD | CURRENT_FEEDFORWARD,
                 },
+                .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
                 .motor_type = GM6020,
             },
 
@@ -124,19 +127,20 @@ Robot_Config_s *SentinelConfigInit(void)
                         .Kp = 10.0,
                         .Ki = 0.0,
                         .Kd = 0.0,
-                        .DeadBand = 0.1,
+                        .DeadBand = 0.1f * DEGREE_2_RAD,
                         .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                        .IntegralLimit = 100,
-                        .MaxOut = 300,
+                        .IntegralLimit = 100.0f * DEGREE_2_RAD,
+                        .MaxOut = 300.0f * DEGREE_2_RAD,
                     },
                     .speed_PID = {
                         .DtMin_s = MOTOR_PID_DT_MIN_S,
                         .DtMax_s = MOTOR_PID_DT_MAX_S,
-                        .Kp = 40.0,
+                        /* 内部转子速度由 deg/s 改为 rad/s，按输入单位缩放。 */
+                        .Kp = 40.0f * RAD_2_DEGREE,
                         .Ki = 0.0,
                         .Kd = 0.0,
                         .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                        .IntegralLimit = 8000,
+                        .IntegralLimit = 8000.0f * DEGREE_2_RAD,
                         .MaxOut = 10000,
                     },
                 },
@@ -148,6 +152,7 @@ Robot_Config_s *SentinelConfigInit(void)
                     .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
                     .feedback_reverse_flag = FEEDBACK_DIRECTION_NORMAL,
                 },
+                .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
                 .motor_type = GM6020,
             },
 
@@ -164,8 +169,8 @@ Robot_Config_s *SentinelConfigInit(void)
                         .Ki = 0.0,
                         .Kd = 0.2,
                         .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                        .IntegralLimit = 100,
-                        .MaxOut = 500,
+                        .IntegralLimit = 100.0f * DEGREE_2_RAD,
+                        .MaxOut = 500.0f * DEGREE_2_RAD,
                     },
                     .speed_PID = {
                         .DtMin_s = MOTOR_PID_DT_MIN_S,
@@ -185,13 +190,13 @@ Robot_Config_s *SentinelConfigInit(void)
                     .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
                     .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
                     .feedback_reverse_flag = FEEDBACK_DIRECTION_NORMAL,
-                    .feedforward_flag = SPEED_FEEDFORWARD | CURRENT_FEEDFORWARD,
                 },
+                .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
                 .motor_type = GM6020
             }
         },
 
-        // 发射参数含电机编号与拨弹盘传动比例，ShootTask() 用其计算每发对应的转子角度。
+        // 发射参数含电机编号与传动比例；ShootTask() 按拨弹盘输出轴计算每发角度，单位为rad。
         .shoot_param = {
             .friction_motor_id[MOTOR_LF] = 8,
             .friction_motor_id[MOTOR_RF] = 4,
@@ -207,11 +212,11 @@ Robot_Config_s *SentinelConfigInit(void)
                     .speed_PID = {
                         .DtMin_s = MOTOR_PID_DT_MIN_S,
                         .DtMax_s = MOTOR_PID_DT_MAX_S,
-                        .Kp = 15.0,
-                        .Ki = 1.0,
+                        .Kp = 15.0f * RAD_2_DEGREE * 19.0f,
+                        .Ki = 1.0f * RAD_2_DEGREE * 19.0f,
                         .Kd = 0.0,
                         .Improve = PID_Integral_Limit,
-                        .IntegralLimit = 10000,
+                        .IntegralLimit = 10000.0f * DEGREE_2_RAD / 19.0f,
                         .MaxOut = 15000,
                     },
                     .current_PID = {
@@ -230,8 +235,9 @@ Robot_Config_s *SentinelConfigInit(void)
                     .speed_feedback_source = MOTOR_FEED,
                     .outer_loop_type = SPEED_LOOP,
                     .close_loop_type = SPEED_LOOP | CURRENT_LOOP,
-                    .motor_reverse_flag = MOTOR_DIRECTION_REVERSE,
+                    .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
                 },
+                .output_axis = {19.0f, MOTOR_AXIS_DIRECTION_REVERSE},
                 .motor_type = M3508
             },
 
@@ -244,19 +250,20 @@ Robot_Config_s *SentinelConfigInit(void)
                     .angle_PID = {
                         .DtMin_s = MOTOR_PID_DT_MIN_S,
                         .DtMax_s = MOTOR_PID_DT_MAX_S,
-                        .Kp = 5.0,
-                        .Ki = 1.0,
+                        /* 角度输入与角速度输出同时按同一输出轴比例缩放，增益保持不变。 */
+                        .Kp = 5.0f,
+                        .Ki = 1.0f,
                         .Kd = 0.0,
-                        .MaxOut = 200,
+                        .MaxOut = 200.0f * DEGREE_2_RAD / 36.0f,
                     },
                     .speed_PID = {
                         .DtMin_s = MOTOR_PID_DT_MIN_S,
                         .DtMax_s = MOTOR_PID_DT_MAX_S,
-                        .Kp = 5.0,
-                        .Ki = 1.0,
+                        .Kp = 5.0f * RAD_2_DEGREE * 36.0f,
+                        .Ki = 1.0f * RAD_2_DEGREE * 36.0f,
                         .Kd = 0.0,
                         .Improve = PID_Integral_Limit,
-                        .IntegralLimit = 8000,
+                        .IntegralLimit = 8000.0f * DEGREE_2_RAD / 36.0f,
                         .MaxOut = 10000,
                     },
                     .current_PID = {
@@ -277,6 +284,7 @@ Robot_Config_s *SentinelConfigInit(void)
                     .close_loop_type = CURRENT_LOOP | SPEED_LOOP,
                     .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
                 },
+                .output_axis = {36.0f, MOTOR_AXIS_DIRECTION_NORMAL},
                 .motor_type = M2006
             },
             .loader_slot_num = 7,           // 拨弹盘槽位数(每转一圈发射弹丸数), 待实测确认

@@ -7,7 +7,9 @@
 #include "dji_motor.h"
 #include "bsp_can.h"
 #include "bsp_dwt.h"
+#include "general_def.h"
 #include "test_check.h"
+#include "motor_feedback_test_support.h"
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
@@ -248,6 +250,7 @@ static void test_production_dji_receive_burst(void)
     {
         Motor_Init_Config_s config = {0};
         config.motor_type = M3508;
+        config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL};
         config.can_init_config.can_handle = handles[bus];
         config.can_init_config.tx_id = 1u;
         config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
@@ -310,6 +313,7 @@ static Motor_Init_Config_s config_for(uint8_t bus, uint32_t motor_id)
 {
     Motor_Init_Config_s config = {0};
     config.motor_type = LK9025;
+    config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL};
     config.can_init_config.can_handle = bus == 0u ? &hfdcan1 : bus == 1u ? &hfdcan2 : &hfdcan3;
     config.can_init_config.tx_id = motor_id;
     config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
@@ -419,11 +423,11 @@ static void test_production_can_routing(void)
 
 static void test_closed_loop_feedback_selection(void)
 {
-    float external_angle = 20.0f;
-    float external_speed = 4.0f;
+    float external_angle = 0.5f;
+    float external_speed = 0.5f;
     LKMotorInstance *motors[LK_MOTOR_PER_BUS_CNT] = {NULL};
-    static const int16_t expected_current[LK_MOTOR_PER_BUS_CNT] = {14, -46, 8, -52};
-    static const uint8_t expected_frame[8] = {0x0Eu, 0u, 0xD2u, 0xFFu, 0x08u, 0u, 0xCCu, 0xFFu};
+    static const int16_t expected_current[LK_MOTOR_PER_BUS_CNT] = {5, 2, 4, 1};
+    static const uint8_t expected_frame[8] = {5u, 0u, 2u, 0u, 4u, 0u, 1u, 0u};
 
     for (uint8_t index = 0u; index < LK_MOTOR_PER_BUS_CNT; ++index)
     {
@@ -434,18 +438,20 @@ static void test_closed_loop_feedback_selection(void)
             (index & 1u) != 0u ? OTHER_FEED : MOTOR_FEED;
         config.controller_setting_init_config.speed_feedback_source =
             (index & 2u) != 0u ? OTHER_FEED : MOTOR_FEED;
-        config.controller_param_init_config.other_angle_feedback_ptr = &external_angle;
-        config.controller_param_init_config.other_speed_feedback_ptr = &external_speed;
+        config.controller_param_init_config.other_angle_feedback = MotorFeedbackTestMakeSource(
+            &external_angle, MotorFeedbackTestReadRadExternal, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL);
+        config.controller_param_init_config.other_speed_feedback = MotorFeedbackTestMakeSource(
+            &external_speed, MotorFeedbackTestReadRadSExternal, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL);
         config.controller_param_init_config.angle_PID = pid_config(2.0f, 1000.0f);
         config.controller_param_init_config.speed_PID = pid_config(3.0f, 1000.0f);
         config.controller_param_init_config.current_PID = pid_config(1.0f, 1000.0f);
 
         motors[index] = LKMotorInit(&config);
         TEST_CHECK(motors[index] != NULL);
-        motors[index]->measure.total_angle = 10.0f;
-        motors[index]->measure.speed_rads = 2.0f;
-        motors[index]->measure.real_current = 100;
-        LKMotorSetRef(motors[index], 30.0f);
+        motors[index]->measure.total_angle = 0.0f;
+        motors[index]->measure.speed_rads = 0.25f;
+        motors[index]->measure.real_current = 0;
+        LKMotorSetRef(motors[index], 1.0f);
     }
 
     now_us = 0u;
@@ -463,13 +469,7 @@ static void test_closed_loop_feedback_selection(void)
 
 static void test_direction_flags(uint8_t speed_outer)
 {
-    static const int16_t expected_angle_positive[4] = {3, -12, -3, 12};
-    static const int16_t expected_angle_negative[4] = {-12, 3, 12, -3};
-    static const int16_t expected_speed_positive[4] = {5, -10, -5, 10};
-    static const int16_t expected_speed_negative[4] = {-10, 5, 10, -5};
     LKMotorInstance *motors[LK_MOTOR_PER_BUS_CNT] = {NULL};
-    const int16_t *positive = speed_outer ? expected_speed_positive : expected_angle_positive;
-    const int16_t *negative = speed_outer ? expected_speed_negative : expected_angle_negative;
 
     for (uint8_t index = 0u; index < LK_MOTOR_PER_BUS_CNT; ++index)
     {
@@ -477,17 +477,16 @@ static void test_direction_flags(uint8_t speed_outer)
         Motor_Control_Setting_s *setting = &config.controller_setting_init_config;
         setting->outer_loop_type = speed_outer ? SPEED_LOOP : ANGLE_LOOP;
         setting->close_loop_type = speed_outer ? SPEED_LOOP : (ANGLE_LOOP | SPEED_LOOP);
-        setting->motor_reverse_flag = (index & 1u) != 0u ? MOTOR_DIRECTION_REVERSE : MOTOR_DIRECTION_NORMAL;
-        setting->feedback_reverse_flag = (index & 2u) != 0u ?
-            FEEDBACK_DIRECTION_REVERSE : FEEDBACK_DIRECTION_NORMAL;
-        config.controller_param_init_config.angle_PID = pid_config(0.25f, 1000.0f);
-        config.controller_param_init_config.speed_PID = pid_config(speed_outer ? 0.25f : 1.0f, 1000.0f);
+        config.output_axis.direction = (index & 1u) != 0u ? MOTOR_AXIS_DIRECTION_REVERSE :
+                                                            MOTOR_AXIS_DIRECTION_NORMAL;
+        config.controller_param_init_config.angle_PID = pid_config(4.0f, 1000.0f);
+        config.controller_param_init_config.speed_PID = pid_config(4.0f, 1000.0f);
 
         motors[index] = LKMotorInit(&config);
         TEST_CHECK(motors[index] != NULL);
-        motors[index]->measure.total_angle = 10.0f;
-        motors[index]->measure.speed_rads = speed_outer ? 10.0f : 2.0f;
-        LKMotorSetRef(motors[index], 30.0f);
+        motors[index]->measure.total_angle = 0.0f;
+        motors[index]->measure.speed_rads = 0.25f;
+        LKMotorSetRef(motors[index], 1.0f);
     }
 
     now_us = 0u;
@@ -498,8 +497,10 @@ static void test_direction_flags(uint8_t speed_outer)
     {
         int16_t actual = (int16_t)((uint16_t)tx_frame[0][index * 2u] |
                                    ((uint16_t)tx_frame[0][index * 2u + 1u] << 8u));
-        TEST_CHECK(actual == positive[index]);
-        LKMotorSetRef(motors[index], -30.0f);
+        const int16_t expected_positive = speed_outer ?
+            ((index & 1u) != 0u ? -5 : 3) : ((index & 1u) != 0u ? -17 : 15);
+        TEST_CHECK(actual == expected_positive);
+        LKMotorSetRef(motors[index], -1.0f);
     }
 
     now_us = 2000u;
@@ -508,7 +509,9 @@ static void test_direction_flags(uint8_t speed_outer)
     {
         int16_t actual = (int16_t)((uint16_t)tx_frame[0][index * 2u] |
                                    ((uint16_t)tx_frame[0][index * 2u + 1u] << 8u));
-        TEST_CHECK(actual == negative[index]);
+        const int16_t expected_negative = speed_outer ?
+            ((index & 1u) != 0u ? 3 : -5) : ((index & 1u) != 0u ? 15 : -17);
+        TEST_CHECK(actual == expected_negative);
         LKMotorSetRef(motors[index], 0.0f);
         motors[index]->measure.total_angle = 0.0f;
         motors[index]->measure.speed_rads = 0.0f;
@@ -525,8 +528,7 @@ static void test_current_loop_ignores_axis_direction_flags(void)
     Motor_Init_Config_s config = config_for(0u, 1u);
     config.controller_setting_init_config.outer_loop_type = CURRENT_LOOP;
     config.controller_setting_init_config.close_loop_type = CURRENT_LOOP;
-    config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
-    config.controller_setting_init_config.feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE;
+    config.output_axis.direction = MOTOR_AXIS_DIRECTION_REVERSE;
     config.controller_param_init_config.current_PID = pid_config(0.25f, 1000.0f);
     LKMotorInstance *motor = LKMotorInit(&config);
     TEST_CHECK(motor != NULL);
@@ -536,7 +538,7 @@ static void test_current_loop_ignores_axis_direction_flags(void)
     LKMotorControl();
     now_us = 1000u;
     LKMotorControl();
-    TEST_CHECK(tx_frame[0][0] == 0xF9u && tx_frame[0][1] == 0xFFu);
+    TEST_CHECK(tx_frame[0][0] == 7u && tx_frame[0][1] == 0u);
 }
 
 static void test_open_loop_keeps_motor_direction(void)
@@ -544,8 +546,7 @@ static void test_open_loop_keeps_motor_direction(void)
     Motor_Init_Config_s config = config_for(0u, 1u);
     config.controller_setting_init_config.outer_loop_type = OPEN_LOOP;
     config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
-    config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
-    config.controller_setting_init_config.feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE;
+    config.output_axis.direction = MOTOR_AXIS_DIRECTION_REVERSE;
     LKMotorInstance *motor = LKMotorInit(&config);
     TEST_CHECK(motor != NULL);
     LKMotorSetRef(motor, 9.0f);
@@ -554,12 +555,12 @@ static void test_open_loop_keeps_motor_direction(void)
     LKMotorControl();
     now_us = 1000u;
     LKMotorControl();
-    TEST_CHECK(tx_frame[0][0] == 0xF7u && tx_frame[0][1] == 0xFFu);
+    TEST_CHECK(tx_frame[0][0] == 9u && tx_frame[0][1] == 0u);
 
     LKMotorSetRef(motor, -9.0f);
     now_us = 2000u;
     LKMotorControl();
-    TEST_CHECK(tx_frame[0][0] == 0x09u && tx_frame[0][1] == 0x00u);
+    TEST_CHECK(tx_frame[0][0] == 0xF7u && tx_frame[0][1] == 0xFFu);
 
     LKMotorSetRef(motor, 0.0f);
     now_us = 3000u;
@@ -575,17 +576,20 @@ static void test_invalid_direction_flags_rejected(void)
     config = config_for(0u, 1u);
     config.controller_setting_init_config.feedback_reverse_flag = (Feedback_Reverse_Flag_e)2;
     TEST_CHECK(LKMotorInit(&config) == NULL);
+    config = config_for(0u, 1u);
+    config.output_axis.direction = (Motor_Axis_Direction_e)0;
+    TEST_CHECK(LKMotorInit(&config) == NULL);
     TEST_CHECK(filter_count[0] == 0u && bus_start_count[0] == 0u);
 }
 
 static void test_feedforward_paths_and_recovery(void)
 {
-    float external_angle = 20.0f;
-    float external_speed = 4.0f;
-    float speed_feedforward = 5.0f;
-    float current_feedforward = 7.0f;
-    static const int16_t expected_current[LK_MOTOR_PER_BUS_CNT] = {14, -31, 15, -30};
-    static const uint8_t expected_frame[8] = {14u, 0u, 0xE1u, 0xFFu, 15u, 0u, 0xE2u, 0xFFu};
+    float external_angle = 0.5f;
+    float external_speed = 0.5f;
+    float speed_feedforward = 0.25f;
+    float current_feedforward = 0.5f;
+    static const int16_t expected_current[LK_MOTOR_PER_BUS_CNT] = {5, 3, 5, 2};
+    static const uint8_t expected_frame[8] = {5u, 0u, 3u, 0u, 5u, 0u, 2u, 0u};
 
     Motor_Init_Config_s invalid = config_for(0u, 1u);
     invalid.controller_setting_init_config.close_loop_type = ALL_THREE_LOOP;
@@ -614,26 +618,34 @@ static void test_feedforward_paths_and_recovery(void)
         config.controller_setting_init_config.feedforward_flag =
             index == 1u ? SPEED_FEEDFORWARD : index == 2u ? CURRENT_FEEDFORWARD :
             index == 3u ? CURRENT_AND_SPEED_FEEDFORWARD : FEEDFORWARD_NONE;
-        config.controller_param_init_config.other_angle_feedback_ptr =
-            (index == 1u || index == 3u) ? &external_angle : NULL;
-        config.controller_param_init_config.other_speed_feedback_ptr =
-            (index == 2u || index == 3u) ? &external_speed : NULL;
-        config.controller_param_init_config.speed_feedforward_ptr =
-            (index == 1u || index == 3u) ? &speed_feedforward : NULL;
-        config.controller_param_init_config.current_feedforward_ptr =
-            (index == 2u || index == 3u) ? &current_feedforward : NULL;
+        config.controller_param_init_config.other_angle_feedback =
+            (index == 1u || index == 3u) ? MotorFeedbackTestMakeSource(&external_angle,
+                MotorFeedbackTestReadRadExternal, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL) :
+                (Motor_Signal_Source_s){0};
+        config.controller_param_init_config.other_speed_feedback =
+            (index == 2u || index == 3u) ? MotorFeedbackTestMakeSource(&external_speed,
+                MotorFeedbackTestReadRadSExternal, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL) :
+                (Motor_Signal_Source_s){0};
+        config.controller_param_init_config.speed_feedforward =
+            (index == 1u || index == 3u) ? MotorFeedbackTestMakeSource(&speed_feedforward,
+                MotorFeedbackTestReadRadSOutput, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_OUTPUT_AXIS) :
+                (Motor_Signal_Source_s){0};
+        config.controller_param_init_config.current_feedforward =
+            (index == 2u || index == 3u) ? MotorFeedbackTestMakeSource(&current_feedforward,
+                MotorFeedbackTestReadDeviceCurrentOutput, MOTOR_UNIT_DEVICE_CURRENT,
+                MOTOR_REFERENCE_OUTPUT_AXIS) : (Motor_Signal_Source_s){0};
         config.controller_param_init_config.angle_PID = pid_config(2.0f, 1000.0f);
         config.controller_param_init_config.speed_PID = pid_config(3.0f, 1000.0f);
         config.controller_param_init_config.current_PID = pid_config(1.0f, 1000.0f);
 
         LKMotorInstance *motor = LKMotorInit(&config);
         TEST_CHECK(motor != NULL);
-        TEST_CHECK(motor->speed_feedforward_ptr == config.controller_param_init_config.speed_feedforward_ptr);
-        TEST_CHECK(motor->current_feedforward_ptr == config.controller_param_init_config.current_feedforward_ptr);
-        motor->measure.total_angle = 10.0f;
-        motor->measure.speed_rads = 2.0f;
-        motor->measure.real_current = 100;
-        LKMotorSetRef(motor, 30.0f);
+        TEST_CHECK(motor->speed_feedforward.context == config.controller_param_init_config.speed_feedforward.context);
+        TEST_CHECK(motor->current_feedforward.context == config.controller_param_init_config.current_feedforward.context);
+        motor->measure.total_angle = 0.0f;
+        motor->measure.speed_rads = 0.25f;
+        motor->measure.real_current = 0;
+        LKMotorSetRef(motor, 1.0f);
     }
 
     now_us = 0u;
@@ -650,18 +662,18 @@ static void test_feedforward_paths_and_recovery(void)
     now_us += 1000u;
     LKMotorControl();
     TEST_CHECK(tx_frame[0][2] == 0u && tx_frame[0][3] == 0u);
-    TEST_CHECK(tx_frame[0][0] == 14u && tx_frame[0][4] == 15u);
+    TEST_CHECK(tx_frame[0][0] == 5u && tx_frame[0][4] == 5u);
     TEST_CHECK(tx_frame[0][6] == 0u && tx_frame[0][7] == 0u);
-    speed_feedforward = 5.0f;
+    speed_feedforward = 0.25f;
     now_us += 1000u;
     LKMotorControl();
-    TEST_CHECK(tx_frame[0][2] == 0xE1u && tx_frame[0][3] == 0xFFu);
-    TEST_CHECK(tx_frame[0][6] == 0xE2u && tx_frame[0][7] == 0xFFu);
+    TEST_CHECK(tx_frame[0][2] == 3u && tx_frame[0][3] == 0u);
+    TEST_CHECK(tx_frame[0][6] == 2u && tx_frame[0][7] == 0u);
 }
 
 static void test_feedback_failure_recovery(void)
 {
-    float external_angle = 20.0f;
+    float external_angle = 0.5f;
     Motor_Init_Config_s invalid = config_for(0u, 1u);
     invalid.controller_setting_init_config.close_loop_type = ANGLE_LOOP;
     invalid.controller_setting_init_config.outer_loop_type = ANGLE_LOOP;
@@ -672,7 +684,8 @@ static void test_feedback_failure_recovery(void)
     invalid.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
     invalid.controller_setting_init_config.close_loop_type = ALL_THREE_LOOP;
     invalid.controller_setting_init_config.speed_feedback_source = OTHER_FEED;
-    invalid.controller_param_init_config.other_angle_feedback_ptr = &external_angle;
+    invalid.controller_param_init_config.other_angle_feedback = MotorFeedbackTestMakeSource(
+        &external_angle, MotorFeedbackTestReadRadExternal, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL);
     TEST_CHECK(LKMotorInit(&invalid) == NULL);
     TEST_CHECK(filter_count[0] == 0u && bus_start_count[0] == 0u);
 
@@ -681,24 +694,25 @@ static void test_feedback_failure_recovery(void)
     config.controller_setting_init_config.outer_loop_type = ANGLE_LOOP;
     config.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
     config.controller_setting_init_config.speed_feedback_source = OTHER_FEED;
-    config.controller_param_init_config.other_angle_feedback_ptr = &external_angle;
+    config.controller_param_init_config.other_angle_feedback = MotorFeedbackTestMakeSource(
+        &external_angle, MotorFeedbackTestReadRadExternal, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL);
     config.controller_param_init_config.angle_PID = pid_config(2.0f, 1000.0f);
     LKMotorInstance *motor = LKMotorInit(&config);
     TEST_CHECK(motor != NULL);
-    TEST_CHECK(motor->other_speed_feedback_ptr == NULL);
-    motor->measure.total_angle = 10.0f;
-    LKMotorSetRef(motor, 30.0f);
+    TEST_CHECK(motor->other_speed_feedback.read == NULL);
+    motor->measure.total_angle = 0.5f * (float)RAD_2_DEGREE;
+    LKMotorSetRef(motor, 1.0f);
 
     now_us = 0u;
     LKMotorControl();
     now_us = 1000u;
     LKMotorControl();
-    TEST_CHECK(tx_frame[0][0] == 20u && tx_frame[0][1] == 0u);
+    TEST_CHECK(tx_frame[0][0] == 1u && tx_frame[0][1] == 0u);
 
     external_angle = NAN;
     now_us += 1000u;
     LKMotorControl();
-    TEST_CHECK(motor->pid_clock.last_status == PID_BAD_ARGUMENT);
+    TEST_CHECK(motor->pid_clock.last_status == PID_NUMERIC_ERROR);
     TEST_CHECK(tx_frame[0][0] == 0u && tx_frame[0][1] == 0u);
     PID_State_t state = {0};
     TEST_CHECK(PIDGetState(&motor->angle_PID, &state) == PID_OK);
@@ -706,10 +720,10 @@ static void test_feedback_failure_recovery(void)
                state.Iout == 0.0f && state.Pout == 0.0f && state.Dout == 0.0f &&
                state.Output == 0.0f);
 
-    external_angle = 10.0f;
+    external_angle = 0.25f;
     now_us += 1000u;
     LKMotorControl();
-    TEST_CHECK(tx_frame[0][0] == 40u && tx_frame[0][1] == 0u);
+    TEST_CHECK(tx_frame[0][0] == 1u && tx_frame[0][1] == 0u);
 
     motor->motor_settings.angle_feedback_source = (Feedback_Source_e)2;
     now_us += 1000u;
@@ -719,7 +733,7 @@ static void test_feedback_failure_recovery(void)
     motor->motor_settings.angle_feedback_source = MOTOR_FEED;
     now_us += 1000u;
     LKMotorControl();
-    TEST_CHECK(tx_frame[0][0] == 40u && tx_frame[0][1] == 0u);
+    TEST_CHECK(tx_frame[0][0] == 1u && tx_frame[0][1] == 0u);
 
     motor->motor_settings.close_loop_type = ANGLE_LOOP | SPEED_LOOP;
     motor->motor_settings.outer_loop_type = SPEED_LOOP;
@@ -732,7 +746,7 @@ static void test_feedback_failure_recovery(void)
     motor->motor_settings.outer_loop_type = ANGLE_LOOP;
     now_us += 1000u;
     LKMotorControl();
-    TEST_CHECK(tx_frame[0][0] == 40u && tx_frame[0][1] == 0u);
+    TEST_CHECK(tx_frame[0][0] == 1u && tx_frame[0][1] == 0u);
 }
 
 static void test_feedforward_overflow(void)
@@ -742,7 +756,8 @@ static void test_feedforward_overflow(void)
     config.controller_setting_init_config.close_loop_type = ANGLE_LOOP;
     config.controller_setting_init_config.outer_loop_type = ANGLE_LOOP;
     config.controller_setting_init_config.feedforward_flag = SPEED_FEEDFORWARD;
-    config.controller_param_init_config.speed_feedforward_ptr = &feedforward;
+    config.controller_param_init_config.speed_feedforward = MotorFeedbackTestMakeSource(
+        &feedforward, MotorFeedbackTestReadRadSOutput, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_OUTPUT_AXIS);
     config.controller_param_init_config.angle_PID = pid_config(1.0f, FLT_MAX);
     LKMotorInstance *motor = LKMotorInit(&config);
     TEST_CHECK(motor != NULL);

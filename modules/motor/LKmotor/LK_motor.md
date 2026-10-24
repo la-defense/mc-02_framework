@@ -27,16 +27,16 @@ LK 注册只允许在启动阶段串行完成，并且要早于 CAN 接收派发
 
 ## 闭环反馈与前馈
 
-角度分支在 `outer_loop_type == ANGLE_LOOP` 时运行：`angle_feedback_source` 选择内部 `measure.total_angle`（deg）或调用方外部角度值（deg），并由 `angle_PID` 计算。速度分支在外层配置含角度或速度位且速度环启用时运行：`speed_feedback_source` 选择内部 `measure.speed_rads`（rad/s）或外部速度值（rad/s），并由独立的 `speed_PID` 计算。电流环使用本机 `real_current` 及 `current_PID`。
+角度分支在 `outer_loop_type == ANGLE_LOOP` 时运行：`angle_feedback_source` 选择内部总角度或外部角度快照，二者均按输出轴 rad 进入 `angle_PID`。速度分支在外层配置含角度或速度位且速度环启用时运行：`speed_feedback_source` 选择内部速度或外部速度快照，二者均按输出轴 rad/s 进入独立的 `speed_PID`。设备原始单圈角度字段仍是 deg，驱动在控制前转换为输出轴坐标；电流环使用本机设备电流数值及 `current_PID`。
 
 速度前馈沿用原位置，在角度 PID 之后加入；当前输出前馈沿用原位置，在速度 PID 之后、当前 PID 之前加入。只有该分支会实际读取的反馈和前馈指针才要求非空；其余指针可留空。指针指向的值在控制轮次中各读取一次，调用方需保证存储持续有效。外部共享数据的跨任务同步仍由 R25-14 跟踪。
 
 初始化只检查实际会运行的 PID 配置。若之后通过公开实例字段切换到未初始化 PID，或反馈来源枚举、指针、数值变为无效，控制轮停止后续计算，将该电机槽位写零并清除三环历史；恢复合法数据后，下一轮可重新计算。总角度的初始参考和跨圈可信度仍由相关 LK TODO 跟踪。控制公式及主机数值回归见 [LK9025.c](LK9025.c)、[LK CAN 集成测试](../../../tests/host/lk_motor_bsp_can_test.c) 和 [MOTOR-01/02 记录](../../../docs/workflow/tickets/MOTOR-01-02.md)。
 
-主机回归还覆盖固定串级数值、四种内部／外部反馈组合、独立 PID、两种前馈单独及组合、非法来源、非有限输入、前馈溢出与恢复；测试链接生产 `LK9025.c`、PID、Daemon 和 BSP CAN，仅替换 HAL、时间和日志。当前没有连接开发板或实际 LK 电机，因此不对物理链路、ACK、单位标定或电机性能作结论。
+实例的 `output_axis` 明确保存转子／输出轴减速比及安装方向；只读反馈快照同时带位置／速度单位、参考系、样本时刻、序号和有效性。主机回归覆盖固定串级数值、四种内部／外部反馈组合、独立 PID、两种前馈单独及组合、非法来源、非有限输入、前馈溢出与恢复；测试链接生产 `LK9025.c`、PID、Daemon 和 BSP CAN，仅替换 HAL、时间和日志。当前没有连接开发板或实际 LK 电机，因此不对物理链路、ACK、方向／减速比标定或电机性能作结论。
 
 ## 方向标志（MC02-0018）
 
-角度或速度作为最外环时，`motor_reverse_flag` 在进入 PID 前翻转外层目标；`feedback_reverse_flag` 在全部 PID 和前馈计算后翻转最终命令。这样沿用 DJI／XM 驱动已有的目标方向与输出方向分离规则。两个标志的默认 `NORMAL` 不改变既有方向。开环和电流外环保留原行为：只在最终输出端应用 `motor_reverse_flag`，忽略 `feedback_reverse_flag`。
+LK9025 初始化要求旧 `motor_reverse_flag` 与 `feedback_reverse_flag` 保持 `NORMAL`，方向统一由 `output_axis.direction` 决定。角度／速度测量和目标先转换到输出轴坐标，闭环输出映回转子方向；直接电流值仍使用设备侧量纲，不自动套用角度方向。历史兼容标志行为见 [MOTOR-01/02 记录](../../../docs/workflow/tickets/MOTOR-01-02.md)，当前接口和单位见 [MC02-0072 记录](../../../docs/workflow/tickets/MC02-0072.md)。
 
-初始化拒绝不属于 `NORMAL`／`REVERSE` 的枚举值，并在注册 CAN 或 Daemon 前失败。主机测试用生产控制及 CAN 发送代码检查角度／速度闭环的正、反、零参考和四种标志组合，也验证电流外环兼容和非法值拒绝；不据此推断接线极性或实际电机旋向。详见 [MC02-0018 记录](../../../docs/workflow/tickets/MC02-0018-0019.md)。
+初始化在注册 CAN 或 Daemon 前拒绝旧方向字段非 `NORMAL` 或输出轴配置非法。生产主机回归覆盖输出轴正反向转换和控制结果；不据此推断接线极性或实际电机旋向。详见 [MC02-0072 记录](../../../docs/workflow/tickets/MC02-0072.md)。

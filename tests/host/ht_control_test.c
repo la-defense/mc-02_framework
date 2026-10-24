@@ -7,6 +7,7 @@
 #include "cmsis_os.h"
 #include "test_check.h"
 #include "general_def.h"
+#include "motor_feedback_test_support.h"
 #include <float.h>
 #include <math.h>
 #include <setjmp.h>
@@ -60,9 +61,11 @@ DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
 
 void DaemonReload(DaemonInstance *instance) { (void)instance; }
 uint8_t DaemonIsOnline(DaemonInstance *instance) { (void)instance; return 1u; }
+uint8_t DaemonUnregister(DaemonInstance *instance) { (void)instance; return 1u; }
 uint64_t DWT_GetTimeline_us(void) { return now_us; }
 float DWT_GetDeltaT(uint32_t *counter) { ++*counter; return 0.001f; }
 void DWT_Delay(float seconds) { (void)seconds; }
+uint32_t HAL_GetTick(void) { return (uint32_t)(now_us / 1000u); }
 
 void *osThreadCreate(const osThreadDef_t *definition, void *argument)
 {
@@ -105,18 +108,25 @@ static Motor_Init_Config_s config_for(float *external_angle, float *external_spe
     Motor_Control_Setting_s *setting = &config.controller_setting_init_config;
     Motor_Controller_Init_s *controller = &config.controller_param_init_config;
     config.motor_type = HT04;
+    config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL};
     setting->outer_loop_type = ANGLE_LOOP;
     setting->close_loop_type = ALL_THREE_LOOP;
     setting->motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
     setting->angle_feedback_source = MOTOR_FEED;
     setting->speed_feedback_source = MOTOR_FEED;
     setting->feedforward_flag = feedforward_flags;
-    controller->other_angle_feedback_ptr = external_angle;
-    controller->other_speed_feedback_ptr = external_speed;
-    controller->speed_feedforward_ptr = speed_feedforward;
-    controller->current_feedforward_ptr = current_feedforward;
+    controller->other_angle_feedback = MotorFeedbackTestMakeSource(external_angle,
+        MotorFeedbackTestReadRadExternal, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL);
+    controller->other_speed_feedback = MotorFeedbackTestMakeSource(external_speed,
+        MotorFeedbackTestReadRadSExternal, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL);
+    controller->speed_feedforward = MotorFeedbackTestMakeSource(speed_feedforward,
+        MotorFeedbackTestReadRadSOutput, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_OUTPUT_AXIS);
+    controller->current_feedforward = MotorFeedbackTestMakeSource(current_feedforward,
+        MotorFeedbackTestReadDeviceTorqueOutput, MOTOR_UNIT_DEVICE_TORQUE,
+        MOTOR_REFERENCE_OUTPUT_AXIS);
     controller->angle_PID = pid_config(0.5f, 1000.0f);
-    controller->speed_PID = pid_config(1.0f, 1000.0f);
+    // 速度输入从每秒度数换成 rad/s 后，按比例换算保留旧输出量级。
+    controller->speed_PID = pid_config((float)RAD_2_DEGREE, 1000.0f);
     controller->current_PID = pid_config(1.0f, 1000.0f);
     return config;
 }
@@ -160,9 +170,9 @@ static void test_feedback_combination(unsigned combination)
         (combination & 2u) != 0u ? OTHER_FEED : MOTOR_FEED;
     HTMotorInstance *motor = HTMotorInit(&config);
     TEST_CHECK(motor != NULL);
-    TEST_CHECK(motor->other_angle_feedback_ptr == &external_angle);
-    TEST_CHECK(motor->other_speed_feedback_ptr == &external_speed);
-    HTMotorSetRef(motor, 30.0f);
+    TEST_CHECK(motor->other_angle_feedback.context == &external_angle);
+    TEST_CHECK(motor->other_speed_feedback.context == &external_speed);
+    HTMotorSetRef(motor, 30.0f / (float)RAD_2_DEGREE);
     motor->measure.total_angle = 10.0f / (float)RAD_2_DEGREE;
     motor->measure.speed_rads = 2.0f / (float)RAD_2_DEGREE;
     motor->measure.real_current = 3.0f;
@@ -178,35 +188,35 @@ static void test_feedback_combination(unsigned combination)
 
 static void test_direction_combination(uint8_t speed_outer, unsigned combination)
 {
-    static const double angle_positive[4] = {3.0, -12.0, -3.0, 12.0};
-    static const double angle_negative[4] = {-12.0, 3.0, 12.0, -3.0};
-    static const double speed_positive[4] = {5.0, -10.0, -5.0, 10.0};
-    static const double speed_negative[4] = {-10.0, 5.0, 10.0, -5.0};
-    TEST_CHECK(combination < 4u);
+    TEST_CHECK(combination < 2u);
     Motor_Init_Config_s config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
     Motor_Control_Setting_s *setting = &config.controller_setting_init_config;
     setting->outer_loop_type = speed_outer ? SPEED_LOOP : ANGLE_LOOP;
     setting->close_loop_type = speed_outer ? SPEED_LOOP : (ANGLE_LOOP | SPEED_LOOP);
-    setting->motor_reverse_flag = (combination & 1u) != 0u ? MOTOR_DIRECTION_REVERSE : MOTOR_DIRECTION_NORMAL;
-    setting->feedback_reverse_flag = (combination & 2u) != 0u ?
-        FEEDBACK_DIRECTION_REVERSE : FEEDBACK_DIRECTION_NORMAL;
+    config.output_axis.direction = combination == 0u ? MOTOR_AXIS_DIRECTION_NORMAL :
+                                                       MOTOR_AXIS_DIRECTION_REVERSE;
     config.controller_param_init_config.angle_PID = pid_config(0.25f, 1000.0f);
-    config.controller_param_init_config.speed_PID = pid_config(speed_outer ? 0.25f : 1.0f, 1000.0f);
+    config.controller_param_init_config.speed_PID = pid_config(
+        (speed_outer ? 0.25f : 1.0f) * (float)RAD_2_DEGREE, 1000.0f);
 
     HTMotorInstance *motor = HTMotorInit(&config);
     TEST_CHECK(motor != NULL);
-    HTMotorSetRef(motor, 30.0f);
+    HTMotorSetRef(motor, 30.0f / (float)RAD_2_DEGREE);
     motor->measure.total_angle = 10.0f / (float)RAD_2_DEGREE;
     motor->measure.speed_rads = (speed_outer ? 10.0f : 2.0f) / (float)RAD_2_DEGREE;
     HTMotorControlInit();
 
     now_us = 0u;
     run_task(0u, 2u);
-    check_torque(motor, speed_outer ? speed_positive[combination] : angle_positive[combination]);
+    const double positive_torque = speed_outer ?
+        (combination == 0u ? 5.0 : -10.0) : (combination == 0u ? 3.0 : -12.0);
+    check_torque(motor, positive_torque);
 
-    HTMotorSetRef(motor, -30.0f);
+    HTMotorSetRef(motor, -30.0f / (float)RAD_2_DEGREE);
     run_task(0u, 1u);
-    check_torque(motor, speed_outer ? speed_negative[combination] : angle_negative[combination]);
+    const double negative_torque = speed_outer ?
+        (combination == 0u ? -10.0 : 5.0) : (combination == 0u ? -12.0 : 3.0);
+    check_torque(motor, negative_torque);
 
     HTMotorSetRef(motor, 0.0f);
     motor->measure.total_angle = 0.0f;
@@ -220,8 +230,6 @@ static void test_current_loop_ignores_axis_direction_flags(void)
     Motor_Init_Config_s config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
     config.controller_setting_init_config.outer_loop_type = CURRENT_LOOP;
     config.controller_setting_init_config.close_loop_type = CURRENT_LOOP;
-    config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
-    config.controller_setting_init_config.feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE;
     config.controller_param_init_config.current_PID = pid_config(0.25f, 1000.0f);
     HTMotorInstance *motor = HTMotorInit(&config);
     TEST_CHECK(motor != NULL);
@@ -230,7 +238,7 @@ static void test_current_loop_ignores_axis_direction_flags(void)
 
     now_us = 0u;
     run_task(0u, 2u);
-    check_torque(motor, -7.5);
+    check_torque(motor, 7.5);
 }
 
 static void test_open_loop_keeps_motor_direction(void)
@@ -239,8 +247,7 @@ static void test_open_loop_keeps_motor_direction(void)
     Motor_Control_Setting_s *setting = &config.controller_setting_init_config;
     setting->outer_loop_type = OPEN_LOOP;
     setting->close_loop_type = OPEN_LOOP;
-    setting->motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
-    setting->feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE;
+    config.output_axis.direction = MOTOR_AXIS_DIRECTION_REVERSE;
     HTMotorInstance *motor = HTMotorInit(&config);
     TEST_CHECK(motor != NULL);
     HTMotorSetRef(motor, 9.0f);
@@ -248,11 +255,11 @@ static void test_open_loop_keeps_motor_direction(void)
 
     now_us = 0u;
     run_task(0u, 2u);
-    check_torque(motor, -9.0);
+    check_torque(motor, 9.0);
 
     HTMotorSetRef(motor, -9.0f);
     run_task(0u, 1u);
-    check_torque(motor, 9.0);
+    check_torque(motor, -9.0);
 
     HTMotorSetRef(motor, 0.0f);
     run_task(0u, 1u);
@@ -262,6 +269,9 @@ static void test_open_loop_keeps_motor_direction(void)
 static void test_invalid_direction_flags_rejected(void)
 {
     Motor_Init_Config_s config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
+    config.output_axis.direction = (Motor_Axis_Direction_e)2;
+    TEST_CHECK(HTMotorInit(&config) == NULL);
+    config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
     config.controller_setting_init_config.motor_reverse_flag = (Motor_Reverse_Flag_e)2;
     TEST_CHECK(HTMotorInit(&config) == NULL);
     config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
@@ -272,15 +282,15 @@ static void test_invalid_direction_flags_rejected(void)
 
 static void test_feedforward_copy_and_use(unsigned flags)
 {
-    float speed_feedforward = 2.0f;
+    float speed_feedforward = 2.0f / (float)RAD_2_DEGREE;
     float current_feedforward = 1.0f;
     Motor_Init_Config_s config = config_for(NULL, NULL, &speed_feedforward,
                                             &current_feedforward, (Feedfoward_Type_e)flags);
     HTMotorInstance *motor = HTMotorInit(&config);
     TEST_CHECK(motor != NULL);
-    TEST_CHECK(motor->speed_feedforward_ptr == &speed_feedforward);
-    TEST_CHECK(motor->current_feedforward_ptr == &current_feedforward);
-    HTMotorSetRef(motor, 30.0f);
+    TEST_CHECK(motor->speed_feedforward.context == &speed_feedforward);
+    TEST_CHECK(motor->current_feedforward.context == &current_feedforward);
+    HTMotorSetRef(motor, 30.0f / (float)RAD_2_DEGREE);
     motor->measure.total_angle = 10.0f / (float)RAD_2_DEGREE;
     motor->measure.speed_rads = 2.0f / (float)RAD_2_DEGREE;
     motor->measure.real_current = 3.0f;
@@ -336,22 +346,22 @@ static void test_runtime_failure_and_recovery(void)
     config.controller_param_init_config.speed_PID = (PID_Init_Config_s){0};
     HTMotorInstance *motor = HTMotorInit(&config);
     TEST_CHECK(motor != NULL);
-    HTMotorSetRef(motor, 30.0f);
+    HTMotorSetRef(motor, 30.0f / (float)RAD_2_DEGREE);
     motor->measure.total_angle = 10.0f / (float)RAD_2_DEGREE;
     HTMotorControlInit();
 
     now_us = 0u;
     run_task(0u, 2u);
-    check_torque(motor, 5.0);
+    check_torque(motor, 0.5 * (10.0 / (double)RAD_2_DEGREE));
 
     external_angle = NAN;
     run_task(0u, 1u);
-    TEST_CHECK(motor->pid_clock.last_status == PID_BAD_ARGUMENT);
+    TEST_CHECK(motor->pid_clock.last_status == PID_NUMERIC_ERROR);
     check_torque(motor, 0.0);
 
     external_angle = 10.0f / (float)RAD_2_DEGREE;
     run_task(0u, 1u);
-    check_torque(motor, 10.0);
+    check_torque(motor, 0.5 * (20.0 / (double)RAD_2_DEGREE));
 
     motor->motor_settings.angle_feedback_source = (Feedback_Source_e)2;
     run_task(0u, 1u);
@@ -360,7 +370,7 @@ static void test_runtime_failure_and_recovery(void)
 
     motor->motor_settings.angle_feedback_source = MOTOR_FEED;
     run_task(0u, 1u);
-    check_torque(motor, 10.0);
+    check_torque(motor, 0.5 * (20.0 / (double)RAD_2_DEGREE));
 
     // 切到启动时未配置的速度 PID 后，本轮失败并清零；切回有效角度环可恢复。
     motor->motor_settings.close_loop_type = ANGLE_LOOP | SPEED_LOOP;
@@ -372,7 +382,7 @@ static void test_runtime_failure_and_recovery(void)
     motor->motor_settings.close_loop_type = ANGLE_LOOP;
     motor->motor_settings.outer_loop_type = ANGLE_LOOP;
     run_task(0u, 1u);
-    check_torque(motor, 10.0);
+    check_torque(motor, 0.5 * (20.0 / (double)RAD_2_DEGREE));
 }
 
 static void test_runtime_speed_failure_and_recovery(void)
@@ -384,7 +394,7 @@ static void test_runtime_speed_failure_and_recovery(void)
     config.controller_setting_init_config.speed_feedback_source = OTHER_FEED;
     HTMotorInstance *motor = HTMotorInit(&config);
     TEST_CHECK(motor != NULL);
-    HTMotorSetRef(motor, 30.0f);
+    HTMotorSetRef(motor, 30.0f / (float)RAD_2_DEGREE);
     motor->measure.speed_rads = 2.0f / (float)RAD_2_DEGREE;
     motor->measure.real_current = 3.0f;
     HTMotorControlInit();
@@ -396,7 +406,7 @@ static void test_runtime_speed_failure_and_recovery(void)
 
     external_speed = NAN;
     run_task(0u, 1u);
-    TEST_CHECK(motor->pid_clock.last_status == PID_BAD_ARGUMENT);
+    TEST_CHECK(motor->pid_clock.last_status == PID_NUMERIC_ERROR);
     check_torque(motor, 0.0);
     PID_State_t speed_state = {0};
     PID_State_t current_state = {0};
@@ -420,11 +430,12 @@ static void test_runtime_speed_failure_and_recovery(void)
     check_torque(motor, 0.0);
 
     motor->motor_settings.speed_feedback_source = OTHER_FEED;
-    motor->other_speed_feedback_ptr = NULL;
+    motor->other_speed_feedback.read = NULL;
     run_task(0u, 1u);
     TEST_CHECK(motor->pid_clock.last_status == PID_BAD_ARGUMENT);
     check_torque(motor, 0.0);
-    motor->other_speed_feedback_ptr = &external_speed;
+    motor->other_speed_feedback = MotorFeedbackTestMakeSource(&external_speed,
+        MotorFeedbackTestReadRadSExternal, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL);
 
     // FLT_MAX 本身有限，乘以弧度转角度系数后会溢出，不能送入 PID。
     external_speed = FLT_MAX;
@@ -445,12 +456,12 @@ static void test_feedforward_overflow(void)
     config.controller_param_init_config.angle_PID = pid_config(1.0f, FLT_MAX);
     HTMotorInstance *motor = HTMotorInit(&config);
     TEST_CHECK(motor != NULL);
-    HTMotorSetRef(motor, 100.0f);
+    HTMotorSetRef(motor, 100.0f / (float)RAD_2_DEGREE);
     motor->measure.total_angle = 0.0f;
     HTMotorControlInit();
     now_us = 0u;
     run_task(0u, 2u);
-    TEST_CHECK(motor->pid_clock.last_status == PID_BAD_ARGUMENT);
+    TEST_CHECK(motor->pid_clock.last_status == PID_NUMERIC_ERROR);
     check_torque(motor, 0.0);
 
     speed_feedforward = FLT_MAX;
@@ -475,6 +486,8 @@ int main(int argc, char **argv)
         test_open_loop_keeps_motor_direction();
     else if (strcmp(argv[1], "direction-invalid") == 0)
         test_invalid_direction_flags_rejected();
+    else if (strcmp(argv[1], "feedforward_overflow") == 0)
+        test_feedforward_overflow();
     else if (strncmp(argv[1], "feedforward_", 12u) == 0)
         test_feedforward_copy_and_use((unsigned)(argv[1][12] - '0'));
     else if (strcmp(argv[1], "init_failures") == 0)
@@ -484,9 +497,6 @@ int main(int argc, char **argv)
     else if (strcmp(argv[1], "runtime_speed_failure") == 0)
         test_runtime_speed_failure_and_recovery();
     else
-    {
-        TEST_CHECK(strcmp(argv[1], "feedforward_overflow") == 0);
-        test_feedforward_overflow();
-    }
+        TEST_CHECK(0 && "unknown HT control scenario");
     return EXIT_SUCCESS;
 }

@@ -7,9 +7,70 @@
 #include "ins_task.h"
 #include "message_center.h"
 #include "general_def.h"
+#include <string.h>
 
 static attitude_t *gimba_IMU_data; // 云台IMU数据
 static DJIMotorInstance *yaw_motor, *pitch_motor;
+
+typedef enum
+{
+    GIMBAL_SOURCE_YAW_POSITION = 0,
+    GIMBAL_SOURCE_YAW_SPEED,
+    GIMBAL_SOURCE_PITCH_POSITION,
+    GIMBAL_SOURCE_PITCH_SPEED,
+} GimbalSourceField_e;
+
+typedef struct
+{
+    GimbalSourceField_e field;
+} GimbalSourceContext_s;
+
+static const GimbalSourceContext_s yaw_position_context = {GIMBAL_SOURCE_YAW_POSITION};
+static const GimbalSourceContext_s yaw_speed_context = {GIMBAL_SOURCE_YAW_SPEED};
+static const GimbalSourceContext_s pitch_position_context = {GIMBAL_SOURCE_PITCH_POSITION};
+static const GimbalSourceContext_s pitch_speed_context = {GIMBAL_SOURCE_PITCH_SPEED};
+
+static Motor_Feedback_Status_e ReadGimbalSignal(const void *context,
+                                                Motor_Signal_Snapshot_s *snapshot)
+{
+    if (context == NULL || snapshot == NULL)
+        return MOTOR_FEEDBACK_BAD_ARGUMENT;
+
+    INS_Control_Snapshot_s ins;
+    if (INSGetControlSnapshot(&ins) == 0u || ins.sequence == 0u)
+        return MOTOR_FEEDBACK_NOT_READY;
+
+    const GimbalSourceContext_s *source = (const GimbalSourceContext_s *)context;
+    Motor_Signal_Snapshot_s candidate = {
+        .reference = MOTOR_REFERENCE_EXTERNAL,
+        .source_time_ms = ins.timestamp_ms,
+        .sequence = ins.sequence,
+        .valid = ins.valid,
+    };
+    switch (source->field)
+    {
+    case GIMBAL_SOURCE_YAW_POSITION:
+        candidate.value = ins.yaw_total_rad;
+        candidate.unit = MOTOR_UNIT_RAD;
+        break;
+    case GIMBAL_SOURCE_YAW_SPEED:
+        candidate.value = ins.gyro_rad_s[Z];
+        candidate.unit = MOTOR_UNIT_RAD_S;
+        break;
+    case GIMBAL_SOURCE_PITCH_POSITION:
+        candidate.value = ins.pitch_rad;
+        candidate.unit = MOTOR_UNIT_RAD;
+        break;
+    case GIMBAL_SOURCE_PITCH_SPEED:
+        candidate.value = ins.gyro_rad_s[X];
+        candidate.unit = MOTOR_UNIT_RAD_S;
+        break;
+    default:
+        return MOTOR_FEEDBACK_BAD_CONFIG;
+    }
+    *snapshot = candidate;
+    return MOTOR_FEEDBACK_OK;
+}
 
 static Publisher_t *gimbal_pub;                   // 云台应用消息发布者(云台反馈给cmd)
 static Subscriber_t *gimbal_sub;                  // cmd控制消息订阅者
@@ -29,14 +90,14 @@ uint8_t GimbalInit(void)
             .angle_PID = {
                 .DtMin_s = MOTOR_PID_DT_MIN_S,
                 .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 8, // 8
+                .Kp = 8, // rad/s per rad; gains retain their ratio when both angle axes use radians.
                 .Ki = 0,
                 .Kd = 0,
-                .DeadBand = 0.1,
+                .DeadBand = 0.1f * DEGREE_2_RAD,
                 .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                .IntegralLimit = 100,
+                .IntegralLimit = 100.0f * DEGREE_2_RAD,
 
-                .MaxOut = 500,
+                .MaxOut = 500.0f * DEGREE_2_RAD,
             },
             .speed_PID = {
                 .DtMin_s = MOTOR_PID_DT_MIN_S,
@@ -48,9 +109,14 @@ uint8_t GimbalInit(void)
                 .IntegralLimit = 3000,
                 .MaxOut = 20000,
             },
-            .other_angle_feedback_ptr = &gimba_IMU_data->YawTotalAngle,
-            // 外部角速度指向 INS 对应轴，安装方向须与本电机一致。
-            .other_speed_feedback_ptr = &gimba_IMU_data->Gyro[2],
+            .other_angle_feedback = {
+                .read = ReadGimbalSignal, .context = &yaw_position_context, .max_age_ms = 5u,
+                .unit = MOTOR_UNIT_RAD, .reference = MOTOR_REFERENCE_EXTERNAL,
+            },
+            .other_speed_feedback = {
+                .read = ReadGimbalSignal, .context = &yaw_speed_context, .max_age_ms = 5u,
+                .unit = MOTOR_UNIT_RAD_S, .reference = MOTOR_REFERENCE_EXTERNAL,
+            },
         },
         .controller_setting_init_config = {
             .angle_feedback_source = OTHER_FEED,
@@ -59,6 +125,7 @@ uint8_t GimbalInit(void)
             .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
         },
+        .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
         .motor_type = GM6020};
     // PITCH
     Motor_Init_Config_s pitch_config = {
@@ -70,12 +137,12 @@ uint8_t GimbalInit(void)
             .angle_PID = {
                 .DtMin_s = MOTOR_PID_DT_MIN_S,
                 .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 10, // 10
+                .Kp = 10,
                 .Ki = 0,
                 .Kd = 0,
                 .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                .IntegralLimit = 100,
-                .MaxOut = 500,
+                .IntegralLimit = 100.0f * DEGREE_2_RAD,
+                .MaxOut = 500.0f * DEGREE_2_RAD,
             },
             .speed_PID = {
                 .DtMin_s = MOTOR_PID_DT_MIN_S,
@@ -87,9 +154,14 @@ uint8_t GimbalInit(void)
                 .IntegralLimit = 2500,
                 .MaxOut = 20000,
             },
-            .other_angle_feedback_ptr = &gimba_IMU_data->Pitch,
-            // 外部角速度指向 INS 对应轴，安装方向须与本电机一致。
-            .other_speed_feedback_ptr = (&gimba_IMU_data->Gyro[0]),
+            .other_angle_feedback = {
+                .read = ReadGimbalSignal, .context = &pitch_position_context, .max_age_ms = 5u,
+                .unit = MOTOR_UNIT_RAD, .reference = MOTOR_REFERENCE_EXTERNAL,
+            },
+            .other_speed_feedback = {
+                .read = ReadGimbalSignal, .context = &pitch_speed_context, .max_age_ms = 5u,
+                .unit = MOTOR_UNIT_RAD_S, .reference = MOTOR_REFERENCE_EXTERNAL,
+            },
         },
         .controller_setting_init_config = {
             .angle_feedback_source = OTHER_FEED,
@@ -98,6 +170,7 @@ uint8_t GimbalInit(void)
             .close_loop_type = SPEED_LOOP | ANGLE_LOOP,
             .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
         },
+        .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
         .motor_type = GM6020,
     };
     // 这里只注册电机；实际是否运行由周期命令中的模式决定。
@@ -137,8 +210,8 @@ void GimbalTask()
         DJIMotorChangeFeed(yaw_motor, SPEED_LOOP, OTHER_FEED);
         DJIMotorChangeFeed(pitch_motor, ANGLE_LOOP, OTHER_FEED);
         DJIMotorChangeFeed(pitch_motor, SPEED_LOOP, OTHER_FEED);
-        DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw); // yaw和pitch会在robot_cmd中处理好多圈和单圈
-        DJIMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch);
+        DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw * DEGREE_2_RAD);
+        DJIMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch * DEGREE_2_RAD);
         break;
     // 自由模式当前也选择外部 IMU 反馈，与上面的 GYRO 分支处理相同。
     case GIMBAL_FREE_MODE: // 后续删除,或加入云台追地盘的跟随模式(响应速度更快)
@@ -148,8 +221,8 @@ void GimbalTask()
         DJIMotorChangeFeed(yaw_motor, SPEED_LOOP, OTHER_FEED);
         DJIMotorChangeFeed(pitch_motor, ANGLE_LOOP, OTHER_FEED);
         DJIMotorChangeFeed(pitch_motor, SPEED_LOOP, OTHER_FEED);
-        DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw); // yaw和pitch会在robot_cmd中处理好多圈和单圈
-        DJIMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch);
+        DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw * DEGREE_2_RAD);
+        DJIMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch * DEGREE_2_RAD);
         break;
     default:
         DJIMotorStop(yaw_motor);

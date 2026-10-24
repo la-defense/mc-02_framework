@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file LK9025.c
  * @brief 管理 LK 实例、解析反馈，并按物理 CAN 总线分别提交多电机帧。
  * 实例只在启动阶段登记，资源在运行期间长期保留。
@@ -6,11 +6,15 @@
 #include "LK9025.h"
 #include <string.h>
 #include <math.h>
+#include <float.h>
 #include "stdlib.h"
 #include "general_def.h"
 #include "daemon.h"
 #include "bsp_dwt.h"
 #include "bsp_log.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "stm32h7xx_hal.h"
 
 static LKMotorInstance *lkmotor_instance[DEVICE_CAN_CNT][LK_MOTOR_PER_BUS_CNT] = {{NULL}};
 static CANInstance *lk_sender_instance[DEVICE_CAN_CNT] = {NULL};
@@ -28,30 +32,31 @@ static int8_t LKBusIndexFromHandle(FDCAN_HandleTypeDef *can_handle)
     return -1;
 }
 
-static uint8_t LKFeedbackConfigValid(Feedback_Source_e source, const float *external_feedback)
+static uint8_t LKSourceValid(const Motor_Signal_Source_s *source,
+                             Motor_Unit_e unit,
+                             Motor_Reference_e reference)
 {
-    if (source == MOTOR_FEED)
-        return 1u;
-    return (uint8_t)(source == OTHER_FEED && external_feedback != NULL);
+    return (uint8_t)(MotorFeedbackValidateSignalSource(source) == MOTOR_FEEDBACK_OK &&
+                     source->unit == unit && source->reference == reference);
 }
 
-static PID_Status_e LKReadFeedback(Feedback_Source_e source, const float *external_feedback,
-                                   float internal_feedback, float *feedback)
+static PID_Status_e LKReadExternal(const Motor_Signal_Source_s *source,
+                                   Motor_Unit_e unit,
+                                   Motor_Reference_e reference,
+                                   uint32_t now_ms,
+                                   float *feedback)
 {
     if (feedback == NULL)
         return PID_BAD_ARGUMENT;
 
-    float candidate;
-    if (source == MOTOR_FEED)
-        candidate = internal_feedback;
-    else if (source == OTHER_FEED && external_feedback != NULL)
-        candidate = *external_feedback;
-    else
+    Motor_Signal_Snapshot_s snapshot = {0};
+    Motor_Feedback_Status_e status = MotorFeedbackReadSignal(source, unit, reference,
+                                                             now_ms, &snapshot);
+    if (status == MOTOR_FEEDBACK_NONFINITE || status == MOTOR_FEEDBACK_OVERFLOW)
+        return PID_NUMERIC_ERROR;
+    if (status != MOTOR_FEEDBACK_OK)
         return PID_BAD_ARGUMENT;
-
-    if (!isfinite(candidate))
-        return PID_BAD_ARGUMENT;
-    *feedback = candidate;
+    *feedback = snapshot.value;
     return PID_OK;
 }
 
@@ -64,20 +69,34 @@ static uint8_t LKControlConfigValid(const Motor_Init_Config_s *config)
     uint8_t speed_active = (uint8_t)((setting->close_loop_type & SPEED_LOOP) != 0u &&
                                      (setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
 
-    if ((setting->motor_reverse_flag != MOTOR_DIRECTION_NORMAL &&
-         setting->motor_reverse_flag != MOTOR_DIRECTION_REVERSE) ||
-        (setting->feedback_reverse_flag != FEEDBACK_DIRECTION_NORMAL &&
-         setting->feedback_reverse_flag != FEEDBACK_DIRECTION_REVERSE))
+    Motor_Capabilities_s capabilities;
+    if (MotorFeedbackValidateOutputAxis(&config->output_axis) != MOTOR_FEEDBACK_OK ||
+        MotorFeedbackGetCapabilities(LK9025, &capabilities) != MOTOR_FEEDBACK_OK ||
+        (capabilities.measurement_mask & MOTOR_CAPABILITY_CURRENT) == 0u ||
+        setting->motor_reverse_flag != MOTOR_DIRECTION_NORMAL ||
+        setting->feedback_reverse_flag != FEEDBACK_DIRECTION_NORMAL ||
+        (setting->feedforward_flag & (uint8_t)~CURRENT_AND_SPEED_FEEDFORWARD) != 0u ||
+        (setting->angle_feedback_source != MOTOR_FEED && setting->angle_feedback_source != OTHER_FEED) ||
+        (setting->speed_feedback_source != MOTOR_FEED && setting->speed_feedback_source != OTHER_FEED))
         return 0u;
 
-    if ((angle_active != 0u &&
-         (!LKFeedbackConfigValid(setting->angle_feedback_source, controller->other_angle_feedback_ptr) ||
-          ((setting->feedforward_flag & SPEED_FEEDFORWARD) != 0u &&
-           controller->speed_feedforward_ptr == NULL))) ||
-        (speed_active != 0u &&
-         (!LKFeedbackConfigValid(setting->speed_feedback_source, controller->other_speed_feedback_ptr) ||
-          ((setting->feedforward_flag & CURRENT_FEEDFORWARD) != 0u &&
-           controller->current_feedforward_ptr == NULL))))
+    if (angle_active != 0u)
+    {
+        if ((setting->angle_feedback_source == OTHER_FEED &&
+             !LKSourceValid(&controller->other_angle_feedback, MOTOR_UNIT_RAD,
+                            MOTOR_REFERENCE_EXTERNAL)) ||
+            ((setting->feedforward_flag & SPEED_FEEDFORWARD) != 0u &&
+             !LKSourceValid(&controller->speed_feedforward, MOTOR_UNIT_RAD_S,
+                            MOTOR_REFERENCE_OUTPUT_AXIS)))
+            return 0u;
+    }
+    if (speed_active != 0u &&
+        ((setting->speed_feedback_source == OTHER_FEED &&
+          !LKSourceValid(&controller->other_speed_feedback, MOTOR_UNIT_RAD_S,
+                         MOTOR_REFERENCE_EXTERNAL)) ||
+         ((setting->feedforward_flag & CURRENT_FEEDFORWARD) != 0u &&
+          !LKSourceValid(&controller->current_feedforward, MOTOR_UNIT_DEVICE_CURRENT,
+                         MOTOR_REFERENCE_OUTPUT_AXIS))))
         return 0u;
 
     return 1u;
@@ -90,11 +109,16 @@ static uint8_t LKControlConfigValid(const Motor_Init_Config_s *config)
  */
 static void LKMotorDecode(CANInstance *_instance)
 {
-    LKMotorInstance *motor = (LKMotorInstance *)_instance->id; // 通过caninstance保存的father id获取对应的motorinstance
-    LKMotor_Measure_t *measure = &motor->measure;
+    if (_instance == NULL || _instance->id == NULL || _instance->rx_len != 8u)
+        return;
+    LKMotorInstance *motor = (LKMotorInstance *)_instance->id; // 通过父对象指针取得对应实例。
+    LKMotor_Measure_t candidate;
+    taskENTER_CRITICAL();
+    candidate = motor->measure;
+    taskEXIT_CRITICAL();
+    LKMotor_Measure_t *measure = &candidate;
     uint8_t *rx_buff = _instance->rx_buff;
 
-    DaemonReload(motor->daemon); // 喂狗
     measure->feed_dt = DWT_GetDeltaT(&measure->feed_dwt_cnt);
 
     measure->last_ecd = measure->ecd;
@@ -116,6 +140,15 @@ static void LKMotorDecode(CANInstance *_instance)
     else if (measure->ecd - measure->last_ecd < -32768)
         measure->total_round++;
     measure->total_angle = measure->total_round * 360 + measure->angle_single_round;
+
+    taskENTER_CRITICAL();
+    motor->measure = candidate;
+    motor->feedback_timestamp_ms = _instance->rx_timestamp_ms;
+    motor->feedback_sequence++;
+    if (motor->feedback_sequence == 0u)
+        motor->feedback_sequence++;
+    taskEXIT_CRITICAL();
+    DaemonReload(motor->daemon);
 }
 
 static void LKMotorLostCallback(void *motor_ptr)
@@ -172,13 +205,14 @@ LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
     motor->can_bus_index = (uint8_t)bus_index;
 
     motor->motor_settings = config->controller_setting_init_config;
+    motor->output_axis = config->output_axis;
     motor->current_PID = current_pid;
     motor->speed_PID = speed_pid;
     motor->angle_PID = angle_pid;
-    motor->other_angle_feedback_ptr = config->controller_param_init_config.other_angle_feedback_ptr;
-    motor->other_speed_feedback_ptr = config->controller_param_init_config.other_speed_feedback_ptr;
-    motor->speed_feedforward_ptr = config->controller_param_init_config.speed_feedforward_ptr;
-    motor->current_feedforward_ptr = config->controller_param_init_config.current_feedforward_ptr;
+    motor->other_angle_feedback = config->controller_param_init_config.other_angle_feedback;
+    motor->other_speed_feedback = config->controller_param_init_config.other_speed_feedback;
+    motor->speed_feedforward = config->controller_param_init_config.speed_feedforward;
+    motor->current_feedforward = config->controller_param_init_config.current_feedforward;
 
     DWT_GetDeltaT(&motor->measure.feed_dwt_cnt);
 
@@ -219,114 +253,177 @@ LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
 }
 
 /* 各总线使用本组首个成功登记实例的发送缓冲区。 */
+static Motor_Feedback_Status_e LKConvertMeasureToOutputAxis(
+    const Motor_Output_Axis_Config_s *config, const LKMotor_Measure_t *measure,
+    float *position_rad, float *speed_rad_s)
+{
+    if (config == NULL || measure == NULL || position_rad == NULL || speed_rad_s == NULL)
+        return MOTOR_FEEDBACK_BAD_ARGUMENT;
+    float candidate_position = 0.0f;
+    float candidate_speed = 0.0f;
+    float unused_speed = 0.0f;
+    float unused_position = 0.0f;
+    // LK 反馈位置在线格式为度，速度已由接收回调换成 rad/s，分开换算避免重复转换。
+    Motor_Feedback_Status_e status = MotorFeedbackConvertDegreesToOutputAxis(
+        config, measure->total_angle, 0.0f, &candidate_position, &unused_speed);
+    if (status != MOTOR_FEEDBACK_OK)
+        return status;
+    status = MotorFeedbackConvertOutputAxis(config, 0.0f, measure->speed_rads,
+                                            &unused_position, &candidate_speed);
+    if (status != MOTOR_FEEDBACK_OK)
+        return status;
+    *position_rad = candidate_position;
+    *speed_rad_s = candidate_speed;
+    return MOTOR_FEEDBACK_OK;
+}
+
+Motor_Feedback_Status_e LKMotorGetFeedbackSnapshot(const LKMotorInstance *motor,
+                                                    uint32_t now_ms,
+                                                    Motor_Feedback_Snapshot_s *snapshot)
+{
+    if (motor == NULL || snapshot == NULL)
+        return MOTOR_FEEDBACK_BAD_ARGUMENT;
+    LKMotor_Measure_t measure;
+    Motor_Output_Axis_Config_s axis;
+    uint32_t timestamp_ms, sequence;
+    taskENTER_CRITICAL();
+    measure = motor->measure;
+    axis = motor->output_axis;
+    timestamp_ms = motor->feedback_timestamp_ms;
+    sequence = motor->feedback_sequence;
+    taskEXIT_CRITICAL();
+    if (sequence == 0u)
+        return MOTOR_FEEDBACK_NOT_READY;
+
+    float position = 0.0f, speed = 0.0f;
+    Motor_Feedback_Status_e status = LKConvertMeasureToOutputAxis(&axis, &measure, &position, &speed);
+    if (status != MOTOR_FEEDBACK_OK)
+        return status;
+    const uint8_t fresh = DaemonIsOnline(motor->daemon) != 0u &&
+                          (uint32_t)(now_ms - timestamp_ms) <= 50u;
+    Motor_Feedback_Snapshot_s candidate = {0};
+    candidate.sample_sequence = sequence;
+    candidate.position = (Motor_Signal_Snapshot_s){position, MOTOR_UNIT_RAD,
+        MOTOR_REFERENCE_OUTPUT_AXIS, timestamp_ms, sequence, fresh};
+    candidate.speed = (Motor_Signal_Snapshot_s){speed, MOTOR_UNIT_RAD_S,
+        MOTOR_REFERENCE_OUTPUT_AXIS, timestamp_ms, sequence, fresh};
+    candidate.current = (Motor_Signal_Snapshot_s){
+        (float)measure.real_current * (float)axis.direction, MOTOR_UNIT_DEVICE_CURRENT,
+        MOTOR_REFERENCE_OUTPUT_AXIS, timestamp_ms, sequence, fresh};
+    *snapshot = candidate;
+    return MOTOR_FEEDBACK_OK;
+}
+
+/* 各总线使用本组首个成功登记实例的发送缓冲区。 */
 void LKMotorControl(void)
 {
-    float pid_measure, pid_ref;
-    int16_t set;
-    LKMotorInstance *motor;
-    LKMotor_Measure_t *measure;
-    Motor_Control_Setting_s *setting;
     uint8_t tx_frames[DEVICE_CAN_CNT][8] = {{0}};
-
     for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
     {
         for (uint8_t slot = 0u; slot < LK_MOTOR_PER_BUS_CNT; ++slot)
         {
-            motor = lkmotor_instance[bus][slot];
+            LKMotorInstance *motor = lkmotor_instance[bus][slot];
             if (motor == NULL)
                 continue;
-
-            measure = &motor->measure;
-            setting = &motor->motor_settings;
+            LKMotor_Measure_t measure;
+            Motor_Control_Setting_s setting;
+            Motor_Output_Axis_Config_s axis;
+            Motor_Signal_Source_s angle_source, speed_source, speed_ff, current_ff;
+            Motor_Working_Type_e stop_flag;
+            float pid_ref;
+            taskENTER_CRITICAL();
+            measure = motor->measure;
+            setting = motor->motor_settings;
+            axis = motor->output_axis;
+            angle_source = motor->other_angle_feedback;
+            speed_source = motor->other_speed_feedback;
+            speed_ff = motor->speed_feedforward;
+            current_ff = motor->current_feedforward;
             pid_ref = motor->pid_ref;
-            // 角度或速度闭环先转换目标方向，保持 PID 与 DJI、XM 驱动的约定一致。
-            uint8_t axis_outer = (uint8_t)((setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
-            if (axis_outer != 0u &&
-                setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE)
-                pid_ref = -pid_ref;
-            // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
-            float control_dt = 0.0f;
-            PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
+            stop_flag = motor->stop_flag;
+            taskEXIT_CRITICAL();
 
-            // 角度环使用角度来源；外部值和电机总角度均以 deg 参与 PID。
-            if (pid_status == PID_OK && (setting->close_loop_type & ANGLE_LOOP) && setting->outer_loop_type == ANGLE_LOOP)
+            const uint8_t angle_active = (uint8_t)((setting.close_loop_type & ANGLE_LOOP) != 0u &&
+                                                    setting.outer_loop_type == ANGLE_LOOP);
+            const uint8_t speed_active = (uint8_t)((setting.close_loop_type & SPEED_LOOP) != 0u &&
+                (setting.outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
+            const uint8_t current_active = (uint8_t)((setting.close_loop_type & CURRENT_LOOP) != 0u);
+            const uint8_t axis_outer = (uint8_t)((setting.outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
+            const uint32_t now_ms = HAL_GetTick();
+            float dt_s = 0.0f, feedback = 0.0f, position = 0.0f, speed = 0.0f;
+            uint8_t internal_valid = 0u;
+            PID_Status_e result = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &dt_s);
+            if ((angle_active && setting.angle_feedback_source == MOTOR_FEED) ||
+                (speed_active && setting.speed_feedback_source == MOTOR_FEED))
             {
-                pid_status = LKReadFeedback(setting->angle_feedback_source,
-                                            motor->other_angle_feedback_ptr,
-                                            measure->total_angle, &pid_measure);
-                if (pid_status == PID_OK)
-                    pid_status = PIDCalculate(&motor->angle_PID, pid_measure, pid_ref, control_dt, &pid_ref);
-                if (pid_status == PID_OK && (setting->feedforward_flag & SPEED_FEEDFORWARD) != 0u)
+                Motor_Feedback_Status_e conversion =
+                    LKConvertMeasureToOutputAxis(&axis, &measure, &position, &speed);
+                if (conversion == MOTOR_FEEDBACK_OK)
+                    internal_valid = 1u;
+                else
+                    result = conversion == MOTOR_FEEDBACK_NONFINITE ? PID_BAD_ARGUMENT : PID_NUMERIC_ERROR;
+            }
+
+            if (result == PID_OK && angle_active)
+            {
+                if (setting.angle_feedback_source == OTHER_FEED)
+                    result = LKReadExternal(&angle_source, MOTOR_UNIT_RAD,
+                        MOTOR_REFERENCE_EXTERNAL, now_ms, &feedback);
+                else if (setting.angle_feedback_source == MOTOR_FEED && internal_valid)
+                    feedback = position;
+                else
+                    result = PID_BAD_ARGUMENT;
+                if (result == PID_OK)
+                    result = PIDCalculate(&motor->angle_PID, feedback, pid_ref, dt_s, &pid_ref);
+                if (result == PID_OK && (setting.feedforward_flag & SPEED_FEEDFORWARD) != 0u)
                 {
-                    if (motor->speed_feedforward_ptr == NULL)
-                        pid_status = PID_BAD_ARGUMENT;
-                    else
+                    result = LKReadExternal(&speed_ff, MOTOR_UNIT_RAD_S,
+                        MOTOR_REFERENCE_OUTPUT_AXIS, now_ms, &feedback);
+                    if (result == PID_OK)
                     {
-                        float feedforward = *motor->speed_feedforward_ptr;
-                        if (!isfinite(feedforward))
-                            pid_status = PID_BAD_ARGUMENT;
-                        else
-                        {
-                            pid_ref += feedforward;
-                            if (!isfinite(pid_ref))
-                                pid_status = PID_NUMERIC_ERROR;
-                        }
+                        pid_ref += feedback;
+                        if (!isfinite(pid_ref)) result = PID_NUMERIC_ERROR;
                     }
                 }
             }
-
-            if (pid_status == PID_OK && (setting->close_loop_type & SPEED_LOOP) &&
-                (setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
+            if (result == PID_OK && speed_active)
             {
-                // 速度闭环按 speed_feedback_source 选反馈，并使用自己的 PID 历史。
-                pid_status = LKReadFeedback(setting->speed_feedback_source,
-                                            motor->other_speed_feedback_ptr,
-                                            measure->speed_rads, &pid_measure);
-                if (pid_status == PID_OK)
-                    pid_status = PIDCalculate(&motor->speed_PID, pid_measure, pid_ref, control_dt, &pid_ref);
-                if (pid_status == PID_OK && (setting->feedforward_flag & CURRENT_FEEDFORWARD) != 0u)
+                if (setting.speed_feedback_source == OTHER_FEED)
+                    result = LKReadExternal(&speed_source, MOTOR_UNIT_RAD_S,
+                        MOTOR_REFERENCE_EXTERNAL, now_ms, &feedback);
+                else if (setting.speed_feedback_source == MOTOR_FEED && internal_valid)
+                    feedback = speed;
+                else
+                    result = PID_BAD_ARGUMENT;
+                if (result == PID_OK)
+                    result = PIDCalculate(&motor->speed_PID, feedback, pid_ref, dt_s, &pid_ref);
+                if (result == PID_OK && (setting.feedforward_flag & CURRENT_FEEDFORWARD) != 0u)
                 {
-                    if (motor->current_feedforward_ptr == NULL)
-                        pid_status = PID_BAD_ARGUMENT;
-                    else
+                    result = LKReadExternal(&current_ff, MOTOR_UNIT_DEVICE_CURRENT,
+                        MOTOR_REFERENCE_OUTPUT_AXIS, now_ms, &feedback);
+                    if (result == PID_OK)
                     {
-                        float feedforward = *motor->current_feedforward_ptr;
-                        if (!isfinite(feedforward))
-                            pid_status = PID_BAD_ARGUMENT;
-                        else
-                        {
-                            pid_ref += feedforward;
-                            if (!isfinite(pid_ref))
-                                pid_status = PID_NUMERIC_ERROR;
-                        }
+                        pid_ref += feedback;
+                        if (!isfinite(pid_ref)) result = PID_NUMERIC_ERROR;
                     }
                 }
             }
-
-            if ((setting->close_loop_type & CURRENT_LOOP) != 0u && pid_status == PID_OK)
+            if (result == PID_OK && current_active)
             {
-                pid_measure = (float)measure->real_current;
-                pid_status = PIDCalculate(&motor->current_PID, pid_measure, pid_ref, control_dt, &pid_ref);
+                feedback = (float)measure.real_current * (axis_outer ? (float)axis.direction : 1.0f);
+                result = PIDCalculate(&motor->current_PID, feedback, pid_ref, dt_s, &pid_ref);
             }
-
-            // 轴向闭环最后转换反馈方向；开环和电流外环保留原有电机反向处理。
-            if (axis_outer != 0u && setting->feedback_reverse_flag == FEEDBACK_DIRECTION_REVERSE)
-                pid_ref = -pid_ref;
-            else if (axis_outer == 0u && setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE)
-                pid_ref = -pid_ref;
-
-            if (pid_status != PID_OK || !isfinite(pid_ref))
+            if (result == PID_OK && axis_outer)
+                pid_ref *= (float)axis.direction;
+            if (result != PID_OK || !isfinite(pid_ref))
             {
-                // 一环失败后丢弃本轮串级结果，恢复前清除各环已有积分和微分历史。
                 MotorPIDResetLoops(&motor->angle_PID, &motor->speed_PID, &motor->current_PID);
-                motor->pid_clock.last_status = pid_status != PID_OK ? pid_status : PID_NUMERIC_ERROR;
+                motor->pid_clock.last_status = result != PID_OK ? result : PID_NUMERIC_ERROR;
                 pid_ref = 0.0f;
             }
-
-            if (motor->stop_flag == MOTOR_STOP)
+            if (stop_flag == MOTOR_STOP)
                 pid_ref = 0.0f;
 
-            // 先按原有向零截断规则检查可表示范围，避免越界浮点转整数。
             int32_t command = 0;
             if (pid_ref >= 32768.0f || pid_ref <= -32769.0f)
             {
@@ -334,31 +431,17 @@ void LKMotorControl(void)
                 motor->pid_clock.last_status = PID_NUMERIC_ERROR;
             }
             else
-            {
                 command = (int32_t)pid_ref;
-                if (command < -32768 || command > 32767)
-                {
-                    // 反向后无法装入有符号16位命令时，按本周期计算失败清零。
-                    MotorPIDResetLoops(&motor->angle_PID, &motor->speed_PID, &motor->current_PID);
-                    motor->pid_clock.last_status = PID_NUMERIC_ERROR;
-                    command = 0;
-                }
-            }
-            set = (int16_t)command;
-
-            // 用编号选择固定位置，并显式按 CAN 小端顺序写字节。
-            uint16_t wire_value = (uint16_t)set;
-            uint8_t offset = (uint8_t)(motor->motor_id - 1u) * 2u;
-            tx_frames[bus][offset] = (uint8_t)(wire_value & 0xFFu);
-            tx_frames[bus][offset + 1u] = (uint8_t)(wire_value >> 8);
+            const uint16_t wire = (uint16_t)(int16_t)command;
+            const uint8_t offset = (uint8_t)(motor->motor_id - 1u) * 2u;
+            tx_frames[bus][offset] = (uint8_t)wire;
+            tx_frames[bus][offset + 1u] = (uint8_t)(wire >> 8u);
         }
     }
-
     for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
     {
         if (lk_sender_instance[bus] == NULL)
             continue;
-        // 先完整准备本组八字节，再提交；失败帧不会留作下周期重发。
         memcpy(lk_sender_instance[bus]->tx_buff, tx_frames[bus], sizeof(tx_frames[bus]));
         (void)CANTransmit(lk_sender_instance[bus], 0.2f);
     }
@@ -366,17 +449,29 @@ void LKMotorControl(void)
 
 void LKMotorStop(LKMotorInstance *motor)
 {
+    if (motor == NULL)
+        return;
+    taskENTER_CRITICAL();
     motor->stop_flag = MOTOR_STOP;
+    taskEXIT_CRITICAL();
 }
 
 void LKMotorEnable(LKMotorInstance *motor)
 {
+    if (motor == NULL)
+        return;
+    taskENTER_CRITICAL();
     motor->stop_flag = MOTOR_ENALBED;
+    taskEXIT_CRITICAL();
 }
 
 void LKMotorSetRef(LKMotorInstance *motor, float ref)
 {
+    if (motor == NULL)
+        return;
+    taskENTER_CRITICAL();
     motor->pid_ref = ref;
+    taskEXIT_CRITICAL();
 }
 
 uint8_t LKMotorIsOnline(LKMotorInstance *motor)

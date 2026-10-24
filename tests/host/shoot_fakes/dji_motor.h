@@ -5,8 +5,10 @@
 typedef struct { float total_angle; } Shoot_Motor_Measure_s;
 typedef struct {
     Shoot_Motor_Measure_s measure;
+    Motor_Output_Axis_Config_s output_axis;
     float ref;
     uint8_t enabled;
+    Closeloop_Type_e close_loop_type;
     Closeloop_Type_e outer_loop;
 } DJIMotorInstance;
 typedef struct {
@@ -15,12 +17,15 @@ typedef struct {
     int16_t current;
     uint8_t temperature;
 } DJIMotorSummary_t;
-DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config);
+DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config);
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
 void DJIMotorStop(DJIMotorInstance *motor);
 void DJIMotorEnable(DJIMotorInstance *motor);
 void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e loop);
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);
+Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *motor,
+                                                     uint32_t now_ms,
+                                                     Motor_Feedback_Snapshot_s *snapshot);
 extern DJIMotorInstance shoot_fake_motors[3];
 extern uint32_t shoot_fake_motor_init_count;
 #endif

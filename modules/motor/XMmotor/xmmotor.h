@@ -69,7 +69,7 @@ typedef enum
 * @return 参数为空、内存分配或 PID 初始化失败返回 NULL，否则返回对象；容量仍未检查。
 * @note 默认仅软件对象，不能用返回对象判断 CAN 已接入。
 */
-XMMotorInstance *XMMotorInit(Motor_Init_Config_s *config);
+XMMotorInstance *XMMotorInit(const Motor_Init_Config_s *config);
 
 /** @brief 仅保存参考值；默认配置没有控制任务执行此值。
 * @param[in,out] motor 有效对象，不能为 NULL。

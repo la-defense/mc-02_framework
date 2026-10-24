@@ -13,6 +13,7 @@ static CANInstance instances[2];
 static void (*callbacks[2])(CANInstance *);
 static DaemonInstance daemons[2];
 static unsigned registered,daemon_count,reloads,clock_reads;
+static uint32_t test_tick;
 
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
@@ -27,9 +28,12 @@ uint8_t CANTransmit(CANInstance *instance,float timeout_ms)
 DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
 {(void)config;TEST_CHECK(daemon_count<2);return &daemons[daemon_count++];}
 void DaemonReload(DaemonInstance *instance){(void)instance;++reloads;}
+uint8_t DaemonUnregister(DaemonInstance *instance){(void)instance;return 1u;}
+uint8_t DaemonIsOnline(DaemonInstance *instance){(void)instance;return 1u;}
 uint64_t DWT_GetTimeline_us(void){return 0;}
 float DWT_GetDeltaT(uint32_t *counter){++clock_reads;++*counter;return .001f;}
 void DWT_Delay(float seconds){(void)seconds;}
+uint32_t HAL_GetTick(void){return test_tick;}
 void *osThreadCreate(const int *definition,void *argument)
 {(void)definition;(void)argument;return NULL;}
 void osDelay(uint32_t milliseconds){(void)milliseconds;}
@@ -49,6 +53,8 @@ static void receive(unsigned index,uint16_t speed)
 int main(void)
 {
     Motor_Init_Config_s config={0};
+    config.motor_type=HT04;
+    config.output_axis=(Motor_Output_Axis_Config_s){1.0f,MOTOR_AXIS_DIRECTION_NORMAL};
     HTMotorInstance *a=HTMotorInit(&config),*b=HTMotorInit(&config);
     TEST_CHECK(a!=NULL && b!=NULL);
     double history[2][5]={{0}};

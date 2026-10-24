@@ -8,6 +8,8 @@
 * @date 2022/2/23
  */
 #include "ins_task.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include "bsp_dwt.h"
 #include "bsp_log.h"
 #include "controller.h"
@@ -33,6 +35,7 @@ static IMU_Param_t IMU_Param;
 static BMI088Instance *bmi088_ins;
 static BMI088_Data_t bmi088_data;
 static uint8_t ins_init_result;
+static INS_Control_Snapshot_s ins_control_snapshot;
 // KF工作区跟随任务存活；20ms和2倍方差是默认软件范围。
 static _Alignas(KF_WORKSPACE_ALIGNMENT) uint8_t qekf_workspace[KF_WORKSPACE_BYTES(6,0,3)];
 // 20ms只限制无校正预测的发布；较长的有限dt由计算结果检查决定能否继续。
@@ -55,6 +58,8 @@ static uint32_t INS_DWT_Count = 0;
 static float dt = 0, t = 0;
 
 static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[3]);
+static void INSInvalidateControlSnapshot(void);
+static void INSPublishControlSnapshot(void);
 
 // 用初始加速度估计倾斜角；静止时加速度能表示重力方向，偏航角仍从0开始。
 static MathStatus_t InitQuaternion(float *init_q4)
@@ -149,6 +154,7 @@ static MathStatus_t InitQuaternion(float *init_q4)
 
 attitude_t *INS_Init(void)
 {
+    INSInvalidateControlSnapshot();
     if (ins_init_result != 0u)
         return (ins_init_result == 3u) ? NULL : (attitude_t *)&INS.Gyro;
     INS.init = 1u;
@@ -230,6 +236,39 @@ attitude_t *INS_GetStorage(void)
     return (attitude_t *)&INS.Gyro;
 }
 
+uint8_t INSGetControlSnapshot(INS_Control_Snapshot_s *snapshot)
+{
+    if (snapshot == NULL)
+        return 0u;
+    taskENTER_CRITICAL();
+    *snapshot = ins_control_snapshot;
+    taskEXIT_CRITICAL();
+    return snapshot->valid;
+}
+
+static void INSInvalidateControlSnapshot(void)
+{
+    taskENTER_CRITICAL();
+    ins_control_snapshot.valid = 0u;
+    taskEXIT_CRITICAL();
+}
+
+static void INSPublishControlSnapshot(void)
+{
+    INS_Control_Snapshot_s candidate = {
+        .yaw_rad = INS.Yaw * DEG_2_RAD,
+        .yaw_total_rad = INS.YawTotalAngle * DEG_2_RAD,
+        .pitch_rad = INS.Pitch * DEG_2_RAD,
+        .gyro_rad_s = {INS.Gyro[X], INS.Gyro[Y], INS.Gyro[Z]},
+        .timestamp_ms = bmi088_data.timestamp_ms,
+        .sequence = bmi088_data.sequence,
+        .valid = 1u,
+    };
+    taskENTER_CRITICAL();
+    ins_control_snapshot = candidate;
+    taskEXIT_CRITICAL();
+}
+
    /* INS_Task 每1ms运行一次；这里的计数和温控间隔都按任务调用次数计算。 */
 /* ---------------- 性能探针(2026-09, CPU 占用排查) ----------------
    ins_prof_all   : 单次 INS_Task 总耗时
@@ -252,6 +291,7 @@ void INS_Task(void)
     /* 左键或右键长按会提出标定请求；由本任务执行，避免和采样同时占用 SPI。 */
     if (BMI088CalibService())
     {
+        INSInvalidateControlSnapshot();
         DWT_GetDeltaT(&INS_DWT_Count); /* 丢掉标定耗时, 否则 EKF 会拿到一个巨大的 dt */
         DWT_ProbeDone(&ins_prof_all, probe_all);
         return;
@@ -273,6 +313,7 @@ void INS_Task(void)
         // 样本读取失败或已经过期时，清除有效标记、撤下旧姿态并关闭温控输入。
         if (!sample_valid)
         {
+            INSInvalidateControlSnapshot();
             imu_sample_valid_diag = 0u;
             bmi088_data.valid = 0u;
             RobotSafetySetImuValid(0u);
@@ -314,6 +355,7 @@ void INS_Task(void)
         // 滤波失效立即撤销许可；严重预测失败由显式重置恢复，不重建参考姿态。
         if ((filter_status!=KF_OK && filter_status!=KF_PREDICTED) || !QEKF_INS.IMU_QuaternionEKF.result.valid)
         {
+            INSInvalidateControlSnapshot();
             imu_sample_valid_diag=0u;
             RobotSafetySetImuValid(0u);
             VisionUpdateTx(0u,0,0,0,0,0,0,0,0,VISION_BULLET_SPEED_DEFAULT,0u);
@@ -346,12 +388,14 @@ void INS_Task(void)
         // 任一姿态或角速度不是有效数值时，都不把这组结果送给视觉端。
         uint8_t imu_valid = sample_valid && isfinite(INS.q[0]) && isfinite(INS.q[1]) && isfinite(INS.q[2]) && isfinite(INS.q[3]) &&
                             isfinite(INS.Gyro[X]) && isfinite(INS.Gyro[Y]) && isfinite(INS.Gyro[Z]) &&
-                            isfinite(INS.Yaw) && isfinite(INS.Pitch);
+                            isfinite(INS.Yaw) && isfinite(INS.Pitch) && isfinite(INS.YawTotalAngle);
         RobotSafetySetImuValid(imu_valid);
         imu_sample_valid_diag = imu_valid;
 
         if (imu_valid)
         {
+            /* 同一份姿态和陀螺快照供云台外环使用，并沿用 BMI088 来源时间。 */
+            INSPublishControlSnapshot();
             // 姿态解算完成后填充视觉上行数据(与 sp_vision_25 GimbalToVision 对齐)
             // yaw/pitch 需转弧度, gyro 已是 rad/s; 只有READY状态才向NUC报告自瞄模式
             VisionUpdateTx(RobotSafetyIsReady() ? 1 : 0,
@@ -360,6 +404,8 @@ void INS_Task(void)
                            INS.Pitch * DEG_2_RAD, INS.Gyro[Y],
                            VISION_BULLET_SPEED_DEFAULT, 0);
         }
+        else
+            INSInvalidateControlSnapshot();
         ins_sample_processed:;
     }
 

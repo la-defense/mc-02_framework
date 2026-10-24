@@ -88,9 +88,12 @@ void XMMotorCaliEncoder(XMMotorInstance *motor)
     // DWT_Delay(0.1);
 }
 
-XMMotorInstance *XMMotorInit(Motor_Init_Config_s *config)
+XMMotorInstance *XMMotorInit(const Motor_Init_Config_s *config)
 {
-    if (config == NULL)
+    Motor_Capabilities_s capabilities;
+    if (config == NULL ||
+        MotorFeedbackGetCapabilities(config->motor_type, &capabilities) != MOTOR_FEEDBACK_OK ||
+        MotorFeedbackValidateOutputAxis(&config->output_axis) != MOTOR_FEEDBACK_OK)
         return NULL;
     XMMotorInstance *motor = (XMMotorInstance *)malloc(sizeof(XMMotorInstance));
     if (motor == NULL)
@@ -109,8 +112,10 @@ XMMotorInstance *XMMotorInit(Motor_Init_Config_s *config)
         free(motor);
         return NULL;
     }
-    motor->motor_controller.other_angle_feedback_ptr = config->controller_param_init_config.other_angle_feedback_ptr;
-    motor->motor_controller.other_speed_feedback_ptr = config->controller_param_init_config.other_speed_feedback_ptr;
+    motor->motor_controller.other_angle_feedback = config->controller_param_init_config.other_angle_feedback;
+    motor->motor_controller.other_speed_feedback = config->controller_param_init_config.other_speed_feedback;
+    motor->motor_controller.speed_feedforward = config->controller_param_init_config.speed_feedforward;
+    motor->motor_controller.current_feedforward = config->controller_param_init_config.current_feedforward;
 
 #ifdef XM_MOTOR_ENABLE
     config->can_init_config.can_module_callback = XMMotorDecode;
@@ -199,6 +204,7 @@ void XMMotorTask(void const *argument)
         // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
         float control_dt = 0.0f;
         PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
+        const uint32_t now_ms = HAL_GetTick();
 
         if (motor_setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
             pid_ref *= -1; // 设置反转
@@ -208,7 +214,14 @@ void XMMotorTask(void const *argument)
         if (pid_status == PID_OK && (motor_setting->close_loop_type & ANGLE_LOOP) && motor_setting->outer_loop_type == ANGLE_LOOP)
         {
             if (motor_setting->angle_feedback_source == OTHER_FEED)
-                pid_measure = *motor_controller->other_angle_feedback_ptr;
+            {
+                Motor_Signal_Snapshot_s signal = {0};
+                if (MotorFeedbackReadSignal(&motor_controller->other_angle_feedback, MOTOR_UNIT_RAD,
+                                            MOTOR_REFERENCE_EXTERNAL, now_ms, &signal) != MOTOR_FEEDBACK_OK)
+                    pid_status = PID_BAD_ARGUMENT;
+                else
+                    pid_measure = signal.value;
+            }
             else
                 pid_measure = measure->total_round; // MOTOR_FEED,对total_round闭环,防止在边界处出现突跃
             // 更新pid_ref进入下一个环
@@ -220,10 +233,24 @@ void XMMotorTask(void const *argument)
         if (pid_status == PID_OK && (motor_setting->close_loop_type & SPEED_LOOP) && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
         {
             if (motor_setting->feedforward_flag & SPEED_FEEDFORWARD)
-                pid_ref += *motor_controller->speed_feedforward_ptr;
+            {
+                Motor_Signal_Snapshot_s signal = {0};
+                if (MotorFeedbackReadSignal(&motor_controller->speed_feedforward, MOTOR_UNIT_RAD_S,
+                                            MOTOR_REFERENCE_OUTPUT_AXIS, now_ms, &signal) != MOTOR_FEEDBACK_OK)
+                    pid_status = PID_BAD_ARGUMENT;
+                else
+                    pid_ref += signal.value;
+            }
 
             if (motor_setting->speed_feedback_source == OTHER_FEED)
-                pid_measure = *motor_controller->other_speed_feedback_ptr;
+            {
+                Motor_Signal_Snapshot_s signal = {0};
+                if (MotorFeedbackReadSignal(&motor_controller->other_speed_feedback, MOTOR_UNIT_RAD_S,
+                                            MOTOR_REFERENCE_EXTERNAL, now_ms, &signal) != MOTOR_FEEDBACK_OK)
+                    pid_status = PID_BAD_ARGUMENT;
+                else
+                    pid_measure = signal.value;
+            }
             else // MOTOR_FEED
                 pid_measure = measure->velocity;
             // 更新pid_ref

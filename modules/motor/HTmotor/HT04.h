@@ -1,5 +1,5 @@
 /** @file HT04.h
-* @brief HT04 独立任务控制接口，公开各电机 PID、反馈和前馈存储。
+* @brief HT04 独立任务控制接口，公开各电机 PID、反馈和前馈快照来源。
 * 接收速度使用每电机独立的五点平均；闭环输入失败时当前周期发送零力矩。
  */
 #ifndef HT04_H
@@ -46,6 +46,7 @@ typedef struct // HT04
 typedef struct
 {
     HTMotor_Measure_t measure;
+    Motor_Output_Axis_Config_s output_axis;
 
     Motor_Control_Setting_s motor_settings;
     MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
@@ -53,10 +54,10 @@ typedef struct
     PIDInstance current_PID;
     PIDInstance speed_PID;
     PIDInstance angle_PID;
-    float *other_angle_feedback_ptr; // 外部角度反馈，单位rad。
-    float *other_speed_feedback_ptr; // 外部速度反馈，单位rad/s。
-    float *speed_feedforward_ptr;    // 速度环前馈，按现有位置加入速度PID参考。
-    float *current_feedforward_ptr;  // 当前PID之前的输出前馈，沿用HT任务原位置。
+    Motor_Signal_Source_s other_angle_feedback;
+    Motor_Signal_Source_s other_speed_feedback;
+    Motor_Signal_Source_s speed_feedforward;
+    Motor_Signal_Source_s current_feedforward;
     float pid_ref;
 
     Motor_Working_Type_e stop_flag; // 启停标志
@@ -65,6 +66,8 @@ typedef struct
 
     DaemonInstance *motor_daemon;
     uint32_t lost_cnt;
+    uint32_t feedback_timestamp_ms;
+    uint32_t feedback_sequence;
 } HTMotorInstance;
 
 /* HT电机模式,初始化时自动进入CMD_MOTOR_MODE*/
@@ -75,20 +78,24 @@ typedef enum
     CMD_ZERO_POSITION = 0xfe // 将当前的位置设置为编码器零位
 } HTMotor_Mode_t;
 
-/** @brief 注册 HT04 电机并准备所选 PID 与外部数据指针。
-* @param[in,out] config 有效配置；会改写 CAN 回调和 id。实际参与控制分支所需 PID 参数须有效，
-*        外部反馈和前馈启用时须提供非空指针。
-* @return 长期保存的对象；空参数、活动来源非法、所需指针缺失或 PID 参数检查失败时返回 NULL；
+/** @brief 注册 HT04 电机并准备所选 PID 与外部快照来源。
+* @param[in] config 只读配置；输出轴配置须有效，实际参与控制的 PID 与外部来源须完整。
+* @return 长期保存的对象；空参数、无效输出轴、来源元数据或 PID 配置返回 NULL；
 *        成功后再调用 HTMotorControlInit() 创建任务。
-* @note 初始化包含真实 CAN 使能、编码器置零命令及 DWT 等待。配置中的外部角度、速度分别使用rad、rad/s；
-*       指针指向的存储须在任务运行期间有效。未参与分支的指针和 PID 配置可以为空或未初始化。
-*       底层 CAN／Daemon 注册失败处理及超过四个实例的回退仍由 MC02-0051 跟踪。
+* @note 输出轴闭环参考、反馈和 PID 输入使用 rad、rad/s；当前环保留驱动设备力矩数值。
+*       外部来源上下文须在任务运行期间有效。未参与分支的来源和 PID 配置可以为空或未初始化。
+*       初始化当前仍会发送设备模式命令；CAN／Daemon 回退和实例容量继续由 MC02-0051 跟踪。
  */
-HTMotorInstance *HTMotorInit(Motor_Init_Config_s *config);
+HTMotorInstance *HTMotorInit(const Motor_Init_Config_s *config);
+
+/** @brief 复制 HT04 的统一单位反馈快照；未支持的电压字段保持无效。 */
+Motor_Feedback_Status_e HTMotorGetFeedbackSnapshot(const HTMotorInstance *motor,
+                                                    uint32_t now_ms,
+                                                    Motor_Feedback_Snapshot_s *snapshot);
 
 /** @brief 保存目标供独立任务计算。
 * @param[in,out] motor 有效对象，不能为 NULL。
-* @param[in] ref 角度环目标用 deg，速度环目标用 deg/s；直接输出按 T_MIN～T_MAX 的协议力矩数值处理。
+* @param[in] ref 角度环目标用输出轴rad，速度环目标用输出轴rad/s；直接输出按T_MIN～T_MAX协议力矩数值处理。
 * @note 数值须有限；否则控制任务本周期发送零力矩并清除 PID 历史。real_current 由协议力矩区间还原，不能按变量名直接当作 A。
  */
 void HTMotorSetRef(HTMotorInstance *motor, float ref);

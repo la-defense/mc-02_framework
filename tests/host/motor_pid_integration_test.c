@@ -17,6 +17,7 @@ static DaemonInstance daemon;
 static uint8_t sent[8];
 
 uint64_t DWT_GetTimeline_us(void) { ++clock_reads; return now_us; }
+uint32_t HAL_GetTick(void) { return (uint32_t)(now_us / 1000u); }
 float DWT_GetDeltaT(uint32_t *count) { ++*count; return 0.001f; }
 uint32_t DWT_ProbeStart(void) { return 0u; }
 void DWT_ProbeDone(volatile DWT_Probe_t *probe, uint32_t start) { (void)probe; (void)start; }
@@ -68,6 +69,7 @@ int main(void)
     Motor_Init_Config_s config = {
         .can_init_config = {.can_handle = &hcan1, .tx_id = 1u},
         .motor_type = M3508,
+        .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
         .controller_setting_init_config = {.outer_loop_type = ANGLE_LOOP,
             .close_loop_type = ALL_THREE_LOOP},
         .controller_param_init_config = {.angle_PID = pid, .speed_PID = pid, .current_PID = pid},
@@ -91,7 +93,7 @@ int main(void)
     motor->measure.speed_aps = NAN;
     tick(3000u);
     TEST_CHECK(sent[0] == 0u && sent[1] == 0u);
-    TEST_CHECK(motor->pid_clock.last_status == PID_BAD_ARGUMENT);
+    TEST_CHECK(motor->pid_clock.last_status == PID_NUMERIC_ERROR);
     TEST_CHECK(motor->motor_controller.angle_PID.state.Iout == 0.0f);
     motor->measure.speed_aps = 0.0f;
     tick(4000u);

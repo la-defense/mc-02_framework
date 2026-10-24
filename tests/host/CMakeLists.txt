@@ -184,7 +184,8 @@ foreach(caller IN ITEMS a b)
 endforeach()
 # 生产 LK、PID 和 Daemon 共同链接；仅替换 CAN 与硬件时基，检查资源回滚及三总线路由。
 add_executable(lk_motor_registration_test lk_motor_registration_test.c
-  ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_pid.c
+  ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_feedback.c
+  ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c ../../modules/daemon/daemon.c)
 target_include_directories(lk_motor_registration_test BEFORE PRIVATE lk_motor_fakes)
 target_include_directories(lk_motor_registration_test PRIVATE ../../modules/motor/LKmotor
@@ -205,7 +206,8 @@ endforeach()
 
 # 这组回归链接生产 BSP CAN 注册与发送实现，仅替换 HAL、时间和日志。
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
-  ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_pid.c
+  ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_feedback.c
+  ../../modules/motor/motor_pid.c
   ../../modules/motor/DJImotor/dji_motor.c
   ../../modules/algorithm/controller.c ../../modules/daemon/daemon.c ../../bsp/can/bsp_can.c)
 target_include_directories(lk_motor_bsp_can_test BEFORE PRIVATE ../../bsp/can lk_motor_can_fakes
@@ -319,7 +321,8 @@ foreach(scenario IN ITEMS reference failures instances response)
   set_tests_properties(production_sample_filter_${scenario} PROPERTIES TIMEOUT 15)
 endforeach()
 add_executable(motor_pid_integration_test motor_pid_integration_test.c
-  ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_pid.c
+  ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_feedback.c
+  ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c)
 target_include_directories(motor_pid_integration_test BEFORE PRIVATE motor_pid_fakes)
 target_include_directories(motor_pid_integration_test PRIVATE ../../modules/motor
@@ -331,6 +334,7 @@ target_link_libraries(motor_pid_integration_test PRIVATE mc02_numeric)
 add_test(NAME production_motor_pid_cascade_and_failure COMMAND motor_pid_integration_test)
 add_executable(motor_feedback_filter_test motor_feedback_filter_test.c
   ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_pid.c
+  ../../modules/motor/motor_feedback.c
   ../../modules/algorithm/controller.c ../../modules/algorithm/sample_filter.c
   ../../modules/algorithm/math_utils.c)
 target_include_directories(motor_feedback_filter_test BEFORE PRIVATE motor_pid_fakes)
@@ -343,6 +347,17 @@ foreach(mode IN ITEMS legacy time-constant bypass gap missing multi-instance bou
   add_test(NAME production_dji_feedback_filter_${mode}
     COMMAND motor_feedback_filter_test ${mode})
   set_tests_properties(production_dji_feedback_filter_${mode} PROPERTIES TIMEOUT 10)
+endforeach()
+add_executable(motor_feedback_test motor_feedback_test.c ../../modules/motor/motor_feedback.c)
+target_include_directories(motor_feedback_test PRIVATE ../../modules/motor)
+target_include_directories(motor_feedback_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(motor_feedback_test PRIVATE -Wall -Wextra -Werror)
+if(UNIX)
+  target_link_libraries(motor_feedback_test PRIVATE m)
+endif()
+foreach(scenario IN ITEMS conversion capabilities signal)
+  add_test(NAME production_motor_feedback_${scenario} COMMAND motor_feedback_test ${scenario})
+  set_tests_properties(production_motor_feedback_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
 add_executable(host_test_check_test test_check_test.c)
 target_include_directories(host_test_check_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -948,7 +963,8 @@ endforeach()
 
 # HT04生产接收回调保留真实平均和PID，只替换CAN、任务及计时。
 add_executable(ht_numeric_test ht_numeric_test.c ../../modules/motor/HTmotor/HT04.c
-  ../../modules/motor/motor_pid.c ../../modules/algorithm/controller.c)
+  ../../modules/motor/motor_feedback.c ../../modules/motor/motor_pid.c
+  ../../modules/algorithm/controller.c)
 target_include_directories(ht_numeric_test BEFORE PRIVATE ht_numeric_fakes motor_pid_fakes)
 target_include_directories(ht_numeric_test PRIVATE ../../modules/motor/HTmotor
   ../../modules/motor ../../modules/daemon)
@@ -958,7 +974,8 @@ set_tests_properties(production_ht_numeric_feedback PROPERTIES TIMEOUT 10)
 
 # HT04 控制回归捕获生产任务入口，并用有限延时轮次检查反馈源和失败输出。
 add_executable(ht_control_test ht_control_test.c ../../modules/motor/HTmotor/HT04.c
-  ../../modules/motor/motor_pid.c ../../modules/algorithm/controller.c)
+  ../../modules/motor/motor_feedback.c ../../modules/motor/motor_pid.c
+  ../../modules/algorithm/controller.c)
 target_include_directories(ht_control_test BEFORE PRIVATE ht_control_fakes ht_numeric_fakes
   lk_motor_fakes motor_pid_fakes)
 target_include_directories(ht_control_test PRIVATE ../../modules/motor/HTmotor
@@ -971,7 +988,7 @@ foreach(scenario IN ITEMS feedback_0 feedback_1 feedback_2 feedback_3
   set_tests_properties(production_ht_control_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
 foreach(direction_case IN ITEMS angle speed)
-  foreach(direction IN ITEMS 0 1 2 3)
+  foreach(direction IN ITEMS 0 1)
     add_test(NAME production_ht_control_direction_${direction_case}_${direction}
       COMMAND ht_control_test direction-${direction_case}-${direction})
     set_tests_properties(production_ht_control_direction_${direction_case}_${direction}

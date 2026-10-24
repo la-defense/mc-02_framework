@@ -15,17 +15,19 @@ DJIMotorInstance shoot_fake_motors[3];
 uint32_t shoot_fake_motor_init_count;
 static uint32_t now_ms;
 static float timeline_ms;
-static Shoot_Config_s shoot_config = { .loader_slot_num = 10u, .loader_gearbox_ratio = 1.0f, .loader_disk_ratio = 1.0f };
+static Shoot_Config_s shoot_config = { .loader_slot_num = 10u, .loader_gearbox_ratio = 36.0f, .loader_disk_ratio = 1.0f };
 
 uint32_t HAL_GetTick(void) { return now_ms; }
 float DWT_GetTimeline_ms(void) { return timeline_ms; }
 Shoot_Config_s *ShootConfigFeed(void) { return &shoot_config; }
-DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
+DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {
     if (config == NULL || shoot_fake_motor_init_count >= 3u)
         return NULL;
     DJIMotorInstance *motor = &shoot_fake_motors[shoot_fake_motor_init_count];
     memset(motor, 0, sizeof(*motor));
+    motor->output_axis = config->output_axis;
+    motor->close_loop_type = config->controller_setting_init_config.close_loop_type;
     motor->measure.total_angle = 100.0f + (float)shoot_fake_motor_init_count;
     shoot_fake_motor_init_count++;
     return motor;
@@ -37,6 +39,20 @@ void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e loop)
 { if (motor != NULL) motor->outer_loop = loop; }
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
 { if (motor != NULL && summary != NULL) summary->enabled = motor->enabled; }
+Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *motor,
+                                                     uint32_t timestamp,
+                                                     Motor_Feedback_Snapshot_s *snapshot)
+{
+    (void)timestamp;
+    if (motor == NULL || snapshot == NULL)
+        return MOTOR_FEEDBACK_BAD_ARGUMENT;
+    const float scale = 0.01745329252f * (float)motor->output_axis.direction /
+                        motor->output_axis.gear_ratio;
+    snapshot->position = (Motor_Signal_Snapshot_s){
+        motor->measure.total_angle * scale, MOTOR_UNIT_RAD, MOTOR_REFERENCE_OUTPUT_AXIS,
+        now_ms, 1u, 1u};
+    return MOTOR_FEEDBACK_OK;
+}
 
 static void publish(Publisher_t *publisher, Shoot_Ctrl_Cmd_s *command, uint32_t timestamp)
 {
@@ -48,6 +64,7 @@ int main(void)
     timeline_ms = 1000.0f;
     CHECK(ShootInit() == 1u);
     CHECK(shoot_fake_motor_init_count == 3u);
+    CHECK((shoot_fake_motors[2].close_loop_type & ANGLE_LOOP) != 0);
     Subscriber_t *observer = SubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
     Publisher_t *publisher = PubRegister("shoot_cmd", sizeof(Shoot_Ctrl_Cmd_s));
     CHECK(observer != NULL && publisher != NULL);
@@ -63,14 +80,23 @@ int main(void)
     publish(publisher, &command, now_ms);
     ShootTask();
     CHECK(shoot_fake_motors[0].enabled && shoot_fake_motors[1].enabled && shoot_fake_motors[2].enabled);
-    CHECK(shoot_fake_motors[0].ref == 30000.0f && shoot_fake_motors[1].ref == 30000.0f);
+    const float friction_speed = 30000.0f * 0.01745329252f / 19.0f;
+    CHECK(fabsf(shoot_fake_motors[0].ref - friction_speed) < 1e-4f &&
+          fabsf(shoot_fake_motors[1].ref - friction_speed) < 1e-4f);
+    CHECK(shoot_fake_motors[0].output_axis.direction == MOTOR_AXIS_DIRECTION_NORMAL &&
+          shoot_fake_motors[1].output_axis.direction == MOTOR_AXIS_DIRECTION_REVERSE);
 
     command.load_mode = LOAD_1_BULLET;
     now_ms = 1u;
     timeline_ms = 1001.0f;
     publish(publisher, &command, now_ms);
     ShootTask();
-    CHECK(fabsf(shoot_fake_motors[2].ref - 138.0f) < 0.001f);
+    const float expected_one_bullet_target =
+        102.0f * 0.01745329252f / 36.0f + 0.62831853072f;
+    if (fabsf(shoot_fake_motors[2].ref - expected_one_bullet_target) >= 1e-5f)
+        fprintf(stderr, "loader target got %.9f, expected %.9f\n",
+                shoot_fake_motors[2].ref, expected_one_bullet_target);
+    CHECK(fabsf(shoot_fake_motors[2].ref - expected_one_bullet_target) < 1e-5f);
 
     /* No later publication: age 51ms must disable every motor and clear references. */
     now_ms = 52u;
@@ -96,7 +122,9 @@ int main(void)
     timeline_ms = 1300.0f;
     publish(publisher, &command, now_ms);
     ShootTask();
-    CHECK(fabsf(shoot_fake_motors[2].ref - 210.0f) < 0.001f);
+    const float expected_three_bullet_target =
+        102.0f * 0.01745329252f / 36.0f + 3.0f * 0.62831853072f;
+    CHECK(fabsf(shoot_fake_motors[2].ref - expected_three_bullet_target) < 1e-5f);
 
     puts("PASS: production shooter initialization, expiry shutdown, and fresh LOAD_STOP re-arm");
     return 0;

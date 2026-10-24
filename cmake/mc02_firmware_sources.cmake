@@ -127,6 +127,7 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/motor/DJImotor/dji_motor.c
     modules/motor/HTmotor/HT04.c
     modules/motor/LKmotor/LK9025.c
+    modules/motor/motor_feedback.c
     modules/motor/motor_pid.c
     modules/motor/motor_task.c
     modules/power/power_manager.c

@@ -3,6 +3,7 @@
 #include "robot_def.h"
 #include "referee_task.h"
 #include "super_cap.h"
+#include "general_def.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -15,14 +16,17 @@ uint32_t HAL_GetTick(void) { return test_tick; }
 CAN_HandleTypeDef hcan1, hcan2;
 UART_HandleTypeDef huart1;
 static DJIMotorInstance motors[4];
+static Motor_Init_Config_s motor_configs[4];
 static unsigned motor_count;
 static unsigned operation_order;
 static SuperCapInstance cap;
 
-DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
+DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {
-    (void)config;
-    return motor_count < 4 ? &motors[motor_count++] : NULL;
+    if (motor_count >= 4)
+        return NULL;
+    motor_configs[motor_count] = *config;
+    return &motors[motor_count++];
 }
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 { if (motor) { motor->ref = ref; motor->set_ref_order = ++operation_order; } }
@@ -41,6 +45,11 @@ int main(void)
 {
     ChassisInit();
     CHECK(motor_count == 4);
+    for (unsigned i = 0; i < 4; ++i) {
+        CHECK(motor_configs[i].output_axis.gear_ratio == REDUCTION_RATIO_WHEEL);
+        CHECK(motor_configs[i].output_axis.direction == MOTOR_AXIS_DIRECTION_REVERSE);
+        CHECK(motor_configs[i].controller_param_init_config.speed_PID.Kp > 10.0f);
+    }
     Publisher_t *commands = PubRegister("chassis_cmd", sizeof(Chassis_Ctrl_Cmd_s));
     Chassis_Ctrl_Cmd_s command = {
         .vx = 100.0f, .vy = 0.0f, .wz = 0.0f, .offset_angle = 0.0f,
@@ -58,16 +67,16 @@ int main(void)
         if (motors[i].enable_order < first_enable) first_enable = motors[i].enable_order;
     }
     CHECK(last_reference_write < first_enable);
-    CHECK(motors[0].ref < 0.0f && motors[2].ref > 0.0f);
+    CHECK(motors[0].ref > 0.0f && motors[2].ref < 0.0f);
     command = (Chassis_Ctrl_Cmd_s){.offset_angle = 0.5f,
                                    .chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW};
     PubPushMessage(commands, &command);
     ChassisTask();
-    for (unsigned i = 0; i < 4; ++i) CHECK(motors[i].ref > 0.0f);
+    for (unsigned i = 0; i < 4; ++i) CHECK(motors[i].ref < 0.0f);
     command.offset_angle = -0.5f;
     PubPushMessage(commands, &command);
     ChassisTask();
-    for (unsigned i = 0; i < 4; ++i) CHECK(motors[i].ref < 0.0f);
+    for (unsigned i = 0; i < 4; ++i) CHECK(motors[i].ref > 0.0f);
 #else
     for (unsigned i = 0; i < 4; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
 #endif
@@ -88,8 +97,9 @@ int main(void)
         CHECK(motors[i].enabled);
         CHECK(motors[i].enable_count > 0);
         CHECK(motors[i].ref != 0.0f);
-        CHECK(motors[i].ref <= CHASSIS_MAX_MOTOR_SPEED_DEG_S &&
-              motors[i].ref >= -CHASSIS_MAX_MOTOR_SPEED_DEG_S);
+        const float max_output_rad_s = CHASSIS_MAX_MOTOR_SPEED_DEG_S * DEGREE_2_RAD /
+                                       REDUCTION_RATIO_WHEEL;
+        CHECK(motors[i].ref <= max_output_rad_s && motors[i].ref >= -max_output_rad_s);
     }
     command = (Chassis_Ctrl_Cmd_s){.vx = 20.0f, .chassis_mode = (chassis_mode_e)99};
     PubPushMessage(commands, &command);

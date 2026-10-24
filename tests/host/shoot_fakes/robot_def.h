@@ -2,6 +2,7 @@
 #define MC02_SHOOT_FAKE_ROBOT_DEF_H
 #include <stdint.h>
 #include "main.h"
+#include "../../../modules/motor/motor_feedback.h"
 
 // 复用生产 PID 参数，避免新增字段时替身仍接受旧接口。
 #include "../../../modules/motor/motor_pid.h"
@@ -9,7 +10,6 @@
 typedef enum { MOTOR_FEED = 0 } Feedback_Source_e;
 typedef enum { SPEED_LOOP = 2, CURRENT_LOOP = 1, ANGLE_LOOP = 4 } Closeloop_Type_e;
 typedef enum { MOTOR_DIRECTION_NORMAL = 0, MOTOR_DIRECTION_REVERSE = 1 } Motor_Reverse_Flag_e;
-typedef enum { M2006 = 1, M3508 = 2 } Motor_Type_e;
 typedef struct {
     CAN_HandleTypeDef *can_handle;
     uint8_t tx_id;
@@ -26,6 +26,7 @@ typedef struct {
     Shoot_CAN_Init_s can_init_config;
     Shoot_Controller_Init_s controller_param_init_config;
     Shoot_Controller_Setting_s controller_setting_init_config;
+    Motor_Output_Axis_Config_s output_axis;
     Motor_Type_e motor_type;
 } Motor_Init_Config_s;
 

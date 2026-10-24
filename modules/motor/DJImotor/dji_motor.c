@@ -8,6 +8,9 @@
 #include "bsp_log.h"
 #include "bsp_can.h"
 #include "motor_pid.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "stm32h7xx_hal.h"
 #include <math.h>
 #include <stdlib.h>
 
@@ -66,6 +69,8 @@ static CANInstance sender_assignment[6] = {
 // 当前 FDCAN 三条总线各有三组发送帧；只给已有电机注册的组提交数据。
 static uint8_t sender_enable_flag[9] = {0};
 
+#define DJI_MULTITURN_MAX_GAP_MS 20u /* 超过此间隔无法从单圈编码器证明遗漏圈数。 */
+
 static uint8_t FilterModeValid(DJI_Motor_Filter_Mode_e mode)
 {
     return mode == DJI_MOTOR_FILTER_LEGACY_FRAME || mode == DJI_MOTOR_FILTER_TIME_CONSTANT ||
@@ -100,6 +105,54 @@ static SampleFilterStatus_t InitTimeConstantFilter(SampleFilter_t *filter,
         .tau_s = tau_s,
     };
     return SampleFilterInit(filter, &filter_config, NULL, 0u);
+}
+
+static uint8_t FeedbackSourceValid(const Motor_Signal_Source_s *source,
+                                   Motor_Unit_e unit,
+                                   Motor_Reference_e reference)
+{
+    return (uint8_t)(MotorFeedbackValidateSignalSource(source) == MOTOR_FEEDBACK_OK &&
+                     source->unit == unit && source->reference == reference);
+}
+
+static uint8_t DjiConfigValid(const Motor_Init_Config_s *config)
+{
+    const Motor_Control_Setting_s *setting = &config->controller_setting_init_config;
+    const Motor_Controller_Init_s *controller = &config->controller_param_init_config;
+    Motor_Capabilities_s capabilities;
+    if (MotorFeedbackValidateOutputAxis(&config->output_axis) != MOTOR_FEEDBACK_OK ||
+        MotorFeedbackGetCapabilities(config->motor_type, &capabilities) != MOTOR_FEEDBACK_OK ||
+        (capabilities.measurement_mask & MOTOR_CAPABILITY_CURRENT) == 0u ||
+        setting->motor_reverse_flag != MOTOR_DIRECTION_NORMAL ||
+        setting->feedback_reverse_flag != FEEDBACK_DIRECTION_NORMAL ||
+        (setting->feedforward_flag & (uint8_t)~CURRENT_AND_SPEED_FEEDFORWARD) != 0u)
+        return 0u;
+
+    if ((setting->close_loop_type & ANGLE_LOOP) != 0u &&
+        (setting->outer_loop_type == ANGLE_LOOP) &&
+        (setting->angle_feedback_source == OTHER_FEED &&
+         !FeedbackSourceValid(&controller->other_angle_feedback, MOTOR_UNIT_RAD,
+                              MOTOR_REFERENCE_EXTERNAL)))
+        return 0u;
+    if ((setting->close_loop_type & SPEED_LOOP) != 0u &&
+        (setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u &&
+        (setting->speed_feedback_source == OTHER_FEED &&
+         !FeedbackSourceValid(&controller->other_speed_feedback, MOTOR_UNIT_RAD_S,
+                              MOTOR_REFERENCE_EXTERNAL)))
+        return 0u;
+    if ((setting->feedforward_flag & SPEED_FEEDFORWARD) != 0u &&
+        !FeedbackSourceValid(&controller->speed_feedforward, MOTOR_UNIT_RAD_S,
+                             MOTOR_REFERENCE_OUTPUT_AXIS))
+        return 0u;
+    if ((setting->feedforward_flag & CURRENT_FEEDFORWARD) != 0u &&
+        !FeedbackSourceValid(&controller->current_feedforward, MOTOR_UNIT_DEVICE_CURRENT,
+                             MOTOR_REFERENCE_OUTPUT_AXIS))
+        return 0u;
+    if (setting->angle_feedback_source != MOTOR_FEED && setting->angle_feedback_source != OTHER_FEED)
+        return 0u;
+    if (setting->speed_feedback_source != MOTOR_FEED && setting->speed_feedback_source != OTHER_FEED)
+        return 0u;
+    return 1u;
 }
 
 static float FeedbackIntervalSeconds(const CANInstance *instance, const DJIMotorInstance *motor)
@@ -202,6 +255,7 @@ static void UpdateFeedbackFilter(DJIMotorInstance *motor, uint8_t is_speed, floa
 
 static void InvalidateFeedbackForMissingSample(DJIMotorInstance *motor)
 {
+    motor->output_position_trusted = 0u;
     if (motor->speed_filter_valid)
     {
         if (motor->filter_config.speed_mode == DJI_MOTOR_FILTER_TIME_CONSTANT)
@@ -345,6 +399,8 @@ static void DecodeDJIMotor(CANInstance *_instance)
     DJIMotorInstance *motor = (DJIMotorInstance *)_instance->id;
     DJI_Motor_Measure_s *measure = &motor->measure;
     const uint8_t first_feedback = motor->has_feedback_timestamp == 0u;
+    const uint32_t elapsed_ms = first_feedback ? 0u :
+        (uint32_t)(_instance->rx_timestamp_ms - motor->last_feedback_timestamp_ms);
     const float dt_s = first_feedback ? 0.0f : FeedbackIntervalSeconds(_instance, motor);
     const int16_t raw_rpm = (int16_t)(((uint16_t)rxbuff[2] << 8u) | rxbuff[3]);
     const int16_t raw_current = (int16_t)(((uint16_t)rxbuff[4] << 8u) | rxbuff[5]);
@@ -391,13 +447,45 @@ static void DecodeDJIMotor(CANInstance *_instance)
     motor->has_feedback_timestamp = 1u;
     if (motor->feedback_sample_count < UINT32_MAX)
         motor->feedback_sample_count++;
+    motor->feedback_sequence++;
+    if (motor->feedback_sequence == 0u)
+        motor->feedback_sequence++;
 
-    // 两次采样间转动须小于半圈；单圈读数跨过零点时补减一圈，保持总角度连续。
-    if (measure->ecd - measure->last_ecd > 4096)
-        measure->total_round--;
-    else if (measure->ecd - measure->last_ecd < -4096)
-        measure->total_round++;
-    measure->total_angle = measure->total_round * 360 + measure->angle_single_round;
+    if (motor->encoder_baseline_valid == 0u)
+    {
+        // 首个有效帧只建立相对零点，避免把上电时的编码器残值当作已知多圈角度。
+        motor->encoder_baseline_valid = 1u;
+        motor->output_position_trusted = 1u;
+        measure->last_ecd = measure->ecd;
+        measure->total_round = 0;
+        measure->total_angle = 0.0f;
+    }
+    else if (motor->output_position_trusted != 0u && elapsed_ms <= DJI_MULTITURN_MAX_GAP_MS)
+    {
+        // 只有反馈连续时才补单圈跨界；计数溢出时撤销可信度，不做有符号溢出。
+        const int32_t delta = (int32_t)measure->ecd - (int32_t)measure->last_ecd;
+        if (delta > 4096)
+        {
+            if (measure->total_round == INT32_MIN)
+                motor->output_position_trusted = 0u;
+            else
+                measure->total_round--;
+        }
+        else if (delta < -4096)
+        {
+            if (measure->total_round == INT32_MAX)
+                motor->output_position_trusted = 0u;
+            else
+                measure->total_round++;
+        }
+        if (motor->output_position_trusted != 0u)
+            measure->total_angle = (float)measure->total_round * 360.0f + measure->angle_single_round;
+    }
+    else
+    {
+        // 超过可证明补圈的间隔后，仅更新单圈基准；多圈位置等待显式重建。
+        motor->output_position_trusted = 0u;
+    }
 }
 
 static void DJIMotorLostCallback(void *motor_ptr)
@@ -410,7 +498,7 @@ static void DJIMotorLostCallback(void *motor_ptr)
 }
 
 // 电机初始化,返回一个电机实例
-DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
+DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {
     const DJI_Motor_Filter_Config_s default_filter = {
         .speed_mode = DJI_MOTOR_FILTER_LEGACY_FRAME,
@@ -426,7 +514,8 @@ DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
 DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
                                          const DJI_Motor_Filter_Config_s *filter_config)
 {
-    if (config == NULL || idx >= DJI_MOTOR_CNT || !FilterConfigValid(filter_config))
+    if (config == NULL || idx >= DJI_MOTOR_CNT || !FilterConfigValid(filter_config) ||
+        !DjiConfigValid(config))
         return NULL;
     DJIMotorInstance *instance = (DJIMotorInstance *)malloc(sizeof(DJIMotorInstance));
     if (instance == NULL)
@@ -445,6 +534,7 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
 
     // motor basic setting 电机基本设置
     instance->motor_type = config->motor_type;                         // 6020 or 2006 or 3508
+    instance->output_axis = config->output_axis;
     instance->motor_settings = config->controller_setting_init_config; // 正反转,闭环类型等
 
     // motor controller init 电机控制器初始化
@@ -459,10 +549,10 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
         free(instance);
         return NULL;
     }
-    instance->motor_controller.other_angle_feedback_ptr = config->controller_param_init_config.other_angle_feedback_ptr;
-    instance->motor_controller.other_speed_feedback_ptr = config->controller_param_init_config.other_speed_feedback_ptr;
-    instance->motor_controller.current_feedforward_ptr = config->controller_param_init_config.current_feedforward_ptr;
-    instance->motor_controller.speed_feedforward_ptr = config->controller_param_init_config.speed_feedforward_ptr;
+    instance->motor_controller.other_angle_feedback = config->controller_param_init_config.other_angle_feedback;
+    instance->motor_controller.other_speed_feedback = config->controller_param_init_config.other_speed_feedback;
+    instance->motor_controller.current_feedforward = config->controller_param_init_config.current_feedforward;
+    instance->motor_controller.speed_feedforward = config->controller_param_init_config.speed_feedforward;
     // 后续增加电机前馈控制器(速度和电流)
 
     // 电机分组,因为至多4个电机可以共用一帧CAN控制报文
@@ -508,28 +598,42 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
 /* 电流只能通过电机自带传感器监测,后续考虑加入力矩传感器应变片等 */
 void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback_Source_e type)
 {
+    if (motor == NULL || (type != MOTOR_FEED && type != OTHER_FEED))
+        return;
+    taskENTER_CRITICAL();
     if (loop == ANGLE_LOOP)
         motor->motor_settings.angle_feedback_source = type;
     else if (loop == SPEED_LOOP)
         motor->motor_settings.speed_feedback_source = type;
     else
+    {
+        taskEXIT_CRITICAL();
         BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_04); // 检查是否传入了正确的LOOP类型,或发生了指针越界
+        return;
+    }
+    taskEXIT_CRITICAL();
 }
 
 void DJIMotorStop(DJIMotorInstance *motor)
 {
+    taskENTER_CRITICAL();
     motor->stop_flag = MOTOR_STOP;
+    taskEXIT_CRITICAL();
 }
 
 void DJIMotorEnable(DJIMotorInstance *motor)
 {
+    taskENTER_CRITICAL();
     motor->stop_flag = MOTOR_ENALBED;
+    taskEXIT_CRITICAL();
 }
 
 /* 修改电机的实际闭环对象 */
 void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop)
 {
+    taskENTER_CRITICAL();
     motor->motor_settings.outer_loop_type = outer_loop;
+    taskEXIT_CRITICAL();
 }
 
 /**
@@ -552,7 +656,122 @@ void DJIMotorIsOnline(DJIMotorInstance *motor)
  */
 void DJIMotorCloseLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop)
 {
+    taskENTER_CRITICAL();
     motor->motor_settings.close_loop_type = outer_loop;
+    taskEXIT_CRITICAL();
+}
+
+static void StoreSignal(Motor_Signal_Snapshot_s *signal, float value, Motor_Unit_e unit,
+                        Motor_Reference_e reference, uint32_t timestamp_ms,
+                        uint32_t sequence, uint8_t valid)
+{
+    *signal = (Motor_Signal_Snapshot_s){
+        .value = value,
+        .unit = unit,
+        .reference = reference,
+        .source_time_ms = timestamp_ms,
+        .sequence = sequence,
+        .valid = valid,
+    };
+}
+
+static PID_Status_e ReadSignalForPID(const Motor_Signal_Source_s *source,
+                                    Motor_Unit_e unit,
+                                    Motor_Reference_e reference,
+                                    uint32_t now_ms,
+                                    float *value)
+{
+    Motor_Signal_Snapshot_s snapshot = {0};
+    if (value == NULL)
+        return PID_BAD_ARGUMENT;
+    const Motor_Feedback_Status_e status = MotorFeedbackReadSignal(
+        source, unit, reference, now_ms, &snapshot);
+    if (status == MOTOR_FEEDBACK_NONFINITE || status == MOTOR_FEEDBACK_OVERFLOW)
+        return PID_NUMERIC_ERROR;
+    if (status != MOTOR_FEEDBACK_OK)
+        return PID_BAD_ARGUMENT;
+    *value = snapshot.value;
+    return PID_OK;
+}
+
+Motor_Feedback_Status_e DJIMotorRebaseReference(DJIMotorInstance *motor, uint32_t now_ms)
+{
+    if (motor == NULL)
+        return MOTOR_FEEDBACK_BAD_ARGUMENT;
+
+    uint32_t timestamp_ms;
+    uint8_t has_sample;
+    taskENTER_CRITICAL();
+    timestamp_ms = motor->last_feedback_timestamp_ms;
+    has_sample = motor->has_feedback_timestamp;
+    taskEXIT_CRITICAL();
+    if (has_sample == 0u || DaemonIsOnline(motor->daemon) == 0u ||
+        (uint32_t)(now_ms - timestamp_ms) > DJI_MULTITURN_MAX_GAP_MS)
+        return MOTOR_FEEDBACK_NOT_READY;
+
+    taskENTER_CRITICAL();
+    motor->measure.last_ecd = motor->measure.ecd;
+    motor->measure.total_round = 0;
+    motor->measure.total_angle = 0.0f;
+    motor->encoder_baseline_valid = 1u;
+    motor->output_position_trusted = 1u;
+    taskEXIT_CRITICAL();
+    return MOTOR_FEEDBACK_OK;
+}
+
+Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *motor,
+                                                     uint32_t now_ms,
+                                                     Motor_Feedback_Snapshot_s *snapshot)
+{
+    if (motor == NULL || snapshot == NULL)
+        return MOTOR_FEEDBACK_BAD_ARGUMENT;
+
+    DJI_Motor_Measure_s measure;
+    Motor_Output_Axis_Config_s output_axis;
+    uint32_t timestamp_ms;
+    uint32_t sequence;
+    uint8_t has_sample;
+    uint8_t position_trusted;
+    uint8_t speed_valid;
+    uint8_t current_valid;
+    taskENTER_CRITICAL();
+    measure = motor->measure;
+    output_axis = motor->output_axis;
+    timestamp_ms = motor->last_feedback_timestamp_ms;
+    sequence = motor->feedback_sequence;
+    has_sample = motor->has_feedback_timestamp;
+    position_trusted = motor->encoder_baseline_valid && motor->output_position_trusted;
+    speed_valid = motor->speed_filter_valid;
+    current_valid = motor->current_filter_valid;
+    taskEXIT_CRITICAL();
+    if (has_sample == 0u)
+        return MOTOR_FEEDBACK_NOT_READY;
+
+    float position_rad = 0.0f;
+    float speed_rad_s = 0.0f;
+    Motor_Feedback_Status_e status = MotorFeedbackConvertDegreesToOutputAxis(
+        &output_axis, measure.total_angle, measure.speed_aps, &position_rad, &speed_rad_s);
+    if (status != MOTOR_FEEDBACK_OK)
+        return status;
+
+    const uint8_t fresh = (DaemonIsOnline(motor->daemon) != 0u) &&
+        ((uint32_t)(now_ms - timestamp_ms) <= DJI_MULTITURN_MAX_GAP_MS);
+    Motor_Feedback_Snapshot_s candidate = {0};
+    candidate.sample_sequence = sequence;
+    StoreSignal(&candidate.position, position_rad, MOTOR_UNIT_RAD, MOTOR_REFERENCE_OUTPUT_AXIS,
+                timestamp_ms, sequence, (uint8_t)(fresh && position_trusted));
+    StoreSignal(&candidate.speed, speed_rad_s, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_OUTPUT_AXIS,
+                timestamp_ms, sequence, (uint8_t)(fresh && speed_valid));
+    StoreSignal(&candidate.current, measure.current_feedback * (float)output_axis.direction,
+                MOTOR_UNIT_DEVICE_CURRENT,
+                MOTOR_REFERENCE_OUTPUT_AXIS, timestamp_ms, sequence,
+                (uint8_t)(fresh && current_valid));
+    StoreSignal(&candidate.torque, 0.0f, MOTOR_UNIT_UNSPECIFIED,
+                MOTOR_REFERENCE_UNSPECIFIED, timestamp_ms, sequence, 0u);
+    StoreSignal(&candidate.voltage, 0.0f, MOTOR_UNIT_UNSPECIFIED,
+                MOTOR_REFERENCE_UNSPECIFIED, timestamp_ms, sequence, 0u);
+    *snapshot = candidate;
+    return MOTOR_FEEDBACK_OK;
 }
 
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
@@ -581,7 +800,11 @@ void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
 // 设置参考值
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 {
+    if (motor == NULL)
+        return;
+    taskENTER_CRITICAL();
     motor->motor_controller.pid_ref = ref;
+    taskEXIT_CRITICAL();
 }
 
 // 为所有电机实例计算三环PID,发送控制报文
@@ -592,24 +815,42 @@ void DJIMotorControl()
     uint8_t group, num; // 电机组号和组内编号
     int16_t set;        // 电机控制CAN发送设定值
     DJIMotorInstance *motor;
-    Motor_Control_Setting_s *motor_setting; // 电机控制参数
+    Motor_Control_Setting_s setting_snapshot; // 本周期使用同一份控制设置。
     Motor_Controller_s *motor_controller;   // 电机控制器
-    DJI_Motor_Measure_s *measure;           // 电机测量值
+    DJI_Motor_Measure_s measure_snapshot;   // 本周期使用同一帧 CAN 反馈。
+    Motor_Output_Axis_Config_s output_axis;
     float pid_measure, pid_ref;             // 电机PID测量值和设定值
 
     // 遍历所有电机实例,进行串级PID的计算并设置发送报文的值
     for (size_t i = 0; i < idx; ++i)
     { // 减小访存开销,先保存指针引用
         motor = dji_motor_instance[i];
-        motor_setting = &motor->motor_settings;
         motor_controller = &motor->motor_controller;
-        measure = &motor->measure;
-        pid_ref = motor_controller->pid_ref; // 保存设定值,防止motor_controller->pid_ref在计算过程中被修改
+        if (motor->has_feedback_timestamp && DaemonIsOnline(motor->daemon) == 0u)
+            InvalidateFeedbackForMissingSample(motor);
+        uint8_t speed_filter_valid;
+        uint8_t current_filter_valid;
+        uint8_t position_trusted;
+        taskENTER_CRITICAL();
+        setting_snapshot = motor->motor_settings;
+        measure_snapshot = motor->measure;
+        output_axis = motor->output_axis;
+        pid_ref = motor_controller->pid_ref;
+        speed_filter_valid = motor->speed_filter_valid;
+        current_filter_valid = motor->current_filter_valid;
+        position_trusted = (uint8_t)(motor->encoder_baseline_valid && motor->output_position_trusted);
+        taskEXIT_CRITICAL();
+        const Motor_Control_Setting_s *motor_setting = &setting_snapshot;
+        DJI_Motor_Measure_s *measure = &measure_snapshot;
+        const uint32_t now_ms = HAL_GetTick();
         // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
         float control_dt = 0.0f;
         PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
-        if (motor->has_feedback_timestamp && DaemonIsOnline(motor->daemon) == 0u)
-            InvalidateFeedbackForMissingSample(motor);
+        const uint8_t axis_closed_loop = (uint8_t)(
+            (motor_setting->outer_loop_type == ANGLE_LOOP &&
+             (motor_setting->close_loop_type & ANGLE_LOOP) != 0u) ||
+            (motor_setting->outer_loop_type == SPEED_LOOP &&
+             (motor_setting->close_loop_type & SPEED_LOOP) != 0u));
         const uint8_t speed_internal_active =
             (motor_setting->close_loop_type & SPEED_LOOP) != 0u &&
             (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u &&
@@ -617,19 +858,36 @@ void DJIMotorControl()
         const uint8_t current_internal_active =
             (motor_setting->close_loop_type & CURRENT_LOOP) != 0u;
         const uint8_t feedback_valid =
-            (!speed_internal_active || motor->speed_filter_valid) &&
-            (!current_internal_active || motor->current_filter_valid);
-        if (motor_setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
-            pid_ref *= -1; // 设置反转
+            (!speed_internal_active || speed_filter_valid) &&
+            (!current_internal_active || current_filter_valid);
+        float output_position_rad = 0.0f;
+        float output_speed_rad_s = 0.0f;
+        const Motor_Feedback_Status_e axis_status = MotorFeedbackConvertDegreesToOutputAxis(
+            &output_axis, measure->total_angle, measure->speed_aps,
+            &output_position_rad, &output_speed_rad_s);
+        const uint8_t internal_axis_active =
+            ((motor_setting->outer_loop_type == ANGLE_LOOP) &&
+             (motor_setting->close_loop_type & ANGLE_LOOP) != 0u &&
+             motor_setting->angle_feedback_source == MOTOR_FEED) ||
+            ((motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u &&
+             (motor_setting->close_loop_type & SPEED_LOOP) != 0u &&
+             motor_setting->speed_feedback_source == MOTOR_FEED);
+        if (axis_status != MOTOR_FEEDBACK_OK && internal_axis_active && pid_status == PID_OK)
+            pid_status = PID_NUMERIC_ERROR;
 
         // pid_ref会顺次通过被启用的闭环充当数据的载体
         // 计算位置环,只有启用位置环且外层闭环为位置时会计算速度环输出
         if (pid_status == PID_OK && feedback_valid && (motor_setting->close_loop_type & ANGLE_LOOP) && motor_setting->outer_loop_type == ANGLE_LOOP)
         {
             if (motor_setting->angle_feedback_source == OTHER_FEED)
-                pid_measure = *motor_controller->other_angle_feedback_ptr;
+                pid_status = ReadSignalForPID(&motor_controller->other_angle_feedback,
+                    MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL, now_ms, &pid_measure);
+            else if (motor_setting->angle_feedback_source == MOTOR_FEED && position_trusted != 0u)
+                pid_measure = output_position_rad;
+            else if (motor_setting->angle_feedback_source == MOTOR_FEED)
+                pid_status = PID_BAD_ARGUMENT; // 多圈参考失效后必须显式重建，不能拿旧值继续闭环。
             else
-                pid_measure = measure->total_angle; // MOTOR_FEED,对total angle闭环,防止在边界处出现突跃
+                pid_status = PID_BAD_ARGUMENT;
             // 更新pid_ref进入下一个环
             if (pid_status == PID_OK)
                 pid_status = PIDCalculate(&motor_controller->angle_PID, pid_measure, pid_ref, control_dt, &pid_ref);
@@ -639,27 +897,49 @@ void DJIMotorControl()
         if (pid_status == PID_OK && feedback_valid && (motor_setting->close_loop_type & SPEED_LOOP) && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
         {
             if (motor_setting->feedforward_flag & SPEED_FEEDFORWARD)
-                pid_ref += *motor_controller->speed_feedforward_ptr;
+            {
+                float feedforward = 0.0f;
+                pid_status = ReadSignalForPID(&motor_controller->speed_feedforward,
+                    MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_OUTPUT_AXIS, now_ms, &feedforward);
+                if (pid_status == PID_OK)
+                    pid_ref += feedforward;
+            }
 
-            if (motor_setting->speed_feedback_source == OTHER_FEED)
-                pid_measure = *motor_controller->other_speed_feedback_ptr;
-            else // MOTOR_FEED
-                pid_measure = measure->speed_aps;
+            if (pid_status == PID_OK && motor_setting->speed_feedback_source == OTHER_FEED)
+                pid_status = ReadSignalForPID(&motor_controller->other_speed_feedback,
+                    MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL, now_ms, &pid_measure);
+            else if (pid_status == PID_OK && motor_setting->speed_feedback_source == MOTOR_FEED)
+                pid_measure = output_speed_rad_s;
+            else if (pid_status == PID_OK)
+                pid_status = PID_BAD_ARGUMENT;
             // 更新pid_ref进入下一个环
             if (pid_status == PID_OK)
                 pid_status = PIDCalculate(&motor_controller->speed_PID, pid_measure, pid_ref, control_dt, &pid_ref);
         }
 
         // 计算电流环,目前只要启用了电流环就计算,不管外层闭环是什么,并且电流只有电机自身传感器的反馈
-        if (feedback_valid && (motor_setting->feedforward_flag & CURRENT_FEEDFORWARD))
-            pid_ref += *motor_controller->current_feedforward_ptr;
+        if (pid_status == PID_OK && feedback_valid &&
+            (motor_setting->feedforward_flag & CURRENT_FEEDFORWARD))
+        {
+            float feedforward = 0.0f;
+            pid_status = ReadSignalForPID(&motor_controller->current_feedforward,
+                MOTOR_UNIT_DEVICE_CURRENT, MOTOR_REFERENCE_OUTPUT_AXIS, now_ms, &feedforward);
+            if (pid_status == PID_OK)
+                pid_ref += feedforward;
+        }
         if (motor_setting->close_loop_type & CURRENT_LOOP)
         {
             if (pid_status == PID_OK && feedback_valid)
-                pid_status = PIDCalculate(&motor_controller->current_PID, measure->current_feedback, pid_ref, control_dt, &pid_ref);
+            {
+                const float current_measure = measure->current_feedback *
+                    ((axis_closed_loop != 0u && output_axis.direction == MOTOR_AXIS_DIRECTION_REVERSE) ? -1.0f : 1.0f);
+                pid_status = PIDCalculate(&motor_controller->current_PID, current_measure,
+                                          pid_ref, control_dt, &pid_ref);
+            }
         }
 
-        if (motor_setting->feedback_reverse_flag == FEEDBACK_DIRECTION_REVERSE && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
+        // 输出轴控制量按安装方向映射回电机转子方向后再编码设备电流。
+        if (axis_closed_loop != 0u && output_axis.direction == MOTOR_AXIS_DIRECTION_REVERSE)
             pid_ref *= -1;
 
         if (pid_status != PID_OK || !feedback_valid || !isfinite(pid_ref))
