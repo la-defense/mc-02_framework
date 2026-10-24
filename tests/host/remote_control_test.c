@@ -5,6 +5,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef MC02_REMOTE_THREAD_TEST
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
+#endif
 #include "remote_control.h"
 #include "daemon.h"
 #include "robot_safety.h"
@@ -18,6 +23,10 @@ UART_HandleTypeDef huart5, huart9;
 static DMA_HandleTypeDef huart5_dma, huart9_dma;
 static uint32_t now;
 static uint8_t *dma_buffer;
+static RemoteControlDiagnostics_s remote_diag_snapshot;
+#define DIAG(field) (RemoteControlGetDiagnostics(&remote_diag_snapshot), remote_diag_snapshot.field)
+static RemoteControlSnapshot_s remote_input_snapshot;
+#define RC_INPUT (RemoteControlGetSnapshot(&remote_input_snapshot), remote_input_snapshot.input)
 extern volatile uint32_t usart_rx_oversize_total;
 uint32_t HAL_GetTick(void) { return now; }
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h, uint8_t *p, uint16_t n)
@@ -52,6 +61,87 @@ static void pc_frame(uint16_t heartbeat, uint16_t keys)
 }
 static void set_heartbeat(uint8_t b[18], uint16_t heartbeat)
 { b[10]=(uint8_t)heartbeat; b[11]=(uint8_t)(heartbeat>>8); }
+
+#ifdef MC02_REMOTE_THREAD_TEST
+static atomic_int remote_thread_start;
+static atomic_int remote_thread_done;
+static atomic_int remote_thread_failed;
+static atomic_int daemon_thread_done;
+
+static void *PublishRemoteFrames(void *unused)
+{
+    (void)unused;
+    while (atomic_load(&remote_thread_start) == 0)
+        atomic_signal_fence(memory_order_acquire);
+    for (uint32_t sequence = 0u; sequence < 50000u; ++sequence)
+    {
+        const int16_t offset = (int16_t)((int32_t)(sequence % 301u) - 150);
+        const uint16_t channels[5] = {
+            (uint16_t)(1024 + offset), (uint16_t)(1024 - offset),
+            1024u, 1024u, 1024u
+        };
+        uint8_t frame[18];
+        encode(frame, channels, 3u, 3u);
+        set_heartbeat(frame, (uint16_t)(sequence % 65534u + 1u));
+        receive(frame, sizeof(frame));
+    }
+    atomic_store(&remote_thread_done, 1);
+    return NULL;
+}
+
+static void *ReadRemoteSnapshots(void *unused)
+{
+    (void)unused;
+    atomic_store(&remote_thread_start, 1);
+    uint32_t previous_count = 0u;
+    do
+    {
+        RemoteControlSnapshot_s input = {0};
+        RemoteControlDiagnostics_s diagnostics = {0};
+        if (RemoteControlGetDiagnostics(&diagnostics) == 0u)
+            atomic_store(&remote_thread_failed, 1);
+        RemoteControlGetSnapshot(&input);
+        if ((int32_t)input.input.rc.rocker_r_ + input.input.rc.rocker_r1 != 0 ||
+            diagnostics.accepted_frames < previous_count ||
+            (diagnostics.online != 0u && diagnostics.has_valid_frame == 0u))
+            atomic_store(&remote_thread_failed, 1);
+        previous_count = diagnostics.accepted_frames;
+    } while (atomic_load(&remote_thread_done) == 0);
+    return NULL;
+}
+
+static void *AdvanceDaemon(void *unused)
+{
+    (void)unused;
+    for (uint32_t iteration = 0u; iteration < 5000u; ++iteration)
+    {
+        DaemonTask();
+        if (iteration > 1000u && atomic_load(&remote_thread_done) != 0)
+            break;
+        (void)sched_yield();
+    }
+    atomic_store(&daemon_thread_done, 1);
+    return NULL;
+}
+
+static int ConcurrentRemoteSnapshots(void)
+{
+    pthread_t producer;
+    pthread_t reader;
+    pthread_t daemon;
+    CHECK(pthread_create(&producer, NULL, PublishRemoteFrames, NULL) == 0);
+    CHECK(pthread_create(&reader, NULL, ReadRemoteSnapshots, NULL) == 0);
+    CHECK(pthread_create(&daemon, NULL, AdvanceDaemon, NULL) == 0);
+    CHECK(pthread_join(producer, NULL) == 0);
+    CHECK(pthread_join(reader, NULL) == 0);
+    CHECK(pthread_join(daemon, NULL) == 0);
+    CHECK(atomic_load(&daemon_thread_done) != 0);
+    CHECK(atomic_load(&remote_thread_failed) == 0);
+    CHECK(DIAG(accepted_frames) == 50000u);
+    return 0;
+}
+#endif
+
 int main(int argc, char **argv)
 {
     huart5.hdmarx = &huart5_dma;
@@ -84,9 +174,12 @@ int main(int argc, char **argv)
     CHECK(!RobotSafetyIsReady());
     return 0;
 #endif
-    RC_ctrl_t *rc = RemoteControlInit(&huart5);
+    const RC_ctrl_t *rc = RemoteControlInit(&huart5);
     CHECK(rc != NULL && dma_buffer != NULL);
     CHECK(!RemoteControlIsOnline());
+#ifdef MC02_REMOTE_THREAD_TEST
+    if (argc > 1 && !strcmp(argv[1], "threads")) return ConcurrentRemoteSnapshots();
+#endif
     RobotSafetyUpdate();
     CHECK(EstopIsLatched());
     CHECK(RobotSafetyGetState() == ROBOT_ESTOP);
@@ -98,12 +191,12 @@ int main(int argc, char **argv)
             now=starts[i]; encode(b,ch,1,3); set_heartbeat(b,1);
             memcpy(dma_buffer,b,18); HAL_UARTEx_RxEventCallback(&huart5,18);
             now+=50u; USARTProcessRx();
-            CHECK(remote_control_diag.last_valid_tick==starts[i]);
-            CHECK(remote_control_diag.pc_last_advance_tick==starts[i]);
+            CHECK(DIAG(last_valid_tick)==starts[i]);
+            CHECK(DIAG(pc_last_advance_tick)==starts[i]);
             now=starts[i]+100u; RemoteControlGetSnapshot(&state); CHECK(state.remote_online);
             now=starts[i]+101u; RemoteControlGetSnapshot(&state);
             CHECK(!state.remote_online && !state.pc_valid && !state.input.rc.switch_left);
-            CHECK(remote_control_diag.offline_tick==now && remote_control_diag.offline_last_valid_tick==starts[i]);
+            CHECK(DIAG(offline_tick)==now && DIAG(offline_last_valid_tick)==starts[i]);
         }
         return 0;
     }
@@ -114,7 +207,7 @@ int main(int argc, char **argv)
         pc_frame(0x8001,0); RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.input.key[0].w);
         uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
         encode(b,ch,1,3); set_heartbeat(b,2); b[12]=2; now=100; receive(b,18);
-        CHECK(remote_control_diag.pc_last_advance_tick==0 && remote_control_diag.raw_mouse_z==0x8001);
+        CHECK(DIAG(pc_last_advance_tick)==0 && DIAG(raw_mouse_z)==0x8001);
         // 无线帧继续到达，但重复键鼠心跳不能延长150ms键鼠期限。
         now=150; pc_frame(0x8001,0); RemoteControlGetSnapshot(&s); CHECK(s.pc_valid);
         now=151; RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
@@ -143,30 +236,30 @@ int main(int argc, char **argv)
             now=last+151u; RemoteControlGetSnapshot(&s);
             CHECK(!s.pc_valid && s.remote_online);
             CHECK(!s.input.key[0].keys && !s.input.key_count[0][Key_E] && !s.input.key_count[0][Key_F]);
-            CHECK(remote_control_diag.pc_expire_tick==now && remote_control_diag.pc_last_advance_tick==last);
+            CHECK(DIAG(pc_expire_tick)==now && DIAG(pc_last_advance_tick)==last);
             pc_frame(4,1); RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
             pc_frame(5,0); pc_frame(6,0); pc_frame(7,1);
             RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.input.key[0].keys==1);
         }
     }
     if (argc > 1 && !strcmp(argv[1], "pc-handshake")) {
-        pc_frame(1,1); CHECK(rc[0].key[0].keys==0);
-        pc_frame(2,0); pc_frame(3,1); CHECK(rc[0].key[0].keys==0);
-        pc_frame(4,0); pc_frame(4,0); CHECK(rc[0].key[0].keys==0);
-        pc_frame(5,0); pc_frame(6,1); CHECK(rc[0].key[0].keys==1);
-        CHECK(rc[0].key_count[0][Key_W]==1);
-        pc_frame(6,0); CHECK(rc[0].key[0].keys==1); /* Repeated seq cannot change input. */
-        pc_frame(5,0); CHECK(rc[0].key[0].keys==1);
-        pc_frame(7,0); CHECK(rc[0].key[0].keys==0);
-        pc_frame(8,1); CHECK(rc[0].key_count[0][Key_W]==2);
-        pc_frame(0,1); CHECK(rc[0].key[0].keys==0 && rc[0].key_count[0][Key_W]==0);
+        pc_frame(1,1); CHECK(RC_INPUT.key[0].keys==0);
+        pc_frame(2,0); pc_frame(3,1); CHECK(RC_INPUT.key[0].keys==0);
+        pc_frame(4,0); pc_frame(4,0); CHECK(RC_INPUT.key[0].keys==0);
+        pc_frame(5,0); pc_frame(6,1); CHECK(RC_INPUT.key[0].keys==1);
+        CHECK(RC_INPUT.key_count[0][Key_W]==1);
+        pc_frame(6,0); CHECK(RC_INPUT.key[0].keys==1); /* Repeated seq cannot change input. */
+        pc_frame(5,0); CHECK(RC_INPUT.key[0].keys==1);
+        pc_frame(7,0); CHECK(RC_INPUT.key[0].keys==0);
+        pc_frame(8,1); CHECK(RC_INPUT.key_count[0][Key_W]==2);
+        pc_frame(0,1); CHECK(RC_INPUT.key[0].keys==0 && RC_INPUT.key_count[0][Key_W]==0);
     }
     if (argc > 1 && !strcmp(argv[1], "pc-startup")) {
         uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
         encode(b,ch,1,3); b[14]=1; b[12]=1; receive(b,18);
         CHECK(RemoteControlIsOnline());
-        CHECK(rc[0].key[0].keys==0 && rc[0].mouse.press_l==0);
-        CHECK(rc[0].key_count[KEY_PRESS][Key_W]==0);
+        CHECK(RC_INPUT.key[0].keys==0 && RC_INPUT.mouse.press_l==0);
+        CHECK(RC_INPUT.key_count[KEY_PRESS][Key_W]==0);
     }
     if (argc > 1 && !strcmp(argv[1], "mouse-z")) {
         /* DBUS byte offsets 10/11; compare literal wire bit patterns. */
@@ -176,30 +269,30 @@ int main(int argc, char **argv)
             encode(b,ch,1,3); b[10]=(uint8_t)words[i]; b[11]=(uint8_t)(words[i]>>8);
             memcpy(dma_buffer,b,18); HAL_UARTEx_RxEventCallback(&huart5,18);
             memset(dma_buffer,0xee,18); USARTProcessRx();
-            CHECK(remote_control_diag.raw_mouse_z==words[i]);
-            CHECK(!rc[0].key[0].keys && !rc[0].mouse.x && !rc[0].mouse.y);
+            CHECK(DIAG(raw_mouse_z)==words[i]);
+            CHECK(!RC_INPUT.key[0].keys && !RC_INPUT.mouse.x && !RC_INPUT.mouse.y);
             CHECK(RemoteControlIsOnline());
-            receive(b,18); CHECK(remote_control_diag.raw_mouse_z==words[i]);
+            receive(b,18); CHECK(DIAG(raw_mouse_z)==words[i]);
         }
         b[10]=0; b[11]=0; receive(b,17);
-        CHECK(remote_control_diag.raw_mouse_z==0xffff);
-        b[12]=2; receive(b,18); CHECK(remote_control_diag.raw_mouse_z==0xffff);
-        CHECK(remote_control_diag.accepted_frames==12);
+        CHECK(DIAG(raw_mouse_z)==0xffff);
+        b[12]=2; receive(b,18); CHECK(DIAG(raw_mouse_z)==0xffff);
+        CHECK(DIAG(accepted_frames)==12);
         now=1000; /* No new frame: diagnostics retain the last accepted bits. */
-        CHECK(remote_control_diag.raw_mouse_z==0xffff);
+        CHECK(DIAG(raw_mouse_z)==0xffff);
     }
     if (argc > 1 && !strcmp(argv[1], "keyboard-map")) {
         /* Official 5.0.2.37 sender and DT7 hardware: A=0x0004, D=0x0008. */
         uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
         pc_frame(1,0); pc_frame(2,0);
         encode(b,ch,1,3); set_heartbeat(b,3); b[14]=0x04; receive(b,18);
-        CHECK(rc[0].key[KEY_PRESS].a && !rc[0].key[KEY_PRESS].d);
-        CHECK(rc[0].key_count[KEY_PRESS][Key_A]==1);
+        CHECK(RC_INPUT.key[KEY_PRESS].a && !RC_INPUT.key[KEY_PRESS].d);
+        CHECK(RC_INPUT.key_count[KEY_PRESS][Key_A]==1);
         b[14]=0; set_heartbeat(b,4); receive(b,18); b[14]=0x08; set_heartbeat(b,5); receive(b,18);
-        CHECK(rc[0].key[KEY_PRESS].d && !rc[0].key[KEY_PRESS].a);
-        CHECK(rc[0].key_count[KEY_PRESS][Key_D]==1);
+        CHECK(RC_INPUT.key[KEY_PRESS].d && !RC_INPUT.key[KEY_PRESS].a);
+        CHECK(RC_INPUT.key_count[KEY_PRESS][Key_D]==1);
         b[14]=0; set_heartbeat(b,6); receive(b,18);
-        CHECK(!rc[0].key[KEY_PRESS].keys);
+        CHECK(!RC_INPUT.key[KEY_PRESS].keys);
     }
     if (argc > 1 && !strcmp(argv[1], "length"))
     {
@@ -215,7 +308,7 @@ int main(int argc, char **argv)
         receive(b, 65535);
         CHECK(!RemoteControlIsOnline());
         CHECK(usart_rx_oversize_total == 2);
-        CHECK(remote_control_diag.rejected_length == 17);
+        CHECK(DIAG(rejected_length) == 17);
         CHECK(!memcmp(before, rc, sizeof(before)));
         receive(b, 18);
         CHECK(RemoteControlIsOnline());
@@ -242,13 +335,13 @@ int main(int argc, char **argv)
         CHECK(!RemoteControlIsOnline()); CHECK(EstopIsLatched());
         RC_ctrl_t empty[2] = {0}; CHECK(!memcmp(empty,rc,sizeof(empty)));
         receive(b,18); CHECK(!RemoteControlIsOnline());
-        CHECK(remote_control_diag.offline_events == 1);
-        CHECK(remote_control_diag.offline_tick - remote_control_diag.offline_last_valid_tick == 110);
+        CHECK(DIAG(offline_events) == 1);
+        CHECK(DIAG(offline_tick) - DIAG(offline_last_valid_tick) == 110);
         for (unsigned edge=0; edge<2; ++edge) {
             for(unsigned i=0; i<5; ++i) ch[i]=edge ? 1684 : 364;
             encode(b,ch,1,2); receive(b,18);
-            CHECK(RemoteControlIsOnline()); CHECK(rc[TEMP].rc.dial == (edge ? 660 : -660));
-            CHECK(rc[TEMP].rc.rocker_l_ == (edge ? 660 : -660));
+            CHECK(RemoteControlIsOnline()); CHECK(RC_INPUT.rc.dial == (edge ? 660 : -660));
+            CHECK(RC_INPUT.rc.rocker_l_ == (edge ? 660 : -660));
         }
     }
     if (argc > 1 && !strcmp(argv[1], "queue-keys")) {
@@ -258,18 +351,18 @@ int main(int argc, char **argv)
         set_heartbeat(b,3);
         b[14]=1; memcpy(dma_buffer,b,18); HAL_UARTEx_RxEventCallback(&huart5,18);
         memset(dma_buffer,0xff,18); USARTProcessRx();
-        CHECK(RemoteControlIsOnline()); CHECK(rc[0].rc.rocker_r_==76);
-        CHECK(rc[0].rc.rocker_r1==-124 && rc[0].rc.rocker_l_==176 && rc[0].rc.rocker_l1==-224);
-        CHECK(rc[0].mouse.x==-2 && rc[0].mouse.y==291 && rc[0].mouse.press_r==1);
-        CHECK(rc[0].key_count[KEY_PRESS][Key_W]==1);
-        receive(b,18); CHECK(rc[0].key_count[KEY_PRESS][Key_W]==1);
+        CHECK(RemoteControlIsOnline()); CHECK(RC_INPUT.rc.rocker_r_==76);
+        CHECK(RC_INPUT.rc.rocker_r1==-124 && RC_INPUT.rc.rocker_l_==176 && RC_INPUT.rc.rocker_l1==-224);
+        CHECK(RC_INPUT.mouse.x==-2 && RC_INPUT.mouse.y==291 && RC_INPUT.mouse.press_r==1);
+        CHECK(RC_INPUT.key_count[KEY_PRESS][Key_W]==1);
+        receive(b,18); CHECK(RC_INPUT.key_count[KEY_PRESS][Key_W]==1);
         b[14]=0; b[12]=2; receive(b,18); /* Invalid release doesn't alter edges. */
-        b[14]=1; b[12]=1; receive(b,18); CHECK(rc[0].key_count[KEY_PRESS][Key_W]==1);
+        b[14]=1; b[12]=1; receive(b,18); CHECK(RC_INPUT.key_count[KEY_PRESS][Key_W]==1);
         b[14]=0; set_heartbeat(b,4); receive(b,18); b[14]=1|(1<<Key_Ctrl); set_heartbeat(b,5); receive(b,18);
-        CHECK(rc[0].key_count[KEY_PRESS_WITH_CTRL][Key_W]==1);
+        CHECK(RC_INPUT.key_count[KEY_PRESS_WITH_CTRL][Key_W]==1);
         b[14]=0; set_heartbeat(b,6); receive(b,18); b[14]=1|(1<<Key_Shift); set_heartbeat(b,7); receive(b,18);
-        CHECK(rc[0].key_count[KEY_PRESS_WITH_SHIFT][Key_W]==1);
-        CHECK(remote_control_diag.accepted_frames==9 && remote_control_diag.rejected_fields==1);
+        CHECK(RC_INPUT.key_count[KEY_PRESS_WITH_SHIFT][Key_W]==1);
+        CHECK(DIAG(accepted_frames)==9 && DIAG(rejected_fields)==1);
     }
     if (argc > 1 && !strcmp(argv[1], "gestures")) {
         RemoteSafetyGestures_s holds; RemoteSafetyGesturesInit(&holds);

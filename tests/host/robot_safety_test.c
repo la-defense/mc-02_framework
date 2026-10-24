@@ -1,6 +1,11 @@
 #include <stdio.h>
 #include <string.h>
 #include "robot_safety.h"
+#ifdef MC02_THREAD_TEST
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#endif
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL:%d %s\n", __LINE__, #c); return 1; } } while (0)
 
@@ -77,8 +82,96 @@ static int InitializationFailureIsSticky(void)
     return 0;
 }
 
+#ifdef MC02_THREAD_TEST
+static atomic_int safety_threads_done;
+static atomic_int safety_threads_start;
+static atomic_int safety_threads_failed;
+
+static void WaitForThreadStart(void)
+{
+    while (atomic_load(&safety_threads_start) == 0)
+        ;
+}
+
+static void *ToggleImuState(void *unused)
+{
+    (void)unused;
+    WaitForThreadStart();
+    for (uint32_t i = 0u; i < 100000u; ++i)
+        RobotSafetySetImuValid((uint8_t)(i & 1u));
+    atomic_fetch_add(&safety_threads_done, 1);
+    return NULL;
+}
+
+static void *ToggleTaskHealth(void *unused)
+{
+    (void)unused;
+    WaitForThreadStart();
+    for (uint32_t i = 0u; i < 100000u; ++i)
+        RobotSafetySetTaskHealthy((uint8_t)(i & 1u));
+    atomic_fetch_add(&safety_threads_done, 1);
+    return NULL;
+}
+
+static void *ToggleEstop(void *unused)
+{
+    (void)unused;
+    WaitForThreadStart();
+    for (uint32_t i = 0u; i < 100000u; ++i)
+    {
+        EstopRequest(ESTOP_REASON_MANUAL);
+        (void)EstopClear();
+    }
+    atomic_fetch_add(&safety_threads_done, 1);
+    return NULL;
+}
+
+static void *ReadSafetySnapshots(void *unused)
+{
+    (void)unused;
+    atomic_store(&safety_threads_start, 1);
+    do
+    {
+        RobotSafetySnapshot_t snapshot = {0};
+        if (!RobotSafetyGetSnapshot(&snapshot) ||
+            (snapshot.estop_latched == 0u && snapshot.estop_reason != ESTOP_REASON_NONE) ||
+            (snapshot.estop_latched != 0u &&
+             snapshot.estop_reason != ESTOP_REASON_MANUAL &&
+             snapshot.estop_reason != ESTOP_REASON_RC_OFFLINE) ||
+            (snapshot.calib_requested != 0u && snapshot.enable_requested != 0u))
+            atomic_store(&safety_threads_failed, 1);
+    } while (atomic_load(&safety_threads_done) != 3);
+    return NULL;
+}
+
+static int ConcurrentSafetySnapshots(void)
+{
+    pthread_t imu_writer;
+    pthread_t task_writer;
+    pthread_t estop_writer;
+    pthread_t reader;
+
+    HealthyInputs();
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate();
+    CHECK(pthread_create(&imu_writer, NULL, ToggleImuState, NULL) == 0);
+    CHECK(pthread_create(&task_writer, NULL, ToggleTaskHealth, NULL) == 0);
+    CHECK(pthread_create(&estop_writer, NULL, ToggleEstop, NULL) == 0);
+    CHECK(pthread_create(&reader, NULL, ReadSafetySnapshots, NULL) == 0);
+    CHECK(pthread_join(imu_writer, NULL) == 0);
+    CHECK(pthread_join(task_writer, NULL) == 0);
+    CHECK(pthread_join(estop_writer, NULL) == 0);
+    CHECK(pthread_join(reader, NULL) == 0);
+    CHECK(atomic_load(&safety_threads_failed) == 0);
+    return 0;
+}
+#endif
+
 int main(int argc, char **argv)
 {
+#ifdef MC02_THREAD_TEST
+    if (argc > 1 && !strcmp(argv[1], "threads")) return ConcurrentSafetySnapshots();
+#endif
     if (argc > 1 && !strcmp(argv[1], "recovery")) return RecoveryAndPriority();
     if (argc > 1 && !strcmp(argv[1], "init-failure")) return InitializationFailureIsSticky();
     const struct {

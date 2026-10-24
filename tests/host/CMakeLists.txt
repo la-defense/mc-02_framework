@@ -439,6 +439,15 @@ if(UNIX AND NOT APPLE)
   target_compile_options(message_center_thread_test PRIVATE -Wall -Wextra -Werror)
   add_test(NAME production_message_center_cross_thread_snapshot COMMAND message_center_thread_test)
   set_tests_properties(production_message_center_cross_thread_snapshot PROPERTIES TIMEOUT 10)
+
+  add_executable(dwt_timeline_thread_test dwt_timeline_thread_test.c
+    ../../bsp/dwt/bsp_dwt.c host_critical_model.c)
+  target_include_directories(dwt_timeline_thread_test BEFORE PRIVATE dwt_thread_fakes)
+  target_include_directories(dwt_timeline_thread_test PRIVATE ../../bsp/dwt)
+  target_link_libraries(dwt_timeline_thread_test PRIVATE Threads::Threads m)
+  target_compile_options(dwt_timeline_thread_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+  add_test(NAME production_dwt_timeline_atomic_snapshot COMMAND dwt_timeline_thread_test)
+  set_tests_properties(production_dwt_timeline_atomic_snapshot PROPERTIES TIMEOUT 10)
 endif()
 add_executable(can_comm_freshness_test can_comm_freshness_test.c ../../modules/can_comm/can_comm.c)
 target_include_directories(can_comm_freshness_test BEFORE PRIVATE can_comm_fakes)
@@ -523,6 +532,18 @@ target_include_directories(robot_safety_test PRIVATE ../../application ../../mod
 add_test(NAME production_safety_reported_faults COMMAND robot_safety_test)
 add_test(NAME production_safety_fault_recovery_priority COMMAND robot_safety_test recovery)
 add_test(NAME production_safety_init_failure_sticky COMMAND robot_safety_test init-failure)
+if(UNIX AND NOT APPLE)
+  find_package(Threads REQUIRED)
+  add_executable(robot_safety_thread_test robot_safety_test.c
+    ../../modules/safety/robot_safety.c host_critical_model.c)
+  target_include_directories(robot_safety_thread_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
+  target_include_directories(robot_safety_thread_test PRIVATE ../../application ../../modules/imu
+    ../../modules/master_machine ../../modules/safety ../../bsp/usart)
+  target_compile_definitions(robot_safety_thread_test PRIVATE MC02_THREAD_CRITICAL=1 MC02_THREAD_TEST=1)
+  target_link_libraries(robot_safety_thread_test PRIVATE Threads::Threads)
+  add_test(NAME production_safety_concurrent_snapshot COMMAND robot_safety_thread_test threads)
+  set_tests_properties(production_safety_concurrent_snapshot PROPERTIES TIMEOUT 10)
+endif()
 add_executable(remote_control_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ../../modules/remote/remote_safety.c
   ../../modules/remote/remote_control.c ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c)
@@ -540,6 +561,20 @@ add_test(NAME production_pc_zero_heartbeat_denied COMMAND remote_control_test pc
 add_test(NAME production_pc_released_handshake COMMAND remote_control_test pc-handshake)
 add_test(NAME production_pc_lease_age_and_tick_wrap COMMAND remote_control_test pc-age)
 add_test(NAME production_pc_sequence_and_invalid_frames COMMAND remote_control_test pc-boundaries)
+if(UNIX AND NOT APPLE)
+  add_executable(remote_control_thread_test remote_control_test.c ../../bsp/usart/bsp_usart.c
+    ../../modules/remote/remote_safety.c ../../modules/remote/remote_control.c
+    ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c host_critical_model.c)
+  target_include_directories(remote_control_thread_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
+  target_include_directories(remote_control_thread_test PRIVATE ../../bsp/usart ../../modules/remote
+    ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine
+    ../../modules/message_center ../../application)
+  target_compile_definitions(remote_control_thread_test PRIVATE
+    MC02_THREAD_CRITICAL=1 MC02_REMOTE_THREAD_TEST=1)
+  target_link_libraries(remote_control_thread_test PRIVATE Threads::Threads)
+  add_test(NAME production_remote_concurrent_snapshot COMMAND remote_control_thread_test threads)
+  set_tests_properties(production_remote_concurrent_snapshot PROPERTIES TIMEOUT 10)
+endif()
 add_executable(usart_snapshot_test usart_snapshot_test.c ../../bsp/usart/bsp_usart.c)
 target_include_directories(usart_snapshot_test BEFORE PRIVATE remote_fakes)
 target_include_directories(usart_snapshot_test PRIVATE ../../bsp/usart ../../modules/message_center)
@@ -1218,7 +1253,7 @@ add_test(NAME production_format_compile_commands
     --compile-commands ${CMAKE_BINARY_DIR}/compile_commands.json)
 set_tests_properties(production_format_compile_commands PROPERTIES TIMEOUT 10)
 # UART队列专项链接生产注册及队列；RX回归只替换硬件接入。
-foreach(rx_target remote_control_test usart_snapshot_test remote_bench_test remote_command_integration_test
+foreach(rx_target remote_control_test remote_control_thread_test usart_snapshot_test remote_bench_test remote_command_integration_test
     pc_vision_integration_test uart_stream_test referee_snapshot_test)
   if(TARGET ${rx_target})
     target_sources(${rx_target} PRIVATE ../../bsp/usart/bsp_usart_tx.c usart_tx_host_port.c)

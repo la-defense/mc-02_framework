@@ -118,10 +118,10 @@ typedef struct
 
 /** @brief 注册遥控 UART 和离线计时，清空旧输入。
 * @param[in] rc_usart_handle 已配置好的遥控 UART 句柄，不能为 NULL。
-* @return 成功返回模块内部两个 RC_ctrl_t 对象的首地址，长期有效且不可释放；失败返回 NULL。
-* @note 只初始化一次；读取控制输入优先使用 RemoteControlGetSnapshot()，不直接改写内部对象。
+* @return 成功返回只读初始化标识地址；失败返回 NULL。
+* @note 只初始化一次；不要解引用返回地址读取运行数据，统一使用 RemoteControlGetSnapshot()。
  */
-RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle);
+const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle);
 
 /**
  * @brief 检查合法18字节块的来源年龄及看门狗，未初始化为离线。
@@ -153,7 +153,7 @@ typedef struct
  */
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot);
 
-// 调试记录；时间单位为 HAL 毫秒，次数为累计次数，不参与调用方直接控制。
+// 诊断副本；时间单位为 HAL 毫秒，次数为累计次数，不参与调用方直接控制。
 typedef struct
 {
     uint32_t accepted_frames;
@@ -181,6 +181,12 @@ typedef struct
     uint32_t pc_revoke_tick;
     uint32_t pc_revoke_reason;
 } RemoteControlDiagnostics_s;
-extern volatile RemoteControlDiagnostics_s remote_control_diag;
+
+/** @brief 一次复制遥控诊断记录，避免逐字段读取跨越接收或离线更新。
+* @param[out] output 输出对象，NULL 时返回 0；失败不改写输出。
+* @return 1 表示复制成功，0 表示参数错误。
+* @note 只读查询，不刷新遥控租约；时间单位为 HAL 毫秒。
+ */
+uint8_t RemoteControlGetDiagnostics(RemoteControlDiagnostics_s *output);
 
 #endif

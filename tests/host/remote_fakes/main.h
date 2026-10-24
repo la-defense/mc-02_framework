@@ -8,10 +8,21 @@ extern UART_HandleTypeDef huart5, huart9;
 #define HAL_UART_STATE_READY 0x20u
 #define DMA_IT_HT 1u
 #define __HAL_DMA_DISABLE_IT(h, flags) ((void)(h), (void)(flags))
+#ifdef MC02_THREAD_CRITICAL
+uint32_t HostGetPrimask(void);
+void HostDisableIrq(void);
+void HostSetPrimask(uint32_t mask);
+void HostDataMemoryBarrier(void);
+#define __get_PRIMASK() HostGetPrimask()
+#define __disable_irq() HostDisableIrq()
+#define __set_PRIMASK(mask) HostSetPrimask(mask)
+#define __DMB() HostDataMemoryBarrier()
+#else
 static inline uint32_t __get_PRIMASK(void) { return 0; }
 static inline void __disable_irq(void) {}
 static inline void __set_PRIMASK(uint32_t mask) { (void)mask; }
 static inline void __DMB(void) {}
+#endif
 uint32_t HAL_GetTick(void);
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *, uint8_t *, uint16_t);
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *);

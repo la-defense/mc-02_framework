@@ -34,7 +34,7 @@ void CANCommSend(CANCommInstance *instance, uint8_t *data)
 { (void)instance; memcpy(&dual_sent_chassis,data,sizeof(dual_sent_chassis)); ++dual_send_calls; }
 #endif
 uint32_t HAL_GetTick(void) { return tick; }
-RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *h) { (void)h; return remote; }
+const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *h) { (void)h; return remote; }
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
 { snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; }

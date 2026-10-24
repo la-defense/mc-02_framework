@@ -30,6 +30,21 @@ typedef enum
     ESTOP_REASON_MANUAL,
 } Estop_Reason_e;
 
+/** @brief 一次读取的 safety 状态及其输入，所有字段来自同一提交时刻。 */
+typedef struct
+{
+    Robot_Status_e state;
+    uint32_t fault_flags;
+    uint8_t rc_online;
+    uint8_t imu_valid;
+    uint8_t calib_valid;
+    uint8_t task_healthy;
+    uint8_t enable_requested;
+    uint8_t calib_requested;
+    uint8_t estop_latched;
+    Estop_Reason_e estop_reason;
+} RobotSafetySnapshot_t;
+
 /** @brief 清空故障、急停和请求，进入 SAFE；只在系统初始化时调用。 */
 void RobotSafetyInit(void);
 /** @brief 根据当前输入选择状态；顺序为初始化失败、急停、任务超时、标定、普通故障、使能请求。 */
@@ -86,6 +101,12 @@ uint8_t RobotSafetyIsReady(void);
 /** @brief 读取已设置的全部故障位。
 * @return Robot_Fault_e 各位的组合。 */
 uint32_t RobotSafetyGetFaults(void);
+/** @brief 原子复制 safety 状态、故障和许可输入。
+* @param[out] snapshot 输出对象；NULL 返回 0，其余失败不改写输出。
+* @return 1 表示复制成功，0 表示参数错误。
+* @note 可在普通任务上下文调用；不推进状态机。输出各字段来自同一临界区快照。
+ */
+uint8_t RobotSafetyGetSnapshot(RobotSafetySnapshot_t *snapshot);
 /** @brief 取得状态对应的短名称。
 * @param[in] state 要显示的状态。
 * @return 长期有效的常量字符串，未知状态返回 STOP，不可改写。 */

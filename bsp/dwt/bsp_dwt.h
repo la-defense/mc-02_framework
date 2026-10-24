@@ -37,6 +37,8 @@ typedef struct
     volatile uint32_t calls;    /* 调用次数 */
 } DWT_Probe_t;
 
+/* 每个 probe 只能由一个串行执行者更新；字段为32位调试量，跨多个字段读取不构成一致快照。 */
+
 /** @brief 读取当前原始周期数，供后续计算差值。
 * @return 32 位 CYCCNT 读数，不是毫秒时间。
  */
@@ -107,7 +109,7 @@ void DWT_Init(uint32_t CPU_Freq_mHz);
 /**
  * @brief 获取两次调用之间的时间间隔,单位为秒/s
  *
-* @param[in,out] cnt_last 先前周期读数地址，不能为 NULL；本次会改成当前读数，间隔须小于约 8.94 s（480 MHz）。
+* @param[in,out] cnt_last 先前周期读数地址，不能为 NULL；本次会改成当前读数，间隔须小于约 8.94 s（480 MHz），同一地址由调用者串行使用。
  * @return float 时间间隔,单位为秒/s
  */
 float DWT_GetDeltaT(uint32_t *cnt_last);
@@ -115,7 +117,7 @@ float DWT_GetDeltaT(uint32_t *cnt_last);
 /**
  * @brief 获取两次调用之间的时间间隔,单位为秒/s,高精度
  *
-* @param[in,out] cnt_last 先前周期读数地址，不能为 NULL；本次会改成当前读数，间隔须小于约 8.94 s（480 MHz）。
+* @param[in,out] cnt_last 先前周期读数地址，不能为 NULL；本次会改成当前读数，间隔须小于约 8.94 s（480 MHz），同一地址由调用者串行使用。
  * @return double 时间间隔,单位为秒/s
  */
 double DWT_GetDeltaT64(uint32_t *cnt_last);
@@ -150,8 +152,8 @@ uint64_t DWT_GetTimeline_us(void);
  */
 void DWT_Delay(float Delay);
 
-/** @brief 更新内部秒、毫秒、微秒分项；内部调用 DWT_CyclesUpdate() 累加计数。
-* @note 三个 Timeline 函数也各自调用 DWT_CyclesUpdate()；累计函数至少每个计数周期内调用一次，
+/** @brief 更新内部秒、毫秒、微秒分项；内部原子读取64位累计周期。
+* @note 三个 Timeline 函数也会更新并复制累计周期；这些只读时间轴可由多个任务并发读取。累计函数至少每个计数周期内调用一次，
 *       480 MHz 下间隔须小于约 8.94 s，不能靠相减识别跨过多次计数周期。
  */
 void DWT_SysTimeUpdate(void);

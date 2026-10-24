@@ -42,6 +42,7 @@ DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config);
 /** @brief 移出实例表并释放对象。
 * @param[in] instance 确保没有回调仍在使用的实例，成功后不可再访问。
 * @return 1 为已释放，0 为 NULL 或未注册。
+* @note 只允许在 DaemonTask 未运行时注销；实例在运行期由模块长期持有。
  */
 uint8_t DaemonUnregister(DaemonInstance *instance);
 
@@ -58,6 +59,7 @@ uint8_t DaemonIsOnline(DaemonInstance *instance);
 
 /** @brief 遍历已注册模块，每次将非零计数减一；本次进入时已为 0 且尚未报告时调用一次回调。
 * @note 由 Daemon 任务约每 10 ms 调用，时间由调用频率决定，不能将次数直接当作毫秒。
+*       注册仅发生于启动阶段；回调在临界区外执行，注销要求此任务已停止。
  */
 void DaemonTask();
 

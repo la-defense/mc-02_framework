@@ -14,7 +14,7 @@ static RC_ctrl_t rc_ctrl[2];
 static uint8_t rc_init_flag;
 static USARTInstance *rc_usart_instance;
 static DaemonInstance *rc_daemon_instance;
-volatile RemoteControlDiagnostics_s remote_control_diag;
+static RemoteControlDiagnostics_s remote_control_diag;
 static uint16_t pc_sequence;
 static uint8_t pc_have_sequence, pc_authorized;
 
@@ -142,13 +142,19 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
     if (block->length != REMOTE_CONTROL_FRAME_SIZE || frame == NULL ||
         (uint32_t)(HAL_GetTick() - block->received_ms) > 50u)
     {
+        const uint32_t primask = __get_PRIMASK();
+        __disable_irq();
         remote_control_diag.rejected_length++;
+        __set_PRIMASK(primask);
         return;
     }
     RC_ctrl_t candidate;
     if (!DecodeCandidate(frame, &candidate))
     {
+        const uint32_t primask = __get_PRIMASK();
+        __disable_irq();
         remote_control_diag.rejected_fields++;
+        __set_PRIMASK(primask);
         return;
     }
     const uint32_t primask = __get_PRIMASK();
@@ -176,30 +182,43 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
     remote_control_diag.has_valid_frame = 1u;
     DaemonReload(rc_daemon_instance);
     remote_control_diag.online = 1u;
-    __set_PRIMASK(primask);
     RobotSafetySetRcOnline(1u);
+    __set_PRIMASK(primask);
 }
 
 // 离线时撤销键鼠并清空摇杆，记录断开时间、请求急停，再重新准备 UART 接收。
 static void RCLostCallback(void *id)
 {
     (void)id;
+    const uint32_t now = HAL_GetTick();
     const uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    RevokePC(HAL_GetTick(), REMOTE_PC_REVOKE_RADIO_LOST);
-    remote_control_diag.offline_tick = HAL_GetTick();
+    if (remote_control_diag.has_valid_frame != 0u &&
+        (uint32_t)(now - remote_control_diag.last_valid_tick) <= 100u)
+    {
+        // 新帧可能在超时检查后到达；过期回调不能撤销这份新输入。
+        __set_PRIMASK(primask);
+        return;
+    }
+    if (remote_control_diag.has_valid_frame == 0u && remote_control_diag.online == 0u)
+    {
+        __set_PRIMASK(primask);
+        return;
+    }
+    RevokePC(now, REMOTE_PC_REVOKE_RADIO_LOST);
+    remote_control_diag.offline_tick = now;
     remote_control_diag.offline_last_valid_tick = remote_control_diag.last_valid_tick;
     remote_control_diag.offline_events++;
     remote_control_diag.has_valid_frame = remote_control_diag.online = 0u;
     memset(rc_ctrl, 0, sizeof(rc_ctrl));
-    __set_PRIMASK(primask);
     RobotSafetySetRcOnline(0u);
+    __set_PRIMASK(primask);
     EstopRequest(ESTOP_REASON_RC_OFFLINE);
     USARTServiceInit(rc_usart_instance);
     BSP_LOG_EVENT_0(EV_MODULES_REMOTE_REMOTE_CONTROL_C_01);
 }
 
-RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
+const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
 {
     if (handle == NULL)
         return NULL;
@@ -236,24 +255,58 @@ RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
 
 uint8_t RemoteControlIsOnline(void)
 {
-    // 派发和DaemonReload不能刷新源数据期限；查询过期时沿用离线清输入及急停路径。
-    if (rc_init_flag && remote_control_diag.has_valid_frame &&
-        (uint32_t)(HAL_GetTick() - remote_control_diag.last_valid_tick) > 100u)
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    const uint32_t now = HAL_GetTick();
+    uint8_t expired = (uint8_t)(rc_init_flag != 0u && remote_control_diag.has_valid_frame != 0u &&
+        (uint32_t)(now - remote_control_diag.last_valid_tick) > 100u);
+    __set_PRIMASK(primask);
+
+    if (expired != 0u)
         RCLostCallback(NULL);
-    const uint8_t online = (uint8_t)(rc_init_flag && remote_control_diag.has_valid_frame &&
-                                   DaemonIsOnline(rc_daemon_instance));
+
+    primask = __get_PRIMASK();
+    __disable_irq();
+    const uint32_t check_time = HAL_GetTick();
+    const uint8_t online = (uint8_t)(rc_init_flag != 0u &&
+        remote_control_diag.has_valid_frame != 0u &&
+        (uint32_t)(check_time - remote_control_diag.last_valid_tick) <= 100u &&
+        DaemonIsOnline(rc_daemon_instance));
     remote_control_diag.online = online;
+    __set_PRIMASK(primask);
     return online;
 }
 
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
 {
     if (snapshot == NULL) return;
-    const uint32_t primask = __get_PRIMASK();
+    (void)RemoteControlIsOnline();
+    uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    ExpirePC(HAL_GetTick());
-    snapshot->remote_online = RemoteControlIsOnline();
+    const uint32_t now = HAL_GetTick();
+    const uint8_t online = (uint8_t)(rc_init_flag != 0u &&
+        remote_control_diag.has_valid_frame != 0u &&
+        (uint32_t)(now - remote_control_diag.last_valid_tick) <= 100u &&
+        DaemonIsOnline(rc_daemon_instance));
+    remote_control_diag.online = online;
+    ExpirePC(now);
+    snapshot->remote_online = (uint8_t)(online != 0u &&
+        remote_control_diag.has_valid_frame != 0u && rc_init_flag != 0u);
     snapshot->input = rc_ctrl[TEMP];
     snapshot->pc_valid = (uint8_t)(snapshot->remote_online && pc_authorized);
     __set_PRIMASK(primask);
+}
+
+uint8_t RemoteControlGetDiagnostics(RemoteControlDiagnostics_s *output)
+{
+    if (output == NULL)
+        return 0u;
+
+    RemoteControlDiagnostics_s candidate;
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    candidate = remote_control_diag;
+    __set_PRIMASK(primask);
+    *output = candidate;
+    return 1u;
 }

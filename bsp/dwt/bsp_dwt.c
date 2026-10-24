@@ -23,8 +23,8 @@ static volatile uint32_t s_cycles_last = 0;  /* 上次采样到的 CYCCNT */
 /* 热路径探针的除数(见 bsp_dwt.h)。给初值, 防止 DWT_Init 之前被调用时除 0 */
 volatile uint32_t dwt_cpu_freq_mhz = 480u;
 
-// 暂时关闭普通中断完成读、加、写，避免不同调用把同一段周期重复累加，随后恢复原状态。
-static void DWT_CyclesUpdate(void)
+// 在同一临界区内更新并复制64位总量，避免32位MCU读到撕裂值。
+static uint64_t DWT_CyclesUpdateAndRead(void)
 {
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
@@ -32,8 +32,10 @@ static void DWT_CyclesUpdate(void)
     uint32_t cnt_now = DWT->CYCCNT;
     s_cycles_total += (uint64_t)(uint32_t)(cnt_now - s_cycles_last);
     s_cycles_last = cnt_now;
+    uint64_t cycles = s_cycles_total;
 
     __set_PRIMASK(primask);
+    return cycles;
 }
 
 void DWT_Init(uint32_t CPU_Freq_mHz)
@@ -66,7 +68,7 @@ float DWT_GetDeltaT(uint32_t *cnt_last)
     float dt = ((uint32_t)(cnt_now - *cnt_last)) * CPU_FREQ_Hz_inv;
     *cnt_last = cnt_now;
 
-    DWT_CyclesUpdate();
+    (void)DWT_CyclesUpdateAndRead();
 
     return dt;
 }
@@ -77,16 +79,14 @@ double DWT_GetDeltaT64(uint32_t *cnt_last)
     double dt = (double)((uint32_t)(cnt_now - *cnt_last)) / (double)(CPU_FREQ_Hz);
     *cnt_last = cnt_now;
 
-    DWT_CyclesUpdate();
+    (void)DWT_CyclesUpdateAndRead();
 
     return dt;
 }
 
 void DWT_SysTimeUpdate(void)
 {
-    DWT_CyclesUpdate();
-
-    uint64_t cycles = s_cycles_total;
+    uint64_t cycles = DWT_CyclesUpdateAndRead();
     uint32_t rem = (uint32_t)(cycles % CPU_FREQ_Hz); /* 不足 1s 的部分 */
 
     SysTime.s = (uint32_t)(cycles / CPU_FREQ_Hz);
@@ -96,20 +96,20 @@ void DWT_SysTimeUpdate(void)
 
 float DWT_GetTimeline_s(void)
 {
-    DWT_CyclesUpdate();
-    return (float)s_cycles_total * CPU_FREQ_Hz_inv;
+    uint64_t cycles = DWT_CyclesUpdateAndRead();
+    return (float)cycles * CPU_FREQ_Hz_inv;
 }
 
 float DWT_GetTimeline_ms(void)
 {
-    DWT_CyclesUpdate();
-    return (float)s_cycles_total * CPU_FREQ_Hz_ms_inv;
+    uint64_t cycles = DWT_CyclesUpdateAndRead();
+    return (float)cycles * CPU_FREQ_Hz_ms_inv;
 }
 
 uint64_t DWT_GetTimeline_us(void)
 {
-    DWT_CyclesUpdate();
-    return s_cycles_total / (uint64_t)CPU_FREQ_Hz_us;
+    uint64_t cycles = DWT_CyclesUpdateAndRead();
+    return cycles / (uint64_t)CPU_FREQ_Hz_us;
 }
 
 void DWT_Delay(float Delay)

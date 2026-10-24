@@ -114,9 +114,12 @@ int main(int argc,char **argv)
         CHECK(observed_shoot.friction_mode==FRICTION_OFF && observed_shoot.load_mode==LOAD_STOP);
         return 0;
     }
-    const uint32_t accepted=remote_control_diag.accepted_frames;
+    RemoteControlDiagnostics_s remote_diagnostics;
+    CHECK(RemoteControlGetDiagnostics(&remote_diagnostics));
+    const uint32_t accepted=remote_diagnostics.accepted_frames;
     for(unsigned i=0;i<11;++i) { now+=10;frame(2,2,18,2);DaemonTask();cycle(i>=9); }
-    CHECK(remote_control_diag.accepted_frames==accepted && !RemoteControlIsOnline() && EstopIsLatched());
+    CHECK(RemoteControlGetDiagnostics(&remote_diagnostics));
+    CHECK(remote_diagnostics.accepted_frames==accepted && !RemoteControlIsOnline() && EstopIsLatched());
     frame(2,2,18,0);cycle(1);CHECK(RemoteControlIsOnline() && EstopIsLatched());
     for(unsigned state=0;state<3;++state) {
         RobotSafetyInit(); RobotSafetySetImuValid(1); RobotSafetySetCalibValid(1);

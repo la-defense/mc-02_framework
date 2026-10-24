@@ -28,7 +28,7 @@ static Vision_Recv_s unused_wire_frame;
 static RefereeSnapshot_t referee_snapshot;
 
 uint32_t HAL_GetTick(void) { return test_tick; }
-RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle) { (void)handle; return &remote_input; }
+const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle) { (void)handle; return &remote_input; }
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
 {
     snapshot->input = remote_input;
