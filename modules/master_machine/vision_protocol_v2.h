@@ -22,8 +22,10 @@ typedef enum
 {
     VISION_V2_AIM_COMMAND = 0x01,
     VISION_V2_NAVIGATION_COMMAND = 0x02,
+    VISION_V2_TIME_SYNC_REPLY = 0x03,
     VISION_V2_POSTURE_STATUS = 0x81,
-    VISION_V2_REFEREE_SUMMARY = 0x82
+    VISION_V2_REFEREE_SUMMARY = 0x82,
+    VISION_V2_TIME_SYNC_PROBE = 0x83
 } VisionV2MessageType_t;
 
 typedef enum
@@ -105,6 +107,19 @@ typedef struct
     uint32_t shoot_record_source_ms;
 } VisionV2RefereeSummary_t;
 
+/** @brief MCU发出的对时探测；请求编号0保留为无效值。 */
+typedef struct
+{
+    uint32_t request_id;
+} VisionV2TimeSyncProbe_t;
+
+/** @brief PC对时回应中的请求编号和PC接收时刻。 */
+typedef struct
+{
+    uint32_t request_id;
+    uint32_t received_time_ms;
+} VisionV2TimeSyncReply_t;
+
 typedef struct
 {
     uint8_t type;
@@ -112,7 +127,8 @@ typedef struct
     uint32_t source_time_ms; /* 远端时钟原值；未完成对时前不可与本机比较。 */
     uint16_t payload_length;
     uint8_t payload[VISION_V2_MAX_PAYLOAD];
-    uint32_t received_time_ms;
+    uint32_t received_time_ms;   /* 首个帧字节所在接收块的时间，用于业务新鲜度。 */
+    uint32_t completed_time_ms;  /* 帧末字节所在接收块的时间，用于测量T4。 */
     uint32_t generation;
 } VisionV2Frame_t;
 
@@ -134,6 +150,42 @@ typedef void (*VisionV2FrameCallback_t)(void *context, const VisionV2Frame_t *fr
  * @return VISION_V2_OK或未知类型／空参数错误。
  */
 VisionV2Status_t VisionV2GetPayloadSize(uint8_t type, size_t *length);
+
+/** @brief 编码4字节对时探测负载。
+ * @param[in] probe 请求编号必须非零。
+ * @param[out] payload 至少可写4字节；失败保持原值。
+ * @param[in] capacity 输出容量，至少4字节。
+ * @return VISION_V2_OK或参数、长度错误。
+ */
+VisionV2Status_t VisionV2EncodeTimeSyncProbe(const VisionV2TimeSyncProbe_t *probe,
+                                             uint8_t *payload, size_t capacity);
+
+/** @brief 解码4字节对时探测负载。
+ * @param[in] payload 恰好4个可读字节，小端非零请求编号。
+ * @param[in] length 必须为4。
+ * @param[out] probe 输出候选；失败保持原值。
+ * @return VISION_V2_OK或参数、长度、请求编号错误。
+ */
+VisionV2Status_t VisionV2DecodeTimeSyncProbe(const uint8_t *payload, size_t length,
+                                             VisionV2TimeSyncProbe_t *probe);
+
+/** @brief 编码8字节PC对时回应负载。
+ * @param[in] reply 请求编号非零，received_time_ms为PC收到探测的毫秒时刻。
+ * @param[out] payload 至少可写8字节；失败保持原值。
+ * @param[in] capacity 输出容量，至少8字节。
+ * @return VISION_V2_OK或参数、长度、请求编号错误。
+ */
+VisionV2Status_t VisionV2EncodeTimeSyncReply(const VisionV2TimeSyncReply_t *reply,
+                                             uint8_t *payload, size_t capacity);
+
+/** @brief 解码8字节PC对时回应负载。
+ * @param[in] payload 恰好8个可读字节，依次为编号LE32和PC接收时刻LE32。
+ * @param[in] length 必须为8。
+ * @param[out] reply 输出候选；失败保持原值。
+ * @return VISION_V2_OK或参数、长度、请求编号错误。
+ */
+VisionV2Status_t VisionV2DecodeTimeSyncReply(const uint8_t *payload, size_t length,
+                                             VisionV2TimeSyncReply_t *reply);
 
 /** @brief 编码完整V2帧并追加CRC16_MODBUS_A5。
  * @note 字节顺序为：`MC`、版本、类型、负载长度LE16、序号LE16、远端源时刻LE32、负载、CRC LE16。

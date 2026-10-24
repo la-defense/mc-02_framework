@@ -79,6 +79,45 @@ typedef struct
 	uint16_t bullet_count;
 } Vision_Status_t;
 
+typedef enum
+{
+    VISION_TIME_SYNC_RESULT_NONE = 0,
+    VISION_TIME_SYNC_RESULT_WAITING,
+    VISION_TIME_SYNC_RESULT_SAMPLE_ACCEPTED,
+    VISION_TIME_SYNC_RESULT_RESPONSE_REJECTED,
+    VISION_TIME_SYNC_RESULT_TIMEOUT,
+    VISION_TIME_SYNC_RESULT_SEND_REJECTED,
+    VISION_TIME_SYNC_RESULT_RESET
+} VisionTimeSyncLastResult_t;
+
+typedef enum
+{
+    VISION_TIME_SYNC_OK = 0,
+    VISION_TIME_SYNC_ERR_ARGUMENT,
+    VISION_TIME_SYNC_ERR_NOT_INITIALIZED,
+    VISION_TIME_SYNC_ERR_UNAVAILABLE,
+    VISION_TIME_SYNC_ERR_NOT_SYNCHRONIZED,
+    VISION_TIME_SYNC_ERR_EXPIRED,
+    VISION_TIME_SYNC_ERR_TIME
+} VisionTimeSyncStatus_t;
+
+/** @brief 可复制读取的V2对时质量；偏差定义为远端时钟减本机时钟。 */
+typedef struct
+{
+    int32_t remote_minus_local_ms;
+    uint32_t sample_age_ms;
+    uint32_t last_round_trip_ms;
+    uint32_t request_id;
+    uint32_t probes_accepted;
+    uint32_t probe_timeouts;
+    uint32_t rejected_replies;
+    uint32_t transport_generation;
+    VisionTimeSyncLastResult_t last_result;
+    uint8_t synchronized;
+    uint8_t sample_count;
+    uint8_t request_pending;
+} VisionTimeSyncSnapshot_t;
+
 /** @brief 注册当前构建选定的视觉协议及传输，并启动链路离线计时。
 * @param[in] _handle UART 配置时须提供有效句柄；USB VCP 配置时忽略，可以为 NULL。
 * @return 成功返回兼容接收对象地址，长期有效且不可释放；任一注册失败返回NULL。
@@ -109,6 +148,23 @@ void VisionGetStatus(Vision_Status_t *status);
 *       USB连接代号失效时，即使尚未执行连接通知，也立即撤销旧命令。
  */
 void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status);
+
+/** @brief 复制V2对时状态；查询不发送探测、不推进样本或续期。
+* @param[out] output 输出对象；失败保持原值。
+* @return VISION_TIME_SYNC_OK；SP构建返回UNAVAILABLE，未初始化或空参数返回错误。
+*/
+VisionTimeSyncStatus_t VisionGetTimeSyncSnapshot(VisionTimeSyncSnapshot_t *output);
+
+/** @brief 映射一个V2远端毫秒时刻到本机时基。
+* @param[in] remote_ms V2帧携带的远端原始时刻，0合法。
+* @param[in] now_local_ms 当前本机毫秒时刻，用于判断映射是否过期。
+* @param[out] local_ms 映射结果；失败保持原值。
+* @return VISION_TIME_SYNC_OK；未同步、过期、时间歧义或SP构建均有明确状态。
+* @note 换算不改变消息接收时间，调用方仍须按原接收期限判断业务是否有效。
+*/
+VisionTimeSyncStatus_t VisionMapRemoteTime(uint32_t remote_ms,
+                                           uint32_t now_local_ms,
+                                           uint32_t *local_ms);
 
 /** @brief 更新待回传的状态内容，本函数不发送、不检查数值范围。
 * @param[in] mode 回传模式，当前调用处用 1 表示 READY，0 表示不允许自瞄。

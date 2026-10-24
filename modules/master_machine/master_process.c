@@ -18,6 +18,7 @@
 #if defined(MC02_VISION_PROTOCOL_V2)
 #include "topics/robot_topics.h"
 #include "message_center.h"
+#include "time_mapping.h"
 #include "referee_snapshot.h"
 #include "rm_referee.h"
 #endif
@@ -38,6 +39,40 @@ static VisionSPStream_t vision_stream;
 #endif
 static volatile uint8_t vision_stream_reset_requested;
 #if defined(MC02_VISION_PROTOCOL_V2)
+#define VISION_V2_TIME_SYNC_PERIOD_MS 500u
+#define VISION_V2_TIME_SYNC_RESPONSE_TIMEOUT_MS 100u
+
+typedef struct
+{
+    VisionV2TimeSyncReply_t reply;
+    uint32_t t1_ms;
+    uint32_t t3_ms;
+    uint32_t t4_ms;
+    uint32_t generation;
+} VisionV2TimeSyncReplyEvent_t;
+
+typedef struct
+{
+    TimeMapping_t mapping;
+    VisionV2TimeSyncReplyEvent_t reply_event;
+    uint32_t next_request_id;
+    uint32_t pending_request_id;
+    uint32_t pending_t1_ms;
+    uint32_t pending_generation;
+    uint32_t last_probe_attempt_ms;
+    uint32_t sync_generation;
+    uint32_t probes_accepted;
+    uint32_t probe_timeouts;
+    uint32_t rejected_replies;
+    VisionTimeSyncLastResult_t last_result;
+    uint8_t mapping_initialized;
+    uint8_t request_pending;
+    uint8_t probe_attempted;
+    uint8_t reply_ready;
+    uint8_t reset_requested;
+    uint8_t generation_valid;
+} VisionV2TimeSync_t;
+
 static MessagePublisher_t *vision_v2_aim_publisher;
 static MessagePublisher_t *vision_v2_navigation_publisher;
 static MessagePublisher_t *vision_v2_posture_publisher;
@@ -50,6 +85,7 @@ static uint32_t vision_v2_last_tx_ms;
 static uint8_t vision_v2_has_tx;
 static uint8_t vision_v2_next_tx_type;
 static uint16_t vision_v2_tx_sequence;
+static VisionV2TimeSync_t vision_v2_time_sync;
 #endif
 
 #ifdef VISION_USE_UART
@@ -120,6 +156,60 @@ static uint8_t VisionV2InvalidateInputSnapshots(const VisionV2Frame_t *frame,
         MESSAGE_CLOCK_REMOTE_RAW) == MESSAGE_OK);
 }
 
+static void VisionV2RejectTimeReply(VisionTimeSyncLastResult_t result)
+{
+    taskENTER_CRITICAL();
+    if (vision_v2_time_sync.rejected_replies != UINT32_MAX)
+        ++vision_v2_time_sync.rejected_replies;
+    vision_v2_time_sync.last_result = result;
+    taskEXIT_CRITICAL();
+}
+
+// 接收任务只把匹配回应复制到单槽邮箱；时间映射由RobotTask独占更新。
+static void VisionV2HandleTimeReply(const VisionV2Frame_t *frame)
+{
+    VisionV2TimeSyncReply_t reply = {0};
+    if (VisionV2DecodeTimeSyncReply(frame->payload, frame->payload_length, &reply) !=
+        VISION_V2_OK)
+    {
+        VisionV2RejectTimeReply(VISION_TIME_SYNC_RESULT_RESPONSE_REJECTED);
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    if (vision_v2_time_sync.request_pending == 0u ||
+        vision_v2_time_sync.pending_generation != frame->generation ||
+        vision_v2_time_sync.pending_request_id != reply.request_id ||
+        vision_v2_time_sync.reply_ready != 0u)
+    {
+        if (vision_v2_time_sync.rejected_replies != UINT32_MAX)
+            ++vision_v2_time_sync.rejected_replies;
+        vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_RESPONSE_REJECTED;
+        taskEXIT_CRITICAL();
+        return;
+    }
+
+    const uint32_t exchange_age_ms = frame->completed_time_ms -
+        vision_v2_time_sync.pending_t1_ms;
+    if (exchange_age_ms > INT32_MAX ||
+        exchange_age_ms > VISION_V2_TIME_SYNC_RESPONSE_TIMEOUT_MS)
+    {
+        if (vision_v2_time_sync.rejected_replies != UINT32_MAX)
+            ++vision_v2_time_sync.rejected_replies;
+        vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_RESPONSE_REJECTED;
+        taskEXIT_CRITICAL();
+        return;
+    }
+
+    vision_v2_time_sync.reply_event.reply = reply;
+    vision_v2_time_sync.reply_event.t1_ms = vision_v2_time_sync.pending_t1_ms;
+    vision_v2_time_sync.reply_event.t3_ms = frame->source_time_ms;
+    vision_v2_time_sync.reply_event.t4_ms = frame->completed_time_ms;
+    vision_v2_time_sync.reply_event.generation = frame->generation;
+    vision_v2_time_sync.reply_ready = 1u;
+    taskEXIT_CRITICAL();
+}
+
 // 每类命令独立检查序号与本地接收年龄，再发布原始远端时刻。
 static void VisionV2FrameReceived(void *context, const VisionV2Frame_t *frame)
 {
@@ -132,6 +222,14 @@ static void VisionV2FrameReceived(void *context, const VisionV2Frame_t *frame)
         return;
 #endif
     const uint32_t now_ms = HAL_GetTick();
+    if (frame->type == VISION_V2_TIME_SYNC_REPLY)
+    {
+        VisionV2HandleTimeReply(frame);
+        return;
+    }
+    // 探测方向固定为MCU到PC，收到反向探测不能当作控制命令处理。
+    if (frame->type == VISION_V2_TIME_SYNC_PROBE)
+        return;
     if ((uint32_t)(now_ms - frame->received_time_ms) > VISION_V2_NAV_MAX_AGE_MS)
         return;
 
@@ -338,6 +436,11 @@ static void VisionVcpLinkChanged(void *context, uint32_t generation, USBLinkReas
         vision_last_rx_ms = 0u;
         vision_stream_reset_requested = 1u;
     }
+#if defined(MC02_VISION_PROTOCOL_V2)
+    if (vision_v2_time_sync.generation_valid != 0u &&
+        vision_v2_time_sync.sync_generation != generation)
+        vision_v2_time_sync.reset_requested = 1u;
+#endif
     taskEXIT_CRITICAL();
 }
 static void VisionVcpTxCompleted(void *context, const USBTxEvent_t *event)
@@ -367,6 +470,11 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
     vision_v2_has_tx = 0u;
     vision_v2_next_tx_type = 0u;
     vision_v2_tx_sequence = 0u;
+    memset(&vision_v2_time_sync, 0, sizeof(vision_v2_time_sync));
+    vision_v2_time_sync.next_request_id = 1u;
+    if (TimeMappingInit(&vision_v2_time_sync.mapping, NULL) != TIME_MAPPING_OK)
+        return NULL;
+    vision_v2_time_sync.mapping_initialized = 1u;
     if (RobotTopicsInit() == 0u)
         return NULL;
     vision_v2_aim_publisher = MessagePublisherRegister(ROBOT_TOPIC_VISION_AIM,
@@ -413,7 +521,11 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
         return NULL;
     }
     USART_Init_Config_s conf = {0};
+#if defined(MC02_VISION_PROTOCOL_V2)
+    conf.context = &vision_v2_stream;
+#else
     conf.context = &vision_stream;
+#endif
     conf.module_callback = VisionUartRxCallback;
     conf.recv_buff_size = VISION_RECV_SIZE * 2;
     conf.usart_handle = _handle;
@@ -525,21 +637,23 @@ static void VisionV2NoteTxResult(uint8_t accepted)
     taskEXIT_CRITICAL();
 }
 
-static void VisionV2SubmitFrame(uint8_t type, const uint8_t *payload, size_t payload_length)
+static uint8_t VisionV2SubmitFrameAt(uint8_t type, uint32_t source_time_ms,
+                                     const uint8_t *payload, size_t payload_length)
 {
     uint8_t frame[VISION_V2_MAX_FRAME];
     size_t frame_length = 0u;
     const uint16_t sequence = vision_v2_tx_sequence;
-    if (VisionV2EncodeFrame(type, sequence, HAL_GetTick(), payload, payload_length,
+    if (VisionV2EncodeFrame(type, sequence, source_time_ms, payload, payload_length,
                             frame, &frame_length) != VISION_V2_OK)
     {
         VisionV2NoteTxResult(0u);
-        return;
+        return 0u;
     }
 
+    uint8_t accepted = 0u;
 #ifdef VISION_USE_VCP
     uint32_t id = 0u;
-    VisionV2NoteTxResult((uint8_t)(USBTransportSubmit(frame, frame_length, &id) == USB_ACCEPTED));
+    accepted = (uint8_t)(USBTransportSubmit(frame, frame_length, &id) == USB_ACCEPTED);
 #elif defined(VISION_USE_UART)
     const USARTTxRequest_t request = {
         .data = frame,
@@ -551,19 +665,202 @@ static void VisionV2SubmitFrame(uint8_t type, const uint8_t *payload, size_t pay
         .context = NULL,
     };
     uint32_t id = 0u;
-    VisionV2NoteTxResult((uint8_t)(USARTSubmitTx(vision_usart_instance, &request, &id) ==
-                                   USART_SEND_ACCEPTED));
+    accepted = (uint8_t)(USARTSubmitTx(vision_usart_instance, &request, &id) ==
+                         USART_SEND_ACCEPTED);
 #else
     (void)frame;
     (void)frame_length;
-    VisionV2NoteTxResult(0u);
 #endif
+    VisionV2NoteTxResult(accepted);
+    return accepted;
+}
+
+static uint8_t VisionV2GetTransport(uint32_t *generation, uint8_t *ready)
+{
+    if (generation == NULL || ready == NULL)
+        return 0u;
+#ifdef VISION_USE_VCP
+    USBTransportState_t state;
+    if (USBTransportGetState(&state) != USB_OK)
+        return 0u;
+    *generation = state.generation;
+    *ready = (uint8_t)(state.phase == USB_PHASE_READY);
+    return 1u;
+#elif defined(VISION_USE_UART)
+    *generation = 1u;
+    *ready = vision_usart_instance != NULL ? 1u : 0u;
+    return 1u;
+#else
+    *generation = 0u;
+    *ready = 0u;
+    return 0u;
+#endif
+}
+
+static void VisionV2ProcessTimeSync(uint32_t now_ms)
+{
+    uint32_t generation = 0u;
+    uint8_t ready = 0u;
+    const uint8_t have_transport = VisionV2GetTransport(&generation, &ready);
+    (void)ready;
+
+    uint8_t reset_mapping = 0u;
+    uint8_t have_reply = 0u;
+    VisionV2TimeSyncReplyEvent_t reply_event = {0};
+    taskENTER_CRITICAL();
+    if (have_transport != 0u &&
+        (vision_v2_time_sync.generation_valid == 0u ||
+         vision_v2_time_sync.sync_generation != generation))
+    {
+        vision_v2_time_sync.sync_generation = generation;
+        vision_v2_time_sync.generation_valid = 1u;
+        vision_v2_time_sync.reset_requested = 1u;
+    }
+    if (vision_v2_time_sync.reset_requested != 0u)
+    {
+        vision_v2_time_sync.reset_requested = 0u;
+        vision_v2_time_sync.request_pending = 0u;
+        vision_v2_time_sync.reply_ready = 0u;
+        vision_v2_time_sync.probe_attempted = 0u;
+        vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_RESET;
+        reset_mapping = 1u;
+    }
+    else if (vision_v2_time_sync.reply_ready != 0u)
+    {
+        vision_v2_time_sync.reply_ready = 0u;
+        if (vision_v2_time_sync.request_pending != 0u &&
+            vision_v2_time_sync.reply_event.generation ==
+                vision_v2_time_sync.pending_generation &&
+            vision_v2_time_sync.reply_event.generation ==
+                vision_v2_time_sync.sync_generation)
+        {
+            reply_event = vision_v2_time_sync.reply_event;
+            vision_v2_time_sync.request_pending = 0u;
+            have_reply = 1u;
+        }
+        else
+        {
+            if (vision_v2_time_sync.rejected_replies != UINT32_MAX)
+                ++vision_v2_time_sync.rejected_replies;
+            vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_RESPONSE_REJECTED;
+        }
+    }
+    else if (vision_v2_time_sync.request_pending != 0u)
+    {
+        const uint32_t elapsed_ms = now_ms - vision_v2_time_sync.pending_t1_ms;
+        if (elapsed_ms > INT32_MAX ||
+            elapsed_ms > VISION_V2_TIME_SYNC_RESPONSE_TIMEOUT_MS)
+        {
+            vision_v2_time_sync.request_pending = 0u;
+            vision_v2_time_sync.reply_ready = 0u;
+            vision_v2_time_sync.probe_timeouts = vision_v2_time_sync.probe_timeouts != UINT32_MAX ?
+                vision_v2_time_sync.probe_timeouts + 1u : UINT32_MAX;
+            vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_TIMEOUT;
+        }
+    }
+    taskEXIT_CRITICAL();
+
+    if (reset_mapping != 0u)
+    {
+        taskENTER_CRITICAL();
+        (void)TimeMappingReset(&vision_v2_time_sync.mapping);
+        taskEXIT_CRITICAL();
+    }
+    if (have_reply != 0u)
+    {
+        taskENTER_CRITICAL();
+        if (vision_v2_time_sync.reset_requested == 0u &&
+            reply_event.generation == vision_v2_time_sync.sync_generation)
+        {
+            const TimeMappingStatus_t status = TimeMappingObserveExchange(
+                &vision_v2_time_sync.mapping, reply_event.t1_ms,
+                reply_event.reply.received_time_ms,
+                reply_event.t3_ms,
+                reply_event.t4_ms);
+            if (status == TIME_MAPPING_OK)
+            {
+                if (vision_v2_time_sync.probes_accepted != UINT32_MAX)
+                    ++vision_v2_time_sync.probes_accepted;
+                vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_SAMPLE_ACCEPTED;
+            }
+            else
+            {
+                if (vision_v2_time_sync.rejected_replies != UINT32_MAX)
+                    ++vision_v2_time_sync.rejected_replies;
+                vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_RESPONSE_REJECTED;
+            }
+        }
+        taskEXIT_CRITICAL();
+    }
+}
+
+static uint8_t VisionV2TrySendTimeProbe(uint32_t now_ms)
+{
+    uint32_t generation = 0u;
+    uint8_t ready = 0u;
+    if (VisionV2GetTransport(&generation, &ready) == 0u || ready == 0u)
+        return 0u;
+
+    uint32_t request_id = 0u;
+    taskENTER_CRITICAL();
+    const uint8_t period_elapsed = (uint8_t)(vision_v2_time_sync.probe_attempted == 0u ||
+        (uint32_t)(now_ms - vision_v2_time_sync.last_probe_attempt_ms) >=
+            VISION_V2_TIME_SYNC_PERIOD_MS);
+    if (vision_v2_time_sync.request_pending != 0u || period_elapsed == 0u)
+    {
+        taskEXIT_CRITICAL();
+        return 0u;
+    }
+
+    request_id = vision_v2_time_sync.next_request_id;
+    if (request_id == 0u)
+        request_id = 1u;
+    vision_v2_time_sync.next_request_id = request_id + 1u;
+    if (vision_v2_time_sync.next_request_id == 0u)
+        vision_v2_time_sync.next_request_id = 1u;
+    vision_v2_time_sync.pending_request_id = request_id;
+    vision_v2_time_sync.pending_t1_ms = now_ms;
+    vision_v2_time_sync.pending_generation = generation;
+    vision_v2_time_sync.request_pending = 1u;
+    vision_v2_time_sync.last_probe_attempt_ms = now_ms;
+    vision_v2_time_sync.probe_attempted = 1u;
+    vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_WAITING;
+    taskEXIT_CRITICAL();
+
+    const VisionV2TimeSyncProbe_t probe = {.request_id = request_id};
+    uint8_t payload[4];
+    if (VisionV2EncodeTimeSyncProbe(&probe, payload, sizeof(payload)) != VISION_V2_OK)
+    {
+        taskENTER_CRITICAL();
+        if (vision_v2_time_sync.request_pending != 0u &&
+            vision_v2_time_sync.pending_request_id == request_id)
+            vision_v2_time_sync.request_pending = 0u;
+        vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_SEND_REJECTED;
+        taskEXIT_CRITICAL();
+        return 1u;
+    }
+    const uint8_t accepted = VisionV2SubmitFrameAt(VISION_V2_TIME_SYNC_PROBE,
+        now_ms, payload, sizeof(payload));
+    if (accepted == 0u)
+    {
+        taskENTER_CRITICAL();
+        if (vision_v2_time_sync.request_pending != 0u &&
+            vision_v2_time_sync.pending_request_id == request_id)
+            vision_v2_time_sync.request_pending = 0u;
+        vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_SEND_REJECTED;
+        taskEXIT_CRITICAL();
+    }
+    return 1u;
 }
 
 static void VisionSendV2(void)
 {
     const uint32_t now_ms = HAL_GetTick();
     VisionExpireIfStale(now_ms);
+    // 先收取单槽回应并检查超时，避免50ms状态发送节流影响映射更新。
+    VisionV2ProcessTimeSync(now_ms);
+    if (VisionV2TrySendTimeProbe(now_ms) != 0u)
+        return;
     if (vision_v2_has_tx != 0u && (uint32_t)(now_ms - vision_v2_last_tx_ms) < 50u)
         return;
     vision_v2_has_tx = 1u;
@@ -584,7 +881,8 @@ static void VisionSendV2(void)
             return;
         }
         (void)VisionV2GetPayloadSize(VISION_V2_POSTURE_STATUS, &payload_length);
-        VisionV2SubmitFrame(VISION_V2_POSTURE_STATUS, payload, payload_length);
+        (void)VisionV2SubmitFrameAt(VISION_V2_POSTURE_STATUS, now_ms,
+                                    payload, payload_length);
     }
     else
     {
@@ -597,7 +895,8 @@ static void VisionSendV2(void)
             return;
         }
         (void)VisionV2GetPayloadSize(VISION_V2_REFEREE_SUMMARY, &payload_length);
-        VisionV2SubmitFrame(VISION_V2_REFEREE_SUMMARY, payload, payload_length);
+        (void)VisionV2SubmitFrameAt(VISION_V2_REFEREE_SUMMARY, now_ms,
+                                    payload, payload_length);
     }
     vision_v2_next_tx_type ^= 1u;
 }
@@ -676,4 +975,103 @@ void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status)
         status->bullet_count = send_data.bullet_count;
     }
     taskEXIT_CRITICAL();
+}
+
+VisionTimeSyncStatus_t VisionGetTimeSyncSnapshot(VisionTimeSyncSnapshot_t *output)
+{
+    if (output == NULL)
+        return VISION_TIME_SYNC_ERR_ARGUMENT;
+#if defined(MC02_VISION_PROTOCOL_V2)
+    TimeMapping_t mapping;
+    VisionTimeSyncSnapshot_t candidate = {0};
+    uint8_t initialized = 0u;
+    taskENTER_CRITICAL();
+    initialized = vision_v2_time_sync.mapping_initialized;
+    if (initialized != 0u)
+    {
+        mapping = vision_v2_time_sync.mapping;
+        candidate.request_pending = vision_v2_time_sync.request_pending;
+        candidate.request_id = vision_v2_time_sync.request_pending != 0u ?
+            vision_v2_time_sync.pending_request_id : 0u;
+        candidate.probes_accepted = vision_v2_time_sync.probes_accepted;
+        candidate.probe_timeouts = vision_v2_time_sync.probe_timeouts;
+        candidate.rejected_replies = vision_v2_time_sync.rejected_replies;
+        candidate.transport_generation = vision_v2_time_sync.sync_generation;
+        candidate.last_result = vision_v2_time_sync.last_result;
+    }
+    taskEXIT_CRITICAL();
+    if (initialized == 0u)
+        return VISION_TIME_SYNC_ERR_NOT_INITIALIZED;
+
+    TimeMappingState_t mapping_state = {0};
+    if (TimeMappingGetState(&mapping, HAL_GetTick(), &mapping_state) != TIME_MAPPING_OK)
+        return VISION_TIME_SYNC_ERR_TIME;
+    candidate.remote_minus_local_ms = mapping_state.remote_minus_local_ms;
+    candidate.sample_age_ms = mapping_state.sample_age_ms;
+    candidate.last_round_trip_ms = mapping_state.last_round_trip_ms;
+    candidate.synchronized = mapping_state.synchronized;
+    candidate.sample_count = mapping_state.sample_count;
+    uint32_t current_generation = 0u;
+    uint8_t transport_ready = 0u;
+    if (VisionV2GetTransport(&current_generation, &transport_ready) == 0u ||
+        transport_ready == 0u ||
+        current_generation != candidate.transport_generation)
+    {
+        // 查询不执行复位，但连接已变时不把旧连接的偏差报告为可用。
+        candidate.synchronized = 0u;
+        candidate.sample_count = 0u;
+    }
+    *output = candidate;
+    return VISION_TIME_SYNC_OK;
+#else
+    return VISION_TIME_SYNC_ERR_UNAVAILABLE;
+#endif
+}
+
+VisionTimeSyncStatus_t VisionMapRemoteTime(uint32_t remote_ms,
+                                           uint32_t now_local_ms,
+                                           uint32_t *local_ms)
+{
+    if (local_ms == NULL)
+        return VISION_TIME_SYNC_ERR_ARGUMENT;
+#if defined(MC02_VISION_PROTOCOL_V2)
+    TimeMapping_t mapping;
+    uint32_t mapping_generation = 0u;
+    uint8_t generation_valid = 0u;
+    taskENTER_CRITICAL();
+    const uint8_t initialized = vision_v2_time_sync.mapping_initialized;
+    if (initialized != 0u)
+    {
+        mapping = vision_v2_time_sync.mapping;
+        mapping_generation = vision_v2_time_sync.sync_generation;
+        generation_valid = vision_v2_time_sync.generation_valid;
+    }
+    taskEXIT_CRITICAL();
+    if (initialized == 0u)
+        return VISION_TIME_SYNC_ERR_NOT_INITIALIZED;
+
+    uint32_t current_generation = 0u;
+    uint8_t transport_ready = 0u;
+    if (VisionV2GetTransport(&current_generation, &transport_ready) == 0u ||
+        transport_ready == 0u || generation_valid == 0u ||
+        current_generation != mapping_generation)
+        return VISION_TIME_SYNC_ERR_NOT_SYNCHRONIZED;
+
+    const TimeMappingStatus_t status = TimeMappingRemoteToLocal(
+        &mapping, remote_ms, now_local_ms, local_ms);
+    switch (status)
+    {
+    case TIME_MAPPING_OK: return VISION_TIME_SYNC_OK;
+    case TIME_MAPPING_ERR_ARGUMENT: return VISION_TIME_SYNC_ERR_ARGUMENT;
+    case TIME_MAPPING_ERR_UNINITIALIZED: return VISION_TIME_SYNC_ERR_NOT_INITIALIZED;
+    case TIME_MAPPING_ERR_NOT_SYNCHRONIZED: return VISION_TIME_SYNC_ERR_NOT_SYNCHRONIZED;
+    case TIME_MAPPING_ERR_EXPIRED: return VISION_TIME_SYNC_ERR_EXPIRED;
+    case TIME_MAPPING_ERR_TIME: return VISION_TIME_SYNC_ERR_TIME;
+    default: return VISION_TIME_SYNC_ERR_TIME;
+    }
+#else
+    (void)remote_ms;
+    (void)now_local_ms;
+    return VISION_TIME_SYNC_ERR_UNAVAILABLE;
+#endif
 }

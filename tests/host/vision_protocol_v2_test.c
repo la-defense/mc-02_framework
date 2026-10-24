@@ -43,6 +43,18 @@ static const uint8_t fixed_referee_frame[] = {
     0x78u, 0x25u
 };
 
+static const uint8_t fixed_time_probe_frame[] = {
+    0x4du, 0x43u, 0x02u, 0x83u, 0x04u, 0x00u, 0x44u, 0x33u,
+    0x44u, 0x33u, 0x22u, 0x11u, 0x88u, 0x77u, 0x66u, 0x55u,
+    0xcfu, 0x3fu,
+};
+
+static const uint8_t fixed_time_reply_frame[] = {
+    0x4du, 0x43u, 0x02u, 0x03u, 0x08u, 0x00u, 0x45u, 0x33u,
+    0xd4u, 0xc3u, 0xb2u, 0xa1u, 0x88u, 0x77u, 0x66u, 0x55u,
+    0x01u, 0x02u, 0x03u, 0x04u, 0x39u, 0x03u,
+};
+
 typedef struct
 {
     size_t count;
@@ -121,6 +133,39 @@ static int TestAllFixedVectors(void)
     TEST_CHECK(CompareFrame(VISION_V2_REFEREE_SUMMARY, 0xabcdu, 0x99aabbccu,
         referee_payload, sizeof(referee_payload), fixed_referee_frame,
         sizeof(fixed_referee_frame)) == 0);
+
+    const VisionV2TimeSyncProbe_t probe = {.request_id = 0x55667788u};
+    uint8_t time_payload[8] = {0};
+    TEST_CHECK(VisionV2EncodeTimeSyncProbe(&probe, time_payload,
+        sizeof(time_payload)) == VISION_V2_OK);
+    TEST_CHECK(CompareFrame(VISION_V2_TIME_SYNC_PROBE, 0x3344u, 0x11223344u,
+        time_payload, 4u, fixed_time_probe_frame, sizeof(fixed_time_probe_frame)) == 0);
+
+    const VisionV2TimeSyncReply_t reply = {
+        .request_id = 0x55667788u, .received_time_ms = 0x04030201u,
+    };
+    TEST_CHECK(VisionV2EncodeTimeSyncReply(&reply, time_payload,
+        sizeof(time_payload)) == VISION_V2_OK);
+    TEST_CHECK(CompareFrame(VISION_V2_TIME_SYNC_REPLY, 0x3345u, 0xa1b2c3d4u,
+        time_payload, 8u, fixed_time_reply_frame, sizeof(fixed_time_reply_frame)) == 0);
+    VisionV2TimeSyncProbe_t decoded_probe = {0};
+    VisionV2TimeSyncReply_t decoded_reply = {0};
+    TEST_CHECK(VisionV2DecodeTimeSyncProbe(fixed_time_probe_frame +
+        VISION_V2_HEADER_SIZE, 4u, &decoded_probe) == VISION_V2_OK &&
+        decoded_probe.request_id == probe.request_id);
+    TEST_CHECK(VisionV2DecodeTimeSyncReply(fixed_time_reply_frame +
+        VISION_V2_HEADER_SIZE, 8u, &decoded_reply) == VISION_V2_OK &&
+        decoded_reply.request_id == reply.request_id &&
+        decoded_reply.received_time_ms == reply.received_time_ms);
+    decoded_reply.request_id = 0x12345678u;
+    TEST_CHECK(VisionV2DecodeTimeSyncReply(fixed_time_reply_frame +
+        VISION_V2_HEADER_SIZE, 7u, &decoded_reply) == VISION_V2_ERR_LENGTH &&
+        decoded_reply.request_id == 0x12345678u);
+    size_t time_payload_length = 0u;
+    TEST_CHECK(VisionV2GetPayloadSize(VISION_V2_TIME_SYNC_PROBE,
+        &time_payload_length) == VISION_V2_OK && time_payload_length == 4u);
+    TEST_CHECK(VisionV2GetPayloadSize(VISION_V2_TIME_SYNC_REPLY,
+        &time_payload_length) == VISION_V2_OK && time_payload_length == 8u);
     return 0;
 }
 
@@ -161,7 +206,8 @@ static int TestAllSplitPoints(void)
         TEST_CHECK(capture.last.type == VISION_V2_NAVIGATION_COMMAND &&
             capture.last.sequence == 0x1234u &&
             capture.last.source_time_ms == 0x01020304u &&
-            capture.last.received_time_ms == 7u && capture.last.generation == 3u);
+            capture.last.received_time_ms == 7u &&
+            capture.last.completed_time_ms == 8u && capture.last.generation == 3u);
         VisionV2NavigationCommand_t nav = {0};
         TEST_CHECK(VisionV2DecodeNavigation(capture.last.payload,
             capture.last.payload_length, &nav) == VISION_V2_OK);

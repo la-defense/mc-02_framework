@@ -9,6 +9,7 @@
 #include "referee_snapshot.h"
 #include "robot_topics.h"
 #include "rm_referee.h"
+#include "time_mapping.h"
 #include "usb_transport.h"
 #include "vision_protocol_v2.h"
 
@@ -19,6 +20,7 @@ static USBTransportConfig_t usb_config;
 static uint32_t current_generation = 1u;
 static uint32_t valid_command_reports;
 static uint32_t daemon_reloads;
+static USBStatus_t next_submit_status = USB_ACCEPTED;
 static Daemon_Init_Config_s daemon_config;
 static DaemonInstance daemon_instance;
 static uint8_t tx_frame[VISION_V2_MAX_FRAME];
@@ -39,10 +41,25 @@ USBStatus_t USBTransportInit(const USBTransportConfig_t *config)
     return USB_OK;
 }
 
+USBStatus_t USBTransportGetState(USBTransportState_t *output)
+{
+    if (output == NULL)
+        return USB_BAD_ARGUMENT;
+    memset(output, 0, sizeof(*output));
+    output->phase = USB_PHASE_READY;
+    output->generation = current_generation;
+    output->initialized = 1u;
+    return USB_OK;
+}
+
 USBStatus_t USBTransportSubmit(const uint8_t *data, size_t length, uint32_t *id)
 {
     if (data == NULL || id == NULL || length > sizeof(tx_frame))
         return USB_BAD_ARGUMENT;
+    const USBStatus_t result = next_submit_status;
+    next_submit_status = USB_ACCEPTED;
+    if (result != USB_ACCEPTED)
+        return result;
     memcpy(tx_frame, data, length);
     tx_length = length;
     ++tx_count;
@@ -107,21 +124,6 @@ static void CaptureFrame(void *context, const VisionV2Frame_t *frame)
     capture->last = *frame;
 }
 
-static int CheckLastTx(uint8_t expected_type, uint16_t expected_sequence)
-{
-    VisionV2Stream_t stream = {0};
-    FrameCapture_t capture = {0};
-    uint32_t errors = 0u;
-    TEST_CHECK(tx_length > 0u);
-    TEST_CHECK(VisionV2StreamFeed(&stream, tx_frame, tx_length, now_ms, 1u,
-        1u, now_ms, CaptureFrame, &capture, &errors) == VISION_V2_OK);
-    TEST_CHECK(errors == 0u && capture.count == 1u);
-    TEST_CHECK(capture.last.type == expected_type &&
-        capture.last.sequence == expected_sequence &&
-        capture.last.source_time_ms == now_ms);
-    return 0;
-}
-
 static void InjectFrame(const uint8_t *data, size_t length, uint32_t received_ms,
                         uint32_t sequence, uint32_t generation)
 {
@@ -133,6 +135,40 @@ static void InjectFrame(const uint8_t *data, size_t length, uint32_t received_ms
         .generation = generation,
     };
     usb_config.receive(usb_config.context, &block);
+}
+
+static int DecodeLastTx(VisionV2Frame_t *frame)
+{
+    VisionV2Stream_t stream = {0};
+    FrameCapture_t capture = {0};
+    uint32_t errors = 0u;
+    TEST_CHECK(frame != NULL && tx_length > 0u);
+    TEST_CHECK(VisionV2StreamFeed(&stream, tx_frame, tx_length, now_ms, 1u,
+        1u, now_ms, CaptureFrame, &capture, &errors) == VISION_V2_OK);
+    TEST_CHECK(errors == 0u && capture.count == 1u);
+    *frame = capture.last;
+    return 0;
+}
+
+static int InjectTimeReply(uint32_t request_id, uint32_t t2_ms,
+                           uint32_t t3_ms, uint32_t t4_ms,
+                           uint32_t block_sequence, uint32_t generation)
+{
+    VisionV2TimeSyncReply_t reply = {
+        .request_id = request_id,
+        .received_time_ms = t2_ms,
+    };
+    uint8_t payload[8];
+    uint8_t frame[VISION_V2_MAX_FRAME];
+    size_t frame_length = 0u;
+    TEST_CHECK(VisionV2EncodeTimeSyncReply(&reply, payload, sizeof(payload)) ==
+        VISION_V2_OK);
+    TEST_CHECK(VisionV2EncodeFrame(VISION_V2_TIME_SYNC_REPLY,
+        (uint16_t)block_sequence, t3_ms, payload, sizeof(payload), frame,
+        &frame_length) == VISION_V2_OK);
+    now_ms = t4_ms;
+    InjectFrame(frame, frame_length, t4_ms, block_sequence, generation);
+    return 0;
 }
 
 static int CheckInboundTopics(void)
@@ -266,17 +302,172 @@ static int CheckOutboundReports(void)
     referee_snapshot.command[REF_CMD_SHOOT_DATA].data.shoot_data.frequency_hz = 10u;
     referee_snapshot.command[REF_CMD_SHOOT_DATA].data.shoot_data.initial_speed_mps = 29.5f;
 
+    Vision_Status_t status_before;
+    Vision_Status_t status_after;
+    VisionTimeSyncSnapshot_t sync = {0};
+    VisionV2Frame_t sent_frame = {0};
+    VisionV2TimeSyncProbe_t probe = {0};
+    uint32_t mapped_local_ms = 0xdeadbeefu;
+    const uint32_t reports_before = valid_command_reports;
+    const uint32_t reloads_before = daemon_reloads;
+
     now_ms = 100u;
     VisionUpdateTx(1u, posture.quaternion_wxyz[0], posture.quaternion_wxyz[1],
         posture.quaternion_wxyz[2], posture.quaternion_wxyz[3], posture.yaw_rad,
         posture.yaw_rate_rad_s, posture.pitch_rad, posture.pitch_rate_rad_s, 30.0f, 2u);
+    VisionGetStatus(&status_before);
     VisionSend();
-    TEST_CHECK(tx_count == 1u && CheckLastTx(VISION_V2_POSTURE_STATUS, 0u) == 0);
+    TEST_CHECK(tx_count == 1u && DecodeLastTx(&sent_frame) == 0);
+    TEST_CHECK(sent_frame.type == VISION_V2_TIME_SYNC_PROBE &&
+        VisionV2DecodeTimeSyncProbe(sent_frame.payload, sent_frame.payload_length,
+            &probe) == VISION_V2_OK && probe.request_id == 1u &&
+        sent_frame.source_time_ms == 100u);
 
+    // 请求尚未完成时不重复探测；普通状态报告仍按原节奏发送。
+    now_ms = 150u;
+    VisionSend();
+    TEST_CHECK(DecodeLastTx(&sent_frame) == 0 &&
+        sent_frame.type == VISION_V2_POSTURE_STATUS);
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.request_pending != 0u && sync.request_id == probe.request_id);
+
+    // 时钟样本仅使用完整帧末RxEvent时间；对时帧不能刷新业务在线状态。
+    TEST_CHECK(InjectTimeReply(probe.request_id, 120u, 180u, 200u, 9u,
+        current_generation) == 0);
+    VisionSend();
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.sample_count == 1u && sync.synchronized == 0u &&
+        sync.probes_accepted == 1u && sync.last_round_trip_ms == 40u);
+    VisionGetStatus(&status_after);
+    TEST_CHECK(status_after.rx_count == status_before.rx_count &&
+        status_after.last_rx_ms == status_before.last_rx_ms &&
+        valid_command_reports == reports_before && daemon_reloads == reloads_before);
+
+    // 三个500ms周期的低RTT样本建立映射，偏差定义为PC时钟减MCU时钟。
+    for (uint32_t sample = 1u; sample < TIME_MAPPING_REQUIRED_SAMPLES; ++sample)
+    {
+        const uint32_t t1_ms = 100u + sample * 500u;
+        now_ms = t1_ms;
+        VisionSend();
+        TEST_CHECK(DecodeLastTx(&sent_frame) == 0 &&
+            sent_frame.type == VISION_V2_TIME_SYNC_PROBE);
+        TEST_CHECK(VisionV2DecodeTimeSyncProbe(sent_frame.payload,
+            sent_frame.payload_length, &probe) == VISION_V2_OK &&
+            sent_frame.source_time_ms == t1_ms);
+        TEST_CHECK(InjectTimeReply(probe.request_id, t1_ms + 5u,
+            t1_ms + 6u, t1_ms + 10u, 9u + sample,
+            current_generation) == 0);
+        VisionSend();
+    }
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.sample_count == 3u && sync.synchronized != 0u &&
+        sync.remote_minus_local_ms == 1 && sync.last_round_trip_ms == 9u);
+    TEST_CHECK(VisionMapRemoteTime(now_ms - 4u, now_ms, &mapped_local_ms) ==
+        VISION_TIME_SYNC_OK && mapped_local_ms == now_ms - 5u);
+
+    // 错编号回应不覆盖映射；未答请求超过100ms后计为超时。
+    now_ms = 1600u;
+    VisionSend();
+    TEST_CHECK(DecodeLastTx(&sent_frame) == 0 &&
+        sent_frame.type == VISION_V2_TIME_SYNC_PROBE);
+    TEST_CHECK(VisionV2DecodeTimeSyncProbe(sent_frame.payload,
+        sent_frame.payload_length, &probe) == VISION_V2_OK);
+    TEST_CHECK(InjectTimeReply(probe.request_id + 1u, 1602u, 1603u, 1604u,
+        15u, current_generation) == 0);
+    VisionSend();
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.rejected_replies == 1u && sync.sample_count == 3u &&
+        sync.synchronized != 0u);
+    now_ms = 1701u;
+    VisionSend();
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.probe_timeouts == 1u && sync.request_pending == 0u);
+
+    // 两秒没有新样本后映射失效；USB代号变化立即撤销旧偏差并拒绝旧代回应。
+    now_ms = 3111u;
+    VisionSend();
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.synchronized == 0u && sync.sample_age_ms == 2001u);
+    TEST_CHECK(VisionMapRemoteTime(now_ms, now_ms, &mapped_local_ms) ==
+        VISION_TIME_SYNC_ERR_EXPIRED && mapped_local_ms == 1105u);
+    current_generation = 3u;
+    if (usb_config.link_changed != NULL)
+        usb_config.link_changed(usb_config.context, current_generation, USB_LINK_RESET);
+    now_ms += 1u;
+    VisionSend();
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.sample_count == 0u && sync.synchronized == 0u &&
+        sync.transport_generation == current_generation);
+    TEST_CHECK(tx_count >= 8u);
+
+    // 新连接只接受本代响应；随后连续三份样本重新建立映射。
+    TEST_CHECK(DecodeLastTx(&sent_frame) == 0 &&
+        sent_frame.type == VISION_V2_TIME_SYNC_PROBE);
+    TEST_CHECK(VisionV2DecodeTimeSyncProbe(sent_frame.payload,
+        sent_frame.payload_length, &probe) == VISION_V2_OK);
+    const uint32_t reconnect_t1_ms = sent_frame.source_time_ms;
+    TEST_CHECK(InjectTimeReply(probe.request_id, reconnect_t1_ms + 5u,
+        reconnect_t1_ms + 6u, reconnect_t1_ms + 10u, 16u,
+        current_generation - 1u) == 0);
+    VisionSend();
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.sample_count == 0u && sync.request_pending != 0u);
+    TEST_CHECK(InjectTimeReply(probe.request_id, reconnect_t1_ms + 5u,
+        reconnect_t1_ms + 6u, reconnect_t1_ms + 10u, 17u,
+        current_generation) == 0);
+    VisionSend();
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.sample_count == 1u && sync.synchronized == 0u);
+    for (uint32_t sample = 1u; sample < TIME_MAPPING_REQUIRED_SAMPLES; ++sample)
+    {
+        const uint32_t t1_ms = reconnect_t1_ms + sample * 500u;
+        now_ms = t1_ms;
+        VisionSend();
+        TEST_CHECK(DecodeLastTx(&sent_frame) == 0 &&
+            sent_frame.type == VISION_V2_TIME_SYNC_PROBE);
+        TEST_CHECK(VisionV2DecodeTimeSyncProbe(sent_frame.payload,
+            sent_frame.payload_length, &probe) == VISION_V2_OK);
+        TEST_CHECK(InjectTimeReply(probe.request_id, t1_ms + 5u,
+            t1_ms + 6u, t1_ms + 10u, 17u + sample,
+            current_generation) == 0);
+        VisionSend();
+    }
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.sample_count == 3u && sync.synchronized != 0u &&
+        sync.transport_generation == current_generation);
+
+    // 入队失败不保留在途请求；错误被报告，下一500ms周期可以重新提交。
+    const uint32_t failed_probe_time = reconnect_t1_ms + 1500u;
+    now_ms = failed_probe_time;
+    next_submit_status = USB_BUSY;
+    VisionSend();
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.request_pending == 0u &&
+        sync.last_result == VISION_TIME_SYNC_RESULT_SEND_REJECTED);
+    now_ms = failed_probe_time + 500u;
+    VisionSend();
+    TEST_CHECK(DecodeLastTx(&sent_frame) == 0 &&
+        sent_frame.type == VISION_V2_TIME_SYNC_PROBE);
+    TEST_CHECK(VisionV2DecodeTimeSyncProbe(sent_frame.payload,
+        sent_frame.payload_length, &probe) == VISION_V2_OK);
+    TEST_CHECK(VisionGetTimeSyncSnapshot(&sync) == VISION_TIME_SYNC_OK &&
+        sync.request_pending != 0u && sync.request_id == probe.request_id);
+
+    // 对时探测不替代原有的双向状态报告，周期发送顺序保持不变。
     now_ms += 50u;
     VisionSend();
-    TEST_CHECK(tx_count == 2u && CheckLastTx(VISION_V2_REFEREE_SUMMARY, 1u) == 0);
-    TEST_CHECK(valid_command_reports == 3u);
+    TEST_CHECK(DecodeLastTx(&sent_frame) == 0);
+    if (sent_frame.type == VISION_V2_TIME_SYNC_PROBE)
+    {
+        now_ms += 50u;
+        VisionSend();
+        TEST_CHECK(DecodeLastTx(&sent_frame) == 0);
+    }
+    TEST_CHECK(sent_frame.type == VISION_V2_POSTURE_STATUS ||
+        sent_frame.type == VISION_V2_REFEREE_SUMMARY);
+
+    TEST_CHECK(valid_command_reports == reports_before &&
+        daemon_reloads == reloads_before);
     return 0;
 }
 

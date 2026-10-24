@@ -164,7 +164,9 @@ if(MC02_PROFILE STREQUAL "robot")
     list(APPEND MC02_APPLICATION_COMMON_C_SOURCES application/topics/robot_topics.c)
 endif()
 if(MC02_VISION_PROTOCOL STREQUAL "v2")
-    list(APPEND MC02_COMMON_MODULE_C_SOURCES modules/master_machine/vision_protocol_v2.c)
+    list(APPEND MC02_COMMON_MODULE_C_SOURCES
+        modules/master_machine/vision_protocol_v2.c
+        modules/time_sync/time_mapping.c)
 else()
     list(APPEND MC02_COMMON_MODULE_C_SOURCES modules/master_machine/vision_protocol.c)
 endif()

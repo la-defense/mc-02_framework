@@ -77,13 +77,15 @@ if(UNIX AND NOT APPLE)
     ../../modules/master_machine/master_process.c
     ../../modules/master_machine/vision_protocol.c
     ../../modules/master_machine/vision_protocol_v2.c
+    ../../modules/time_sync/time_mapping.c
     ../../application/topics/robot_topics.c
     ../../modules/message_center/message_center.c)
   target_include_directories(vision_v2_link_test BEFORE PRIVATE
     vision_v2_link_fakes crc_protocol_fakes)
   target_include_directories(vision_v2_link_test PRIVATE
     ../../bsp/usb ../../bsp/usart ../../application ../../application/topics ../../modules/master_machine
-    ../../modules/message_center ../../modules/referee ../../modules/daemon ../../modules/algorithm)
+    ../../modules/message_center ../../modules/referee ../../modules/daemon ../../modules/algorithm
+    ../../modules/time_sync)
   target_compile_definitions(vision_v2_link_test PRIVATE VISION_USE_VCP=1
     MC02_VISION_PROTOCOL_V2=1)
   target_compile_options(vision_v2_link_test PRIVATE -Wall -Wextra -Werror
@@ -156,6 +158,13 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(CTest)
+
+add_executable(time_mapping_test time_mapping_test.c
+  ../../modules/time_sync/time_mapping.c)
+target_include_directories(time_mapping_test PRIVATE ../../modules/time_sync)
+target_compile_options(time_mapping_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+add_test(NAME production_time_mapping_wrap_expiry_and_recovery COMMAND time_mapping_test)
+set_tests_properties(production_time_mapping_wrap_expiry_and_recovery PROPERTIES TIMEOUT 10)
 # 三位小数入口独立于日志硬件；Python Decimal提供不同实现的数值参考。
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_executable(

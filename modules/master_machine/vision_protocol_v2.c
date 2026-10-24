@@ -13,6 +13,8 @@
 #define VISION_V2_NAV_PAYLOAD_SIZE 13u
 #define VISION_V2_POSTURE_PAYLOAD_SIZE 34u
 #define VISION_V2_REFEREE_PAYLOAD_SIZE 36u
+#define VISION_V2_TIME_SYNC_PROBE_SIZE 4u
+#define VISION_V2_TIME_SYNC_REPLY_SIZE 8u
 
 _Static_assert(sizeof(float) == 4u && FLT_RADIX == 2 && FLT_MANT_DIG == 24 &&
                FLT_MAX_EXP == 128, "V2 wire format requires IEEE-754 binary32");
@@ -66,11 +68,76 @@ VisionV2Status_t VisionV2GetPayloadSize(uint8_t type, size_t *length)
     {
     case VISION_V2_AIM_COMMAND: candidate = VISION_V2_AIM_PAYLOAD_SIZE; break;
     case VISION_V2_NAVIGATION_COMMAND: candidate = VISION_V2_NAV_PAYLOAD_SIZE; break;
+    case VISION_V2_TIME_SYNC_REPLY: candidate = VISION_V2_TIME_SYNC_REPLY_SIZE; break;
     case VISION_V2_POSTURE_STATUS: candidate = VISION_V2_POSTURE_PAYLOAD_SIZE; break;
     case VISION_V2_REFEREE_SUMMARY: candidate = VISION_V2_REFEREE_PAYLOAD_SIZE; break;
+    case VISION_V2_TIME_SYNC_PROBE: candidate = VISION_V2_TIME_SYNC_PROBE_SIZE; break;
     default: return VISION_V2_ERR_TYPE;
     }
     *length = candidate;
+    return VISION_V2_OK;
+}
+
+VisionV2Status_t VisionV2EncodeTimeSyncProbe(const VisionV2TimeSyncProbe_t *probe,
+                                             uint8_t *payload, size_t capacity)
+{
+    if (probe == NULL || payload == NULL)
+        return VISION_V2_ERR_ARGUMENT;
+    if (capacity < VISION_V2_TIME_SYNC_PROBE_SIZE)
+        return VISION_V2_ERR_LENGTH;
+    if (probe->request_id == 0u)
+        return VISION_V2_ERR_VALUE;
+    uint8_t candidate[VISION_V2_TIME_SYNC_PROBE_SIZE];
+    WriteU32LE(candidate, probe->request_id);
+    memcpy(payload, candidate, sizeof(candidate));
+    return VISION_V2_OK;
+}
+
+VisionV2Status_t VisionV2DecodeTimeSyncProbe(const uint8_t *payload, size_t length,
+                                             VisionV2TimeSyncProbe_t *probe)
+{
+    if (payload == NULL || probe == NULL)
+        return VISION_V2_ERR_ARGUMENT;
+    if (length != VISION_V2_TIME_SYNC_PROBE_SIZE)
+        return VISION_V2_ERR_LENGTH;
+    const uint32_t request_id = ReadU32LE(payload);
+    if (request_id == 0u)
+        return VISION_V2_ERR_VALUE;
+    probe->request_id = request_id;
+    return VISION_V2_OK;
+}
+
+VisionV2Status_t VisionV2EncodeTimeSyncReply(const VisionV2TimeSyncReply_t *reply,
+                                             uint8_t *payload, size_t capacity)
+{
+    if (reply == NULL || payload == NULL)
+        return VISION_V2_ERR_ARGUMENT;
+    if (capacity < VISION_V2_TIME_SYNC_REPLY_SIZE)
+        return VISION_V2_ERR_LENGTH;
+    if (reply->request_id == 0u)
+        return VISION_V2_ERR_VALUE;
+    uint8_t candidate[VISION_V2_TIME_SYNC_REPLY_SIZE];
+    WriteU32LE(candidate, reply->request_id);
+    WriteU32LE(&candidate[4], reply->received_time_ms);
+    memcpy(payload, candidate, sizeof(candidate));
+    return VISION_V2_OK;
+}
+
+VisionV2Status_t VisionV2DecodeTimeSyncReply(const uint8_t *payload, size_t length,
+                                             VisionV2TimeSyncReply_t *reply)
+{
+    if (payload == NULL || reply == NULL)
+        return VISION_V2_ERR_ARGUMENT;
+    if (length != VISION_V2_TIME_SYNC_REPLY_SIZE)
+        return VISION_V2_ERR_LENGTH;
+    const uint32_t request_id = ReadU32LE(payload);
+    if (request_id == 0u)
+        return VISION_V2_ERR_VALUE;
+    const VisionV2TimeSyncReply_t candidate = {
+        .request_id = request_id,
+        .received_time_ms = ReadU32LE(&payload[4]),
+    };
+    *reply = candidate;
     return VISION_V2_OK;
 }
 
@@ -296,6 +363,7 @@ static void ProcessAvailable(VisionV2Stream_t *stream, uint32_t generation,
         frame.sequence = ReadU16LE(&stream->bytes[6]);
         frame.source_time_ms = ReadU32LE(&stream->bytes[8]);
         frame.received_time_ms = stream->byte_time_ms[0];
+        frame.completed_time_ms = stream->byte_time_ms[frame_length - 1u];
         frame.generation = generation;
         memcpy(frame.payload, &stream->bytes[VISION_V2_HEADER_SIZE], expected_payload);
         complete(context, &frame);
