@@ -213,6 +213,7 @@ target_include_directories(lk_motor_bsp_can_test BEFORE PRIVATE ../../bsp/can lk
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/message_center)
 target_compile_options(lk_motor_bsp_can_test PRIVATE -Wall -Wextra -Werror
   -Wno-type-limits -ffunction-sections -fdata-sections -fno-builtin-malloc -fno-builtin-free)
+target_link_libraries(lk_motor_bsp_can_test PRIVATE mc02_numeric)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
    (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE))
   target_compile_definitions(lk_motor_bsp_can_test PRIVATE LK_TEST_ALLOC_WRAP=1)
@@ -326,7 +327,23 @@ target_include_directories(motor_pid_integration_test PRIVATE ../../modules/moto
 if(UNIX)
   target_link_libraries(motor_pid_integration_test PRIVATE m)
 endif()
+target_link_libraries(motor_pid_integration_test PRIVATE mc02_numeric)
 add_test(NAME production_motor_pid_cascade_and_failure COMMAND motor_pid_integration_test)
+add_executable(motor_feedback_filter_test motor_feedback_filter_test.c
+  ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_pid.c
+  ../../modules/algorithm/controller.c ../../modules/algorithm/sample_filter.c
+  ../../modules/algorithm/math_utils.c)
+target_include_directories(motor_feedback_filter_test BEFORE PRIVATE motor_pid_fakes)
+target_include_directories(motor_feedback_filter_test PRIVATE ../../modules/motor
+  ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon)
+if(UNIX)
+  target_link_libraries(motor_feedback_filter_test PRIVATE m)
+endif()
+foreach(mode IN ITEMS legacy time-constant bypass gap missing multi-instance bounds channels config)
+  add_test(NAME production_dji_feedback_filter_${mode}
+    COMMAND motor_feedback_filter_test ${mode})
+  set_tests_properties(production_dji_feedback_filter_${mode} PROPERTIES TIMEOUT 10)
+endforeach()
 add_executable(host_test_check_test test_check_test.c)
 target_include_directories(host_test_check_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME host_test_check_positive_control COMMAND host_test_check_test)

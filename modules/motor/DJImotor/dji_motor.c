@@ -7,6 +7,7 @@
 #include "bsp_dwt.h"
 #include "bsp_log.h"
 #include "bsp_can.h"
+#include "motor_pid.h"
 #include <math.h>
 #include <stdlib.h>
 
@@ -64,6 +65,166 @@ static CANInstance sender_assignment[6] = {
 
 // 当前 FDCAN 三条总线各有三组发送帧；只给已有电机注册的组提交数据。
 static uint8_t sender_enable_flag[9] = {0};
+
+static uint8_t FilterModeValid(DJI_Motor_Filter_Mode_e mode)
+{
+    return mode == DJI_MOTOR_FILTER_LEGACY_FRAME || mode == DJI_MOTOR_FILTER_TIME_CONSTANT ||
+           mode == DJI_MOTOR_FILTER_DISABLED;
+}
+
+static uint8_t FilterConfigValid(const DJI_Motor_Filter_Config_s *config)
+{
+    if (config == NULL || !FilterModeValid(config->speed_mode) || !FilterModeValid(config->current_mode) ||
+        !isfinite(config->dt_min_s) || !isfinite(config->dt_max_s) ||
+        config->dt_min_s <= 0.0f || config->dt_max_s < config->dt_min_s ||
+        config->dt_max_s > MOTOR_PID_DT_MAX_S)
+        return 0u;
+
+    const uint8_t speed_tau_valid = config->speed_mode == DJI_MOTOR_FILTER_TIME_CONSTANT
+        ? isfinite(config->speed_tau_s) && config->speed_tau_s > 0.0f
+        : config->speed_tau_s == 0.0f;
+    const uint8_t current_tau_valid = config->current_mode == DJI_MOTOR_FILTER_TIME_CONSTANT
+        ? isfinite(config->current_tau_s) && config->current_tau_s > 0.0f
+        : config->current_tau_s == 0.0f;
+    return speed_tau_valid && current_tau_valid;
+}
+
+static SampleFilterStatus_t InitTimeConstantFilter(SampleFilter_t *filter,
+                                                   const DJI_Motor_Filter_Config_s *config,
+                                                   float tau_s)
+{
+    const SampleFilterConfig_t filter_config = {
+        .type = SAMPLE_FILTER_LOWPASS1,
+        .dt_min_s = config->dt_min_s,
+        .dt_max_s = config->dt_max_s,
+        .tau_s = tau_s,
+    };
+    return SampleFilterInit(filter, &filter_config, NULL, 0u);
+}
+
+static float FeedbackIntervalSeconds(const CANInstance *instance, const DJIMotorInstance *motor)
+{
+    const uint32_t elapsed_cycles = (uint32_t)(instance->rx_timestamp_cycles - motor->last_feedback_cycles);
+    const uint32_t elapsed_ms = (uint32_t)(instance->rx_timestamp_ms - motor->last_feedback_timestamp_ms);
+    const uint32_t frequency_mhz = dwt_cpu_freq_mhz;
+    const float max_interval_ms = motor->filter_config.dt_max_s * 1000.0f;
+
+    // 毫秒时间戳用于识别超过DWT单圈周期的长停顿；精确间隔仍使用帧入队时的周期差。
+    if (frequency_mhz == 0u || (float)elapsed_ms > max_interval_ms + 1.0f)
+        return INFINITY;
+    return (float)elapsed_cycles / ((float)frequency_mhz * 1000000.0f);
+}
+
+static void UpdateFeedbackFilter(DJIMotorInstance *motor, uint8_t is_speed, float raw,
+                                 float dt_s, float legacy_previous, float *effective)
+{
+    const DJI_Motor_Filter_Mode_e mode = is_speed ? motor->filter_config.speed_mode
+                                                   : motor->filter_config.current_mode;
+    SampleFilter_t *sample_filter = is_speed ? &motor->speed_filter : &motor->current_filter;
+    DJI_Motor_Filter_Status_e *status = is_speed ? &motor->speed_filter_status
+                                                  : &motor->current_filter_status;
+    uint8_t *valid = is_speed ? &motor->speed_filter_valid : &motor->current_filter_valid;
+    uint8_t *started = is_speed ? &motor->speed_filter_started : &motor->current_filter_started;
+    uint8_t *needs_rebuild = is_speed ? &motor->speed_filter_needs_rebuild
+                                       : &motor->current_filter_needs_rebuild;
+
+    if (mode == DJI_MOTOR_FILTER_DISABLED)
+    {
+        *effective = raw;
+        *status = DJI_FILTER_STATUS_BYPASSED;
+        *valid = 1u;
+        *started = 1u;
+        *needs_rebuild = 0u;
+        return;
+    }
+
+    if (mode == DJI_MOTOR_FILTER_TIME_CONSTANT)
+    {
+        float candidate = *effective;
+        const SampleFilterStatus_t result = SampleFilterUpdate(sample_filter, 1u, raw, dt_s, &candidate);
+        if (result == FILTER_OK || result == FILTER_REBUILT)
+        {
+            *effective = candidate;
+            *status = result == FILTER_REBUILT ? DJI_FILTER_STATUS_REBUILT : DJI_FILTER_STATUS_VALID;
+            *valid = 1u;
+        }
+        else
+        {
+            *status = result == FILTER_ERROR_DT ? DJI_FILTER_STATUS_GAP : DJI_FILTER_STATUS_ERROR;
+            *valid = 0u;
+        }
+        *started = 1u;
+        return;
+    }
+
+    if (!*started)
+    {
+        // 首帧仍从零开始按旧系数平滑，保持原DJI初始化后的默认响应。
+        *effective = (1.0f - (is_speed ? SPEED_SMOOTH_COEF : CURRENT_SMOOTH_COEF)) * legacy_previous +
+                     (is_speed ? SPEED_SMOOTH_COEF : CURRENT_SMOOTH_COEF) * raw;
+        *started = 1u;
+        *valid = 1u;
+        *status = DJI_FILTER_STATUS_VALID;
+        return;
+    }
+
+    if (!isfinite(dt_s) || dt_s < motor->filter_config.dt_min_s || dt_s > motor->filter_config.dt_max_s)
+    {
+        *valid = 0u;
+        *status = DJI_FILTER_STATUS_GAP;
+        *needs_rebuild = 1u;
+        return;
+    }
+
+    if (*needs_rebuild)
+    {
+        // 间隔异常后的第一份连续样本直接建立常值起点，不混入停顿前历史。
+        *effective = raw;
+        *needs_rebuild = 0u;
+        *valid = 1u;
+        *status = DJI_FILTER_STATUS_REBUILT;
+        return;
+    }
+
+    const float alpha = is_speed ? SPEED_SMOOTH_COEF : CURRENT_SMOOTH_COEF;
+    const float candidate = (1.0f - alpha) * legacy_previous + alpha * raw;
+    if (!isfinite(candidate))
+    {
+        *valid = 0u;
+        *status = DJI_FILTER_STATUS_ERROR;
+        *needs_rebuild = 1u;
+        return;
+    }
+    *effective = candidate;
+    *valid = 1u;
+    *status = DJI_FILTER_STATUS_VALID;
+}
+
+static void InvalidateFeedbackForMissingSample(DJIMotorInstance *motor)
+{
+    if (motor->speed_filter_valid)
+    {
+        if (motor->filter_config.speed_mode == DJI_MOTOR_FILTER_TIME_CONSTANT)
+        {
+            float unused_output = motor->measure.speed_aps;
+            (void)SampleFilterUpdate(&motor->speed_filter, 0u, 0.0f, 0.0f, &unused_output);
+        }
+        motor->speed_filter_valid = 0u;
+        motor->speed_filter_status = DJI_FILTER_STATUS_GAP;
+        motor->speed_filter_needs_rebuild = 1u;
+    }
+    if (motor->current_filter_valid)
+    {
+        if (motor->filter_config.current_mode == DJI_MOTOR_FILTER_TIME_CONSTANT)
+        {
+            float unused_output = motor->measure.current_feedback;
+            (void)SampleFilterUpdate(&motor->current_filter, 0u, 0.0f, 0.0f, &unused_output);
+        }
+        motor->current_filter_valid = 0u;
+        motor->current_filter_status = DJI_FILTER_STATUS_GAP;
+        motor->current_filter_needs_rebuild = 1u;
+    }
+}
 
 /**
  * @brief 根据电调/拨码开关上的ID,根据说明书的默认id分配方式计算发送ID和接收ID,
@@ -178,24 +339,58 @@ static uint8_t MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *c
  */
 static void DecodeDJIMotor(CANInstance *_instance)
 {
-    // 这里对can instance的id进行了强制转换,从而获得电机的instance实例地址
-    // _instance指针指向的id是对应电机instance的地址,通过强制转换为电机instance的指针,再通过->运算符访问电机的成员motor_measure,最后取地址获得指针
+    if (_instance == NULL || _instance->id == NULL || _instance->rx_len != 8u)
+        return;
     uint8_t *rxbuff = _instance->rx_buff;
     DJIMotorInstance *motor = (DJIMotorInstance *)_instance->id;
-    DJI_Motor_Measure_s *measure = &motor->measure; // measure要多次使用,保存指针减小访存开销
+    DJI_Motor_Measure_s *measure = &motor->measure;
+    const uint8_t first_feedback = motor->has_feedback_timestamp == 0u;
+    const float dt_s = first_feedback ? 0.0f : FeedbackIntervalSeconds(_instance, motor);
+    const int16_t raw_rpm = (int16_t)(((uint16_t)rxbuff[2] << 8u) | rxbuff[3]);
+    const int16_t raw_current = (int16_t)(((uint16_t)rxbuff[4] << 8u) | rxbuff[5]);
+    const float raw_speed_aps = RPM_2_ANGLE_PER_SEC * (float)raw_rpm;
+    float candidate_speed = measure->speed_aps;
+    float candidate_current = measure->current_feedback;
 
     DaemonReload(motor->daemon);
-    motor->dt = DWT_GetDeltaT(&motor->feed_cnt);
 
-    // 解析数据并对电流和速度进行滤波,电机的反馈报文具体格式见电机说明手册
+    // 原始量先独立保存；滤波失败时保留旧有效输出，但控制环会检查有效标记。
     measure->last_ecd = measure->ecd;
     measure->ecd = ((uint16_t)rxbuff[0]) << 8 | rxbuff[1];
     measure->angle_single_round = ECD_ANGLE_COEF_DJI * (float)measure->ecd;
-    measure->speed_aps = (1.0f - SPEED_SMOOTH_COEF) * measure->speed_aps +
-                         RPM_2_ANGLE_PER_SEC * SPEED_SMOOTH_COEF * (float)((int16_t)(rxbuff[2] << 8 | rxbuff[3]));
-    measure->real_current = (1.0f - CURRENT_SMOOTH_COEF) * measure->real_current +
-                            CURRENT_SMOOTH_COEF * (float)((int16_t)(rxbuff[4] << 8 | rxbuff[5]));
+    measure->raw_speed_aps = raw_speed_aps;
+    measure->raw_current = raw_current;
+    motor->feedback_dt_s = dt_s;
+
+    UpdateFeedbackFilter(motor, 1u, raw_speed_aps, dt_s, measure->speed_aps, &candidate_speed);
+    UpdateFeedbackFilter(motor, 0u, (float)raw_current, dt_s, (float)measure->real_current, &candidate_current);
+
+    if (motor->speed_filter_valid)
+        measure->speed_aps = candidate_speed;
+    if (motor->current_filter_valid)
+    {
+        if (motor->filter_config.current_mode == DJI_MOTOR_FILTER_LEGACY_FRAME)
+            candidate_current = (float)(int16_t)candidate_current;
+        if (candidate_current >= (float)INT16_MIN && candidate_current <= (float)INT16_MAX)
+        {
+            measure->current_feedback = candidate_current;
+            // 保留原整数成员供旧诊断读取；滤波控制使用上面的浮点结果。
+            measure->real_current = (int16_t)candidate_current;
+        }
+        else
+        {
+            motor->current_filter_valid = 0u;
+            motor->current_filter_status = DJI_FILTER_STATUS_ERROR;
+        }
+    }
     measure->temperature = rxbuff[6];
+
+    motor->feedback_dt_s = dt_s;
+    motor->last_feedback_cycles = _instance->rx_timestamp_cycles;
+    motor->last_feedback_timestamp_ms = _instance->rx_timestamp_ms;
+    motor->has_feedback_timestamp = 1u;
+    if (motor->feedback_sample_count < UINT32_MAX)
+        motor->feedback_sample_count++;
 
     // 两次采样间转动须小于半圈；单圈读数跨过零点时补减一圈，保持总角度连续。
     if (measure->ecd - measure->last_ecd > 4096)
@@ -217,12 +412,36 @@ static void DJIMotorLostCallback(void *motor_ptr)
 // 电机初始化,返回一个电机实例
 DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config)
 {
-    if (config == NULL || idx >= DJI_MOTOR_CNT)
+    const DJI_Motor_Filter_Config_s default_filter = {
+        .speed_mode = DJI_MOTOR_FILTER_LEGACY_FRAME,
+        .current_mode = DJI_MOTOR_FILTER_LEGACY_FRAME,
+        .speed_tau_s = 0.0f,
+        .current_tau_s = 0.0f,
+        .dt_min_s = MOTOR_PID_DT_MIN_S,
+        .dt_max_s = MOTOR_PID_DT_MAX_S,
+    };
+    return DJIMotorInitWithFilter(config, &default_filter);
+}
+
+DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
+                                         const DJI_Motor_Filter_Config_s *filter_config)
+{
+    if (config == NULL || idx >= DJI_MOTOR_CNT || !FilterConfigValid(filter_config))
         return NULL;
     DJIMotorInstance *instance = (DJIMotorInstance *)malloc(sizeof(DJIMotorInstance));
     if (instance == NULL)
         return NULL;
     memset(instance, 0, sizeof(DJIMotorInstance));
+    instance->filter_config = *filter_config;
+
+    if ((filter_config->speed_mode == DJI_MOTOR_FILTER_TIME_CONSTANT &&
+         InitTimeConstantFilter(&instance->speed_filter, filter_config, filter_config->speed_tau_s) != FILTER_OK) ||
+        (filter_config->current_mode == DJI_MOTOR_FILTER_TIME_CONSTANT &&
+         InitTimeConstantFilter(&instance->current_filter, filter_config, filter_config->current_tau_s) != FILTER_OK))
+    {
+        free(instance);
+        return NULL;
+    }
 
     // motor basic setting 电机基本设置
     instance->motor_type = config->motor_type;                         // 6020 or 2006 or 3508
@@ -348,6 +567,15 @@ void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
     summary->total_angle = motor->measure.total_angle;
     summary->current = motor->measure.real_current;
     summary->temperature = motor->measure.temperature;
+    summary->raw_speed_aps = motor->measure.raw_speed_aps;
+    summary->raw_current = motor->measure.raw_current;
+    summary->current_feedback = motor->measure.current_feedback;
+    summary->feedback_dt_s = motor->feedback_dt_s;
+    summary->feedback_sample_count = motor->feedback_sample_count;
+    summary->speed_filter_status = motor->speed_filter_status;
+    summary->current_filter_status = motor->current_filter_status;
+    summary->speed_filter_valid = motor->speed_filter_valid;
+    summary->current_filter_valid = motor->current_filter_valid;
 }
 
 // 设置参考值
@@ -380,12 +608,23 @@ void DJIMotorControl()
         // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
         float control_dt = 0.0f;
         PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
+        if (motor->has_feedback_timestamp && DaemonIsOnline(motor->daemon) == 0u)
+            InvalidateFeedbackForMissingSample(motor);
+        const uint8_t speed_internal_active =
+            (motor_setting->close_loop_type & SPEED_LOOP) != 0u &&
+            (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u &&
+            motor_setting->speed_feedback_source == MOTOR_FEED;
+        const uint8_t current_internal_active =
+            (motor_setting->close_loop_type & CURRENT_LOOP) != 0u;
+        const uint8_t feedback_valid =
+            (!speed_internal_active || motor->speed_filter_valid) &&
+            (!current_internal_active || motor->current_filter_valid);
         if (motor_setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
             pid_ref *= -1; // 设置反转
 
         // pid_ref会顺次通过被启用的闭环充当数据的载体
         // 计算位置环,只有启用位置环且外层闭环为位置时会计算速度环输出
-        if (pid_status == PID_OK && (motor_setting->close_loop_type & ANGLE_LOOP) && motor_setting->outer_loop_type == ANGLE_LOOP)
+        if (pid_status == PID_OK && feedback_valid && (motor_setting->close_loop_type & ANGLE_LOOP) && motor_setting->outer_loop_type == ANGLE_LOOP)
         {
             if (motor_setting->angle_feedback_source == OTHER_FEED)
                 pid_measure = *motor_controller->other_angle_feedback_ptr;
@@ -397,7 +636,7 @@ void DJIMotorControl()
         }
 
         // 计算速度环,(外层闭环为速度或位置)且(启用速度环)时会计算速度环
-        if (pid_status == PID_OK && (motor_setting->close_loop_type & SPEED_LOOP) && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
+        if (pid_status == PID_OK && feedback_valid && (motor_setting->close_loop_type & SPEED_LOOP) && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
         {
             if (motor_setting->feedforward_flag & SPEED_FEEDFORWARD)
                 pid_ref += *motor_controller->speed_feedforward_ptr;
@@ -412,18 +651,18 @@ void DJIMotorControl()
         }
 
         // 计算电流环,目前只要启用了电流环就计算,不管外层闭环是什么,并且电流只有电机自身传感器的反馈
-        if (motor_setting->feedforward_flag & CURRENT_FEEDFORWARD)
+        if (feedback_valid && (motor_setting->feedforward_flag & CURRENT_FEEDFORWARD))
             pid_ref += *motor_controller->current_feedforward_ptr;
         if (motor_setting->close_loop_type & CURRENT_LOOP)
         {
-            if (pid_status == PID_OK)
-                pid_status = PIDCalculate(&motor_controller->current_PID, measure->real_current, pid_ref, control_dt, &pid_ref);
+            if (pid_status == PID_OK && feedback_valid)
+                pid_status = PIDCalculate(&motor_controller->current_PID, measure->current_feedback, pid_ref, control_dt, &pid_ref);
         }
 
         if (motor_setting->feedback_reverse_flag == FEEDBACK_DIRECTION_REVERSE && (motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)))
             pid_ref *= -1;
 
-        if (pid_status != PID_OK || !isfinite(pid_ref))
+        if (pid_status != PID_OK || !feedback_valid || !isfinite(pid_ref))
         {
             // 一环失败后丢弃本轮串级结果，恢复前清除各环已有积分和微分历史。
             MotorPIDResetLoops(&motor_controller->angle_PID, &motor_controller->speed_PID, &motor_controller->current_PID);

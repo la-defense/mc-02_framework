@@ -13,7 +13,9 @@ typedef struct CANInstance
     CAN_HandleTypeDef *can_handle;
     struct { uint32_t StdId, IDE, RTR, DLC; } txconf;
     uint32_t tx_id, rx_id;
-    uint8_t tx_buff[8], rx_buff[8];
+    uint8_t tx_buff[8], rx_buff[8], rx_len;
+    uint32_t rx_timestamp_ms, rx_timestamp_cycles;
+    void (*can_module_callback)(struct CANInstance *);
     void *id;
 } CANInstance;
 typedef struct

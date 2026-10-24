@@ -77,7 +77,8 @@ typedef struct _
     uint8_t rx_buff[8];            // 接收缓存,最大消息长度为8
     uint32_t rx_id;                // 接收id
     uint8_t rx_len;                // 接收长度,可能为0-8
-    uint32_t rx_timestamp_ms; // 当前派发帧真正入队的 HAL 毫秒时间。
+    uint32_t rx_timestamp_ms; // 帧进入接收队列时的 HAL 毫秒时间，用于新鲜度检查。
+    uint32_t rx_timestamp_cycles; // 同一时刻的 DWT 周期计数，供需要亚毫秒精度的解析器计算相邻帧间隔。
     // 接收的回调函数,用于解析接收到的数据
     void (*can_module_callback)(struct _ *); // callback needs an instance to tell among registered ones
     void *id;                                // 使用can外设的模块指针(即id指向的模块拥有此can实例,是父子关系)

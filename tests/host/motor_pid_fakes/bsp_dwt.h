@@ -5,6 +5,7 @@
 #define MC02_PID_TEST_DWT_H
 #include <stdint.h>
 typedef struct { uint32_t unused; } DWT_Probe_t;
+extern volatile uint32_t dwt_cpu_freq_mhz;
 /** @brief 读取并统计测试时钟调用。
  * @return 测试设置的当前微秒数。
  */

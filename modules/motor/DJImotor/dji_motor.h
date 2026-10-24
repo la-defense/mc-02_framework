@@ -5,8 +5,7 @@
  * @version 0.2
  * @date 2022-11-01
  *
- * @todo  1. 给不同的电机设置不同的低通滤波器惯性系数而不是统一使用宏
-          2. 为M2006和M3508增加开环的零位校准函数,并在初始化时调用(根据用户配置决定是否调用)
+ * @todo  为M2006和M3508增加开环的零位校准函数,并在初始化时调用(根据用户配置决定是否调用)
 
  * @copyright Copyright (c) 2022 HNU YueLu EC all rights reserved
  *
@@ -20,13 +19,44 @@
 #include "motor_def.h"
 #include "stdint.h"
 #include "daemon.h"
+#include "sample_filter.h"
 
 #define DJI_MOTOR_CNT 12
 
-/* 滤波系数设置为1的时候即关闭滤波 */
-#define SPEED_SMOOTH_COEF 0.85f      // 最好大于0.85
-#define CURRENT_SMOOTH_COEF 0.9f     // 必须大于0.9
+/* 原DJIMotorInit()继续沿用这两个逐帧兼容系数。 */
+#define SPEED_SMOOTH_COEF 0.85f
+#define CURRENT_SMOOTH_COEF 0.9f
 #define ECD_ANGLE_COEF_DJI 0.043945f // (360/8192),将编码器值转化为角度制
+
+/** @brief 每个反馈量可单独选择旧逐帧滤波、按真实dt计算的一阶低通或原始值。 */
+typedef enum
+{
+    DJI_MOTOR_FILTER_LEGACY_FRAME = 0,
+    DJI_MOTOR_FILTER_TIME_CONSTANT = 1,
+    DJI_MOTOR_FILTER_DISABLED = 2
+} DJI_Motor_Filter_Mode_e;
+
+/** @brief 反馈滤波状态；异常间隔后，下一份合法样本会明确标记为重建。 */
+typedef enum
+{
+    DJI_FILTER_STATUS_WAITING = 0,
+    DJI_FILTER_STATUS_VALID = 1,
+    DJI_FILTER_STATUS_REBUILT = 2,
+    DJI_FILTER_STATUS_GAP = 3,
+    DJI_FILTER_STATUS_BYPASSED = 4,
+    DJI_FILTER_STATUS_ERROR = 5
+} DJI_Motor_Filter_Status_e;
+
+/** @brief 每实例固定滤波配置；时间常数和间隔单位均为秒。 */
+typedef struct
+{
+    DJI_Motor_Filter_Mode_e speed_mode;
+    DJI_Motor_Filter_Mode_e current_mode;
+    float speed_tau_s; /**< 速度时间常数；仅 TIME_CONSTANT 模式要求大于0。 */
+    float current_tau_s; /**< 电流时间常数；仅 TIME_CONSTANT 模式要求大于0。 */
+    float dt_min_s; /**< 相邻反馈间隔下限，含边界，默认与 PID 下限相同。 */
+    float dt_max_s; /**< 相邻反馈间隔上限，含边界，最大不超过50ms。 */
+} DJI_Motor_Filter_Config_s;
 
 /* DJI电机CAN反馈信息*/
 typedef struct
@@ -34,8 +64,11 @@ typedef struct
     uint16_t last_ecd;        // 上一次读取的编码器值
     uint16_t ecd;             // 0-8191,刻度总共有8192格
     float angle_single_round; // 单圈角度，单位 deg。
-    float speed_aps;          // 角速度,单位为:度/秒
-    int16_t real_current;     // 电调原始电流反馈整数，未换算为 A。
+    float speed_aps;          // 当前有效速度反馈，单位deg/s。
+    int16_t real_current;     // 当前有效电流的整数兼容值，不换算为A。
+    float raw_speed_aps;      // 当前CAN帧直接换算的速度，单位deg/s。
+    int16_t raw_current;      // 当前CAN帧中的原始电流字段，不换算为A。
+    float current_feedback;   // 控制器实际使用的电流反馈，保留时间常数滤波的小数结果。
     uint8_t temperature;      // 温度 Celsius
 
     float total_angle;   // 总角度,注意方向
@@ -63,8 +96,22 @@ typedef struct
     Motor_Online_Flag_e online_flag; // 在线标志
 
     DaemonInstance* daemon;
-    uint32_t feed_cnt;
-    float dt;
+    DJI_Motor_Filter_Config_s filter_config;
+    SampleFilter_t speed_filter;
+    SampleFilter_t current_filter;
+    uint32_t last_feedback_cycles;
+    uint32_t last_feedback_timestamp_ms;
+    uint32_t feedback_sample_count;
+    float feedback_dt_s;
+    DJI_Motor_Filter_Status_e speed_filter_status;
+    DJI_Motor_Filter_Status_e current_filter_status;
+    uint8_t has_feedback_timestamp;
+    uint8_t speed_filter_valid;
+    uint8_t current_filter_valid;
+    uint8_t speed_filter_started;
+    uint8_t current_filter_started;
+    uint8_t speed_filter_needs_rebuild;
+    uint8_t current_filter_needs_rebuild;
 } DJIMotorInstance;
 
 typedef struct
@@ -76,6 +123,15 @@ typedef struct
     float total_angle;
     int16_t current;
     uint8_t temperature;
+    float raw_speed_aps;
+    int16_t raw_current;
+    float current_feedback;
+    float feedback_dt_s;
+    uint32_t feedback_sample_count;
+    DJI_Motor_Filter_Status_e speed_filter_status;
+    DJI_Motor_Filter_Status_e current_filter_status;
+    uint8_t speed_filter_valid;
+    uint8_t current_filter_valid;
 } DJIMotorSummary_t;
 
 /** @brief 注册 DJI 电机、CAN 接收与离线计数，成功后保持停止输出。
@@ -84,6 +140,19 @@ typedef struct
 * @note 先配置 BSP，再在应用初始化阶段注册；外部反馈和前馈指针须长期有效，数据单位由调用方匹配。
  */
 DJIMotorInstance *DJIMotorInit(Motor_Init_Config_s *config);
+
+/** @brief 使用独立反馈滤波配置注册 DJI 电机，滤波历史由返回实例长期保存。
+* @param[in] config 有效电机配置；函数不修改输入，成功实例长期保存 CAN 与 Daemon 资源。
+* @param[in] filter_config 非空配置；速度／电流可各自选择逐帧兼容、时间常数或关闭滤波。
+*        dt_min_s、dt_max_s 使用秒，范围须满足 0 < min <= max <= 0.05；边界允许。
+*        TIME_CONSTANT 模式的对应 tau 使用秒且须有限并大于0；其他模式的 tau 须为0。
+* @return 成功返回长期实例；参数、滤波配置、PID、Daemon 或 CAN 注册失败返回 NULL，且不发布半成品。
+* @note 初始化必须在接收派发与电机控制任务启动前串行调用。输入配置在返回后可释放；
+*       DJIMotorInit() 仍默认使用速度alpha=0.85、电流alpha=0.9的逐帧兼容滤波。
+*       时间常数模式首个有效样本直接建立历史，后续使用CAN RX中断记录的DWT周期差。
+*/
+DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
+                                         const DJI_Motor_Filter_Config_s *filter_config);
 
 /** @brief 保存目标，供下一轮 DJIMotorControl() 计算，不直接发送。
 * @param[in,out] motor 有效实例，不能为 NULL。

@@ -23,6 +23,7 @@ FDCAN_HandleTypeDef hfdcan1 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdca
 FDCAN_HandleTypeDef hfdcan2 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdcan_registers[1]};
 FDCAN_HandleTypeDef hfdcan3 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdcan_registers[2]};
 volatile uint32_t dwt_cpu_freq_mhz = 480u;
+volatile uint32_t test_dwt_cycles = 0u;
 
 typedef struct
 {

@@ -18,6 +18,7 @@ FDCAN_HandleTypeDef hfdcan1 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdca
 FDCAN_HandleTypeDef hfdcan2 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdcan_registers[1]};
 FDCAN_HandleTypeDef hfdcan3 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdcan_registers[2]};
 volatile uint32_t dwt_cpu_freq_mhz = 480u;
+volatile uint32_t test_dwt_cycles;
 extern volatile DWT_Probe_t can_prof_rx_dispatch;
 
 static uint64_t now_us;
@@ -41,6 +42,7 @@ static uint8_t rx_frame_count[DEVICE_CAN_CNT];
 static uint8_t rx_frame_read[DEVICE_CAN_CNT];
 static uint32_t burst_rx_count[DEVICE_CAN_CNT];
 static uint32_t burst_rx_bad[DEVICE_CAN_CNT];
+static uint32_t burst_last_cycle[DEVICE_CAN_CNT];
 
 #if defined(LK_TEST_ALLOC_WRAP)
 static unsigned malloc_calls;
@@ -174,6 +176,7 @@ uint32_t HAL_FDCAN_GetRxMessage(FDCAN_HandleTypeDef *handle, uint32_t fifo,
     if (bus >= DEVICE_CAN_CNT || rx_frame_read[bus] >= rx_frame_count[bus])
         return HAL_ERROR;
     TestRxFrame_t *frame = &rx_frames[bus][rx_frame_read[bus]++];
+    test_dwt_cycles += 480000u;
     *header = frame->header;
     memcpy(data, frame->data, sizeof(frame->data));
     return HAL_OK;
@@ -182,12 +185,16 @@ uint32_t HAL_FDCAN_GetRxMessage(FDCAN_HandleTypeDef *handle, uint32_t fifo,
 static void burst_rx_callback(CANInstance *instance)
 {
     uint8_t bus = bus_for_handle(instance->can_handle);
-    if (bus >= DEVICE_CAN_CNT || instance->rx_len != 8u || instance->rx_buff[0] != burst_rx_count[bus])
+    if (bus >= DEVICE_CAN_CNT || instance->rx_len != 8u || instance->rx_buff[0] != burst_rx_count[bus] ||
+        instance->rx_timestamp_cycles == 0u ||
+        (burst_rx_count[bus] != 0u &&
+         (uint32_t)(instance->rx_timestamp_cycles - burst_last_cycle[bus]) != 480000u))
     {
         if (bus < DEVICE_CAN_CNT)
             ++burst_rx_bad[bus];
         return;
     }
+    burst_last_cycle[bus] = instance->rx_timestamp_cycles;
     ++burst_rx_count[bus];
 }
 
@@ -288,7 +295,7 @@ static void test_production_dji_receive_burst(void)
     {
         DJIMotorInstance *motor = motors[bus];
         uint16_t expected_ecd = (uint16_t)((7000u + 23u * 73u + 30u) % 8192u);
-        TEST_CHECK(motor->feed_cnt == expected_accepted[bus]);
+        TEST_CHECK(motor->feedback_sample_count == expected_accepted[bus]);
         TEST_CHECK(motor->measure.ecd == expected_ecd);
         TEST_CHECK(motor->measure.temperature == (uint8_t)(23u + 30u));
         TEST_CHECK(isfinite(motor->measure.angle_single_round));

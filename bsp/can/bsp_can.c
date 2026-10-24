@@ -35,6 +35,7 @@ typedef struct
     uint8_t len;           /* 数据长度 0~8 */
     uint8_t data[8];       /* 帧数据 */
     uint32_t timestamp_ms;
+    uint32_t timestamp_cycles;
 } CANRxItem_t;
 
 /* 接收中断只保留"有新帧"和"丢帧诊断"两种:
@@ -130,6 +131,8 @@ static void CANRxQueuePush(CANBusState_t *bus, CANInstance *ins, uint8_t len, co
 {
     if (bus == NULL || ins == NULL)
         return;
+    const uint32_t timestamp_cycles = DWT_ProbeStart();
+    const uint32_t timestamp_ms = HAL_GetTick();
     if (len > 8u)
         len = 8u;
 
@@ -146,7 +149,8 @@ static void CANRxQueuePush(CANBusState_t *bus, CANInstance *ins, uint8_t len, co
     it->instance = ins;
     it->len = len;
     memcpy(it->data, data, len);
-    it->timestamp_ms = HAL_GetTick();
+    it->timestamp_ms = timestamp_ms;
+    it->timestamp_cycles = timestamp_cycles;
 
     __DMB();
     bus->rxq_head = next;
@@ -186,6 +190,7 @@ void CANProcessRx(void)
             {
                 ins->rx_len = it->len;
                 ins->rx_timestamp_ms = it->timestamp_ms;
+                ins->rx_timestamp_cycles = it->timestamp_cycles;
                 memcpy(ins->rx_buff, it->data, it->len);
                 ins->can_module_callback(ins);
             }

@@ -9,6 +9,7 @@
 #include <string.h>
 
 CAN_HandleTypeDef hcan1, hcan2;
+volatile uint32_t dwt_cpu_freq_mhz = 480u;
 static uint64_t now_us;
 static unsigned clock_reads, registered, submitted;
 static CANInstance can_instances[4];
@@ -30,6 +31,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     instance->can_handle = config->can_handle;
     instance->rx_id = config->rx_id;
     instance->id = config->id;
+    instance->can_module_callback = config->can_module_callback;
     return instance;
 }
 uint8_t CANTransmit(CANInstance *instance, float timeout_ms)
@@ -46,6 +48,16 @@ static void tick(uint64_t at)
     clock_reads = 0u;
     DJIMotorControl();
     TEST_CHECK(clock_reads == 1u);
+}
+
+static void feed_zero_feedback(DJIMotorInstance *motor)
+{
+    CANInstance *can = motor->motor_can_instance;
+    memset(can->rx_buff, 0, sizeof(can->rx_buff));
+    can->rx_len = 8u;
+    can->rx_timestamp_cycles = 480000u;
+    can->rx_timestamp_ms = 1u;
+    can->can_module_callback(can);
 }
 
 /** @brief 仅使用有效驱动接口和可观察的发送字节验证计算结果。 */
@@ -67,6 +79,7 @@ int main(void)
     config.controller_param_init_config.speed_PID = pid;
     motor = DJIMotorInit(&config);
     TEST_CHECK(motor != NULL && registered == 1u);
+    feed_zero_feedback(motor);
     DJIMotorSetRef(motor, 2.0f);
     DJIMotorEnable(motor);
     tick(1000u);
