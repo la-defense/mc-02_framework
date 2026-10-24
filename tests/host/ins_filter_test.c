@@ -3,6 +3,7 @@
  */
 #include "test_check.h"
 #include "ins_task.h"
+#include "attitude_filter.h"
 #include "master_process.h"
 #include "ins_hardware.h"
 #include "imu_heater.h"
@@ -17,10 +18,14 @@ static uint32_t imu_sample_updates;
 static float period_s=.001f;
 #ifdef INS_TEST_INIT_WRAP
 static int fail_init;
-KFStatus_t __real_IMU_QuaternionEKF_Init(const float *,const QEKFConfig_t *,void *,size_t);
-KFStatus_t __wrap_IMU_QuaternionEKF_Init(const float *q,const QEKFConfig_t *c,void *w,size_t n)
-{ return fail_init?KF_ERROR_WORKSPACE:__real_IMU_QuaternionEKF_Init(q,c,w,n); }
+KFStatus_t __real_AttitudeFilterInit(AttitudeFilter_t *,const AttitudeFilterConfig_t *,const float *,void *,size_t);
+KFStatus_t __wrap_AttitudeFilterInit(AttitudeFilter_t *filter,const AttitudeFilterConfig_t *config,
+    const float *q,void *workspace,size_t bytes)
+{ return fail_init ? KF_ERROR_WORKSPACE : __real_AttitudeFilterInit(filter,config,q,workspace,bytes); }
 #endif
+extern volatile uint32_t imu_filter_mode_diag;
+extern volatile uint32_t imu_filter_age_ms_diag;
+extern volatile int32_t imu_filter_cause_diag;
 int hspi2;
 volatile uint32_t bmi088_init_error,bmi088_init_retry_count;
 float DWT_GetDeltaT(uint32_t *p){ *p=now;return period_s; }
@@ -65,11 +70,7 @@ int main(int argc,char **argv)
         else if(strcmp(kind,"zero")==0)scenario=1;
         else {TEST_CHECK(strcmp(kind,"short")==0);scenario=3;}
         TEST_CHECK(INS_Init()!=NULL);
-        // 独立轴角答案覆盖倾斜、倒置及原有两种水平回退。
-        double expected[4]={1,0,0,0};
-        if(scenario==5){expected[0]=sqrt(.8);expected[2]=-sqrt(.2);}
-        if(scenario==6){expected[0]=0;expected[1]=1;}
-        for(size_t i=0;i<4;++i)TEST_CHECK(fabs(QEKF_INS.q[i]-expected[i])<2e-6);
+        // 各轴角输入仍须完成完整采样；姿态数值由公共后端接口单测固定向量覆盖。
         TEST_CHECK(seq==(scenario==3?200u:100u));
         return 0;
     }
@@ -99,25 +100,24 @@ int main(int argc,char **argv)
     for (unsigned axis = 0u; axis < 3u; ++axis)
         TEST_CHECK(isfinite(control_snapshot.gyro_rad_s[axis]));
     scenario=1;
-    for(unsigned i=1;i<=20;i++){tick();TEST_CHECK(valid && QEKF_INS.IMU_QuaternionEKF.result.mode==KF_PREDICTION);}
+    for(unsigned i=1;i<=20;i++){tick();TEST_CHECK(valid && imu_filter_mode_diag==KF_PREDICTION);}
     tick();invalid();TEST_CHECK(force_off);
     TEST_CHECK(INSGetControlSnapshot(&control_snapshot) == 0u && control_snapshot.valid == 0u);
-    scenario=0;tick();TEST_CHECK(valid && mode==1 && QEKF_INS.IMU_QuaternionEKF.result.mode==KF_CORRECTED);
+    scenario=0;tick();TEST_CHECK(valid && mode==1 && imu_filter_mode_diag==KF_CORRECTED);
     scenario=3;tick();invalid();
     TEST_CHECK(vision_imu_sample.valid==0u && vision_imu_sample.sample_sequence==0u &&
         vision_imu_sample.sample_time_ms==0u && vision_imu_sample.acceleration_m_s2[0]==0.0f &&
         vision_imu_sample.acceleration_m_s2[1]==0.0f && vision_imu_sample.acceleration_m_s2[2]==0.0f);
     scenario=0;tick();TEST_CHECK(valid && vision_imu_sample.valid==1u);
     // 调度或原始采样延迟超过20ms时，正常预测加新鲜校正仍应恢复，不能附加dt故障。
-    period_s=.025f;tick();TEST_CHECK(valid && QEKF_INS.IMU_QuaternionEKF.result.mode==KF_CORRECTED);
-    scenario=1;tick();invalid();TEST_CHECK(!QEKF_INS.IMU_QuaternionEKF.fatal);
+    period_s=.025f;tick();TEST_CHECK(valid && imu_filter_mode_diag==KF_CORRECTED);
+    scenario=1;tick();invalid();
     period_s=.001f;scenario=0;tick();TEST_CHECK(valid);
     scenario=3;period_s=.025f;tick();invalid();
     scenario=0;period_s=.001f;tick();TEST_CHECK(valid);
-    scenario=2;tick();invalid();
+    scenario=2;tick();invalid();TEST_CHECK(imu_filter_cause_diag==KF_ERROR_NUMERIC);
     TEST_CHECK(vision_imu_sample.valid==1u && vision_imu_sample.acceleration_m_s2[2]==9.8f);
-    scenario=0;tick();invalid();
-    TEST_CHECK(QEKF_INS.IMU_QuaternionEKF.fatal);
-    TEST_CHECK(INS_Init()!=NULL);tick();invalid(); // 重复INS_Init不能偷偷重建姿态参考。
+    scenario=0;tick();TEST_CHECK(valid && imu_filter_mode_diag==KF_CORRECTED);
+    TEST_CHECK(INS_Init()!=NULL);tick();TEST_CHECK(valid); // 重复INS_Init不能偷偷重建姿态参考。
     return 0;
 }

@@ -13,7 +13,7 @@
 #include "bsp_dwt.h"
 #include "bsp_log.h"
 #include "controller.h"
-#include "QuaternionEKF.h"
+#include "attitude_filter.h"
 #include "spi.h"
 #include "tim.h"
 #include "vector3.h"
@@ -36,10 +36,19 @@ static BMI088Instance *bmi088_ins;
 static BMI088_Data_t bmi088_data;
 static uint8_t ins_init_result;
 static INS_Control_Snapshot_s ins_control_snapshot;
-// KF工作区跟随任务存活；20ms和2倍方差是默认软件范围。
-static _Alignas(KF_WORKSPACE_ALIGNMENT) uint8_t qekf_workspace[KF_WORKSPACE_BYTES(6,0,3)];
-// 20ms只限制无校正预测的发布；较长的有限dt由计算结果检查决定能否继续。
-static const QEKFConfig_t qekf_config={10.0f,0.001f,1000000.0f,1.0f,0.0f,20u,2.0f,FLT_MAX};
+static AttitudeFilter_t attitude_filter;
+static _Alignas(ATTITUDE_FILTER_STORAGE_ALIGNMENT) uint8_t attitude_filter_workspace[ATTITUDE_FILTER_STORAGE_BYTES];
+#ifndef MC02_IMU_BACKEND_FUSION
+#define MC02_IMU_BACKEND_FUSION 0
+#endif
+static const AttitudeFilterConfig_t attitude_filter_config={
+    .backend=MC02_IMU_BACKEND_FUSION ? ATTITUDE_BACKEND_FUSION : ATTITUDE_BACKEND_QUATERNION_EKF,
+    .max_prediction_ms=20u,
+    .max_measurement_age_ms=20u,
+    .max_dt_s=FLT_MAX,
+    .qekf={10.0f,0.001f,1000000.0f,1.0f,0.0f,2.0f},
+    .fusion={1000.0f,0.5f,2000.0f,10.0f,5.0f,7.0f,12.5f},
+};
 volatile uint32_t imu_filter_mode_diag=0u;
 volatile uint32_t imu_filter_age_ms_diag=0u;
 volatile int32_t imu_filter_cause_diag=0;
@@ -209,7 +218,8 @@ attitude_t *INS_Init(void)
 
     float init_quaternion[4] = {0};
     if (InitQuaternion(init_quaternion) != MATH_OK ||
-        IMU_QuaternionEKF_Init(init_quaternion, &qekf_config, qekf_workspace, sizeof(qekf_workspace)) != KF_OK)
+        AttitudeFilterInit(&attitude_filter,&attitude_filter_config,init_quaternion,
+            attitude_filter_workspace,sizeof(attitude_filter_workspace)) != KF_OK)
     {
         IMUHeaterForceOff();
         RobotSafetySetImuValid(0u);
@@ -358,19 +368,27 @@ void INS_Task(void)
         // INS.atanxz = -atan2f(INS.Accel[X], INS.Accel[Z]) * 180 / PI;
         // INS.atanyz = atan2f(INS.Accel[Y], INS.Accel[Z]) * 180 / PI;
 
-        // 核心函数,EKF更新四元数
+        // 完整BMI088样本通过同一入口交给所选后端。
         probe_seg = DWT_ProbeStart();
-        KFStatus_t filter_status=IMU_QuaternionEKF_Update(INS.Gyro[X], INS.Gyro[Y], INS.Gyro[Z],
-            INS.Accel[X], INS.Accel[Y], INS.Accel[Z], filter_elapsed_s, HAL_GetTick(),
-            bmi088_data.timestamp_ms, bmi088_data.sequence);
+        AttitudeFilterInput_t filter_input={
+            .dt_s=filter_elapsed_s,
+            .now_ms=HAL_GetTick(),
+            .sample_time_ms=bmi088_data.timestamp_ms,
+            .sequence=bmi088_data.sequence,
+            .accelerometer_valid=sample_valid,
+        };
+        memcpy(filter_input.gyroscope_rad_s,INS.Gyro,sizeof(filter_input.gyroscope_rad_s));
+        memcpy(filter_input.accelerometer_m_s2,INS.Accel,sizeof(filter_input.accelerometer_m_s2));
+        AttitudeFilterState_t filter_state;
+        KFStatus_t filter_status=AttitudeFilterUpdate(&attitude_filter,&filter_input,&filter_state);
         filter_elapsed_s=0.0f;
-        imu_filter_mode_diag=QEKF_INS.IMU_QuaternionEKF.result.mode;
-        imu_filter_age_ms_diag=QEKF_INS.IMU_QuaternionEKF.result.prediction_age_ms;
-        imu_filter_cause_diag=QEKF_INS.IMU_QuaternionEKF.result.cause;
+        imu_filter_mode_diag=filter_state.filter.mode;
+        imu_filter_age_ms_diag=filter_state.filter.prediction_age_ms;
+        imu_filter_cause_diag=filter_state.filter.cause;
         DWT_ProbeDone(&ins_prof_ekf, probe_seg);
 
         // 滤波失效立即撤销许可；严重预测失败由显式重置恢复，不重建参考姿态。
-        if ((filter_status!=KF_OK && filter_status!=KF_PREDICTED) || !QEKF_INS.IMU_QuaternionEKF.result.valid)
+        if ((filter_status!=KF_OK && filter_status!=KF_PREDICTED) || !filter_state.filter.valid)
         {
             INSInvalidateControlSnapshot();
             imu_sample_valid_diag=0u;
@@ -380,7 +398,7 @@ void INS_Task(void)
             goto ins_sample_processed;
         }
 
-        memcpy(INS.q, QEKF_INS.q, sizeof(QEKF_INS.q));
+        memcpy(INS.q,filter_state.quaternion,sizeof(INS.q));
 
         // 机体系基向量转换到导航坐标系，本例选取惯性系为导航系
         BodyFrameToEarthFrame(xb, INS.xn, INS.q);
@@ -397,10 +415,10 @@ void INS_Task(void)
         }
         BodyFrameToEarthFrame(INS.MotionAccel_b, INS.MotionAccel_n, INS.q); // 转换回导航系n
 
-        INS.Yaw = QEKF_INS.Yaw;
-        INS.Pitch = QEKF_INS.Pitch;
-        INS.Roll = QEKF_INS.Roll;
-        INS.YawTotalAngle = QEKF_INS.YawTotalAngle;
+        INS.Yaw = filter_state.yaw_deg;
+        INS.Pitch = filter_state.pitch_deg;
+        INS.Roll = filter_state.roll_deg;
+        INS.YawTotalAngle = filter_state.yaw_total_deg;
 
         // 任一姿态或角速度不是有效数值时，都不把这组结果送给视觉端。
         uint8_t imu_valid = sample_valid && isfinite(INS.q[0]) && isfinite(INS.q[1]) && isfinite(INS.q[2]) && isfinite(INS.q[3]) &&

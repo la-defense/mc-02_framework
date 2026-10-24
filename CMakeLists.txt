@@ -15,6 +15,8 @@ set(MC02_VISION_TRANSPORT "usb" CACHE STRING "视觉链路传输方式")
 set_property(CACHE MC02_VISION_TRANSPORT PROPERTY STRINGS usb uart)
 set(MC02_VISION_PROTOCOL "sp" CACHE STRING "视觉业务协议")
 set_property(CACHE MC02_VISION_PROTOCOL PROPERTY STRINGS sp v2)
+set(MC02_IMU_BACKEND "quaternion_ekf" CACHE STRING "INS姿态算法后端")
+set_property(CACHE MC02_IMU_BACKEND PROPERTY STRINGS quaternion_ekf fusion)
 
 option(MC02_ENABLE_HEATER "显式允许机器人配置使用 IMU 加热器" OFF)
 option(MC02_BENCH_RC_DIAGNOSTICS "裸板遥控接收诊断；禁止请求 READY" OFF)
@@ -36,6 +38,14 @@ if(NOT MC02_VISION_TRANSPORT MATCHES "^(usb|uart)$")
 endif()
 if(NOT MC02_VISION_PROTOCOL MATCHES "^(sp|v2)$")
     message(FATAL_ERROR "MC02_VISION_PROTOCOL 必须是 sp 或 v2")
+endif()
+if(NOT MC02_IMU_BACKEND MATCHES "^(quaternion_ekf|fusion)$")
+    message(FATAL_ERROR "MC02_IMU_BACKEND 必须是 quaternion_ekf 或 fusion")
+endif()
+if(MC02_IMU_BACKEND STREQUAL "fusion")
+    add_compile_definitions(MC02_IMU_BACKEND_FUSION=1)
+else()
+    add_compile_definitions(MC02_IMU_BACKEND_FUSION=0)
 endif()
 if(MC02_VISION_PROTOCOL STREQUAL "v2" AND
    (NOT MC02_PROFILE STREQUAL "robot" OR NOT MC02_BOARD_ROLE STREQUAL "single"))
@@ -142,6 +152,9 @@ endif()
 
 # 源码清单读取已经解析并校验过的配置，确保协议和板级角色只编译所选实现。
 include(cmake/mc02_firmware_sources.cmake)
+if(MC02_IMU_BACKEND STREQUAL "fusion")
+    list(APPEND MC02_EXTRA_INCLUDE_DIRS Middlewares/Third_Party/Fusion)
+endif()
 
 if(MC02_PROFILE STREQUAL "bench_safe")
     set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_bench_safe")
@@ -256,7 +269,7 @@ add_custom_command(TARGET ${MC02_OUTPUT_BASENAME}.elf POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${MC02_OUTPUT_BASENAME}.elf> ${PROJECT_BINARY_DIR}/${MC02_OUTPUT_BASENAME}.bin
     COMMAND ${SIZE} $<TARGET_FILE:${MC02_OUTPUT_BASENAME}.elf>)
 
-file(WRITE "${CMAKE_BINARY_DIR}/mc02-selected-sources.txt" "profile=${MC02_PROFILE}\nrole=${MC02_BOARD_ROLE}\nvision=${MC02_VISION_TRANSPORT}\nvision_protocol=${MC02_VISION_PROTOCOL}\ntarget=${MC02_OUTPUT_BASENAME}.elf\n")
+file(WRITE "${CMAKE_BINARY_DIR}/mc02-selected-sources.txt" "profile=${MC02_PROFILE}\nrole=${MC02_BOARD_ROLE}\nvision=${MC02_VISION_TRANSPORT}\nvision_protocol=${MC02_VISION_PROTOCOL}\nimu_backend=${MC02_IMU_BACKEND}\ntarget=${MC02_OUTPUT_BASENAME}.elf\n")
 foreach(source IN LISTS MC02_SELECTED_SOURCES)
     file(APPEND "${CMAKE_BINARY_DIR}/mc02-selected-sources.txt" "${source}\n")
 endforeach()

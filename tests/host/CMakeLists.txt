@@ -418,6 +418,19 @@ if(UNIX)
 endif()
 add_test(NAME production_quaternion_inverse_sqrt_accuracy COMMAND quaternion_ekf_inv_sqrt_test)
 
+add_executable(attitude_filter_test attitude_filter_test.c
+  ../../modules/algorithm/attitude_filter.c
+  ../../modules/algorithm/QuaternionEKF.c
+  ../../Middlewares/Third_Party/Fusion/FusionAhrs.c)
+target_include_directories(attitude_filter_test PRIVATE
+  ../../modules/algorithm
+  ../../Middlewares/Third_Party/Fusion)
+target_compile_definitions(attitude_filter_test PRIVATE MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1)
+target_link_libraries(attitude_filter_test PRIVATE mc02_kf m)
+target_compile_options(attitude_filter_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+add_test(NAME production_attitude_backends_quality_prediction_and_isolation COMMAND attitude_filter_test)
+set_tests_properties(production_attitude_backends_quality_prediction_and_isolation PROPERTIES TIMEOUT 10)
+
 add_executable(message_freshness_test message_freshness_test.c ../../modules/message_center/message_center.c)
 target_include_directories(message_freshness_test BEFORE PRIVATE init_resource_fakes)
 target_include_directories(message_freshness_test PRIVATE ../../modules/message_center)
@@ -499,10 +512,14 @@ add_test(NAME production_kalman_workspace_and_results COMMAND kalman_filter_init
 add_executable(dsp_numeric_test dsp_numeric_test.c)
 target_link_libraries(dsp_numeric_test PRIVATE mc02_kf)
 add_test(NAME production_dsp_matrix_and_trigonometry COMMAND dsp_numeric_test)
-add_executable(ins_filter_test ins_filter_test.c ../../modules/imu/ins_task.c ../../modules/algorithm/QuaternionEKF.c)
+add_executable(ins_filter_test ins_filter_test.c ../../modules/imu/ins_task.c
+  ../../modules/algorithm/attitude_filter.c ../../modules/algorithm/QuaternionEKF.c
+  ../../Middlewares/Third_Party/Fusion/FusionAhrs.c)
 target_include_directories(ins_filter_test BEFORE PRIVATE ins_filter_fakes)
-target_include_directories(ins_filter_test PRIVATE ../../modules/imu ../../modules/BMI088)
-target_compile_definitions(ins_filter_test PRIVATE MC02_VISION_PROTOCOL_V2=1)
+target_include_directories(ins_filter_test PRIVATE ../../modules/imu ../../modules/BMI088
+  ../../Middlewares/Third_Party/Fusion)
+target_compile_definitions(ins_filter_test PRIVATE MC02_VISION_PROTOCOL_V2=1
+  MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=0)
 target_link_libraries(ins_filter_test PRIVATE mc02_kf mc02_numeric)
 add_test(NAME production_ins_filter_validity_and_recovery COMMAND ins_filter_test)
 add_test(NAME production_ins_numeric_init_failure COMMAND ins_filter_test --math-failure)
@@ -511,11 +528,31 @@ foreach(direction IN ITEMS tilt inverted zero short)
   set_tests_properties(production_ins_numeric_initial_${direction} PROPERTIES TIMEOUT 10)
 endforeach()
 set_tests_properties(production_ins_numeric_init_failure PROPERTIES TIMEOUT 10)
+add_executable(ins_filter_fusion_test ins_filter_test.c ../../modules/imu/ins_task.c
+  ../../modules/algorithm/attitude_filter.c ../../modules/algorithm/QuaternionEKF.c
+  ../../Middlewares/Third_Party/Fusion/FusionAhrs.c)
+target_include_directories(ins_filter_fusion_test BEFORE PRIVATE ins_filter_fakes)
+target_include_directories(ins_filter_fusion_test PRIVATE ../../modules/imu ../../modules/BMI088
+  ../../Middlewares/Third_Party/Fusion)
+target_compile_definitions(ins_filter_fusion_test PRIVATE MC02_VISION_PROTOCOL_V2=1
+  MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=1)
+target_link_libraries(ins_filter_fusion_test PRIVATE mc02_kf mc02_numeric)
+add_test(NAME production_ins_fusion_backend_validity_and_recovery COMMAND ins_filter_fusion_test)
+add_test(NAME production_ins_fusion_backend_numeric_init_failure COMMAND ins_filter_fusion_test --math-failure)
+foreach(direction IN ITEMS tilt inverted zero short)
+  add_test(NAME production_ins_fusion_backend_initial_${direction} COMMAND ins_filter_fusion_test --initial-${direction})
+  set_tests_properties(production_ins_fusion_backend_initial_${direction} PROPERTIES TIMEOUT 10)
+endforeach()
+set_tests_properties(production_ins_fusion_backend_validity_and_recovery
+  production_ins_fusion_backend_numeric_init_failure PROPERTIES TIMEOUT 10)
 if(UNIX AND NOT APPLE)
   find_package(Threads REQUIRED)
   target_compile_definitions(ins_filter_test PRIVATE INS_TEST_INIT_WRAP=1)
-  target_link_options(ins_filter_test PRIVATE -Wl,--wrap=IMU_QuaternionEKF_Init)
+  target_link_options(ins_filter_test PRIVATE -Wl,--wrap=AttitudeFilterInit)
   add_test(NAME production_ins_filter_init_failure COMMAND ins_filter_test --init-failure)
+  target_compile_definitions(ins_filter_fusion_test PRIVATE INS_TEST_INIT_WRAP=1)
+  target_link_options(ins_filter_fusion_test PRIVATE -Wl,--wrap=AttitudeFilterInit)
+  add_test(NAME production_ins_fusion_backend_init_failure COMMAND ins_filter_fusion_test --init-failure)
   add_executable(kf_matrix_failure_test kf_matrix_failure_test.c)
   target_link_libraries(kf_matrix_failure_test PRIVATE mc02_kf)
   target_link_options(kf_matrix_failure_test PRIVATE -Wl,--wrap=arm_mat_mult_f32

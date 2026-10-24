@@ -9,7 +9,7 @@ static _Alignas(KF_WORKSPACE_ALIGNMENT) unsigned char workspace[KF_WORKSPACE_BYT
 int main(void)
 {
     float initial[4]={1,0,0,0};
-    QEKFConfig_t c={10,.001f,1000000,1,0,20,2,.020f};
+    QEKFConfig_t c={10,.001f,1000000,1,0,20,20,2,.020f};
     TEST_CHECK(IMU_QuaternionEKF_Init(initial,&c,workspace,sizeof(workspace))==KF_OK);
     TEST_CHECK(IMU_QuaternionEKF_Update(0,0,0,0,0,0,.001f,0,0,0)<0);
     TEST_CHECK(IMU_QuaternionEKF_Update(0,0,0,0,0,9.8f,.001f,1,1,1)==KF_OK);

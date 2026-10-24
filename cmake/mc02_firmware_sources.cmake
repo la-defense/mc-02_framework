@@ -99,6 +99,7 @@ set(MC02_BSP_C_SOURCES
     bsp/ws2812/ws2812.c)
 
 set(MC02_COMMON_MODULE_C_SOURCES
+    modules/algorithm/attitude_filter.c
     modules/algorithm/QuaternionEKF.c
     modules/algorithm/controller.c
     modules/algorithm/crc.c
@@ -140,6 +141,10 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/task_monitor/task_monitor.c
     modules/alarm/buzzer.c
     modules/alarm/led.c)
+
+if(MC02_IMU_BACKEND STREQUAL "fusion")
+    list(APPEND MC02_COMMON_MODULE_C_SOURCES Middlewares/Third_Party/Fusion/FusionAhrs.c)
+endif()
 
 set(MC02_APPLICATION_COMMON_C_SOURCES
     application/init_diagnostic.c

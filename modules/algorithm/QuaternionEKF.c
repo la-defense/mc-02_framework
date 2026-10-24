@@ -55,9 +55,9 @@ static KFStatus_t check_matrix(arm_status status,const arm_matrix_instance_f32 *
 }
 #define Q_MATRIX(call,output) do { KFStatus_t s=check_matrix((call),(output)); if(s!=KF_OK) return s; } while(0)
 
-KFStatus_t IMU_QuaternionEKF_Init(const float *initial,const QEKFConfig_t *c,void *workspace,size_t bytes)
+KFStatus_t IMU_QuaternionEKF_InstanceInit(QEKF_INS_t *instance,const float *initial,const QEKFConfig_t *c,void *workspace,size_t bytes)
 {
-    if(initial==NULL || c==NULL) return KF_ERROR_ARGUMENT;
+    if(instance==NULL || initial==NULL || c==NULL) return KF_ERROR_ARGUMENT;
     if(!isfinite(c->process_noise1) || c->process_noise1<0.0f ||
        !isfinite(c->process_noise2) || c->process_noise2<0.0f ||
        !isfinite(c->measure_noise) || c->measure_noise<=0.0f ||
@@ -68,14 +68,17 @@ KFStatus_t IMU_QuaternionEKF_Init(const float *initial,const QEKFConfig_t *c,voi
     if(!isfinite(norm) || norm<1e-6f) return KF_ERROR_NUMERIC;
     float state[6]={initial[0],initial[1],initial[2],initial[3],0,0};
     QEKF_INS_t prepared={0};
-    KFConfig_t config={6u,0u,3u,c->max_prediction_ms,20u,c->variance_ratio,c->max_dt_s,
+    KFConfig_t config={6u,0u,3u,c->max_prediction_ms,c->max_measurement_age_ms,c->variance_ratio,c->max_dt_s,
         IMU_QuaternionEKF_F_Linearization_P_Fading,IMU_QuaternionEKF_SetH,IMU_QuaternionEKF_xhatUpdate};
-    // 不允许工作区盖住公开实例，否则初始化清零会破坏旧结果。
-    uintptr_t w=(uintptr_t)workspace,q=(uintptr_t)&QEKF_INS;
-    if(bytes>UINTPTR_MAX-w || (w<q+sizeof(QEKF_INS) && q<w+bytes)) return KF_ERROR_WORKSPACE;
+    // 工作区和输入参数不能覆盖实例或彼此重叠，避免初始化时破坏调用者数据。
+    uintptr_t w=(uintptr_t)workspace,q=(uintptr_t)instance;
+    if(bytes>UINTPTR_MAX-w || q>UINTPTR_MAX-sizeof(*instance) ||
+       (w<q+sizeof(*instance) && q<w+bytes)) return KF_ERROR_WORKSPACE;
     uintptr_t a=(uintptr_t)initial,b=(uintptr_t)c;
     if(a>UINTPTR_MAX-4u*sizeof(float) || b>UINTPTR_MAX-sizeof(*c) ||
-       (w<a+4u*sizeof(float) && a<w+bytes) || (w<b+sizeof(*c) && b<w+bytes)) return KF_ERROR_WORKSPACE;
+       (w<a+4u*sizeof(float) && a<w+bytes) || (w<b+sizeof(*c) && b<w+bytes) ||
+       (q<a+4u*sizeof(float) && a<q+sizeof(*instance)) ||
+       (q<b+sizeof(*c) && b<q+sizeof(*instance))) return KF_ERROR_WORKSPACE;
     KFStatus_t status=KFInit(&prepared.IMU_QuaternionEKF,&config,workspace,bytes,state,k_initial_P);
     if(status!=KF_OK) return status;
     prepared.Q1=c->process_noise1; prepared.Q2=c->process_noise2; prepared.R=c->measure_noise;
@@ -84,17 +87,18 @@ KFStatus_t IMU_QuaternionEKF_Init(const float *initial,const QEKFConfig_t *c,voi
     memcpy(prepared.q,initial,4u*sizeof(float));
     memcpy(prepared.IMU_QuaternionEKF.F_data,IMU_QuaternionEKF_F,sizeof(IMU_QuaternionEKF_F));
     prepared.ChiSquare=(arm_matrix_instance_f32){1,1,prepared.ChiSquare_Data};
-    QEKF_INS=prepared;
-    // 结构复制后重新绑定自身数组，避免留下栈上对象的地址。
-    QEKF_INS.ChiSquare.pData=QEKF_INS.ChiSquare_Data;
+    *instance=prepared;
+    // 结构复制后重新绑定实例自己的数组，避免留下栈上对象的地址。
+    instance->ChiSquare.pData=instance->ChiSquare_Data;
     return KF_OK;
 }
 
-KFStatus_t IMU_QuaternionEKF_Update(float gx,float gy,float gz,float ax,float ay,float az,
+KFStatus_t IMU_QuaternionEKF_InstanceUpdate(QEKF_INS_t *instance,float gx,float gy,float gz,float ax,float ay,float az,
     float dt,uint32_t now_ms,uint32_t measurement_ms,uint32_t sequence)
 {
-    if(!QEKF_INS.Initialized) return KF_ERROR_STATE;
-    QEKF_INS_t trial=QEKF_INS;
+    if(instance==NULL) return KF_ERROR_ARGUMENT;
+    if(!instance->Initialized) return KF_ERROR_STATE;
+    QEKF_INS_t trial=*instance;
     QEKF_INS_t *owner=&trial;
     owner->ChiSquare.pData=owner->ChiSquare_Data;
     // 0.5(Ohm-Ohm^bias)*deltaT,用于更新工作点处的状态转移F矩阵
@@ -191,8 +195,7 @@ KFStatus_t IMU_QuaternionEKF_Update(float gx,float gy,float gz,float ax,float ay
 
 
     KFStep_t step={dt,now_ms,measurement_ms,sequence,owner->IMU_QuaternionEKF.MeasuredVector,NULL,measurements,owner};
-    KFStatus_t status=KFUpdate(&QEKF_INS.IMU_QuaternionEKF,&step);
-    owner->IMU_QuaternionEKF=QEKF_INS.IMU_QuaternionEKF;
+    KFStatus_t status=KFUpdate(&owner->IMU_QuaternionEKF,&step);
     if(status==KF_OK || status==KF_PREDICTED)
     {
     // 获取融合后的数据,包括四元数和xy零飘值
@@ -225,19 +228,35 @@ KFStatus_t IMU_QuaternionEKF_Update(float gx,float gy,float gz,float ax,float ay
 
         if(!isfinite(owner->Yaw) || !isfinite(owner->Pitch) || !isfinite(owner->Roll))
         {
-            QEKF_INS.IMU_QuaternionEKF.fatal=1u;
-            QEKF_INS.IMU_QuaternionEKF.result.valid=0u;
-            QEKF_INS.IMU_QuaternionEKF.result.mode=KF_INVALID;
-            QEKF_INS.IMU_QuaternionEKF.result.cause=KF_ERROR_NUMERIC;
+            instance->IMU_QuaternionEKF.fatal=1u;
+            instance->IMU_QuaternionEKF.result.valid=0u;
+            instance->IMU_QuaternionEKF.result.mode=KF_INVALID;
+            instance->IMU_QuaternionEKF.result.cause=KF_ERROR_NUMERIC;
             return KF_ERROR_NUMERIC;
         }
     }
     if(isfinite(owner->dt) && owner->dt>0.0f) owner->UpdateCount++;
-    QEKF_INS=*owner; QEKF_INS.ChiSquare.pData=QEKF_INS.ChiSquare_Data;
-    memcpy(IMU_QuaternionEKF_P,QEKF_INS.IMU_QuaternionEKF.published_P,sizeof(IMU_QuaternionEKF_P));
-    memcpy(IMU_QuaternionEKF_K,QEKF_INS.IMU_QuaternionEKF.K_data,sizeof(IMU_QuaternionEKF_K));
-    memcpy(IMU_QuaternionEKF_H,QEKF_INS.IMU_QuaternionEKF.H_data,sizeof(IMU_QuaternionEKF_H));
+    *instance=*owner;
+    instance->ChiSquare.pData=instance->ChiSquare_Data;
+    // 旧调试数组仅镜像兼容全局实例；新接口的其他实例互不读写这些数组。
+    if(instance==&QEKF_INS)
+    {
+        memcpy(IMU_QuaternionEKF_P,instance->IMU_QuaternionEKF.published_P,sizeof(IMU_QuaternionEKF_P));
+        memcpy(IMU_QuaternionEKF_K,instance->IMU_QuaternionEKF.K_data,sizeof(IMU_QuaternionEKF_K));
+        memcpy(IMU_QuaternionEKF_H,instance->IMU_QuaternionEKF.H_data,sizeof(IMU_QuaternionEKF_H));
+    }
     return status;
+}
+
+KFStatus_t IMU_QuaternionEKF_Init(const float *initial,const QEKFConfig_t *config,void *workspace,size_t bytes)
+{
+    return IMU_QuaternionEKF_InstanceInit(&QEKF_INS,initial,config,workspace,bytes);
+}
+
+KFStatus_t IMU_QuaternionEKF_Update(float gx,float gy,float gz,float ax,float ay,float az,
+    float dt,uint32_t now_ms,uint32_t measurement_ms,uint32_t sequence)
+{
+    return IMU_QuaternionEKF_InstanceUpdate(&QEKF_INS,gx,gy,gz,ax,ay,az,dt,now_ms,measurement_ms,sequence);
 }
 static KFStatus_t IMU_QuaternionEKF_F_Linearization_P_Fading(KalmanFilter_t *kf,void *context)
 {

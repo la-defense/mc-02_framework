@@ -73,9 +73,35 @@ extern QEKF_INS_t QEKF_INS;
 /** @brief 启动固定的六状态／三量测EKF；预测时限及方差比由调用方显式配置。 */
 typedef struct {
     float process_noise1,process_noise2,measure_noise,lambda,lpf;
-    uint32_t max_prediction_ms;
+    uint32_t max_prediction_ms,max_measurement_age_ms;
     float variance_ratio,max_dt_s;
 } QEKFConfig_t;
+/** @brief 初始化调用者保存的独立 EKF 实例，不分配内存。
+ * @param[in,out] instance 长期保存的滤波器状态；不能与工作区、配置或初值重叠。
+ * @param[in] initial_quaternion 4个有限float，模长非零，顺序w/x/y/z。
+ * @param[in] config 合法噪声、时间和预测方差配置；成功后复制。
+ * @param[in,out] workspace KF_WORKSPACE_BYTES(6,0,3)字节，满足KF_WORKSPACE_ALIGNMENT。
+ * @param[in] bytes 工作区可写容量。
+ * @return KF_OK或具体错误；失败不改写实例和工作区，成功后等待首次校正。
+ */
+KFStatus_t IMU_QuaternionEKF_InstanceInit(QEKF_INS_t *instance,const float *initial_quaternion,
+    const QEKFConfig_t *config,void *workspace,size_t bytes);
+/** @brief 更新指定EKF实例；不同实例可并行，同一实例须由调用者串行访问。
+ * @param[in,out] instance 已初始化实例。
+ * @param[in] gx 陀螺仪x轴角速度，单位rad/s。
+ * @param[in] gy 陀螺仪y轴角速度，单位rad/s。
+ * @param[in] gz 陀螺仪z轴角速度，单位rad/s。
+ * @param[in] ax 加速度x轴分量，单位m/s²；任一分量非有限表示本轮没有量测。
+ * @param[in] ay 加速度y轴分量，单位m/s²。
+ * @param[in] az 加速度z轴分量，单位m/s²。
+ * @param[in] dt_s 本机实测间隔，单位秒。
+ * @param[in] now_ms 当前毫秒时刻。
+ * @param[in] measurement_ms 样本源毫秒时刻；与now_ms使用同一32位时钟并允许回绕。
+ * @param[in] sequence 样本序号；重复或过期样本被拒绝。
+ * @return KF_OK、KF_PREDICTED或具体错误；失败保留旧数值并撤销有效标记。
+ */
+KFStatus_t IMU_QuaternionEKF_InstanceUpdate(QEKF_INS_t *instance,float gx,float gy,float gz,
+    float ax,float ay,float az,float dt_s,uint32_t now_ms,uint32_t measurement_ms,uint32_t sequence);
 /** @brief 接受起点、配置及工作区，不分配内存。
  * @param[in] initial_quaternion 4个有限float，模长非零，顺序w/x/y/z。
  * @param[in] config Q1/Q2非负，R>0，0<lambda<=1，lpf>=0；所有浮点参数有限。
