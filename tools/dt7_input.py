@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 
 PERIOD = 0.033
-MAX_DURATION = 180.0
+# 180秒限制只用于离线回放，实时输入由操作者主动结束。
+MAX_REPLAY_DURATION = 180.0
 KEYS = {key: 1 << bit for bit, key in enumerate(
     ("W", "S", "A", "D", "SHIFT", "CTRL", "Q", "E", "R", "F", "G", "Z", "X", "C", "V", "B"))}
 
@@ -192,7 +193,7 @@ def validate_replay(data):
     if not isinstance(data, dict) or set(data) != {"duration_s", "actions"}:
         raise ValueError("replay needs duration_s and actions only")
     duration = data["duration_s"]
-    if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration) or not 0 < duration <= MAX_DURATION:
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration) or not 0 < duration <= MAX_REPLAY_DURATION:
         raise ValueError("duration_s must be finite, >0 and <=180")
     actions = data["actions"]
     if not isinstance(actions, list):
@@ -233,7 +234,7 @@ class Replay:
 
     @property
     def end_time(self):
-        return min(MAX_DURATION, self.duration + (self.action_start or 2 * PERIOD))
+        return min(MAX_REPLAY_DURATION, self.duration + (self.action_start or 2 * PERIOD))
 
     def tick(self, elapsed: float) -> bool:
         if self.finished:
@@ -335,14 +336,18 @@ def run_replay(data, sender, dry_run):
     finally:
         replay.close()
 
-def run_live(sender):
+def live_window_title(port):
+    """显示本次显式选择的端口，不将回放时限套用到实时输入。"""
+    return f"DT7 裸板键鼠诊断 — {port}"
+
+def run_live(sender, port):
     import tkinter as tk
     live = LiveInput(sender)
     root = None
     try:
         if not sender.release(live.state): raise SendError("initial release failed")
         root = tk.Tk()
-        root.title("DT7 裸板键鼠诊断 — COM4")
+        root.title(live_window_title(port))
         status = tk.StringVar(value="已暂停。点击开始后，在下方区域操作；失焦立即释放并暂停。")
         tk.Label(root,textvariable=status,wraplength=650).pack(padx=12,pady=8)
         controls = tk.Frame(root); controls.pack()
@@ -474,7 +479,7 @@ def main(argv=None):
         transport = DryTransport() if dry_run else open_device(args.port,record)
         sender = Sender(transport,record)
         if args.command == "replay": run_replay(data,sender,dry_run)
-        else: run_live(sender)
+        else: run_live(sender,args.port)
         if sender.failed: raise SendError("transmission failed; release not confirmed")
         print(json.dumps({"result":"completed", "dry_run":dry_run,"log":str(log_path)},ensure_ascii=False))
         return 0

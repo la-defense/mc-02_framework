@@ -1319,6 +1319,12 @@ set_tests_properties(read_only_live_observation_tool PROPERTIES TIMEOUT 10)
 add_test(NAME native_rtt_receive_only_tool COMMAND ${Python3_EXECUTABLE}
   ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_rtt_monitor.py)
 set_tests_properties(native_rtt_receive_only_tool PROPERTIES TIMEOUT 10)
+add_test(NAME vision_dual_protocol_fire_disabled_tool COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_vision_sim.py)
+set_tests_properties(vision_dual_protocol_fire_disabled_tool PROPERTIES TIMEOUT 10)
+add_test(NAME dt7_input_tool COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_dt7_input.py)
+set_tests_properties(dt7_input_tool PROPERTIES TIMEOUT 10)
 # 使用真实裁判和UART后端，验证两种业务竞争同一份发送额度。
 add_executable(referee_budget_test referee_budget_test.c uart_tx_hal_model.c
   ../../bsp/usart/bsp_usart.c ../../bsp/usart/bsp_usart_tx.c ../../bsp/usart/usart_tx_port.c

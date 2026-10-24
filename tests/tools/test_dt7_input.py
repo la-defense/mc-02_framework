@@ -93,6 +93,10 @@ class SenderTests(unittest.TestCase):
                 self.assertEqual(records[-1]["event"],"release-unconfirmed")
 
 class LiveTests(unittest.TestCase):
+    def test_live_title_uses_selected_port_and_duration_limit_is_replay_only(self):
+        self.assertEqual(dt7_input.live_window_title("COM12"), "DT7 裸板键鼠诊断 — COM12")
+        self.assertEqual(dt7_input.MAX_REPLAY_DURATION, 180.0)
+
     def test_start_handshake_discards_input_and_pause_cancels_handshake(self):
         transport=Transport(); live=dt7_input.LiveInput(dt7_input.Sender(transport,lambda row:None))
         live.start(); live.key('W',True); live.mouse(4,5); live.button('left',True)
