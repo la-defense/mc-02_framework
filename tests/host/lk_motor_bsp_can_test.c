@@ -15,12 +15,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* 测试按生产任务的顺序计算目标，再由唯一调度入口推进一次发送。 */
+#define LKMotorControl() (LKMotorControl(), CANProcessTx())
+
 static FDCAN_GlobalTypeDef fdcan_registers[DEVICE_CAN_CNT];
 FDCAN_HandleTypeDef hfdcan1 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdcan_registers[0]};
 FDCAN_HandleTypeDef hfdcan2 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdcan_registers[1]};
 FDCAN_HandleTypeDef hfdcan3 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdcan_registers[2]};
 volatile uint32_t dwt_cpu_freq_mhz = 480u;
 volatile uint32_t test_dwt_cycles;
+volatile uint32_t test_ipsr;
 extern volatile DWT_Probe_t can_prof_rx_dispatch;
 
 static uint64_t now_us;
@@ -33,7 +37,13 @@ static uint32_t filter_rx_id[DEVICE_CAN_CNT];
 static uint32_t tx_attempt_count[DEVICE_CAN_CNT];
 static uint32_t tx_accept_count[DEVICE_CAN_CNT];
 static uint32_t tx_header_id[DEVICE_CAN_CNT];
+static uint32_t tx_latest_buffer[DEVICE_CAN_CNT];
+static uint8_t tx_next_buffer_index[DEVICE_CAN_CNT];
 static uint8_t tx_frame[DEVICE_CAN_CNT][8];
+static uint32_t tx_id_history[DEVICE_CAN_CNT][64];
+static uint8_t tx_id_type_history[DEVICE_CAN_CNT][64];
+static uint8_t tx_length_history[DEVICE_CAN_CNT][64];
+static uint8_t tx_data_history[DEVICE_CAN_CNT][64][8];
 typedef struct
 {
     FDCAN_RxHeaderTypeDef header;
@@ -78,6 +88,14 @@ static uint8_t bus_for_handle(const FDCAN_HandleTypeDef *handle)
     if (handle == &hfdcan1) return 0u;
     if (handle == &hfdcan2) return 1u;
     if (handle == &hfdcan3) return 2u;
+    return UINT8_MAX;
+}
+
+static uint8_t test_dlc_to_length(uint32_t encoded_dlc)
+{
+    for (uint8_t length = 0u; length <= 8u; ++length)
+        if (DLC_LookUp_Table[length] == encoded_dlc)
+            return length;
     return UINT8_MAX;
 }
 
@@ -148,9 +166,24 @@ uint32_t HAL_FDCAN_AddMessageToTxFifoQ(FDCAN_HandleTypeDef *handle,
     if ((tx_error_mask & (1u << bus)) != 0u)
         return HAL_ERROR;
     ++tx_accept_count[bus];
+    const uint32_t history_index = tx_accept_count[bus] - 1u;
+    if (history_index < 64u)
+    {
+        tx_id_history[bus][history_index] = header->Identifier;
+        tx_id_type_history[bus][history_index] = header->IdType;
+        tx_length_history[bus][history_index] = test_dlc_to_length(header->DataLength);
+        memcpy(tx_data_history[bus][history_index], data, 8u);
+    }
+    tx_latest_buffer[bus] = 1u << tx_next_buffer_index[bus];
+    tx_next_buffer_index[bus] = (uint8_t)((tx_next_buffer_index[bus] + 1u) % 16u);
     tx_header_id[bus] = header->Identifier;
     memcpy(tx_frame[bus], data, sizeof(tx_frame[bus]));
     return HAL_OK;
+}
+uint32_t HAL_FDCAN_GetLatestTxFifoQRequestBuffer(FDCAN_HandleTypeDef *handle)
+{
+    const uint8_t bus = bus_for_handle(handle);
+    return bus < DEVICE_CAN_CNT ? tx_latest_buffer[bus] : 0u;
 }
 uint32_t HAL_FDCAN_GetProtocolStatus(FDCAN_HandleTypeDef *handle, FDCAN_ProtocolStatusTypeDef *status)
 {
@@ -771,9 +804,526 @@ static void test_feedforward_overflow(void)
     TEST_CHECK(tx_frame[0][0] == 0u && tx_frame[0][1] == 0u);
 }
 
+static void scheduler_rx_callback(CANInstance *instance)
+{
+    (void)instance;
+}
+
+static void scheduler_register(void)
+{
+    CAN_Init_Config_s config = {0};
+    config.can_handle = &hfdcan1;
+    config.tx_id = 0x280u;
+    config.rx_id = 0x500u;
+    config.can_module_callback = scheduler_rx_callback;
+    TEST_CHECK(CANRegister(&config) != NULL);
+}
+
+static void scheduler_complete_latest(FDCAN_HandleTypeDef *handle)
+{
+    const uint8_t bus = bus_for_handle(handle);
+    TEST_CHECK(bus < DEVICE_CAN_CNT && tx_latest_buffer[bus] != 0u);
+    HAL_FDCAN_TxBufferCompleteCallback(handle, tx_latest_buffer[bus]);
+}
+
+static CAN_TxFrame_t scheduler_frame(uint32_t id, CAN_TxIdType_t id_type,
+                                     const uint8_t *data, uint8_t length)
+{
+    CAN_TxFrame_t frame = {
+        .identifier = id,
+        .identifier_type = id_type,
+        .data = data,
+        .length = length,
+    };
+    return frame;
+}
+
+static void test_can_tx_arguments_and_copy(void)
+{
+    TEST_CHECK(CANClassicFrameWorstCaseBits(CAN_TX_ID_STANDARD, 8u) == 136u);
+    TEST_CHECK(CANClassicFrameWorstCaseBits(CAN_TX_ID_EXTENDED, 8u) == 161u);
+    TEST_CHECK(CANClassicFrameWorstCaseBits((CAN_TxIdType_t)2, 8u) == 0u);
+    TEST_CHECK(CANClassicFrameWorstCaseBits(CAN_TX_ID_STANDARD, 9u) == 0u);
+
+    CAN_TxBusConfig_t bus_config = {
+        .queue_capacity = 4u,
+        .utilization_limit_permille = 500u,
+        .nominal_bitrate_bps = 1000000u,
+    };
+    TEST_CHECK(CANConfigureTxBus(&hfdcan1, NULL) == CAN_TX_SUBMIT_INVALID);
+    bus_config.queue_capacity = 0u;
+    TEST_CHECK(CANConfigureTxBus(&hfdcan1, &bus_config) == CAN_TX_SUBMIT_INVALID);
+    bus_config.queue_capacity = 4u;
+    TEST_CHECK(CANConfigureTxBus(&hfdcan1, &bus_config) == CAN_TX_SUBMIT_ACCEPTED);
+
+    uint8_t payload[8] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u};
+    CAN_TxFrame_t frame = scheduler_frame(0x123u, CAN_TX_ID_STANDARD, payload, sizeof(payload));
+    uint32_t request_id = 0xA5A5A5A5u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                20u, &request_id) == CAN_TX_SUBMIT_NOT_READY);
+    TEST_CHECK(request_id == 0xA5A5A5A5u);
+    scheduler_register();
+    TEST_CHECK(CANConfigureTxBus(&hfdcan1, &bus_config) == CAN_TX_SUBMIT_NOT_READY);
+
+    frame = scheduler_frame(0x800u, CAN_TX_ID_STANDARD, payload, sizeof(payload));
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                20u, &request_id) == CAN_TX_SUBMIT_INVALID);
+    frame = scheduler_frame(0x20000000u, CAN_TX_ID_EXTENDED, payload, sizeof(payload));
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                20u, &request_id) == CAN_TX_SUBMIT_INVALID);
+    frame = scheduler_frame(0x123u, CAN_TX_ID_STANDARD, payload, 9u);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                20u, &request_id) == CAN_TX_SUBMIT_INVALID);
+    frame = scheduler_frame(0x123u, CAN_TX_ID_STANDARD, NULL, 1u);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                20u, &request_id) == CAN_TX_SUBMIT_INVALID);
+    frame = scheduler_frame(0x123u, CAN_TX_ID_STANDARD, payload, sizeof(payload));
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, (CAN_TxPriority_t)4,
+                                20u, &request_id) == CAN_TX_SUBMIT_INVALID);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, (CAN_TxPriority_t)-1,
+                                20u, &request_id) == CAN_TX_SUBMIT_INVALID);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                0u, &request_id) == CAN_TX_SUBMIT_INVALID);
+    TEST_CHECK(request_id == 0xA5A5A5A5u);
+
+    test_ipsr = 1u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                20u, &request_id) == CAN_TX_SUBMIT_CONTEXT);
+    test_ipsr = 0u;
+
+    static const uint8_t expected_payload[8] = {0x10u, 0x21u, 0x32u, 0x43u,
+                                                0x54u, 0x65u, 0x76u, 0x87u};
+    for (uint8_t length = 0u; length <= 8u; ++length)
+    {
+        uint8_t source_data[8];
+        memcpy(source_data, expected_payload, sizeof(source_data));
+        const CAN_TxIdType_t id_type = (length & 1u) != 0u ?
+            CAN_TX_ID_EXTENDED : CAN_TX_ID_STANDARD;
+        const uint32_t id = id_type == CAN_TX_ID_STANDARD ?
+            (length == 0u ? 0u : length == 2u ? 0x7ffu : 0x321u) :
+            (length == 1u ? 0u : length == 3u ? 0x1fffffffu : 0x1234567u);
+        frame = scheduler_frame(id, id_type, length == 0u ? NULL : source_data, length);
+        now_us = (uint64_t)length * 1000u;
+        request_id = 0u;
+        TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                    20u, &request_id) == CAN_TX_SUBMIT_ACCEPTED);
+        memset(source_data, 0xEE, sizeof(source_data));
+        CANProcessTx();
+
+        const uint32_t history_index = length;
+        TEST_CHECK(tx_id_history[0][history_index] == id);
+        TEST_CHECK(tx_id_type_history[0][history_index] == (uint8_t)id_type);
+        TEST_CHECK(tx_length_history[0][history_index] == length);
+        TEST_CHECK(memcmp(tx_data_history[0][history_index], expected_payload, length) == 0);
+        scheduler_complete_latest(&hfdcan1);
+
+        CAN_TxResult_t result = {0};
+        TEST_CHECK(CANGetTxRequestState(request_id, &result) == 1u);
+        TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE);
+        TEST_CHECK(result.accepted_frames == 1u && result.completed_frames == 1u);
+    }
+
+    CAN_TxSchedulerStats_t stats = {0};
+    TEST_CHECK(CANGetTxSchedulerStats(&hfdcan1, &stats) == 1u);
+    TEST_CHECK(stats.completed == 9u && stats.queued == 0u);
+}
+
+static void test_can_tx_queue_batch_and_buses(void)
+{
+    const CAN_TxBusConfig_t bus0_config = {
+        .queue_capacity = 2u,
+        .utilization_limit_permille = 500u,
+        .nominal_bitrate_bps = 1000000u,
+    };
+    const CAN_TxBusConfig_t bus1_config = {
+        .queue_capacity = 1u,
+        .utilization_limit_permille = 400u,
+        .nominal_bitrate_bps = 500000u,
+    };
+    TEST_CHECK(CANConfigureTxBus(&hfdcan1, &bus0_config) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANConfigureTxBus(&hfdcan2, &bus1_config) == CAN_TX_SUBMIT_ACCEPTED);
+    scheduler_register();
+
+    const uint8_t a_data[2] = {0xA1u, 0xA2u};
+    const uint8_t b_data[2] = {0xB1u, 0xB2u};
+    const uint8_t c_data[1] = {0xC1u};
+    const CAN_TxFrame_t batch[2] = {
+        {0x222u, CAN_TX_ID_STANDARD, a_data, sizeof(a_data)},
+        {0x223u, CAN_TX_ID_STANDARD, b_data, sizeof(b_data)},
+    };
+    const CAN_TxFrame_t urgent = scheduler_frame(0x111u, CAN_TX_ID_STANDARD,
+                                                  c_data, sizeof(c_data));
+    const CAN_TxFrame_t other_bus = scheduler_frame(0x400u, CAN_TX_ID_STANDARD,
+                                                     c_data, sizeof(c_data));
+    uint32_t batch_id = 0u;
+    uint32_t urgent_id = 0u;
+    uint32_t other_bus_id = 0u;
+    TEST_CHECK(CANSubmitOneShotBatch(&hfdcan1, NULL, batch, 2u, CAN_TX_PRIORITY_NORMAL,
+                                     30u, &batch_id) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &urgent, CAN_TX_PRIORITY_URGENT,
+                                30u, &urgent_id) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan2, NULL, &other_bus, CAN_TX_PRIORITY_NORMAL,
+                                30u, &other_bus_id) == CAN_TX_SUBMIT_ACCEPTED);
+
+    uint32_t rejected_id = 0x5A5A5A5Au;
+    TEST_CHECK(CANSubmitOneShotBatch(&hfdcan1, NULL, batch, 2u, CAN_TX_PRIORITY_NORMAL,
+                                     30u, &rejected_id) == CAN_TX_SUBMIT_FULL);
+    TEST_CHECK(rejected_id == 0x5A5A5A5Au);
+    CAN_TxSchedulerStats_t stats = {0};
+    TEST_CHECK(CANGetTxSchedulerStats(&hfdcan1, &stats) == 1u);
+    TEST_CHECK(stats.queued == 2u && stats.queue_peak == 2u);
+    TEST_CHECK(CANGetTxSchedulerStats(&hfdcan2, &stats) == 1u && stats.queued == 1u);
+
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 1u && tx_id_history[0][0] == 0x111u);
+    TEST_CHECK(tx_accept_count[1] == 1u && tx_id_history[1][0] == 0x400u);
+    scheduler_complete_latest(&hfdcan1);
+    scheduler_complete_latest(&hfdcan2);
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 2u && tx_id_history[0][1] == 0x222u);
+    scheduler_complete_latest(&hfdcan1);
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 3u && tx_id_history[0][2] == 0x223u);
+    scheduler_complete_latest(&hfdcan1);
+
+    CAN_TxResult_t result = {0};
+    TEST_CHECK(CANGetTxRequestState(batch_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE && result.completed_frames == 2u);
+    TEST_CHECK(CANGetTxRequestState(urgent_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE);
+    TEST_CHECK(CANGetTxRequestState(other_bus_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE);
+    TEST_CHECK(CANCancelTxRequest(urgent_id) == 0u);
+
+    CAN_TxFrame_t invalid_batch[2] = {batch[0], batch[1]};
+    invalid_batch[1].identifier = 0x800u;
+    rejected_id = 0x5A5A5A5Au;
+    TEST_CHECK(CANSubmitOneShotBatch(&hfdcan1, NULL, invalid_batch, 2u,
+                                     CAN_TX_PRIORITY_NORMAL, 30u,
+                                     &rejected_id) == CAN_TX_SUBMIT_INVALID);
+    TEST_CHECK(rejected_id == 0x5A5A5A5Au);
+    CAN_TxFrame_t too_many[CAN_TX_MAX_BATCH_FRAMES + 1u];
+    for (size_t i = 0u; i < CAN_TX_MAX_BATCH_FRAMES + 1u; ++i)
+        too_many[i] = batch[0];
+    TEST_CHECK(CANSubmitOneShotBatch(&hfdcan1, NULL, too_many,
+                                     CAN_TX_MAX_BATCH_FRAMES + 1u,
+                                     CAN_TX_PRIORITY_NORMAL, 30u,
+                                     &rejected_id) == CAN_TX_SUBMIT_INVALID);
+
+    CAN_TxFrame_t maximum_batch[CAN_TX_MAX_BATCH_FRAMES];
+    for (size_t i = 0u; i < CAN_TX_MAX_BATCH_FRAMES; ++i)
+    {
+        maximum_batch[i] = batch[0];
+        maximum_batch[i].identifier = 0x600u + (uint32_t)i;
+    }
+    uint32_t maximum_batch_id = 0u;
+    TEST_CHECK(CANSubmitOneShotBatch(&hfdcan1, NULL, maximum_batch,
+                                     CAN_TX_MAX_BATCH_FRAMES,
+                                     CAN_TX_PRIORITY_NORMAL, 30u,
+                                     &maximum_batch_id) == CAN_TX_SUBMIT_ACCEPTED);
+    for (size_t i = 0u; i < CAN_TX_MAX_BATCH_FRAMES; ++i)
+    {
+        CANProcessTx();
+        TEST_CHECK(tx_id_history[0][3u + i] == 0x600u + i);
+        scheduler_complete_latest(&hfdcan1);
+    }
+    TEST_CHECK(CANGetTxRequestState(maximum_batch_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE &&
+               result.completed_frames == CAN_TX_MAX_BATCH_FRAMES);
+
+    uint32_t later_deadline_id = 0u;
+    uint32_t earlier_deadline_id = 0u;
+    const CAN_TxFrame_t later_deadline = scheduler_frame(0x501u, CAN_TX_ID_STANDARD,
+                                                          c_data, sizeof(c_data));
+    const CAN_TxFrame_t earlier_deadline = scheduler_frame(0x500u, CAN_TX_ID_STANDARD,
+                                                            c_data, sizeof(c_data));
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &later_deadline,
+                                CAN_TX_PRIORITY_NORMAL, 20u,
+                                &later_deadline_id) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &earlier_deadline,
+                                CAN_TX_PRIORITY_NORMAL, 10u,
+                                &earlier_deadline_id) == CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx();
+    TEST_CHECK(tx_id_history[0][11] == 0x500u);
+    scheduler_complete_latest(&hfdcan1);
+    CANProcessTx();
+    TEST_CHECK(tx_id_history[0][12] == 0x501u);
+    scheduler_complete_latest(&hfdcan1);
+    TEST_CHECK(CANGetTxRequestState(later_deadline_id, &result) == 1u &&
+               result.state == CAN_TX_RESULT_COMPLETE);
+    TEST_CHECK(CANGetTxRequestState(earlier_deadline_id, &result) == 1u &&
+               result.state == CAN_TX_RESULT_COMPLETE);
+}
+
+static void test_can_tx_periodic_latest_and_budget(void)
+{
+    const CAN_TxBusConfig_t bus_config = {
+        .queue_capacity = 4u,
+        .utilization_limit_permille = 250u,
+        .nominal_bitrate_bps = 1000000u,
+    };
+    TEST_CHECK(CANConfigureTxBus(&hfdcan1, &bus_config) == CAN_TX_SUBMIT_ACCEPTED);
+    scheduler_register();
+
+    static const uint8_t first[8] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u};
+    static const uint8_t latest[8] = {8u, 7u, 6u, 5u, 4u, 3u, 2u, 1u};
+    static const uint8_t extended[8] = {9u, 8u, 7u, 6u, 5u, 4u, 3u, 2u};
+    static int source_a;
+    static int source_b;
+    uint32_t first_id = 0u;
+    uint32_t latest_id = 0u;
+    uint32_t second_stream_id = 0xABABABABu;
+    CAN_TxFrame_t frame_a = scheduler_frame(0x300u, CAN_TX_ID_STANDARD, first, 8u);
+    CAN_TxFrame_t frame_b = scheduler_frame(0x1234567u, CAN_TX_ID_EXTENDED, extended, 8u);
+
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1, &source_a, 1u, &frame_a,
+                                 CAN_TX_PRIORITY_CONTROL, 30u, 1000u,
+                                 &first_id) == CAN_TX_SUBMIT_ACCEPTED);
+    frame_a.data = latest;
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1, &source_a, 1u, &frame_a,
+                                 CAN_TX_PRIORITY_CONTROL, 30u, 1000u,
+                                 &latest_id) == CAN_TX_SUBMIT_COALESCED);
+    CAN_TxResult_t result = {0};
+    TEST_CHECK(CANGetTxRequestState(first_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_SUPERSEDED);
+
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1, &source_b, 2u, &frame_b,
+                                 CAN_TX_PRIORITY_CONTROL, 30u, 1000u,
+                                 &second_stream_id) == CAN_TX_SUBMIT_BANDWIDTH);
+    TEST_CHECK(second_stream_id == 0xABABABABu);
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1, &source_b, 2u, &frame_b,
+                                 CAN_TX_PRIORITY_CONTROL, 30u, 2000u,
+                                 &second_stream_id) == CAN_TX_SUBMIT_ACCEPTED);
+
+    CAN_TxSchedulerStats_t stats = {0};
+    TEST_CHECK(CANGetTxSchedulerStats(&hfdcan1, &stats) == 1u);
+    TEST_CHECK(stats.periodic_reserved_permille == 217u && stats.queued == 2u);
+    CANProcessTx();
+    TEST_CHECK(tx_id_history[0][0] == 0x300u);
+    TEST_CHECK(memcmp(tx_data_history[0][0], latest, 8u) == 0);
+    scheduler_complete_latest(&hfdcan1);
+    CANProcessTx();
+    TEST_CHECK(tx_id_history[0][1] == 0x1234567u);
+    TEST_CHECK(tx_id_type_history[0][1] == FDCAN_EXTENDED_ID);
+    scheduler_complete_latest(&hfdcan1);
+    TEST_CHECK(CANGetTxRequestState(latest_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE);
+    TEST_CHECK(CANGetTxRequestState(second_stream_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE);
+
+    static const uint8_t busy_value[8] = {0xB0u, 0xB1u, 0xB2u, 0xB3u,
+                                          0xB4u, 0xB5u, 0xB6u, 0xB7u};
+    static const uint8_t recovered_value[8] = {0xC0u, 0xC1u, 0xC2u, 0xC3u,
+                                               0xC4u, 0xC5u, 0xC6u, 0xC7u};
+    uint32_t busy_id = 0u;
+    tx_busy_mask = 1u;
+    frame_a.data = busy_value;
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1, &source_a, 1u, &frame_a,
+                                 CAN_TX_PRIORITY_CONTROL, 30u, 1000u,
+                                 &busy_id) == CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx();
+    TEST_CHECK(CANGetTxRequestState(busy_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_FAILED);
+    TEST_CHECK(tx_accept_count[0] == 2u);
+
+    tx_busy_mask = 0u;
+    uint32_t recovered_id = 0u;
+    frame_a.data = recovered_value;
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1, &source_a, 1u, &frame_a,
+                                 CAN_TX_PRIORITY_CONTROL, 30u, 1000u,
+                                 &recovered_id) == CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 3u);
+    TEST_CHECK(memcmp(tx_data_history[0][2], recovered_value, 8u) == 0);
+    scheduler_complete_latest(&hfdcan1);
+
+    static const uint8_t rejected_value[8] = {0xD0u, 0xD1u, 0xD2u, 0xD3u,
+                                              0xD4u, 0xD5u, 0xD6u, 0xD7u};
+    static const uint8_t error_recovery_value[8] = {0xE0u, 0xE1u, 0xE2u, 0xE3u,
+                                                    0xE4u, 0xE5u, 0xE6u, 0xE7u};
+    uint32_t rejected_id = 0u;
+    tx_error_mask = 1u;
+    frame_a.data = rejected_value;
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1, &source_a, 1u, &frame_a,
+                                 CAN_TX_PRIORITY_CONTROL, 30u, 1000u,
+                                 &rejected_id) == CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx();
+    TEST_CHECK(CANGetTxRequestState(rejected_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_FAILED && tx_accept_count[0] == 3u);
+
+    tx_error_mask = 0u;
+    uint32_t error_recovery_id = 0u;
+    frame_a.data = error_recovery_value;
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1, &source_a, 1u, &frame_a,
+                                 CAN_TX_PRIORITY_CONTROL, 30u, 1000u,
+                                 &error_recovery_id) == CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 4u);
+    TEST_CHECK(memcmp(tx_data_history[0][3], error_recovery_value, 8u) == 0);
+    scheduler_complete_latest(&hfdcan1);
+}
+
+static void test_can_tx_expiry_cancel_and_wrap(void)
+{
+    const CAN_TxBusConfig_t bus_config = {
+        .queue_capacity = 2u,
+        .utilization_limit_permille = 500u,
+        .nominal_bitrate_bps = 1000000u,
+    };
+    TEST_CHECK(CANConfigureTxBus(&hfdcan1, &bus_config) == CAN_TX_SUBMIT_ACCEPTED);
+    scheduler_register();
+    const uint8_t data[1] = {0x42u};
+    const CAN_TxFrame_t frame = scheduler_frame(0x123u, CAN_TX_ID_STANDARD, data, 1u);
+    uint32_t expired_id = 0u;
+    uint32_t cancelled_id = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                5u, &expired_id) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                20u, &cancelled_id) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANCancelTxRequest(cancelled_id) == 1u);
+    CAN_TxResult_t result = {0};
+    TEST_CHECK(CANGetTxRequestState(cancelled_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_CANCELLED);
+    now_us = 5000u;
+    uint32_t fresh_id = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                20u, &fresh_id) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANGetTxRequestState(expired_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_EXPIRED);
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 1u);
+    TEST_CHECK(CANGetTxRequestState(fresh_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_IN_FLIGHT);
+    scheduler_complete_latest(&hfdcan1);
+
+    now_us = (uint64_t)(UINT32_MAX - 2u) * 1000u;
+    uint32_t wrap_id = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                5u, &wrap_id) == CAN_TX_SUBMIT_ACCEPTED);
+    now_us = ((uint64_t)UINT32_MAX + 1u) * 1000u;
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 2u);
+    TEST_CHECK(CANGetTxRequestState(wrap_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_IN_FLIGHT);
+    scheduler_complete_latest(&hfdcan1);
+    TEST_CHECK(CANGetTxRequestState(wrap_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE);
+
+    now_us = (uint64_t)(UINT32_MAX - 2u) * 1000u;
+    uint32_t wrapped_expiry_id = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL,
+                                5u, &wrapped_expiry_id) == CAN_TX_SUBMIT_ACCEPTED);
+    now_us = 2000u;
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 2u);
+    TEST_CHECK(CANGetTxRequestState(wrapped_expiry_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_EXPIRED);
+}
+
+static void test_can_tx_budget_large_arithmetic(void)
+{
+    const CAN_TxBusConfig_t bus_config = {
+        .queue_capacity = 2u,
+        .utilization_limit_permille = 1u,
+        .nominal_bitrate_bps = UINT32_MAX,
+    };
+    TEST_CHECK(CANConfigureTxBus(&hfdcan1, &bus_config) == CAN_TX_SUBMIT_ACCEPTED);
+    scheduler_register();
+
+    static const uint8_t data[8] = {0u};
+    const CAN_TxFrame_t frame = scheduler_frame(0x456u, CAN_TX_ID_STANDARD, data, 8u);
+    static int source;
+    uint32_t request_id = 0u;
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1, &source, 1u, &frame,
+                                 CAN_TX_PRIORITY_CONTROL, INT32_MAX, UINT32_MAX,
+                                 &request_id) == CAN_TX_SUBMIT_ACCEPTED);
+    CAN_TxSchedulerStats_t stats = {0};
+    TEST_CHECK(CANGetTxSchedulerStats(&hfdcan1, &stats) == 1u);
+    TEST_CHECK(stats.periodic_reserved_permille == 1u);
+}
+
+static void test_can_tx_retry_boundary_and_abort(void)
+{
+    scheduler_register();
+    const uint8_t data[2] = {0xAAu, 0x55u};
+    const CAN_TxFrame_t frame = scheduler_frame(0x321u, CAN_TX_ID_STANDARD, data, 2u);
+    uint32_t busy_id = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_URGENT,
+                                100u, &busy_id) == CAN_TX_SUBMIT_ACCEPTED);
+    tx_busy_mask = 1u;
+    for (uint8_t attempt = 0u; attempt < 4u; ++attempt)
+        CANProcessTx();
+    CAN_TxResult_t result = {0};
+    TEST_CHECK(CANGetTxRequestState(busy_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_FAILED && result.accepted_frames == 0u);
+
+    CAN_TxSchedulerStats_t stats = {0};
+    TEST_CHECK(CANGetTxSchedulerStats(&hfdcan1, &stats) == 1u);
+    TEST_CHECK(stats.fifo_busy == 4u && stats.retries == 3u && stats.failed == 1u);
+    tx_busy_mask = 0u;
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 0u);
+
+    uint32_t hal_error_id = 0u;
+    tx_error_mask = 1u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_URGENT,
+                                100u, &hal_error_id) == CAN_TX_SUBMIT_ACCEPTED);
+    for (uint8_t attempt = 0u; attempt < 4u; ++attempt)
+        CANProcessTx();
+    TEST_CHECK(CANGetTxRequestState(hal_error_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_FAILED && result.accepted_frames == 0u);
+    TEST_CHECK(result.last_hal_error == HAL_ERROR);
+    tx_error_mask = 0u;
+
+    uint32_t accepted_id = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_URGENT,
+                                100u, &accepted_id) == CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 1u);
+    HAL_FDCAN_TxBufferAbortCallback(&hfdcan1, tx_latest_buffer[0]);
+    TEST_CHECK(CANGetTxRequestState(accepted_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_FAILED && result.accepted_frames == 1u);
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 1u);
+}
+
+static void test_can_tx_retry_yields_for_priority(void)
+{
+    scheduler_register();
+    const uint8_t data = 0x5Au;
+    const CAN_TxFrame_t normal = scheduler_frame(0x321u, CAN_TX_ID_STANDARD, &data, 1u);
+    const CAN_TxFrame_t urgent = scheduler_frame(0x111u, CAN_TX_ID_STANDARD, &data, 1u);
+    uint32_t normal_id = 0u;
+    uint32_t urgent_id = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &normal, CAN_TX_PRIORITY_NORMAL,
+                                100u, &normal_id) == CAN_TX_SUBMIT_ACCEPTED);
+
+    tx_busy_mask = 1u;
+    CANProcessTx();
+    CAN_TxResult_t result = {0};
+    TEST_CHECK(CANGetTxRequestState(normal_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_QUEUED);
+
+    tx_busy_mask = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &urgent, CAN_TX_PRIORITY_URGENT,
+                                100u, &urgent_id) == CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx();
+    TEST_CHECK(tx_id_history[0][0] == urgent.identifier);
+    scheduler_complete_latest(&hfdcan1);
+    CANProcessTx();
+    TEST_CHECK(tx_id_history[0][1] == normal.identifier);
+    scheduler_complete_latest(&hfdcan1);
+
+    TEST_CHECK(CANGetTxRequestState(urgent_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE);
+    TEST_CHECK(CANGetTxRequestState(normal_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE);
+}
+
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
+    CANInitWorkspace();
     if (strcmp(argv[1], "rollback") == 0)
         test_production_registration_rollback();
     else if (strcmp(argv[1], "routing") == 0)
@@ -796,6 +1346,20 @@ int main(int argc, char **argv)
         test_production_can_receive_burst();
     else if (strcmp(argv[1], "dji-rx-burst") == 0)
         test_production_dji_receive_burst();
+    else if (strcmp(argv[1], "tx-arguments-copy") == 0)
+        test_can_tx_arguments_and_copy();
+    else if (strcmp(argv[1], "tx-queue-batch-buses") == 0)
+        test_can_tx_queue_batch_and_buses();
+    else if (strcmp(argv[1], "tx-periodic-budget") == 0)
+        test_can_tx_periodic_latest_and_budget();
+    else if (strcmp(argv[1], "tx-expiry-cancel-wrap") == 0)
+        test_can_tx_expiry_cancel_and_wrap();
+    else if (strcmp(argv[1], "tx-budget-large-arithmetic") == 0)
+        test_can_tx_budget_large_arithmetic();
+    else if (strcmp(argv[1], "tx-retry-abort") == 0)
+        test_can_tx_retry_boundary_and_abort();
+    else if (strcmp(argv[1], "tx-retry-priority") == 0)
+        test_can_tx_retry_yields_for_priority();
     else
     {
         if (strcmp(argv[1], "closed_loops") == 0)

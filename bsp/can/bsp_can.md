@@ -1,114 +1,47 @@
-# bsp_can
+# BSP CAN 模块说明
 
 <p align='right'>neozng1@hnu.edu.cn</p>
 
-# 请注意使用CAN设备的时候务必保证总线只接入了2个终端电阻！开发板一般都有一个，6020电机、c620/c610电调、LK电机也都有终端电阻，注意把多于2个的全部断开（通过拨码）
+## 用途与使用条件
 
+本模块为 H723 的 FDCAN 提供实例注册、接收分发和经典 CAN 发送调度。每个总线实例均使用固定存储，不在运行期间分配内存。队列和接收状态位于 RAM_D2 的 `.can_workspace (NOLOAD)`；`BSPInit()`在创建任务前调用`CANInitWorkspace()`清零并装入三个 HAL 句柄，不启动 CAN、不发送报文。主机侧及电机任务通过 `CANSubmitPeriodic()`、`CANSubmitOneShot()` 或 `CANSubmitOneShotBatch()`提交；`MotorControlTask()`调用`CANProcessTx()`推进发送。
 
+收发器与电机接线前，确认整条 CAN 总线只保留两个终端电阻。主机软件测试只覆盖编码和调度状态，不证明实际接线、终端匹配或对端响应。
 
-## 使用说明
+## 注册和帧格式
 
-若你希望新增一个基于CAN的module，首先在该模块下应该有一个包含`can_instance`指针的module结构体（或当功能简单的时候，可以是单独存在的`can_instance`，但不推荐这样做）。
+`CANRegister()`在启动阶段串行登记 CAN 句柄、收发 ID 和解析回调。句柄、回调目标及`id`所指对象需在实例使用期间保持有效。接收中断只复制帧到固定队列，`CANProcessRx()`在唯一的任务消费者中派发解析。
 
-## 代码结构
+发送只接受经典 CAN 数据帧：标准 ID 为`0～0x7FF`，扩展 ID 为`0～0x1FFFFFFF`，负载为`0～8`字节。提交时会复制帧描述和负载，调用方在提交返回后即可复用原数组。CAN FD 长帧不属于此接口。
 
-.h文件内包括了外部接口和类型定义,以及模块对应的宏。c文件内为私有函数和外部接口的定义。
+## 每总线配置
 
-## 类型定义
+首次`CANRegister()`之前可调用`CANConfigureTxBus()`配置每条总线的请求容量、标称速率和周期利用率上限。配置范围为：容量1～16个请求、利用率1～1000‰、速率大于0 bit/s。默认值如下：
 
-```c
+| 总线 | 请求容量 | 周期利用率上限 | 标称速率 |
+|---|---:|---:|---:|
+| CAN1 | 16 | 700‰ | 1,000,000 bit/s |
+| CAN2 | 12 | 650‰ | 1,000,000 bit/s |
+| CAN3 | 8 | 500‰ | 1,000,000 bit/s |
 
-#define MX_REGISTER_DEVICE_CNT 12  // maximum number of device can be registered to CAN service, this number depends on the load of CAN bus.
-#define MX_CAN_FILTER_CNT (4 * 14) // temporarily useless
-#define DEVICE_CAN_CNT 2           // CAN1,CAN2
+周期流以稳定的`source`指针和来源内`key`标识。首次成功提交时，模块按帧 ID 类型、数据长度及`period_us`预留保守带宽；同一来源键更新时替换原预留。预留只统计本固件登记的周期流，不能反映其他 CAN 节点的负载。当前没有运行期删除周期预留的接口，通常由固定生命周期的驱动实例持有。
 
-/* can instance typedef, every module registered to CAN should have this variable */
-typedef struct _
-{
-    CAN_HandleTypeDef *can_handle; // can句柄
-    CAN_TxHeaderTypeDef txconf;    // CAN报文发送配置
-    uint32_t tx_id;                // 发送id
-    uint32_t tx_mailbox;           // CAN消息填入的邮箱号
-    uint8_t tx_buff[8];            // 发送缓存,发送消息长度可以通过CANSetDLC()设定,最大为8
-    uint8_t rx_buff[8];            // 接收缓存,最大消息长度为8
-    uint32_t rx_id;                // 接收id
-    uint8_t rx_len;                // 接收长度,可能为0-8
-    // 接收的回调函数,用于解析接收到的数据
-    void (*can_module_callback)(struct _ *); // callback needs an instance to tell among registered ones
-    void *id;                                // 使用can外设的模块指针(即id指向的模块拥有此can实例,是父子关系)
-} CANInstance;
+## 提交、推进和结果
 
-typedef struct 
-{
-    CAN_HandleTypeDef* can_handle;
-    uint32_t tx_id;
-    uint32_t rx_id;
-    void (*can_module_callback)(can_instance*);
-    void* id;
-} can_instance_config;
+- `CANSubmitPeriodic()`接收单个最新目标。若原目标还未交给 HAL，新值会替代旧值；同一目标每次都要由调用方重新提交。总线忙或 HAL 拒绝时本次立即失败，不保留旧帧等待重发。
+- `CANSubmitOneShot()`接收单个一次性命令；`CANSubmitOneShotBatch()`原子复制1～8帧，容量不足时整批拒绝。每组在软件队列中按给定顺序交给 HAL，同优先级按更近的期限优先。其他节点仍可通过 CAN 仲裁先发。
+- 请求期限为1～`INT32_MAX`毫秒，从成功入队时计时；达到期限即过期，支持 HAL tick 回绕。周期提交还需提供大于0的最小周期，单位微秒。
+- 一次性帧初次未被 HAL 接受后最多再试3次；HAL 已接受的帧若中止，只报告失败，不自动重发。周期帧被拒绝时也不重试。
+- `CANProcessTx()`只允许普通任务调用。每次最多为每条总线推进一帧，不等待硬件邮箱空闲。系统由`MotorControlTask()`统一调用；专用回环自测在其隔离流程中自行推进。
+- 提交返回`ACCEPTED`／`COALESCED`只表示调度器收下副本。`CANGetTxRequestState()`进一步报告排队、处理中、HAL 已接受、完成、失败、过期、取消或被新周期值替代，并给出总帧数、接受数、完成数和最后 HAL 错误。
+- 完成回调表示 FDCAN 报告该硬件发送缓冲完成，不表示业务对端已经解析或执行命令。每条总线保留最近32个终态结果；记录被复用后，查询会返回未找到。取消只能撤销尚未交给 HAL 的帧，已经接受的帧无法收回。
 
-typedef void (*can_callback)(can_instance*);
-```
+## 带宽估算与限制
 
-- `MX_REGISTER_DEVICE_CNT`是最大的CAN设备注册数量，当每个设备的发送频率都较高时，设备过多会产生总线拥塞从而出现丢包和数据错误的情况。
-- `MX_CAN_FILTER_CNT`是最大的CAN接收过滤器数量，两个CAN共享标号0~27共28个过滤器。这部分内容比较繁杂，暂时不用理解，有兴趣自行参考MCU的数据手册。当前为简单起见，每个过滤器只设置一组规则用于控制一个id的过滤。
-- `DEVICE_CAN_CNT`是MCU拥有的CAN硬件数量。
+`CANClassicFrameWorstCaseBits()`按标准或扩展 ID、0～8字节数据估算包含位填充和帧间隔的保守帧长。周期占用向上取整到千分比，多个流累加后与该总线配置上限比较。一次性命令不参与静态周期预留；其突发、总线其他节点、错误帧和重传可能增加实际负载，因此配置预算不能替代现场总线分析。
 
-- `can_instance`是一个CAN实例。注意，CAN作为一个总线设备，一条总线上可以挂载多个设备，因此多个设备可以共享同一个CAN硬件。其成员变量包括发送id，发送邮箱（不需要管，只是一个32位变量，CAN收发器会自动设置其值），发送buff以及接收buff，还有接收id和接收协议解析回调函数。**由于目前使用的设备每个数据帧的长度都是8，因此收发buff长度暂时固定为8**。定义该结构体的时候使用了一个技巧，使得在结构体内部可以用结构体自身的指针作为成员，即`can_module_callback`的定义。
+周期流预留槽固定为每总线16项。队列容量和周期利用率可分别配置，但队列满、结果历史满、预算超限、上下文非法或句柄无效时，接口会拒绝请求且不会写入请求编号输出。
 
-- `can_instance_config`是用于初始化CAN实例的结构，在调用CAN实例的初始化函数时传入（下面介绍函数时详细介绍）。
+## 验证边界
 
-- `can_module_callback()`是模块提供给CAN接收中断回调函数使用的协议解析函数指针。对于每个需要CAN的模块，需要定义一个这样的函数用于解包数据。
-- 每个使用CAN外设的module，都需要在其内部定义一个`can_instance*`。
-
-
-## 外部接口
-
-```c
-void CANRegister(can_instance* instance, can_instance_config config);
-void CANSetDLC(CANInstance *_instance, uint8_t length); // 设置发送帧的数据长度
-uint8_t CANTransmit(can_instance* _instance, uint8_t timeout);
-```
-
-`CANRegister`是用于初始化CAN实例的接口，module层的模块对象（也应当为一个结构体）内要包含一个`usart_instance`。调用时传入实例指针，以及用于初始化的config。`CANRegister`应当在module的初始化函数内被调用，推荐config采用以下的方式定义，更加直观明了：
-
-```c
-can_instance_config config={.can_handle=&hcan1,
-							.tx_id=0x005,
-							.rx_id=0x200,
-							can_module_callback=MotorCallback}
-```
-
-`CANTransmit()`是通过模块通过其拥有的CAN实例发送数据的接口，调用时传入对应的instance。在发送之前，应当给instance内的`send_buff`赋值。
-
-## 私有函数和变量
-
-在.c文件内设为static的函数和变量
-
-```c
-static can_instance *instance[MX_REGISTER_DEVICE_CNT]={NULL};
-```
-
-这是bsp层管理所有CAN实例的入口。
-
-```c
-static void CANServiceInit()
-static void CANAddFilter(can_instance *_instance)
-static void CANFIFOxCallback(CAN_HandleTypeDef *_hcan, uint32_t fifox)
-void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
-void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
-```
-
-- `CANServiceInit()`会被`CANRegister()`调用，对CAN外设进行硬件初始化并开启接收中断和消息提醒。
-
-- `CANAddFilter()`在每次使用`CANRegister()`的时候被调用，用于给当前注册的实例添加过滤器规则并设定处理对应`rx_id`的接收FIFO。过滤器的作用是减小CAN收发器的压力，只接收符合过滤器规则的报文（否则不会产生接收中断）。
-
-- `HAL_CAN_RxFifo0MsgPendingCallback()`和`HAL_CAN_RxFifo1MsgPendingCallback()`都是对HAL的CAN回调函数的重定义（原本的callback是`__week`修饰的弱定义），当发生FIFO0或FIFO1有新消息到达的时候，对应的callback会被调用。`CANFIFOxCallback()`随后被前两者调用，并根据接收id和硬件中断来源（哪一个CAN硬件，CAN1还是CAN2）调用对应的instance的回调函数进行协议解析。
-
-- 当有一个模块注册了多个can实例时，通过`CANInstance.id`,使用强制类型转换将其转换成对应模块的实例指针，就可以对不同的模块实例进行回调处理了。
-
-## 注意事项
-
-由于CAN总线自带发送检测，如果总线上没有挂载目标设备（接收id和发送报文相同的设备），那么CAN邮箱会被占满而无法发送。在`CANTransmit()`中会对CAN邮箱是否已满进行`while(1)`检查。当超出`timeout`之后函数会返回零，说明发送失败。
-
-由于卡在`while(1)`处不断检查邮箱是否空闲，调用`CANTransmit()`的任务可能无法按时挂起，导致任务定时不精确。建议在没有连接CAN进行调试时，按需注释掉有关CAN发送的代码部分，或设定一个较小的`timeout`值，防止对其他需要精确定时的任务产生影响。
+WSL主机回归使用生产调度器和 HAL 替身，覆盖 ID／长度边界、复制、批量原子入队、周期合并、预算、超时回绕、取消、忙／错误及接受后中止。ARM禁热固件构建检查实际链接依赖及 RAM_D2 工作区范围。未接入真实 CAN 总线时，不据此宣称物理波形、ACK、终端电阻、对端行为或实际带宽已验证。

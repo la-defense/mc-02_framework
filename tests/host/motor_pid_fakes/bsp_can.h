@@ -4,7 +4,8 @@
 #ifndef MC02_PID_TEST_CAN_H
 #define MC02_PID_TEST_CAN_H
 #include <stdint.h>
-typedef struct { unsigned id; } CAN_HandleTypeDef;
+typedef struct { unsigned id; } FDCAN_HandleTypeDef;
+typedef FDCAN_HandleTypeDef CAN_HandleTypeDef;
 extern CAN_HandleTypeDef hcan1, hcan2;
 #define CAN_ID_STD 0u
 #define CAN_RTR_DATA 0u
@@ -30,10 +31,12 @@ typedef struct
  * @return 已登记的测试对象。
  */
 CANInstance *CANRegister(CAN_Init_Config_s *config);
-/** @brief 复制提交字节用于检查，不发送 CAN。
- * @param[in] instance 有效发送对象。
- * @param[in] timeout_ms 保留生产参数，替身不等待。
- * @return 固定为1，仅表示替身完成复制。
- */
-uint8_t CANTransmit(CANInstance *instance, float timeout_ms);
+#include "../can_tx_fake_api.h"
+CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, uint32_t *request_id);
+CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *source,
+                                      const CAN_TxFrame_t *frame, CAN_TxPriority_t priority,
+                                      uint32_t deadline_ms, uint32_t *request_id);
 #endif

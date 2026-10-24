@@ -4,7 +4,8 @@
 #ifndef MC02_HT_NUMERIC_CAN_H
 #define MC02_HT_NUMERIC_CAN_H
 #include <stdint.h>
-typedef struct { unsigned unused; } CAN_HandleTypeDef;
+typedef struct { unsigned unused; } FDCAN_HandleTypeDef;
+typedef FDCAN_HandleTypeDef CAN_HandleTypeDef;
 typedef struct CANInstance
 {
     CAN_HandleTypeDef *can_handle;
@@ -27,10 +28,12 @@ typedef struct
  * @return 测试中的长期存储对象。
  */
 CANInstance *CANRegister(CAN_Init_Config_s *config);
-/** @brief 记录驱动的发送调用，不执行物理发送。
- * @param[in] instance 非空测试对象。
- * @param[in] timeout_ms 保留生产参数，替身不等待。
- * @return 固定返回1。
- */
-uint8_t CANTransmit(CANInstance *instance,float timeout_ms);
+#include "../can_tx_fake_api.h"
+CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, uint32_t *request_id);
+CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *source,
+                                      const CAN_TxFrame_t *frame, CAN_TxPriority_t priority,
+                                      uint32_t deadline_ms, uint32_t *request_id);
 #endif

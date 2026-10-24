@@ -18,6 +18,7 @@
 
 
 #include <stdint.h>
+#include <stddef.h>
 #ifdef FDCAN
 #include "fdcan.h"
 #define hcan1  hfdcan1
@@ -73,7 +74,7 @@ typedef struct _
 #endif
     uint32_t tx_id;                // 发送id
     uint32_t tx_mailbox;           // CAN消息填入的邮箱号
-    uint8_t tx_buff[8];            // 发送缓存,发送消息长度可以通过CANSetDLC()设定,最大为8
+    uint8_t tx_buff[8];            // 模块编码暂存区；新发送接口提交时复制数据，不保留此指针
     uint8_t rx_buff[8];            // 接收缓存,最大消息长度为8
     uint32_t rx_id;                // 接收id
     uint8_t rx_len;                // 接收长度,可能为0-8
@@ -128,6 +129,96 @@ typedef struct
     uint32_t tx_fifo_empty_events;/* TX FIFO 变空事件次数 */
 } CAN_TxStats_t;
 
+#define CAN_TX_MAX_QUEUE_ITEMS 16u
+#define CAN_TX_MAX_BATCH_FRAMES 8u
+
+/** @brief CAN 帧标识符类型；经典帧数据区最多 8 字节。 */
+typedef enum
+{
+    CAN_TX_ID_STANDARD = 0,
+    CAN_TX_ID_EXTENDED = 1
+} CAN_TxIdType_t;
+
+/** @brief 调度器帧副本的输入格式。 */
+typedef struct
+{
+    uint32_t identifier;          /**< 标准 ID 为 0～0x7FF，扩展 ID 为 0～0x1FFFFFFF。 */
+    CAN_TxIdType_t identifier_type;
+    const uint8_t *data;          /**< 长度大于零时须指向可读存储；提交返回后可立即复用。 */
+    uint8_t length;               /**< 数据字节数，允许 0～8。 */
+} CAN_TxFrame_t;
+
+/** @brief 每条总线独立的队列与周期流量预算。 */
+typedef struct
+{
+    uint8_t queue_capacity;       /**< 有界待发组容量，范围 1～16。 */
+    uint16_t utilization_limit_permille; /**< 周期流量上限，范围 1～1000‰。 */
+    uint32_t nominal_bitrate_bps; /**< 经典 CAN 标称位速率，单位 bit/s。 */
+} CAN_TxBusConfig_t;
+
+/** @brief 提交请求的排序优先级，数值越小越先调度。 */
+typedef enum
+{
+    CAN_TX_PRIORITY_URGENT = 0,
+    CAN_TX_PRIORITY_CONTROL = 1,
+    CAN_TX_PRIORITY_NORMAL = 2,
+    CAN_TX_PRIORITY_BACKGROUND = 3
+} CAN_TxPriority_t;
+
+/** @brief 调度请求的提交结果；成功只代表调度器已复制并接收请求。 */
+typedef enum
+{
+    CAN_TX_SUBMIT_ACCEPTED = 0,
+    CAN_TX_SUBMIT_COALESCED,
+    CAN_TX_SUBMIT_INVALID,
+    CAN_TX_SUBMIT_NOT_READY,
+    CAN_TX_SUBMIT_FULL,
+    CAN_TX_SUBMIT_BANDWIDTH,
+    CAN_TX_SUBMIT_CONTEXT
+} CAN_TxSubmitStatus_t;
+
+/** @brief 单次请求的异步处理状态，硬件接受与总线完成分开报告。 */
+typedef enum
+{
+    CAN_TX_RESULT_QUEUED = 0,
+    CAN_TX_RESULT_ACTIVE,
+    CAN_TX_RESULT_IN_FLIGHT,
+    CAN_TX_RESULT_COMPLETE,
+    CAN_TX_RESULT_FAILED,
+    CAN_TX_RESULT_EXPIRED,
+    CAN_TX_RESULT_CANCELLED,
+    CAN_TX_RESULT_SUPERSEDED
+} CAN_TxResultState_t;
+
+typedef struct
+{
+    uint32_t request_id;          /**< 非零请求编号；仅在本机调度器生命周期内唯一。 */
+    CAN_TxResultState_t state;
+    uint8_t frame_count;
+    uint8_t accepted_frames;      /**< HAL 已接受的帧数，不代表已在线上发送。 */
+    uint8_t completed_frames;     /**< 收到 FDCAN 完成中断的帧数。 */
+    uint32_t last_hal_error;      /**< 最近一次提交失败的 HAL 状态值。 */
+} CAN_TxResult_t;
+
+typedef struct
+{
+    uint32_t submitted;
+    uint32_t coalesced;
+    uint32_t rejected;
+    uint32_t bandwidth_rejected;
+    uint32_t retries;
+    uint32_t fifo_busy;
+    uint32_t hal_rejected;
+    uint32_t completed;
+    uint32_t failed;
+    uint32_t expired;
+    uint32_t cancelled;
+    uint32_t superseded;
+    uint16_t queue_peak;
+    uint16_t queued;
+    uint16_t periodic_reserved_permille;
+} CAN_TxSchedulerStats_t;
+
 /* CAN 总线健康统计 */
 typedef struct
 {
@@ -167,18 +258,102 @@ typedef struct
  */
 CANInstance *CANRegister(CAN_Init_Config_s *config);
 
-/** @brief 设置下一帧数据字节数，默认 8。
-* @param[in,out] _instance CAN 实例，NULL 时不处理。
-* @param[in] length 1～8 字节；传 0 改为 1，超过 8 改为 8，并记录日志计数。
+/** @brief 清零固定 CAN 工作区并装入总线句柄，不启动硬件或发送报文。
+* @note 由 BSPInit 在创建任务前调用一次；普通主机测试可由首次 CAN API 自动触发同一初始化。
  */
-void CANSetDLC(CANInstance *_instance, uint8_t length);
+void CANInitWorkspace(void);
 
-/** @brief 把实例 tx_buff 中的数据提交给 CAN 硬件，发送空间满时直接返回。
-* @param[in] _instance 有效实例，不能为 NULL；先填写发送数组及字节数。
-* @param[in] timeout 保留的旧参数，当前忽略，不作为等待时间。
-* @return 1 为已交给硬件，0 为队列满或 HAL 拒绝；不表示对端已收到，也不自动重试。
+/** @brief 配置一条 FDCAN 总线的发送容量和周期利用率预算。
+* @param[in] hcan 已支持的 FDCAN 句柄；必须在首次 CANRegister() 前调用。
+* @param[in] config 每总线独立配置；队列容量 1～16、利用率 1～1000‰、速率大于零。
+* @return 调度状态；配置失败不改变已有配置。
+* @note 静态默认值为 CAN1 16项/700‰、CAN2 12项/650‰、CAN3 8项/500‰，标称速率均为1Mbit/s。
  */
-uint8_t CANTransmit(CANInstance *_instance,float timeout);
+CAN_TxSubmitStatus_t CANConfigureTxBus(FDCAN_HandleTypeDef *hcan,
+                                       const CAN_TxBusConfig_t *config);
+
+/** @brief 登记或更新周期最新目标；同来源和键的未启动旧目标会被替换。
+* @param[in] hcan 已启动服务的总线句柄。
+* @param[in] source 长期稳定的流来源标识；同一流更新时必须保持相同指针。
+* @param[in] key 来源内部的流键。
+* @param[in] frame 单帧经典 CAN 数据，提交时复制 0～8 字节。
+* @param[in] priority 数值越小越先处理，范围 0～3。
+* @param[in] deadline_ms 从本次成功提交起的期限，单位 ms，范围 1～INT32_MAX，边界到达即过期。
+* @param[in] period_us 周期流的最小更新周期，单位 us，用于保守带宽核算，须大于零。
+* @param[out] request_id 非空；仅成功／合并时写入非零编号，失败保持原值。
+* @return 接收、合并、容量、带宽、上下文或参数状态；成功不代表 HAL 已接受。
+* @note 普通任务上下文调用。负载在返回后可立即复用；周期帧遇忙或 HAL 拒绝时本次即失败，等待下一周期的新目标，不重放旧值。
+ */
+CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, uint32_t *request_id);
+
+/** @brief 提交一条有界一次性命令。
+* @param[in] hcan 已启动服务的总线句柄。
+* @param[in] source 可选长期来源标识，仅供诊断关联。
+* @param[in] frame 经典 CAN 数据帧；提交时复制负载。
+* @param[in] priority 数值越小越先处理，范围 0～3。
+* @param[in] deadline_ms 从成功入队起算的总期限，单位 ms，范围 1～INT32_MAX。
+* @param[out] request_id 非空；成功时写非零编号，失败保持原值。
+* @return 调度器提交结果；队列接收不等于 HAL 接受或对端确认。
+* @note 未被 HAL 接受的帧可重试初次尝试后的最多3次；HAL接受后的失败不重试。
+ */
+CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *source,
+                                      const CAN_TxFrame_t *frame,
+                                      CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                      uint32_t *request_id);
+
+/** @brief 原子复制一组按批内顺序调度的一次性帧，容量不足时整组拒绝。
+* @param[in] hcan 已启动服务的总线句柄。
+* @param[in] source 可选长期来源标识。
+* @param[in] frames 连续可读的帧描述数组，1～8项；每项负载在返回时复制。
+* @param[in] frame_count 组内帧数，不得超过8。
+* @param[in] priority 数值越小越先处理，范围 0～3。
+* @param[in] deadline_ms 从成功入队起算的总期限，单位 ms，范围 1～INT32_MAX。
+* @param[out] request_id 非空；失败保持原值。
+* @return 调度器提交结果；组内帧依次尝试提交，完成／失败通过状态查询报告。
+* @note 一组提交期间不会插入其他软件请求，但其他总线节点仍可参与仲裁；已被 HAL 接受的帧不会由软件重试。
+ */
+CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void *source,
+                                           const CAN_TxFrame_t *frames, size_t frame_count,
+                                           CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                           uint32_t *request_id);
+
+/** @brief 在1ms级普通任务中推进每条总线最多一帧，按优先级与期限调度。
+* @note 只在 MotorControlTask() 或专用自测任务调用；不等待 FIFO 空闲，每条总线每次至多尝试一帧。
+ */
+void CANProcessTx(void);
+
+/** @brief 查询请求入队、HAL接受及完成状态；读取不推进队列。
+* @param[in] request_id 非零请求编号。
+* @param[out] result 非空；找到时整体复制，参数错误或记录已回收时保持原值。
+* @return 1 表示找到请求，0 表示参数错误、ISR 上下文或记录已回收。
+* @note 限普通任务查询；HAL 接受与传输完成由不同状态表示。
+ */
+uint8_t CANGetTxRequestState(uint32_t request_id, CAN_TxResult_t *result);
+
+/** @brief 取消尚未全部交给 HAL 的请求；已接受帧不能撤回。
+* @param[in] request_id 非零请求编号。
+* @return 1 表示排队剩余部分已取消，0 表示请求不存在或已全部交给 HAL。
+ */
+uint8_t CANCancelTxRequest(uint32_t request_id);
+
+/** @brief 复制指定总线调度统计；查询不推进发送。
+* @param[in] hcan 已支持的 FDCAN 句柄。
+* @param[out] stats 输出对象；参数错误时保持原值。
+* @return 1 表示复制成功，0 表示参数无效或处于 ISR 上下文。
+ */
+uint8_t CANGetTxSchedulerStats(FDCAN_HandleTypeDef *hcan,
+                               CAN_TxSchedulerStats_t *stats);
+
+/** @brief 估算经典 CAN 帧含最坏位填充和帧间隔的位数。
+* @param[in] identifier_type 标准或扩展标识符类型。
+* @param[in] data_length 数据长度，0～8字节。
+* @return 合法帧的保守位数；参数无效返回0。
+ */
+uint16_t CANClassicFrameWorstCaseBits(CAN_TxIdType_t identifier_type,
+                                      uint8_t data_length);
 
 /** @brief 读取 CAN 协议及错误计数。
 * @param[in] hcan 有效句柄；NULL 时不处理。

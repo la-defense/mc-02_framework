@@ -10,6 +10,7 @@
 
 #define HAL_OK 0u
 #define HAL_ERROR 1u
+typedef uint32_t HAL_StatusTypeDef;
 #define HAL_FDCAN_STATE_READY 1u
 #define HAL_FDCAN_STATE_BUSY 2u
 
@@ -31,6 +32,8 @@
 #define FDCAN_IT_RX_FIFO1_MESSAGE_LOST (1u << 5)
 #define FDCAN_IT_RX_FIFO1_FULL (1u << 6)
 #define FDCAN_IT_RX_FIFO1_WATERMARK (1u << 7)
+#define FDCAN_IT_TX_COMPLETE (1u << 8)
+#define FDCAN_IT_TX_ABORT_COMPLETE (1u << 9)
 
 #define FDCAN_RX_FIFO0 0u
 #define FDCAN_RX_FIFO1 1u
@@ -41,6 +44,7 @@
 #define FDCAN_FILTER_TO_RXFIFO0 0u
 #define FDCAN_FILTER_TO_RXFIFO1 1u
 #define FDCAN_STANDARD_ID 0u
+#define FDCAN_EXTENDED_ID 1u
 #define FDCAN_DATA_FRAME 0u
 #define FDCAN_MODE_NORMAL 0u
 #define FDCAN_MODE_EXTERNAL_LOOPBACK 1u
@@ -144,5 +148,8 @@ uint32_t HAL_FDCAN_GetRxFifoFillLevel(FDCAN_HandleTypeDef *handle, uint32_t fifo
 uint32_t HAL_FDCAN_GetRxMessage(FDCAN_HandleTypeDef *handle, uint32_t fifo,
                                 FDCAN_RxHeaderTypeDef *header, uint8_t *data);
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *handle, uint32_t flags);
+uint32_t HAL_FDCAN_GetLatestTxFifoQRequestBuffer(FDCAN_HandleTypeDef *handle);
+void HAL_FDCAN_TxBufferCompleteCallback(FDCAN_HandleTypeDef *handle, uint32_t indexes);
+void HAL_FDCAN_TxBufferAbortCallback(FDCAN_HandleTypeDef *handle, uint32_t indexes);
 
 #endif

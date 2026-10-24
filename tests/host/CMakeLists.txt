@@ -279,6 +279,13 @@ add_test(NAME production_can_full_queue_burst COMMAND lk_motor_bsp_can_test rx-b
 set_tests_properties(production_can_full_queue_burst PROPERTIES TIMEOUT 10)
 add_test(NAME production_dji_parser_full_queue_burst COMMAND lk_motor_bsp_can_test dji-rx-burst)
 set_tests_properties(production_dji_parser_full_queue_burst PROPERTIES TIMEOUT 10)
+foreach(can_tx_scenario IN ITEMS arguments-copy queue-batch-buses periodic-budget expiry-cancel-wrap
+    retry-abort budget-large-arithmetic retry-priority)
+  string(REPLACE "-" "_" can_tx_test_suffix "${can_tx_scenario}")
+  add_test(NAME production_can_tx_${can_tx_test_suffix}
+    COMMAND lk_motor_bsp_can_test tx-${can_tx_scenario})
+  set_tests_properties(production_can_tx_${can_tx_test_suffix} PROPERTIES TIMEOUT 10)
+endforeach()
 
 # DM 测试链接生产电机、FDCAN 注册和 Daemon；测试仅替换 HAL、RTOS、时间与日志。
 add_executable(dm_motor_test dm_motor_test.c ../../modules/motor/DMmotor/dmmotor.c

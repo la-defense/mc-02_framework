@@ -22,12 +22,24 @@ void DaemonReload(DaemonInstance *instance) { (void)instance; daemon_online = 1u
 uint8_t DaemonIsOnline(DaemonInstance *instance) { (void)instance; return daemon_online; }
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
+    can_instance.can_handle = config->can_handle;
+    can_instance.tx_id = config->tx_id;
     can_instance.id = config->id;
     rx_callback = config->can_module_callback;
     return &can_instance;
 }
-void CANSetDLC(CANInstance *instance, uint8_t length) { (void)instance; (void)length; }
-uint8_t CANTransmit(CANInstance *instance, float timeout) { (void)instance; (void)timeout; ++sends; return 1u; }
+CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void *source,
+                                           const CAN_TxFrame_t *frames, size_t frame_count,
+                                           CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                           uint32_t *request_id)
+{
+    (void)hcan; (void)source; (void)priority; (void)deadline_ms;
+    if (frames == NULL || frame_count == 0u || request_id == NULL)
+        return CAN_TX_SUBMIT_INVALID;
+    sends += (uint32_t)frame_count;
+    *request_id = 1u;
+    return CAN_TX_SUBMIT_ACCEPTED;
+}
 static void deliver(uint32_t timestamp_ms, const uint8_t *bytes, uint8_t length)
 {
     now_ms = timestamp_ms;

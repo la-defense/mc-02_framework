@@ -38,21 +38,28 @@ static float uint16_to_float(uint16_t x_int, float x_min, float x_max, int bits)
 // 仅硬件分支使用：模式选择影响扩展帧编号和数据字段，当前依赖待适配的 BSP 类型。
 static void XMMotorSetMode(XMMotor_Mode_e cmd, XMMotorInstance *motor)
 {
+    uint32_t identifier = 0x0300007fu;
     if (cmd == XM_CMD_MOTOR_MODE)
     {
         memset(motor->motor_can_instace->tx_buff, 0, 8);
-        motor->motor_can_instace->txconf.ExtId = 0x0300007f;
     }
     else if (cmd == XM_CMD_CURRENT_MODE)
     {
-        motor->motor_can_instace->txconf.ExtId = 0x12 << 24 | 0x0 << 8 | motor->motor_can_instace->tx_id;
-        motor->motor_can_instace->txconf.ExtId = 0x1200007f;
+        identifier = 0x1200007fu;
         motor->motor_can_instace->tx_buff[0] = (uint8_t)0x05;
         motor->motor_can_instace->tx_buff[1] = (uint8_t)0x70;
         motor->motor_can_instace->tx_buff[4] = (uint8_t)0x03;
     }
 
-    CANTransmit(motor->motor_can_instace, 1);
+    const CAN_TxFrame_t frame = {
+        .identifier = identifier,
+        .identifier_type = CAN_TX_ID_EXTENDED,
+        .data = motor->motor_can_instace->tx_buff,
+        .length = 8u,
+    };
+    uint32_t request_id = 0u;
+    (void)CANSubmitOneShot(motor->motor_can_instace->can_handle, motor->motor_can_instace,
+                           &frame, CAN_TX_PRIORITY_URGENT, 100u, &request_id);
 }
 
 static void XMMotorDecode(CANInstance *motor_can)
@@ -278,9 +285,6 @@ void XMMotorTask(void const *argument)
             set = 0;
 
         // 拓展帧
-        motor->motor_can_instace->txconf.ExtId = 0x12 << 24 | 0x0 << 8 | motor->motor_can_instace->tx_id;
-        motor->motor_can_instace->txconf.StdId = 0;
-
         memset(motor->motor_can_instace->tx_buff, 0, 8);
         motor->motor_can_instace->tx_buff[0] = (uint8_t)(0x06);
         motor->motor_can_instace->tx_buff[1] = (uint8_t)(0x70);
@@ -289,7 +293,16 @@ void XMMotorTask(void const *argument)
         motor->motor_can_instace->tx_buff[6] = (uint8_t)((*(unsigned long*)&set & 0x00FF0000) >> 16);
         motor->motor_can_instace->tx_buff[7] = (uint8_t)((*(unsigned long*)&set & 0xFF000000) >> 24);
 
-        CANTransmit(motor->motor_can_instace, 1);
+        const CAN_TxFrame_t frame = {
+            .identifier = 0x1200007fu,
+            .identifier_type = CAN_TX_ID_EXTENDED,
+            .data = motor->motor_can_instace->tx_buff,
+            .length = 8u,
+        };
+        uint32_t request_id = 0u;
+        (void)CANSubmitPeriodic(motor->motor_can_instace->can_handle,
+                                motor->motor_can_instace, 0u, &frame,
+                                CAN_TX_PRIORITY_CONTROL, 10u, 2000u, &request_id);
 
         osDelay(2);
     }

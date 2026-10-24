@@ -9,10 +9,12 @@
 #include "bsp_adc.h"
 #include "bsp_crash.h"
 #include "bsp_param.h"
+#include "bsp_can.h"
 
 void BSPInit(void)
 {
     DWT_Init(480);
+    CANInitWorkspace();
     BSPLogInit();
     // 启动先等待 4000 ms，任务创建成功后由 RobotInit 改为 200 ms。
     BSP_WatchdogInit(4000);

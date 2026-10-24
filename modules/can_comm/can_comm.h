@@ -62,13 +62,13 @@ typedef struct
  */
 CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config);
 
-/** @brief 添加帧头、长度、CRC8 和帧尾，每次最多 8 字节依次尝试发送。
-* @param[in,out] instance 初始化成功的实例，不能为 NULL；共用发送数组，不要并发调用。
-* @param[in] data 至少可读注册发送长度，不能为 NULL，数据会在本次调用中复制。
-* @note 不等待也不报告单帧发送失败，不保证整包到达；接收端通过整包校验判断是否采用。
-* 空参数或 CRC 计算失败时直接返回，不提交任何分片。
+/** @brief 添加帧头、长度、CRC8 和帧尾，并原子提交完整分片组。
+* @param[in] instance 初始化成功的实例，不能为 NULL；同一实例由调用者串行访问。
+* @param[in] data 至少可读注册发送长度，不能为 NULL；队列复制完成后可立即复用。
+* @return CAN队列提交状态；成功只表示完整分片组已入队，实际完成由请求状态独立记录。
+* @note 队列容量不足时整包拒绝，不提交部分分片；HAL接受后的故障不重放旧分片。
  */
-void CANCommSend(CANCommInstance *instance, uint8_t *data);
+CAN_TxSubmitStatus_t CANCommSend(CANCommInstance *instance, const uint8_t *data);
 
 /** @brief 清除更新标记并取得最后一次完整接收的内部数据，不检查时间。
 * @param[in,out] instance 初始化成功的实例，不能为 NULL。

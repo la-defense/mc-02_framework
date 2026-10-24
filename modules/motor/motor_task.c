@@ -52,5 +52,7 @@ void MotorControlTask()
     // 将所有的CAN设备集中在一处发送,最高反馈频率仅能达到500Hz,为了更好的控制效果,应使用新的HTMotorControlInit()接口
 
     // StepMotorControl();
+    // 控制模块只提交复制后的候选帧；唯一发送推进点统一仲裁并写入各总线 FIFO。
+    CANProcessTx();
     DWT_ProbeDone(&motor_prof_all, probe_all);
 }

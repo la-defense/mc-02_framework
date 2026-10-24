@@ -6,7 +6,7 @@
 #define BSP_INIT_H
 
 /**
- * @brief 按既定顺序准备计时、看门狗、日志、ADC、崩溃记录和参数。
+ * @brief 按既定顺序准备计时、CAN固定工作区、看门狗、日志、ADC、崩溃记录和参数。
  * @return 无返回值；本接口不汇总各步骤的成功状态，ParamInit 的结果仍未在此处理。
  * @note 先完成 HAL、480 MHz 系统时钟及所需外设的 MX 初始化，再由 RobotInit
  *       在调度器启动前调用一次。中断状态由 RobotInit 保存和恢复。

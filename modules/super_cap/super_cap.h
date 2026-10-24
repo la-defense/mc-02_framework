@@ -42,6 +42,6 @@ SuperCapInstance *SuperCapInit(SuperCap_Init_Config_s *supercap_config);
 * @param[in] instance 初始化成功的有效对象，不能为 NULL。
 * @param[in] data 至少可读八字节；具体字段和比例由实际电容协议决定，本接口不换算。
  */
-void SuperCapSend(SuperCapInstance *instance, uint8_t *data);
+CAN_TxSubmitStatus_t SuperCapSend(SuperCapInstance *instance, const uint8_t *data);
 
 #endif // !SUPER_CAP_H

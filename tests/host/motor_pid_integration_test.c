@@ -35,12 +35,18 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     instance->can_module_callback = config->can_module_callback;
     return instance;
 }
-uint8_t CANTransmit(CANInstance *instance, float timeout_ms)
+CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, uint32_t *request_id)
 {
-    (void)timeout_ms;
+    (void)hcan; (void)source; (void)key; (void)priority; (void)deadline_ms; (void)period_us;
+    TEST_CHECK(frame != NULL && request_id != NULL && frame->length <= sizeof(sent));
     ++submitted;
-    memcpy(sent, instance->tx_buff, sizeof(sent));
-    return 1u;
+    memset(sent, 0, sizeof(sent));
+    memcpy(sent, frame->data, frame->length);
+    *request_id = submitted;
+    return CAN_TX_SUBMIT_ACCEPTED;
 }
 
 static void tick(uint64_t at)

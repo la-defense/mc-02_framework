@@ -198,6 +198,17 @@ SECTIONS
   } >DTCMRAM
   ASSERT(SIZEOF(.log_workspace) <= 0x4000, "logger workspace exceeds 16 KiB DTCM budget")
 
+  /* CAN固定队列位于RAM_D2；BSP在首次使用时显式清零该NOLOAD区域。 */
+  .can_workspace (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __can_workspace_start__ = .;
+    KEEP(*(.can_workspace))
+    . = ALIGN(32);
+    __can_workspace_end__ = .;
+  } >RAM_D2
+  ASSERT(SIZEOF(.can_workspace) <= 0x8000, "CAN workspace exceeds 32 KiB RAM_D2 budget")
+
   
   /* Uninitialized data section */
   . = ALIGN(4);

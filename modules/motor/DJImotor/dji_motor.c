@@ -988,7 +988,21 @@ void DJIMotorControl()
     {
         if (sender_enable_flag[i])
         {
-            CANTransmit(&sender_assignment[i], 1);
+#ifdef FDCAN
+            const uint32_t identifier = sender_assignment[i].txconf.Identifier;
+#else
+            const uint32_t identifier = sender_assignment[i].txconf.StdId;
+#endif
+            const CAN_TxFrame_t frame = {
+                .identifier = identifier,
+                .identifier_type = CAN_TX_ID_STANDARD,
+                .data = sender_assignment[i].tx_buff,
+                .length = 8u,
+            };
+            uint32_t request_id = 0u;
+            (void)CANSubmitPeriodic(sender_assignment[i].can_handle,
+                                    &sender_assignment[i], 0u, &frame,
+                                    CAN_TX_PRIORITY_CONTROL, 4u, 1000u, &request_id);
         }
     }
     DWT_ProbeDone(&dji_prof_send, probe_send);
@@ -1005,7 +1019,8 @@ volatile uint32_t can_dji_inject_fail = 0;
 volatile uint32_t can_dji_inject_multi_turn_err = 0;
 volatile uint32_t can_dji_inject_frame_cnt = 0;
 
-static CANInstance *s_inject_tx = NULL;             /* 注入发送用的临时实例 */
+static uint8_t s_inject_source;                     /* 固定来源身份，不持有发送缓存 */
+static uint8_t s_inject_frame[8];
 static DJIMotorInstance *s_inject_target = NULL;    /* 被注入的电机 */
 static DJI_Motor_Measure_s s_inject_backup;         /* 测试前的 measure, 结束后还原 */
 static FDCAN_HandleTypeDef *s_inject_h = NULL;
@@ -1013,18 +1028,27 @@ static FDCAN_HandleTypeDef *s_inject_h = NULL;
 /* 按 DJI 反馈帧格式填好 tx_buff 并发出(不等待接收) */
 static void DJIInjectSend(uint16_t ecd, int16_t speed_rpm, int16_t current_raw, uint8_t temp)
 {
-    if (s_inject_tx == NULL)
+    if (s_inject_h == NULL)
         return;
-    s_inject_tx->tx_buff[0] = (uint8_t)(ecd >> 8);
-    s_inject_tx->tx_buff[1] = (uint8_t)(ecd & 0xFFu);
-    s_inject_tx->tx_buff[2] = (uint8_t)(((uint16_t)speed_rpm) >> 8);
-    s_inject_tx->tx_buff[3] = (uint8_t)(((uint16_t)speed_rpm) & 0xFFu);
-    s_inject_tx->tx_buff[4] = (uint8_t)(((uint16_t)current_raw) >> 8);
-    s_inject_tx->tx_buff[5] = (uint8_t)(((uint16_t)current_raw) & 0xFFu);
-    s_inject_tx->tx_buff[6] = temp;
-    s_inject_tx->tx_buff[7] = 0u;
+    s_inject_frame[0] = (uint8_t)(ecd >> 8);
+    s_inject_frame[1] = (uint8_t)(ecd & 0xFFu);
+    s_inject_frame[2] = (uint8_t)(((uint16_t)speed_rpm) >> 8);
+    s_inject_frame[3] = (uint8_t)(((uint16_t)speed_rpm) & 0xFFu);
+    s_inject_frame[4] = (uint8_t)(((uint16_t)current_raw) >> 8);
+    s_inject_frame[5] = (uint8_t)(((uint16_t)current_raw) & 0xFFu);
+    s_inject_frame[6] = temp;
+    s_inject_frame[7] = 0u;
     can_dji_inject_frame_cnt++;
-    (void)CANTransmit(s_inject_tx, 0.0f);
+    const CAN_TxFrame_t frame = {
+        .identifier = s_inject_target->motor_can_instance->rx_id,
+        .identifier_type = CAN_TX_ID_STANDARD,
+        .data = s_inject_frame,
+        .length = 8u,
+    };
+    uint32_t request_id = 0u;
+    if (CANSubmitOneShot(s_inject_h, &s_inject_source, &frame,
+                         CAN_TX_PRIORITY_URGENT, 3u, &request_id) != CAN_TX_SUBMIT_ACCEPTED)
+        can_dji_inject_fail++;
 }
 
 /* 边消费接收队列边等, 直到目标电机的 ecd 变成期望值; 返回 1=等到 */
@@ -1034,6 +1058,7 @@ static uint8_t DJIInjectWaitEcd(uint16_t expect, uint32_t timeout_us)
     while (DWT_ProbeElapsedUs(t0) < timeout_us)
     {
         CANProcessRx();
+        CANProcessTx();
         if (s_inject_target != NULL && s_inject_target->measure.ecd == expect)
             return 1u;
     }
@@ -1075,25 +1100,8 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
        回环自测不需要这一步, 因为它注册测试实例时自己会加滤镜。 */
     CANReapplyFilters();
 
-    /* 2. 注册"只发不收"的注入实例: tx_id 取目标电机的 rx_id(如 0x201),
-          回环回来的帧就会命中该电机的接收滤镜, 走进它正常的解码路径。
-          rx_id 用一个用不到的 ID, 免得去抢别人要收的帧。 */
-    CAN_Init_Config_s cfg = {
-        .can_handle = s_inject_h,
-        .tx_id = target_rx_id,
-        .rx_id = 0x7FFu,
-        .can_module_callback = NULL,
-        .id = NULL,
-    };
-    s_inject_tx = CANRegister(&cfg);
-    if (s_inject_tx == NULL)
-    {
-        BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_07);
-        (void)CANForceMode(s_inject_h, FDCAN_MODE_NORMAL, 0u);
-        CANReapplyFilters();
-        return 0u;
-    }
-    CANSetDLC(s_inject_tx, 8u);
+    /* 发送接口按已运行总线句柄提交复制帧，无需制造无接收用途的注册实例。 */
+    (void)target_rx_id;
 
     /* ---- 测试 1: 单帧解码(ecd / 温度) ---- */
     DJIInjectSend(1000u, 100, 50, 42u);
@@ -1151,12 +1159,11 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
     /* 压测模式: 保留回环与注入实例, 由 daemon 循环持续注入, 用来观察队列深度与丢帧 */
     BSP_LOG_EVENT_2(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_08, BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_pass), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_fail));
 #else
-    /* 收尾: 还原 measure、注销注入实例、切回正常模式并重装滤镜 */
+    /* 收尾: 还原 measure、切回正常模式并重装滤镜 */
     s_inject_target->measure = s_inject_backup;
-    CANUnregisterInstance(s_inject_tx);
-    s_inject_tx = NULL;
     (void)CANForceMode(s_inject_h, FDCAN_MODE_NORMAL, 0u);
     CANReapplyFilters();
+    s_inject_h = NULL;
 #endif
 
     BSP_LOG_EVENT_4(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_09, BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_pass), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_fail), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_multi_turn_err), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_frame_cnt));
@@ -1166,7 +1173,7 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
 #if CAN_DJI_INJECT_TEST >= 2
 void DJIInjectStressTick(void)
 {
-    if (s_inject_tx == NULL)
+    if (s_inject_h == NULL)
         return;
     /* 每轮塞一小批帧(不等待消费), 制造"任务还没来得及消费"的场景,
        从而观察 rxq_peak(队列最大占用)与 rxq_drop(队列满丢帧)。 */

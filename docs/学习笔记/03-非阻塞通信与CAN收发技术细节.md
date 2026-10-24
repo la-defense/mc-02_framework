@@ -93,7 +93,7 @@ DMA 的工作模型是：**内存 ↔ 外设数据寄存器（DR）**逐字节�
 
 ## 4. 我们原来的写法为什么把系统拖垮（真实数据）
 
-改造前的代码（简化）：
+改造前的代码（简化，仅作历史对照；当前发送入口见第5节）：
 
 ```c
 while (HAL_FDCAN_GetTxFifoFreeLevel(handle) == 0) {      /* 信箱满就一直等 */
@@ -129,48 +129,40 @@ HAL_FDCAN_AddMessageToTxFifoQ(handle, &conf, buf);
 
 ---
 
-## 5. 改成非阻塞：具体写了什么
+## 5. 从一次性发送接口改成分用途调度（MC02-0060）
 
-### 5.1 发送：满了就丢，绝不等待
-
-```c
-uint8_t CANTransmit(CANInstance *ins, float timeout /* 保留但不再使用 */)
-{
-    probe_start = DWT_ProbeStart();
-
-    if (HAL_FDCAN_GetTxFifoFreeLevel(handle) == 0u) {   /* 信箱满 */
-        stats->tx_drop++;                                /* 记一笔 */
-        LogRateLimited(...);                             /* 限速打印, 不刷屏 */
-        DWT_ProbeDone(&can_prof_tx, probe_start);
-        return 0;                                        /* 立刻返回, 不等待 */
-    }
-    if (HAL_FDCAN_AddMessageToTxFifoQ(handle, &conf, buf) != HAL_OK) {
-        stats->tx_error++;
-        return 0;
-    }
-    stats->tx_ok++;
-    return 1;
-}
-```
-
-**为什么"丢一帧"比"等 1ms"好？**
-
-- 丢一帧的后果：这个电机在接下来的 1ms 里继续执行上一帧的指令（电流/速度给定是连续的），几乎没有影响；下一周期会自动重发；
-- 等 1ms 的后果：整个 motor 任务这一轮延迟 1~3ms，**所有**电机一起被拖慢，还能把更高层的控制节奏打乱；
-- 一句话：**丢一帧是局部小损失，等待是全系统大损失。**
-
-### 5.2 缓冲深度与发送完成统计
-
-- TX FIFO 深度 4 → 16：突发时多给硬件一点缓冲；
-- 打开 `FDCAN_IT_TX_FIFO_EMPTY`（队列清空）与 `FDCAN_IT_TX_COMPLETE`（单帧完成）中断，在回调里只做计数：
+### 5.1 调用方提交副本，任务统一推进
 
 ```c
-void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *hfdcan) { bus->tx_complete++; }
-void HAL_FDCAN_TxBufferCompleteCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t indexes)
-{ bus->tx_done += __builtin_popcount(indexes); }
+CAN_TxFrame_t frame = {
+    .identifier = 0x200,
+    .identifier_type = CAN_TX_ID_STANDARD,
+    .data = payload,
+    .length = 8,
+};
+uint32_t request_id = 0;
+CAN_TxSubmitStatus_t status = CANSubmitPeriodic(
+    hcan, stable_source, 0, &frame, CAN_TX_PRIORITY_CONTROL,
+    4, 1000, &request_id);
 ```
 
-**注意**：这两个回调在**中断上下文**执行——只允许加法、赋值这类操作。不能打印、不能调用可能阻塞的东西。
+`CANSubmitPeriodic()`会把最多8字节复制进对应总线的固定队列，所以函数返回后调用方可以复用原缓冲。周期目标由“稳定来源指针＋来源内键”区分；同一目标还没交给硬件时，新提交会替换旧副本。总线忙或 HAL 拒绝时，这个周期目标立即失败并释放队列项，调用方下一周期重新计算、提交新值，调度器不会替它重放旧值。
+
+`MotorControlTask()`末尾调用`CANProcessTx()`。它每次最多为每条总线提交一帧给 HAL，不轮询等待邮箱；先按优先级选任务，同优先级下选择期限更近的请求。请求入队不代表 HAL 已接受，更不代表应用层对端已经处理。
+
+一次性命令使用`CANSubmitOneShot()`，多帧命令可通过`CANSubmitOneShotBatch()`整体复制和入队；一批最多8帧，容量不足时整批拒绝。帧按批内顺序交给硬件，调度器不会在批次中途插入其他软件请求，但物理总线仍由 CAN 仲裁决定实际次序。
+
+### 5.2 每总线配置、预算和完成状态
+
+`CANConfigureTxBus()`可以在首次`CANRegister()`前分别设置队列请求数、经典 CAN 标称速率和周期利用率上限。当前默认值为 CAN1 **16项／70%**、CAN2 **12项／65%**、CAN3 **8项／50%**，速率均为1 Mbit/s。周期流按最坏帧长和周期预留带宽；预算超限时提交失败。此预算只核算本 MCU 登记的周期流，不包含总线上其他节点。
+
+请求状态用`CANGetTxRequestState()`复制读取，依次区分排队、正在调度、已有帧交给 HAL、完成、失败、过期、取消和被新周期值替代。结果另给出帧总数、HAL 接受数、完成数及最近 HAL 错误。每总线保存最近32项结果；旧终态记录被复用后，查询会返回未找到。
+
+初次提交未被 HAL 接受时，一次性命令最多再试3次；如果 HAL 已接受后触发中止，记录失败且不重发，避免同一命令执行两次。周期帧不重试。提交状态、HAL 接受和 FDCAN 完成回调是三个不同阶段；完成回调不证明上层业务已收到或执行命令。
+
+### 5.3 发送完成中断和接收派发
+
+发送完成及中止回调只按硬件缓冲位更新对应请求，不打印、不等待。接收仍按下一节的中断入队和任务派发规则运行；发送调度不改变接收队列的所有权。
 
 ### 5.3 接收：中断源精简 + O(1) 查表派发
 
@@ -235,9 +227,7 @@ I²C 地址在配置中填写未左移的0x0E，由底层登记函数左移。�
 
 ### 6.2 接口说明里的完成、时间和地址（MC02-0123）
 
-[bsp_can.h](../../bsp/can/bsp_can.h) 的发送返回 1 只表示写入硬件队列，空间满则立即返回 0，
-旧的 `timeout` 参数已忽略。发送完成统计记录的是回调次数，一次通知可能包含多帧，不能直接等同于帧数。
-当前回环自测默认使用外部回环，会发出测试帧，旧注释中的“不驱动总线”不能沿用。
+[bsp_can.h](../../bsp/can/bsp_can.h) 的周期和一次性接口返回“调度器是否收下请求”；请求状态再区分排队、HAL 接受和 FDCAN 完成。周期目标只合并未启动的同来源同键请求，忙或 HAL 错误后不重放；一次性命令只在尚未被 HAL 接受时重试。预算只统计本固件登记的周期流，不能据此当作物理总线的总负载。当前回环自测默认使用外部回环，会发出测试帧，旧注释中的“不驱动总线”不能沿用。
 
 UART、USB 都是中断复制数据、任务派发，超过 50 ms 的排队数据不再回调。
 UART回调接收`USART_RxBlock_t`，USB仍使用`VCPGetCurrentRxData()`。
@@ -381,14 +371,15 @@ py -3 tools\rtt_monitor.py --openocd "<OpenOCD可执行文件>" --elf build\wsl\
 
 | 改动 | 位置 | 作用 |
 |---|---|---|
-| `CANTransmit()` 改非阻塞 + 丢帧计数 | `bsp/can/bsp_can.c` | 去掉每个 tick 2~3ms 的自旋 |
-| TX FIFO 4 → 16 | `Core/Src/fdcan.c` | 突发时少丢帧 |
-| `TxFifoEmpty / TxBufferComplete` 回调 | `bsp/can/bsp_can.c` | 统计队列空及发送完成的通知次数，不能直接换成帧数 |
+| `CANSubmitPeriodic()` / 一次性批量接口 | `bsp/can/bsp_can.c` | 复制负载、合并未启动的周期新值，按每总线队列和预算检查 |
+| `CANProcessTx()` 调度推进 | `modules/motor/motor_task.c` | 每总线每轮最多尝试一帧，不等待；HAL 接受前的一次性失败最多重试3次 |
+| 请求状态与完成／中止回调 | `bsp/can/bsp_can.c` | 分开报告入队、HAL 接受和完成；已接受后中止不重发 |
+| 每总线周期利用率预算 | `bsp/can/bsp_can.h` | 默认 CAN1 70%、CAN2 65%、CAN3 50%，可在注册实例前配置 |
 | 接收中断源精简为 `NEW_MESSAGE + MESSAGE_LOST` | `bsp/can/bsp_can.c` | 去掉重复进中断 |
 | `rx_lookup[bus][id & 0x1FF]` 查表派发 | `bsp/can/bsp_can.c` | ISR 里从 O(N) 变 O(1) |
 | ISR 排空 FIFO（不再提前 return） | `bsp/can/bsp_can.c` | 修掉"FIFO 明明有帧却不处理"的丢帧根因 |
 | `CANHealthMonitor()` 10Hz BusOff 恢复 | `bsp/can` + daemon 任务 | 定期尝试恢复并记录次数，仍需查询实际状态 |
-| `CANSetDLC()` 死循环改成钳位+计数 | `bsp/can/bsp_can.c` | 参数错误不再把系统卡死 |
+| 旧 `CANTransmit()` / `CANSetDLC()` 入口移除 | `bsp/can/bsp_can.h` | 活动调用方统一使用复制提交与有界调度接口 |
 
 ## 11. UART的块和协议帧要分开（BSPUART-03U1）
 

@@ -6,8 +6,9 @@
 #include "motor_task.h"
 #include "profile_io.h"
 #include "usb_transport.h"
-static unsigned can_pending, uart_pending, usb_pending, dji_outputs, lk_outputs;
+static unsigned can_pending, can_tx_pumps, uart_pending, usb_pending, dji_outputs, lk_outputs;
 void CANProcessRx(void) { if (can_pending) --can_pending; }
+void CANProcessTx(void) { ++can_tx_pumps; }
 void USARTProcessRx(void) { if (uart_pending) --uart_pending; }
 USBStatus_t USBTransportProcessRx(void) { if (usb_pending) --usb_pending; return USB_OK; }
 void DJIMotorControl(void) { ++dji_outputs; }
@@ -19,6 +20,7 @@ int main(void)
     MotorControlTask();
     MotorControlTask();
     CHECK(can_pending == 0 && uart_pending == 0 && usb_pending == 0);
+    CHECK(can_tx_pumps == 2);
 #if defined(MC02_PROFILE_BENCH_SAFE)
     CHECK(dji_outputs == 0 && lk_outputs == 0);
 #else

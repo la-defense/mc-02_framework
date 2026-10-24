@@ -34,6 +34,7 @@ struct DMMotorInstance
     CANInstance *can_instance;
     DaemonInstance *daemon;
     uint32_t command_sequence;
+    uint32_t command_tx_request_id;
     DMMotorCommandType_t command_type;
     DMMotorCommandResult_t command_result;
     DMMotorCalculationStatus_t calculation_status;
@@ -146,6 +147,7 @@ static uint8_t DMMotorProcessCommand(DMMotorInstance *motor)
 {
     DMMotorCommandType_t type = DMMOTOR_COMMAND_NONE;
     uint32_t sequence = 0u;
+    uint32_t tx_request_id = 0u;
 
     taskENTER_CRITICAL();
     if (motor->command_result == DMMOTOR_COMMAND_PENDING && motor->command_processing == 0u)
@@ -160,23 +162,78 @@ static uint8_t DMMotorProcessCommand(DMMotorInstance *motor)
         motor->command_processing = 1u;
         type = motor->command_type;
         sequence = motor->command_sequence;
+        tx_request_id = motor->command_tx_request_id;
     }
     taskEXIT_CRITICAL();
 
     if (type == DMMOTOR_COMMAND_NONE)
         return 0u;
 
-    // 任务独占发送缓冲，命令槽中的一条命令只尝试提交一次。
-    if (type == DMMOTOR_COMMAND_ENABLE)
-        DMMotorWriteModeFrame(motor->can_instance, DM_CMD_MOTOR_MODE);
+    uint8_t accepted = 0u;
+    if (tx_request_id != 0u)
+    {
+        CAN_TxResult_t tx_result;
+        memset(&tx_result, 0, sizeof(tx_result));
+        if (CANGetTxRequestState(tx_request_id, &tx_result) != 0u)
+        {
+            accepted = (uint8_t)(tx_result.state == CAN_TX_RESULT_IN_FLIGHT ||
+                                 tx_result.state == CAN_TX_RESULT_COMPLETE);
+            if (tx_result.state == CAN_TX_RESULT_QUEUED ||
+                tx_result.state == CAN_TX_RESULT_ACTIVE)
+            {
+                taskENTER_CRITICAL();
+                if (motor->command_sequence == sequence &&
+                    motor->command_result == DMMOTOR_COMMAND_PENDING)
+                    motor->command_processing = 0u;
+                taskEXIT_CRITICAL();
+                return 1u;
+            }
+            if (tx_result.state == CAN_TX_RESULT_FAILED ||
+                tx_result.state == CAN_TX_RESULT_EXPIRED ||
+                tx_result.state == CAN_TX_RESULT_CANCELLED ||
+                tx_result.state == CAN_TX_RESULT_SUPERSEDED)
+                accepted = 0u;
+        }
+    }
     else
-        DMMotorWriteModeFrame(motor->can_instance, DM_CMD_ZERO_POSITION);
-    const uint8_t accepted = CANTransmit(motor->can_instance, 0.0f);
+    {
+        // 任务在本地候选帧中准备命令；队列接收后即可复用实例缓冲。
+        if (type == DMMOTOR_COMMAND_ENABLE)
+            DMMotorWriteModeFrame(motor->can_instance, DM_CMD_MOTOR_MODE);
+        else
+            DMMotorWriteModeFrame(motor->can_instance, DM_CMD_ZERO_POSITION);
+        const CAN_TxFrame_t frame = {
+            .identifier = motor->tx_id,
+            .identifier_type = CAN_TX_ID_STANDARD,
+            .data = motor->can_instance->tx_buff,
+            .length = 8u,
+        };
+        uint32_t request_id = 0u;
+        const CAN_TxSubmitStatus_t submit_status = CANSubmitOneShot(
+            motor->can_handle, motor->can_instance, &frame, CAN_TX_PRIORITY_URGENT,
+            100u, &request_id);
+        taskENTER_CRITICAL();
+        if (motor->command_sequence == sequence &&
+            motor->command_result == DMMOTOR_COMMAND_PENDING)
+        {
+            if (submit_status == CAN_TX_SUBMIT_ACCEPTED)
+                motor->command_tx_request_id = request_id;
+            else
+            {
+                motor->command_result = DMMOTOR_COMMAND_REJECTED;
+                motor->enable_transition_pending = 0u;
+            }
+        }
+        motor->command_processing = 0u;
+        taskEXIT_CRITICAL();
+        return 1u;
+    }
 
     taskENTER_CRITICAL();
     if (motor->command_sequence == sequence && motor->command_result == DMMOTOR_COMMAND_PENDING)
     {
         motor->command_result = accepted != 0u ? DMMOTOR_COMMAND_ACCEPTED : DMMOTOR_COMMAND_REJECTED;
+        motor->command_tx_request_id = 0u;
         if (type == DMMOTOR_COMMAND_ENABLE && accepted != 0u)
         {
             motor->protocol_enabled = 1u;
@@ -247,7 +304,16 @@ static void DMMotorTask(void const *argument)
                 }
 
                 DMMotorWriteControlFrame(motor->can_instance, torque);
-                (void)CANTransmit(motor->can_instance, 0.0f);
+                const CAN_TxFrame_t frame = {
+                    .identifier = motor->tx_id,
+                    .identifier_type = CAN_TX_ID_STANDARD,
+                    .data = motor->can_instance->tx_buff,
+                    .length = 8u,
+                };
+                uint32_t request_id = 0u;
+                (void)CANSubmitPeriodic(motor->can_handle, motor->can_instance, 0u,
+                                        &frame, CAN_TX_PRIORITY_CONTROL, 10u, 2000u,
+                                        &request_id);
                 taskENTER_CRITICAL();
                 motor->calculation_status = result;
                 if (result == DMMOTOR_CALCULATION_INVALID_INPUT)
@@ -412,6 +478,7 @@ DMMotorStatus_t DMMotorStop(DMMotorInstance *motor)
     if (!DMMotorIsRegistered(motor))
         return DMMOTOR_STATUS_NOT_REGISTERED;
 
+    uint32_t cancel_request_id = 0u;
     taskENTER_CRITICAL();
     motor->pid_ref = 0.0f;
     motor->reference_available = 0u;
@@ -421,10 +488,14 @@ DMMotorStatus_t DMMotorStop(DMMotorInstance *motor)
     if (motor->command_result == DMMOTOR_COMMAND_PENDING && motor->command_processing == 0u)
     {
         // 只有尚未被任务取走的请求可以取消；已经开始提交的 CAN 帧无法撤回。
+        cancel_request_id = motor->command_tx_request_id;
+        motor->command_tx_request_id = 0u;
         motor->command_result = DMMOTOR_COMMAND_CANCELLED;
         status = DMMOTOR_STATUS_CANCELLED;
     }
     taskEXIT_CRITICAL();
+    if (cancel_request_id != 0u)
+        (void)CANCancelTxRequest(cancel_request_id);
     return status;
 }
 

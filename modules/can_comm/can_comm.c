@@ -148,26 +148,36 @@ CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config)
     return ins;
 }
 
-void CANCommSend(CANCommInstance *instance, uint8_t *data)
+CAN_TxSubmitStatus_t CANCommSend(CANCommInstance *instance, const uint8_t *data)
 {
     uint32_t crc8;
-    uint8_t send_len;
-    if (instance == NULL || data == NULL) return;
+    if (instance == NULL || data == NULL)
+        return CAN_TX_SUBMIT_INVALID;
     // 将data copy到raw_sendbuf中,计算crc8
     memcpy(instance->raw_sendbuf + 2, data, instance->send_data_len);
     // 在发送分片前确认 CRC 已算出，失败时不发送任何分片。
     if (CRCCompute(CRC8_CAN_A5, data, instance->send_data_len, &crc8) != CRC_OK)
-        return;
+        return CAN_TX_SUBMIT_INVALID;
     instance->raw_sendbuf[2 + instance->send_data_len] = crc8;
 
-    // CAN单次发送最大为8字节,如果超过8字节,需要分包发送
-    for (size_t i = 0; i < instance->send_buf_len; i += 8)
-    { // 如果是最后一包,send len将会小于8,要修改CAN的txconf中的DLC位,调用bsp_can提供的接口即可
-        send_len = instance->send_buf_len - i >= 8 ? 8 : instance->send_buf_len - i;
-        CANSetDLC(instance->can_ins, send_len);
-        memcpy(instance->can_ins->tx_buff, instance->raw_sendbuf + i, send_len);
-        CANTransmit(instance->can_ins, 1);
+    // 一次性把完整分片组交给有界队列，容量不足时不发送半包。
+    CAN_TxFrame_t frames[CAN_TX_MAX_BATCH_FRAMES] = {0};
+    const size_t frame_count = ((size_t)instance->send_buf_len + 7u) / 8u;
+    if (frame_count == 0u || frame_count > CAN_TX_MAX_BATCH_FRAMES)
+        return CAN_TX_SUBMIT_INVALID;
+    for (size_t i = 0u; i < frame_count; ++i)
+    {
+        const size_t offset = i * 8u;
+        const size_t remaining = (size_t)instance->send_buf_len - offset;
+        frames[i].identifier = instance->can_ins->tx_id;
+        frames[i].identifier_type = CAN_TX_ID_STANDARD;
+        frames[i].data = instance->raw_sendbuf + offset;
+        frames[i].length = (uint8_t)(remaining >= 8u ? 8u : remaining);
     }
+    uint32_t request_id = 0u;
+    return CANSubmitOneShotBatch(instance->can_ins->can_handle, instance,
+                                 frames, frame_count, CAN_TX_PRIORITY_NORMAL,
+                                 20u, &request_id);
 }
 
 void *CANCommGet(CANCommInstance *instance)

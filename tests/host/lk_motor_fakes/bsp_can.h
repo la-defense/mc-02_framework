@@ -41,6 +41,17 @@ typedef struct
 } CAN_Init_Config_s;
 
 CANInstance *CANRegister(CAN_Init_Config_s *config);
-uint8_t CANTransmit(CANInstance *instance, float timeout);
+#include "../can_tx_fake_api.h"
+CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, uint32_t *request_id);
+CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *source,
+                                      const CAN_TxFrame_t *frame, CAN_TxPriority_t priority,
+                                      uint32_t deadline_ms, uint32_t *request_id);
+CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void *source,
+                                           const CAN_TxFrame_t *frames, size_t frame_count,
+                                           CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                           uint32_t *request_id);
 
 #endif

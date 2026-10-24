@@ -13,6 +13,8 @@
 #include <setjmp.h>
 #include <stdlib.h>
 #include <string.h>
+
+volatile uint32_t test_ipsr;
 #if defined(DM_TEST_THREADS)
 #include <pthread.h>
 #include <sched.h>
@@ -47,6 +49,8 @@ static unsigned tx_accepts;
 static DMMotorInstance *stop_during_tx;
 static uint32_t sent_id[128];
 static uint8_t sent_frame[128][8];
+static uint32_t tx_latest_buffer[DEVICE_CAN_CNT];
+static uint8_t tx_next_buffer_index[DEVICE_CAN_CNT];
 static jmp_buf task_exit;
 #if defined(DM_TEST_THREADS)
 static pthread_mutex_t critical_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -115,9 +119,7 @@ uint32_t HAL_FDCAN_AddMessageToTxFifoQ(FDCAN_HandleTypeDef *handle,
     ++tx_calls;
     if (stop_during_tx != NULL)
     {
-        DMMotorInstance *motor = stop_during_tx;
-        stop_during_tx = NULL;
-        TEST_CHECK(DMMotorStop(motor) == DMMOTOR_STATUS_OK);
+        TEST_CHECK(0 && "停止交错应在发送推进前注入");
     }
     if (bus_index(handle) >= DEVICE_CAN_CNT || fail_tx_once != 0u)
     { fail_tx_once = 0u; return HAL_ERROR; }
@@ -126,8 +128,16 @@ uint32_t HAL_FDCAN_AddMessageToTxFifoQ(FDCAN_HandleTypeDef *handle,
         sent_id[tx_accepts] = header->Identifier;
         memcpy(sent_frame[tx_accepts], data, sizeof(sent_frame[tx_accepts]));
     }
+    const uint8_t bus = bus_index(handle);
+    tx_latest_buffer[bus] = 1u << tx_next_buffer_index[bus];
+    tx_next_buffer_index[bus] = (uint8_t)((tx_next_buffer_index[bus] + 1u) % 16u);
     ++tx_accepts;
     return HAL_OK;
+}
+uint32_t HAL_FDCAN_GetLatestTxFifoQRequestBuffer(FDCAN_HandleTypeDef *handle)
+{
+    const uint8_t bus = bus_index(handle);
+    return bus < DEVICE_CAN_CNT ? tx_latest_buffer[bus] : 0u;
 }
 uint32_t HAL_FDCAN_GetProtocolStatus(FDCAN_HandleTypeDef *handle, FDCAN_ProtocolStatusTypeDef *status)
 { (void)handle; memset(status, 0, sizeof(*status)); return HAL_OK; }
@@ -207,10 +217,21 @@ static void run_task(unsigned index, unsigned iterations)
 {
     TEST_CHECK(index < thread_create_calls && iterations != 0u);
     TEST_CHECK(threads[index].definition != NULL && threads[index].terminated == 0u);
-    task_iterations = iterations;
-    if (setjmp(task_exit) == 0)
-    { threads[index].definition->entry(threads[index].argument); TEST_CHECK(0 && "DMMotorTask returned"); }
-    TEST_CHECK(task_iterations == 0u);
+    for (unsigned i = 0u; i < iterations; ++i)
+    {
+        // 每个测试轮次后推进一次集中发送服务，模拟 MotorControlTask 的调度点。
+        task_iterations = 1u;
+        if (setjmp(task_exit) == 0)
+        { threads[index].definition->entry(threads[index].argument); TEST_CHECK(0 && "DMMotorTask returned"); }
+        TEST_CHECK(task_iterations == 0u);
+        if (stop_during_tx != NULL)
+        {
+            DMMotorInstance *motor = stop_during_tx;
+            stop_during_tx = NULL;
+            TEST_CHECK(DMMotorStop(motor) == DMMOTOR_STATUS_CANCELLED);
+        }
+        CANProcessTx();
+    }
 }
 static uint16_t torque_field(const uint8_t frame[8])
 { return (uint16_t)(((uint16_t)(frame[6] & 0x0fu) << 8u) | frame[7]); }
@@ -306,11 +327,13 @@ static void test_frames(void)
     run_task(0u, 1u); expect_mode_frame(0u, DM_CMD_ZERO_POSITION);
     TEST_CHECK(DMMotorGetState(motor, &state) == DMMOTOR_STATUS_OK);
     TEST_CHECK(state.running == 0u && state.protocol_enabled == 0u);
+    run_task(0u, 1u);
     TEST_CHECK(DMMotorEnable(motor) == DMMOTOR_STATUS_QUEUED);
     TEST_CHECK(DMMotorGetState(motor, &state) == DMMOTOR_STATUS_OK);
     TEST_CHECK(state.command_result == DMMOTOR_COMMAND_PENDING && tx_accepts == 1u);
     TEST_CHECK(DMMotorCaliEncoder(motor) == DMMOTOR_STATUS_BUSY);
     run_task(0u, 1u); TEST_CHECK(tx_accepts == 2u); expect_mode_frame(1u, DM_CMD_MOTOR_MODE);
+    run_task(0u, 1u);
     TEST_CHECK(DMMotorGetState(motor, &state) == DMMOTOR_STATUS_OK);
     TEST_CHECK(state.running != 0u && state.command_result == DMMOTOR_COMMAND_ACCEPTED);
     TEST_CHECK(state.reference_available == 0u);
@@ -337,7 +360,7 @@ static void test_reverse(void)
     config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
     DMMotorInstance *motor = DMMotorInit(&config);
     TEST_CHECK(motor != NULL && DMMotorControlInit() == DMMOTOR_STATUS_OK);
-    TEST_CHECK(DMMotorEnable(motor) == DMMOTOR_STATUS_QUEUED); run_task(0u, 1u);
+    TEST_CHECK(DMMotorEnable(motor) == DMMOTOR_STATUS_QUEUED); run_task(0u, 2u);
     TEST_CHECK(DMMotorSetRef(motor, 9.0f) == DMMOTOR_STATUS_OK); run_task(0u, 1u);
     TEST_CHECK(torque_field(sent_frame[1]) == 0x3ffu);
     TEST_CHECK(DMMotorSetRef(motor, FLT_MAX) == DMMOTOR_STATUS_OK); run_task(0u, 1u);
@@ -357,7 +380,7 @@ static void test_normal_edges(void)
     DMMotorInstance *motor = register_motor(&hfdcan1, 0x128u, 0x228u);
     TEST_CHECK(motor != NULL && DMMotorControlInit() == DMMOTOR_STATUS_OK);
     TEST_CHECK(DMMotorEnable(motor) == DMMOTOR_STATUS_QUEUED);
-    run_task(0u, 1u);
+    run_task(0u, 2u);
     const float references[] = {9.0f, -9.0f, DM_T_MIN, DM_T_MAX, 0.0f};
     const uint16_t expected[] = {0xbffu, 0x3ffu, 0x000u, 0xfffu, 0x7ffu};
     for (unsigned i = 0u; i < sizeof(references) / sizeof(references[0]); ++i)
@@ -376,12 +399,10 @@ static void test_commands(void)
     TEST_CHECK(DMMotorStop(motor) == DMMOTOR_STATUS_CANCELLED);
     run_task(0u, 1u); TEST_CHECK(tx_calls == 0u);
     fail_tx_once = 1u;
-    TEST_CHECK(DMMotorEnable(motor) == DMMOTOR_STATUS_QUEUED); run_task(0u, 1u);
+    TEST_CHECK(DMMotorEnable(motor) == DMMOTOR_STATUS_QUEUED); run_task(0u, 3u);
     DMMotorState_t state = {0};
     TEST_CHECK(DMMotorGetState(motor, &state) == DMMOTOR_STATUS_OK);
-    TEST_CHECK(state.running == 0u && state.command_result == DMMOTOR_COMMAND_REJECTED);
-    TEST_CHECK(tx_calls == 1u && tx_accepts == 0u);
-    TEST_CHECK(DMMotorEnable(motor) == DMMOTOR_STATUS_QUEUED); run_task(0u, 1u);
+    TEST_CHECK(state.running != 0u && state.command_result == DMMOTOR_COMMAND_ACCEPTED);
     TEST_CHECK(tx_calls == 2u && tx_accepts == 1u); expect_mode_frame(0u, DM_CMD_MOTOR_MODE);
     TEST_CHECK(DMMotorSetRef(motor, 4.0f) == DMMOTOR_STATUS_OK);
     fail_tx_once = 1u;
@@ -404,12 +425,16 @@ static void test_instance_routing(void)
     expect_mode_frame(0u, DM_CMD_MOTOR_MODE);
     expect_mode_frame(1u, DM_CMD_MOTOR_MODE);
     TEST_CHECK(sent_id[0] == 0x142u && sent_id[1] == 0x141u);
+    run_task(0u, 1u);
+    run_task(1u, 1u);
     TEST_CHECK(DMMotorSetRef(first, 9.0f) == DMMOTOR_STATUS_OK);
     TEST_CHECK(DMMotorSetRef(second, -9.0f) == DMMOTOR_STATUS_OK);
     run_task(0u, 1u);
     run_task(1u, 1u);
-    TEST_CHECK(sent_id[2] == 0x141u && torque_field(sent_frame[2]) == 0xbffu);
-    TEST_CHECK(sent_id[3] == 0x142u && torque_field(sent_frame[3]) == 0x3ffu);
+    TEST_CHECK(sent_id[2] == 0x141u);
+    TEST_CHECK(torque_field(sent_frame[2]) == 0xbffu);
+    TEST_CHECK(sent_id[3] == 0x142u);
+    TEST_CHECK(torque_field(sent_frame[3]) == 0x3ffu);
 }
 
 static void test_quarantine(void)
@@ -433,10 +458,10 @@ static void test_stop_during_submit(void)
     run_task(0u, 1u);
     DMMotorState_t state = {0};
     TEST_CHECK(DMMotorGetState(motor, &state) == DMMOTOR_STATUS_OK);
-    TEST_CHECK(state.protocol_enabled != 0u && state.running == 0u);
-    expect_mode_frame(0u, DM_CMD_MOTOR_MODE);
+    TEST_CHECK(state.protocol_enabled == 0u && state.running == 0u);
+    TEST_CHECK(state.command_result == DMMOTOR_COMMAND_CANCELLED && tx_accepts == 0u);
     run_task(0u, 1u);
-    expect_zero_control_frame(1u);
+    TEST_CHECK(tx_accepts == 0u);
 }
 
 #if defined(DM_TEST_THREADS)

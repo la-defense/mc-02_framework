@@ -19,12 +19,27 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
     TEST_CHECK(registered<2);
     CANInstance *instance=&instances[registered];
+    instance->can_handle=config->can_handle;
+    instance->tx_id=config->tx_id;
     instance->id=config->id;
     callbacks[registered++]=config->can_module_callback;
     return instance;
 }
-uint8_t CANTransmit(CANInstance *instance,float timeout_ms)
-{(void)instance;(void)timeout_ms;return 1;}
+static CAN_TxSubmitStatus_t fake_tx_submit(const CAN_TxFrame_t *frame, uint32_t *request_id)
+{
+    TEST_CHECK(frame != NULL && request_id != NULL && frame->length <= 8u);
+    *request_id = 1u;
+    return CAN_TX_SUBMIT_ACCEPTED;
+}
+CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, uint32_t *request_id)
+{(void)hcan;(void)source;(void)key;(void)priority;(void)deadline_ms;(void)period_us;return fake_tx_submit(frame,request_id);}
+CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *source,
+                                      const CAN_TxFrame_t *frame,CAN_TxPriority_t priority,
+                                      uint32_t deadline_ms,uint32_t *request_id)
+{(void)hcan;(void)source;(void)priority;(void)deadline_ms;return fake_tx_submit(frame,request_id);}
 DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
 {(void)config;TEST_CHECK(daemon_count<2);return &daemons[daemon_count++];}
 void DaemonReload(DaemonInstance *instance){(void)instance;++reloads;}

@@ -442,8 +442,16 @@ void LKMotorControl(void)
     {
         if (lk_sender_instance[bus] == NULL)
             continue;
-        memcpy(lk_sender_instance[bus]->tx_buff, tx_frames[bus], sizeof(tx_frames[bus]));
-        (void)CANTransmit(lk_sender_instance[bus], 0.2f);
+        const CAN_TxFrame_t frame = {
+            .identifier = 0x280u,
+            .identifier_type = CAN_TX_ID_STANDARD,
+            .data = tx_frames[bus],
+            .length = 8u,
+        };
+        uint32_t request_id = 0u;
+        (void)CANSubmitPeriodic(lk_sender_instance[bus]->can_handle,
+                                lk_sender_instance[bus], 0u, &frame,
+                                CAN_TX_PRIORITY_CONTROL, 4u, 1000u, &request_id);
     }
 }
 

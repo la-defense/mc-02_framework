@@ -50,10 +50,19 @@ SuperCapInstance *SuperCapInit(SuperCap_Init_Config_s *supercap_config)
     return super_cap_instance;
 }
 
-void SuperCapSend(SuperCapInstance *instance, uint8_t *data)
+CAN_TxSubmitStatus_t SuperCapSend(SuperCapInstance *instance, const uint8_t *data)
 {
-    memcpy(instance->can_ins->tx_buff, data, 8);
-    CANTransmit(instance->can_ins,1);
+    if (instance == NULL || data == NULL || instance->can_ins == NULL)
+        return CAN_TX_SUBMIT_INVALID;
+    const CAN_TxFrame_t frame = {
+        .identifier = instance->can_ins->tx_id,
+        .identifier_type = CAN_TX_ID_STANDARD,
+        .data = data,
+        .length = 8u,
+    };
+    uint32_t request_id = 0u;
+    return CANSubmitPeriodic(instance->can_ins->can_handle, instance->can_ins, 0u,
+                             &frame, CAN_TX_PRIORITY_NORMAL, 20u, 10000u, &request_id);
 }
 
 /** @brief 按值返回最近保存的原始反馈，不检查在线或数据时间。

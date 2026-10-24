@@ -9,6 +9,10 @@
 #include "bsp_dwt.h"
 #include "bsp_log.h"
 #include "cmsis_os.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include <limits.h>
+#include <stddef.h>
 
 // 注册表用于 ID 查找、过滤规则重装及注销；中断不直接运行模块解析。
 static CANInstance *can_instance[CAN_MX_REGISTER_CNT] = {NULL};
@@ -45,12 +49,80 @@ typedef struct
      FDCAN_IT_RX_FIFO1_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_MESSAGE_LOST)
 /* 发送完成中断要按 TX 缓冲位掩码使能; 必须与 fdcan.c 的 TxFifoQueueElmtsNbr(16) 一致 */
 #define FDCAN_TX_BUFFER_IT_MASK 0xFFFFu
+#define FDCAN_TX_ACTIVE_ITS (FDCAN_IT_TX_COMPLETE | FDCAN_IT_TX_ABORT_COMPLETE)
+#define CAN_TX_RESULT_HISTORY 32u
+#define CAN_TX_PERIODIC_STREAMS 16u
+#define CAN_TX_MAX_HW_BUFFERS 16u
+#define CAN_TX_ATTEMPTS_TOTAL 4u /* 首次尝试加用户选择的最多3次未接受重试。 */
+#define CAN_TX_INVALID_RESULT_INDEX 0xffu
+
+typedef struct
+{
+    uint32_t identifier;
+    uint8_t id_type;
+    uint8_t length;
+    uint8_t data[8];
+} CANQueuedFrame_t;
+
+typedef struct
+{
+    uint8_t used;
+    uint8_t periodic;
+    uint8_t active;
+    uint8_t frame_count;
+    uint8_t next_frame;
+    uint8_t attempts;
+    uint8_t result_index;
+    uint8_t priority;
+    uint32_t expiry_ms;
+    const void *source;
+    uint32_t key;
+    CANQueuedFrame_t frames[CAN_TX_MAX_BATCH_FRAMES];
+} CANQueuedRequest_t;
+
+typedef struct
+{
+    uint8_t used;
+    uint8_t pending_hw;
+    uint8_t accepted_frames;
+    uint8_t completed_frames;
+    uint8_t frame_count;
+    uint32_t request_id;
+    CAN_TxResultState_t state;
+    uint32_t last_hal_error;
+} CANTxResultSlot_t;
+
+typedef struct
+{
+    uint8_t used;
+    const void *source;
+    uint32_t key;
+    uint16_t frame_bits;
+    uint32_t period_us;
+} CANPeriodicReservation_t;
+
+typedef struct
+{
+    uint8_t initialized;
+    CAN_TxBusConfig_t config;
+    CANQueuedRequest_t queue[CAN_TX_MAX_QUEUE_ITEMS];
+    CANTxResultSlot_t results[CAN_TX_RESULT_HISTORY];
+    CANPeriodicReservation_t reservations[CAN_TX_PERIODIC_STREAMS];
+    uint8_t hw_result[CAN_TX_MAX_HW_BUFFERS];
+    uint8_t active_queue_index;
+    uint32_t next_request_id;
+    uint16_t result_cursor;
+    uint16_t queued_count;
+    uint16_t periodic_reserved_permille;
+    CAN_TxSchedulerStats_t stats;
+} CANTxScheduler_t;
 
 typedef struct
 {
     FDCAN_HandleTypeDef *handle;
     CAN_TxStats_t tx;
     CAN_BusStats_t bus;
+    CANTxScheduler_t tx_scheduler;
     /* ---- 接收队列(SPSC): 中断入队, 任务用 CANProcessRx() 消费 ---- */
     CANRxItem_t rxq[CAN_RXQ_DEPTH];
     volatile uint16_t rxq_head;    /* 生产者(中断)写 */
@@ -60,8 +132,15 @@ typedef struct
     volatile uint32_t rx_dispatch; /* 已派发给回调的帧数 */
 } CANBusState_t;
 
-static CANBusState_t can_bus[DEVICE_CAN_CNT] = {
-    {.handle = &hfdcan1}, {.handle = &hfdcan2}, {.handle = &hfdcan3}};
+#if defined(__arm__) && defined(__GNUC__)
+/* H723主RAM余量很小；CAN收发只由CPU访问，可把固定工作区放到未使用的RAM_D2。 */
+#define CAN_BUS_WORKSPACE __attribute__((section(".can_workspace"), aligned(32), used))
+#else
+#define CAN_BUS_WORKSPACE
+#endif
+static CANBusState_t can_bus[DEVICE_CAN_CNT] CAN_BUS_WORKSPACE;
+static uint8_t can_bus_state_initialized;
+static void CANBusStateEnsureInitialized(void);
 static CANInstance *rx_lookup[DEVICE_CAN_CNT][CAN_RX_LOOKUP_SIZE];
 /* 每条总线已用的标准滤镜下标(自测重装滤镜时需要整体重置) */
 static uint8_t can_filter_idx[DEVICE_CAN_CNT] = {0};
@@ -103,6 +182,7 @@ volatile uint16_t can_rxq_peak_max = 0;          /* 三条总线里队列占用�
 // 将已知 HAL 句柄对应到本地总线记录；未找到返回 NULL。
 static CANBusState_t *CANBusFromHandle(FDCAN_HandleTypeDef *_handle)
 {
+    CANBusStateEnsureInitialized();
     for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
     {
         if (can_bus[i].handle == _handle)
@@ -114,12 +194,782 @@ static CANBusState_t *CANBusFromHandle(FDCAN_HandleTypeDef *_handle)
 // 查询三条总线的数组编号，未知句柄返回 0xff。
 static uint8_t CANBusIndexFromHandle(FDCAN_HandleTypeDef *_handle)
 {
+    CANBusStateEnsureInitialized();
     for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
     {
         if (can_bus[i].handle == _handle)
             return i;
     }
     return 0xFFu;
+}
+
+static const CAN_TxBusConfig_t can_tx_default_config[DEVICE_CAN_CNT] = {
+    {.queue_capacity = 16u, .utilization_limit_permille = 700u, .nominal_bitrate_bps = 1000000u},
+    {.queue_capacity = 12u, .utilization_limit_permille = 650u, .nominal_bitrate_bps = 1000000u},
+    {.queue_capacity = 8u, .utilization_limit_permille = 500u, .nominal_bitrate_bps = 1000000u},
+};
+
+static void CANBusStateEnsureInitialized(void)
+{
+    if (can_bus_state_initialized != 0u)
+        return;
+
+    // RAM_D2工作区为NOLOAD，首次使用时显式清零并恢复各总线的默认配置。
+    memset(can_bus, 0, sizeof(can_bus));
+    can_bus[0].handle = &hfdcan1;
+    can_bus[1].handle = &hfdcan2;
+    can_bus[2].handle = &hfdcan3;
+    for (uint8_t bus_index = 0u; bus_index < DEVICE_CAN_CNT; ++bus_index)
+    {
+        CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler;
+        scheduler->config = can_tx_default_config[bus_index];
+        scheduler->active_queue_index = CAN_TX_INVALID_RESULT_INDEX;
+        scheduler->next_request_id = 1u;
+        scheduler->initialized = 1u;
+        for (uint8_t i = 0u; i < CAN_TX_MAX_HW_BUFFERS; ++i)
+            scheduler->hw_result[i] = CAN_TX_INVALID_RESULT_INDEX;
+    }
+    can_bus_state_initialized = 1u;
+}
+
+void CANInitWorkspace(void)
+{
+    CANBusStateEnsureInitialized();
+}
+
+static void CANTxSchedulerEnsureInitialized(uint8_t bus_index)
+{
+    (void)bus_index;
+    CANBusStateEnsureInitialized();
+}
+
+static uint8_t CANFrameValid(const CAN_TxFrame_t *frame)
+{
+    if (frame == NULL || frame->length > 8u || (frame->length != 0u && frame->data == NULL))
+        return 0u;
+    if (frame->identifier_type == CAN_TX_ID_STANDARD)
+        return (uint8_t)(frame->identifier <= 0x7ffu);
+    if (frame->identifier_type == CAN_TX_ID_EXTENDED)
+        return (uint8_t)(frame->identifier <= 0x1fffffffu);
+    return 0u;
+}
+
+uint16_t CANClassicFrameWorstCaseBits(CAN_TxIdType_t identifier_type, uint8_t data_length)
+{
+    if (data_length > 8u)
+        return 0u;
+
+    uint32_t stuffable_bits;
+    if (identifier_type == CAN_TX_ID_STANDARD)
+        stuffable_bits = 34u + 8u * data_length;
+    else if (identifier_type == CAN_TX_ID_EXTENDED)
+        stuffable_bits = 54u + 8u * data_length;
+    else
+        return 0u;
+
+    /* 固定部分含 CRC/ACK/帧间隔；可填充部分按每连续4位插入一位保守估算。 */
+    return (uint16_t)(stuffable_bits + 14u + (stuffable_bits - 1u) / 4u);
+}
+
+static uint32_t CANTxReservationPermille(const CANTxScheduler_t *scheduler,
+                                        const CANPeriodicReservation_t *replacement,
+                                        uint8_t replacement_index)
+{
+    uint64_t total_permille = 0u;
+    for (uint8_t i = 0u; i < CAN_TX_PERIODIC_STREAMS; ++i)
+    {
+        const CANPeriodicReservation_t *entry = &scheduler->reservations[i];
+        if (i == replacement_index && replacement != NULL)
+            entry = replacement;
+        if (entry->used == 0u)
+            continue;
+
+        const uint64_t numerator = (uint64_t)entry->frame_bits * 1000000000ull;
+        const uint64_t denominator = (uint64_t)entry->period_us *
+                                     scheduler->config.nominal_bitrate_bps;
+        if (denominator == 0u)
+            return UINT32_MAX;
+        /* 用商和余数向上取整，避免高位速率配置下 numerator+denominator 溢出。 */
+        total_permille += numerator / denominator +
+                          (numerator % denominator != 0u ? 1u : 0u);
+        if (total_permille > UINT32_MAX)
+            return UINT32_MAX;
+    }
+    return (uint32_t)total_permille;
+}
+
+static int CANFindPeriodicReservation(const CANTxScheduler_t *scheduler,
+                                      const void *source, uint32_t key)
+{
+    for (uint8_t i = 0u; i < CAN_TX_PERIODIC_STREAMS; ++i)
+    {
+        if (scheduler->reservations[i].used != 0u &&
+            scheduler->reservations[i].source == source &&
+            scheduler->reservations[i].key == key)
+            return (int)i;
+    }
+    return -1;
+}
+
+static int CANTxFindFreeQueueSlot(const CANTxScheduler_t *scheduler)
+{
+    for (uint8_t i = 0u; i < CAN_TX_MAX_QUEUE_ITEMS; ++i)
+        if (scheduler->queue[i].used == 0u)
+            return (int)i;
+    return -1;
+}
+
+static int CANTxFindPeriodicQueueSlot(const CANTxScheduler_t *scheduler,
+                                     const void *source, uint32_t key)
+{
+    for (uint8_t i = 0u; i < CAN_TX_MAX_QUEUE_ITEMS; ++i)
+    {
+        const CANQueuedRequest_t *entry = &scheduler->queue[i];
+        if (entry->used != 0u && entry->periodic != 0u &&
+            entry->source == source && entry->key == key)
+            return (int)i;
+    }
+    return -1;
+}
+
+static int CANTxFindResultById(uint32_t request_id)
+{
+    if (request_id == 0u)
+        return -1;
+    for (uint8_t bus_index = 0u; bus_index < DEVICE_CAN_CNT; ++bus_index)
+    {
+        CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler;
+        if (scheduler->initialized == 0u)
+            continue;
+        for (uint8_t i = 0u; i < CAN_TX_RESULT_HISTORY; ++i)
+            if (scheduler->results[i].used != 0u &&
+                scheduler->results[i].request_id == request_id)
+                return (int)(((uint16_t)bus_index << 8u) | i);
+    }
+    return -1;
+}
+
+static int CANTxAllocateResult(CANTxScheduler_t *scheduler)
+{
+    for (uint8_t attempt = 0u; attempt < CAN_TX_RESULT_HISTORY; ++attempt)
+    {
+        uint8_t index = (uint8_t)((scheduler->result_cursor + attempt) % CAN_TX_RESULT_HISTORY);
+        CANTxResultSlot_t *result = &scheduler->results[index];
+        if (result->used == 0u ||
+            ((result->state == CAN_TX_RESULT_COMPLETE || result->state == CAN_TX_RESULT_FAILED ||
+              result->state == CAN_TX_RESULT_EXPIRED || result->state == CAN_TX_RESULT_CANCELLED ||
+              result->state == CAN_TX_RESULT_SUPERSEDED) && result->pending_hw == 0u))
+        {
+            scheduler->result_cursor = (uint16_t)((index + 1u) % CAN_TX_RESULT_HISTORY);
+            memset(result, 0, sizeof(*result));
+            result->used = 1u;
+            return index;
+        }
+    }
+    return -1;
+}
+
+static uint32_t CANTxNextRequestId(CANTxScheduler_t *scheduler, uint8_t bus_index)
+{
+    uint32_t sequence = scheduler->next_request_id++ & 0x3fffffffu;
+    if (sequence == 0u)
+        sequence = scheduler->next_request_id++ & 0x3fffffffu;
+    if ((scheduler->next_request_id & 0x3fffffffu) == 0u)
+        scheduler->next_request_id = 1u;
+    return ((uint32_t)(bus_index + 1u) << 30u) | sequence;
+}
+
+static void CANTxSetTerminal(CANTxScheduler_t *scheduler, uint8_t result_index,
+                             CAN_TxResultState_t state)
+{
+    CANTxResultSlot_t *result = &scheduler->results[result_index];
+    if (result->state == CAN_TX_RESULT_COMPLETE || result->state == CAN_TX_RESULT_FAILED ||
+        result->state == CAN_TX_RESULT_EXPIRED || result->state == CAN_TX_RESULT_CANCELLED ||
+        result->state == CAN_TX_RESULT_SUPERSEDED)
+        return;
+
+    result->state = state;
+    switch (state)
+    {
+    case CAN_TX_RESULT_COMPLETE: scheduler->stats.completed++; break;
+    case CAN_TX_RESULT_FAILED: scheduler->stats.failed++; break;
+    case CAN_TX_RESULT_EXPIRED: scheduler->stats.expired++; break;
+    case CAN_TX_RESULT_CANCELLED: scheduler->stats.cancelled++; break;
+    case CAN_TX_RESULT_SUPERSEDED: scheduler->stats.superseded++; break;
+    default: break;
+    }
+}
+
+static uint8_t CANSubmitContextValid(void)
+{
+    return (uint8_t)(__get_IPSR() == 0u);
+}
+
+static void CANTxUpdateQueueStats(CANTxScheduler_t *scheduler)
+{
+    scheduler->stats.queued = scheduler->queued_count;
+    if (scheduler->queued_count > scheduler->stats.queue_peak)
+        scheduler->stats.queue_peak = scheduler->queued_count;
+    scheduler->stats.periodic_reserved_permille = scheduler->periodic_reserved_permille;
+}
+
+static void CANTxExpireQueue(CANTxScheduler_t *scheduler, uint32_t now);
+
+static uint8_t CANTxConfigValid(const CAN_TxBusConfig_t *config)
+{
+    return (uint8_t)(config != NULL && config->queue_capacity > 0u &&
+                     config->queue_capacity <= CAN_TX_MAX_QUEUE_ITEMS &&
+                     config->utilization_limit_permille > 0u &&
+                     config->utilization_limit_permille <= 1000u &&
+                     config->nominal_bitrate_bps > 0u);
+}
+
+CAN_TxSubmitStatus_t CANConfigureTxBus(FDCAN_HandleTypeDef *hcan,
+                                       const CAN_TxBusConfig_t *config)
+{
+    const uint8_t bus_index = CANBusIndexFromHandle(hcan);
+    if (bus_index == 0xffu || !CANTxConfigValid(config))
+        return CAN_TX_SUBMIT_INVALID;
+    if (can_service_started != 0u || idx != 0u)
+        return CAN_TX_SUBMIT_NOT_READY;
+
+    CANTxSchedulerEnsureInitialized(bus_index);
+    taskENTER_CRITICAL();
+    CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler;
+    if (scheduler->queued_count != 0u || scheduler->periodic_reserved_permille != 0u)
+    {
+        taskEXIT_CRITICAL();
+        return CAN_TX_SUBMIT_NOT_READY;
+    }
+    scheduler->config = *config;
+    taskEXIT_CRITICAL();
+    return CAN_TX_SUBMIT_ACCEPTED;
+}
+
+static uint8_t CANTxRequestDeadlineValid(uint32_t deadline_ms)
+{
+    return (uint8_t)(deadline_ms > 0u && deadline_ms <= (uint32_t)INT32_MAX);
+}
+
+static int CANTxFindFreeReservation(const CANTxScheduler_t *scheduler)
+{
+    for (uint8_t i = 0u; i < CAN_TX_PERIODIC_STREAMS; ++i)
+        if (scheduler->reservations[i].used == 0u)
+            return (int)i;
+    return -1;
+}
+
+static void CANTxCopyFrame(CANQueuedFrame_t *destination, const CAN_TxFrame_t *source)
+{
+    destination->identifier = source->identifier;
+    destination->id_type = (uint8_t)source->identifier_type;
+    destination->length = source->length;
+    memset(destination->data, 0, sizeof(destination->data));
+    if (source->length != 0u)
+        memcpy(destination->data, source->data, source->length);
+}
+
+static uint32_t CANTxAllocateRequestId(CANTxScheduler_t *scheduler, uint8_t bus_index,
+                                      uint8_t result_index)
+{
+    uint32_t id = CANTxNextRequestId(scheduler, bus_index);
+    CANTxResultSlot_t *result = &scheduler->results[result_index];
+    result->request_id = id;
+    return id;
+}
+
+CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, uint32_t *request_id)
+{
+    const uint8_t bus_index = CANBusIndexFromHandle(hcan);
+    if (request_id == NULL || source == NULL || !CANFrameValid(frame) ||
+        priority < CAN_TX_PRIORITY_URGENT || priority > CAN_TX_PRIORITY_BACKGROUND ||
+        !CANTxRequestDeadlineValid(deadline_ms) ||
+        period_us == 0u)
+        return CAN_TX_SUBMIT_INVALID;
+    if (!CANSubmitContextValid())
+        return CAN_TX_SUBMIT_CONTEXT;
+    if (bus_index == 0xffu || can_service_started == 0u)
+        return CAN_TX_SUBMIT_NOT_READY;
+
+    CANTxSchedulerEnsureInitialized(bus_index);
+    taskENTER_CRITICAL();
+    CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler;
+    const uint32_t now = HAL_GetTick();
+    CANTxExpireQueue(scheduler, now);
+    const int queue_index = CANTxFindPeriodicQueueSlot(scheduler, source, key);
+    const int reservation_index = CANFindPeriodicReservation(scheduler, source, key);
+    const int target_reservation_index = reservation_index >= 0
+        ? reservation_index : CANTxFindFreeReservation(scheduler);
+    if (target_reservation_index < 0)
+    {
+        scheduler->stats.rejected++;
+        scheduler->stats.bandwidth_rejected++;
+        taskEXIT_CRITICAL();
+        return CAN_TX_SUBMIT_BANDWIDTH;
+    }
+
+    CANPeriodicReservation_t candidate_reservation = {
+        .used = 1u,
+        .source = source,
+        .key = key,
+        .frame_bits = CANClassicFrameWorstCaseBits(frame->identifier_type, frame->length),
+        .period_us = period_us,
+    };
+    const uint32_t reserved_permille = CANTxReservationPermille(
+        scheduler, &candidate_reservation, (uint8_t)target_reservation_index);
+    if (reserved_permille > scheduler->config.utilization_limit_permille)
+    {
+        scheduler->stats.rejected++;
+        scheduler->stats.bandwidth_rejected++;
+        taskEXIT_CRITICAL();
+        return CAN_TX_SUBMIT_BANDWIDTH;
+    }
+
+    const int target_queue_index = queue_index >= 0 ? queue_index : CANTxFindFreeQueueSlot(scheduler);
+    if (target_queue_index < 0 ||
+        (queue_index < 0 && scheduler->queued_count >= scheduler->config.queue_capacity))
+    {
+        scheduler->stats.rejected++;
+        taskEXIT_CRITICAL();
+        return CAN_TX_SUBMIT_FULL;
+    }
+
+    const int result_index = CANTxAllocateResult(scheduler);
+    if (result_index < 0)
+    {
+        scheduler->stats.rejected++;
+        taskEXIT_CRITICAL();
+        return CAN_TX_SUBMIT_FULL;
+    }
+
+    const uint32_t token = CANTxAllocateRequestId(scheduler, bus_index, (uint8_t)result_index);
+    CANTxResultSlot_t *result = &scheduler->results[result_index];
+    result->frame_count = 1u;
+
+    CANQueuedRequest_t *queued = &scheduler->queue[target_queue_index];
+    if (queued->used != 0u)
+    {
+        CANTxSetTerminal(scheduler, queued->result_index, CAN_TX_RESULT_SUPERSEDED);
+        scheduler->stats.coalesced++;
+    }
+    else
+    {
+        scheduler->queued_count++;
+        scheduler->stats.submitted++;
+    }
+
+    const uint8_t was_active = queued->active;
+    memset(queued, 0, sizeof(*queued));
+    queued->used = 1u;
+    queued->periodic = 1u;
+    queued->active = was_active;
+    queued->frame_count = 1u;
+    queued->result_index = (uint8_t)result_index;
+    queued->priority = (uint8_t)priority;
+    queued->expiry_ms = now + deadline_ms;
+    queued->source = source;
+    queued->key = key;
+    CANTxCopyFrame(&queued->frames[0], frame);
+
+    scheduler->reservations[target_reservation_index] = candidate_reservation;
+    scheduler->periodic_reserved_permille = (uint16_t)reserved_permille;
+    result->state = queued->active != 0u ? CAN_TX_RESULT_ACTIVE : CAN_TX_RESULT_QUEUED;
+    CANTxUpdateQueueStats(scheduler);
+    *request_id = token;
+    taskEXIT_CRITICAL();
+    return queue_index >= 0 ? CAN_TX_SUBMIT_COALESCED : CAN_TX_SUBMIT_ACCEPTED;
+}
+
+CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void *source,
+                                           const CAN_TxFrame_t *frames, size_t frame_count,
+                                           CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                           uint32_t *request_id)
+{
+    const uint8_t bus_index = CANBusIndexFromHandle(hcan);
+    if (request_id == NULL || frames == NULL || frame_count == 0u ||
+        frame_count > CAN_TX_MAX_BATCH_FRAMES ||
+        priority < CAN_TX_PRIORITY_URGENT || priority > CAN_TX_PRIORITY_BACKGROUND ||
+        !CANTxRequestDeadlineValid(deadline_ms))
+        return CAN_TX_SUBMIT_INVALID;
+    for (size_t i = 0u; i < frame_count; ++i)
+        if (!CANFrameValid(&frames[i]))
+            return CAN_TX_SUBMIT_INVALID;
+    if (!CANSubmitContextValid())
+        return CAN_TX_SUBMIT_CONTEXT;
+    if (bus_index == 0xffu || can_service_started == 0u)
+        return CAN_TX_SUBMIT_NOT_READY;
+
+    CANTxSchedulerEnsureInitialized(bus_index);
+    taskENTER_CRITICAL();
+    CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler;
+    const uint32_t now = HAL_GetTick();
+    CANTxExpireQueue(scheduler, now);
+    const int queue_index = CANTxFindFreeQueueSlot(scheduler);
+    if (queue_index < 0 || scheduler->queued_count >= scheduler->config.queue_capacity)
+    {
+        scheduler->stats.rejected++;
+        taskEXIT_CRITICAL();
+        return CAN_TX_SUBMIT_FULL;
+    }
+    const int result_index = CANTxAllocateResult(scheduler);
+    if (result_index < 0)
+    {
+        scheduler->stats.rejected++;
+        taskEXIT_CRITICAL();
+        return CAN_TX_SUBMIT_FULL;
+    }
+
+    const uint32_t token = CANTxAllocateRequestId(scheduler, bus_index, (uint8_t)result_index);
+    CANTxResultSlot_t *result = &scheduler->results[result_index];
+    result->frame_count = (uint8_t)frame_count;
+    result->state = CAN_TX_RESULT_QUEUED;
+
+    CANQueuedRequest_t *queued = &scheduler->queue[queue_index];
+    memset(queued, 0, sizeof(*queued));
+    queued->used = 1u;
+    queued->frame_count = (uint8_t)frame_count;
+    queued->result_index = (uint8_t)result_index;
+    queued->priority = (uint8_t)priority;
+    queued->expiry_ms = now + deadline_ms;
+    queued->source = source;
+    for (size_t i = 0u; i < frame_count; ++i)
+        CANTxCopyFrame(&queued->frames[i], &frames[i]);
+
+    scheduler->queued_count++;
+    scheduler->stats.submitted++;
+    CANTxUpdateQueueStats(scheduler);
+    *request_id = token;
+    taskEXIT_CRITICAL();
+    return CAN_TX_SUBMIT_ACCEPTED;
+}
+
+CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *source,
+                                      const CAN_TxFrame_t *frame,
+                                      CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                      uint32_t *request_id)
+{
+    return CANSubmitOneShotBatch(hcan, source, frame, 1u, priority, deadline_ms, request_id);
+}
+
+static uint8_t CANTxStateTerminal(CAN_TxResultState_t state)
+{
+    return (uint8_t)(state == CAN_TX_RESULT_COMPLETE || state == CAN_TX_RESULT_FAILED ||
+                     state == CAN_TX_RESULT_EXPIRED || state == CAN_TX_RESULT_CANCELLED ||
+                     state == CAN_TX_RESULT_SUPERSEDED);
+}
+
+static void CANTxReleaseQueueSlot(CANTxScheduler_t *scheduler, uint8_t queue_index)
+{
+    memset(&scheduler->queue[queue_index], 0, sizeof(scheduler->queue[queue_index]));
+    if (scheduler->queued_count > 0u)
+        scheduler->queued_count--;
+    if (scheduler->active_queue_index == queue_index)
+        scheduler->active_queue_index = CAN_TX_INVALID_RESULT_INDEX;
+    CANTxUpdateQueueStats(scheduler);
+}
+
+static void CANTxFailBeforeAcceptance(CANBusState_t *bus, uint8_t queue_index,
+                                      uint32_t hal_error)
+{
+    CANTxScheduler_t *scheduler = &bus->tx_scheduler;
+    CANQueuedRequest_t *queued = &scheduler->queue[queue_index];
+    CANTxResultSlot_t *result = &scheduler->results[queued->result_index];
+    if (hal_error != HAL_OK)
+    {
+        result->last_hal_error = hal_error;
+        scheduler->stats.hal_rejected++;
+        bus->tx.tx_error++;
+    }
+    else
+    {
+        scheduler->stats.fifo_busy++;
+        bus->tx.tx_drop++;
+        can_prof_tx_full = bus->tx.tx_drop;
+    }
+
+    if (queued->periodic != 0u)
+    {
+        // 周期目标只允许尝试一次；下一周期会重新提交最新计算值。
+        CANTxSetTerminal(scheduler, queued->result_index, CAN_TX_RESULT_FAILED);
+        CANTxReleaseQueueSlot(scheduler, queue_index);
+        return;
+    }
+
+    if (queued->periodic == 0u)
+    {
+        queued->attempts++;
+        if (queued->attempts >= CAN_TX_ATTEMPTS_TOTAL)
+        {
+            CANTxSetTerminal(scheduler, queued->result_index, CAN_TX_RESULT_FAILED);
+            CANTxReleaseQueueSlot(scheduler, queue_index);
+            return;
+        }
+        scheduler->stats.retries++;
+    }
+
+    // 尚无帧交给 HAL 时让出选择权，避免低优先级重试挡住新到的紧急请求。
+    if (queued->next_frame == 0u)
+    {
+        queued->active = 0u;
+        if (scheduler->active_queue_index == queue_index)
+            scheduler->active_queue_index = CAN_TX_INVALID_RESULT_INDEX;
+        result->state = CAN_TX_RESULT_QUEUED;
+    }
+    else
+        result->state = CAN_TX_RESULT_ACTIVE;
+}
+
+static uint8_t CANTxRequestExpired(const CANQueuedRequest_t *queued, uint32_t now)
+{
+    return (uint8_t)((uint32_t)(now - queued->expiry_ms) < 0x80000000u);
+}
+
+static void CANTxExpireQueue(CANTxScheduler_t *scheduler, uint32_t now)
+{
+    for (uint8_t i = 0u; i < CAN_TX_MAX_QUEUE_ITEMS; ++i)
+    {
+        CANQueuedRequest_t *queued = &scheduler->queue[i];
+        if (queued->used != 0u && CANTxRequestExpired(queued, now) != 0u)
+        {
+            CANTxSetTerminal(scheduler, queued->result_index, CAN_TX_RESULT_EXPIRED);
+            CANTxReleaseQueueSlot(scheduler, i);
+        }
+    }
+}
+
+static uint8_t CANTxSelectNextRequest(CANBusState_t *bus, uint32_t now)
+{
+    CANTxScheduler_t *scheduler = &bus->tx_scheduler;
+    uint8_t selected = CAN_TX_INVALID_RESULT_INDEX;
+    uint32_t selected_remaining = UINT32_MAX;
+
+    for (uint8_t i = 0u; i < CAN_TX_MAX_QUEUE_ITEMS; ++i)
+    {
+        CANQueuedRequest_t *queued = &scheduler->queue[i];
+        if (queued->used == 0u)
+            continue;
+        if (CANTxRequestExpired(queued, now) != 0u)
+            continue;
+        if (queued->active != 0u)
+            continue;
+
+        const uint32_t remaining = queued->expiry_ms - now;
+        if (selected == CAN_TX_INVALID_RESULT_INDEX ||
+            queued->priority < scheduler->queue[selected].priority ||
+            (queued->priority == scheduler->queue[selected].priority &&
+             remaining < selected_remaining))
+        {
+            selected = i;
+            selected_remaining = remaining;
+        }
+    }
+
+    if (selected != CAN_TX_INVALID_RESULT_INDEX)
+    {
+        scheduler->queue[selected].active = 1u;
+        scheduler->active_queue_index = selected;
+        scheduler->results[scheduler->queue[selected].result_index].state = CAN_TX_RESULT_ACTIVE;
+    }
+    return selected;
+}
+
+static uint8_t CANTxHardwareIndex(uint32_t buffer_mask)
+{
+    if (buffer_mask == 0u || (buffer_mask & (buffer_mask - 1u)) != 0u)
+        return CAN_TX_INVALID_RESULT_INDEX;
+    for (uint8_t i = 0u; i < CAN_TX_MAX_HW_BUFFERS; ++i)
+        if (buffer_mask == (1u << i))
+            return i;
+    return CAN_TX_INVALID_RESULT_INDEX;
+}
+
+void CANProcessTx(void)
+{
+    if (__get_IPSR() != 0u || can_service_started == 0u)
+        return;
+
+    for (uint8_t bus_index = 0u; bus_index < DEVICE_CAN_CNT; ++bus_index)
+    {
+        CANBusState_t *bus = &can_bus[bus_index];
+        CANTxScheduler_t *scheduler = &bus->tx_scheduler;
+        CANTxSchedulerEnsureInitialized(bus_index);
+        const uint32_t probe_start = DWT_ProbeStart();
+
+        taskENTER_CRITICAL();
+        uint32_t now = HAL_GetTick();
+        CANTxExpireQueue(scheduler, now);
+        uint8_t queue_index = scheduler->active_queue_index;
+        if (queue_index != CAN_TX_INVALID_RESULT_INDEX &&
+            scheduler->queue[queue_index].used == 0u)
+            queue_index = CAN_TX_INVALID_RESULT_INDEX;
+        if (queue_index == CAN_TX_INVALID_RESULT_INDEX)
+            queue_index = CANTxSelectNextRequest(bus, now);
+        if (queue_index == CAN_TX_INVALID_RESULT_INDEX)
+        {
+            taskEXIT_CRITICAL();
+            DWT_ProbeDone(&can_prof_tx, probe_start);
+            continue;
+        }
+
+        CANQueuedRequest_t *queued = &scheduler->queue[queue_index];
+        if (queued->next_frame >= queued->frame_count)
+        {
+            CANTxReleaseQueueSlot(scheduler, queue_index);
+            taskEXIT_CRITICAL();
+            DWT_ProbeDone(&can_prof_tx, probe_start);
+            continue;
+        }
+
+        // 一次服务只查询并启动一帧，避免总线繁忙时阻塞电机周期。
+        if (HAL_FDCAN_GetTxFifoFreeLevel(bus->handle) == 0u)
+        {
+            CANTxFailBeforeAcceptance(bus, queue_index, HAL_OK);
+            taskEXIT_CRITICAL();
+            DWT_ProbeDone(&can_prof_tx, probe_start);
+            continue;
+        }
+
+        const CANQueuedFrame_t *frame = &queued->frames[queued->next_frame];
+        FDCAN_TxHeaderTypeDef header = {0};
+        header.Identifier = frame->identifier;
+        header.IdType = frame->id_type == CAN_TX_ID_EXTENDED ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;
+        header.TxFrameType = FDCAN_DATA_FRAME;
+        header.DataLength = DLC_LookUp_Table[frame->length];
+        header.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+        header.BitRateSwitch = FDCAN_BRS_OFF;
+        header.FDFormat = FDCAN_CLASSIC_CAN;
+        header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+        header.MessageMarker = 0u;
+
+        const HAL_StatusTypeDef hal_status = HAL_FDCAN_AddMessageToTxFifoQ(
+            bus->handle, &header, (uint8_t *)frame->data);
+        if (hal_status != HAL_OK)
+        {
+            CANTxFailBeforeAcceptance(bus, queue_index, (uint32_t)hal_status);
+            taskEXIT_CRITICAL();
+            DWT_ProbeDone(&can_prof_tx, probe_start);
+            continue;
+        }
+
+        // HAL已复制负载到消息RAM；在开放TX中断前记录其FIFO槽归属，避免完成回调抢先到达。
+        const uint8_t hardware_index = CANTxHardwareIndex(
+            HAL_FDCAN_GetLatestTxFifoQRequestBuffer(bus->handle));
+        const uint8_t result_index = queued->result_index;
+        CANTxResultSlot_t *result = &scheduler->results[result_index];
+        result->accepted_frames++;
+        result->pending_hw++;
+        queued->next_frame++;
+        queued->attempts = 0u;
+        bus->tx.tx_ok++;
+
+        if (hardware_index == CAN_TX_INVALID_RESULT_INDEX ||
+            scheduler->hw_result[hardware_index] != CAN_TX_INVALID_RESULT_INDEX)
+        {
+            // HAL已经接受但没有可关联的槽位时绝不重发，避免重复发送同一命令。
+            if (result->pending_hw > 0u)
+                result->pending_hw--;
+            CANTxSetTerminal(scheduler, result_index, CAN_TX_RESULT_FAILED);
+            result->last_hal_error = (uint32_t)HAL_ERROR;
+            bus->tx.tx_error++;
+            CANTxReleaseQueueSlot(scheduler, queue_index);
+        }
+        else
+        {
+            scheduler->hw_result[hardware_index] = result_index;
+            if (queued->next_frame >= queued->frame_count)
+            {
+                result->state = CAN_TX_RESULT_IN_FLIGHT;
+                CANTxReleaseQueueSlot(scheduler, queue_index);
+            }
+            else
+                result->state = CAN_TX_RESULT_ACTIVE;
+        }
+
+        taskEXIT_CRITICAL();
+        DWT_ProbeDone(&can_prof_tx, probe_start);
+    }
+}
+
+uint8_t CANGetTxRequestState(uint32_t request_id, CAN_TxResult_t *result)
+{
+    if (request_id == 0u || result == NULL || __get_IPSR() != 0u)
+        return 0u;
+    taskENTER_CRITICAL();
+    const int packed_index = CANTxFindResultById(request_id);
+    if (packed_index < 0)
+    {
+        taskEXIT_CRITICAL();
+        return 0u;
+    }
+
+    const uint8_t bus_index = (uint8_t)((uint32_t)packed_index >> 8u);
+    const uint8_t result_index = (uint8_t)packed_index;
+    const CANTxResultSlot_t *slot = &can_bus[bus_index].tx_scheduler.results[result_index];
+    CAN_TxResult_t candidate = {
+        .request_id = slot->request_id,
+        .state = slot->state,
+        .frame_count = slot->frame_count,
+        .accepted_frames = slot->accepted_frames,
+        .completed_frames = slot->completed_frames,
+        .last_hal_error = slot->last_hal_error,
+    };
+    *result = candidate;
+    taskEXIT_CRITICAL();
+    return 1u;
+}
+
+uint8_t CANCancelTxRequest(uint32_t request_id)
+{
+    if (request_id == 0u || !CANSubmitContextValid())
+        return 0u;
+    taskENTER_CRITICAL();
+    const int packed_index = CANTxFindResultById(request_id);
+    if (packed_index < 0)
+    {
+        taskEXIT_CRITICAL();
+        return 0u;
+    }
+    const uint8_t bus_index = (uint8_t)((uint32_t)packed_index >> 8u);
+    const uint8_t result_index = (uint8_t)packed_index;
+    CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler;
+    CANTxResultSlot_t *result = &scheduler->results[result_index];
+    for (uint8_t i = 0u; i < CAN_TX_MAX_QUEUE_ITEMS; ++i)
+    {
+        CANQueuedRequest_t *queued = &scheduler->queue[i];
+        if (queued->used != 0u && queued->result_index == result_index)
+        {
+            CANTxSetTerminal(scheduler, result_index, CAN_TX_RESULT_CANCELLED);
+            CANTxReleaseQueueSlot(scheduler, i);
+            taskEXIT_CRITICAL();
+            return 1u;
+        }
+    }
+    const uint8_t cancellable = (uint8_t)(result->state == CAN_TX_RESULT_QUEUED ||
+                                          result->state == CAN_TX_RESULT_ACTIVE);
+    if (cancellable != 0u)
+        CANTxSetTerminal(scheduler, result_index, CAN_TX_RESULT_CANCELLED);
+    taskEXIT_CRITICAL();
+    return cancellable;
+}
+
+uint8_t CANGetTxSchedulerStats(FDCAN_HandleTypeDef *hcan,
+                               CAN_TxSchedulerStats_t *stats)
+{
+    const uint8_t bus_index = CANBusIndexFromHandle(hcan);
+    if (bus_index == 0xffu || stats == NULL || __get_IPSR() != 0u)
+        return 0u;
+    CANTxSchedulerEnsureInitialized(bus_index);
+    taskENTER_CRITICAL();
+    CAN_TxSchedulerStats_t candidate = can_bus[bus_index].tx_scheduler.stats;
+    candidate.queued = can_bus[bus_index].tx_scheduler.queued_count;
+    candidate.periodic_reserved_permille =
+        can_bus[bus_index].tx_scheduler.periodic_reserved_permille;
+    *stats = candidate;
+    taskEXIT_CRITICAL();
+    return 1u;
 }
 
 /**
@@ -164,6 +1014,7 @@ static void CANRxQueuePush(CANBusState_t *bus, CANInstance *ins, uint8_t len, co
 // 公开调用条件见头文件；只派发接收后不超过 50 ms 的帧，按总线分别保持到达顺序。
 void CANProcessRx(void)
 {
+    CANBusStateEnsureInitialized();
     // 检查并设置 processing 时暂时关普通中断；已有派发执行时直接返回，由另一调用处理队列。
     static volatile uint8_t processing = 0;
     uint32_t primask = __get_PRIMASK();
@@ -297,7 +1148,8 @@ static uint8_t CANBusConfigure(FDCAN_HandleTypeDef *h)
     can_diag_state = (uint32_t)h->State;
     if (can_diag_start_ret != (uint32_t)HAL_OK)
         return 0u;
-    can_diag_act_ret = (uint32_t)HAL_FDCAN_ActivateNotification(h, FDCAN_RX_ACTIVE_ITS, 0u);
+    can_diag_act_ret = (uint32_t)HAL_FDCAN_ActivateNotification(
+        h, FDCAN_RX_ACTIVE_ITS | FDCAN_TX_ACTIVE_ITS, FDCAN_TX_BUFFER_IT_MASK);
     can_diag_ie = h->Instance->IE;
     can_diag_ile = h->Instance->ILE;
     can_diag_ils = h->Instance->ILS;
@@ -314,6 +1166,8 @@ static void CANServiceStop(void)
 {
 #ifdef FDCAN
     for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
+        CANTxSchedulerEnsureInitialized(i);
+    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
         (void)HAL_FDCAN_Stop(can_bus[i].handle);
     memset(can_filter_idx, 0, sizeof(can_filter_idx));
 #else
@@ -328,6 +1182,7 @@ static void CANServiceStop(void)
 // 依次启动各总线，一条失败便停止本轮全部服务，不留下部分启动状态。
 static uint8_t CANServiceInit(void)
 {
+    CANBusStateEnsureInitialized();
 #ifdef FDCAN
     for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
     {
@@ -462,6 +1317,7 @@ void CANReapplyFilters(void)
 
 uint8_t CANRunLoopbackSelfTest(void)
 {
+    CANBusStateEnsureInitialized();
     uint8_t passed = 0;
 
     can_selftest_tx_ok = 0;
@@ -499,6 +1355,13 @@ uint8_t CANRunLoopbackSelfTest(void)
             .id = NULL,
         };
         selftest_instance = CANRegister(&test_cfg);
+        if (selftest_instance == NULL)
+        {
+            can_selftest_tx_fail++;
+            (void)CANForceMode(h, FDCAN_MODE_NORMAL, 0u);
+            CANReapplyFilters();
+            continue;
+        }
 
         /* 3. 发 N 帧并等待回环接收 */
         for (uint8_t n = 0; n < CAN_SELFTEST_FRAMES; ++n)
@@ -507,28 +1370,47 @@ uint8_t CANRunLoopbackSelfTest(void)
             {
                 uint8_t v = (uint8_t)(n * 16u + k);
                 selftest_expect[k] = v;
-                selftest_instance->tx_buff[k] = v;
             }
             selftest_expect_len = 8;
             selftest_rx_seen = 0;
-
-            if (CANTransmit(selftest_instance, 0.0f) != 1u)
+            const CAN_TxFrame_t frame = {
+                .identifier = CAN_SELFTEST_ID,
+                .identifier_type = CAN_TX_ID_STANDARD,
+                .data = selftest_expect,
+                .length = 8u,
+            };
+            uint32_t request_id = 0u;
+            if (CANSubmitOneShot(h, selftest_instance, &frame,
+                                 CAN_TX_PRIORITY_URGENT, CAN_SELFTEST_WAIT_MS,
+                                 &request_id) != CAN_TX_SUBMIT_ACCEPTED)
             {
                 can_selftest_tx_fail++;
                 bus_ok = 0;
                 continue;
             }
-            can_selftest_tx_ok++;
 
             /* 注意: 调度器启动前 TIM23 时间基准尚未正常递增, HAL_GetTick() 不会走,
                所以这里必须用 DWT 周期计数器计时, 否则会死等(TIM23 的 uwTick 停住)。 */
             uint32_t t0 = DWT_ProbeStart();
+            uint8_t counted_accept = 0u;
             while (!selftest_rx_seen &&
                    DWT_ProbeElapsedUs(t0) < (uint32_t)CAN_SELFTEST_WAIT_MS * 1000u)
             {
                 /* 接收改成"中断入队 + 任务派发"之后, 回调不再在中断里执行,
                    这里必须主动消费队列, 否则永远等不到 selftest_rx_seen。 */
+                CANProcessTx();
                 CANProcessRx();
+                CAN_TxResult_t tx_result;
+                memset(&tx_result, 0, sizeof(tx_result));
+                if (CANGetTxRequestState(request_id, &tx_result) != 0u &&
+                    tx_result.accepted_frames > 0u && counted_accept == 0u)
+                {
+                    can_selftest_tx_ok++;
+                    counted_accept = 1u;
+                }
+                if (tx_result.state == CAN_TX_RESULT_FAILED ||
+                    tx_result.state == CAN_TX_RESULT_EXPIRED)
+                    break;
             }
             if (!selftest_rx_seen)
                 bus_ok = 0;
@@ -578,6 +1460,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     uint8_t bus_idx = CANBusIndexFromHandle(config->can_handle);
     if (bus_idx == 0xFFu)
         return NULL;
+    CANTxSchedulerEnsureInitialized(bus_idx);
     uint16_t lookup_idx = (uint16_t)(config->rx_id & (CAN_RX_LOOKUP_SIZE - 1u));
 #else
     if (config->can_handle != &hcan1 && config->can_handle != &hcan2)
@@ -640,60 +1523,6 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     return instance;
 }
 
-/* @todo 目前似乎封装过度,应该添加一个指向tx_buff的指针,tx_buff不应该由CAN instance保存 */
-/* 如果让CANinstance保存txbuff,会增加一次复制的开销 */
-uint8_t CANTransmit(CANInstance *_instance, float timeout)
-{
-    (void)timeout; /* 保留参数以免改动所有调用者; 现在是非阻塞语义, 不再等待 */
-    uint32_t probe_start = DWT_ProbeStart();
-    CANBusState_t *bus = CANBusFromHandle(_instance->can_handle);
-
-#ifdef FDCAN
-    if (HAL_FDCAN_GetTxFifoFreeLevel(_instance->can_handle) == 0u)
-    {
-        // 发送空间满就立即返回，避免等待拖延整轮控制；模块自行决定下一轮是否再次发送。
-        if (bus != NULL)
-        {
-            bus->tx.tx_drop++;
-            can_prof_tx_full = bus->tx.tx_drop;
-            CANLogDiagnostic(bus, "TX FIFO满，报文未提交", bus->tx.tx_drop);
-        }
-        DWT_ProbeDone(&can_prof_tx, probe_start);
-        return 0;
-    }
-    if (HAL_FDCAN_AddMessageToTxFifoQ(_instance->can_handle, &_instance->txconf, _instance->tx_buff) != HAL_OK)
-    {
-        if (bus != NULL)
-        {
-            bus->tx.tx_error++;
-            CANLogDiagnostic(bus, "CAN发送接口失败", bus->tx.tx_error);
-        }
-        DWT_ProbeDone(&can_prof_tx, probe_start);
-        return 0;
-    }
-#else
-    if (HAL_CAN_GetTxMailboxesFreeLevel(_instance->can_handle) == 0u)
-    {
-        if (bus != NULL)
-            bus->tx.tx_drop++;
-        DWT_ProbeDone(&can_prof_tx, probe_start);
-        return 0;
-    }
-    if (HAL_CAN_AddTxMessage(_instance->can_handle, &_instance->txconf, _instance->tx_buff, &_instance->tx_mailbox) != HAL_OK)
-    {
-        if (bus != NULL)
-            bus->tx.tx_error++;
-        DWT_ProbeDone(&can_prof_tx, probe_start);
-        return 0;
-    }
-#endif
-
-    if (bus != NULL)
-        bus->tx.tx_ok++;
-    DWT_ProbeDone(&can_prof_tx, probe_start);
-    return 1; // 已成功交给硬件
-}
-
 /* 发送完成相关回调(中断上下文: 只做计数, 不打印不阻塞) */
 void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *hfdcan)
 {
@@ -704,10 +1533,60 @@ void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *hfdcan)
 
 void HAL_FDCAN_TxBufferCompleteCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t BufferIndexes)
 {
-    (void)BufferIndexes; /* TXBTO 是累计标志, 用 popcount 统计会重复累加, 这里只统计事件次数 */
     CANBusState_t *bus = CANBusFromHandle(hfdcan);
-    if (bus != NULL)
+    if (bus == NULL)
+        return;
+
+    CANTxScheduler_t *scheduler = &bus->tx_scheduler;
+    for (uint8_t hw_index = 0u; hw_index < CAN_TX_MAX_HW_BUFFERS; ++hw_index)
+    {
+        if ((BufferIndexes & (1u << hw_index)) == 0u)
+            continue;
+        const uint8_t result_index = scheduler->hw_result[hw_index];
+        scheduler->hw_result[hw_index] = CAN_TX_INVALID_RESULT_INDEX;
+        if (result_index >= CAN_TX_RESULT_HISTORY)
+            continue;
+
+        CANTxResultSlot_t *result = &scheduler->results[result_index];
+        if (result->used == 0u)
+            continue;
+        if (result->pending_hw > 0u)
+            result->pending_hw--;
+        result->completed_frames++;
         bus->tx.tx_done++;
+        if (!CANTxStateTerminal(result->state) &&
+            result->accepted_frames == result->frame_count && result->pending_hw == 0u &&
+            result->completed_frames == result->frame_count)
+            CANTxSetTerminal(scheduler, result_index, CAN_TX_RESULT_COMPLETE);
+    }
+}
+
+void HAL_FDCAN_TxBufferAbortCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t BufferIndexes)
+{
+    CANBusState_t *bus = CANBusFromHandle(hfdcan);
+    if (bus == NULL)
+        return;
+
+    CANTxScheduler_t *scheduler = &bus->tx_scheduler;
+    for (uint8_t hw_index = 0u; hw_index < CAN_TX_MAX_HW_BUFFERS; ++hw_index)
+    {
+        if ((BufferIndexes & (1u << hw_index)) == 0u)
+            continue;
+        const uint8_t result_index = scheduler->hw_result[hw_index];
+        scheduler->hw_result[hw_index] = CAN_TX_INVALID_RESULT_INDEX;
+        if (result_index >= CAN_TX_RESULT_HISTORY)
+            continue;
+
+        CANTxResultSlot_t *result = &scheduler->results[result_index];
+        if (result->used == 0u)
+            continue;
+        if (result->pending_hw > 0u)
+            result->pending_hw--;
+        bus->tx.tx_error++;
+        result->last_hal_error = (uint32_t)HAL_ERROR;
+        // HAL曾接受该帧；中止后不重发，避免重复执行一次性命令。
+        CANTxSetTerminal(scheduler, result_index, CAN_TX_RESULT_FAILED);
+    }
 }
 
 void CANGetTxStats(FDCAN_HandleTypeDef *hcan, CAN_TxStats_t *stats)
@@ -736,6 +1615,7 @@ uint8_t CANGetObservationCounters(uint8_t bus_index, CAN_ObservationCounters_t *
     if (bus_index >= DEVICE_CAN_CNT || counters == NULL)
         return 0u;
 
+    CANBusStateEnsureInitialized();
     CANBusState_t *bus = &can_bus[bus_index];
     CAN_ObservationCounters_t candidate;
     uint32_t primask = __get_PRIMASK();
@@ -769,6 +1649,7 @@ uint8_t CANGetObservationCounters(uint8_t bus_index, CAN_ObservationCounters_t *
  */
 void CANHealthMonitor(void)
 {
+    CANBusStateEnsureInitialized();
     static uint32_t last_ms = 0;
     uint32_t now = HAL_GetTick();
     if ((uint32_t)(now - last_ms) < 100u)
@@ -857,33 +1738,6 @@ void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status)
         status->status = CAN_STATUS_ERROR;
     else
         status->status = CAN_STATUS_OK;
-}
-
-void CANSetDLC(CANInstance *_instance, uint8_t length)
-{
-    // 长度 0 改成 1，超过 8 改成 8；记录错误并继续，不把整个控制任务留在等待中。
-    static uint32_t dlc_err_cnt = 0;
-    static uint32_t dlc_log_ms = 0;
-
-    if (_instance == NULL)
-        return;
-
-    if (length > 8u || length == 0u)
-    {
-        dlc_err_cnt++;
-        uint32_t now = HAL_GetTick();
-        if ((uint32_t)(now - dlc_log_ms) >= 1000u)
-        {
-            dlc_log_ms = now;
-            BSP_LOG_EVENT_2(EV_BSP_CAN_BSP_CAN_C_04, BSP_LOG_FIELD_U32((unsigned)length), BSP_LOG_FIELD_U32((unsigned long)dlc_err_cnt));
-        }
-        if (length > 8u)
-            length = 8u;
-        else
-            length = 1u;
-    }
-
-    _instance->txconf.DataLength = DLC_LookUp_Table[length];
 }
 
 /* -----------------------belows are callback definitions--------------------------*/

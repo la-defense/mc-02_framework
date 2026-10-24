@@ -5,6 +5,7 @@
  */
 #include "test_check.h"
 #include "bsp_dwt.h"
+#include "bsp_can.h"
 #include "bsp_watchdog.h"
 #include "bsp_log.h"
 #include "bsp_adc.h"
@@ -26,12 +27,18 @@ void DWT_Init(uint32_t cpu_mhz)
 
 void BSP_WatchdogInit(uint32_t timeout_ms)
 {
-    TEST_CHECK(step == 2u);
+    TEST_CHECK(step == 3u);
     TEST_CHECK(timeout_ms == 4000u);
     ++step;
 }
 
 void BSPLogInit(void)
+{
+    TEST_CHECK(step == 2u);
+    ++step;
+}
+
+void CANInitWorkspace(void)
 {
     TEST_CHECK(step == 1u);
     ++step;
@@ -39,25 +46,25 @@ void BSPLogInit(void)
 
 void BSP_ADCInit(void)
 {
-    TEST_CHECK(step == 3u);
+    TEST_CHECK(step == 4u);
     ++step;
 }
 
 void BSP_WatchdogLogResetReason(void)
 {
-    TEST_CHECK(step == 4u);
+    TEST_CHECK(step == 5u);
     ++step;
 }
 
 void CrashLogInit(void)
 {
-    TEST_CHECK(step == 5u);
+    TEST_CHECK(step == 6u);
     ++step;
 }
 
 uint8_t ParamInit(void)
 {
-    TEST_CHECK(step == 6u);
+    TEST_CHECK(step == 7u);
     ++step;
     // 即使参数载入失败，原有 void 启动入口也不汇总失败，不能据此宣称整体成功。
     return 0u;
@@ -74,6 +81,6 @@ int main(int argc, char **argv)
         TEST_CHECK(strcmp(argv[1], "b") == 0);
         BSPInitCallerB();
     }
-    TEST_CHECK(step == 7u);
+    TEST_CHECK(step == 8u);
     return 0;
 }
