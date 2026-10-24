@@ -7,6 +7,7 @@
 #include "message_center.h"
 #include "../robot_def.h"
 #include "vision_protocol_v2.h"
+#include "vision_imu_sample.h"
 
 #define ENDPOINT_MASK(endpoint) (1u << ((endpoint) - 1u))
 #define SNAPSHOT_TOPIC(id, type, age, clock, publisher, subscriber) \
@@ -37,6 +38,10 @@ static const MessageTopicDescriptor_t robot_topics[] = {
                    VISION_V2_NAV_MAX_AGE_MS, MESSAGE_CLOCK_REMOTE_RAW,
                    ROBOT_TOPIC_ENDPOINT_VISION, ROBOT_TOPIC_ENDPOINT_COMMAND),
     SNAPSHOT_TOPIC(ROBOT_TOPIC_VISION_POSTURE, VisionV2PostureStatus_t, 100u,
+                   MESSAGE_CLOCK_LOCAL, ROBOT_TOPIC_ENDPOINT_INS,
+                   ROBOT_TOPIC_ENDPOINT_VISION),
+    // 无效标记要能等到约150ms轮询的IMU发送槽；有效样本另按5ms源期限检查。
+    SNAPSHOT_TOPIC(ROBOT_TOPIC_VISION_IMU_SAMPLE, VisionIMUSample_t, 300u,
                    MESSAGE_CLOCK_LOCAL, ROBOT_TOPIC_ENDPOINT_INS,
                    ROBOT_TOPIC_ENDPOINT_VISION),
 };

@@ -5,6 +5,7 @@
 #define MASTER_PROCESS_H
 
 #include "bsp_usart.h"
+#include "vision_imu_sample.h"
 #include "vision_protocol.h"
 #include <stdint.h>
 
@@ -128,9 +129,10 @@ typedef struct
  */
 Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle);
 
-/** @brief 按当前协议周期发送状态；V2交替发送姿态和裁判摘要。
+/** @brief 按当前协议周期发送状态；V2轮流发送姿态、裁判摘要和IMU加速度。
 * @note 先初始化，由命令任务周期调用。SP状态由VisionUpdateTx()准备并按原帧格式发送；
-*       V2以50ms节奏交替编码两类状态，字段各自保留源时刻和有效位。
+*       V2最多每50ms提交一帧，三类状态轮流发送；IMU样本名义间隔约150ms。
+*       姿态与裁判摘要保持现有字段和源时间，IMU使用BMI088样本时刻。
 *       USB使用单份在途复制缓冲，UART使用复制队列；忙时拒绝本次，不积压旧状态。
 *       接口不返回结果，提交和传输计数由VisionGetStatus读取。
  */
@@ -179,5 +181,13 @@ void VisionUpdateTx(uint8_t mode,
                     float yaw, float yaw_vel,
                     float pitch, float pitch_vel,
                     float bullet_speed, uint16_t bullet_count);
+
+/** @brief 发布INS的最新BMI088加速度快照，供V2独立状态帧读取。
+ * @param[in] sample 有效样本须序号非0、三轴有限；无效标记要求其余字段全0。
+ * @return 成功返回UPDATE_OK；SP构建返回UNAVAILABLE，其余失败有明确状态。
+ * @note 初始化VisionInit()后调用。坐标沿BMI088传感器x/y/z轴，单位m/s²，包含重力；
+ *       本接口不改姿态状态，坏采样应发布无效标记以撤销上一次有效加速度。
+ */
+VisionIMUSampleUpdateStatus_t VisionUpdateIMUSample(const VisionIMUSample_t *sample);
 
 #endif // !MASTER_PROCESS_H

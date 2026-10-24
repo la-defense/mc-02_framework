@@ -13,6 +13,7 @@
 #include "usb_transport.h"
 #include "vision_protocol_v2.h"
 
+#include <math.h>
 #include <string.h>
 
 static uint32_t now_ms;
@@ -468,14 +469,206 @@ static int CheckOutboundReports(void)
 
     TEST_CHECK(valid_command_reports == reports_before &&
         daemon_reloads == reloads_before);
+
+    // V2轮询应把INS样本序号和源时刻原样送入独立IMU状态帧。
+    VisionIMUSample_t sample = {0};
+    VisionV2IMUSampleStatus_t decoded_sample = {0};
+    uint8_t found_report = 0u;
+    uint32_t expected_sequence = 0u;
+    uint32_t expected_source_time = 0u;
+    for (uint8_t attempt = 0u; attempt < 8u; ++attempt)
+    {
+        now_ms += 50u;
+        sample = (VisionIMUSample_t){
+            .valid = 1u,
+            .sample_sequence = 0x100u + attempt,
+            .sample_time_ms = now_ms,
+            .acceleration_m_s2 = {1.0f, -0.5f, 9.81f},
+        };
+        expected_sequence = sample.sample_sequence;
+        expected_source_time = sample.sample_time_ms;
+        TEST_CHECK(VisionUpdateIMUSample(&sample) == VISION_IMU_SAMPLE_UPDATE_OK);
+        const uint32_t previous_tx_count = tx_count;
+        VisionSend();
+        if (tx_count != previous_tx_count && DecodeLastTx(&sent_frame) == 0 &&
+            sent_frame.type == VISION_V2_IMU_SAMPLE_STATUS)
+        {
+            found_report = 1u;
+            break;
+        }
+    }
+    TEST_CHECK(found_report != 0u && sent_frame.source_time_ms == expected_source_time &&
+        VisionV2DecodeIMUSampleStatus(sent_frame.payload, sent_frame.payload_length,
+            &decoded_sample) == VISION_V2_OK && decoded_sample.valid == 1u &&
+        decoded_sample.sample_sequence == expected_sequence &&
+        decoded_sample.acceleration_m_s2[0] == 1.0f &&
+        decoded_sample.acceleration_m_s2[1] == -0.5f &&
+        decoded_sample.acceleration_m_s2[2] == 9.81f);
+
+    // 失效标记等待本类发送槽时仍保留，出线后时间、序号和三轴均清零。
+    sample = (VisionIMUSample_t){0};
+    TEST_CHECK(VisionUpdateIMUSample(&sample) == VISION_IMU_SAMPLE_UPDATE_OK);
+    found_report = 0u;
+    for (uint8_t attempt = 0u; attempt < 8u; ++attempt)
+    {
+        now_ms += 50u;
+        TEST_CHECK(VisionUpdateIMUSample(&sample) == VISION_IMU_SAMPLE_UPDATE_OK);
+        const uint32_t previous_tx_count = tx_count;
+        VisionSend();
+        if (tx_count != previous_tx_count && DecodeLastTx(&sent_frame) == 0 &&
+            sent_frame.type == VISION_V2_IMU_SAMPLE_STATUS)
+        {
+            found_report = 1u;
+            break;
+        }
+    }
+    TEST_CHECK(found_report != 0u && sent_frame.source_time_ms == 0u &&
+        VisionV2DecodeIMUSampleStatus(sent_frame.payload, sent_frame.payload_length,
+            &decoded_sample) == VISION_V2_OK && decoded_sample.valid == 0u &&
+        decoded_sample.sample_sequence == 0u &&
+        decoded_sample.acceleration_m_s2[0] == 0.0f &&
+        decoded_sample.acceleration_m_s2[1] == 0.0f &&
+        decoded_sample.acceleration_m_s2[2] == 0.0f);
+
+    // 传感器停止更新后，消息中心仍保留诊断记录，但发送端不能续发旧有效值。
+    sample = (VisionIMUSample_t){
+        .valid = 1u, .sample_sequence = 0x200u, .sample_time_ms = now_ms,
+        .acceleration_m_s2 = {0.0f, 0.0f, 9.81f},
+    };
+    TEST_CHECK(VisionUpdateIMUSample(&sample) == VISION_IMU_SAMPLE_UPDATE_OK);
+    found_report = 0u;
+    for (uint8_t attempt = 0u; attempt < 6u; ++attempt)
+    {
+        now_ms += 50u;
+        const uint32_t previous_tx_count = tx_count;
+        VisionSend();
+        if (tx_count != previous_tx_count && DecodeLastTx(&sent_frame) == 0 &&
+            sent_frame.type == VISION_V2_IMU_SAMPLE_STATUS)
+        {
+            found_report = 1u;
+            break;
+        }
+    }
+    TEST_CHECK(found_report != 0u && sent_frame.source_time_ms == 0u &&
+        VisionV2DecodeIMUSampleStatus(sent_frame.payload, sent_frame.payload_length,
+            &decoded_sample) == VISION_V2_OK && decoded_sample.valid == 0u);
+
+    // 毫秒时钟和BMI088序号都允许回绕；无符号年龄在时钟回绕后仍按5ms边界判断。
+    now_ms = UINT32_MAX - 2u;
+    found_report = 0u;
+    for (uint8_t attempt = 0u; attempt < 8u; ++attempt)
+    {
+        now_ms += attempt == 0u ? 0u : 50u;
+        sample = (VisionIMUSample_t){
+            .valid = 1u,
+            .sample_sequence = UINT32_MAX,
+            .sample_time_ms = now_ms - 5u,
+            .acceleration_m_s2 = {0.25f, -0.5f, 9.75f},
+        };
+        TEST_CHECK(VisionUpdateIMUSample(&sample) == VISION_IMU_SAMPLE_UPDATE_OK);
+        const uint32_t previous_tx_count = tx_count;
+        VisionSend();
+        if (tx_count != previous_tx_count && DecodeLastTx(&sent_frame) == 0 &&
+            sent_frame.type == VISION_V2_IMU_SAMPLE_STATUS)
+        {
+            found_report = 1u;
+            break;
+        }
+    }
+    TEST_CHECK(found_report != 0u && sent_frame.source_time_ms == sample.sample_time_ms &&
+        VisionV2DecodeIMUSampleStatus(sent_frame.payload, sent_frame.payload_length,
+            &decoded_sample) == VISION_V2_OK && decoded_sample.valid == 1u &&
+        decoded_sample.sample_sequence == UINT32_MAX);
+
+    // BMI088序号绕过保留的0后从1继续，线路帧应逐样本保留这个变化。
+    found_report = 0u;
+    for (uint8_t attempt = 0u; attempt < 8u; ++attempt)
+    {
+        now_ms += 50u;
+        sample.sample_sequence = 1u;
+        sample.sample_time_ms = now_ms;
+        TEST_CHECK(VisionUpdateIMUSample(&sample) == VISION_IMU_SAMPLE_UPDATE_OK);
+        const uint32_t previous_tx_count = tx_count;
+        VisionSend();
+        if (tx_count != previous_tx_count && DecodeLastTx(&sent_frame) == 0 &&
+            sent_frame.type == VISION_V2_IMU_SAMPLE_STATUS)
+        {
+            found_report = 1u;
+            break;
+        }
+    }
+    TEST_CHECK(found_report != 0u && sent_frame.source_time_ms == sample.sample_time_ms &&
+        VisionV2DecodeIMUSampleStatus(sent_frame.payload, sent_frame.payload_length,
+            &decoded_sample) == VISION_V2_OK && decoded_sample.valid == 1u &&
+        decoded_sample.sample_sequence == 1u);
+
+    // 超过边界1ms时发布无效状态；每次重发样本只用于保持快照可读，不刷新其源时刻。
+    found_report = 0u;
+    for (uint8_t attempt = 0u; attempt < 8u; ++attempt)
+    {
+        now_ms += 50u;
+        sample.sample_time_ms = now_ms - 6u;
+        TEST_CHECK(VisionUpdateIMUSample(&sample) == VISION_IMU_SAMPLE_UPDATE_OK);
+        const uint32_t previous_tx_count = tx_count;
+        VisionSend();
+        if (tx_count != previous_tx_count && DecodeLastTx(&sent_frame) == 0 &&
+            sent_frame.type == VISION_V2_IMU_SAMPLE_STATUS)
+        {
+            found_report = 1u;
+            break;
+        }
+    }
+    TEST_CHECK(found_report != 0u && sent_frame.source_time_ms == 0u &&
+        VisionV2DecodeIMUSampleStatus(sent_frame.payload, sent_frame.payload_length,
+            &decoded_sample) == VISION_V2_OK && decoded_sample.valid == 0u);
+
+    // 消息中心快照本身过期后，也要发送撤销状态，不能让上位机永久保留最后有效值。
+    found_report = 0u;
+    for (uint8_t attempt = 0u; attempt < 8u; ++attempt)
+    {
+        now_ms += 50u;
+        sample.sample_time_ms = now_ms - 301u;
+        TEST_CHECK(VisionUpdateIMUSample(&sample) == VISION_IMU_SAMPLE_UPDATE_OK);
+        const uint32_t previous_tx_count = tx_count;
+        VisionSend();
+        if (tx_count != previous_tx_count && DecodeLastTx(&sent_frame) == 0 &&
+            sent_frame.type == VISION_V2_IMU_SAMPLE_STATUS)
+        {
+            found_report = 1u;
+            break;
+        }
+    }
+    TEST_CHECK(found_report != 0u && sent_frame.source_time_ms == 0u &&
+        VisionV2DecodeIMUSampleStatus(sent_frame.payload, sent_frame.payload_length,
+            &decoded_sample) == VISION_V2_OK && decoded_sample.valid == 0u);
     return 0;
 }
 
 int main(void)
 {
     TEST_CHECK(RobotTopicsInit() != 0u);
+    VisionIMUSample_t sample_before_init = {
+        .valid = 1u, .sample_sequence = 1u, .sample_time_ms = 0u,
+        .acceleration_m_s2 = {0.0f, 0.0f, 9.81f},
+    };
+    TEST_CHECK(VisionUpdateIMUSample(&sample_before_init) ==
+        VISION_IMU_SAMPLE_UPDATE_ERR_NOT_INITIALIZED);
     TEST_CHECK(VisionInit(NULL) != NULL);
     TEST_CHECK(usb_config.receive != NULL && daemon_config.reload_count == 30u);
+    now_ms = 1u;
+    VisionIMUSample_t zero_time_sample = {
+        .valid = 1u, .sample_sequence = 1u, .sample_time_ms = 0u,
+        .acceleration_m_s2 = {0.0f, 0.0f, 9.81f},
+    };
+    TEST_CHECK(VisionUpdateIMUSample(&zero_time_sample) == VISION_IMU_SAMPLE_UPDATE_OK);
+    TEST_CHECK(VisionUpdateIMUSample(NULL) == VISION_IMU_SAMPLE_UPDATE_ERR_ARGUMENT);
+    zero_time_sample.sample_sequence = 0u;
+    TEST_CHECK(VisionUpdateIMUSample(&zero_time_sample) == VISION_IMU_SAMPLE_UPDATE_ERR_VALUE);
+    zero_time_sample.sample_sequence = 1u;
+    zero_time_sample.acceleration_m_s2[0] = NAN;
+    TEST_CHECK(VisionUpdateIMUSample(&zero_time_sample) == VISION_IMU_SAMPLE_UPDATE_ERR_VALUE);
+    zero_time_sample.acceleration_m_s2[0] = INFINITY;
+    TEST_CHECK(VisionUpdateIMUSample(&zero_time_sample) == VISION_IMU_SAMPLE_UPDATE_ERR_VALUE);
     TEST_CHECK(CheckInboundTopics() == 0);
     TEST_CHECK(CheckOutboundReports() == 0);
     return 0;

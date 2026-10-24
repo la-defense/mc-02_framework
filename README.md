@@ -36,7 +36,7 @@ cmake --build --preset bench-debug
 | motor | `Motor_Online_Flag_e`/`enable` 字段、`DR04`/`XMCY` 类型、`DJIMotorIsOnline`/`DJIMotorCloseLoop`、XMmotor 骨架、DRmotor 占位、HT04 扭矩系数宏 |
 | power | `power_manager.c/.h` 功率管理（k1/k2/k3 模型，RLS 待启用） |
 | referee | 新版 RM 协议（game_robot_state 13B、新增 0x0104/0x0105）、`refresh_flag`、交互结构新字段 |
-| master_machine | 视觉协议升级为 SP+CRC16（与上位机 sp_vision_25 对齐），支持 USB VCP 与 UART 双传输，`VisionUpdateTx` |
+| master_machine | 保留 SP 29/43 字节兼容；V2 增加有源时间戳的姿态、裁判摘要和 BMI088 原始加速度状态，支持 USB VCP 与 UART |
 | imu | ist8310 磁力计骨架（未接硬件）；ins_task 保留 H723 适配（htim3/hspi2/温度PID） |
 | config | 机器人配置框架 + 哨兵配置（OMNI 轮 + MINI 云台，hcan1/2 → hfdcan1/2） |
 | robot_cmd | 视觉自瞄核心：mode 1/2 接管云台、`RAD_TO_DEG`、`YAW_GEAR_RATIO`（1.25 皮带传动补偿）、视觉前馈字段 |

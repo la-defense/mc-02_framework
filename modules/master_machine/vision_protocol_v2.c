@@ -13,6 +13,7 @@
 #define VISION_V2_NAV_PAYLOAD_SIZE 13u
 #define VISION_V2_POSTURE_PAYLOAD_SIZE 34u
 #define VISION_V2_REFEREE_PAYLOAD_SIZE 36u
+#define VISION_V2_IMU_SAMPLE_PAYLOAD_SIZE 17u
 #define VISION_V2_TIME_SYNC_PROBE_SIZE 4u
 #define VISION_V2_TIME_SYNC_REPLY_SIZE 8u
 
@@ -72,6 +73,7 @@ VisionV2Status_t VisionV2GetPayloadSize(uint8_t type, size_t *length)
     case VISION_V2_POSTURE_STATUS: candidate = VISION_V2_POSTURE_PAYLOAD_SIZE; break;
     case VISION_V2_REFEREE_SUMMARY: candidate = VISION_V2_REFEREE_PAYLOAD_SIZE; break;
     case VISION_V2_TIME_SYNC_PROBE: candidate = VISION_V2_TIME_SYNC_PROBE_SIZE; break;
+    case VISION_V2_IMU_SAMPLE_STATUS: candidate = VISION_V2_IMU_SAMPLE_PAYLOAD_SIZE; break;
     default: return VISION_V2_ERR_TYPE;
     }
     *length = candidate;
@@ -138,6 +140,77 @@ VisionV2Status_t VisionV2DecodeTimeSyncReply(const uint8_t *payload, size_t leng
         .received_time_ms = ReadU32LE(&payload[4]),
     };
     *reply = candidate;
+    return VISION_V2_OK;
+}
+
+VisionV2Status_t VisionV2EncodeIMUSampleStatus(const VisionV2IMUSampleStatus_t *status,
+                                               uint8_t *payload, size_t capacity)
+{
+    if (status == NULL || payload == NULL)
+        return VISION_V2_ERR_ARGUMENT;
+    if (capacity < VISION_V2_IMU_SAMPLE_PAYLOAD_SIZE)
+        return VISION_V2_ERR_LENGTH;
+    if (status->valid > 1u ||
+        (status->valid != 0u && status->sample_sequence == 0u) ||
+        (status->valid == 0u && status->sample_sequence != 0u))
+        return VISION_V2_ERR_VALUE;
+
+    uint8_t candidate[VISION_V2_IMU_SAMPLE_PAYLOAD_SIZE] = {0};
+    candidate[0] = status->valid;
+    if (status->valid != 0u)
+    {
+        for (size_t axis = 0u; axis < 3u; ++axis)
+        {
+            if (!isfinite(status->acceleration_m_s2[axis]))
+                return VISION_V2_ERR_VALUE;
+        }
+        WriteU32LE(&candidate[1], status->sample_sequence);
+        for (size_t axis = 0u; axis < 3u; ++axis)
+            WriteF32LE(&candidate[5u + axis * 4u], status->acceleration_m_s2[axis]);
+    }
+    else if (status->acceleration_m_s2[0] != 0.0f ||
+             status->acceleration_m_s2[1] != 0.0f ||
+             status->acceleration_m_s2[2] != 0.0f)
+    {
+        return VISION_V2_ERR_VALUE;
+    }
+
+    memcpy(payload, candidate, sizeof(candidate));
+    return VISION_V2_OK;
+}
+
+VisionV2Status_t VisionV2DecodeIMUSampleStatus(const uint8_t *payload, size_t length,
+                                               VisionV2IMUSampleStatus_t *status)
+{
+    if (payload == NULL || status == NULL)
+        return VISION_V2_ERR_ARGUMENT;
+    if (length != VISION_V2_IMU_SAMPLE_PAYLOAD_SIZE)
+        return VISION_V2_ERR_LENGTH;
+
+    VisionV2IMUSampleStatus_t candidate = {
+        .valid = payload[0],
+        .sample_sequence = ReadU32LE(&payload[1]),
+        .acceleration_m_s2 = {
+            ReadF32LE(&payload[5]), ReadF32LE(&payload[9]), ReadF32LE(&payload[13])
+        },
+    };
+    if (candidate.valid > 1u ||
+        (candidate.valid != 0u && candidate.sample_sequence == 0u) ||
+        (candidate.valid == 0u && candidate.sample_sequence != 0u))
+        return VISION_V2_ERR_VALUE;
+    if (candidate.valid != 0u)
+    {
+        for (size_t axis = 0u; axis < 3u; ++axis)
+            if (!isfinite(candidate.acceleration_m_s2[axis]))
+                return VISION_V2_ERR_VALUE;
+    }
+    else if (candidate.acceleration_m_s2[0] != 0.0f ||
+             candidate.acceleration_m_s2[1] != 0.0f ||
+             candidate.acceleration_m_s2[2] != 0.0f)
+    {
+        return VISION_V2_ERR_VALUE;
+    }
+    *status = candidate;
     return VISION_V2_OK;
 }
 

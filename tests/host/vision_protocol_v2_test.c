@@ -55,6 +55,13 @@ static const uint8_t fixed_time_reply_frame[] = {
     0x01u, 0x02u, 0x03u, 0x04u, 0x39u, 0x03u,
 };
 
+static const uint8_t fixed_imu_sample_frame[] = {
+    0x4du, 0x43u, 0x02u, 0x84u, 0x11u, 0x00u, 0xefu, 0xbeu,
+    0x04u, 0x03u, 0x02u, 0x01u, 0x01u, 0x44u, 0x33u, 0x22u,
+    0x11u, 0x00u, 0x00u, 0x80u, 0x3fu, 0x00u, 0x00u, 0x00u,
+    0xbfu, 0xc3u, 0xf5u, 0x1cu, 0x41u, 0xf5u, 0xd1u
+};
+
 typedef struct
 {
     size_t count;
@@ -166,6 +173,96 @@ static int TestAllFixedVectors(void)
         &time_payload_length) == VISION_V2_OK && time_payload_length == 4u);
     TEST_CHECK(VisionV2GetPayloadSize(VISION_V2_TIME_SYNC_REPLY,
         &time_payload_length) == VISION_V2_OK && time_payload_length == 8u);
+
+    VisionV2IMUSampleStatus_t imu_sample = {
+        .valid = 1u,
+        .sample_sequence = 0x11223344u,
+        .acceleration_m_s2 = {1.0f, -0.5f, 9.81f},
+    };
+    uint8_t imu_payload[17] = {0};
+    TEST_CHECK(VisionV2EncodeIMUSampleStatus(&imu_sample, imu_payload,
+        sizeof(imu_payload)) == VISION_V2_OK);
+    TEST_CHECK(CompareFrame(VISION_V2_IMU_SAMPLE_STATUS, 0xbeefu, 0x01020304u,
+        imu_payload, sizeof(imu_payload), fixed_imu_sample_frame,
+        sizeof(fixed_imu_sample_frame)) == 0);
+
+    VisionV2IMUSampleStatus_t decoded_imu = {0};
+    TEST_CHECK(VisionV2DecodeIMUSampleStatus(fixed_imu_sample_frame +
+        VISION_V2_HEADER_SIZE, sizeof(imu_payload), &decoded_imu) == VISION_V2_OK);
+    TEST_CHECK(decoded_imu.valid == 1u &&
+        decoded_imu.sample_sequence == imu_sample.sample_sequence &&
+        decoded_imu.acceleration_m_s2[0] == 1.0f &&
+        decoded_imu.acceleration_m_s2[1] == -0.5f &&
+        decoded_imu.acceleration_m_s2[2] == 9.81f);
+
+    size_t imu_payload_length = 0u;
+    TEST_CHECK(VisionV2GetPayloadSize(VISION_V2_IMU_SAMPLE_STATUS,
+        &imu_payload_length) == VISION_V2_OK && imu_payload_length == sizeof(imu_payload));
+    uint8_t unchanged_payload[17];
+    memset(unchanged_payload, 0xa5, sizeof(unchanged_payload));
+    TEST_CHECK(VisionV2EncodeIMUSampleStatus(&imu_sample, unchanged_payload,
+        sizeof(unchanged_payload) - 1u) == VISION_V2_ERR_LENGTH);
+    for (size_t i = 0u; i < sizeof(unchanged_payload); ++i)
+        TEST_CHECK(unchanged_payload[i] == 0xa5u);
+    imu_sample.acceleration_m_s2[1] = NAN;
+    TEST_CHECK(VisionV2EncodeIMUSampleStatus(&imu_sample, unchanged_payload,
+        sizeof(unchanged_payload)) == VISION_V2_ERR_VALUE);
+    for (size_t i = 0u; i < sizeof(unchanged_payload); ++i)
+        TEST_CHECK(unchanged_payload[i] == 0xa5u);
+    imu_sample.acceleration_m_s2[1] = INFINITY;
+    TEST_CHECK(VisionV2EncodeIMUSampleStatus(&imu_sample, unchanged_payload,
+        sizeof(unchanged_payload)) == VISION_V2_ERR_VALUE);
+    for (size_t i = 0u; i < sizeof(unchanged_payload); ++i)
+        TEST_CHECK(unchanged_payload[i] == 0xa5u);
+
+    VisionV2IMUSampleStatus_t wrapped_sample = {
+        .valid = 1u, .sample_sequence = UINT32_MAX,
+        .acceleration_m_s2 = {-9.81f, 0.0f, 9.81f},
+    };
+    TEST_CHECK(VisionV2EncodeIMUSampleStatus(&wrapped_sample, imu_payload,
+        sizeof(imu_payload)) == VISION_V2_OK);
+    VisionV2IMUSampleStatus_t unchanged_sample = {
+        .valid = 1u, .sample_sequence = 77u,
+        .acceleration_m_s2 = {4.0f, 5.0f, 6.0f},
+    };
+    const VisionV2IMUSampleStatus_t previous_sample = unchanged_sample;
+    imu_payload[5] = 0x00u;
+    imu_payload[6] = 0x00u;
+    imu_payload[7] = 0xc0u;
+    imu_payload[8] = 0x7fu; // NaN不能作为有效加速度发布。
+    TEST_CHECK(VisionV2DecodeIMUSampleStatus(imu_payload, sizeof(imu_payload),
+        &unchanged_sample) == VISION_V2_ERR_VALUE &&
+        unchanged_sample.valid == previous_sample.valid &&
+        unchanged_sample.sample_sequence == previous_sample.sample_sequence &&
+        unchanged_sample.acceleration_m_s2[0] == previous_sample.acceleration_m_s2[0] &&
+        unchanged_sample.acceleration_m_s2[1] == previous_sample.acceleration_m_s2[1] &&
+        unchanged_sample.acceleration_m_s2[2] == previous_sample.acceleration_m_s2[2]);
+    TEST_CHECK(VisionV2EncodeIMUSampleStatus(&wrapped_sample, imu_payload,
+        sizeof(imu_payload)) == VISION_V2_OK);
+    imu_payload[0] = 2u;
+    TEST_CHECK(VisionV2DecodeIMUSampleStatus(imu_payload, sizeof(imu_payload),
+        &unchanged_sample) == VISION_V2_ERR_VALUE &&
+        unchanged_sample.valid == previous_sample.valid &&
+        unchanged_sample.sample_sequence == previous_sample.sample_sequence &&
+        unchanged_sample.acceleration_m_s2[0] == previous_sample.acceleration_m_s2[0] &&
+        unchanged_sample.acceleration_m_s2[1] == previous_sample.acceleration_m_s2[1] &&
+        unchanged_sample.acceleration_m_s2[2] == previous_sample.acceleration_m_s2[2]);
+    memset(imu_payload, 0, sizeof(imu_payload));
+    imu_payload[5] = 1u; // 无效样本不得携带残留轴值。
+    TEST_CHECK(VisionV2DecodeIMUSampleStatus(imu_payload, sizeof(imu_payload),
+        &unchanged_sample) == VISION_V2_ERR_VALUE &&
+        unchanged_sample.valid == previous_sample.valid &&
+        unchanged_sample.sample_sequence == previous_sample.sample_sequence &&
+        unchanged_sample.acceleration_m_s2[0] == previous_sample.acceleration_m_s2[0] &&
+        unchanged_sample.acceleration_m_s2[1] == previous_sample.acceleration_m_s2[1] &&
+        unchanged_sample.acceleration_m_s2[2] == previous_sample.acceleration_m_s2[2]);
+    TEST_CHECK(VisionV2DecodeIMUSampleStatus(imu_payload, sizeof(imu_payload) - 1u,
+        &unchanged_sample) == VISION_V2_ERR_LENGTH &&
+        unchanged_sample.valid == previous_sample.valid &&
+        unchanged_sample.sample_sequence == previous_sample.sample_sequence &&
+        unchanged_sample.acceleration_m_s2[0] == previous_sample.acceleration_m_s2[0] &&
+        unchanged_sample.acceleration_m_s2[1] == previous_sample.acceleration_m_s2[1] &&
+        unchanged_sample.acceleration_m_s2[2] == previous_sample.acceleration_m_s2[2]);
     return 0;
 }
 

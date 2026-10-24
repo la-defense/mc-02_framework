@@ -77,6 +77,8 @@ static MessagePublisher_t *vision_v2_aim_publisher;
 static MessagePublisher_t *vision_v2_navigation_publisher;
 static MessagePublisher_t *vision_v2_posture_publisher;
 static MessageSubscriber_t *vision_v2_posture_subscriber;
+static MessagePublisher_t *vision_v2_imu_sample_publisher;
+static MessageSubscriber_t *vision_v2_imu_sample_subscriber;
 static uint16_t vision_v2_last_sequence[2];
 static uint8_t vision_v2_sequence_valid[2];
 static uint32_t vision_v2_sequence_generation;
@@ -416,6 +418,40 @@ void VisionUpdateTx(uint8_t mode,
 #endif
 }
 
+VisionIMUSampleUpdateStatus_t VisionUpdateIMUSample(const VisionIMUSample_t *sample)
+{
+    if (sample == NULL)
+        return VISION_IMU_SAMPLE_UPDATE_ERR_ARGUMENT;
+    if (sample->valid > 1u ||
+        (sample->valid != 0u && sample->sample_sequence == 0u) ||
+        (sample->valid == 0u && (sample->sample_sequence != 0u ||
+                                 sample->sample_time_ms != 0u ||
+                                 sample->acceleration_m_s2[0] != 0.0f ||
+                                 sample->acceleration_m_s2[1] != 0.0f ||
+                                 sample->acceleration_m_s2[2] != 0.0f)))
+        return VISION_IMU_SAMPLE_UPDATE_ERR_VALUE;
+    if (sample->valid != 0u &&
+        (!isfinite(sample->acceleration_m_s2[0]) ||
+         !isfinite(sample->acceleration_m_s2[1]) ||
+         !isfinite(sample->acceleration_m_s2[2])))
+        return VISION_IMU_SAMPLE_UPDATE_ERR_VALUE;
+
+#if defined(MC02_VISION_PROTOCOL_V2)
+    if (vision_v2_imu_sample_publisher == NULL)
+        return VISION_IMU_SAMPLE_UPDATE_ERR_NOT_INITIALIZED;
+
+    const uint32_t now_ms = HAL_GetTick();
+    // 无效标记没有传感器来源时刻；本地发布时间仅用于保留它到下一发送轮次。
+    const uint32_t freshness_time_ms = sample->valid != 0u ? sample->sample_time_ms : now_ms;
+    if (MessagePublishAt(vision_v2_imu_sample_publisher, sample, freshness_time_ms,
+                         now_ms, now_ms, MESSAGE_CLOCK_LOCAL) != MESSAGE_OK)
+        return VISION_IMU_SAMPLE_UPDATE_ERR_PUBLISH;
+    return VISION_IMU_SAMPLE_UPDATE_OK;
+#else
+    return VISION_IMU_SAMPLE_UPDATE_ERR_UNAVAILABLE;
+#endif
+}
+
 #ifdef VISION_USE_VCP
 static void VisionVcpRxCallback(void *context, const USBRxBlock_t *block)
 {
@@ -485,8 +521,13 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
         ROBOT_TOPIC_ENDPOINT_INS);
     vision_v2_posture_subscriber = MessageSubscriberRegister(ROBOT_TOPIC_VISION_POSTURE,
         ROBOT_TOPIC_ENDPOINT_VISION);
+    vision_v2_imu_sample_publisher = MessagePublisherRegister(ROBOT_TOPIC_VISION_IMU_SAMPLE,
+        ROBOT_TOPIC_ENDPOINT_INS);
+    vision_v2_imu_sample_subscriber = MessageSubscriberRegister(ROBOT_TOPIC_VISION_IMU_SAMPLE,
+        ROBOT_TOPIC_ENDPOINT_VISION);
     if (vision_v2_aim_publisher == NULL || vision_v2_navigation_publisher == NULL ||
-        vision_v2_posture_publisher == NULL || vision_v2_posture_subscriber == NULL)
+        vision_v2_posture_publisher == NULL || vision_v2_posture_subscriber == NULL ||
+        vision_v2_imu_sample_publisher == NULL || vision_v2_imu_sample_subscriber == NULL)
         return NULL;
 #endif
 
@@ -866,9 +907,12 @@ static void VisionSendV2(void)
     vision_v2_has_tx = 1u;
     vision_v2_last_tx_ms = now_ms;
 
+    const uint8_t report_type = vision_v2_next_tx_type;
+    vision_v2_next_tx_type = (uint8_t)((vision_v2_next_tx_type + 1u) % 3u);
+
     uint8_t payload[VISION_V2_MAX_PAYLOAD];
     size_t payload_length = 0u;
-    if (vision_v2_next_tx_type == 0u)
+    if (report_type == 0u)
     {
         VisionV2PostureStatus_t posture;
         MessageFreshness_t freshness;
@@ -877,28 +921,59 @@ static void VisionSendV2(void)
             VisionV2EncodePosture(&posture, payload, sizeof(payload)) != VISION_V2_OK)
         {
             VisionV2NoteTxResult(0u);
-            vision_v2_next_tx_type = 1u;
             return;
         }
         (void)VisionV2GetPayloadSize(VISION_V2_POSTURE_STATUS, &payload_length);
         (void)VisionV2SubmitFrameAt(VISION_V2_POSTURE_STATUS, now_ms,
                                     payload, payload_length);
     }
-    else
+    else if (report_type == 1u)
     {
         VisionV2RefereeSummary_t summary;
         if (VisionV2BuildRefereeSummary(&summary) == 0u ||
             VisionV2EncodeRefereeSummary(&summary, payload, sizeof(payload)) != VISION_V2_OK)
         {
             VisionV2NoteTxResult(0u);
-            vision_v2_next_tx_type = 0u;
             return;
         }
         (void)VisionV2GetPayloadSize(VISION_V2_REFEREE_SUMMARY, &payload_length);
         (void)VisionV2SubmitFrameAt(VISION_V2_REFEREE_SUMMARY, now_ms,
                                     payload, payload_length);
     }
-    vision_v2_next_tx_type ^= 1u;
+    else
+    {
+        VisionIMUSample_t sample;
+        const MessageStatus_t sample_status = MessageReadSnapshot(
+            vision_v2_imu_sample_subscriber, &sample, sizeof(sample), now_ms, NULL);
+        if (sample_status != MESSAGE_OK && sample_status != MESSAGE_ERR_EMPTY &&
+            sample_status != MESSAGE_ERR_EXPIRED)
+        {
+            VisionV2NoteTxResult(0u);
+            return;
+        }
+
+        VisionV2IMUSampleStatus_t status = {0};
+        uint32_t source_time_ms = 0u;
+        // 话题尚无样本或本地期限已过时仍发送明确无效帧，远端可撤销旧数值。
+        if (sample_status == MESSAGE_OK && sample.valid == 1u && sample.sample_sequence != 0u &&
+            (uint32_t)(now_ms - sample.sample_time_ms) <=
+                VISION_V2_IMU_SAMPLE_MAX_SOURCE_AGE_MS)
+        {
+            status.valid = 1u;
+            status.sample_sequence = sample.sample_sequence;
+            memcpy(status.acceleration_m_s2, sample.acceleration_m_s2,
+                   sizeof(status.acceleration_m_s2));
+            source_time_ms = sample.sample_time_ms;
+        }
+        if (VisionV2EncodeIMUSampleStatus(&status, payload, sizeof(payload)) != VISION_V2_OK)
+        {
+            VisionV2NoteTxResult(0u);
+            return;
+        }
+        (void)VisionV2GetPayloadSize(VISION_V2_IMU_SAMPLE_STATUS, &payload_length);
+        (void)VisionV2SubmitFrameAt(VISION_V2_IMU_SAMPLE_STATUS, source_time_ms,
+                                    payload, payload_length);
+    }
 }
 #endif
 

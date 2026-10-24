@@ -3,6 +3,7 @@
  */
 #include "test_check.h"
 #include "ins_task.h"
+#include "master_process.h"
 #include "ins_hardware.h"
 #include "imu_heater.h"
 #include "vector3.h"
@@ -11,6 +12,8 @@
 static uint32_t now,seq;
 static int scenario,valid,mode,force_off,calib_valid=1;
 static float frame[4];
+static VisionIMUSample_t vision_imu_sample;
+static uint32_t imu_sample_updates;
 static float period_s=.001f;
 #ifdef INS_TEST_INIT_WRAP
 static int fail_init;
@@ -40,6 +43,11 @@ Robot_Status_e RobotSafetyGetState(void){return ROBOT_READY;}
 uint8_t RobotSafetyIsReady(void){return valid;}
 void VisionUpdateTx(uint8_t m,float w,float x,float y,float z,float a,float b,float c,float d,float e,uint8_t f){
     (void)a;(void)b;(void)c;(void)d;(void)e;(void)f; mode=m;frame[0]=w;frame[1]=x;frame[2]=y;frame[3]=z;
+}
+VisionIMUSampleUpdateStatus_t VisionUpdateIMUSample(const VisionIMUSample_t *sample){
+    if(!sample)return VISION_IMU_SAMPLE_UPDATE_ERR_ARGUMENT;
+    vision_imu_sample=*sample;imu_sample_updates++;
+    return VISION_IMU_SAMPLE_UPDATE_OK;
 }
 void TaskMonitorDelayMs(int task,uint32_t ms){(void)task;now+=ms;}
 void IMUHeaterForceOff(void){force_off=1;}
@@ -79,6 +87,9 @@ int main(int argc,char **argv)
     (void)argc;
 #endif
     TEST_CHECK(INS_Init()!=NULL);tick();TEST_CHECK(valid && mode==1);
+    TEST_CHECK(imu_sample_updates==1u && vision_imu_sample.valid==1u &&
+        vision_imu_sample.sample_sequence==seq && vision_imu_sample.sample_time_ms==now &&
+        vision_imu_sample.acceleration_m_s2[2]==9.8f);
     INS_Control_Snapshot_s control_snapshot = {0};
     TEST_CHECK(INSGetControlSnapshot(&control_snapshot) == 1u);
     TEST_CHECK(control_snapshot.valid == 1u && control_snapshot.sequence == seq &&
@@ -92,14 +103,20 @@ int main(int argc,char **argv)
     tick();invalid();TEST_CHECK(force_off);
     TEST_CHECK(INSGetControlSnapshot(&control_snapshot) == 0u && control_snapshot.valid == 0u);
     scenario=0;tick();TEST_CHECK(valid && mode==1 && QEKF_INS.IMU_QuaternionEKF.result.mode==KF_CORRECTED);
-    scenario=3;tick();invalid();scenario=0;tick();TEST_CHECK(valid);
+    scenario=3;tick();invalid();
+    TEST_CHECK(vision_imu_sample.valid==0u && vision_imu_sample.sample_sequence==0u &&
+        vision_imu_sample.sample_time_ms==0u && vision_imu_sample.acceleration_m_s2[0]==0.0f &&
+        vision_imu_sample.acceleration_m_s2[1]==0.0f && vision_imu_sample.acceleration_m_s2[2]==0.0f);
+    scenario=0;tick();TEST_CHECK(valid && vision_imu_sample.valid==1u);
     // 调度或原始采样延迟超过20ms时，正常预测加新鲜校正仍应恢复，不能附加dt故障。
     period_s=.025f;tick();TEST_CHECK(valid && QEKF_INS.IMU_QuaternionEKF.result.mode==KF_CORRECTED);
     scenario=1;tick();invalid();TEST_CHECK(!QEKF_INS.IMU_QuaternionEKF.fatal);
     period_s=.001f;scenario=0;tick();TEST_CHECK(valid);
     scenario=3;period_s=.025f;tick();invalid();
     scenario=0;period_s=.001f;tick();TEST_CHECK(valid);
-    scenario=2;tick();invalid();scenario=0;tick();invalid();
+    scenario=2;tick();invalid();
+    TEST_CHECK(vision_imu_sample.valid==1u && vision_imu_sample.acceleration_m_s2[2]==9.8f);
+    scenario=0;tick();invalid();
     TEST_CHECK(QEKF_INS.IMU_QuaternionEKF.fatal);
     TEST_CHECK(INS_Init()!=NULL);tick();invalid(); // 重复INS_Init不能偷偷重建姿态参考。
     return 0;

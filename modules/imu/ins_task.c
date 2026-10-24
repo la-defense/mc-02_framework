@@ -310,6 +310,23 @@ void INS_Task(void)
 
         uint8_t sample_valid = (acq_ok == BMI088_ACQUIRE_OK) &&
                                BMI088SampleIsFresh(&bmi088_data, HAL_GetTick());
+        for (uint8_t axis = 0u; axis < 3u; ++axis)
+            sample_valid = (uint8_t)(sample_valid && isfinite(bmi088_data.acc[axis]));
+
+#if defined(MC02_VISION_PROTOCOL_V2)
+        VisionIMUSample_t vision_imu_sample = {0};
+        if (sample_valid != 0u)
+        {
+            vision_imu_sample.valid = 1u;
+            vision_imu_sample.sample_sequence = bmi088_data.sequence;
+            vision_imu_sample.sample_time_ms = bmi088_data.timestamp_ms;
+            memcpy(vision_imu_sample.acceleration_m_s2, bmi088_data.acc,
+                   sizeof(vision_imu_sample.acceleration_m_s2));
+        }
+        // 原始加速度状态独立于EKF结果；坏样本立即发布无效标记，避免远端沿用旧值。
+        (void)VisionUpdateIMUSample(&vision_imu_sample);
+#endif
+
         // 样本读取失败或已经过期时，清除有效标记、撤下旧姿态并关闭温控输入。
         if (!sample_valid)
         {

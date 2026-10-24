@@ -2,7 +2,7 @@
 
 <p align='right'>neozng1@hnu.edu.cn</p>
 
-本模块登记视觉链路、保存合法SP命令、检查来源时限并回传状态。先调用VisionInit()，再通过VisionGetSnapshot()复制命令及状态；发送内容由VisionUpdateTx()准备，VisionSend()追加CRC并尝试发送。公开用法见[master_process.h](master_process.h)，字节布局见[vision_protocol.h](vision_protocol.h)。
+本模块登记视觉链路、保存合法命令并回传状态。先调用`VisionInit()`，再通过`VisionGetSnapshot()`复制命令及状态；发送内容由`VisionUpdateTx()`准备，`VisionSend()`按所选协议追加CRC并尝试发送。默认SP仍保持29/43字节；V2另含姿态、裁判摘要和IMU加速度状态。公开用法见[master_process.h](master_process.h)，字节布局见[vision_protocol.h](vision_protocol.h)与[vision_protocol_v2.h](vision_protocol_v2.h)。
 
 ## 接收与时间（BSPUART-03U1）
 
@@ -20,6 +20,16 @@ VisionSend使用局部完整候选追加CRC；USB和UART都在提交时复制。
 
 [流式回归](../../tests/host/uart_stream_test.c)使用真实UART队列和生产解析，检查分割、逐字节、多帧、错误、来源时间及恢复；[CRC协议回归](../../tests/host/crc_protocol_test.c)继续覆盖USB正常路径和CRC失败。完整证据见[BSPUART-03U1](../../docs/workflow/tickets/BSPUART-03U1.md)，本轮没有硬件操作。
 
+
+## V2 IMU 加速度状态（MC02-0006／0007）
+
+V2 新增类型`0x84`，负载固定17字节：有效标记1字节、BMI088样本序号`uint32`小端、传感器x/y/z三个IEEE-754 binary32小端值。有效样本的坐标轴沿BMI088传感器本身，单位m/s²且包含重力；尚未应用机器人安装方向修正。无效样本的标记为0、序号和三轴均为0。采样时刻放在V2帧头`source_time_ms`，取BMI088完整样本准备时的本机毫秒计数，0合法；它不是PC时钟，也不是消息被读取的时刻。
+
+INS在原始采样有效性检查后发布快照，不依赖EKF校正是否成功。样本序号由BMI088驱动递增并跳过0，接收方可用序号识别重复／乱序，用帧头源时刻按无符号毫秒差判断年龄；V2接收端还可用MC02-0090的时间映射解释远端时刻，但本地采样时间不需要映射。这里不实现生产上位机的样本消费策略。
+
+V2每50ms最多提交一个状态帧，姿态、裁判摘要和IMU按轮次轮流；IMU状态名义约150ms出现一次。只有采样年龄不超过5ms时才携带有效值。采样无效、超过5ms，或消息中心快照已经过期时，MCU发出明确全零无效状态和0源时间，供接收方撤销旧数值。坏样本不会用旧加速度续期。SP构建不改变原29/43字节帧，也不伪造采样时间；`VisionUpdateIMUSample()`在SP构建返回不可用。
+
+生产端到端测试见[vision_v2_link_test.c](../../tests/host/vision_v2_link_test.c)，固定字节和CRC向量见[vision_protocol_v2_test.c](../../tests/host/vision_protocol_v2_test.c)。它们验证的是下位机编码、序号／时间字段和失效发布，不代表生产上位机已经接入或完成实体传输测试；任务范围与结果见[MC02-0006／0007记录](../../docs/workflow/tickets/MC02-0006-0007.md)。
 
 ## V2 对时与映射（MC02-0090）
 

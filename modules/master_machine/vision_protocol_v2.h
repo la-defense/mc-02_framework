@@ -1,5 +1,5 @@
 /** @file vision_protocol_v2.h
- * @brief V2视觉业务帧及瞄准、导航、姿态和裁判摘要的字节接口。
+ * @brief V2视觉业务帧及瞄准、导航、姿态、IMU样本和裁判摘要的字节接口。
  * @note 帧头12字节、负载最多112字节、末尾CRC16 2字节；内存结构体不能直接上线路。
  */
 #ifndef VISION_PROTOCOL_V2_H
@@ -17,6 +17,7 @@
 #define VISION_V2_ASSEMBLY_TIMEOUT_MS 50u
 #define VISION_V2_AIM_MAX_AGE_MS 50u
 #define VISION_V2_NAV_MAX_AGE_MS 100u
+#define VISION_V2_IMU_SAMPLE_MAX_SOURCE_AGE_MS 5u
 
 typedef enum
 {
@@ -25,7 +26,8 @@ typedef enum
     VISION_V2_TIME_SYNC_REPLY = 0x03,
     VISION_V2_POSTURE_STATUS = 0x81,
     VISION_V2_REFEREE_SUMMARY = 0x82,
-    VISION_V2_TIME_SYNC_PROBE = 0x83
+    VISION_V2_TIME_SYNC_PROBE = 0x83,
+    VISION_V2_IMU_SAMPLE_STATUS = 0x84
 } VisionV2MessageType_t;
 
 typedef enum
@@ -80,6 +82,16 @@ typedef struct
     float pitch_rad;
     float pitch_rate_rad_s;
 } VisionV2PostureStatus_t;
+
+/** @brief 一份BMI088加速度样本；有效值使用传感器x/y/z轴，单位m/s²，包含重力。
+ * @note 无效状态的序号和三轴数值均为0；采样时刻放在V2帧头source_time_ms。
+ */
+typedef struct
+{
+    uint8_t valid; /* 只允许0或1；1时sample_sequence必须非0。 */
+    uint32_t sample_sequence; /* BMI088成功样本序号，回绕时跳过0。 */
+    float acceleration_m_s2[3]; /* BMI088传感器坐标x/y/z，尚未做安装方向修正。 */
+} VisionV2IMUSampleStatus_t;
 
 enum
 {
@@ -186,6 +198,24 @@ VisionV2Status_t VisionV2EncodeTimeSyncReply(const VisionV2TimeSyncReply_t *repl
  */
 VisionV2Status_t VisionV2DecodeTimeSyncReply(const uint8_t *payload, size_t length,
                                              VisionV2TimeSyncReply_t *reply);
+
+/** @brief 编码17字节IMU加速度状态；有效时三轴必须为有限m/s²数值。
+ * @param[in] status 有效样本或全零无效标记；结构体由调用者保存。
+ * @param[out] payload 至少17字节；失败保持原内容。
+ * @param[in] capacity 可写容量，至少17字节。
+ * @return VISION_V2_OK；空参数、容量不足或非法状态／数值返回具体错误。
+ */
+VisionV2Status_t VisionV2EncodeIMUSampleStatus(const VisionV2IMUSampleStatus_t *status,
+                                               uint8_t *payload, size_t capacity);
+
+/** @brief 解码17字节IMU加速度状态，验证有效标记、序号和有限数值。
+ * @param[in] payload 恰好17字节，整数及IEEE-754 binary32按小端排列。
+ * @param[in] length 必须为17。
+ * @param[out] status 成功后替换完整结果；失败保持原值。
+ * @return VISION_V2_OK；空参数、长度或字段值非法返回具体错误。
+ */
+VisionV2Status_t VisionV2DecodeIMUSampleStatus(const uint8_t *payload, size_t length,
+                                               VisionV2IMUSampleStatus_t *status);
 
 /** @brief 编码完整V2帧并追加CRC16_MODBUS_A5。
  * @note 字节顺序为：`MC`、版本、类型、负载长度LE16、序号LE16、远端源时刻LE32、负载、CRC LE16。
