@@ -224,6 +224,11 @@ add_test(NAME production_lk_motor_bsp_can_closed_loops COMMAND lk_motor_bsp_can_
 add_test(NAME production_lk_motor_bsp_can_feedforward COMMAND lk_motor_bsp_can_test feedforward)
 add_test(NAME production_lk_motor_bsp_can_feedback_failure COMMAND lk_motor_bsp_can_test feedback_failure)
 add_test(NAME production_lk_motor_bsp_can_feedforward_overflow COMMAND lk_motor_bsp_can_test feedforward_overflow)
+foreach(direction_case IN ITEMS angle speed current open invalid)
+  add_test(NAME production_lk_motor_bsp_can_direction_${direction_case}
+    COMMAND lk_motor_bsp_can_test direction-${direction_case})
+  set_tests_properties(production_lk_motor_bsp_can_direction_${direction_case} PROPERTIES TIMEOUT 10)
+endforeach()
 set_tests_properties(production_lk_motor_bsp_can_rollback production_lk_motor_bsp_can_routing
   production_lk_motor_bsp_can_closed_loops production_lk_motor_bsp_can_feedforward
   production_lk_motor_bsp_can_feedback_failure production_lk_motor_bsp_can_feedforward_overflow
@@ -945,6 +950,18 @@ target_link_libraries(ht_control_test PRIVATE mc02_numeric)
 foreach(scenario IN ITEMS feedback_0 feedback_1 feedback_2 feedback_3
     feedforward_1 feedforward_2 feedforward_3 init_failures runtime_recovery
     runtime_speed_failure feedforward_overflow)
+  add_test(NAME production_ht_control_${scenario} COMMAND ht_control_test ${scenario})
+  set_tests_properties(production_ht_control_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+foreach(direction_case IN ITEMS angle speed)
+  foreach(direction IN ITEMS 0 1 2 3)
+    add_test(NAME production_ht_control_direction_${direction_case}_${direction}
+      COMMAND ht_control_test direction-${direction_case}-${direction})
+    set_tests_properties(production_ht_control_direction_${direction_case}_${direction}
+      PROPERTIES TIMEOUT 10)
+  endforeach()
+endforeach()
+foreach(scenario IN ITEMS direction-current direction-open direction-invalid)
   add_test(NAME production_ht_control_${scenario} COMMAND ht_control_test ${scenario})
   set_tests_properties(production_ht_control_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()

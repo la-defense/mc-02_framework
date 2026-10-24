@@ -454,6 +454,123 @@ static void test_closed_loop_feedback_selection(void)
                             ((uint16_t)tx_frame[0][index * 2u + 1u] << 8u)) == expected_current[index]);
 }
 
+static void test_direction_flags(uint8_t speed_outer)
+{
+    static const int16_t expected_angle_positive[4] = {3, -12, -3, 12};
+    static const int16_t expected_angle_negative[4] = {-12, 3, 12, -3};
+    static const int16_t expected_speed_positive[4] = {5, -10, -5, 10};
+    static const int16_t expected_speed_negative[4] = {-10, 5, 10, -5};
+    LKMotorInstance *motors[LK_MOTOR_PER_BUS_CNT] = {NULL};
+    const int16_t *positive = speed_outer ? expected_speed_positive : expected_angle_positive;
+    const int16_t *negative = speed_outer ? expected_speed_negative : expected_angle_negative;
+
+    for (uint8_t index = 0u; index < LK_MOTOR_PER_BUS_CNT; ++index)
+    {
+        Motor_Init_Config_s config = config_for(0u, (uint32_t)index + 1u);
+        Motor_Control_Setting_s *setting = &config.controller_setting_init_config;
+        setting->outer_loop_type = speed_outer ? SPEED_LOOP : ANGLE_LOOP;
+        setting->close_loop_type = speed_outer ? SPEED_LOOP : (ANGLE_LOOP | SPEED_LOOP);
+        setting->motor_reverse_flag = (index & 1u) != 0u ? MOTOR_DIRECTION_REVERSE : MOTOR_DIRECTION_NORMAL;
+        setting->feedback_reverse_flag = (index & 2u) != 0u ?
+            FEEDBACK_DIRECTION_REVERSE : FEEDBACK_DIRECTION_NORMAL;
+        config.controller_param_init_config.angle_PID = pid_config(0.25f, 1000.0f);
+        config.controller_param_init_config.speed_PID = pid_config(speed_outer ? 0.25f : 1.0f, 1000.0f);
+
+        motors[index] = LKMotorInit(&config);
+        TEST_CHECK(motors[index] != NULL);
+        motors[index]->measure.total_angle = 10.0f;
+        motors[index]->measure.speed_rads = speed_outer ? 10.0f : 2.0f;
+        LKMotorSetRef(motors[index], 30.0f);
+    }
+
+    now_us = 0u;
+    LKMotorControl();
+    now_us = 1000u;
+    LKMotorControl();
+    for (uint8_t index = 0u; index < LK_MOTOR_PER_BUS_CNT; ++index)
+    {
+        int16_t actual = (int16_t)((uint16_t)tx_frame[0][index * 2u] |
+                                   ((uint16_t)tx_frame[0][index * 2u + 1u] << 8u));
+        TEST_CHECK(actual == positive[index]);
+        LKMotorSetRef(motors[index], -30.0f);
+    }
+
+    now_us = 2000u;
+    LKMotorControl();
+    for (uint8_t index = 0u; index < LK_MOTOR_PER_BUS_CNT; ++index)
+    {
+        int16_t actual = (int16_t)((uint16_t)tx_frame[0][index * 2u] |
+                                   ((uint16_t)tx_frame[0][index * 2u + 1u] << 8u));
+        TEST_CHECK(actual == negative[index]);
+        LKMotorSetRef(motors[index], 0.0f);
+        motors[index]->measure.total_angle = 0.0f;
+        motors[index]->measure.speed_rads = 0.0f;
+    }
+
+    now_us = 3000u;
+    LKMotorControl();
+    for (uint8_t index = 0u; index < LK_MOTOR_PER_BUS_CNT; ++index)
+        TEST_CHECK(tx_frame[0][index * 2u] == 0u && tx_frame[0][index * 2u + 1u] == 0u);
+}
+
+static void test_current_loop_ignores_axis_direction_flags(void)
+{
+    Motor_Init_Config_s config = config_for(0u, 1u);
+    config.controller_setting_init_config.outer_loop_type = CURRENT_LOOP;
+    config.controller_setting_init_config.close_loop_type = CURRENT_LOOP;
+    config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
+    config.controller_setting_init_config.feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE;
+    config.controller_param_init_config.current_PID = pid_config(0.25f, 1000.0f);
+    LKMotorInstance *motor = LKMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+    LKMotorSetRef(motor, 30.0f);
+
+    now_us = 0u;
+    LKMotorControl();
+    now_us = 1000u;
+    LKMotorControl();
+    TEST_CHECK(tx_frame[0][0] == 0xF9u && tx_frame[0][1] == 0xFFu);
+}
+
+static void test_open_loop_keeps_motor_direction(void)
+{
+    Motor_Init_Config_s config = config_for(0u, 1u);
+    config.controller_setting_init_config.outer_loop_type = OPEN_LOOP;
+    config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
+    config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
+    config.controller_setting_init_config.feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE;
+    LKMotorInstance *motor = LKMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+    LKMotorSetRef(motor, 9.0f);
+
+    now_us = 0u;
+    LKMotorControl();
+    now_us = 1000u;
+    LKMotorControl();
+    TEST_CHECK(tx_frame[0][0] == 0xF7u && tx_frame[0][1] == 0xFFu);
+
+    LKMotorSetRef(motor, -9.0f);
+    now_us = 2000u;
+    LKMotorControl();
+    TEST_CHECK(tx_frame[0][0] == 0x09u && tx_frame[0][1] == 0x00u);
+
+    LKMotorSetRef(motor, 0.0f);
+    now_us = 3000u;
+    LKMotorControl();
+    TEST_CHECK(tx_frame[0][0] == 0u && tx_frame[0][1] == 0u);
+}
+
+static void test_invalid_direction_flags_rejected(void)
+{
+    Motor_Init_Config_s config = config_for(0u, 1u);
+    config.controller_setting_init_config.motor_reverse_flag = (Motor_Reverse_Flag_e)2;
+    TEST_CHECK(LKMotorInit(&config) == NULL);
+    config = config_for(0u, 1u);
+    config.controller_setting_init_config.feedback_reverse_flag = (Feedback_Reverse_Flag_e)2;
+    TEST_CHECK(LKMotorInit(&config) == NULL);
+    TEST_CHECK(filter_count[0] == 0u && bus_start_count[0] == 0u);
+}
+
 static void test_feedforward_paths_and_recovery(void)
 {
     float external_angle = 20.0f;
@@ -643,6 +760,16 @@ int main(int argc, char **argv)
         test_feedforward_paths_and_recovery();
     else if (strcmp(argv[1], "feedback_failure") == 0)
         test_feedback_failure_recovery();
+    else if (strcmp(argv[1], "direction-angle") == 0)
+        test_direction_flags(0u);
+    else if (strcmp(argv[1], "direction-speed") == 0)
+        test_direction_flags(1u);
+    else if (strcmp(argv[1], "direction-current") == 0)
+        test_current_loop_ignores_axis_direction_flags();
+    else if (strcmp(argv[1], "direction-open") == 0)
+        test_open_loop_keeps_motor_direction();
+    else if (strcmp(argv[1], "direction-invalid") == 0)
+        test_invalid_direction_flags_rejected();
     else if (strcmp(argv[1], "rx-burst") == 0)
         test_production_can_receive_burst();
     else if (strcmp(argv[1], "dji-rx-burst") == 0)

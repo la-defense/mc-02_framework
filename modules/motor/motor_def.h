@@ -51,14 +51,21 @@ typedef enum
     OTHER_FEED,
 } Feedback_Source_e;
 
-/* 电机正反转标志 */
+/*
+ * @brief 电机方向设置。
+ * LK、HT04 的角度／速度外环先按 motor_reverse_flag 翻转目标，
+ * 开环和电流外环沿用输出端翻转；其他驱动按各自实现处理。
+ */
 typedef enum
 {
     MOTOR_DIRECTION_NORMAL = 0,
     MOTOR_DIRECTION_REVERSE = 1
 } Motor_Reverse_Flag_e;
 
-/* 反馈量正反标志 */
+/*
+ * @brief 角度／速度外环的最终输出方向设置。
+ * LK、HT04 在串级 PID 与前馈之后应用；开环和电流外环忽略该标志。
+ */
 typedef enum
 {
     FEEDBACK_DIRECTION_NORMAL = 0,
@@ -83,8 +90,8 @@ typedef struct
 {
     Closeloop_Type_e outer_loop_type;              // 最外层的闭环,未设置时默认为最高级的闭环
     Closeloop_Type_e close_loop_type;              // 使用几个闭环(串级)
-    Motor_Reverse_Flag_e motor_reverse_flag;       // 是否反转
-    Feedback_Reverse_Flag_e feedback_reverse_flag; // 反馈是否反向
+    Motor_Reverse_Flag_e motor_reverse_flag;       // LK／HT 轴向外环先翻转目标；默认值 NORMAL 保持旧方向。
+    Feedback_Reverse_Flag_e feedback_reverse_flag; // LK／HT 轴向外环最后翻转结果；开环／电流外环不使用。
     Feedback_Source_e angle_feedback_source;       // 角度反馈类型
     Feedback_Source_e speed_feedback_source;       // 速度反馈类型
     Feedfoward_Type_e feedforward_flag;            // 前馈标志

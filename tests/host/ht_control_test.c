@@ -176,6 +176,100 @@ static void test_feedback_combination(unsigned combination)
     TEST_CHECK(transmit_count >= 4u);
 }
 
+static void test_direction_combination(uint8_t speed_outer, unsigned combination)
+{
+    static const double angle_positive[4] = {3.0, -12.0, -3.0, 12.0};
+    static const double angle_negative[4] = {-12.0, 3.0, 12.0, -3.0};
+    static const double speed_positive[4] = {5.0, -10.0, -5.0, 10.0};
+    static const double speed_negative[4] = {-10.0, 5.0, 10.0, -5.0};
+    TEST_CHECK(combination < 4u);
+    Motor_Init_Config_s config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
+    Motor_Control_Setting_s *setting = &config.controller_setting_init_config;
+    setting->outer_loop_type = speed_outer ? SPEED_LOOP : ANGLE_LOOP;
+    setting->close_loop_type = speed_outer ? SPEED_LOOP : (ANGLE_LOOP | SPEED_LOOP);
+    setting->motor_reverse_flag = (combination & 1u) != 0u ? MOTOR_DIRECTION_REVERSE : MOTOR_DIRECTION_NORMAL;
+    setting->feedback_reverse_flag = (combination & 2u) != 0u ?
+        FEEDBACK_DIRECTION_REVERSE : FEEDBACK_DIRECTION_NORMAL;
+    config.controller_param_init_config.angle_PID = pid_config(0.25f, 1000.0f);
+    config.controller_param_init_config.speed_PID = pid_config(speed_outer ? 0.25f : 1.0f, 1000.0f);
+
+    HTMotorInstance *motor = HTMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+    HTMotorSetRef(motor, 30.0f);
+    motor->measure.total_angle = 10.0f / (float)RAD_2_DEGREE;
+    motor->measure.speed_rads = (speed_outer ? 10.0f : 2.0f) / (float)RAD_2_DEGREE;
+    HTMotorControlInit();
+
+    now_us = 0u;
+    run_task(0u, 2u);
+    check_torque(motor, speed_outer ? speed_positive[combination] : angle_positive[combination]);
+
+    HTMotorSetRef(motor, -30.0f);
+    run_task(0u, 1u);
+    check_torque(motor, speed_outer ? speed_negative[combination] : angle_negative[combination]);
+
+    HTMotorSetRef(motor, 0.0f);
+    motor->measure.total_angle = 0.0f;
+    motor->measure.speed_rads = 0.0f;
+    run_task(0u, 1u);
+    check_torque(motor, 0.0);
+}
+
+static void test_current_loop_ignores_axis_direction_flags(void)
+{
+    Motor_Init_Config_s config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
+    config.controller_setting_init_config.outer_loop_type = CURRENT_LOOP;
+    config.controller_setting_init_config.close_loop_type = CURRENT_LOOP;
+    config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
+    config.controller_setting_init_config.feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE;
+    config.controller_param_init_config.current_PID = pid_config(0.25f, 1000.0f);
+    HTMotorInstance *motor = HTMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+    HTMotorSetRef(motor, 30.0f);
+    HTMotorControlInit();
+
+    now_us = 0u;
+    run_task(0u, 2u);
+    check_torque(motor, -7.5);
+}
+
+static void test_open_loop_keeps_motor_direction(void)
+{
+    Motor_Init_Config_s config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
+    Motor_Control_Setting_s *setting = &config.controller_setting_init_config;
+    setting->outer_loop_type = OPEN_LOOP;
+    setting->close_loop_type = OPEN_LOOP;
+    setting->motor_reverse_flag = MOTOR_DIRECTION_REVERSE;
+    setting->feedback_reverse_flag = FEEDBACK_DIRECTION_REVERSE;
+    HTMotorInstance *motor = HTMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+    HTMotorSetRef(motor, 9.0f);
+    HTMotorControlInit();
+
+    now_us = 0u;
+    run_task(0u, 2u);
+    check_torque(motor, -9.0);
+
+    HTMotorSetRef(motor, -9.0f);
+    run_task(0u, 1u);
+    check_torque(motor, 9.0);
+
+    HTMotorSetRef(motor, 0.0f);
+    run_task(0u, 1u);
+    check_torque(motor, 0.0);
+}
+
+static void test_invalid_direction_flags_rejected(void)
+{
+    Motor_Init_Config_s config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
+    config.controller_setting_init_config.motor_reverse_flag = (Motor_Reverse_Flag_e)2;
+    TEST_CHECK(HTMotorInit(&config) == NULL);
+    config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
+    config.controller_setting_init_config.feedback_reverse_flag = (Feedback_Reverse_Flag_e)2;
+    TEST_CHECK(HTMotorInit(&config) == NULL);
+    TEST_CHECK(registered == 0u && daemon_count == 0u && transmit_count == 0u && task_count == 0u);
+}
+
 static void test_feedforward_copy_and_use(unsigned flags)
 {
     float speed_feedforward = 2.0f;
@@ -371,6 +465,16 @@ int main(int argc, char **argv)
     TEST_CHECK(argc == 2);
     if (strncmp(argv[1], "feedback_", 9u) == 0)
         test_feedback_combination((unsigned)(argv[1][9] - '0'));
+    else if (strncmp(argv[1], "direction-angle-", 16u) == 0)
+        test_direction_combination(0u, (unsigned)(argv[1][16] - '0'));
+    else if (strncmp(argv[1], "direction-speed-", 16u) == 0)
+        test_direction_combination(1u, (unsigned)(argv[1][16] - '0'));
+    else if (strcmp(argv[1], "direction-current") == 0)
+        test_current_loop_ignores_axis_direction_flags();
+    else if (strcmp(argv[1], "direction-open") == 0)
+        test_open_loop_keeps_motor_direction();
+    else if (strcmp(argv[1], "direction-invalid") == 0)
+        test_invalid_direction_flags_rejected();
     else if (strncmp(argv[1], "feedforward_", 12u) == 0)
         test_feedforward_copy_and_use((unsigned)(argv[1][12] - '0'));
     else if (strcmp(argv[1], "init_failures") == 0)

@@ -331,11 +331,11 @@ Unicom
 
 #### LKmotor
 
-- [ ] **MC02-0018** [enhancement] [ready-for-agent] 为 LK 电机增加正反转标志并统一反馈量与 PID 方向。验收：正转、反转和零速测试方向正确，既有默认方向兼容。
+- [x] **MC02-0018** [enhancement] 为 LK 电机增加正反转标志并统一反馈量与 PID 方向。验收：正转、反转和零速软件回归方向正确，既有默认方向兼容。WSL Debug／Release 全量 CTest 各346/346通过；十种 ARM 禁热固件构建及 ELF 配置检查通过。未连接或驱动电机，物理旋向未验。详见[共同记录](../docs/workflow/tickets/MC02-0018-0019.md)。
 
 #### HTmotor
 
-- [ ] **MC02-0019** [enhancement] [ready-for-agent] 为 HT 电机增加正反转标志并统一反馈量与 PID 方向。验收：正转、反转和零速测试方向正确，既有默认方向兼容。
+- [x] **MC02-0019** [enhancement] 为 HT 电机增加正反转标志并统一反馈量与 PID 方向。验收：正转、反转和零速软件回归方向正确，既有默认方向兼容。WSL Debug／Release 全量 CTest 各346/346通过；十种 ARM 禁热固件构建及 ELF 配置检查通过。未连接或驱动电机，物理旋向未验。详见[共同记录](../docs/workflow/tickets/MC02-0018-0019.md)。
 
 ### 待添加
 

@@ -55,6 +55,12 @@ static uint8_t HTControlConfigValid(const Motor_Init_Config_s *config)
     uint8_t speed_active = (uint8_t)((setting->close_loop_type & SPEED_LOOP) != 0u &&
                                      (setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
 
+    if ((setting->motor_reverse_flag != MOTOR_DIRECTION_NORMAL &&
+         setting->motor_reverse_flag != MOTOR_DIRECTION_REVERSE) ||
+        (setting->feedback_reverse_flag != FEEDBACK_DIRECTION_NORMAL &&
+         setting->feedback_reverse_flag != FEEDBACK_DIRECTION_REVERSE))
+        return 0u;
+
     if ((angle_active != 0u &&
          !HTFeedbackConfigValid(setting->angle_feedback_source, controller->other_angle_feedback_ptr)) ||
         (speed_active != 0u &&
@@ -244,6 +250,11 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
     while (1)
     {
         pid_ref = motor->pid_ref;
+        // 角度或速度闭环先转换目标方向，保持 PID 与 DJI、XM 驱动的约定一致。
+        uint8_t axis_outer = (uint8_t)((setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
+        if (axis_outer != 0u &&
+            setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE)
+            pid_ref = -pid_ref;
         // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
         float control_dt = 0.0f;
         PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
@@ -323,6 +334,12 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
             pid_status = PIDCalculate(&motor->current_PID, pid_measure, pid_ref, control_dt, &pid_ref);
         }
 
+        // 轴向闭环最后转换反馈方向；开环和电流外环保留原有电机反向处理。
+        if (axis_outer != 0u && setting->feedback_reverse_flag == FEEDBACK_DIRECTION_REVERSE)
+            pid_ref = -pid_ref;
+        else if (axis_outer == 0u && setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE)
+            pid_ref = -pid_ref;
+
         if (pid_status != PID_OK || !isfinite(pid_ref))
         {
             // 一环失败后丢弃本轮串级结果，恢复前清除各环已有积分和微分历史。
@@ -332,8 +349,6 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
         }
 
         set = pid_ref;
-        if (setting->motor_reverse_flag == MOTOR_DIRECTION_REVERSE)
-            set *= -1;
 
         LIMIT_MIN_MAX(set, T_MIN, T_MAX);
         tmp = float_to_uint(set, T_MIN, T_MAX, 12);
