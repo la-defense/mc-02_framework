@@ -3,7 +3,8 @@
 
 用途：记录 CDC 收发、序号和主机侧错误，供 MC02-0062 裸板回归使用。
 入口：命令行 main；使用前需显式指定端口和输出目录，工具会先运行只读身份核对。
-限制：不发送模式切换或执行器命令；主机时间不是 USB 线端时序保证。
+限制：短时阻塞读取以保持CDC IN读请求；设备重枚举后仅按USB序列号有限重开，不重发失败帧。
+      不发送模式切换或执行器命令；主机时间不是USB线端时序保证。
 """
 from __future__ import annotations
 
@@ -21,6 +22,9 @@ USB_VID = 0x0483
 USB_PID = 0x5740
 FRAME_PERIOD_S = 0.01
 MAX_SECONDS = 300.0
+SERIAL_READ_TIMEOUT_S = 0.02
+RECONNECT_TIMEOUT_S = 10.0
+RECONNECT_POLL_S = 0.02
 UINT32_MASK = 0xFFFFFFFF
 
 
@@ -49,6 +53,36 @@ def identity_command(elf: Path, output_root: Path, *, diagnostic: bool = False,
     return [sys.executable, str(tool), mode, "--samples", "2", "--elf", str(elf.resolve()),
             "--gdb", gdb, "--readelf", readelf, "--host", host,
             "--telnet-port", str(telnet_port), "--output-root", str(output_root)]
+
+
+def _open_serial_port(serial_module, device: str):
+    """打开指定CDC端口并保留短时读请求，便于设备发送IN状态帧。"""
+    return serial_module.Serial(device, 115200, timeout=SERIAL_READ_TIMEOUT_S, write_timeout=0.1)
+
+
+def _matching_serial_device(list_ports, serial_number: str):
+    """按稳定的USB序列号找当前COM名；多个匹配项时拒绝猜测。"""
+    matches = [item for item in list_ports.comports()
+               if item.vid == USB_VID and item.pid == USB_PID and item.serial_number == serial_number]
+    if len(matches) > 1:
+        raise OSError("USB serial number matched more than one CDC port")
+    return matches[0] if matches else None
+
+
+def _reopen_serial_port(serial_module, list_ports, serial_number: str, deadline: float):
+    """在期限内等待同一块板重新出现，返回当前COM名和新句柄。"""
+    serial_exception = getattr(serial_module, "SerialException", OSError)
+    error_types = (OSError,) if issubclass(serial_exception, OSError) else (OSError, serial_exception)
+    while time.monotonic() < deadline:
+        item = _matching_serial_device(list_ports, serial_number)
+        if item is not None:
+            try:
+                return item.device, _open_serial_port(serial_module, item.device)
+            except error_types:
+                # 设备刚出现时驱动可能还没准备好，短暂停顿后再检查同一序列号。
+                pass
+        time.sleep(RECONNECT_POLL_S)
+    raise OSError("matching STM32 CDC did not reopen before the reconnect deadline")
 
 
 class StatusFrames:
@@ -137,8 +171,8 @@ def main(argv: list[str] | None = None) -> int:
         print("板上固件身份核对失败；未打开 CDC 串口或发送测试帧", file=sys.stderr)
         return 2
     parser_frames = StatusFrames()
-    sent = received = 0
-    failures = 0
+    sent = received = failures = reopen_count = 0
+    capture_error = None
     start = time.monotonic()
     deadline = start + args.duration
     next_send = start
@@ -146,18 +180,25 @@ def main(argv: list[str] | None = None) -> int:
                "usb_serial": matches[0].serial_number, "source_sha": args.source_sha,
                "elf": str(args.elf.resolve()), "elf_sha256": digest,
                "duration_limit_s": args.duration, "tx": "fixed-neutral-mode0-only",
+               "read_timeout_s": SERIAL_READ_TIMEOUT_S,
+               "reconnect_timeout_s": RECONNECT_TIMEOUT_S,
                "identity_preflight": str(identity_root.resolve()),
                "identity_mode": identity_mode}
+    port = None
     try:
         with (args.output / "raw.bin").open("xb") as raw, (args.output / "raw.jsonl").open("x", encoding="utf-8") as log:
             log.write(json.dumps({"type": "session", **session}, sort_keys=True) + "\n")
-            with serial.Serial(args.port, 115200, timeout=0.0, write_timeout=0.1) as port:
-                while time.monotonic() < deadline:
+            try:
+                port = _open_serial_port(serial, args.port)
+            except (OSError, serial.SerialException) as error:
+                capture_error = str(error)
+            # 短时等待读结果能让Windows主机持续请求IN数据；重枚举后只发下一份新帧。
+            while capture_error is None and time.monotonic() < deadline:
+                try:
                     now = time.monotonic()
                     if now >= next_send:
                         frame = neutral_frame(sent)
                         if port.write(frame) != len(frame):
-                            failures += 1
                             raise OSError("short CDC write; stop without replaying partial frame")
                         sent += 1
                         next_send = now + FRAME_PERIOD_S
@@ -169,17 +210,50 @@ def main(argv: list[str] | None = None) -> int:
                             log.write(json.dumps({"type": "status", "elapsed_s": round(time.monotonic()-start, 6),
                                                   **item}, allow_nan=False) + "\n")
                     time.sleep(0.001)
+                except (OSError, serial.SerialException) as error:
+                    failures += 1
+                    log.write(json.dumps({"type": "io_error", "elapsed_s": round(time.monotonic()-start, 6),
+                                          "error": str(error)}, ensure_ascii=False) + "\n")
+                    try:
+                        port.close()
+                    except (OSError, serial.SerialException):
+                        pass
+                    port = None
+                    reconnect_deadline = min(deadline, time.monotonic() + RECONNECT_TIMEOUT_S)
+                    try:
+                        active_port, port = _reopen_serial_port(
+                            serial, list_ports, matches[0].serial_number, reconnect_deadline
+                        )
+                    except (OSError, serial.SerialException) as reopen_error:
+                        capture_error = f"CDC reconnect failed after {error}: {reopen_error}"
+                        break
+                    reopen_count += 1
+                    next_send = time.monotonic() + FRAME_PERIOD_S
+                    log.write(json.dumps({"type": "reopened", "elapsed_s": round(time.monotonic()-start, 6),
+                                          "port": active_port}, ensure_ascii=False) + "\n")
+                    log.flush()
+            if port is not None:
+                port.close()
             raw.flush()
             log.write(json.dumps({"type": "summary", "sent": sent, "received": received,
                                   "rejected_bytes": parser_frames.rejected,
-                                  "partial_bytes": len(parser_frames.buffer), "failures": failures}) + "\n")
+                                  "partial_bytes": len(parser_frames.buffer), "failures": failures,
+                                  "reopen_count": reopen_count, "complete": capture_error is None}) + "\n")
+            log.flush()
+        if capture_error is not None:
+            (args.output / "error.txt").write_text(capture_error + "\n", encoding="utf-8")
+            return 2
     except KeyboardInterrupt:
         return 130
-    except (OSError, ValueError) as error:
-        failures += 1
+    except (OSError, ValueError, serial.SerialException) as error:
+        if port is not None:
+            try:
+                port.close()
+            except (OSError, serial.SerialException):
+                pass
         (args.output / "error.txt").write_text(str(error) + "\n", encoding="utf-8")
         return 2
-    return 0 if failures == 0 else 2
+    return 0 if capture_error is None else 2
 
 
 if __name__ == "__main__":
