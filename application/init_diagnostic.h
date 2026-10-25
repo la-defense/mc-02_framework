@@ -9,6 +9,8 @@
 
 #include <stdint.h>
 
+#define INIT_DIAGNOSTIC_EVENT_CAPACITY 16u
+
 /** @brief 启动阶段；发生失败后保留当时的阶段。 */
 typedef enum
 {
@@ -72,6 +74,42 @@ typedef struct
     uint32_t heartbeat;     ///< 心跳接口的调用次数，单位为次，超过 UINT32_MAX 后回到 0
 } InitDiagnosticSnapshot_s;
 
+/** @brief 初始化历史事件的种类。 */
+typedef enum
+{
+    INIT_DIAGNOSTIC_EVENT_STAGE_CHANGED = 1u,
+    INIT_DIAGNOSTIC_EVENT_FAILURE,
+    INIT_DIAGNOSTIC_EVENT_READY,
+} InitDiagnosticEventKind_e;
+
+/** @brief 初始化历史事件的严重程度。 */
+typedef enum
+{
+    INIT_DIAGNOSTIC_SEVERITY_INFO = 1u,
+    INIT_DIAGNOSTIC_SEVERITY_ERROR,
+} InitDiagnosticSeverity_e;
+
+/** @brief 一次阶段变化、初始化失败或 READY 事件；时间为本机 HAL 毫秒，0合法。 */
+typedef struct
+{
+    uint32_t sequence;   ///< 非0事件序号，递增到上限后回到1
+    uint32_t timestamp_ms; ///< 事件发生时刻，单位 ms
+    uint16_t resource_id; ///< 与 InitDiagnosticSnapshot_s 相同的资源编号
+    uint8_t kind;       ///< InitDiagnosticEventKind_e
+    uint8_t stage;      ///< InitDiagnosticStage_e
+    uint8_t module;     ///< InitDiagnosticModule_e；阶段事件为0
+    uint8_t reason;     ///< InitDiagnosticReason_e；非失败事件为 NONE
+    uint8_t severity;   ///< InitDiagnosticSeverity_e
+} InitDiagnosticEvent_t;
+
+/** @brief 最近最多16条初始化事件，按发生先后从旧到新排列。 */
+typedef struct
+{
+    uint32_t total_count; ///< 本次启动累计事件数，到 UINT32_MAX 后保持
+    uint8_t count;        ///< 本次复制的条目数，最多 INIT_DIAGNOSTIC_EVENT_CAPACITY
+    InitDiagnosticEvent_t events[INIT_DIAGNOSTIC_EVENT_CAPACITY];
+} InitDiagnosticEventSnapshot_t;
+
 /** @brief 供调试器通过 SWD 只读查看；程序中用 InitDiagnosticGetSnapshot() 复制记录。 */
 extern volatile InitDiagnosticSnapshot_s init_diagnostic_snapshot;
 
@@ -124,5 +162,13 @@ uint8_t InitDiagnosticIsFailed(void);
  * @note 复制时暂时关闭普通中断，结束后恢复调用前的中断开关状态。
  */
 void InitDiagnosticGetSnapshot(InitDiagnosticSnapshot_s *snapshot);
+
+/**
+ * @brief 将最近的初始化事件复制到调用方缓冲区，不消费记录。
+ * @param[out] snapshot 接收事件，不能为NULL。
+ * @return 1表示复制成功；NULL 返回0，输出不可用时原值保持。
+ * @note 事件最多保存16条，满后覆盖最旧项；查询在短临界区内复制，不分配内存。
+ */
+uint8_t InitDiagnosticGetEvents(InitDiagnosticEventSnapshot_t *snapshot);
 
 #endif

@@ -24,7 +24,7 @@ ROLE_FORBIDDEN = {
     "gimbal": {"ChassisInit", "ChassisTask"},
 }
 OPTIONAL_SOURCES = {
-    "bsp/flash/bsp_flash.c", "modules/algorithm/RLS.c",
+    "modules/algorithm/RLS.c",
     "modules/bluetooth/HC05.c", "modules/ist8310/ist8310.c", "modules/oled/oled.c",
     "modules/standard_cmd/std_cmd.c", "modules/unicomm/unicomm.c",
     "modules/TFminiPlus/tfminiplus.c", "modules/motor/DMmotor/dmmotor.c",

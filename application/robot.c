@@ -13,6 +13,7 @@
 #include "bsp_param.h"
 #include "imu_heater.h"
 #include "init_diagnostic.h"
+#include "vehicle_health.h"
 #include "bsp_safety.h"
 #if MC02_BENCH_RC_DIAGNOSTICS
 #include "remote_bench.h"
@@ -74,6 +75,8 @@ uint8_t RobotInit(void)
     BSPInit();
     RobotSafetyInit();
     TaskMonitorInit();
+    (void)VehicleHealthInit();
+    (void)VehicleHealthDiagnosticInit();
     const ParamLongOperationGuard_t param_guard = {
         .begin = RobotParamFlashOperationBegin,
         .end = RobotParamFlashOperationEnd,
@@ -152,6 +155,7 @@ void RobotTask()
         RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
         RobotSafetyRequestDisable();
         RobotSafetyUpdate();
+        (void)VehicleHealthProcess();
         return;
     }
 #if defined(MC02_PROFILE_BENCH_SAFE)
@@ -175,5 +179,7 @@ void RobotTask()
     ChassisTask();
 #endif
 #endif
+
+    (void)VehicleHealthProcess();
 
 }

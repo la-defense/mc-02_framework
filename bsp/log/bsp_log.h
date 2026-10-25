@@ -14,7 +14,8 @@
 #define BSP_LOG_PAYLOAD_MAX 96u
 #define BSP_LOG_HISTORY_CAPACITY 16u
 #define BSP_LOG_OUTPUT_CAPACITY 256u
-#define BSP_LOG_DIAGNOSTIC_FRAME_MAX 16u
+#define BSP_LOG_DIAGNOSTIC_REPLY_PAYLOAD_MAX 120u
+#define BSP_LOG_DIAGNOSTIC_TX_FRAME_MAX 128u
 #define BSP_LOG_MAX_FIELDS 8u
 #define BSP_LOG_SOURCE_CAPACITY 32u
 #define BSP_LOG_WORKSPACE_MAX 16384u
@@ -84,8 +85,14 @@ typedef enum
     BSP_LOG_STATUS_PROCESSED,
     BSP_LOG_STATUS_TASK_CREATE_FAILED,
     BSP_LOG_STATUS_BAD_SOURCE,
-    BSP_LOG_STATUS_LEVEL_ABOVE_COMPILED
+    BSP_LOG_STATUS_LEVEL_ABOVE_COMPILED,
+    BSP_LOG_STATUS_HANDLER_ALREADY_REGISTERED
 } BSPLogStatus_t;
+
+/** @brief 健康快照回复负载生成器；在USARTProcessRx派发的普通任务上下文调用。 */
+typedef uint8_t (*BSPLogHealthSnapshotHandler_t)(uint8_t *payload,
+                                                 uint8_t capacity,
+                                                 uint8_t *length);
 
 typedef enum
 {
@@ -190,7 +197,7 @@ typedef struct
 /** @brief 十六进制显示的32位字段。 */
 #define BSP_LOG_FIELD_HEX32(value_) BSP_LOG_FIELD_U32(value_)
 
-/** @brief 初始化队列、历史、RTT和等级命令UART；重复调用保留本次启动的记录。
+/** @brief 初始化队列、历史、RTT和USART10诊断命令；重复调用保留本次启动的记录。
  * @note 应在DWT初始化后、看门狗及其诊断之前调用；不创建日志任务。日志只经RTT输出。
  */
 void BSPLogInit(void);
@@ -228,7 +235,7 @@ BSPLogStatus_t BSPLogGetState(BSPLogState_t *output);
  * @param[in] level OFF、FAULT、STATUS或VERBOSE；不得高于本固件编译上限。
  * @return OK或参数、上下文、来源及编译上限错误；失败时原等级不变。
  * @note 仅普通任务调用。默认等级为STATUS，设置只影响之后提交的事件，不重放已过滤记录。
- * USART10只承载此类等级命令和应答，日志事件不镜像到该串口。
+ * USART10承载等级命令及按需健康快照，不镜像日志事件。
  */
 BSPLogStatus_t BSPLogSetSourceLevel(BSPLogSourceId_t source, BSPLogLevel_t level);
 
@@ -245,6 +252,13 @@ BSPLogStatus_t BSPLogGetSourceLevel(BSPLogSourceId_t source, BSPLogLevel_t *outp
  * @return 成功返回OK，否则返回参数、初始化或未找到。
  */
 BSPLogStatus_t BSPLogGetHistory(uint32_t sequence, BSPLogHistoryRecord_t *output);
+
+/** @brief 注册按需健康快照回复处理器，不将状态或日志文本周期发送到USART10。
+ * @param[in] handler 写入最多120字节结构化快照的回调，函数须长期有效、有限执行且不得递归记日志。
+ * @return OK，或参数、上下文、未初始化及已注册错误；失败时原处理器不变。
+ * @note 在BSPLogInit后、启动调度器前由普通启动代码调用一次。回调在USART接收块派发时执行，不能等待或访问控制输出。
+ */
+BSPLogStatus_t BSPLogRegisterHealthSnapshotHandler(BSPLogHealthSnapshotHandler_t handler);
 
 /** @brief 统计零结尾文本的可读前缀；limit为上限，字符串未在上限内结束时会多读1字节。 */
 BSPLogField_t BSPLogFieldFromCString(const char *text, size_t limit);

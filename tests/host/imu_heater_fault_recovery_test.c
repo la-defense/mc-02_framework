@@ -16,11 +16,15 @@
     do { if (!(condition)) { fprintf(stderr, "%s\n", (message)); return EXIT_FAILURE; } } while (0)
 
 static uint32_t now_ms;
+static uint32_t primask;
 static BSP_ADC_Sample_t adc_sample;
 static BSP_ADC_Status_e adc_status;
 TIM_HandleTypeDef htim3;
 
 uint32_t HAL_GetTick(void) { return now_ms; }
+uint32_t __get_PRIMASK(void) { return primask; }
+void __disable_irq(void) { primask = 1u; }
+void __set_PRIMASK(uint32_t value) { primask = value; }
 
 BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample)
 {

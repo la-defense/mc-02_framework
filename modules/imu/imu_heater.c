@@ -562,6 +562,9 @@ void IMUHeaterGetStatus(IMUHeaterStatus_t *status)
     if (status == NULL)
         return;
 
+    // 温控由任务更新；短临界区阻止读到新旧两轮字段混合。
+    const uint32_t previous = __get_PRIMASK();
+    __disable_irq();
     status->target_temp = heater_target;
     status->temperature = last_temperature;
     status->duty = heater_duty;
@@ -570,4 +573,7 @@ void IMUHeaterGetStatus(IMUHeaterStatus_t *status)
     status->overtemp = heater_overtemp;
     status->timeout_fault = heater_timeout_fault;
     status->heating = (heater_duty > 0) ? 1 : 0;
+    status->initialized = heater_initialized;
+    status->enabled = (MC02_HEATER_ENABLED != 0) ? 1u : 0u;
+    __set_PRIMASK(previous);
 }

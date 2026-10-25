@@ -3,6 +3,7 @@
  * @note 日志任务、栈和控制块使用静态 DTCM 存储；RTT 缓冲仅在关闭 DCache 时启用。
  */
 #include "bsp_log_port.h"
+#include "bsp_log.h"
 
 #include "FreeRTOS.h"
 #include "SEGGER_RTT.h"
@@ -23,6 +24,8 @@
 
 _Static_assert(BSP_LOG_WORKER_PRIORITY < configMAX_PRIORITIES,
                "log worker priority must fit the configured FreeRTOS range");
+_Static_assert(BSP_LOG_DIAGNOSTIC_TX_FRAME_MAX <= USART_TX_MAX_BYTES,
+               "health snapshot reply must fit the USART copied transmit queue");
 
 #if defined(__GNUC__)
 #define BSP_LOG_STATIC_DTCM __attribute__((section(".log_workspace"), aligned(32), used))

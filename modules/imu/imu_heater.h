@@ -28,6 +28,8 @@ typedef struct
     uint8_t overtemp;       /**< 已记录过温原因。 */
     uint8_t timeout_fault;  /**< 已记录 PWM 连续非0达到300000ms的原因。 */
     uint8_t heating;        /**< duty 非0时为1。 */
+    uint8_t initialized;    /**< Init 已完成时为1。 */
+    uint8_t enabled;         /**< 当前固件编译允许温控时为1；不代表正在加热。 */
 } IMUHeaterStatus_t;
 
 typedef enum
@@ -98,6 +100,8 @@ uint8_t IMUHeaterClearFault(void);
 /**
  * @brief 读取已保存的状态，不重新检查传感器或经过时间。
  * @param[out] status 接收状态；空指针时不处理。温度需结合 sensor_valid 使用。
+ * @note 普通任务调用；在短临界区复制同一时刻的温控字段。heating只表示PWM比较值非0，
+ *       不代表已测得加热电阻实际电流或温升；本接口不判断热稳定状态。
  */
 void IMUHeaterGetStatus(IMUHeaterStatus_t *status);
 

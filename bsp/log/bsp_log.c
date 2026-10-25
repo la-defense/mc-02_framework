@@ -55,6 +55,7 @@ typedef struct
     BSPLogHistoryRecord_t processing_record;
     char output[BSP_LOG_OUTPUT_CAPACITY];
     uint8_t diagnostic_rx[BSP_LOG_DIAG_REQUEST_MAX];
+    BSPLogHealthSnapshotHandler_t health_snapshot_handler;
     uint32_t next_sequence;
     uint32_t diagnostic_response_dropped;
     uint32_t diagnostic_crc_errors;
@@ -156,7 +157,7 @@ static void BSPLogCount(uint32_t *counter)
 static uint8_t BSPLogSubmitDiagnosticFrame(uint8_t type, uint8_t sequence,
                                             const uint8_t *payload, uint8_t payload_length)
 {
-    uint8_t frame[BSP_LOG_DIAGNOSTIC_FRAME_MAX];
+    uint8_t frame[BSP_LOG_DIAGNOSTIC_TX_FRAME_MAX];
     size_t length = (size_t)BSP_LOG_DIAG_HEADER_SIZE + payload_length + BSP_LOG_DIAG_CRC_SIZE;
     if (length > sizeof(frame) || (payload_length != 0u && payload == NULL))
         return 0u;
@@ -218,7 +219,7 @@ static void BSPLogHandleDiagnosticRequest(const uint8_t *frame, size_t length)
     uint8_t command = frame[3];
     uint8_t sequence = frame[4];
     const uint8_t *request_payload = frame + BSP_LOG_DIAG_HEADER_SIZE;
-    uint8_t reply[80] = {0u};
+    uint8_t reply[BSP_LOG_DIAGNOSTIC_REPLY_PAYLOAD_MAX] = {0u};
     uint8_t reply_length = 0u;
 
     if (frame[2] != BSP_LOG_DIAG_VERSION)
@@ -253,6 +254,18 @@ static void BSPLogHandleDiagnosticRequest(const uint8_t *frame, size_t length)
         reply_length = 4u;
         if (status != BSP_LOG_STATUS_OK)
             BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+    }
+    else if (command == BSP_LOG_DIAG_GET_HEALTH && payload_length == 0u)
+    {
+        BSPLogHealthSnapshotHandler_t handler = log_workspace.health_snapshot_handler;
+        if ((handler == NULL) ||
+            (handler(reply, (uint8_t)sizeof(reply), &reply_length) == 0u) ||
+            (reply_length == 0u) || (reply_length > sizeof(reply)))
+        {
+            reply[0] = BSP_LOG_STATUS_BAD_ARGUMENT;
+            reply_length = 1u;
+            BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+        }
     }
     else
     {
@@ -803,6 +816,22 @@ BSPLogStatus_t BSPLogGetSourceLevel(BSPLogSourceId_t source, BSPLogLevel_t *outp
     BSPLogLevel_t candidate = (BSPLogLevel_t)log_workspace.source_levels[(uint32_t)source];
     BSPLogPortExitCritical();
     *output = candidate;
+    return BSP_LOG_STATUS_OK;
+}
+
+BSPLogStatus_t BSPLogRegisterHealthSnapshotHandler(BSPLogHealthSnapshotHandler_t handler)
+{
+    if (handler == NULL)
+        return BSP_LOG_STATUS_BAD_ARGUMENT;
+    if (!log_workspace_initialized)
+        return BSP_LOG_STATUS_NOT_INITIALIZED;
+    if (BSPLogPortInInterrupt() || BSPLogPortSchedulerRunning())
+        return BSP_LOG_STATUS_BAD_CONTEXT;
+
+    if (log_workspace.health_snapshot_handler != NULL)
+        return BSP_LOG_STATUS_HANDLER_ALREADY_REGISTERED;
+    // 注册被限制在调度器启动前；此时接收任务尚未派发，不需进入RTOS临界区。
+    log_workspace.health_snapshot_handler = handler;
     return BSP_LOG_STATUS_OK;
 }
 

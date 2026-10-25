@@ -50,10 +50,12 @@ static uint32_t format_call_count;
 static uint8_t diagnostic_available = 1u;
 static uint8_t fail_next_diagnostic_submit;
 static BSPLogDiagnosticRx_t diagnostic_receive;
-static uint8_t diagnostic_frames[LOG_OUTPUT_CAPACITY][BSP_LOG_DIAGNOSTIC_FRAME_MAX];
+static uint8_t diagnostic_frames[LOG_OUTPUT_CAPACITY][BSP_LOG_DIAGNOSTIC_TX_FRAME_MAX];
 static size_t diagnostic_lengths[LOG_OUTPUT_CAPACITY];
 static uint32_t diagnostic_frame_count;
 static BSPLogPortDiagnosticState_t diagnostic_port_state;
+static uint8_t health_handler_calls;
+static uint8_t health_handler_length = BSP_LOG_DIAGNOSTIC_REPLY_PAYLOAD_MAX;
 
 void BSPLogTestSetNextSequence(uint32_t sequence);
 
@@ -102,7 +104,7 @@ uint8_t BSPLogPortSubmitDiagnosticFrame(const uint8_t *data, size_t length)
         diagnostic_port_state.rejected++;
         return 0u;
     }
-    if (data == NULL || length == 0u || length > BSP_LOG_DIAGNOSTIC_FRAME_MAX ||
+    if (data == NULL || length == 0u || length > BSP_LOG_DIAGNOSTIC_TX_FRAME_MAX ||
         diagnostic_frame_count >= LOG_OUTPUT_CAPACITY)
     {
         diagnostic_port_state.rejected++;
@@ -159,6 +161,17 @@ static uint8_t diagnostic_frame_crc_valid(const uint8_t *frame, size_t length)
         return 0u;
     return frame[length - 2u] == (uint8_t)expected &&
            frame[length - 1u] == (uint8_t)(expected >> 8u);
+}
+
+static uint8_t health_snapshot_reply(uint8_t *payload, uint8_t capacity, uint8_t *length)
+{
+    if ((payload == NULL) || (length == NULL) || (capacity < health_handler_length))
+        return 0u;
+    ++health_handler_calls;
+    for (uint8_t index = 0u; index < health_handler_length; ++index)
+        payload[index] = (uint8_t)(0xA0u + (index & 0x0Fu));
+    *length = health_handler_length;
+    return 1u;
 }
 
 uint8_t BSPLogPortStartWorker(BSPLogWorkerEntry_t entry)
@@ -533,8 +546,22 @@ static void test_levels(void)
 
 static void test_diagnostic(void)
 {
+    TEST_CHECK(BSPLogRegisterHealthSnapshotHandler(health_snapshot_reply) ==
+               BSP_LOG_STATUS_NOT_INITIALIZED);
     BSPLogInit();
     TEST_CHECK(diagnostic_receive != NULL);
+    TEST_CHECK(BSPLogRegisterHealthSnapshotHandler(NULL) == BSP_LOG_STATUS_BAD_ARGUMENT);
+    interrupt_context = 1u;
+    TEST_CHECK(BSPLogRegisterHealthSnapshotHandler(health_snapshot_reply) ==
+               BSP_LOG_STATUS_BAD_CONTEXT);
+    interrupt_context = 0u;
+    scheduler_running = 1u;
+    TEST_CHECK(BSPLogRegisterHealthSnapshotHandler(health_snapshot_reply) ==
+               BSP_LOG_STATUS_BAD_CONTEXT);
+    scheduler_running = 0u;
+    TEST_CHECK(BSPLogRegisterHealthSnapshotHandler(health_snapshot_reply) == BSP_LOG_STATUS_OK);
+    TEST_CHECK(BSPLogRegisterHealthSnapshotHandler(health_snapshot_reply) ==
+               BSP_LOG_STATUS_HANDLER_ALREADY_REGISTERED);
 #if MC02_LOG_COMPILED_MAX_LEVEL >= 3
     TEST_CHECK(BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, BSP_LOG_LEVEL_VERBOSE) == BSP_LOG_STATUS_OK);
 #else
@@ -623,29 +650,52 @@ static void test_diagnostic(void)
 #endif
 #endif
 
-    request_length = make_diagnostic_request(3u, 45u, NULL, 0u, request);
+    uint32_t output_count_before_health = output_count;
+    request_length = make_diagnostic_request(BSP_LOG_DIAG_GET_HEALTH, 42u, NULL, 0u, request);
+    const uint8_t fixed_health_request[] = {0xD3u, 0x6Cu, 0x01u, 0x03u,
+                                            0x2Au, 0x00u, 0x6Du, 0x2Du};
+    TEST_CHECK(request_length == sizeof(fixed_health_request));
+    TEST_CHECK(memcmp(request, fixed_health_request, sizeof(fixed_health_request)) == 0);
     inject_diagnostic_bytes(request, request_length);
     TEST_CHECK(diagnostic_frame_count == 4u);
     reply = diagnostic_frames[3];
-    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE] == BSP_LOG_STATUS_BAD_ARGUMENT);
+    TEST_CHECK(reply[3] == (uint8_t)(BSP_LOG_DIAG_GET_HEALTH | BSP_LOG_DIAG_REPLY_BIT));
+    TEST_CHECK(reply[4] == 42u && diagnostic_lengths[3] == BSP_LOG_DIAGNOSTIC_TX_FRAME_MAX);
+    TEST_CHECK(diagnostic_frame_crc_valid(reply, diagnostic_lengths[3]));
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE] == 0xA0u);
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE + BSP_LOG_DIAGNOSTIC_REPLY_PAYLOAD_MAX - 1u] == 0xA7u);
+    TEST_CHECK(health_handler_calls == 1u);
+    TEST_CHECK(output_count == output_count_before_health); /* 健康请求不把日志转到诊断串口。 */
 
+    health_handler_length = 0u;
+    request_length = make_diagnostic_request(BSP_LOG_DIAG_GET_HEALTH, 47u, NULL, 0u, request);
+    inject_diagnostic_bytes(request, request_length);
+    TEST_CHECK(diagnostic_frame_count == 5u);
+    reply = diagnostic_frames[4];
+    TEST_CHECK(reply[4] == 47u && reply[BSP_LOG_DIAG_HEADER_SIZE] == BSP_LOG_STATUS_BAD_ARGUMENT);
+
+    request_length = make_diagnostic_request(4u, 48u, NULL, 0u, request);
+    inject_diagnostic_bytes(request, request_length);
+    TEST_CHECK(diagnostic_frame_count == 6u);
+    reply = diagnostic_frames[5];
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE] == BSP_LOG_STATUS_BAD_ARGUMENT);
     request[request_length - 1u] ^= 0x80u;
     inject_diagnostic_bytes(request, request_length);
-    TEST_CHECK(diagnostic_frame_count == 4u);
+    TEST_CHECK(diagnostic_frame_count == 6u);
     fail_next_diagnostic_submit = 1u;
-    request_length = make_diagnostic_request(BSP_LOG_DIAG_GET_LEVEL, 46u,
+    request_length = make_diagnostic_request(BSP_LOG_DIAG_GET_LEVEL, 49u,
                                              &source, 1u, request);
     inject_diagnostic_bytes(request, request_length);
-    TEST_CHECK(diagnostic_frame_count == 4u);
+    TEST_CHECK(diagnostic_frame_count == 6u);
     BSPLogState_t state;
     TEST_CHECK(BSPLogGetState(&state) == BSP_LOG_STATUS_OK);
     TEST_CHECK(state.diagnostic_crc_errors == 1u);
 #if MC02_LOG_COMPILED_MAX_LEVEL >= 3
-    TEST_CHECK(state.diagnostic_command_errors == 1u);
-#elif MC02_LOG_COMPILED_MAX_LEVEL >= BSP_LOG_COMPILED_LEVEL_STATUS
     TEST_CHECK(state.diagnostic_command_errors == 2u);
-#else
+#elif MC02_LOG_COMPILED_MAX_LEVEL >= BSP_LOG_COMPILED_LEVEL_STATUS
     TEST_CHECK(state.diagnostic_command_errors == 3u);
+#else
+    TEST_CHECK(state.diagnostic_command_errors == 4u);
 #endif
     TEST_CHECK(state.diagnostic_response_dropped == 1u);
     TEST_CHECK(state.diagnostic_tx_accepted == diagnostic_port_state.accepted);

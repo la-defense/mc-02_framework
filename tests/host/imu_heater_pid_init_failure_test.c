@@ -10,8 +10,12 @@
 #include "test_check.h"
 
 TIM_HandleTypeDef htim3;
+static uint32_t primask;
 static unsigned pwm_starts;
 uint32_t HAL_GetTick(void) { return 100u; }
+uint32_t __get_PRIMASK(void) { return primask; }
+void __disable_irq(void) { primask = 1u; }
+void __set_PRIMASK(uint32_t value) { primask = value; }
 BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample)
 {
     *sample = (BSP_ADC_Sample_t){.sequence = 1u, .timestamp_ms = 100u,

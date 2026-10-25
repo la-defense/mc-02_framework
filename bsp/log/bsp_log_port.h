@@ -1,6 +1,6 @@
 /** @file bsp_log_port.h
- * @brief 为日志核心提供时钟、临界区、RTT输出、USART10等级命令和静态任务入口。
- * @note 诊断UART只接收／回复等级命令，不镜像日志；普通模块不直接依赖平台函数。
+ * @brief 为日志核心提供时钟、临界区、RTT输出、USART10诊断帧和静态任务入口。
+ * @note 诊断UART承载等级命令与按需健康快照，不镜像日志；普通模块不直接依赖平台函数。
  */
 #ifndef MC02_BSP_LOG_PORT_H
 #define MC02_BSP_LOG_PORT_H

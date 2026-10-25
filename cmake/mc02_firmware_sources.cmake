@@ -149,6 +149,9 @@ endif()
 
 set(MC02_APPLICATION_COMMON_C_SOURCES
     application/init_diagnostic.c
+    application/vehicle_health.c
+    application/vehicle_health_diag.c
+    application/vehicle_health_port_stm32.c
     application/robot.c
     application/robot_def.c
     application/config/sentinel_robot/sentinel_config.c)

@@ -9,6 +9,11 @@
 
 // 普通全局变量在启动时清零，本次启动中的失败会一直保留到下次启动。
 volatile InitDiagnosticSnapshot_s init_diagnostic_snapshot;
+static InitDiagnosticEvent_t init_events[INIT_DIAGNOSTIC_EVENT_CAPACITY];
+static uint32_t init_event_sequence;
+static uint32_t init_event_total;
+static uint8_t init_event_write;
+static uint8_t init_event_count;
 
 // 保存原中断开关状态，再暂时关闭普通中断。
 static uint32_t EnterCritical(void)
@@ -24,12 +29,47 @@ static void ExitCritical(uint32_t previous)
     __set_PRIMASK(previous);
 }
 
+static uint32_t NextEventSequence(uint32_t sequence)
+{
+    ++sequence;
+    return sequence == 0u ? 1u : sequence;
+}
+
+// 调用者已关闭普通中断；固定容量写入，不调用日志、分配器或其他模块。
+static void RecordEventLocked(InitDiagnosticEventKind_e kind, InitDiagnosticStage_e stage,
+                              uint8_t module, InitDiagnosticReason_e reason,
+                              uint16_t resource_id, InitDiagnosticSeverity_e severity)
+{
+    InitDiagnosticEvent_t event = {
+        .sequence = NextEventSequence(init_event_sequence),
+        .timestamp_ms = HAL_GetTick(),
+        .resource_id = resource_id,
+        .kind = (uint8_t)kind,
+        .stage = (uint8_t)stage,
+        .module = module,
+        .reason = (uint8_t)reason,
+        .severity = (uint8_t)severity,
+    };
+
+    init_event_sequence = event.sequence;
+    init_events[init_event_write] = event;
+    init_event_write = (uint8_t)((init_event_write + 1u) % INIT_DIAGNOSTIC_EVENT_CAPACITY);
+    if (init_event_count < INIT_DIAGNOSTIC_EVENT_CAPACITY)
+        ++init_event_count;
+    if (init_event_total != UINT32_MAX)
+        ++init_event_total;
+}
+
 void InitDiagnosticBegin(InitDiagnosticStage_e stage)
 {
     uint32_t previous = EnterCritical();
     // 一旦记录失败，就保留当时的阶段，方便追查最先出错的位置。
-    if (!init_diagnostic_snapshot.failed)
+    if (!init_diagnostic_snapshot.failed && init_diagnostic_snapshot.stage != (uint8_t)stage)
+    {
         init_diagnostic_snapshot.stage = (uint8_t)stage;
+        RecordEventLocked(INIT_DIAGNOSTIC_EVENT_STAGE_CHANGED, stage, 0u,
+                          INIT_FAILURE_NONE, 0u, INIT_DIAGNOSTIC_SEVERITY_INFO);
+    }
     ExitCritical(previous);
 }
 
@@ -54,6 +94,9 @@ void InitDiagnosticReportFailure(InitDiagnosticStage_e stage, uint8_t module,
         init_diagnostic_snapshot.resource_id = resource_id;
         init_diagnostic_snapshot.failed = 1u;
     }
+    // 后续失败也入历史，保留重复失败次数及不同模块的报错位置。
+    RecordEventLocked(INIT_DIAGNOSTIC_EVENT_FAILURE, stage, module, reason,
+                      resource_id, INIT_DIAGNOSTIC_SEVERITY_ERROR);
     ExitCritical(previous);
 }
 
@@ -61,8 +104,13 @@ void InitDiagnosticMarkReady(void)
 {
     uint32_t previous = EnterCritical();
     // 后续模块完成初始化，也不能覆盖前面已经记录的失败阶段。
-    if (!init_diagnostic_snapshot.failed)
+    if (!init_diagnostic_snapshot.failed &&
+        init_diagnostic_snapshot.stage != (uint8_t)INIT_STAGE_READY)
+    {
         init_diagnostic_snapshot.stage = INIT_STAGE_READY;
+        RecordEventLocked(INIT_DIAGNOSTIC_EVENT_READY, INIT_STAGE_READY, 0u,
+                          INIT_FAILURE_NONE, 0u, INIT_DIAGNOSTIC_SEVERITY_INFO);
+    }
     ExitCritical(previous);
 }
 
@@ -94,4 +142,25 @@ void InitDiagnosticGetSnapshot(InitDiagnosticSnapshot_s *snapshot)
     snapshot->failure_count = init_diagnostic_snapshot.failure_count;
     snapshot->heartbeat = init_diagnostic_snapshot.heartbeat;
     ExitCritical(previous);
+}
+
+uint8_t InitDiagnosticGetEvents(InitDiagnosticEventSnapshot_t *snapshot)
+{
+    if (snapshot == NULL)
+        return 0u;
+
+    InitDiagnosticEventSnapshot_t candidate = {0};
+    uint32_t previous = EnterCritical();
+    const uint8_t oldest = (uint8_t)((init_event_write + INIT_DIAGNOSTIC_EVENT_CAPACITY -
+                                      init_event_count) % INIT_DIAGNOSTIC_EVENT_CAPACITY);
+    candidate.count = init_event_count;
+    candidate.total_count = init_event_total;
+    for (uint8_t index = 0u; index < init_event_count; ++index)
+    {
+        const uint8_t source = (uint8_t)((oldest + index) % INIT_DIAGNOSTIC_EVENT_CAPACITY);
+        candidate.events[index] = init_events[source];
+    }
+    *snapshot = candidate;
+    ExitCritical(previous);
+    return 1u;
 }

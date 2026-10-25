@@ -13,6 +13,7 @@
 
 static uint32_t now_ms;
 static uint32_t compare_value;
+static uint32_t primask;
 static BSP_ADC_Sample_t adc_sample = {
     .sequence = 1u,
     .timestamp_ms = 100u,
@@ -29,6 +30,9 @@ static void fail(const char *message)
 }
 
 uint32_t HAL_GetTick(void) { return now_ms; }
+uint32_t __get_PRIMASK(void) { return primask; }
+void __disable_irq(void) { primask = 1u; }
+void __set_PRIMASK(uint32_t value) { primask = value; }
 BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample)
 {
     if (sample == NULL)
