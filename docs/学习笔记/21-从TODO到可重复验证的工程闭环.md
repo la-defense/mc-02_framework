@@ -214,6 +214,16 @@ MC02-0078把KF改为调用者长期保存实例及工作区。主机验证回答
 
 详细的预设、角色矩阵、工具链结果和资源统计见 [BUILD-02 任务记录](../workflow/tickets/BUILD-02.md)。
 
+## 怎样锁定一次构建实际用到的依赖（MC02-0020）
+
+版本说明和构建证据要对得上：文件夹里存在一个库，只能说明它被保存进仓库；`compile_commands.json`列出实际编译的源文件，Ninja依赖记录列出编译时读取的头文件，二者合起来才能说明这个配置真正用到了哪些第三方文件。`capture_build_baseline.py`按这些输入计算逐文件SHA-256和组件摘要，并同时核对ELF、HEX、BIN、map是否生成。
+
+版本字符串缺失时不能靠目录名猜版本。MC02-0020记录STM32H7 HAL、FreeRTOS、CMSIS Core、CMSIS Device、CMSIS-DSP、SEGGER RTT的源码版本依据；ST USB Device Library没有在被选源文件中写版本号，因此记录官方来源、完整实际文件指纹和“版本未在源码声明”。CMSIS Core 5.3.0和CMSIS-DSP 1.7.0是两个独立版本。CMake配置、FreeRTOS、HAL和USB第一方适配文件单独列出指纹；仓库没有独立补丁队列时，也不把文件哈希说成已经和上游包逐字节比对。
+
+这份证据来自独立干净worktree和新建构建目录。旧的忽略构建缓存可以留在本机，但不参与干净检出结果。主机测试按生产逻辑、H723接口替身、真实线程模型和Python工具检查分层：每一层都要写清替换了什么、能够证明什么、不能证明什么。HAL寄存器模型不能证明电平或波形，成功编译也不能证明机器人已完成物理联调。
+
+MC02-0020继续使用WSL Debug／Release主机预设和ARM GCC固件预设；Windows原生构建不是验收前置条件。版本、文件指纹、工具链、十种禁热构建及内存报告见[任务记录](../workflow/tickets/MC02-0020.md)和[机器可读构建证据](../workflow/tickets/MC02-0020-baseline.json)。
+
 ## 相关实现
 
 - [MC-02 主机安全测试](../../tests/host/CMakeLists.txt)

@@ -341,7 +341,7 @@ Unicom
 
 #### 构建基线（原 unicomm 占位条目）
 
-- [ ] **MC02-0020** [enhancement] [ready-for-agent] 建立 CMake、依赖与主机验证基线。验收：干净检出得到 H723＋FreeRTOS 对应配置的 ELF／HEX／BIN／map，记录工具链、内存、实际第三方版本／来源／指纹／补丁。Linux／WSL 为完整 Debug／Release 基线，Windows 可移植子集明确跳过；测试分层、替身边界和有限超时有说明。关联 BUILD-02、0099／0103；不将 unicomm 占位设想混入此项，保留历史验收。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [x] **MC02-0020** [enhancement] 建立 CMake、依赖与主机验证基线。验收：独立干净 worktree 在10种禁热 ARM 配置下生成 ELF／HEX／BIN／map并通过角色检查；第三方版本与逐文件 SHA 记录在基线 JSON。WSL Debug／Release CTest 均386/386通过，Python工具测试运行125项、124项通过且1项因板上身份条件不满足而跳过；学习文档离线链接检查4/4通过。Windows原生构建不属于验收。关联 BUILD-02、0099／0103保持原状态，不将 unicomm 占位设想混入此项。详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)及[任务记录](../docs/workflow/tickets/MC02-0020.md)。
 
 #### step_motor
 

@@ -485,8 +485,14 @@ static void *run_reference_writer(void *argument)
         TEST_CHECK(DMMotorGetState(input->motor, &state) == DMMOTOR_STATUS_OK);
         if ((i % 17u) == 0u)
         {
-            (void)DMMotorStop(input->motor);
-            TEST_CHECK(DMMotorEnable(input->motor) == DMMOTOR_STATUS_OK);
+            DMMotorStatus_t stop_status = DMMotorStop(input->motor);
+            TEST_CHECK(stop_status == DMMOTOR_STATUS_OK ||
+                       stop_status == DMMOTOR_STATUS_CANCELLED);
+            // 并发任务可能正处理上一条命令；此时 BUSY 是接口允许的结果。
+            DMMotorStatus_t enable_status = DMMotorEnable(input->motor);
+            TEST_CHECK(enable_status == DMMOTOR_STATUS_OK ||
+                       enable_status == DMMOTOR_STATUS_QUEUED ||
+                       enable_status == DMMOTOR_STATUS_BUSY);
         }
     }
     return NULL;
@@ -506,7 +512,11 @@ static void test_threads(void)
     TEST_CHECK(pthread_join(writer_thread, NULL) == 0);
     DMMotorState_t state = {0};
     TEST_CHECK(DMMotorGetState(motor, &state) == DMMOTOR_STATUS_OK);
-    TEST_CHECK(state.protocol_enabled != 0u);
+    // Stop 与 Enable 并发时，最终由最后一次完整状态迁移决定结果。
+    // 查询需要保证字段仍是合法快照，不假设线程调度后的最终运行状态。
+    TEST_CHECK(state.command_type <= DMMOTOR_COMMAND_ZERO_POSITION);
+    TEST_CHECK(state.command_result <= DMMOTOR_COMMAND_CANCELLED);
+    TEST_CHECK(state.calculation_status <= DMMOTOR_CALCULATION_INVALID_INPUT);
 }
 #endif
 

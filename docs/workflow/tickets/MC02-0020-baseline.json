@@ -1,0 +1,1357 @@
+{
+  "schema_version": 1,
+  "source_commit": "afb836b18b149ad459a9f8c4473c45f0e2bbde50",
+  "configurations": [
+    {
+      "preset_configuration": {
+        "build_type": "Debug",
+        "profile": "bench_safe",
+        "board_role": "single",
+        "vision_transport": "usb",
+        "heater": "OFF",
+        "target": "Basic_Framework_MC02_bench_safe.elf"
+      },
+      "toolchain": {
+        "cmake": "cmake version 3.22.1",
+        "generator": "Ninja 1.10.1",
+        "arm_compiler": "arm-none-eabi-gcc (15:10.3-2021.07-4) 10.3.1 20210621 (release)",
+        "compile_commands": 152,
+        "compile_abi": "-mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16",
+        "fast_math": false
+      },
+      "artifacts": {
+        "elf": {
+          "file": "Basic_Framework_MC02_bench_safe.elf",
+          "size_bytes": 2673732,
+          "sha256": "c562ab5ec3f030ca19ab34797b5deeb2d076d975964cf466e68702ab23d0283d"
+        },
+        "hex": {
+          "file": "Basic_Framework_MC02_bench_safe.hex",
+          "size_bytes": 617300,
+          "sha256": "6b64153235d92df6966486bb95da63db598277b84546ee74bd0bafed66941e9b"
+        },
+        "bin": {
+          "file": "Basic_Framework_MC02_bench_safe.bin",
+          "size_bytes": 219448,
+          "sha256": "7c63627faf55aab9e02caa5ee9117596461745a1e49a19b5134fd7673f375328"
+        },
+        "map": {
+          "file": "Basic_Framework_MC02_bench_safe.map",
+          "size_bytes": 1659052,
+          "sha256": "9a476f93faf0c072d9ec0326e7e5a86341abc56fdcd37f4890d4c5bf27dc21ba"
+        }
+      },
+      "size_bytes": {
+        "text": 218448,
+        "data": 984,
+        "bss": 143128,
+        "text_plus_data": 219432,
+        "data_plus_bss": 144112
+      },
+      "third_party_fingerprints": {
+        "STM32H7 HAL": {
+          "file_count": 62,
+          "sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15"
+        },
+        "CMSIS Core": {
+          "file_count": 5,
+          "sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6"
+        },
+        "STM32H7 CMSIS Device": {
+          "file_count": 3,
+          "sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647"
+        },
+        "FreeRTOS Kernel": {
+          "file_count": 26,
+          "sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794"
+        },
+        "CMSIS-DSP": {
+          "file_count": 11,
+          "sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1"
+        },
+        "SEGGER RTT": {
+          "file_count": 4,
+          "sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36"
+        },
+        "STM32 USB Device Library": {
+          "file_count": 9,
+          "sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681"
+        }
+      }
+    },
+    {
+      "preset_configuration": {
+        "build_type": "RelWithDebInfo",
+        "profile": "bench_safe",
+        "board_role": "single",
+        "vision_transport": "usb",
+        "heater": "OFF",
+        "target": "Basic_Framework_MC02_bench_safe.elf"
+      },
+      "toolchain": {
+        "cmake": "cmake version 3.22.1",
+        "generator": "Ninja 1.10.1",
+        "arm_compiler": "arm-none-eabi-gcc (15:10.3-2021.07-4) 10.3.1 20210621 (release)",
+        "compile_commands": 152,
+        "compile_abi": "-mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16",
+        "fast_math": false
+      },
+      "artifacts": {
+        "elf": {
+          "file": "Basic_Framework_MC02_bench_safe.elf",
+          "size_bytes": 2834036,
+          "sha256": "28fda6ace9e7c6f55e7e8c6484e123a5d43d503bced89dec1938d08b14af2c6f"
+        },
+        "hex": {
+          "file": "Basic_Framework_MC02_bench_safe.hex",
+          "size_bytes": 588656,
+          "sha256": "8d3effc47566e8022d30c550072e4b7c37c6a00542b14b41d7ade5187edc680a"
+        },
+        "bin": {
+          "file": "Basic_Framework_MC02_bench_safe.bin",
+          "size_bytes": 209260,
+          "sha256": "1960e03d7fc4de14725e24031e380576d4ddd48989c8cb354ca13c71e37f4d02"
+        },
+        "map": {
+          "file": "Basic_Framework_MC02_bench_safe.map",
+          "size_bytes": 1598753,
+          "sha256": "c914f80c85b330fc2e3da2f613c3aee30ce24dfe41e98eeb1dd12394342097d5"
+        }
+      },
+      "size_bytes": {
+        "text": 208260,
+        "data": 984,
+        "bss": 143120,
+        "text_plus_data": 209244,
+        "data_plus_bss": 144104
+      },
+      "third_party_fingerprints": {
+        "STM32H7 HAL": {
+          "file_count": 62,
+          "sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15"
+        },
+        "CMSIS Core": {
+          "file_count": 5,
+          "sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6"
+        },
+        "STM32H7 CMSIS Device": {
+          "file_count": 3,
+          "sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647"
+        },
+        "FreeRTOS Kernel": {
+          "file_count": 26,
+          "sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794"
+        },
+        "CMSIS-DSP": {
+          "file_count": 11,
+          "sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1"
+        },
+        "SEGGER RTT": {
+          "file_count": 4,
+          "sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36"
+        },
+        "STM32 USB Device Library": {
+          "file_count": 9,
+          "sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681"
+        }
+      }
+    },
+    {
+      "preset_configuration": {
+        "build_type": "Debug",
+        "profile": "bench_safe",
+        "board_role": "single",
+        "vision_transport": "usb",
+        "heater": "OFF",
+        "target": "Basic_Framework_MC02_rcdiag_bench_safe.elf"
+      },
+      "toolchain": {
+        "cmake": "cmake version 3.22.1",
+        "generator": "Ninja 1.10.1",
+        "arm_compiler": "arm-none-eabi-gcc (15:10.3-2021.07-4) 10.3.1 20210621 (release)",
+        "compile_commands": 153,
+        "compile_abi": "-mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16",
+        "fast_math": false
+      },
+      "artifacts": {
+        "elf": {
+          "file": "Basic_Framework_MC02_rcdiag_bench_safe.elf",
+          "size_bytes": 2683576,
+          "sha256": "a8b005d432f420ebcf19ed5966ed938668246bd0812b07feac1e59263ad9c57c"
+        },
+        "hex": {
+          "file": "Basic_Framework_MC02_rcdiag_bench_safe.hex",
+          "size_bytes": 622700,
+          "sha256": "80da4684e671c0007641c2062275345664a0a1a9f42f09abeb2317fb74516302"
+        },
+        "bin": {
+          "file": "Basic_Framework_MC02_rcdiag_bench_safe.bin",
+          "size_bytes": 221368,
+          "sha256": "a52ed25e9a410c78b0467948ce815069e634a725beb519c5bc01b8c603d8f4ca"
+        },
+        "map": {
+          "file": "Basic_Framework_MC02_rcdiag_bench_safe.map",
+          "size_bytes": 1722858,
+          "sha256": "2c888035844f7c364850eb56e49c27556d16732a9628f2e5f0110d9213ec36dd"
+        }
+      },
+      "size_bytes": {
+        "text": 220368,
+        "data": 984,
+        "bss": 143224,
+        "text_plus_data": 221352,
+        "data_plus_bss": 144208
+      },
+      "third_party_fingerprints": {
+        "STM32H7 HAL": {
+          "file_count": 62,
+          "sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15"
+        },
+        "CMSIS Core": {
+          "file_count": 5,
+          "sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6"
+        },
+        "STM32H7 CMSIS Device": {
+          "file_count": 3,
+          "sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647"
+        },
+        "FreeRTOS Kernel": {
+          "file_count": 26,
+          "sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794"
+        },
+        "CMSIS-DSP": {
+          "file_count": 11,
+          "sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1"
+        },
+        "SEGGER RTT": {
+          "file_count": 4,
+          "sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36"
+        },
+        "STM32 USB Device Library": {
+          "file_count": 9,
+          "sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681"
+        }
+      }
+    },
+    {
+      "preset_configuration": {
+        "build_type": "RelWithDebInfo",
+        "profile": "bench_safe",
+        "board_role": "single",
+        "vision_transport": "usb",
+        "heater": "OFF",
+        "target": "Basic_Framework_MC02_rcdiag_bench_safe.elf"
+      },
+      "toolchain": {
+        "cmake": "cmake version 3.22.1",
+        "generator": "Ninja 1.10.1",
+        "arm_compiler": "arm-none-eabi-gcc (15:10.3-2021.07-4) 10.3.1 20210621 (release)",
+        "compile_commands": 153,
+        "compile_abi": "-mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16",
+        "fast_math": false
+      },
+      "artifacts": {
+        "elf": {
+          "file": "Basic_Framework_MC02_rcdiag_bench_safe.elf",
+          "size_bytes": 2844896,
+          "sha256": "5a07ad658b8909d003959b85cd1c7f7ca8b658ad85bfec4b6f01226abef1997b"
+        },
+        "hex": {
+          "file": "Basic_Framework_MC02_rcdiag_bench_safe.hex",
+          "size_bytes": 593892,
+          "sha256": "7f0168e1a528f64e1e2e5426d665c79ed790b64775f3099df248736c7c50674a"
+        },
+        "bin": {
+          "file": "Basic_Framework_MC02_rcdiag_bench_safe.bin",
+          "size_bytes": 211124,
+          "sha256": "a5437ff63e1a5d51e6fcfa0b9aa0fbc4c08fb3aaef6a5cc7e1eb3c522188b9e0"
+        },
+        "map": {
+          "file": "Basic_Framework_MC02_rcdiag_bench_safe.map",
+          "size_bytes": 1660044,
+          "sha256": "80063b6f076f8197f23b08d0bfc4af125705c9393d10d08522779831f16f5f11"
+        }
+      },
+      "size_bytes": {
+        "text": 210124,
+        "data": 984,
+        "bss": 143216,
+        "text_plus_data": 211108,
+        "data_plus_bss": 144200
+      },
+      "third_party_fingerprints": {
+        "STM32H7 HAL": {
+          "file_count": 62,
+          "sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15"
+        },
+        "CMSIS Core": {
+          "file_count": 5,
+          "sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6"
+        },
+        "STM32H7 CMSIS Device": {
+          "file_count": 3,
+          "sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647"
+        },
+        "FreeRTOS Kernel": {
+          "file_count": 26,
+          "sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794"
+        },
+        "CMSIS-DSP": {
+          "file_count": 11,
+          "sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1"
+        },
+        "SEGGER RTT": {
+          "file_count": 4,
+          "sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36"
+        },
+        "STM32 USB Device Library": {
+          "file_count": 9,
+          "sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681"
+        }
+      }
+    },
+    {
+      "preset_configuration": {
+        "build_type": "Debug",
+        "profile": "robot",
+        "board_role": "single",
+        "vision_transport": "usb",
+        "heater": "OFF",
+        "target": "Basic_Framework_MC02_robot.elf"
+      },
+      "toolchain": {
+        "cmake": "cmake version 3.22.1",
+        "generator": "Ninja 1.10.1",
+        "arm_compiler": "arm-none-eabi-gcc (15:10.3-2021.07-4) 10.3.1 20210621 (release)",
+        "compile_commands": 159,
+        "compile_abi": "-mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16",
+        "fast_math": false
+      },
+      "artifacts": {
+        "elf": {
+          "file": "Basic_Framework_MC02_robot.elf",
+          "size_bytes": 2972756,
+          "sha256": "cefd840285ae00fe828c9251b2179e152ad81e0499da6ea01d5fd8219f2bd9d0"
+        },
+        "hex": {
+          "file": "Basic_Framework_MC02_robot.hex",
+          "size_bytes": 743473,
+          "sha256": "2ab4fa0d5169e5e09032aa20cb07b69bfbd9f2ebb367318d18bd6c23cec13ed2"
+        },
+        "bin": {
+          "file": "Basic_Framework_MC02_robot.bin",
+          "size_bytes": 264304,
+          "sha256": "e6655e3fc60ed390a09b3a619959a737ad6030dfde8ad1a04c901cc0d667c71c"
+        },
+        "map": {
+          "file": "Basic_Framework_MC02_robot.map",
+          "size_bytes": 1678779,
+          "sha256": "fc61ca876d2f31d0bc6d94982b61e8e21a8494b0c7b4fcb4be8570495199b7b1"
+        }
+      },
+      "size_bytes": {
+        "text": 262500,
+        "data": 1784,
+        "bss": 152280,
+        "text_plus_data": 264284,
+        "data_plus_bss": 154064
+      },
+      "third_party_fingerprints": {
+        "STM32H7 HAL": {
+          "file_count": 62,
+          "sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15"
+        },
+        "CMSIS Core": {
+          "file_count": 5,
+          "sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6"
+        },
+        "STM32H7 CMSIS Device": {
+          "file_count": 3,
+          "sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647"
+        },
+        "FreeRTOS Kernel": {
+          "file_count": 26,
+          "sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794"
+        },
+        "CMSIS-DSP": {
+          "file_count": 11,
+          "sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1"
+        },
+        "SEGGER RTT": {
+          "file_count": 4,
+          "sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36"
+        },
+        "STM32 USB Device Library": {
+          "file_count": 9,
+          "sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681"
+        }
+      }
+    },
+    {
+      "preset_configuration": {
+        "build_type": "RelWithDebInfo",
+        "profile": "robot",
+        "board_role": "single",
+        "vision_transport": "usb",
+        "heater": "OFF",
+        "target": "Basic_Framework_MC02_robot.elf"
+      },
+      "toolchain": {
+        "cmake": "cmake version 3.22.1",
+        "generator": "Ninja 1.10.1",
+        "arm_compiler": "arm-none-eabi-gcc (15:10.3-2021.07-4) 10.3.1 20210621 (release)",
+        "compile_commands": 159,
+        "compile_abi": "-mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16",
+        "fast_math": false
+      },
+      "artifacts": {
+        "elf": {
+          "file": "Basic_Framework_MC02_robot.elf",
+          "size_bytes": 3147552,
+          "sha256": "025c509fc84f69f6474a1bf0147b0db949cb62445eaf1a1f0d7d3750036296bb"
+        },
+        "hex": {
+          "file": "Basic_Framework_MC02_robot.hex",
+          "size_bytes": 707623,
+          "sha256": "3ab95146921a1a3ec98de4a47e86de5f16d7d9e7b77a14a0b56f8eea28348040"
+        },
+        "bin": {
+          "file": "Basic_Framework_MC02_robot.bin",
+          "size_bytes": 251564,
+          "sha256": "1a3e6d05bcdbb25d3b3e5fc73e878b3029d96bf1bb9eb7600ed579ebb354a170"
+        },
+        "map": {
+          "file": "Basic_Framework_MC02_robot.map",
+          "size_bytes": 1617489,
+          "sha256": "baaa45d9ba9a0039b9b296f2f02035b903188b4ba9aba0841a47c49ab2fd0ad2"
+        }
+      },
+      "size_bytes": {
+        "text": 249764,
+        "data": 1784,
+        "bss": 152248,
+        "text_plus_data": 251548,
+        "data_plus_bss": 154032
+      },
+      "third_party_fingerprints": {
+        "STM32H7 HAL": {
+          "file_count": 62,
+          "sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15"
+        },
+        "CMSIS Core": {
+          "file_count": 5,
+          "sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6"
+        },
+        "STM32H7 CMSIS Device": {
+          "file_count": 3,
+          "sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647"
+        },
+        "FreeRTOS Kernel": {
+          "file_count": 26,
+          "sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794"
+        },
+        "CMSIS-DSP": {
+          "file_count": 11,
+          "sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1"
+        },
+        "SEGGER RTT": {
+          "file_count": 4,
+          "sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36"
+        },
+        "STM32 USB Device Library": {
+          "file_count": 9,
+          "sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681"
+        }
+      }
+    },
+    {
+      "preset_configuration": {
+        "build_type": "Debug",
+        "profile": "robot",
+        "board_role": "chassis",
+        "vision_transport": "usb",
+        "heater": "OFF",
+        "target": "Basic_Framework_MC02_chassis_robot.elf"
+      },
+      "toolchain": {
+        "cmake": "cmake version 3.22.1",
+        "generator": "Ninja 1.10.1",
+        "arm_compiler": "arm-none-eabi-gcc (15:10.3-2021.07-4) 10.3.1 20210621 (release)",
+        "compile_commands": 156,
+        "compile_abi": "-mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16",
+        "fast_math": false
+      },
+      "artifacts": {
+        "elf": {
+          "file": "Basic_Framework_MC02_chassis_robot.elf",
+          "size_bytes": 2908544,
+          "sha256": "701789c338d65ab3bd27fb4cbceeb068a59cc3e73dca7b8fd6933d78b6988204"
+        },
+        "hex": {
+          "file": "Basic_Framework_MC02_chassis_robot.hex",
+          "size_bytes": 714439,
+          "sha256": "ac8f95781d724866b95f2c6fbbd9366ec5102ca6e175e6c5c1be2b738f20d826"
+        },
+        "bin": {
+          "file": "Basic_Framework_MC02_chassis_robot.bin",
+          "size_bytes": 253984,
+          "sha256": "3abe184feffd0a50b575b76cb8cb216598f3e4b451eb9a8a9938998e1e986a89"
+        },
+        "map": {
+          "file": "Basic_Framework_MC02_chassis_robot.map",
+          "size_bytes": 1720784,
+          "sha256": "3e1fb6c3c05297034d3472cf5ec08b071a5378e061ab305eefaa340b2ac54917"
+        }
+      },
+      "size_bytes": {
+        "text": 252192,
+        "data": 1776,
+        "bss": 151640,
+        "text_plus_data": 253968,
+        "data_plus_bss": 153416
+      },
+      "third_party_fingerprints": {
+        "STM32H7 HAL": {
+          "file_count": 62,
+          "sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15"
+        },
+        "CMSIS Core": {
+          "file_count": 5,
+          "sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6"
+        },
+        "STM32H7 CMSIS Device": {
+          "file_count": 3,
+          "sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647"
+        },
+        "FreeRTOS Kernel": {
+          "file_count": 26,
+          "sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794"
+        },
+        "CMSIS-DSP": {
+          "file_count": 11,
+          "sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1"
+        },
+        "SEGGER RTT": {
+          "file_count": 4,
+          "sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36"
+        },
+        "STM32 USB Device Library": {
+          "file_count": 9,
+          "sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681"
+        }
+      }
+    },
+    {
+      "preset_configuration": {
+        "build_type": "RelWithDebInfo",
+        "profile": "robot",
+        "board_role": "chassis",
+        "vision_transport": "usb",
+        "heater": "OFF",
+        "target": "Basic_Framework_MC02_chassis_robot.elf"
+      },
+      "toolchain": {
+        "cmake": "cmake version 3.22.1",
+        "generator": "Ninja 1.10.1",
+        "arm_compiler": "arm-none-eabi-gcc (15:10.3-2021.07-4) 10.3.1 20210621 (release)",
+        "compile_commands": 156,
+        "compile_abi": "-mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16",
+        "fast_math": false
+      },
+      "artifacts": {
+        "elf": {
+          "file": "Basic_Framework_MC02_chassis_robot.elf",
+          "size_bytes": 3081812,
+          "sha256": "c042edba3f6fd8ed2b491ed0c579d08232ec8fe3f00ac1181ac7fb05f3a27f06"
+        },
+        "hex": {
+          "file": "Basic_Framework_MC02_chassis_robot.hex",
+          "size_bytes": 681385,
+          "sha256": "533eed16b26772ed878774fd38b4efac62034001abbe95e6b75fac8e9392423b"
+        },
+        "bin": {
+          "file": "Basic_Framework_MC02_chassis_robot.bin",
+          "size_bytes": 242228,
+          "sha256": "4efffc8652136b31ac9a423c3c2521ebca6dd13a9ce5b99b0acd9c122558aac8"
+        },
+        "map": {
+          "file": "Basic_Framework_MC02_chassis_robot.map",
+          "size_bytes": 1657847,
+          "sha256": "f2b2920ee6d73c84e2ec56e19620c444f03abe91a313bae934d2cc3123d3eb33"
+        }
+      },
+      "size_bytes": {
+        "text": 240436,
+        "data": 1776,
+        "bss": 151616,
+        "text_plus_data": 242212,
+        "data_plus_bss": 153392
+      },
+      "third_party_fingerprints": {
+        "STM32H7 HAL": {
+          "file_count": 62,
+          "sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15"
+        },
+        "CMSIS Core": {
+          "file_count": 5,
+          "sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6"
+        },
+        "STM32H7 CMSIS Device": {
+          "file_count": 3,
+          "sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647"
+        },
+        "FreeRTOS Kernel": {
+          "file_count": 26,
+          "sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794"
+        },
+        "CMSIS-DSP": {
+          "file_count": 11,
+          "sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1"
+        },
+        "SEGGER RTT": {
+          "file_count": 4,
+          "sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36"
+        },
+        "STM32 USB Device Library": {
+          "file_count": 9,
+          "sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681"
+        }
+      }
+    },
+    {
+      "preset_configuration": {
+        "build_type": "Debug",
+        "profile": "robot",
+        "board_role": "gimbal",
+        "vision_transport": "usb",
+        "heater": "OFF",
+        "target": "Basic_Framework_MC02_gimbal_robot.elf"
+      },
+      "toolchain": {
+        "cmake": "cmake version 3.22.1",
+        "generator": "Ninja 1.10.1",
+        "arm_compiler": "arm-none-eabi-gcc (15:10.3-2021.07-4) 10.3.1 20210621 (release)",
+        "compile_commands": 156,
+        "compile_abi": "-mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16",
+        "fast_math": false
+      },
+      "artifacts": {
+        "elf": {
+          "file": "Basic_Framework_MC02_gimbal_robot.elf",
+          "size_bytes": 2895844,
+          "sha256": "1ec18f7944f367bffca8b62ab515693f96e7a895fd486d76b3f36671db75c7cf"
+        },
+        "hex": {
+          "file": "Basic_Framework_MC02_gimbal_robot.hex",
+          "size_bytes": 709092,
+          "sha256": "2d42ccaeca4e2eddd98776c7d51830ecad5cf16af16745b9e13fac0692bb66e3"
+        },
+        "bin": {
+          "file": "Basic_Framework_MC02_gimbal_robot.bin",
+          "size_bytes": 252084,
+          "sha256": "db09b00a572e0dbe27d245bd4cdba1fe2f6bab09bd7df0a1d2cdbac478d0307b"
+        },
+        "map": {
+          "file": "Basic_Framework_MC02_gimbal_robot.map",
+          "size_bytes": 1712656,
+          "sha256": "b97b982727527cbe7503bd68cb07c429540185b048e0901ec2d9e718f49f5440"
+        }
+      },
+      "size_bytes": {
+        "text": 250284,
+        "data": 1784,
+        "bss": 148168,
+        "text_plus_data": 252068,
+        "data_plus_bss": 149952
+      },
+      "third_party_fingerprints": {
+        "STM32H7 HAL": {
+          "file_count": 62,
+          "sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15"
+        },
+        "CMSIS Core": {
+          "file_count": 5,
+          "sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6"
+        },
+        "STM32H7 CMSIS Device": {
+          "file_count": 3,
+          "sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647"
+        },
+        "FreeRTOS Kernel": {
+          "file_count": 26,
+          "sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794"
+        },
+        "CMSIS-DSP": {
+          "file_count": 11,
+          "sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1"
+        },
+        "SEGGER RTT": {
+          "file_count": 4,
+          "sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36"
+        },
+        "STM32 USB Device Library": {
+          "file_count": 9,
+          "sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681"
+        }
+      }
+    },
+    {
+      "preset_configuration": {
+        "build_type": "RelWithDebInfo",
+        "profile": "robot",
+        "board_role": "gimbal",
+        "vision_transport": "usb",
+        "heater": "OFF",
+        "target": "Basic_Framework_MC02_gimbal_robot.elf"
+      },
+      "toolchain": {
+        "cmake": "cmake version 3.22.1",
+        "generator": "Ninja 1.10.1",
+        "arm_compiler": "arm-none-eabi-gcc (15:10.3-2021.07-4) 10.3.1 20210621 (release)",
+        "compile_commands": 156,
+        "compile_abi": "-mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-d16",
+        "fast_math": false
+      },
+      "artifacts": {
+        "elf": {
+          "file": "Basic_Framework_MC02_gimbal_robot.elf",
+          "size_bytes": 3064576,
+          "sha256": "b2492102c20572ba5a9b2d5584d9aa63697c137d8b5a24d569ec601923982896"
+        },
+        "hex": {
+          "file": "Basic_Framework_MC02_gimbal_robot.hex",
+          "size_bytes": 677314,
+          "sha256": "ede3fecec66aa363ea9b5b73a983cad8bf7c18be686e5edb0c735587867b069d"
+        },
+        "bin": {
+          "file": "Basic_Framework_MC02_gimbal_robot.bin",
+          "size_bytes": 240784,
+          "sha256": "2dc1f015fb58f955da7102234b681fba76fde4764bd5b3cb30363e1aef046e34"
+        },
+        "map": {
+          "file": "Basic_Framework_MC02_gimbal_robot.map",
+          "size_bytes": 1649568,
+          "sha256": "78c0be878294831765c9c6c03be3582cd0200c1f367204d198e3fb6ff9125c2e"
+        }
+      },
+      "size_bytes": {
+        "text": 238984,
+        "data": 1784,
+        "bss": 148144,
+        "text_plus_data": 240768,
+        "data_plus_bss": 149928
+      },
+      "third_party_fingerprints": {
+        "STM32H7 HAL": {
+          "file_count": 62,
+          "sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15"
+        },
+        "CMSIS Core": {
+          "file_count": 5,
+          "sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6"
+        },
+        "STM32H7 CMSIS Device": {
+          "file_count": 3,
+          "sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647"
+        },
+        "FreeRTOS Kernel": {
+          "file_count": 26,
+          "sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794"
+        },
+        "CMSIS-DSP": {
+          "file_count": 11,
+          "sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1"
+        },
+        "SEGGER RTT": {
+          "file_count": 4,
+          "sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36"
+        },
+        "STM32 USB Device Library": {
+          "file_count": 9,
+          "sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681"
+        }
+      }
+    }
+  ],
+  "third_party_packages": [
+    {
+      "name": "CMSIS Core",
+      "version": "5.3.0",
+      "version_evidence": "CMSIS Core version macros",
+      "source": "https://github.com/ARM-software/CMSIS_5",
+      "license": "Drivers/CMSIS/LICENSE.txt",
+      "union_file_count": 5,
+      "union_sha256": "965b1a192e8c7ae88cf9e33de3fd417da08952ffea0f1d737307575cc7a28ae6",
+      "files": [
+        {
+          "path": "Drivers/CMSIS/Include/cmsis_compiler.h",
+          "sha256": "869640702d811c4c63abb52206715c891a93fd03be954df5ad40d378355af3d6"
+        },
+        {
+          "path": "Drivers/CMSIS/Include/cmsis_gcc.h",
+          "sha256": "0837f98e834d6a529854c8c86336e9d99eb8e379bf1deb964858d7863950f862"
+        },
+        {
+          "path": "Drivers/CMSIS/Include/cmsis_version.h",
+          "sha256": "dd03af200b23bdd8d091ffa7beb3d1a2c4fc5611557567bd57ec613205f6df1f"
+        },
+        {
+          "path": "Drivers/CMSIS/Include/core_cm7.h",
+          "sha256": "ff629c5bf98a8caadf360d0bcc48e1042fefa19995f7b64855d5e81e4c2e81cb"
+        },
+        {
+          "path": "Drivers/CMSIS/Include/mpu_armv7.h",
+          "sha256": "e504a7d47dfdb3d61dfae3cf08d27ba9bc69aa4b2b81ca568efdafd65d6abdcc"
+        }
+      ]
+    },
+    {
+      "name": "CMSIS-DSP",
+      "version": "CMSIS 5.7.0 / DSP 1.7.0",
+      "version_evidence": "provenance.json with upstream commit",
+      "source": "https://github.com/ARM-software/CMSIS_5",
+      "license": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/LICENSE.txt",
+      "union_file_count": 11,
+      "union_sha256": "cd1eeaeb93e6ac421b5306a9091695c3771ca60121f5742192d3c21ca31cacb1",
+      "files": [
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Include/arm_common_tables.h",
+          "sha256": "7ec673e2a79eb49151bc76f833a5220f2cb701127a0022e3ac700741b6bcc463"
+        },
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Include/arm_math.h",
+          "sha256": "78e38b20c04467837116173f33f108b06c63241724458f01f556d774a8520daa"
+        },
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/CommonTables/arm_common_tables.c",
+          "sha256": "c9ff6a6d077e7a765055828330254e15526056f7aa72fbdbe3655cfcba6f4588"
+        },
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/FastMathFunctions/arm_cos_f32.c",
+          "sha256": "b2d1583aeb1b0d332ab06a6a6f9f4d56fd719e2d1a7164201bf60bfec8075b70"
+        },
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/FastMathFunctions/arm_sin_f32.c",
+          "sha256": "660139a65f4ccd6bde68097f09b136c716e534773ab8f316d22da1b5cb00292b"
+        },
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/MatrixFunctions/arm_mat_add_f32.c",
+          "sha256": "2cf7a381bb07764845cf73d91a92b54373d8ec3868d0c1731e7634b6b99b21db"
+        },
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/MatrixFunctions/arm_mat_init_f32.c",
+          "sha256": "f441c917e21caab027621c4f2ee430020bd62e2b7981931cb5484d5b23211977"
+        },
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/MatrixFunctions/arm_mat_inverse_f32.c",
+          "sha256": "e05fbc4aa0c60538e5638483af5074fbdb1c83ff0dcdc9799e95253e60d0b548"
+        },
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/MatrixFunctions/arm_mat_mult_f32.c",
+          "sha256": "2a9d23498f295626b1cb7ea76077b3a352cb52df407b971499597f6bf421f426"
+        },
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/MatrixFunctions/arm_mat_sub_f32.c",
+          "sha256": "0877c3591e8b7ee7e881513099cdb9cd30f9572c8cfcb7a74b38214516dd80c9"
+        },
+        {
+          "path": "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/MatrixFunctions/arm_mat_trans_f32.c",
+          "sha256": "d7007ae071b95253facc7d8904a046ec74700c4f07c80525d950e61bf7314f81"
+        }
+      ]
+    },
+    {
+      "name": "FreeRTOS Kernel",
+      "version": "10.3.1",
+      "version_evidence": "tskKERNEL_VERSION_NUMBER",
+      "source": "https://github.com/FreeRTOS/FreeRTOS-Kernel",
+      "license": "Middlewares/Third_Party/FreeRTOS/Source/LICENSE",
+      "union_file_count": 26,
+      "union_sha256": "641fc64acda07499241973e44aa5983a24445347d213e4e768b45a4dc7bd6794",
+      "files": [
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS/cmsis_os.c",
+          "sha256": "4fe9dc4cb26fced50176deaca2da0e867218c02ac3f8713c21b2df25a56f4edf"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS/cmsis_os.h",
+          "sha256": "6a7548650076cf17f0090a7195a786a759fdb87f184babf8cbaffbf992417afc"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/croutine.c",
+          "sha256": "e31cd1c9c280c919a92edc28885e9bebce589d4cfab71cefab832a73683200fb"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/event_groups.c",
+          "sha256": "a72063c3977fad098a87a5430e04e9fc5b892d703e01fbe09ea907f67aacf20e"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h",
+          "sha256": "b7a81501c3f4ff9537df5c9a5e0231f37638cdc8324965ae10064128fded840f"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/croutine.h",
+          "sha256": "8df4c5eec7eb30262f09b7c47fc2eb0534a27721293b0d260a3398846494f9ac"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/deprecated_definitions.h",
+          "sha256": "382f8a7a0e00240fb69911dff8d8515248beb9dadfe77c22c4e5544f49cc76eb"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/event_groups.h",
+          "sha256": "3b9cbd64db721c4317544700fff4e42ac68d989f71b7d610b31087bb19175839"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/list.h",
+          "sha256": "f9b239f168976f7b167e054fa72616826f55ae4d74d76b87c9e70b2df079363f"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h",
+          "sha256": "c1fc47acdb79efb0fb8a0fb8a169ae4423fdc3a6d820b2f81d49e8e077c1ed48"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/portable.h",
+          "sha256": "39795c8dded505f24f53646ecd8192251851c74f366d2a5b0aae3fbfa68c191b"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/projdefs.h",
+          "sha256": "399814721d9735e91d74ca07be3974edb20639acb46a6792230ff9f61f67b353"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/queue.h",
+          "sha256": "39d58a203f1b67fdb1099293914a2af9722d223586cfc5ff06e230e047919dea"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/semphr.h",
+          "sha256": "b9b2ff28a0c80fa21443690bb28de64c8b9451cccd57e484de0bcf02fc367575"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/stack_macros.h",
+          "sha256": "7d1d30b6c9ae34bebb26b14402f78a59a35ae826f460a1ad28534c9590b32151"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/stream_buffer.h",
+          "sha256": "0607fcca1927ba782a29a3814481d69db3569e6e53a68ebf2c01f5598a3af2b8"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/task.h",
+          "sha256": "830990f7b17b8e0ce3bdb0a7475d2cdc7d659eafff16b88a855c84c06a7a2a3e"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/include/timers.h",
+          "sha256": "7fa62f648014533ce5bd8da1775ddd814cbf208f9af7c748a40bb8b50a8e8912"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/list.c",
+          "sha256": "e735517f308fad5dd77d03b6858c16bdbc937bb9d0754735849fc7799ebe2b59"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c",
+          "sha256": "89f24a509ec85bf502724334c2607eeb7a432e1f26afbc9b7291254b8f7971dc"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/portmacro.h",
+          "sha256": "356ce2ec084883d8fc41d380910f828aee559f140e877629974752ea26a89792"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c",
+          "sha256": "c697b88e48e9906a19cabef187e5797a5a45009144f9e473262752c86a5d2c50"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/queue.c",
+          "sha256": "06a153c1ce111213af32dfc8797bd2e5c7819e264dfa338b4049f058dc1edb11"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/stream_buffer.c",
+          "sha256": "4376714fecad0f72dc4c8b45236591a7e0ffe24dd018382f56e8b0dfc2230b28"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/tasks.c",
+          "sha256": "8cb1eabe18f130b2b8980e880847f773fb12a4071c763d26c51624223b32a3a4"
+        },
+        {
+          "path": "Middlewares/Third_Party/FreeRTOS/Source/timers.c",
+          "sha256": "0d16405e621a2c4b003b5f0324b9713cd4865364133df6f742f482a6b2dbc773"
+        }
+      ]
+    },
+    {
+      "name": "SEGGER RTT",
+      "version": "7.58c",
+      "version_evidence": "SEGGER source header",
+      "source": "https://github.com/SEGGERMicro/RTT",
+      "license": null,
+      "union_file_count": 4,
+      "union_sha256": "218d76bd1b5e95600f7b130f2e7c36b2a505da08cf227c0ae237663b15a17b36",
+      "files": [
+        {
+          "path": "Middlewares/Third_Party/SEGGER/Config/SEGGER_RTT_Conf.h",
+          "sha256": "105e0027e911b1f0de023e1036db154b80126f2ad85f305fb9217f734e4c8a99"
+        },
+        {
+          "path": "Middlewares/Third_Party/SEGGER/RTT/SEGGER_RTT.c",
+          "sha256": "4558638a68c9a85cfba4ae14582ab6695bfb68d3a2a7d7f43f02bda117e5bcd2"
+        },
+        {
+          "path": "Middlewares/Third_Party/SEGGER/RTT/SEGGER_RTT.h",
+          "sha256": "5381e15b124e8a266b6c29e2efe481a01bb44774149352c054c50c6447eeea07"
+        },
+        {
+          "path": "Middlewares/Third_Party/SEGGER/RTT/SEGGER_RTT_ASM_ARMv7M.s",
+          "sha256": "cc18609e2009e44194cbe42dfcf3072ba4ca65c3526023b389400ce607f8d752"
+        }
+      ]
+    },
+    {
+      "name": "STM32 USB Device Library",
+      "version": "源文件未声明版本；以实际依赖文件指纹锁定",
+      "version_evidence": "no version string in selected source",
+      "source": "https://github.com/STMicroelectronics/stm32-mw-usb-device",
+      "license": "Middlewares/ST/STM32_USB_Device_Library/LICENSE.txt",
+      "union_file_count": 9,
+      "union_sha256": "38b40fe77b135217a4155e0518c72844bcd7ac6c49be8571b438b385bdbd1681",
+      "files": [
+        {
+          "path": "Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc/usbd_cdc.h",
+          "sha256": "74e8344735af1711285dae8797104b0c02aa0967a7f65283cf99f81b70dff404"
+        },
+        {
+          "path": "Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Src/usbd_cdc.c",
+          "sha256": "50b507f2f42afb1fe65232a7144567a49ccda19e97c214166eadd6261ca374b5"
+        },
+        {
+          "path": "Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_core.h",
+          "sha256": "634775ec822aa50684a7cd1d0aa34f9b921c9407e7c70a73d7427cf67c1ce653"
+        },
+        {
+          "path": "Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_ctlreq.h",
+          "sha256": "0d766fe68a0f746b29caa7c6ea1e96c45c5fca50360e1d224c19935a76eb666f"
+        },
+        {
+          "path": "Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_def.h",
+          "sha256": "748f08a7eb3f8842483d5b3b004665171f58da128668e92aa09474f84f971409"
+        },
+        {
+          "path": "Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_ioreq.h",
+          "sha256": "fc7ffbed8ff7752453bb510493b43165ef29f4c5091e50fb6d0c4c8652d4f560"
+        },
+        {
+          "path": "Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c",
+          "sha256": "595af70687e3b8ef251110b0794476bce2d384cb994fcfde2cefb8a3c6e536d9"
+        },
+        {
+          "path": "Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c",
+          "sha256": "623ebebb6948ec16a281c1cc17b50d4a96e635d5af2516c79d260252fca5133c"
+        },
+        {
+          "path": "Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c",
+          "sha256": "047c63014d1242a8d4254495d019f710bead71de566897c6daaf97f496a019b4"
+        }
+      ]
+    },
+    {
+      "name": "STM32H7 CMSIS Device",
+      "version": "1.10.3",
+      "version_evidence": "STM32H7 CMSIS Device version constant",
+      "source": "https://github.com/STMicroelectronics/cmsis-device-h7",
+      "license": "Drivers/CMSIS/Device/ST/STM32H7xx/LICENSE.txt",
+      "union_file_count": 3,
+      "union_sha256": "eb0849406a978cb73abd30871d3793982f3b80ee60c27838ba2215cbf6939647",
+      "files": [
+        {
+          "path": "Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h723xx.h",
+          "sha256": "e104205b6500ab6597c62d6d3d0b89989ff3217a2bb3473754f810006e191685"
+        },
+        {
+          "path": "Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h7xx.h",
+          "sha256": "0cd35d1572030afe6dc9a2232d43c293369dd3b4e140dc1425c55bc2d86a048b"
+        },
+        {
+          "path": "Drivers/CMSIS/Device/ST/STM32H7xx/Include/system_stm32h7xx.h",
+          "sha256": "50a12cd3da7187ad260583d1eff40c4b90bb308a5d97e46384bcc7c17016da85"
+        }
+      ]
+    },
+    {
+      "name": "STM32H7 HAL",
+      "version": "1.11.1",
+      "version_evidence": "stm32h7xx_hal.c version constant",
+      "source": "https://github.com/STMicroelectronics/stm32h7xx-hal-driver",
+      "license": "Drivers/STM32H7xx_HAL_Driver/LICENSE.txt",
+      "union_file_count": 62,
+      "union_sha256": "31dc1fac941112f76940c73438da08e6211de8900ea5b4426c83f9c45609ac15",
+      "files": [
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/Legacy/stm32_hal_legacy.h",
+          "sha256": "bc730354f4c6a871a5018917521eb1a4a6f4df1f5c70233a2b2b5557359b34d9"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal.h",
+          "sha256": "fccd591209e885066abfa886020d0b1f585cd504f8845af74e9f52ba6681fce7"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_adc.h",
+          "sha256": "7327ae3890171eba9640e55d29aeef85e0b578f45eb227ab60a264ccdf8a722a"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_adc_ex.h",
+          "sha256": "b8b7ac45cfee378595ffdc5449ed215fc35a6ca77df4ad4e0439c401052f59c0"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_cortex.h",
+          "sha256": "8fee5e760047a15b3053e635098a27b1bb82134b979c4c408bbbb6721e044a61"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_def.h",
+          "sha256": "e5bc2d5185f17c8b5cd313685380dabb69ee21e31ab81203b16f60626f016248"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_dma.h",
+          "sha256": "1804edfc23459c078728a21ff8748a5459cb134b7142c5f6d80c4e99e8c855bb"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_dma_ex.h",
+          "sha256": "fca0d4a25edbe4aa37b8a37abbd8d555435c66d0906f261de39d2b87cc5259f2"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_exti.h",
+          "sha256": "63a686ff015e352c75c6e51881348b669d48a5c8ff50712f5ac361747df792e9"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_fdcan.h",
+          "sha256": "610e219af936a7c80fe713b1dfc259d2c2794a9e9f096d5578495afc2d21aaf2"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_flash.h",
+          "sha256": "0597127dbd5f6d09ab8c26a922312ceeaaba90b6585a9d8bf49091f8fbe8e9f8"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_flash_ex.h",
+          "sha256": "0bad2d31bc8a5ce17870e42b373b8ec5ea112a1aa8bf3b9ba9b04a2e0eeb2983"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_gpio.h",
+          "sha256": "c1fbfdbbd9395d86bc5d9a2cb6bbd7ca7cec3dc405d233791b24d299ba48137c"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_gpio_ex.h",
+          "sha256": "bd304ef8f51c627a5f2b2298f435bb1627e5a61c12a08e8e2d0d274e4bd096e3"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_hsem.h",
+          "sha256": "55c812c13906965e561bb5cb4c99c87573707d5e8965d73258536602afaa6c2f"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_i2c.h",
+          "sha256": "41c86ebd00cd5862692bf932f65d2179eb04db2c353d66e1acc7b2e78bc10bde"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_i2c_ex.h",
+          "sha256": "ee7834ac6d09246c57d0c1519d98cf3893f5d9633fd14ff47f72a3bd95b62798"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_mdma.h",
+          "sha256": "7d366f30263bd429ec79c19f57b2229e569da4b0957765a0ddc8aac272d2cf17"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_ospi.h",
+          "sha256": "ae20fc3d6ca6af110a54e7ba6b270d8b9625d954be1599e85eca4ac8c492fbc5"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_pcd.h",
+          "sha256": "9a6c4d0ad1068ece15a1be48defcae3d71986ea38050d7141eae3643e84708de"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_pcd_ex.h",
+          "sha256": "84f1ea073a0764dcf659fcdacf546d6994828e18d36e03349f1c0dd6f1de51b2"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_pwr.h",
+          "sha256": "b79c3ad3ad674db67d987043202af7a0de4604c43cf4e4577f1611b8567770b5"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_pwr_ex.h",
+          "sha256": "2904c8673c56d5091546e745dbe20fad2532459325c6319db6e07bc64f96657e"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_rcc.h",
+          "sha256": "2f63d86e74aa180608e2234bf7d89daf299b07013886bafa2ef42de79607b4db"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_rcc_ex.h",
+          "sha256": "caecb51d0c1404cce84bb4179f67ced264f16fa231da1f1f8178d6f7bbbe9613"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_spi.h",
+          "sha256": "9e0adf0e3fbc4542ff2b943c2c7facf0cecd659be81aac080e2be9173c556780"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_spi_ex.h",
+          "sha256": "90071b0706143e522ff687c7679d2565f4bbc46838b98148c7307880e1be342a"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_tim.h",
+          "sha256": "ac1ed35f6e4c5e445fc3842dd5b6a618b6a855e2eb6df95bb11df18b9fa19607"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_tim_ex.h",
+          "sha256": "2f6b2512170bc3243ea8849cf26f164a4d417a4418bb82688b7e516fd96b0784"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_uart.h",
+          "sha256": "6dba6b5f125798732d9823f54dc52d22bbaec686aa91845b8b4e52b9da4051d5"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_uart_ex.h",
+          "sha256": "b1227abe882877c96651052643b0d19f1c42ea8189c6ed1e265b5b26912609f4"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_adc.h",
+          "sha256": "1b788330ac444657973a6e7bc1a63a5e8345e7a7e031850df2225acd2593661c"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_usb.h",
+          "sha256": "60d3483373d163ad64c462bfdef3ea04659588dc63c23cf85bdc93ef41d7e9eb"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal.c",
+          "sha256": "9afc6ed557af7db19da2a07a1bb4806b66515efde44a51dddd292c059bfec808"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc.c",
+          "sha256": "b990ffd647f3dbc63d49e59e2ff2019b2f8d4045059a8205abdaf63c691a14d4"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc_ex.c",
+          "sha256": "04763ae283f6650b8746bd146f1955d41fb2ceb39eb6bc70b067a5d7b014902a"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_cortex.c",
+          "sha256": "e9b0f8354d70b4fa4e2103631332d318a1e62274d0d83801eb324644b0671c63"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_dma.c",
+          "sha256": "b8344b2d52bc99fe525377e6a1ffac025b5a4eb9f08c9980ba43abd6c4f65e45"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_dma_ex.c",
+          "sha256": "7aff9d494ce37e3374967d2e63848f48f27c841ee4a82bdf88020023d2816a18"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_exti.c",
+          "sha256": "f2f63c2e9841a0f7281c69f5615581fae6dc000a37c4df49450995ab4426cce1"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c",
+          "sha256": "274544c756d0e9c2bc0d98829314f8606f2814ec0b324272655a5b7d804c3017"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_flash.c",
+          "sha256": "67cb3e1e1c29692f698cffe7a24496037c0f1b67d93a3781f0d04ece1f345cf7"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_flash_ex.c",
+          "sha256": "b54c0192d3fbef4007df0ef07464a26ca63d5a0af0e6e09bd4ef4fba0d890732"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_gpio.c",
+          "sha256": "4272b517b061fd8a039d72cf6d24d5e53a828e8bf89014b3fe53136af3c57db4"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_hsem.c",
+          "sha256": "7aa9d9c61347405cf78bae273d502f9e60512888858b9144a814b02ef13761c9"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_i2c.c",
+          "sha256": "5f5f038ed33e83855e085c4c48fcc9de95328d8f2b38f8d42e73525f41572b70"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_i2c_ex.c",
+          "sha256": "1da0b4070bf3146cb389f7b0aab80d9b5b9160e920177ae7344e05bc75636bed"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_mdma.c",
+          "sha256": "d31491977a3eac6cf94cdbfd6f9293a880996d41a2357eb0f52a5516c2ffd30d"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_ospi.c",
+          "sha256": "15c58cb111c2fbc0662e44f6488dc6351e8679c5503710b7b9c23051ba9228ca"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd.c",
+          "sha256": "c4902778f107efb93d72d48c400f74f63ba36673448edc086341501d694e186c"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd_ex.c",
+          "sha256": "8f3e8ed1374169be6ecabfd2e55d7c17f8142d0e21c9da0b343df9dc7607a893"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pwr.c",
+          "sha256": "cb6910c98f341b54db64fb1dfc6d3b2e014ac3a2c2a155fcc5208cd61f48e3ea"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pwr_ex.c",
+          "sha256": "d8aafd7570be98a5e4a56c9f1e3f8ca417ef40297a689e488b0d9af6c26625b8"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rcc.c",
+          "sha256": "76d0e4430a029e1f99c172c431a1fbef22ace4e8c60303335cb6771ce1d4b3e5"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rcc_ex.c",
+          "sha256": "834f3b24e82a347b6e66413fbc8a10a1cb16d2f75acebb54345ce3343c3e1b59"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi.c",
+          "sha256": "f7a8cb6a3e29bc0ea9f3e08202614ebf72b75028effd266249561e3cfcd4f5f8"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi_ex.c",
+          "sha256": "9312b1a0444171c614ef2f5ec85d65295753c90dcdc11e87bd6f739ba5d3e557"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim.c",
+          "sha256": "ce5f91bd053b109a5c1620b63c5e1d06062691c86153daab93db53ec224f3129"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim_ex.c",
+          "sha256": "d93ac5fcc598b8e4dc003a13a00e27884d6ace4894f401c8c9326d10a90ce559"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c",
+          "sha256": "8b407df843f7e8de6f0f71246d9042cf7465e4d9733acfd9504176a99114602a"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c",
+          "sha256": "d33d1b977fcd07a379e9c316c4477432ecdfd4a368c27d6fcce54fac206dbfb9"
+        },
+        {
+          "path": "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c",
+          "sha256": "e4c5aad90a86a76d64e2bccad6e071565ed8fe0cc377f14c9e3354ac156738a5"
+        }
+      ]
+    }
+  ],
+  "first_party_integration_files": [
+    {
+      "path": "Core/Inc/FreeRTOSConfig.h",
+      "sha256": "70cd4efc1c846a014e656e4a9b69dfcb0d49827384633bab816b66bfc844c666"
+    },
+    {
+      "path": "Core/Inc/stm32h7xx_hal_conf.h",
+      "sha256": "a3c56011ee73edef8a46fb0c128c15c21658031bbd576d5bd573fd46dc2eb51b"
+    },
+    {
+      "path": "Middlewares/Third_Party/SEGGER/Config/SEGGER_RTT_Conf.h",
+      "sha256": "105e0027e911b1f0de023e1036db154b80126f2ad85f305fb9217f734e4c8a99"
+    },
+    {
+      "path": "USB_DEVICE/Target/usbd_conf.h",
+      "sha256": "4f19f0158186fae7ee542b21bb152eb87216785160272977e820782982803008"
+    },
+    {
+      "path": "cmake/mc02_firmware_sources.cmake",
+      "sha256": "35e0509c12b885e5f0c06ffa6f82c6f0e0121758cd9d1369d48a985de9aabab2"
+    }
+  ]
+}
