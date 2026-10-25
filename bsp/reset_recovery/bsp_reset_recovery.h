@@ -28,12 +28,18 @@ uint8_t BSP_ResetRecoveryInit(uint32_t reset_flags);
 
 /**
  * @brief 在关断输出或等待看门狗前标记一个故障复位原因。
- * @param[in] cause RESET_RECOVERY_CAUSE_*；非法原因忽略。
+ * @param[in] cause 有效范围为RESET_RECOVERY_CAUSE_CORE_TASK至
+ *                  RESET_RECOVERY_CAUSE_BROWNOUT；其他值忽略。
+ * @return 无；存储未初始化或已锁定时不改写记录。
  * @note 异常路径只复制固定记录并更新CRC；不使用HAL、RTOS、日志、分配器或Flash。
  */
 void BSP_ResetRecoveryMarkFault(ResetRecoveryCause_e cause);
 
-/** @brief 保存／清除人工急停标记；仅明确的人工急停请求和解除入口调用。 */
+/**
+ * @brief 保存或清除需要跨 MCU 复位保留的人工急停标记。
+ * @param[in] latched 非零保存急停，0清除；仅由明确的人工急停请求和解除入口调用。
+ * @note 恢复存储未初始化时不修改状态；断电后标记不保证保留。
+ */
 void BSP_ResetRecoverySetManualEstop(uint8_t latched);
 
 /**
@@ -43,15 +49,19 @@ void BSP_ResetRecoverySetManualEstop(uint8_t latched);
  */
 uint8_t BSP_ResetRecoveryGetState(BSP_ResetRecoveryState_t *output);
 
-/** @brief 查询是否必须保持复位恢复锁定；存储不可用也按锁定处理。 */
+/**
+ * @brief 查询当前是否必须保持复位恢复锁定。
+ * @return 1表示锁定或存储不可用，0表示记录可用且未锁定。
+ */
 uint8_t BSP_ResetRecoveryIsLockedOut(void);
 
 /**
  * @brief 观察控制与核心任务健康状态，连续稳定30秒后清除故障额度。
  * @param[in] now_ms HAL毫秒时刻，允许0值和回绕。
- * @param[in] control_ready 非0表示 RobotSafety 状态为 READY。
- * @param[in] all_core_healthy 非0表示所有核心任务仍正常。
- * @return 1表示状态记录成功更新；0表示没有变化或记录不可用。
+ * @param[in] control_ready 非0表示 RobotSafety 状态为 READY，0表示未就绪。
+ * @param[in] all_core_healthy 非0表示当前期限检查确认所有核心任务正常，
+ *                             0表示至少一项未健康。
+ * @return 1表示记录有变化；0表示状态未变、记录未初始化或恢复已锁定。
  */
 uint8_t BSP_ResetRecoveryObserveControl(uint32_t now_ms,
                                         uint8_t control_ready,
