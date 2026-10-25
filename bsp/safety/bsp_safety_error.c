@@ -6,6 +6,7 @@
 #include "main.h"
 
 #include "bsp_safety.h"
+#include "bsp_reset_recovery.h"
 
 /**
  * @brief 关闭普通中断和已知输出，避免错误发生后继续执行原来的流程。
@@ -13,6 +14,7 @@
  */
 void Error_Handler(void)
 {
+    BSP_ResetRecoveryMarkFault(RESET_RECOVERY_CAUSE_FATAL_HANDLER);
     __disable_irq();
     // 模块初始化可能尚未完成，使用直接操作寄存器的关闭入口。
     BSP_SafetyLatchOutputsOff();

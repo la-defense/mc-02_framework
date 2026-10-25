@@ -87,6 +87,8 @@ set(MC02_BSP_C_SOURCES
     bsp/log/float_to_string.c
     bsp/param/bsp_param.c
     bsp/pwm/bsp_pwm.c
+    bsp/reset_recovery/bsp_reset_recovery.c
+    bsp/reset_recovery/reset_recovery_policy.c
     bsp/safety/bsp_safety.c
     bsp/safety/bsp_safety_error.c
     bsp/spi/bsp_spi.c

@@ -244,6 +244,14 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id,
  */
 uint8_t TaskMonitorAllAlive(void);
 
+/**
+ * @brief 按当前 HAL tick 再检查全部核心任务的进度期限。
+ * @return 1 表示至少有一项核心任务且当前未过期；未初始化、无核心项或已过期时返回0。
+ * @note 供任务上下文的稳定期判断使用；不会关断输出或发布故障动作。
+ *       检查到标定／Flash窗口自身超时时会锁存该超时，后续监控周期负责发布关断动作。
+ */
+uint8_t TaskMonitorAllCoreHealthyNow(void);
+
 /** @brief 读取指定任务的最近监控结果。
  * @param[in] id 已配置任务编号。
  * @param[out] status 接收任务名、健康标记和期限；参数错误时保持输出不变。

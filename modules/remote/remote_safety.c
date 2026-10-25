@@ -3,6 +3,7 @@
 */
 #include "remote_safety.h"
 #include "robot_safety.h"
+#include "bsp_reset_recovery.h"
 #include <string.h>
 
 void RemoteSafetyGesturesInit(RemoteSafetyGestures_s *state)
@@ -36,7 +37,15 @@ void RemoteSafetyGesturesUpdate(RemoteSafetyGestures_s *state, const RC_ctrl_t *
         RobotSafetyRequestEnable();
     if (Held(&state->disable, (uint8_t)(left == RC_SW_UP && right == RC_SW_UP), now))
         RobotSafetyRequestDisable();
-    if (Held(&state->reset, (uint8_t)(left == RC_SW_MID && right == RC_SW_MID), now) && EstopIsLatched())
-        (void)EstopClear();
-    if (input->rc.dial > 300) EstopRequest(ESTOP_REASON_MANUAL);
+    if (Held(&state->reset, (uint8_t)(left == RC_SW_MID && right == RC_SW_MID), now) &&
+        EstopIsLatched() && EstopClear())
+        BSP_ResetRecoverySetManualEstop(0u);
+    if (input->rc.dial > 300)
+    {
+        const uint8_t was_manual_estop =
+            (EstopIsLatched() != 0u && EstopGetReason() == ESTOP_REASON_MANUAL) ? 1u : 0u;
+        EstopRequest(ESTOP_REASON_MANUAL);
+        if (was_manual_estop == 0u)
+            BSP_ResetRecoverySetManualEstop(1u);
+    }
 }

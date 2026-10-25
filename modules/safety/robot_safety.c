@@ -47,8 +47,8 @@ static void RobotSafetyReportFaultLocked(Robot_Fault_e fault)
 
 static void RobotSafetyClearFaultLocked(Robot_Fault_e fault)
 {
-    if ((fault & ROBOT_FAULT_INIT_FAILURE) != 0)
-        fault = (Robot_Fault_e)((uint32_t)fault & ~(uint32_t)ROBOT_FAULT_INIT_FAILURE);
+    const uint32_t permanent_faults = ROBOT_FAULT_INIT_FAILURE | ROBOT_FAULT_RESET_LOCKOUT;
+    fault = (Robot_Fault_e)((uint32_t)fault & ~permanent_faults);
     fault_flags &= ~(uint32_t)fault;
 }
 
@@ -161,7 +161,7 @@ void RobotSafetySetTaskHealthy(uint8_t healthy)
 void RobotSafetyRequestEnable(void)
 {
     const uint32_t previous = RobotSafetyEnterCritical();
-    if ((fault_flags & ROBOT_FAULT_INIT_FAILURE) == 0u)
+    if ((fault_flags & (ROBOT_FAULT_INIT_FAILURE | ROBOT_FAULT_RESET_LOCKOUT)) == 0u)
     {
         enable_requested = 1u;
         calib_requested = 0u;
@@ -180,7 +180,7 @@ void RobotSafetyRequestDisable(void)
 void RobotSafetyRequestCalib(uint8_t enable)
 {
     const uint32_t previous = RobotSafetyEnterCritical();
-    if (!enable || (fault_flags & ROBOT_FAULT_INIT_FAILURE) == 0u)
+    if (!enable || (fault_flags & (ROBOT_FAULT_INIT_FAILURE | ROBOT_FAULT_RESET_LOCKOUT)) == 0u)
     {
         calib_requested = enable != 0u ? 1u : 0u;
         if (calib_requested != 0u)
@@ -219,7 +219,7 @@ uint8_t EstopClear(void)
     Robot_Status_e old_state;
     const uint32_t previous = RobotSafetyEnterCritical();
     if ((fault_flags & (ROBOT_FAULT_RC_OFFLINE | ROBOT_FAULT_TASK_TIMEOUT |
-                        ROBOT_FAULT_INIT_FAILURE)) != 0u)
+                        ROBOT_FAULT_INIT_FAILURE | ROBOT_FAULT_RESET_LOCKOUT)) != 0u)
     {
         RobotSafetyExitCritical(previous);
         return 0u;
@@ -326,7 +326,7 @@ void RobotSafetyUpdate(void)
     const uint32_t previous = RobotSafetyEnterCritical();
     const uint32_t active_faults = fault_flags;
 
-    if ((active_faults & ROBOT_FAULT_INIT_FAILURE) != 0u)
+    if ((active_faults & (ROBOT_FAULT_INIT_FAILURE | ROBOT_FAULT_RESET_LOCKOUT)) != 0u)
     {
         enable_requested = 0u;
         calib_requested = 0u;

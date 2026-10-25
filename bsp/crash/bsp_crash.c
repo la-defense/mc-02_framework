@@ -14,6 +14,7 @@
 #include "bsp_safety.h"
 #include "main.h"
 #include "bsp_log.h"
+#include "bsp_reset_recovery.h"
 
 #include <stddef.h>
 
@@ -41,7 +42,7 @@ extern const uint8_t __mc02_ram_d3_end__[];
 extern const BSP_ObservationIdentityTemplate_t bsp_observation_identity_template;
 
 static volatile CrashLog_t g_crash_log
-    __attribute__((section(".crash_record"), used, aligned(32)));
+    __attribute__((section(".crash_record.log"), used, aligned(32)));
 static volatile uint32_t g_crash_handler_active;
 
 static const CrashMemoryRegion_t g_crash_memory_regions[CRASH_MEMORY_REGION_CAPACITY] = {
@@ -186,6 +187,13 @@ static void CrashLogWriteRecord(uint32_t type, uint32_t *frame, uint32_t excepti
                                 uint32_t arg0, uint32_t arg1, uint32_t caller_pc,
                                 uintptr_t task_name, uintptr_t source_name)
 {
+    ResetRecoveryCause_e recovery_cause = RESET_RECOVERY_CAUSE_CPU_EXCEPTION;
+    if (type == CRASH_TYPE_ASSERT)
+        recovery_cause = RESET_RECOVERY_CAUSE_ASSERT;
+    else if (type == CRASH_TYPE_STACK_OVF)
+        recovery_cause = RESET_RECOVERY_CAUSE_STACK_OVERFLOW;
+    BSP_ResetRecoveryMarkFault(recovery_cause);
+
     uint32_t previous_count = CrashLogPreviousCountRead();
     uint32_t current_count = 1u;
 

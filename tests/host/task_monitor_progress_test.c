@@ -338,6 +338,36 @@ int main(void)
     TaskMonitorTick();
     TEST_CHECK(TaskMonitorAllAlive() == 0u);
 
+    // 监控任务停更时旧快照仍显示健康；恢复额度必须核对当前时刻的任务期限。
+    ResetFakes(700u);
+    const TaskMonitorTaskConfig_t recovery_health_configs[] = {
+        {.id = TASK_MONITOR_INS,
+         .name = "INS_HEALTH",
+         .mode = TASK_MONITOR_MODE_PERIODIC,
+         .role = TASK_MONITOR_ROLE_CORE,
+         .period_ms = 5u,
+         .deadline_ms = 10u,
+         .startup_grace_ms = 100u},
+        {.id = TASK_MONITOR_DAEMON,
+         .name = "DAEMON_HEALTH",
+         .mode = TASK_MONITOR_MODE_PERIODIC,
+         .role = TASK_MONITOR_ROLE_CORE,
+         .period_ms = 5u,
+         .deadline_ms = 10u,
+         .startup_grace_ms = 100u},
+    };
+    TEST_CHECK(InitConfiguredForTest(recovery_health_configs, 2u) ==
+               TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorBeginWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorCompleteWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorBeginWork(TASK_MONITOR_DAEMON) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorCompleteWork(TASK_MONITOR_DAEMON) == TASK_MONITOR_RESULT_OK);
+    TaskMonitorTick();
+    TEST_CHECK(TaskMonitorAllAlive() != 0u);
+    mc02_test_tick += 11u;
+    TEST_CHECK(TaskMonitorAllAlive() != 0u);
+    TEST_CHECK(TaskMonitorAllCoreHealthyNow() == 0u);
+
     puts("PASS: configured task progress, fixed deadlines, event idle, and role-specific faults");
     return 0;
 }

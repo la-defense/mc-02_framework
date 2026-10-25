@@ -606,6 +606,7 @@ target_include_directories(robot_safety_test PRIVATE ../../application ../../mod
 add_test(NAME production_safety_reported_faults COMMAND robot_safety_test)
 add_test(NAME production_safety_fault_recovery_priority COMMAND robot_safety_test recovery)
 add_test(NAME production_safety_init_failure_sticky COMMAND robot_safety_test init-failure)
+add_test(NAME production_safety_reset_recovery_lockout COMMAND robot_safety_test reset-lockout)
 if(UNIX AND NOT APPLE)
   find_package(Threads REQUIRED)
   add_executable(robot_safety_thread_test robot_safety_test.c
@@ -879,6 +880,24 @@ add_executable(
 target_include_directories(bsp_crash_record_test PRIVATE ../../bsp/crash)
 add_test(NAME crash_record_layout_crc_and_legacy_detection COMMAND bsp_crash_record_test)
 set_tests_properties(crash_record_layout_crc_and_legacy_detection PROPERTIES TIMEOUT 10)
+
+# 同时验证纯策略边界和使用生产 NOLOAD 存储适配的跨启动行为。
+add_executable(reset_recovery_policy_test reset_recovery_policy_test.c
+  ../../bsp/reset_recovery/reset_recovery_policy.c)
+target_include_directories(reset_recovery_policy_test PRIVATE ../../bsp/reset_recovery)
+target_compile_options(reset_recovery_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME reset_recovery_policy_bounds COMMAND reset_recovery_policy_test)
+set_tests_properties(reset_recovery_policy_bounds PROPERTIES TIMEOUT 10)
+
+add_executable(reset_recovery_test reset_recovery_test.c
+  ../../bsp/reset_recovery/bsp_reset_recovery.c
+  ../../bsp/reset_recovery/reset_recovery_policy.c)
+target_include_directories(reset_recovery_test BEFORE PRIVATE reset_recovery_fakes)
+target_include_directories(reset_recovery_test PRIVATE ../../bsp/reset_recovery ../../bsp/crash)
+target_compile_options(reset_recovery_test PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(reset_recovery_test PRIVATE MC02_RESET_RECOVERY_TESTING=1)
+add_test(NAME production_reset_recovery_persistence_and_lockout COMMAND reset_recovery_test)
+set_tests_properties(production_reset_recovery_persistence_and_lockout PROPERTIES TIMEOUT 10)
 
 add_executable(
   crash_guard_test

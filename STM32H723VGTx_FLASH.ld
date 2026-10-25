@@ -103,8 +103,10 @@ SECTIONS
   {
     . = ALIGN(32);
     __mc02_crash_record_start__ = .;
-    KEEP(*(.crash_record))
+    KEEP(*(.crash_record.log))
     KEEP(*(.crash_test_arm))
+    KEEP(*(.crash_record.recovery))
+    KEEP(*(.crash_record))
     . = __mc02_crash_record_start__ + 0x200;
     __mc02_crash_record_end__ = .;
   } >RAM

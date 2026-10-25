@@ -20,6 +20,7 @@ typedef enum
     ROBOT_FAULT_CALIB_INVALID = 1u << 5,
     ROBOT_FAULT_TASK_TIMEOUT = 1u << 6,
     ROBOT_FAULT_INIT_FAILURE = 1u << 7,
+    ROBOT_FAULT_RESET_LOCKOUT = 1u << 8,
 } Robot_Fault_e;
 
 /* 急停原因 */
@@ -75,7 +76,7 @@ void RobotSafetyRequestCalib(uint8_t enable);
 /** @brief 添加故障位，不立即更新运行状态。
 * @param[in] fault 可以同时包含多个 Robot_Fault_e 故障位。 */
 void RobotFaultReport(Robot_Fault_e fault);
-/** @brief 清除指定故障位；初始化失败位始终保留，须复位后重新初始化。
+/** @brief 清除指定故障位；初始化失败和复位额度锁定只能由对应维护流程解除。
 * @param[in] fault 需要清除的故障位，可组合多个。 */
 void RobotFaultClear(Robot_Fault_e fault);
 

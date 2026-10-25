@@ -82,6 +82,27 @@ static int InitializationFailureIsSticky(void)
     return 0;
 }
 
+static int ResetRecoveryLockoutIsSticky(void)
+{
+    HealthyInputs();
+    RobotSafetyRequestEnable();
+    RobotFaultReport(ROBOT_FAULT_RESET_LOCKOUT);
+    RobotSafetyUpdate();
+    CHECK(RobotSafetyGetState() == ROBOT_FAULT);
+    CHECK(!RobotSafetyIsReady());
+
+    // 清普通故障和请求使能均不能解除跨复位锁定。
+    RobotFaultClear(ROBOT_FAULT_RESET_LOCKOUT);
+    RobotSafetyRequestEnable();
+    RobotSafetyRequestCalib(1u);
+    CHECK(!EstopClear());
+    RobotSafetyUpdate();
+    CHECK(RobotSafetyGetState() == ROBOT_FAULT);
+    CHECK((RobotSafetyGetFaults() & ROBOT_FAULT_RESET_LOCKOUT) != 0u);
+    CHECK(!RobotSafetyIsReady());
+    return 0;
+}
+
 #ifdef MC02_THREAD_TEST
 static atomic_int safety_threads_done;
 static atomic_int safety_threads_start;
@@ -174,6 +195,7 @@ int main(int argc, char **argv)
 #endif
     if (argc > 1 && !strcmp(argv[1], "recovery")) return RecoveryAndPriority();
     if (argc > 1 && !strcmp(argv[1], "init-failure")) return InitializationFailureIsSticky();
+    if (argc > 1 && !strcmp(argv[1], "reset-lockout")) return ResetRecoveryLockoutIsSticky();
     const struct {
         Robot_Fault_e fault;
         Robot_Status_e state;

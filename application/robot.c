@@ -15,6 +15,7 @@
 #include "init_diagnostic.h"
 #include "vehicle_health.h"
 #include "bsp_safety.h"
+#include "bsp_reset_recovery.h"
 #if MC02_BENCH_RC_DIAGNOSTICS
 #include "remote_bench.h"
 #endif
@@ -93,6 +94,12 @@ uint8_t RobotInit(void)
     
     BSPInit();
     RobotSafetyInit();
+    BSP_ResetRecoveryState_t recovery_state = {0};
+    const uint8_t recovery_state_valid = BSP_ResetRecoveryGetState(&recovery_state);
+    if (recovery_state_valid == 0u || recovery_state.locked_out != 0u)
+        RobotFaultReport(ROBOT_FAULT_RESET_LOCKOUT);
+    if (recovery_state_valid != 0u && recovery_state.manual_estop_latched != 0u)
+        EstopRequest(ESTOP_REASON_MANUAL);
     if (TaskMonitorInitConfigured(robot_task_monitor_config,
                                   (uint32_t)(sizeof(robot_task_monitor_config) /
                                              sizeof(robot_task_monitor_config[0]))) !=
@@ -208,5 +215,7 @@ void RobotTask()
 #endif
 
     (void)VehicleHealthProcess();
+    (void)BSP_ResetRecoveryObserveControl(HAL_GetTick(), RobotSafetyIsReady(),
+                                          TaskMonitorAllCoreHealthyNow());
 
 }

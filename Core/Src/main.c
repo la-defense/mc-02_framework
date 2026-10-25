@@ -39,6 +39,7 @@
 #include "bsp_watchdog.h"
 #include "init_diagnostic.h"
 #include "robot_safety.h"
+#include "bsp_reset_recovery.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -100,6 +101,8 @@ int main(void)
 {
   /* USER CODE BEGIN 1 */
   BSP_SafetyStartupLatchOutputsOff();
+  // 在看门狗清除RCC标志前保存本次复位来源。
+  (void)BSP_ResetRecoveryInit(RCC->RSR);
   if (!BSPObservationInitEarly())
   {
     Error_Handler();

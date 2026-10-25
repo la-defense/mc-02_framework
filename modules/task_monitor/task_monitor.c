@@ -9,6 +9,7 @@
 #include "bsp_log.h"
 #include "main.h"
 #include "bsp_safety.h"
+#include "bsp_reset_recovery.h"
 #include "bsp_dwt.h"
 #include "cmsis_os.h"
 
@@ -233,7 +234,11 @@ static void TaskMonitorPublishFaultActions(const TaskMonitorFaultAction_t *actio
     {
         const TaskMonitorFaultAction_t *action = &actions[index];
         if (action->role == TASK_MONITOR_ROLE_CORE)
+        {
+            // 先保存任务期限原因，之后IWDG复位才能计入有限恢复额度。
+            BSP_ResetRecoveryMarkFault(RESET_RECOVERY_CAUSE_CORE_TASK);
             BSP_SafetyLatchOutputsOff();
+        }
         else if (action->callback != NULL)
             action->callback(action->id, action->dependency_mask, action->callback_context);
 
@@ -814,6 +819,35 @@ uint8_t TaskMonitorAllAlive(void)
     }
     TaskMonitorExitCritical(previous);
     return alive;
+}
+
+uint8_t TaskMonitorAllCoreHealthyNow(void)
+{
+    if (monitor_initialized == 0u)
+        return 0u;
+
+    const uint32_t now = HAL_GetTick();
+    const uint32_t previous = TaskMonitorEnterCritical();
+    uint8_t has_core_task = 0u;
+    uint8_t healthy = (uint8_t)(core_fault_latched == 0u &&
+                                long_operation_timeout_latched == 0u &&
+                                long_operation_fault_latched == 0u);
+    for (uint32_t index = 0u; index < monitor_configured_count; ++index)
+    {
+        const TaskMonitorItem_t *item = &monitor_items[index];
+        if (item->config.role != TASK_MONITOR_ROLE_CORE)
+            continue;
+
+        has_core_task = 1u;
+        if (item->alive == 0u || item->fault_reason != TASK_MONITOR_FAULT_NONE ||
+            TaskMonitorExpiredReason(item, now, monitor_started_ms) !=
+                TASK_MONITOR_FAULT_NONE)
+            healthy = 0u;
+    }
+    if (long_operation_timeout_latched != 0u || long_operation_fault_latched != 0u)
+        healthy = 0u;
+    TaskMonitorExitCritical(previous);
+    return (has_core_task != 0u && healthy != 0u) ? 1u : 0u;
 }
 
 void TaskMonitorGetStatus(TaskMonitor_Id_e id, TaskMonitorStatus_t *status)
