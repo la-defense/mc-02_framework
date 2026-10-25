@@ -408,8 +408,6 @@ static void DecodeDJIMotor(CANInstance *_instance)
     float candidate_speed = measure->speed_aps;
     float candidate_current = measure->current_feedback;
 
-    DaemonReload(motor->daemon);
-
     // 原始量先独立保存；滤波失败时保留旧有效输出，但控制环会检查有效标记。
     measure->last_ecd = measure->ecd;
     measure->ecd = ((uint16_t)rxbuff[0]) << 8 | rxbuff[1];
@@ -486,10 +484,17 @@ static void DecodeDJIMotor(CANInstance *_instance)
         // 超过可证明补圈的间隔后，仅更新单圈基准；多圈位置等待显式重建。
         motor->output_position_trusted = 0u;
     }
+    const uint8_t data_valid = (uint8_t)(motor->speed_filter_valid != 0u &&
+                                          motor->current_filter_valid != 0u);
+    (void)DaemonReportAt(motor->daemon, _instance->rx_timestamp_ms,
+        DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT |
+        (data_valid != 0u ? DAEMON_REPORT_DATA_VALID : 0u));
 }
 
-static void DJIMotorLostCallback(void *motor_ptr)
+static void DJIMotorLostCallback(const DaemonEvent_t *event, void *motor_ptr)
 {
+    if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
+        return;
     DJIMotorInstance *motor = (DJIMotorInstance *)motor_ptr;
     uint16_t can_bus = motor->motor_can_instance->can_handle == &hcan1 ? 1 : 2;
     BSP_LOG_EVENT_2(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_03,
@@ -565,9 +570,17 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
 
     // 注册守护线程
     Daemon_Init_Config_s daemon_config = {
-        .callback = DJIMotorLostCallback,
+        .transport_timeout_ms = 20u,
+        .data_timeout_ms = 20u,
+        .startup_grace_ms = 1000u,
+        .event_max_age_ms = 1000u,
+        .source_id = (uint16_t)(0x2000u | (can_config.rx_id & 0x01ffu)),
+        .event_capacity = 1u,
+        .consumer_id = DAEMON_CONSUMER_MOTOR_TASK,
+        .event_policy = DAEMON_EVENT_COUNT,
+        .consumer_mode = DAEMON_CONSUMER_BOUND_TASK,
+        .event_handler = DJIMotorLostCallback,
         .owner_id = instance,
-        .reload_count = 2, // 20ms未收到数据则丢失
     };
     instance->daemon = DaemonRegister(&daemon_config);
     if (instance->daemon == NULL)

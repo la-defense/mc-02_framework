@@ -21,9 +21,11 @@ uint32_t HAL_GetTick(void) { return (uint32_t)(now_us / 1000u); }
 float DWT_GetDeltaT(uint32_t *count) { ++*count; return 0.001f; }
 uint32_t DWT_ProbeStart(void) { return 0u; }
 void DWT_ProbeDone(volatile DWT_Probe_t *probe, uint32_t start) { (void)probe; (void)start; }
-DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config) { (void)config; return &daemon; }
+DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config) { (void)config; return &daemon; }
 uint8_t DaemonUnregister(DaemonInstance *instance) { (void)instance; return 1u; }
 void DaemonReload(DaemonInstance *instance) { (void)instance; }
+DaemonStatus_t DaemonReportAt(DaemonInstance *instance, uint32_t received_ms, uint8_t flags)
+{ (void)instance; (void)received_ms; (void)flags; return DAEMON_OK; }
 uint8_t DaemonIsOnline(DaemonInstance *instance) { (void)instance; return 1u; }
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {

@@ -60,11 +60,17 @@ static uint32_t burst_last_cycle[DEVICE_CAN_CNT];
 static unsigned malloc_calls;
 static unsigned free_calls;
 void *__real_malloc(size_t size);
+void *__real_calloc(size_t count, size_t size);
 void __real_free(void *pointer);
 void *__wrap_malloc(size_t size)
 {
     ++malloc_calls;
     return __real_malloc(size);
+}
+void *__wrap_calloc(size_t count, size_t size)
+{
+    ++malloc_calls;
+    return __real_calloc(count, size);
 }
 void __wrap_free(void *pointer)
 {

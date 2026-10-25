@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 
+uint32_t HAL_GetTick(void);
+
 extern volatile uint32_t test_ipsr;
 
 static inline void __DMB(void) {}

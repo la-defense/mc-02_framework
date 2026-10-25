@@ -299,7 +299,8 @@ static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8
     referee_last_valid_rx_ms = source_rx_ms;
     referee_has_valid_frame = 1u;
     referee_link_active = 1u;
-    DaemonReload(referee_daemon);
+    (void)DaemonReportAt(referee_daemon, source_rx_ms,
+        DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
     taskEXIT_CRITICAL();
     return 1u;
 }
@@ -371,9 +372,11 @@ static void RefereeRxCallback(void *context, const USART_RxBlock_t *block)
     }
 }
 
-static void RefereeLostCallback(void *arg)
+static void RefereeLostCallback(const DaemonEvent_t *event, void *arg)
 {
     (void)arg;
+    if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
+        return;
     taskENTER_CRITICAL();
     referee_stream.reset_requested = 1u;
     referee_link_active = 0u;
@@ -426,9 +429,17 @@ RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *c
     if (!RefereeConfigValid(selected)) return REFEREE_ERROR_CONFIG;
 
     Daemon_Init_Config_s daemon_conf = {
-        .callback = RefereeLostCallback,
+        .transport_timeout_ms = REFEREE_LINK_TIMEOUT_MS,
+        .data_timeout_ms = REFEREE_LINK_TIMEOUT_MS,
+        .startup_grace_ms = 1000u,
+        .event_max_age_ms = 1000u,
+        .source_id = 0x7003u,
+        .event_capacity = 1u,
+        .consumer_id = DAEMON_CONSUMER_MOTOR_TASK,
+        .event_policy = DAEMON_EVENT_COALESCED_STATE,
+        .consumer_mode = DAEMON_CONSUMER_BOUND_TASK,
+        .event_handler = RefereeLostCallback,
         .owner_id = &referee_published,
-        .reload_count = 30,
     };
     DaemonInstance *daemon = DaemonRegister(&daemon_conf);
     if (daemon == NULL) return REFEREE_ERROR_RESOURCE;

@@ -64,6 +64,7 @@ static unsigned allocation_calls;
 static unsigned free_calls;
 static unsigned fail_allocation_call;
 void *__real_malloc(size_t size);
+void *__real_calloc(size_t count, size_t size);
 void __real_free(void *pointer);
 void *__wrap_malloc(size_t size)
 {
@@ -71,6 +72,13 @@ void *__wrap_malloc(size_t size)
     if (allocation_calls == fail_allocation_call)
         return NULL;
     return __real_malloc(size);
+}
+void *__wrap_calloc(size_t count, size_t size)
+{
+    ++allocation_calls;
+    if (allocation_calls == fail_allocation_call)
+        return NULL;
+    return __real_calloc(count, size);
 }
 void __wrap_free(void *pointer)
 {

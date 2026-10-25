@@ -35,6 +35,18 @@ endif()
 
 
 if(UNIX AND NOT APPLE)
+  add_executable(daemon_source_monitor_test daemon_source_monitor_test.c
+    ../../modules/daemon/daemon.c ../../modules/daemon/daemon_event_task.c
+    host_critical_model.c)
+  target_include_directories(daemon_source_monitor_test BEFORE PRIVATE daemon_source_fakes)
+  target_include_directories(daemon_source_monitor_test PRIVATE ../../modules/daemon .)
+  target_compile_options(daemon_source_monitor_test PRIVATE -Wall -Wextra -Werror)
+  target_link_libraries(daemon_source_monitor_test PRIVATE Threads::Threads)
+  foreach(scenario IN ITEMS deadlines wrap fifo-overflow policies expiration consumers-task-retry threads)
+    add_test(NAME production_daemon_${scenario} COMMAND daemon_source_monitor_test ${scenario})
+    set_tests_properties(production_daemon_${scenario} PROPERTIES TIMEOUT 10)
+  endforeach()
+
   add_executable(usb_diagnostic_test usb_backend_test.c ../../bsp/usb/usb_transport.c
     ../../bsp/usb/usb_transport_port_stm32.c ../../bsp/usb/usb_diagnostic.c
     ../../USB_DEVICE/App/usbd_cdc_if.c)
@@ -262,7 +274,8 @@ endif()
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
    (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE))
   target_compile_definitions(lk_motor_registration_test PRIVATE LK_TEST_ALLOC_WRAP=1)
-  target_link_options(lk_motor_registration_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=free)
+  target_link_options(lk_motor_registration_test PRIVATE
+    -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
 endif()
 foreach(scenario IN ITEMS registration can_failure sparse routing)
   add_test(NAME production_lk_motor_${scenario} COMMAND lk_motor_registration_test ${scenario})
@@ -284,7 +297,8 @@ target_link_libraries(lk_motor_bsp_can_test PRIVATE mc02_numeric)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
    (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE))
   target_compile_definitions(lk_motor_bsp_can_test PRIVATE LK_TEST_ALLOC_WRAP=1)
-  target_link_options(lk_motor_bsp_can_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=free -Wl,--gc-sections)
+  target_link_options(lk_motor_bsp_can_test PRIVATE
+    -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free -Wl,--gc-sections)
 endif()
 add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test rollback)
 add_test(NAME production_lk_motor_bsp_can_routing COMMAND lk_motor_bsp_can_test routing)
@@ -327,7 +341,7 @@ target_link_options(dm_motor_test PRIVATE -Wl,--gc-sections)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
    (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE))
   target_compile_definitions(dm_motor_test PRIVATE DM_TEST_ALLOC_WRAP=1)
-  target_link_options(dm_motor_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=free)
+  target_link_options(dm_motor_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
 endif()
 if(UNIX)
   find_package(Threads REQUIRED)
@@ -634,7 +648,10 @@ add_test(NAME production_remote_keyboard_ad_mapping COMMAND remote_control_test 
 add_test(NAME production_remote_mouse_z_wire_bits COMMAND remote_control_test mouse-z)
 add_test(NAME production_pc_zero_heartbeat_denied COMMAND remote_control_test pc-startup)
 add_test(NAME production_pc_released_handshake COMMAND remote_control_test pc-handshake)
-add_test(NAME production_pc_lease_age_and_tick_wrap COMMAND remote_control_test pc-age)
+add_test(NAME production_pc_lease_age_zero COMMAND remote_control_test pc-age-zero)
+add_test(NAME production_pc_lease_age_tick_wrap COMMAND remote_control_test pc-age-wrap)
+set_tests_properties(production_pc_lease_age_zero production_pc_lease_age_tick_wrap
+  PROPERTIES TIMEOUT 10)
 add_test(NAME production_pc_sequence_and_invalid_frames COMMAND remote_control_test pc-boundaries)
 if(UNIX AND NOT APPLE)
   add_executable(remote_control_thread_test remote_control_test.c ../../bsp/usart/bsp_usart.c
@@ -803,6 +820,10 @@ if(UNIX)
   target_link_libraries(robot_cmd_dual_test PRIVATE m)
 endif()
 add_test(NAME production_dual_board_command_snapshot_path COMMAND robot_cmd_dual_test dual-board)
+foreach(target IN ITEMS robot_cmd_task_test robot_cmd_vision_test robot_cmd_v2_test robot_cmd_dual_test)
+  target_sources(${target} PRIVATE ../../modules/daemon/daemon.c)
+  target_include_directories(${target} PRIVATE ../../modules/daemon)
+endforeach()
 add_executable(shoot_freshness_test shoot_freshness_test.c
   ../../application/shoot/shoot.c ../../application/topics/robot_topics.c
   ../../modules/message_center/message_center.c)
@@ -818,7 +839,7 @@ if(UNIX AND NOT APPLE)
     set(target motor_profile_${profile})
     add_executable(${target} motor_profile_test.c ../../modules/motor/motor_task.c)
     target_include_directories(${target} BEFORE PRIVATE motor_profile_fakes)
-    target_include_directories(${target} PRIVATE ../../modules/motor ../../bsp/usb)
+    target_include_directories(${target} PRIVATE ../../modules/motor ../../modules/daemon ../../bsp/usb)
     if(profile STREQUAL "bench_safe")
       target_compile_definitions(${target} PRIVATE MC02_PROFILE_BENCH_SAFE=1)
     else()
@@ -1308,9 +1329,11 @@ foreach(case IN ITEMS init-race quarantine slots)
   add_test(NAME production_uart_${case} COMMAND usart_snapshot_test ${case})
   set_tests_properties(production_uart_${case} PROPERTIES TIMEOUT 10)
 endforeach()
-add_test(NAME production_remote_original_receive_time COMMAND remote_control_test source-time)
+add_test(NAME production_remote_original_receive_time_zero COMMAND remote_control_test source-time-zero)
+add_test(NAME production_remote_original_receive_time_tick_wrap COMMAND remote_control_test source-time-wrap)
 set_tests_properties(production_uart_stream_protocols production_uart_pool_limit
-  production_remote_original_receive_time PROPERTIES TIMEOUT 10)
+  production_remote_original_receive_time_zero production_remote_original_receive_time_tick_wrap
+  PROPERTIES TIMEOUT 10)
 
 # 裁判生产解析器和UART块队列一起运行；Linux线程共享真实互斥临界区模型。
 add_executable(referee_snapshot_test referee_snapshot_test.c ../../bsp/usart/bsp_usart.c

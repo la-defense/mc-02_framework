@@ -9,6 +9,7 @@
 #include "bsp_can.h"
 #include "bsp_usart.h"
 #include "usb_transport.h"
+#include "daemon.h"
 
 /* ---------------- 性能探针(2026-09, CPU 占用排查) ---------------- */
 volatile DWT_Probe_t motor_prof_all = {0};
@@ -28,6 +29,9 @@ void MotorControlTask()
     // UART 和 USB 也在这里运行模块解析，避免将协议计算放在中断里；排队过时的数据由 BSP 跳过。
     USARTProcessRx();
     (void)USBTransportProcessRx();
+
+    // 裁判 UART 已完成本轮解析后，再由电机任务处理有界离线恢复事件。
+    (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_MOTOR_TASK, DAEMON_EVENT_MAX_DEPTH, NULL);
 
     probe_seg = DWT_ProbeStart();
 #if !defined(MC02_PROFILE_BENCH_SAFE)

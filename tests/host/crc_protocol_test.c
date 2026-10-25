@@ -33,9 +33,11 @@ static USARTInstance uart_instance = {0};
 static DaemonInstance daemon_instance;
 
 uint32_t HAL_GetTick(void) { return now_ms; }
-DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config) { (void)config; return &daemon_instance; }
+DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config) { (void)config; return &daemon_instance; }
 uint8_t DaemonUnregister(DaemonInstance *instance) { (void)instance; return 1u; }
 void DaemonReload(DaemonInstance *instance) { (void)instance; ++reloads; }
+DaemonStatus_t DaemonReportAt(DaemonInstance *instance, uint32_t received_ms, uint8_t flags)
+{ (void)instance; (void)received_ms; if ((flags & DAEMON_REPORT_TRANSPORT_VALID) != 0u) ++reloads; return DAEMON_OK; }
 uint8_t DaemonIsOnline(DaemonInstance *instance) { (void)instance; return 1u; }
 USARTInstance *USARTRegister(USART_Init_Config_s *config)
 { uart_callback = config->module_callback; uart_context=config->context; return &uart_instance; }

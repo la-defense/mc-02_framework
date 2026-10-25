@@ -92,17 +92,19 @@ static void DMMotorDecode(CANInstance *can_instance)
     const uint16_t velocity = (uint16_t)(((uint16_t)data[3] << 4u) | (data[4] >> 4u));
     const uint16_t torque = (uint16_t)(((uint16_t)(data[4] & 0x0fu) << 8u) | data[5]);
 
-    DaemonReload(motor->daemon);
     motor->measure.last_position = motor->measure.position;
     motor->measure.position = ((float)position * (DM_P_MAX - DM_P_MIN) / 65535.0f) + DM_P_MIN;
     motor->measure.velocity = ((float)velocity * (DM_V_MAX - DM_V_MIN) / 4095.0f) + DM_V_MIN;
     motor->measure.torque = ((float)torque * (DM_T_MAX - DM_T_MIN) / 4095.0f) + DM_T_MIN;
     motor->measure.mos_temperature = (float)data[6];
     motor->measure.rotor_temperature = (float)data[7];
+    (void)DaemonReportAt(motor->daemon, can_instance->rx_timestamp_ms,
+        DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
 }
 
-static void DMMotorLostCallback(void *owner)
+static void DMMotorLostCallback(const DaemonEvent_t *event, void *owner)
 {
+    (void)event;
     (void)owner;
 }
 
@@ -364,9 +366,17 @@ DMMotorInstance *DMMotorInit(const Motor_Init_Config_s *config)
     motor->calculation_status = DMMOTOR_CALCULATION_NO_REFERENCE;
 
     Daemon_Init_Config_s daemon_config = {
-        .callback = DMMotorLostCallback,
+        .transport_timeout_ms = 100u,
+        .data_timeout_ms = 100u,
+        .startup_grace_ms = 1000u,
+        .event_max_age_ms = 1000u,
+        .source_id = (uint16_t)(0x3000u | (config->can_init_config.rx_id & 0x01ffu)),
+        .event_capacity = 1u,
+        .consumer_id = DAEMON_CONSUMER_MOTOR_TASK,
+        .event_policy = DAEMON_EVENT_COALESCED_STATE,
+        .consumer_mode = DAEMON_CONSUMER_BOUND_TASK,
+        .event_handler = DMMotorLostCallback,
         .owner_id = motor,
-        .reload_count = 10u,
     };
     motor->daemon = DaemonRegister(&daemon_config);
     if (motor->daemon == NULL)

@@ -86,7 +86,9 @@ static void CANCommRxCallback(CANInstance *_instance)
                     comm->freshness.timestamp_ms = rx_timestamp_ms;
                     comm->freshness.sequence++;
                     taskEXIT_CRITICAL();           // 数据更新flag置为1
-                    DaemonReload(comm->comm_daemon); // 重载daemon,避免数据更新后一直不被读取而导致数据更新不及时
+                    (void)DaemonReportAt(comm->comm_daemon, rx_timestamp_ms,
+                        DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT |
+                        DAEMON_REPORT_DATA_VALID);
                 }
             }
             CANCommResetRx(comm);
@@ -96,8 +98,10 @@ static void CANCommRxCallback(CANInstance *_instance)
 }
 
 // 离线时只清未完成拼包；已发布消息由读取入口按时间拒绝。
-static void CANCommLostCallback(void *cancomm)
+static void CANCommLostCallback(const DaemonEvent_t *event, void *cancomm)
 {
+    if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
+        return;
     CANCommInstance *comm = (CANCommInstance *)cancomm;
     CANCommResetRx(comm);
     // 记录实际接收编号，便于区分是哪条链路离线。
@@ -124,9 +128,19 @@ CANCommInstance *CANCommInit(CANComm_Init_Config_s *comm_config)
     ins->raw_sendbuf[ins->send_buf_len - 1u] = CAN_COMM_TAIL;
 
     Daemon_Init_Config_s daemon_config = {
-        .callback = CANCommLostCallback,
+        .transport_timeout_ms = comm_config->daemon_timeout_ms == 0u ?
+            1000u : comm_config->daemon_timeout_ms,
+        .data_timeout_ms = comm_config->daemon_timeout_ms == 0u ?
+            1000u : comm_config->daemon_timeout_ms,
+        .startup_grace_ms = 1000u,
+        .event_max_age_ms = 1000u,
+        .source_id = (uint16_t)(0x6000u | (comm_config->can_config.rx_id & 0x00ffu)),
+        .event_capacity = 1u,
+        .consumer_id = DAEMON_CONSUMER_ROBOT_TASK,
+        .event_policy = DAEMON_EVENT_COALESCED_STATE,
+        .consumer_mode = DAEMON_CONSUMER_BOUND_TASK,
+        .event_handler = CANCommLostCallback,
         .owner_id = ins,
-        .reload_count = comm_config->daemon_count,
     };
     ins->comm_daemon = DaemonRegister(&daemon_config);
     if (ins->comm_daemon == NULL)

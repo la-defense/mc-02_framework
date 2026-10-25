@@ -39,6 +39,7 @@ static unsigned malloc_calls;
 static unsigned free_calls;
 static unsigned malloc_fail_call;
 void *__real_malloc(size_t size);
+void *__real_calloc(size_t count, size_t size);
 void __real_free(void *pointer);
 
 void *__wrap_malloc(size_t size)
@@ -47,6 +48,14 @@ void *__wrap_malloc(size_t size)
     if (malloc_fail_call != 0u && malloc_calls == malloc_fail_call)
         return NULL;
     return __real_malloc(size);
+}
+
+void *__wrap_calloc(size_t count, size_t size)
+{
+    ++malloc_calls;
+    if (malloc_fail_call != 0u && malloc_calls == malloc_fail_call)
+        return NULL;
+    return __real_calloc(count, size);
 }
 
 void __wrap_free(void *pointer)

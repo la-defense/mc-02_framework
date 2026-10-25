@@ -47,10 +47,12 @@ HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h, uint8_t *p, uint16
 { return HAL_UART_Transmit(h,p,n,0); }
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, uint8_t *p, uint16_t n)
 { return HAL_UART_Transmit(h,p,n,0); }
-DaemonInstance *DaemonRegister(Daemon_Init_Config_s *c)
+DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *c)
 { TEST_CHECK(daemon_count < 2); daemon_configs[daemon_count] = *c; return &daemons[daemon_count++]; }
 uint8_t DaemonUnregister(DaemonInstance *d) { (void)d; return 1u; }
 void DaemonReload(DaemonInstance *d) { (void)d; ++reloads; }
+DaemonStatus_t DaemonReportAt(DaemonInstance *d, uint32_t received_ms, uint8_t flags)
+{ (void)d; (void)received_ms; if ((flags & DAEMON_REPORT_TRANSPORT_VALID) != 0u) ++reloads; return DAEMON_OK; }
 uint8_t DaemonIsOnline(DaemonInstance *d) { (void)d; return 1u; }
 
 // 逐位参考只用于生成测试字节；生产接收路径始终调用只读查表CRC。
@@ -124,7 +126,8 @@ static void vision_cases(void)
     before=reloads; feed(1,frame+10,sizeof(frame)-10); TEST_CHECK(reloads==before);
     feed(1,frame,sizeof(frame)); TEST_CHECK(reloads==before+1);
     restart(1); feed(1,frame,10);
-    daemon_configs[0].callback(daemon_configs[0].owner_id);
+    const DaemonEvent_t offline_event = {.state = DAEMON_SOURCE_OFFLINE};
+    daemon_configs[0].event_handler(&offline_event, daemon_configs[0].owner_id);
     before=reloads; feed(1,frame+10,sizeof(frame)-10); TEST_CHECK(reloads==before);
     feed(1,frame,sizeof(frame)); TEST_CHECK(reloads==before+1);
     restart(1); const uint8_t noise=0;

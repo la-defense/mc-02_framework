@@ -55,7 +55,17 @@ static void check_invalid_and_exhausted_daemon(void)
     DaemonInstance *invalid = DaemonRegister(NULL);
     TEST_CHECK(invalid == NULL);
 
-    Daemon_Init_Config_s config = {0};
+    Daemon_Init_Config_s config = {
+        .transport_timeout_ms = 100u,
+        .data_timeout_ms = 100u,
+        .startup_grace_ms = 10u,
+        .event_max_age_ms = 100u,
+        .source_id = 1u,
+        .event_capacity = 1u,
+        .consumer_id = 1u,
+        .event_policy = DAEMON_EVENT_COALESCED_STATE,
+        .consumer_mode = DAEMON_CONSUMER_BOUND_TASK,
+    };
     allocation_countdown = 0;
     invalid = DaemonRegister(&config);
     TEST_CHECK(invalid == NULL);

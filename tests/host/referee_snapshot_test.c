@@ -52,7 +52,7 @@ static void set_tick(uint32_t value)
     now_ms=value;
 #endif
 }
-DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config) { daemon_config=*config;return &daemon_instance; }
+DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config) { daemon_config=*config;return &daemon_instance; }
 uint8_t DaemonUnregister(DaemonInstance *instance) { (void)instance;return 1u; }
 void DaemonReload(DaemonInstance *instance)
 {
@@ -62,6 +62,19 @@ void DaemonReload(DaemonInstance *instance)
 #else
     ++reload_count;
 #endif
+}
+DaemonStatus_t DaemonReportAt(DaemonInstance *instance, uint32_t received_ms, uint8_t flags)
+{
+    (void)instance;
+    (void)received_ms;
+    if ((flags & DAEMON_REPORT_TRANSPORT_VALID) == 0u)
+        return DAEMON_OK;
+#if defined(REFEREE_TEST_THREADS)
+    atomic_fetch_add_explicit(&reload_count,1u,memory_order_relaxed);
+#else
+    ++reload_count;
+#endif
+    return DAEMON_OK;
 }
 uint8_t DaemonIsOnline(DaemonInstance *instance) { (void)instance;return 1u; }
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h,uint8_t *p,uint16_t n)
@@ -416,7 +429,8 @@ static void check_expiry(void)
     TEST_CHECK(RefereeGetSnapshot(&snapshot)==REFEREE_OK && snapshot.command[REF_CMD_GAME_STATE].state==REFEREE_DATA_FRESH);
     set_tick(2900u);
     TEST_CHECK(RefereeGetSnapshot(&snapshot)==REFEREE_OK && snapshot.command[REF_CMD_GAME_STATE].state==REFEREE_DATA_EXPIRED);
-    daemon_config.callback(daemon_config.owner_id);
+    const DaemonEvent_t offline_event = {.state = DAEMON_SOURCE_OFFLINE};
+    daemon_config.event_handler(&offline_event, daemon_config.owner_id);
     TEST_CHECK(RefereeGetSnapshot(&snapshot)==REFEREE_OK && !snapshot.link_online &&
                snapshot.command[REF_CMD_GAME_STATE].state==REFEREE_DATA_EXPIRED);
 }

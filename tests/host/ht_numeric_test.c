@@ -40,9 +40,11 @@ CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *sou
                                       const CAN_TxFrame_t *frame,CAN_TxPriority_t priority,
                                       uint32_t deadline_ms,uint32_t *request_id)
 {(void)hcan;(void)source;(void)priority;(void)deadline_ms;return fake_tx_submit(frame,request_id);}
-DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
+DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config)
 {(void)config;TEST_CHECK(daemon_count<2);return &daemons[daemon_count++];}
 void DaemonReload(DaemonInstance *instance){(void)instance;++reloads;}
+DaemonStatus_t DaemonReportAt(DaemonInstance *instance,uint32_t received_ms,uint8_t flags)
+{(void)instance;(void)received_ms;if((flags&DAEMON_REPORT_TRANSPORT_VALID)!=0u)++reloads;return DAEMON_OK;}
 uint8_t DaemonUnregister(DaemonInstance *instance){(void)instance;return 1u;}
 uint8_t DaemonIsOnline(DaemonInstance *instance){(void)instance;return 1u;}
 uint64_t DWT_GetTimeline_us(void){return 0;}

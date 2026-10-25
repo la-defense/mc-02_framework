@@ -128,7 +128,8 @@ static void VisionFrameReceived(void *context, const Vision_Recv_s *packet,
         vision_usb_generation = generation;
         USBTransportReportValidCommand(generation, received_ms);
 #endif
-        DaemonReload(vision_daemon_instance);
+        (void)DaemonReportAt(vision_daemon_instance, received_ms,
+            DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
     }
     taskEXIT_CRITICAL();
 }
@@ -309,7 +310,8 @@ static void VisionV2FrameReceived(void *context, const VisionV2Frame_t *frame)
 #ifdef VISION_USE_VCP
     vision_usb_generation = frame->generation;
 #endif
-    DaemonReload(vision_daemon_instance);
+    (void)DaemonReportAt(vision_daemon_instance, frame->received_time_ms,
+        DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
     taskEXIT_CRITICAL();
 #ifdef VISION_USE_VCP
     USBTransportReportValidCommand(frame->generation, frame->received_time_ms);
@@ -356,9 +358,11 @@ static void VisionUartRxCallback(void *context, const USART_RxBlock_t *block)
 #endif
 
 // 离线时清旧命令、接收时间和有效标记；UART 配置还会重新准备接收。
-static void VisionOfflineCallback(void *id)
+static void VisionOfflineCallback(const DaemonEvent_t *event, void *id)
 {
     (void)id;
+    if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
+        return;
     taskENTER_CRITICAL();
     memset(&recv_data, 0, sizeof(recv_data));
     vision_last_rx_ms = 0u;
@@ -532,14 +536,27 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
 #endif
 
     Daemon_Init_Config_s daemon_conf = {
-        .callback = VisionOfflineCallback,
-        .owner_id = NULL,
-        .reload_count =
+        .transport_timeout_ms =
 #if defined(MC02_VISION_PROTOCOL_V2)
-            30, // V2链路整体在线期限为300ms，瞄准与导航另行按各自期限失效。
+            300u,
 #else
-            5, // SP旧协议在线期限为50ms。
+            50u,
 #endif
+        .data_timeout_ms =
+#if defined(MC02_VISION_PROTOCOL_V2)
+            300u,
+#else
+            50u,
+#endif
+        .startup_grace_ms = 1000u,
+        .event_max_age_ms = 1000u,
+        .source_id = 0x7002u,
+        .event_capacity = 1u,
+        .consumer_id = DAEMON_CONSUMER_ROBOT_TASK,
+        .event_policy = DAEMON_EVENT_COALESCED_STATE,
+        .consumer_mode = DAEMON_CONSUMER_BOUND_TASK,
+        .event_handler = VisionOfflineCallback,
+        .owner_id = NULL,
     };
     vision_daemon_instance = DaemonRegister(&daemon_conf);
     if (vision_daemon_instance == NULL)

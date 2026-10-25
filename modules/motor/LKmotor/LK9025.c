@@ -148,11 +148,14 @@ static void LKMotorDecode(CANInstance *_instance)
     if (motor->feedback_sequence == 0u)
         motor->feedback_sequence++;
     taskEXIT_CRITICAL();
-    DaemonReload(motor->daemon);
+    (void)DaemonReportAt(motor->daemon, _instance->rx_timestamp_ms,
+        DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
 }
 
-static void LKMotorLostCallback(void *motor_ptr)
+static void LKMotorLostCallback(const DaemonEvent_t *event, void *motor_ptr)
 {
+    if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
+        return;
     LKMotorInstance *motor = (LKMotorInstance *)motor_ptr;
     (void)motor; /* 仅诊断使用的局部指针在关闭日志的主机替身中也保持无告警。 */
     BSP_LOG_EVENT_1(EV_MODULES_MOTOR_LKMOTOR_LK9025_C_01,
@@ -217,9 +220,17 @@ LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
     DWT_GetDeltaT(&motor->measure.feed_dwt_cnt);
 
     Daemon_Init_Config_s daemon_config = {
-        .callback = LKMotorLostCallback,
+        .transport_timeout_ms = 50u,
+        .data_timeout_ms = 50u,
+        .startup_grace_ms = 1000u,
+        .event_max_age_ms = 1000u,
+        .source_id = (uint16_t)(0x5000u | (config->can_init_config.rx_id & 0x01ffu)),
+        .event_capacity = 1u,
+        .consumer_id = DAEMON_CONSUMER_MOTOR_TASK,
+        .event_policy = DAEMON_EVENT_COALESCED_STATE,
+        .consumer_mode = DAEMON_CONSUMER_BOUND_TASK,
+        .event_handler = LKMotorLostCallback,
         .owner_id = motor,
-        .reload_count = 5, // 50ms
     };
     motor->daemon = DaemonRegister(&daemon_config);
     if (motor->daemon == NULL)

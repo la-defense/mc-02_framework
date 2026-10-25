@@ -53,7 +53,7 @@ typedef struct
     uint8_t send_data_len;        // 发送数据长度
     uint8_t recv_data_len;        // 接收数据长度
 
-    uint16_t daemon_count; // 守护进程计数,用于初始化守护进程
+    uint32_t daemon_timeout_ms; // 合法完整消息的绝对期限，单位ms；0沿用1000ms默认值。
 } CANComm_Init_Config_s;
 
 /** @brief 注册 CAN 和离线回调，准备固定长度的消息收发对象。

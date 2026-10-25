@@ -13,7 +13,7 @@
 #include <string.h>
 static DaemonInstance daemon_instance;
 
-DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
+DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config)
 {
     (void)config;
     return &daemon_instance;
@@ -26,6 +26,13 @@ uint8_t DaemonUnregister(DaemonInstance *instance)
 void DaemonReload(DaemonInstance *instance)
 {
     (void)instance;
+}
+DaemonStatus_t DaemonReportAt(DaemonInstance *instance, uint32_t received_ms, uint8_t flags)
+{
+    (void)instance;
+    (void)received_ms;
+    (void)flags;
+    return DAEMON_OK;
 }
 uint8_t DaemonIsOnline(DaemonInstance *instance)
 {

@@ -89,6 +89,11 @@ uint8_t OSTaskInit(void)
     /* 日志任务是辅助诊断能力，创建失败由日志只读状态报告，不阻断核心任务启动。 */
     (void)BSPLogTaskInit();
 
+    // 只有登记了独立事件来源时才创建工作线程；来源事件不能在监控任务里直接恢复模块。
+    const DaemonStatus_t event_task_status = DaemonEventTaskInit();
+    const uint8_t event_task_created = (uint8_t)(event_task_status == DAEMON_OK ||
+                                                   event_task_status == DAEMON_NO_TASK_REQUIRED);
+
     // Daemon 内有状态检查与日志，需同时容纳日志行数组和各层调用。
     osThreadDef(daemontask, StartDAEMONTASK, osPriorityNormal, 0, 512);
     daemonTaskHandle = osThreadCreate(osThread(daemontask), NULL);
@@ -104,6 +109,12 @@ uint8_t OSTaskInit(void)
     osThreadDef(lcdtask, StartLCDTASK, osPriorityLow, 0, 1024);
     lcdTaskHandle = osThreadCreate(osThread(lcdtask), NULL);
     uint8_t all_created = 1u;
+    if (!event_task_created)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_DAEMON);
+        all_created = 0u;
+    }
     if (!uart_tx_created) {
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
             INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UART_TX);

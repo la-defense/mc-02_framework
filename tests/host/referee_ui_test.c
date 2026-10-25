@@ -34,9 +34,11 @@ static uint32_t now_ms;
 static uint32_t rx_sequence;
 
 uint32_t HAL_GetTick(void) { return now_ms; }
-DaemonInstance *DaemonRegister(Daemon_Init_Config_s *c) { (void)c; return &daemon_instance; }
+DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *c) { (void)c; return &daemon_instance; }
 uint8_t DaemonUnregister(DaemonInstance *d) { (void)d; ++unregisters; return 1; }
 void DaemonReload(DaemonInstance *d) { (void)d; ++reloads; }
+DaemonStatus_t DaemonReportAt(DaemonInstance *d, uint32_t received_ms, uint8_t flags)
+{ (void)d; (void)received_ms; if ((flags & DAEMON_REPORT_TRANSPORT_VALID) != 0u) ++reloads; return DAEMON_OK; }
 uint8_t DaemonIsOnline(DaemonInstance *d) { (void)d; return 1; }
 USARTInstance *USARTRegister(USART_Init_Config_s *c)
 { receive_callback=c->module_callback;receive_context=c->context; return registration_fail?NULL:&instance; }

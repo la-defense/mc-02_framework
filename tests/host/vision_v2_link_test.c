@@ -80,7 +80,7 @@ void USBTransportReportValidCommand(uint32_t generation, uint32_t received_ms)
         ++valid_command_reports;
 }
 
-DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config)
+DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config)
 {
     if (config == NULL)
         return NULL;
@@ -97,6 +97,17 @@ void DaemonReload(DaemonInstance *instance)
 {
     if (instance == &daemon_instance)
         ++daemon_reloads;
+}
+
+DaemonStatus_t DaemonReportAt(DaemonInstance *instance, uint32_t received_ms, uint8_t flags)
+{
+    if (instance != &daemon_instance)
+        return DAEMON_ERR_NOT_REGISTERED;
+    if ((flags & DAEMON_REPORT_TRANSPORT_VALID) == 0u)
+        return DAEMON_OK;
+    ++daemon_reloads;
+    (void)received_ms;
+    return DAEMON_OK;
 }
 
 uint8_t DaemonIsOnline(DaemonInstance *instance)
@@ -713,7 +724,7 @@ int main(void)
     TEST_CHECK(VisionUpdateIMUSample(&sample_before_init) ==
         VISION_IMU_SAMPLE_UPDATE_ERR_NOT_INITIALIZED);
     TEST_CHECK(VisionInit(NULL) != NULL);
-    TEST_CHECK(usb_config.receive != NULL && daemon_config.reload_count == 30u);
+    TEST_CHECK(usb_config.receive != NULL && daemon_config.transport_timeout_ms == 300u);
     now_ms = 1u;
     VisionIMUSample_t zero_time_sample = {
         .valid = 1u, .sample_sequence = 1u, .sample_time_ms = 0u,

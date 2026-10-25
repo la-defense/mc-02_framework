@@ -29,6 +29,14 @@ static RemoteControlSnapshot_s remote_input_snapshot;
 #define RC_INPUT (RemoteControlGetSnapshot(&remote_input_snapshot), remote_input_snapshot.input)
 extern volatile uint32_t usart_rx_oversize_total;
 uint32_t HAL_GetTick(void) { return now; }
+
+static void daemon_cycle(void)
+{
+    uint8_t processed = 0u;
+    DaemonTask();
+    (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_ROBOT_TASK,
+                                  DAEMON_EVENT_MAX_DEPTH, &processed);
+}
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h, uint8_t *p, uint16_t n)
 { (void)n; if (h == &huart5) dma_buffer = p; return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h) { (void)h; return HAL_OK; }
@@ -115,7 +123,7 @@ static void *AdvanceDaemon(void *unused)
     (void)unused;
     for (uint32_t iteration = 0u; iteration < 5000u; ++iteration)
     {
-        DaemonTask();
+        daemon_cycle();
         if (iteration > 1000u && atomic_load(&remote_thread_done) != 0)
             break;
         (void)sched_yield();
@@ -146,6 +154,9 @@ int main(int argc, char **argv)
 {
     huart5.hdmarx = &huart5_dma;
     huart9.hdmarx = &huart9_dma;
+    if (argc > 1 && (!strcmp(argv[1], "source-time-wrap") ||
+                     !strcmp(argv[1], "pc-age-wrap")))
+        now = UINT32_MAX - 50u;
     RobotSafetyInit();
 #if MC02_BENCH_RC_DIAGNOSTICS
     RemoteBenchInit(&huart5);
@@ -153,22 +164,22 @@ int main(int argc, char **argv)
     RobotSafetySetImuValid(1); RobotSafetySetCalibValid(1);
     uint8_t frame[18]; const uint16_t center[5]={1024,1024,1024,1024,1024};
     encode(frame,center,3,3);
-    for(now=0;now<=1000;now+=10) { receive(frame,18); RemoteBenchTask(); DaemonTask(); }
+    for(now=0;now<=1000;now+=10) { receive(frame,18); RemoteBenchTask(); daemon_cycle(); }
     CHECK(RemoteControlIsOnline() && !EstopIsLatched() && RobotSafetyGetState()==ROBOT_SAFE);
     encode(frame,center,2,2);
     for(now=1010;now<=2020;now+=10) {
-        RobotSafetyRequestEnable(); receive(frame,18); RemoteBenchTask(); DaemonTask();
+        RobotSafetyRequestEnable(); receive(frame,18); RemoteBenchTask(); daemon_cycle();
         CHECK(!RobotSafetyIsReady());
     }
     const Robot_Fault_e faults[]={ROBOT_FAULT_MOTOR_OFFLINE,ROBOT_FAULT_CAN_BUSOFF,ROBOT_FAULT_TILT};
     for(unsigned i=0;i<3;++i) {
         RobotSafetyRequestEnable(); RobotFaultReport(faults[i]);
-        now+=10; receive(frame,18); RemoteBenchTask(); DaemonTask();
+        now+=10; receive(frame,18); RemoteBenchTask(); daemon_cycle();
         CHECK(RobotSafetyGetState()==ROBOT_FAULT && !RobotSafetyIsReady());
-        RobotFaultClear(faults[i]); now+=10; receive(frame,18); RemoteBenchTask(); DaemonTask();
+        RobotFaultClear(faults[i]); now+=10; receive(frame,18); RemoteBenchTask(); daemon_cycle();
         CHECK(RobotSafetyGetState()==ROBOT_SAFE && !RobotSafetyIsReady());
     }
-    for(unsigned i=0;i<11;++i) { now+=10; DaemonTask(); RemoteBenchTask(); }
+    for(unsigned i=0;i<11;++i) { now+=10; daemon_cycle(); RemoteBenchTask(); }
     CHECK(!RemoteControlIsOnline() && EstopIsLatched());
     receive(frame,18); RemoteBenchTask(); CHECK(RemoteControlIsOnline() && EstopIsLatched());
     CHECK(!RobotSafetyIsReady());
@@ -183,21 +194,20 @@ int main(int argc, char **argv)
     RobotSafetyUpdate();
     CHECK(EstopIsLatched());
     CHECK(RobotSafetyGetState() == ROBOT_ESTOP);
-    if (argc > 1 && !strcmp(argv[1], "source-time")) {
+    if (argc > 1 && (!strcmp(argv[1], "source-time-zero") ||
+                     !strcmp(argv[1], "source-time-wrap"))) {
         uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
         RemoteControlSnapshot_s state;
-        const uint32_t starts[]={0u,UINT32_MAX-25u};
-        for (unsigned i=0;i<2;++i) {
-            now=starts[i]; encode(b,ch,1,3); set_heartbeat(b,1);
-            memcpy(dma_buffer,b,18); HAL_UARTEx_RxEventCallback(&huart5,18);
-            now+=50u; USARTProcessRx();
-            CHECK(DIAG(last_valid_tick)==starts[i]);
-            CHECK(DIAG(pc_last_advance_tick)==starts[i]);
-            now=starts[i]+100u; RemoteControlGetSnapshot(&state); CHECK(state.remote_online);
-            now=starts[i]+101u; RemoteControlGetSnapshot(&state);
-            CHECK(!state.remote_online && !state.pc_valid && !state.input.rc.switch_left);
-            CHECK(DIAG(offline_tick)==now && DIAG(offline_last_valid_tick)==starts[i]);
-        }
+        const uint32_t start = now;
+        encode(b,ch,1,3); set_heartbeat(b,1);
+        memcpy(dma_buffer,b,18); HAL_UARTEx_RxEventCallback(&huart5,18);
+        now+=50u; USARTProcessRx();
+        CHECK(DIAG(last_valid_tick)==start);
+        CHECK(DIAG(pc_last_advance_tick)==start);
+        now=start+100u; RemoteControlGetSnapshot(&state); CHECK(state.remote_online);
+        now=start+101u; daemon_cycle(); RemoteControlGetSnapshot(&state);
+        CHECK(!state.remote_online && !state.pc_valid && !state.input.rc.switch_left);
+        CHECK(DIAG(offline_tick)==now && DIAG(offline_last_valid_tick)==start);
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "pc-boundaries")) {
@@ -215,32 +225,30 @@ int main(int argc, char **argv)
         b[6]=0; set_heartbeat(b,4); receive(b,18); RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
         now+=151; set_heartbeat(b,5); receive(b,18); RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
         set_heartbeat(b,6); receive(b,18); RemoteControlGetSnapshot(&s); CHECK(s.pc_valid);
-        for(unsigned i=0;i<12;++i) { now+=10; DaemonTask(); }
+        for(unsigned i=0;i<12;++i) { now+=10; daemon_cycle(); }
         RemoteControlGetSnapshot(&s); CHECK(!s.remote_online && !s.pc_valid && EstopIsLatched());
         pc_frame(7,1); RemoteControlGetSnapshot(&s); CHECK(s.remote_online && !s.pc_valid && EstopIsLatched());
         pc_frame(8,0); pc_frame(9,0); RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && EstopIsLatched());
     }
-    if (argc > 1 && !strcmp(argv[1], "pc-age")) {
-        const uint32_t starts[]={0u,UINT32_MAX-50u};
-        for (unsigned i=0;i<2;++i) {
-            now=starts[i]; pc_frame(0,0); pc_frame(1,0);
-            now+=33u; pc_frame(2,0);
-            now+=33u; pc_frame(3,(1u<<Key_E)|(1u<<Key_F));
-            const uint32_t last=now;
-            RemoteControlSnapshot_s s; RemoteControlGetSnapshot(&s);
-            CHECK(s.pc_valid && s.input.key_count[0][Key_E]==1);
-            for(unsigned age=10;age<=150;age+=10) {
-                now=last+age; pc_frame(3,(1u<<Key_E)|(1u<<Key_F));
-                RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.remote_online);
-            }
-            now=last+151u; RemoteControlGetSnapshot(&s);
-            CHECK(!s.pc_valid && s.remote_online);
-            CHECK(!s.input.key[0].keys && !s.input.key_count[0][Key_E] && !s.input.key_count[0][Key_F]);
-            CHECK(DIAG(pc_expire_tick)==now && DIAG(pc_last_advance_tick)==last);
-            pc_frame(4,1); RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
-            pc_frame(5,0); pc_frame(6,0); pc_frame(7,1);
-            RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.input.key[0].keys==1);
+    if (argc > 1 && (!strcmp(argv[1], "pc-age-zero") ||
+                     !strcmp(argv[1], "pc-age-wrap"))) {
+        pc_frame(0,0); pc_frame(1,0);
+        now+=33u; pc_frame(2,0);
+        now+=33u; pc_frame(3,(1u<<Key_E)|(1u<<Key_F));
+        const uint32_t last=now;
+        RemoteControlSnapshot_s s; RemoteControlGetSnapshot(&s);
+        CHECK(s.pc_valid && s.input.key_count[0][Key_E]==1);
+        for(unsigned age=10;age<=150;age+=10) {
+            now=last+age; pc_frame(3,(1u<<Key_E)|(1u<<Key_F));
+            RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.remote_online);
         }
+        now=last+151u; RemoteControlGetSnapshot(&s);
+        CHECK(!s.pc_valid && s.remote_online);
+        CHECK(!s.input.key[0].keys && !s.input.key_count[0][Key_E] && !s.input.key_count[0][Key_F]);
+        CHECK(DIAG(pc_expire_tick)==now && DIAG(pc_last_advance_tick)==last);
+        pc_frame(4,1); RemoteControlGetSnapshot(&s); CHECK(!s.pc_valid);
+        pc_frame(5,0); pc_frame(6,0); pc_frame(7,1);
+        RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.input.key[0].keys==1);
     }
     if (argc > 1 && !strcmp(argv[1], "pc-handshake")) {
         pc_frame(1,1); CHECK(RC_INPUT.key[0].keys==0);
@@ -331,7 +339,7 @@ int main(int argc, char **argv)
         for (unsigned i=12; i<=13; ++i) {
             encode(b,ch,3,3); b[i]=2; receive(b,18); CHECK(!memcmp(before,rc,sizeof(before)));
         }
-        for (unsigned i=0; i<11; ++i) { now += 10; receive(b,18); DaemonTask(); }
+        for (unsigned i=0; i<11; ++i) { now += 10; receive(b,18); daemon_cycle(); }
         CHECK(!RemoteControlIsOnline()); CHECK(EstopIsLatched());
         RC_ctrl_t empty[2] = {0}; CHECK(!memcmp(empty,rc,sizeof(empty)));
         receive(b,18); CHECK(!RemoteControlIsOnline());

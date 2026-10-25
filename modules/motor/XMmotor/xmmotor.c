@@ -69,8 +69,6 @@ static void XMMotorDecode(CANInstance *motor_can)
     XMMotorInstance *motor = (XMMotorInstance *)motor_can->id;
     XM_Motor_Measure_s *measure = &(motor->measure); // 将can实例中保存的id转换成电机实例的指针
 
-    DaemonReload(motor->motor_daemon);
-
     measure->last_position = measure->position;
     tmp = (uint16_t)(rxbuff[0] << 8 | rxbuff[1]);
     measure->position = uint16_to_float(tmp, XM_P_MIN, XM_P_MAX, 16);
@@ -82,10 +80,14 @@ static void XMMotorDecode(CANInstance *motor_can)
     measure->torque = uint16_to_float(tmp, XM_T_MIN, XM_T_MAX, 16);
 
     measure->temperature = (float)((rxbuff[6] << 8) | rxbuff[7]) * 0.1;
+    (void)DaemonReportAt(motor->motor_daemon, motor_can->rx_timestamp_ms,
+        DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
 }
 
-static void XMMotorLostCallback(void *motor_ptr)
+static void XMMotorLostCallback(const DaemonEvent_t *event, void *motor_ptr)
 {
+    (void)event;
+    (void)motor_ptr;
 }
 #endif /* XM_MOTOR_ENABLE */
 
@@ -138,9 +140,17 @@ XMMotorInstance *XMMotorInit(const Motor_Init_Config_s *config)
     DWT_Delay(0.1);
 
     Daemon_Init_Config_s conf = {
-        .callback = XMMotorLostCallback,
+        .transport_timeout_ms = 50u,
+        .data_timeout_ms = 50u,
+        .startup_grace_ms = 1000u,
+        .event_max_age_ms = 1000u,
+        .source_id = (uint16_t)(0x8000u | (config->can_init_config.rx_id & 0x01ffu)),
+        .event_capacity = 1u,
+        .consumer_id = DAEMON_CONSUMER_MOTOR_TASK,
+        .event_policy = DAEMON_EVENT_COUNT,
+        .consumer_mode = DAEMON_CONSUMER_BOUND_TASK,
+        .event_handler = XMMotorLostCallback,
         .owner_id = motor,
-        .reload_count = 5, // 50ms
     };
     motor->motor_daemon = DaemonRegister(&conf);
 #else

@@ -17,6 +17,7 @@ static RemoteSafetyGestures_s remote_gestures;
 #include "dji_motor.h"
 #include "bmi088.h"
 #include "robot_safety.h"
+#include "daemon.h"
 #include "vision_control.h"
 #if defined(MC02_VISION_PROTOCOL_V2)
 #include "vision_protocol_v2.h"
@@ -467,6 +468,8 @@ static void EmergencyHandler(uint8_t remote_online)
 /* 机器人核心控制任务,200Hz频率运行(必须高于视觉发送频率) */
 void RobotCMDTask()
 {
+   // 来源离线事件在整车任务中执行，确保撤销遥控许可与视觉清理不挤入监控任务。
+   (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_ROBOT_TASK, DAEMON_EVENT_MAX_DEPTH, NULL);
    // BMI088Acquire(bmi088_test,&bmi088_data) ;
     // 从其他应用获取回传数据
 #ifdef ONE_BOARD

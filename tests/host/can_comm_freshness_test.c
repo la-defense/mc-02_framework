@@ -16,9 +16,11 @@ static DaemonInstance daemon_instance;
 static void (*rx_callback)(CANInstance *);
 
 uint32_t HAL_GetTick(void) { return now_ms; }
-DaemonInstance *DaemonRegister(Daemon_Init_Config_s *config) { (void)config; return &daemon_instance; }
+DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config) { (void)config; return &daemon_instance; }
 uint8_t DaemonUnregister(DaemonInstance *instance) { (void)instance; return 1u; }
 void DaemonReload(DaemonInstance *instance) { (void)instance; daemon_online = 1u; }
+DaemonStatus_t DaemonReportAt(DaemonInstance *instance, uint32_t received_ms, uint8_t flags)
+{ (void)received_ms; if (instance != &daemon_instance) return DAEMON_ERR_NOT_REGISTERED; if ((flags & DAEMON_REPORT_TRANSPORT_VALID) != 0u) daemon_online = 1u; return DAEMON_OK; }
 uint8_t DaemonIsOnline(DaemonInstance *instance) { (void)instance; return daemon_online; }
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
@@ -52,7 +54,7 @@ static void deliver(uint32_t timestamp_ms, const uint8_t *bytes, uint8_t length)
 
 int main(void)
 {
-    CANComm_Init_Config_s config = {.send_data_len = 4u, .recv_data_len = 4u, .daemon_count = 5u};
+    CANComm_Init_Config_s config = {.send_data_len = 4u, .recv_data_len = 4u, .daemon_timeout_ms = 50u};
     CANCommInstance *comm = CANCommInit(&config);
     TEST_CHECK(comm != NULL && rx_callback != NULL);
     uint8_t payload[4] = {1u, 2u, 3u, 4u};

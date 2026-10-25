@@ -114,6 +114,7 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/BMI088/bmi088.c
     modules/can_comm/can_comm.c
     modules/daemon/daemon.c
+    modules/daemon/daemon_event_task.c
     modules/imu/BMI088Middleware.c
     modules/imu/imu_heater.c
     modules/imu/ins_task.c

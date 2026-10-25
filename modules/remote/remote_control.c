@@ -180,16 +180,19 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
     remote_control_diag.accepted_frames++;
     remote_control_diag.last_valid_tick = block->received_ms;
     remote_control_diag.has_valid_frame = 1u;
-    DaemonReload(rc_daemon_instance);
+    (void)DaemonReportAt(rc_daemon_instance, block->received_ms,
+        DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
     remote_control_diag.online = 1u;
     RobotSafetySetRcOnline(1u);
     __set_PRIMASK(primask);
 }
 
 // 离线时撤销键鼠并清空摇杆，记录断开时间、请求急停，再重新准备 UART 接收。
-static void RCLostCallback(void *id)
+static void RCLostCallback(const DaemonEvent_t *event, void *id)
 {
     (void)id;
+    if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
+        return;
     const uint32_t now = HAL_GetTick();
     const uint32_t primask = __get_PRIMASK();
     __disable_irq();
@@ -233,8 +236,16 @@ const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
     pc_authorized = 0u;
     RevokePC(HAL_GetTick(), REMOTE_PC_REVOKE_NONE);
     Daemon_Init_Config_s daemon_conf = {
-        .reload_count = 10,
-        .callback = RCLostCallback,
+        .transport_timeout_ms = 100u,
+        .data_timeout_ms = 100u,
+        .startup_grace_ms = 1000u,
+        .event_max_age_ms = 500u,
+        .source_id = 0x7001u,
+        .event_capacity = 1u,
+        .consumer_id = DAEMON_CONSUMER_ROBOT_TASK,
+        .event_policy = DAEMON_EVENT_COALESCED_STATE,
+        .consumer_mode = DAEMON_CONSUMER_BOUND_TASK,
+        .event_handler = RCLostCallback,
         .owner_id = NULL,
     };
     rc_daemon_instance = DaemonRegister(&daemon_conf);
@@ -255,17 +266,7 @@ const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
 
 uint8_t RemoteControlIsOnline(void)
 {
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    const uint32_t now = HAL_GetTick();
-    uint8_t expired = (uint8_t)(rc_init_flag != 0u && remote_control_diag.has_valid_frame != 0u &&
-        (uint32_t)(now - remote_control_diag.last_valid_tick) > 100u);
-    __set_PRIMASK(primask);
-
-    if (expired != 0u)
-        RCLostCallback(NULL);
-
-    primask = __get_PRIMASK();
+    const uint32_t primask = __get_PRIMASK();
     __disable_irq();
     const uint32_t check_time = HAL_GetTick();
     const uint8_t online = (uint8_t)(rc_init_flag != 0u &&

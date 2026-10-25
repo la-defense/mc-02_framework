@@ -160,16 +160,20 @@ static void HTMotorDecode(CANInstance *motor_can)
     if (motor->feedback_sequence == 0u)
         motor->feedback_sequence++;
     taskEXIT_CRITICAL();
-    DaemonReload(motor->motor_daemon);
+    (void)DaemonReportAt(motor->motor_daemon, motor_can->rx_timestamp_ms,
+        DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
 }
 
-static void HTMotorLostCallback(void *motor_ptr)
+static void HTMotorLostCallback(const DaemonEvent_t *event, void *motor_ptr)
 {
+    if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
+        return;
     HTMotorInstance *motor = (HTMotorInstance *)motor_ptr;
+    // 每次确认进入离线只提交一条模式请求；重试须等待新通信恢复后再次失联。
     BSP_LOG_EVENT_1(EV_MODULES_MOTOR_HTMOTOR_HT04_C_01,
                     BSP_LOG_FIELD_I32((int)motor->motor_can_instace->tx_id));
-    if (++motor->lost_cnt % 10 != 0)
-        HTMotorSetMode(CMD_MOTOR_MODE, motor); // 尝试重新让电机进入控制模式
+    motor->lost_cnt++;
+    HTMotorSetMode(CMD_MOTOR_MODE, motor);
 }
 
 // 先发零控制量再置零，并保存公共报文字段，供之后的模式命令恢复使用。
@@ -247,9 +251,17 @@ HTMotorInstance *HTMotorInit(const Motor_Init_Config_s *config)
     motor->current_feedforward = config->controller_param_init_config.current_feedforward;
 
     Daemon_Init_Config_s conf = {
-        .callback = HTMotorLostCallback,
+        .transport_timeout_ms = 50u,
+        .data_timeout_ms = 50u,
+        .startup_grace_ms = 1000u,
+        .event_max_age_ms = 1000u,
+        .source_id = (uint16_t)(0x4000u | (config->can_init_config.rx_id & 0x01ffu)),
+        .event_capacity = 4u,
+        .consumer_id = DAEMON_EVENT_TASK_CONSUMER,
+        .event_policy = DAEMON_EVENT_FIFO,
+        .consumer_mode = DAEMON_CONSUMER_INDEPENDENT_TASK,
+        .event_handler = HTMotorLostCallback,
         .owner_id = motor,
-        .reload_count = 5, // 五次 Daemon 调用，按当前 10 ms 周期约为 50 ms。
     };
     motor->motor_daemon = DaemonRegister(&conf);
     if (motor->motor_daemon == NULL)
