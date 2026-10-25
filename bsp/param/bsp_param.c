@@ -7,16 +7,13 @@
  * 接口用法与失败后的数据说明见 bsp_param.h。
  */
 #include "bsp_param.h"
+#include "bsp_flash.h"
+#include "bsp_flash_internal.h"
 #include "crc.h"
 #include "bsp_watchdog.h"
 #include "bsp_log.h"
-#include "main.h"
 #include <string.h>
 
-/* H723 共8个128KB扇区，本模块使用最后两个。 */
-#define PARAM_SECTOR_A_ADDR 0x080C0000u /* FLASH_SECTOR_6 */
-#define PARAM_SECTOR_B_ADDR 0x080E0000u /* FLASH_SECTOR_7 */
-#define PARAM_SECTOR_SIZE 0x20000u      /* 128KB */
 #define PARAM_FLASHWORD 32u             /* 每次写入32字节，即256位 */
 
 /* 记录头占32字节；CRC 只检查后面的参数数据，不包含本头部。 */
@@ -52,24 +49,45 @@ void ParamSetLongOperationGuard(const ParamLongOperationGuard_t *guard)
 }
 
 /* 先让回调完成准备；允许后保存原时限，再将 IWDG 请求时限改为8000ms并喂一次。 */
-static uint8_t ParamFlashOperationBegin(uint32_t *previous_timeout_ms)
+static uint8_t ParamFlashOperationBegin(uint32_t *previous_timeout_ms,
+                                        BSPFlashAuthorization_t *authorization)
 {
+    if (previous_timeout_ms == NULL || authorization == NULL ||
+        s_long_operation_guard.begin == NULL || s_long_operation_guard.end == NULL)
+        return 0u;
+
+    // 加热与任务监控回调只能从普通任务调用，先拒绝中断上下文。
+    if (!BSPFlashMaintenanceIsTaskContext())
+        return 0u;
+
+    const uint32_t operation_started_at_ms = BSPFlashMaintenanceGetTick();
     // 回调不完整或拒绝开始时，不修改看门狗，也不进入 Flash 擦写。
-    if (previous_timeout_ms == NULL || s_long_operation_guard.begin == NULL ||
-        s_long_operation_guard.end == NULL || !s_long_operation_guard.begin())
+    if (!s_long_operation_guard.begin())
         return 0u;
 
     *previous_timeout_ms = BSP_WatchdogGetTimeout();
-    BSP_WatchdogSetTimeout(8000u);
+    BSP_WatchdogSetTimeout(BSP_FLASH_MAINTENANCE_TIMEOUT_MS);
     BSP_WatchdogFeed();
+    // 只有 MC02-0036 的加热与任务监控准入完成后，参数层才取得写入令牌。
+    if (BSPFlashAuthorizationOpen(authorization, operation_started_at_ms) != BSP_FLASH_OK)
+    {
+        BSP_WatchdogSetTimeout(*previous_timeout_ms);
+        (void)s_long_operation_guard.end(0u);
+        return 0u;
+    }
     return 1u;
 }
 
 /* 只在 Begin 成功后调用：恢复原时限，再把 Flash 操作结果交给收尾回调。 */
-static uint8_t ParamFlashOperationEnd(uint32_t previous_timeout_ms, uint8_t flash_success)
+static uint8_t ParamFlashOperationEnd(uint32_t previous_timeout_ms,
+                                      uint8_t flash_success,
+                                      BSPFlashAuthorization_t *authorization)
 {
+    const BSPFlashStatus_e authorization_status = BSPFlashAuthorizationClose(authorization);
+    const uint8_t operation_ok = (uint8_t)(flash_success &&
+                                            authorization_status == BSP_FLASH_OK);
     BSP_WatchdogSetTimeout(previous_timeout_ms);
-    return s_long_operation_guard.end(flash_success);
+    return s_long_operation_guard.end(operation_ok);
 }
 
 volatile uint32_t param_commit_count = 0;
@@ -175,7 +193,8 @@ uint8_t ParamSet(uint16_t key, const void *buf, uint16_t len)
 }
 
 /* 写入指定的 A/B 区并回读；调用前应已完成擦写准备，失败也要由调用方收尾。 */
-static uint8_t ParamWriteSector(uint32_t sector_addr)
+static uint8_t ParamWriteSector(BSPFlashPartition_e partition,
+                                const BSPFlashAuthorization_t *authorization)
 {
     // 写入源地址和总字节数都需按32字节安排，多出的字节预先补0。
     static __attribute__((aligned(32))) uint8_t buf[PARAM_FLASHWORD + PARAM_MAX_PAYLOAD + PARAM_FLASHWORD];
@@ -197,62 +216,59 @@ static uint8_t ParamWriteSector(uint32_t sector_addr)
     uint32_t total = (uint32_t)PARAM_FLASHWORD + ParamRoundUp4(s_payload_len);
     total = (total + PARAM_FLASHWORD - 1u) & ~(PARAM_FLASHWORD - 1u);
 
-    // 先擦除目标扇区，原活动区保留；同一 Flash 的取指会等待擦除完成。
-    FLASH_EraseInitTypeDef erase = {0};
-    uint32_t sector_error = 0;
-    HAL_FLASH_Unlock();
-    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS_BANK1);
-    erase.TypeErase = FLASH_TYPEERASE_SECTORS;
-    erase.Banks = FLASH_BANK_1;
-    erase.Sector = (sector_addr == PARAM_SECTOR_A_ADDR) ? FLASH_SECTOR_6 : FLASH_SECTOR_7;
-    erase.NbSectors = 1;
-    erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;
-    if (HAL_FLASHEx_Erase(&erase, &sector_error) != HAL_OK)
+    // 只擦写非活动分区；低层再次校验分区、粒度和同一外层维护期限。
+    BSPFlashStatus_e flash_status = BSPFlashErase(partition, 0u, 0x20000u,
+                                                   authorization);
+    if (flash_status != BSP_FLASH_OK)
     {
-        // 擦除失败也要重新锁定 Flash，再交给上层恢复时限并通知回调。
-        HAL_FLASH_Lock();
-        BSP_LOG_EVENT_2(EV_BSP_PARAM_BSP_PARAM_C_02, BSP_LOG_FIELD_HEX32((unsigned long)sector_addr), BSP_LOG_FIELD_U32((unsigned long)sector_error));
+        BSP_LOG_EVENT_2(EV_BSP_PARAM_BSP_PARAM_C_02,
+                        BSP_LOG_FIELD_HEX32((unsigned long)partition),
+                        BSP_LOG_FIELD_U32((unsigned long)flash_status));
         return 0;
     }
 
-    // 每次写32字节，直到头部、参数和补齐字节全部写完；任一块失败就停止。
-    for (uint32_t off = 0; off < total; off += PARAM_FLASHWORD)
+    flash_status = BSPFlashProgram(partition, 0u, buf, total, authorization);
+    if (flash_status != BSP_FLASH_OK)
     {
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD, sector_addr + off,
-                              (uint32_t)(uintptr_t)&buf[off]) != HAL_OK)
+        BSP_LOG_EVENT_2(EV_BSP_PARAM_BSP_PARAM_C_03,
+                        BSP_LOG_FIELD_U32((unsigned long)partition),
+                        BSP_LOG_FIELD_U32((unsigned long)flash_status));
+        return 0u;
+    }
+
+    // 用公共读取入口逐个 Flash word 回读，发现差异时不切换活动分区。
+    uint8_t verify[PARAM_FLASHWORD];
+    for (uint32_t off = 0u; off < total; off += PARAM_FLASHWORD)
+    {
+        flash_status = BSPFlashRead(partition, off, verify, sizeof(verify));
+        if (flash_status != BSP_FLASH_OK ||
+            memcmp(verify, &buf[off], sizeof(verify)) != 0)
         {
-            HAL_FLASH_Lock();
-            BSP_LOG_EVENT_1(EV_BSP_PARAM_BSP_PARAM_C_03, BSP_LOG_FIELD_U32((unsigned long)off));
-            return 0;
+            BSP_LOG_EVENT_2(EV_BSP_PARAM_BSP_PARAM_C_04,
+                            BSP_LOG_FIELD_U32((unsigned long)partition),
+                            BSP_LOG_FIELD_U32((unsigned long)off));
+            return 0u;
         }
-    }
-    HAL_FLASH_Lock();
-
-    // 先让后续读取重新访问 Flash，再逐字节与写入缓冲区比较，避免读到旧缓存。
-    SCB_InvalidateDCache_by_Addr((uint32_t *)(uintptr_t)sector_addr, (int32_t)total);
-    if (memcmp((const void *)(uintptr_t)sector_addr, buf, total) != 0)
-    {
-        BSP_LOG_EVENT_1(EV_BSP_PARAM_BSP_PARAM_C_04, BSP_LOG_FIELD_HEX32((unsigned long)sector_addr));
-        return 0;
     }
     return 1;
 }
 
 /* 检查指定 A/B 区；成功后才填写非空的 out/out_hdr，失败时两者保持原样。 */
-static uint8_t ParamReadSector(uint32_t sector_addr, uint8_t *out, ParamHeader_t *out_hdr)
+static uint8_t ParamReadSector(BSPFlashPartition_e partition, uint8_t *out,
+                               ParamHeader_t *out_hdr)
 {
     ParamHeader_t hdr;
-    SCB_InvalidateDCache_by_Addr((uint32_t *)(uintptr_t)sector_addr, PARAM_FLASHWORD);
-    memcpy(&hdr, (const void *)(uintptr_t)sector_addr, sizeof(hdr));
+    if (BSPFlashRead(partition, 0u, &hdr, sizeof(hdr)) != BSP_FLASH_OK)
+        return 0u;
 
     // 先检查记录格式和长度，避免按损坏的长度读取参数数据。
     if (hdr.magic != PARAM_MAGIC || hdr.version != PARAM_VERSION ||
         hdr.payload_len > PARAM_MAX_PAYLOAD)
         return 0;
 
-    SCB_InvalidateDCache_by_Addr((uint32_t *)(uintptr_t)(sector_addr + PARAM_FLASHWORD),
-                                 (int32_t)ParamRoundUp4(hdr.payload_len));
-    const uint8_t *payload = (const uint8_t *)(uintptr_t)(sector_addr + PARAM_FLASHWORD);
+    uint8_t payload[PARAM_MAX_PAYLOAD];
+    if (BSPFlashRead(partition, PARAM_FLASHWORD, payload, hdr.payload_len) != BSP_FLASH_OK)
+        return 0u;
     // 参数数据的 CRC 不符时整条记录都不使用；具体数值范围由使用参数的模块检查。
     uint32_t crc;
     if (CRCCompute(CRC32_IEEE, payload, hdr.payload_len, &crc) != CRC_OK || crc != hdr.crc32)
@@ -275,19 +291,19 @@ uint8_t ParamInit(void)
         return param_loaded;
     s_inited = 1;
 
-    uint8_t valid_a = ParamReadSector(PARAM_SECTOR_A_ADDR, NULL, &hdr_a);
-    uint8_t valid_b = ParamReadSector(PARAM_SECTOR_B_ADDR, NULL, &hdr_b);
+    uint8_t valid_a = ParamReadSector(BSP_FLASH_PARTITION_PARAMETER_A, NULL, &hdr_a);
+    uint8_t valid_b = ParamReadSector(BSP_FLASH_PARTITION_PARAMETER_B, NULL, &hdr_b);
 
-    uint32_t sector_addr;
+    BSPFlashPartition_e partition;
     // A 可用且序号不小于 B 时选 A；否则尝试 B；两区都不可用就交给上层使用默认值。
     if (valid_a && (!valid_b || hdr_a.seq >= hdr_b.seq))
     {
-        sector_addr = PARAM_SECTOR_A_ADDR;
+        partition = BSP_FLASH_PARTITION_PARAMETER_A;
         param_active_region = 0;
     }
     else if (valid_b)
     {
-        sector_addr = PARAM_SECTOR_B_ADDR;
+        partition = BSP_FLASH_PARTITION_PARAMETER_B;
         param_active_region = 1;
     }
     else
@@ -300,7 +316,12 @@ uint8_t ParamInit(void)
     }
 
     ParamHeader_t hdr;
-    (void)ParamReadSector(sector_addr, s_payload, &hdr);
+    if (!ParamReadSector(partition, s_payload, &hdr))
+    {
+        s_payload_len = 0u;
+        param_loaded = 0u;
+        return 0u;
+    }
     s_payload_len = hdr.payload_len;
     param_seq = hdr.seq;
     param_loaded = 1;
@@ -312,8 +333,9 @@ uint8_t ParamInit(void)
 uint8_t ParamCommit(void)
 {
     uint32_t operation_previous_timeout_ms = 0u;
+    BSPFlashAuthorization_t authorization = {0};
     // 开始前必须得到回调允许；拒绝时不擦写，也不用调用结束回调。
-    if (!ParamFlashOperationBegin(&operation_previous_timeout_ms))
+    if (!ParamFlashOperationBegin(&operation_previous_timeout_ms, &authorization))
     {
         param_commit_fail++;
         BSP_LOG_EVENT_0(EV_BSP_PARAM_BSP_PARAM_C_07);
@@ -321,12 +343,15 @@ uint8_t ParamCommit(void)
     }
 
     // 总是写另一个区，写入或回读失败时保留原活动区和序号。
-    uint32_t target = (param_active_region == 0) ? PARAM_SECTOR_B_ADDR : PARAM_SECTOR_A_ADDR;
+    BSPFlashPartition_e target = (param_active_region == 0) ?
+                                 BSP_FLASH_PARTITION_PARAMETER_B :
+                                 BSP_FLASH_PARTITION_PARAMETER_A;
     uint8_t target_region = (param_active_region == 0) ? 1u : 0u;
 
-    uint8_t ok = ParamWriteSector(target);
+    uint8_t ok = ParamWriteSector(target, &authorization);
     // 写入失败也必须恢复 IWDG 原时限，并把失败结果交给回调处理。
-    uint8_t operation_ok = ParamFlashOperationEnd(operation_previous_timeout_ms, ok);
+    uint8_t operation_ok = ParamFlashOperationEnd(operation_previous_timeout_ms, ok,
+                                                   &authorization);
     if (ok)
     {
         // 新记录已经写入并回读成功，即使收尾检查失败，这里仍切换记录并计入成功次数。
@@ -348,36 +373,30 @@ uint8_t ParamCommit(void)
 uint8_t ParamReset(void)
 {
     uint32_t operation_previous_timeout_ms = 0u;
+    BSPFlashAuthorization_t authorization = {0};
     // 与提交使用同一组回调；尚未完成准备时保留 Flash 和 RAM 内容。
-    if (!ParamFlashOperationBegin(&operation_previous_timeout_ms))
+    if (!ParamFlashOperationBegin(&operation_previous_timeout_ms, &authorization))
     {
         BSP_LOG_EVENT_0(EV_BSP_PARAM_BSP_PARAM_C_10);
         return 0u;
     }
 
-    FLASH_EraseInitTypeDef erase = {0};
-    uint32_t sector_error = 0u;
-    HAL_StatusTypeDef ret = HAL_FLASH_Unlock();
-    if (ret == HAL_OK)
-    {
-        // 解锁成功后一次擦除两个区，随后重新锁定；失败仍进入下方收尾。
-        __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS_BANK1);
-        erase.TypeErase = FLASH_TYPEERASE_SECTORS;
-        erase.Banks = FLASH_BANK_1;
-        erase.Sector = FLASH_SECTOR_6;
-        erase.NbSectors = 2u;
-        erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;
-        ret = HAL_FLASHEx_Erase(&erase, &sector_error);
-        HAL_FLASH_Lock();
-    }
+    // 两个区共用一次授权和期限；第二次擦除失败时也不清 RAM 缓存。
+    BSPFlashStatus_e flash_status = BSPFlashErase(BSP_FLASH_PARTITION_PARAMETER_A, 0u,
+                                                  0x20000u, &authorization);
+    if (flash_status == BSP_FLASH_OK)
+        flash_status = BSPFlashErase(BSP_FLASH_PARTITION_PARAMETER_B, 0u,
+                                     0x20000u, &authorization);
 
     uint8_t operation_ok = ParamFlashOperationEnd(operation_previous_timeout_ms,
-                                                   (uint8_t)(ret == HAL_OK));
-    if (ret != HAL_OK || !operation_ok)
+                                                   (uint8_t)(flash_status == BSP_FLASH_OK),
+                                                   &authorization);
+    if (flash_status != BSP_FLASH_OK || !operation_ok)
     {
         // Flash 可能已被擦除，但本次仍报告失败并保留 RAM 参数和记录状态。
-        if (ret != HAL_OK)
-            BSP_LOG_EVENT_1(EV_BSP_PARAM_BSP_PARAM_C_11, BSP_LOG_FIELD_U32((unsigned long)sector_error));
+        if (flash_status != BSP_FLASH_OK)
+            BSP_LOG_EVENT_1(EV_BSP_PARAM_BSP_PARAM_C_11,
+                            BSP_LOG_FIELD_U32((unsigned long)flash_status));
         else
             BSP_LOG_EVENT_0(EV_BSP_PARAM_BSP_PARAM_C_12);
         return 0u;

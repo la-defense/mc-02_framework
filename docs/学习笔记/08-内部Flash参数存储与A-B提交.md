@@ -359,59 +359,29 @@ memmove(...);   /* 把后面的条目往前挪 */
 
 ---
 
-### 7.4 不要把旧 Flash 接口当作当前参数驱动（MC02-0123）
+### 7.4 H723 分区驱动与统一维护准入（MC02-0063）
 
-[bsp_flash.h](../../bsp/flash/bsp_flash.h) 保留 F1/F4 风格地址表及逐四字节写入接口，
-对应源文件已由 CMake 排除，H723 参数实际使用 `bsp_param.c`。旧表中的小扇区地址和大小不能照搬到 H723。
-旧接口的 `len` 有两种单位：擦除是扇区数，读写是 `uint32_t` 元素数，元素数乘四才是字节数。
+旧的 F1/F4 地址表和逐字写入接口已从活动头文件移除。当前 [bsp_flash.h](../../bsp/flash/bsp_flash.h) 只提供 H723 的分区接口：`BSPFlashRead()`、`BSPFlashErase()`、`BSPFlashProgram()`。调用者用分区枚举加字节偏移，不再传任意物理地址；布局从 [链接脚本](../../STM32H723VGTx_FLASH.ld) 的符号读取，驱动还会核对应用区与两个参数区的边界是否正好对应 H723 的 1MiB Flash。
 
-旧写入循环包含末地址，单扇区入口还会把下一扇区起点当作可尝试地址；`len=0` 也不会在开始前返回。
-循环因范围用完提前结束时仍可能返回 0，因此 0 只表示没有遇到 HAL 写失败，不能证明全部数据已保存。
-这些说明用于读懂保留实现，本轮未调用擦写、修改地址表或启用该驱动。
+应用区只读。参数 A、B 各为一个128KiB扇区；擦除偏移和长度必须按128KiB对齐，编程偏移、RAM源地址和长度必须按32字节对齐，且源数据不能直接取自 Flash。失败会返回参数、分区、范围、对齐、只读、授权、超时以及 HAL 错误／忙／超时等状态，查询布局失败时不会改写输出。写入已完成的前缀不会自动回滚，所以 `bsp_param` 仍先写非活动区，再回读并比较后才切换活动区。
 
-## 8. 实测验证方法（你可以照着复现）
+写入令牌的完整结构只在 [bsp_flash_internal.h](../../bsp/flash/bsp_flash_internal.h) 中声明。`bsp_param` 先调用由 RobotInit 注册的 MC02-0036 准入回调；回调完成关热与任务状态检查后，才打开令牌。计时起点在准入回调前取得，因此关热检查、擦除、编程及回读共用从起点起最多8秒的期限。任务级回调之前先拒绝 ISR；保护回调缺失、拒绝、上下文错误或期限到达时不进入后续擦写。每次 HAL 操作后都会重新锁住 Flash。
 
-用 OpenOCD 读几个全局变量就能看到全流程（地址用 `arm-none-eabi-nm` 查）：
+`ParamReset()` 按顺序擦除 A、B 两个分区。若第二个区失败，第一个区可能已经擦除，但 RAM 参数、活动区和序号仍保留；只有两次擦除及维护收尾均成功才清空 RAM。它不会让两次擦除各自重新获得8秒期限。
 
-| 变量 | 含义 |
-|---|---|
-| `param_loaded` | 1 = 已载入或写入可用记录；成功清除后变0 |
-| `param_active_region` | 0 = A 区，1 = B 区 |
-| `param_seq` | 当前记录的序号 |
-| `param_commit_count` / `param_commit_fail` | 写入及回读成功 / 开始被拒绝或写入、回读失败次数；见7.3的区别 |
-| `bmi088_calib_source` | 0=未定 1=FLASH 2=首次自动 3=手动 4=默认值 |
+## 8. 本机验证方法（MC02-0063）
 
-**测试 1：首次上电（两个区都是 0xFF）**
+此项使用生产 `bsp_flash.c` 与 `bsp_param.c`，把 H723 的1MiB地址范围映射为主机内存，并替换 HAL 擦除／编程及时钟。回归覆盖应用只读、参数分区布局、字节范围、32字节编程、128KiB擦除、无令牌拒绝、错误链接符号拒绝、ISR拒绝、HAL解锁／擦除／编程失败、8秒边界和毫秒回绕；还检查旧参数记录 CRC、写后回读、A/B切换及第二分区失败时保留 RAM。
+
+在 WSL 中可按下面方式构建和运行专项测试；Release 检查使用显式 `CHECK`，不依赖 `assert` 或 `NDEBUG`：
 
 ```bash
-# 擦掉参数区
-openocd ... -c "init" -c "halt" -c "flash erase_sector 0 6 7" -c "reset" -c "exit"
+cmake -S tests/host -B build/wsl/host-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/wsl/host-debug --target param_operation_test bsp_flash_invalid_layout_test
+ctest --test-dir build/wsl/host-debug --output-on-failure -R production_parameter_flash
 ```
 
-预期日志：`[bmi088] 无 Flash 标定记录, 首次自动标定...` → `标定成功并已保存`
-预期变量：`param_seq=1`、`param_active_region=1`（第一次写 B 区）、`cali_diag_outer>=1`
-
-**测试 2：再次复位（有记录）**
-
-预期日志：`[bmi088] 使用 Flash 标定记录`
-预期变量：`param_seq` 不变、`cali_diag_outer == 0`（**一次标定循环都没跑**，启动 <1s）
-
-**测试 3：连续提交，看 A/B 交替**
-
-预期：`param_seq` 1→2→3，`param_active_region` 1→0→1（严格交替）。
-
-**测试 4：把活动区擦掉（模拟"坏了一份"）**
-
-```bash
-openocd ... -c "init" -c "halt" -c "flash erase_sector 0 7 7" -c "reset" -c "exit"
-```
-
-预期：自动回退到另一个区，`param_seq` 回到备份区的值（实测 3→2、区域 B→A），
-而且**不会重新标定**。
-
-**测试 5：两个区都坏**
-
-预期：回到"参数为空"分支 → 首次自动标定 → 保存 → 报警（如果标定失败则置 `CALIB_INVALID`）。
+全量 Debug／Release 和 ARM 构建用于检查其余调用关系与链接布局。主机 HAL 模型验证软件选择和边界，不验证物理擦除耗时、供电、实际芯片写入或掉电时序。本轮没有连接开发板，也没有执行 Flash 擦写。不要用 OpenOCD 手工擦参数扇区来代替 `ParamCommit()`；那会绕过 MC02-0036 的运行期准入和统一期限。
 
 ---
 
@@ -419,9 +389,9 @@ openocd ... -c "init" -c "halt" -c "flash erase_sector 0 7 7" -c "reset" -c "exi
 
 | 坑 | 后果 | 正确做法 |
 |---|---|---|
-| 忘了改链接脚本 | 擦参数把程序擦掉 | 用 Flash 存数据前先把这段地址从 `FLASH` 长度里减掉 |
+| 链接分区与芯片不符 | 参数偏移可能指向程序或未映射区域 | 链接脚本留出 A/B 分区；驱动逐项核对链接符号，不匹配就拒绝读取和擦写 |
 | 用 `UINT32_MAX` 当 2^32 的模 | 每次回绕少算 1 | 增量累加用 32bit 无符号减法（见《09》） |
-| 在中断里提交参数 | ISR 里擦 1.7s Flash，系统必崩 | 只在任务上下文、SAFE/CALIB 状态提交 |
+| 在中断里提交参数 | 任务级加热和监控回调不能在 ISR 调用 | 只在普通任务且获得 MC02-0036 准入后提交 |
 | 提交时不放长看门狗 | 200ms 必然复位，还会形成复位循环 | `SetTimeout(8000)` → 擦写 → 恢复原值 |
 | 恢复成写死的 200ms | 启动期（4s）被缩短，启动立刻复位 | 先 `GetTimeout()` 存下来再恢复 |
 | 只做 CRC 不做语义校验 | 参数区被别的固件写过时，CRC 可能"合法"但值荒谬 | CRC + 范围检查两层 |

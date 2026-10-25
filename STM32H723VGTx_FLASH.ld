@@ -68,6 +68,8 @@ RAM_D3 (xrw)      : ORIGIN = 0x38000000, LENGTH = 16K
 ITCMRAM (xrw)      : ORIGIN = 0x00000000, LENGTH = 64K
 /* 末尾 2×128KB(扇区 6/7)留给"通用参数存储"(bsp/param), 所以应用区收到 768K */
 FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 768K
+PARAM_A (r)     : ORIGIN = 0x080C0000, LENGTH = 128K
+PARAM_B (r)     : ORIGIN = 0x080E0000, LENGTH = 128K
 }
 
 /* Define output sections */
@@ -75,6 +77,18 @@ SECTIONS
 {
   __mc02_flash_start__ = ORIGIN(FLASH);
   __mc02_flash_end__ = ORIGIN(FLASH) + LENGTH(FLASH);
+  __mc02_param_a_start__ = ORIGIN(PARAM_A);
+  __mc02_param_a_end__ = ORIGIN(PARAM_A) + LENGTH(PARAM_A);
+  __mc02_param_b_start__ = ORIGIN(PARAM_B);
+  __mc02_param_b_end__ = ORIGIN(PARAM_B) + LENGTH(PARAM_B);
+  ASSERT(ORIGIN(PARAM_A) == ORIGIN(FLASH) + LENGTH(FLASH),
+         "参数A分区必须紧接应用Flash区域")
+  ASSERT(ORIGIN(PARAM_B) == ORIGIN(PARAM_A) + LENGTH(PARAM_A),
+         "参数B分区必须紧接参数A分区")
+  ASSERT(LENGTH(PARAM_A) == 0x20000 && LENGTH(PARAM_B) == 0x20000,
+         "H723参数分区必须各占一个128KiB扇区")
+  ASSERT(__mc02_param_b_end__ == 0x08100000,
+         "参数分区必须位于H723 1MiB Flash末端")
   __mc02_dtcm_start__ = ORIGIN(DTCMRAM);
   __mc02_dtcm_end__ = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);
   __mc02_main_ram_start__ = ORIGIN(RAM);

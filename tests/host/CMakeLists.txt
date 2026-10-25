@@ -966,12 +966,43 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   add_executable(
     param_operation_test
     param_operation_test.c
+    ../../bsp/flash/bsp_flash.c
     ../../bsp/param/bsp_param.c)
   target_include_directories(param_operation_test BEFORE PRIVATE param_operation_fakes)
-  target_include_directories(param_operation_test PRIVATE ../../bsp/param)
+  target_include_directories(param_operation_test PRIVATE ../../bsp/flash ../../bsp/param)
   target_compile_options(param_operation_test PRIVATE -fno-pie)
-  target_link_options(param_operation_test PRIVATE -no-pie)
+  target_link_options(param_operation_test PRIVATE -no-pie
+    -Wl,--defsym=__mc02_flash_start__=0x08000000
+    -Wl,--defsym=__mc02_flash_end__=0x080C0000
+    -Wl,--defsym=__mc02_param_a_start__=0x080C0000
+    -Wl,--defsym=__mc02_param_a_end__=0x080E0000
+    -Wl,--defsym=__mc02_param_b_start__=0x080E0000
+    -Wl,--defsym=__mc02_param_b_end__=0x08100000)
   add_test(NAME production_parameter_flash_is_guarded COMMAND param_operation_test)
+  add_test(NAME production_parameter_flash_reads_legacy_record COMMAND param_operation_test legacy)
+  add_test(NAME production_parameter_flash_crc_failure COMMAND param_operation_test read-failure)
+  set_tests_properties(
+    production_parameter_flash_is_guarded
+    production_parameter_flash_reads_legacy_record
+    production_parameter_flash_crc_failure
+    PROPERTIES TIMEOUT 10)
+
+  # 错误链接边界必须在运行时拒绝，且不能触碰 HAL 擦写入口。
+  add_executable(bsp_flash_invalid_layout_test bsp_flash_invalid_layout_test.c
+    ../../bsp/flash/bsp_flash.c)
+  target_include_directories(bsp_flash_invalid_layout_test BEFORE PRIVATE param_operation_fakes)
+  target_include_directories(bsp_flash_invalid_layout_test PRIVATE ../../bsp/flash)
+  target_compile_options(bsp_flash_invalid_layout_test PRIVATE -Wall -Wextra -Werror)
+  target_link_options(bsp_flash_invalid_layout_test PRIVATE -no-pie
+    -Wl,--defsym=__mc02_flash_start__=0x08000000
+    -Wl,--defsym=__mc02_flash_end__=0x080C0000
+    -Wl,--defsym=__mc02_param_a_start__=0x080C0000
+    -Wl,--defsym=__mc02_param_a_end__=0x080E0000
+    -Wl,--defsym=__mc02_param_b_start__=0x080E0000
+    -Wl,--defsym=__mc02_param_b_end__=0x080FE000)
+  add_test(NAME production_parameter_flash_rejects_invalid_link_layout
+    COMMAND bsp_flash_invalid_layout_test)
+  set_tests_properties(production_parameter_flash_rejects_invalid_link_layout PROPERTIES TIMEOUT 10)
 
   add_executable(
     lcd_key_input_test

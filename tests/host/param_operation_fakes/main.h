@@ -33,6 +33,8 @@ void HAL_FLASH_Lock(void);
 HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef *erase, uint32_t *sector_error);
 HAL_StatusTypeDef HAL_FLASH_Program(uint32_t type, uint32_t address, uint32_t data_address);
 void SCB_InvalidateDCache_by_Addr(uint32_t *address, int32_t size);
+uint32_t HAL_GetTick(void);
+uint32_t __get_IPSR(void);
 
 #define __HAL_FLASH_CLEAR_FLAG(flags) ((void)(flags))
 
