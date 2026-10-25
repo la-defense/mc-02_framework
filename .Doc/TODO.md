@@ -280,7 +280,7 @@ Unicom
 - [x] **MC02-0006** [enhancement] [done] 为 master_machine IMU 数据增加采样时间戳。完成：V2帧头source_time_ms使用BMI088样本时刻，序号可供消费者检测重复／乱序，发送前检查5ms源年龄；样本时刻与消息读取时刻分开保存，SP 29/43字节兼容。WSL Debug／Release各365项及新增ASan／UBSan测试通过；SP与V2 USB／UART六种禁热ARM构建通过。详见[任务记录](../docs/workflow/tickets/MC02-0006-0007.md)和[学习笔记20](../docs/学习笔记/20-SP固定帧与CRC校验.md)。
 - [x] **MC02-0007** [enhancement] [done] 将加速度计数据纳入 master_machine 数据结构与传输。完成：V2类型0x84以17字节发送BMI088传感器x/y/z轴原始加速度，单位m/s²、包含重力；无效样本、5ms超龄或本地快照过期会发送全零无效状态。生产INS—消息中心—V2路径及固定字节／CRC向量通过主机验证；未实现生产上位机消费，也未做实体精度验证。详见[任务记录](../docs/workflow/tickets/MC02-0006-0007.md)。
 - [x] **MC02-0008** [enhancement] [done] 保留 SeaSky 参考并移出活动构建，替代原接口重构方案。验收：保留源码／头文件、作者署名及旧格式文档；活动模块不依赖该头，固件不编入；只维护已选 SP 与新版业务协议，不实现第三种兼容路线。WSL Debug／Release各280项通过，六种禁热 ARM 固件及构建隔离检查通过；归档 SHA-256、CMake增量与资源数据见[任务记录](../docs/workflow/tickets/MC02-0008.md)，教学说明见[学习笔记20](../docs/学习笔记/20-SP固定帧与CRC校验.md)。关联0054／0085仍开放。详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
-- [ ] **MC02-0009** [bug] [ready-for-agent] 处理上下位机分组未更新及恢复。验收：瞄准／导航独立按源期限失效，坏帧不续期；瞄准过期但导航有效时按自主许可继续移动并禁发射，USB 全失效停平移。首合法新命令恢复对应业务，无强制握手，不重放旧命令／击发。关联0056／0062／0089，保留 SP 新鲜度回归。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [x] **MC02-0009** [bug] [done] 处理上下位机分组未更新及恢复。验收完成：瞄准／导航按50／100ms本机接收年龄独立失效；坏CRC、NaN及超龄帧不发布、不续期；USB代际改变后撤销两组旧值，首个任意序号的新合法命令恢复对应分组，不需握手。瞄准过期时新鲜导航仍可按许可移动且发射关闭；导航、许可或链路失效时移动清零，恢复在线不重用旧命令。SP兼容回归保留。WSL Debug／Release各386/386、ASan／UBSan专项4/4及ARM SP／V2 Debug／RelWithDebInfo构建通过；见[任务记录](../docs/workflow/tickets/MC02-0009.md)。
 
 需要一个更简单的协议以加快速度。若有必要，可能需要重新编写一个简单的调试上位机UI。
 

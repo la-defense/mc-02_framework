@@ -224,6 +224,13 @@ static int CheckInboundTopics(void)
     const uint32_t accepted_rx = status.rx_count;
     now_ms = 4u;
     InjectFrame(frame, frame_length, 4u, 3u, current_generation);
+    uint8_t bad_frame[VISION_V2_MAX_FRAME];
+    memcpy(bad_frame, frame, frame_length);
+    bad_frame[frame_length - 1u] ^= 0x01u;
+    InjectFrame(bad_frame, frame_length, now_ms, 4u, current_generation);
+    VisionGetStatus(&status);
+    TEST_CHECK(status.rx_count == accepted_rx && status.last_rx_ms == 0u &&
+        status.crc_error_count > 0u);
     now_ms = VISION_V2_AIM_MAX_AGE_MS + 10u;
     InjectFrame(frame, frame_length, now_ms - VISION_V2_AIM_MAX_AGE_MS - 1u,
         4u, current_generation);
@@ -259,21 +266,73 @@ static int CheckInboundTopics(void)
     MessageTopicStats_t stats;
     TEST_CHECK(MessageGetTopicStats(ROBOT_TOPIC_VISION_NAVIGATION, &stats) == MESSAGE_OK &&
         stats.published == 1u);
+    const uint32_t navigation_received_ms = freshness.received_time_ms;
 
-    // 新连接的首帧可从任意序号恢复，并先撤销另一类型的旧连接快照。
-    current_generation = 2u;
-    ++now_ms;
-    TEST_CHECK(VisionV2EncodeFrame(VISION_V2_AIM_COMMAND, 0u, 1u,
-        aim_payload, sizeof(aim_payload), frame, &frame_length) == VISION_V2_OK);
+    // 字段含NaN但CRC正确的导航帧也不能覆盖有效数据或更新时间。
+    navigation_payload[1] = 0x00u;
+    navigation_payload[2] = 0x00u;
+    navigation_payload[3] = 0xc0u;
+    navigation_payload[4] = 0x7fu;
+    TEST_CHECK(VisionV2EncodeFrame(VISION_V2_NAVIGATION_COMMAND, 0u, 0u,
+        navigation_payload, sizeof(navigation_payload), frame, &frame_length) ==
+        VISION_V2_OK);
+    const uint32_t published_before_invalid = stats.published;
+    now_ms += 1u;
     InjectFrame(frame, frame_length, now_ms, 7u, current_generation);
     TEST_CHECK(MessageGetTopicStats(ROBOT_TOPIC_VISION_NAVIGATION, &stats) == MESSAGE_OK &&
-        stats.published == 2u);
+        stats.published == published_before_invalid);
+    TEST_CHECK(MessageReadSnapshot(navigation_subscriber, &navigation,
+        sizeof(navigation), now_ms, &freshness) == MESSAGE_OK &&
+        navigation.vx_m_s == 1.25f && freshness.received_time_ms == navigation_received_ms);
+    VisionGetStatus(&status);
+    TEST_CHECK(status.rx_count == accepted_rx + 1u &&
+        status.last_rx_ms == navigation_received_ms);
+
+    // 新连接先收到状态变化，再接纳新序号；首条导航恢复时旧瞄准也先失效。
+    current_generation = 2u;
+    usb_config.link_changed(usb_config.context, current_generation, USB_LINK_RESET);
+    Vision_Status_t disconnected_status;
+    VisionGetStatus(&disconnected_status);
+    TEST_CHECK(disconnected_status.online == 0u && disconnected_status.has_valid_frame == 0u);
+    ++now_ms;
+    navigation_payload[0] = VISION_V2_NAV_TRANSLATION_VALID |
+        VISION_V2_NAV_YAW_RATE_VALID;
+    uint32_t vx_bits;
+    const float recovered_vx_m_s = 0.75f;
+    memcpy(&vx_bits, &recovered_vx_m_s, sizeof(vx_bits));
+    for (size_t byte = 0u; byte < sizeof(vx_bits); ++byte)
+        navigation_payload[1u + byte] = (uint8_t)(vx_bits >> (8u * byte));
+    TEST_CHECK(VisionV2EncodeFrame(VISION_V2_NAVIGATION_COMMAND, 0x9000u, 1u,
+        navigation_payload, sizeof(navigation_payload), frame, &frame_length) ==
+        VISION_V2_OK);
+    InjectFrame(frame, frame_length, now_ms, 7u, current_generation);
     TEST_CHECK(MessageReadSnapshot(navigation_subscriber, &navigation, sizeof(navigation),
-        now_ms, &freshness) == MESSAGE_OK && navigation.valid_flags == 0u &&
+        now_ms, &freshness) == MESSAGE_OK && navigation.valid_flags ==
+        (VISION_V2_NAV_TRANSLATION_VALID | VISION_V2_NAV_YAW_RATE_VALID) &&
+        navigation.vx_m_s == recovered_vx_m_s && freshness.received_time_ms == now_ms);
+    TEST_CHECK(MessageReadSnapshot(aim_subscriber, &actual_aim, sizeof(actual_aim),
+        now_ms, &freshness) == MESSAGE_OK && actual_aim.mode == 0u &&
         freshness.received_time_ms == now_ms);
+    VisionGetStatus(&status);
+    TEST_CHECK(status.online != 0u && status.rx_count == accepted_rx + 2u);
+
+    // 任意序号的首条新瞄准恢复自己的分组，不改写本代导航数据。
+    TEST_CHECK(VisionV2EncodeFrame(VISION_V2_AIM_COMMAND, 0xf123u, 1u,
+        aim_payload, sizeof(aim_payload), frame, &frame_length) == VISION_V2_OK);
+    ++now_ms;
+    InjectFrame(frame, frame_length, now_ms, 8u, current_generation);
+    TEST_CHECK(MessageReadSnapshot(aim_subscriber, &actual_aim, sizeof(actual_aim),
+        now_ms, &freshness) == MESSAGE_OK && actual_aim.mode == aim.mode &&
+        freshness.received_time_ms == now_ms);
+    TEST_CHECK(MessageReadSnapshot(navigation_subscriber, &navigation,
+        sizeof(navigation), now_ms, &freshness) == MESSAGE_OK &&
+        navigation.vx_m_s == recovered_vx_m_s &&
+        freshness.received_time_ms == now_ms - 1u);
+
+    // 旧连接迟到块不更新任一话题。
     InjectFrame(frame, frame_length, now_ms, 8u, 1u);
-    TEST_CHECK(MessageGetTopicStats(ROBOT_TOPIC_VISION_NAVIGATION, &stats) == MESSAGE_OK &&
-        stats.published == 2u);
+    TEST_CHECK(MessageGetTopicStats(ROBOT_TOPIC_VISION_AIM, &stats) == MESSAGE_OK &&
+        stats.published == 3u);
     return 0;
 }
 

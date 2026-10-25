@@ -135,11 +135,19 @@ int main(void)
     TEST_CHECK(shoot.shoot_mode == SHOOT_OFF && shoot.friction_mode == FRICTION_OFF &&
         shoot.load_mode == LOAD_STOP);
 
-    // 新导航不能延长旧瞄准；瞄准过期后云台保持当前姿态，导航仍可独立使用。
-    test_tick += VISION_V2_AIM_MAX_AGE_MS + 1u;
-    pose.gimbal_imu_data.YawTotalAngle = 12.0f;
+    // 源年龄恰好到期边界时仍可使用，下一毫秒才失效。
+    test_tick += VISION_V2_AIM_MAX_AGE_MS;
     TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
     TEST_CHECK(PublishVision(nav_publisher, &navigation, 78u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(gimbal_subscriber, &gimbal, sizeof(gimbal),
+        test_tick, NULL) == MESSAGE_OK && gimbal.yaw_vel != 0.0f);
+
+    // 新导航不能延长旧瞄准；瞄准过期后云台保持当前姿态，导航仍可独立使用。
+    test_tick += 1u;
+    pose.gimbal_imu_data.YawTotalAngle = 12.0f;
+    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    TEST_CHECK(PublishVision(nav_publisher, &navigation, 79u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
     RobotCMDTask();
     TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
         test_tick, NULL) == MESSAGE_OK && chassis.vx == 500.0f);
@@ -149,8 +157,13 @@ int main(void)
     TEST_CHECK(MessageReadSnapshot(shoot_subscriber, &shoot, sizeof(shoot),
         test_tick, NULL) == MESSAGE_OK && shoot.shoot_mode == SHOOT_OFF);
 
-    // 导航期限和裁判许可任一失效都会清零输出，旧命令不继续使用。
-    test_tick += VISION_V2_NAV_MAX_AGE_MS + 1u;
+    // 导航年龄恰好达到100ms时仍有效；再过1ms，旧目标必须清零。
+    test_tick += VISION_V2_NAV_MAX_AGE_MS;
+    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
+        test_tick, NULL) == MESSAGE_OK && chassis.vx == 500.0f);
+    test_tick += 1u;
     TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
     RobotCMDTask();
     TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
@@ -209,6 +222,57 @@ int main(void)
     TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
         test_tick, NULL) == MESSAGE_OK && chassis.chassis_mode == CHASSIS_ZERO_FORCE &&
         chassis.vx == 0.0f && chassis.vy == 0.0f && chassis.wz == 0.0f);
+
+    // USB恢复后旧命令仍须过期；首份新导航在许可齐备时即可恢复移动。
+    test_tick += VISION_V2_NAV_MAX_AGE_MS + 1u;
+    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
+        test_tick, NULL) == MESSAGE_OK && chassis.chassis_mode == CHASSIS_ZERO_FORCE &&
+        chassis.vx == 0.0f && chassis.vy == 0.0f && chassis.wz == 0.0f);
+
+    vision_online = 1u;
+    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
+        test_tick, NULL) == MESSAGE_OK && chassis.chassis_mode == CHASSIS_ZERO_FORCE &&
+        chassis.vx == 0.0f);
+
+    navigation.vx_m_s = 0.4f;
+    test_tick += 1u;
+    TEST_CHECK(PublishVision(nav_publisher, &navigation, 83u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
+    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
+        test_tick, NULL) == MESSAGE_OK && chassis.chassis_mode == CHASSIS_NO_FOLLOW &&
+        chassis.vx == 400.0f);
+    TEST_CHECK(MessageReadSnapshot(gimbal_subscriber, &gimbal, sizeof(gimbal),
+        test_tick, NULL) == MESSAGE_OK && gimbal.yaw == 12.0f && gimbal.yaw_vel == 0.0f);
+    TEST_CHECK(MessageReadSnapshot(shoot_subscriber, &shoot, sizeof(shoot),
+        test_tick, NULL) == MESSAGE_OK && shoot.shoot_mode == SHOOT_OFF);
+
+    // 首份新瞄准只恢复瞄准；再次刷新瞄准也不能续期导航。
+    aim.yaw_rad = 0.2f;
+    test_tick += 1u;
+    TEST_CHECK(PublishVision(aim_publisher, &aim, 84u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
+    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(gimbal_subscriber, &gimbal, sizeof(gimbal),
+        test_tick, NULL) == MESSAGE_OK && fabsf(gimbal.yaw - 11.4591559f) < 0.0001f);
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
+        test_tick, NULL) == MESSAGE_OK && chassis.vx == 400.0f);
+
+    test_tick += VISION_V2_NAV_MAX_AGE_MS + 1u;
+    TEST_CHECK(PublishVision(aim_publisher, &aim, 85u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
+    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
+        test_tick, NULL) == MESSAGE_OK && chassis.chassis_mode == CHASSIS_ZERO_FORCE &&
+        chassis.vx == 0.0f);
+    TEST_CHECK(MessageReadSnapshot(gimbal_subscriber, &gimbal, sizeof(gimbal),
+        test_tick, NULL) == MESSAGE_OK && fabsf(gimbal.yaw - 11.4591559f) < 0.0001f);
+    TEST_CHECK(MessageReadSnapshot(shoot_subscriber, &shoot, sizeof(shoot),
+        test_tick, NULL) == MESSAGE_OK && shoot.shoot_mode == SHOOT_OFF);
 
     vision_online = 1u;
     remote_online = 0u;
