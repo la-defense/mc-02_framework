@@ -88,7 +88,7 @@ void ResetRecoveryPolicyInitialize(ResetRecoveryRecord_t *record);
 /**
  * @brief 根据复位来源更新额度；失败现场标记或看门狗／棕断电复位会消耗一次。
  * @param[in,out] record 记录输入输出；空指针时返回LOCKED且不写记录。
- *                      无效记录仅在cause.power_on非零时重建。
+ *                      无效记录在非POR时重建为锁定记录；仅POR建立未锁定新周期。
  * @param[in] cause 由BSP转换的复位来源，各成员使用0表示无、非0表示有；
  *                  POR优先建立新周期。
  * @param[in] record_valid 非零表示CRC、版本和固定长度检查均通过，0表示没有可信记录。
