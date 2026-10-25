@@ -981,10 +981,22 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   add_test(NAME production_parameter_flash_is_guarded COMMAND param_operation_test)
   add_test(NAME production_parameter_flash_reads_legacy_record COMMAND param_operation_test legacy)
   add_test(NAME production_parameter_flash_crc_failure COMMAND param_operation_test read-failure)
+  add_test(NAME production_parameter_group_transaction COMMAND param_operation_test group)
+  add_test(NAME production_parameter_group_requires_initialization COMMAND param_operation_test group-uninitialized)
+  add_test(NAME production_parameter_group_v1_compatibility COMMAND param_operation_test legacy-bmi)
+  add_test(NAME production_parameter_group_semantic_ab_fallback COMMAND param_operation_test semantic-fallback)
+  add_test(NAME production_parameter_group_capacity_failure COMMAND param_operation_test group-capacity)
+  add_test(NAME production_parameter_group_flash_failure_preserves_old COMMAND param_operation_test group-commit-failure)
   set_tests_properties(
     production_parameter_flash_is_guarded
     production_parameter_flash_reads_legacy_record
     production_parameter_flash_crc_failure
+    production_parameter_group_transaction
+    production_parameter_group_requires_initialization
+    production_parameter_group_v1_compatibility
+    production_parameter_group_semantic_ab_fallback
+    production_parameter_group_capacity_failure
+    production_parameter_group_flash_failure_preserves_old
     PROPERTIES TIMEOUT 10)
 
   # 错误链接边界必须在运行时拒绝，且不能触碰 HAL 擦写入口。

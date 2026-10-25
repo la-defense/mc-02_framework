@@ -10,6 +10,7 @@
 #define BSP_PARAM_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 /** @brief 擦写前的准备函数：非零表示允许开始，0 表示拒绝；拒绝时自行处理已做的准备。 */
 typedef uint8_t (*ParamLongOperationBeginFn)(void);
@@ -44,8 +45,30 @@ typedef enum
     PARAM_KEY_IMU_GYRO_OFFSET = 0x0100, /* float[3]：x/y/z 轴陀螺仪零偏，单位 rad/s */
     PARAM_KEY_IMU_G_NORM = 0x0101,      /* float：静止时的加速度大小，单位 m/s² */
     PARAM_KEY_IMU_CALIB_META = 0x0102,  /* u32 结果/状态 | float 标定温度 | u32 标定时刻(s) */
-    /* 0x0200~ 预留给 CAN 参数; 0x0300~ 预留给底盘参数; 0x0400~ 预留给配置框架 */
+    PARAM_KEY_IMU_CALIB_SCHEMA_VERSION = 0x0103, /* u32：BMI088 标定参数组逻辑版本 */
+    /* 0x0200~ 仍预留给 CAN；0x0300~ 仍预留给底盘；0x0400~ 仍预留给配置描述。 */
 } Param_Key_e;
+
+/** @brief BMI088 标定组当前逻辑版本；与 Flash 记录容器版本分开。 */
+#define PARAM_IMU_CALIB_SCHEMA_VERSION 2u
+/** @brief 每轴陀螺仪零偏允许绝对值，单位 rad/s。 */
+#define PARAM_IMU_GYRO_OFFSET_LIMIT_RAD_S 0.1f
+/** @brief 未找到有效标定组时陀螺仪零偏默认值，单位 rad/s。 */
+#define PARAM_IMU_GYRO_OFFSET_DEFAULT_RAD_S 0.0f
+/** @brief BMI088 静止重力模长允许下限，单位 m/s²。 */
+#define PARAM_IMU_G_NORM_MIN_M_S2 9.0f
+/** @brief BMI088 静止重力模长允许上限，单位 m/s²。 */
+#define PARAM_IMU_G_NORM_MAX_M_S2 10.5f
+/** @brief 未找到有效标定组时的重力模长默认值，单位 m/s²。 */
+#define PARAM_IMU_G_NORM_DEFAULT_M_S2 9.805f
+/** @brief 标定元数据温度允许下边界，单位 °C；边界值本身不接受。 */
+#define PARAM_IMU_CALIB_META_TEMP_MIN_C (-40.0f)
+/** @brief 标定元数据温度允许上边界，单位 °C；边界值本身不接受。 */
+#define PARAM_IMU_CALIB_META_TEMP_MAX_C 100.0f
+/** @brief 参数描述名称副本的字节容量，包含结尾零字节。 */
+#define PARAM_DESCRIPTOR_NAME_CAPACITY 32u
+/** @brief 参数描述单位副本的字节容量，包含结尾零字节。 */
+#define PARAM_DESCRIPTOR_UNIT_CAPACITY 24u
 
 /* 标定/加载结果(写入 PARAM_KEY_IMU_CALIB_META 的第一项) */
 typedef enum
@@ -65,13 +88,132 @@ typedef struct
 
 _Static_assert(sizeof(ParamImuCalibMeta_t) == 12, "标定元数据必须是 12 字节");
 
+/** @brief 参数值在描述目录中的存储类型。 */
+typedef enum
+{
+    PARAM_VALUE_FLOAT32 = 0,
+    PARAM_VALUE_FLOAT32_ARRAY,
+    PARAM_VALUE_IMU_CALIB_META,
+    PARAM_VALUE_UINT32,
+} ParamValueType_e;
+
+/** @brief 参数被载入或更新后由哪个模块应用。 */
+typedef enum
+{
+    PARAM_EFFECTIVE_BMI088_INIT = 0, /* BMI088 初始化时读取；在线重标定成功后立即应用 */
+    PARAM_EFFECTIVE_DISPLAY_ONLY,    /* 只供标定状态显示，不参与控制计算 */
+    PARAM_EFFECTIVE_STORAGE_ONLY,    /* 仅说明参数组版本，不参与运行计算 */
+} ParamEffectiveMode_e;
+
+/** @brief 描述目录查询和参数组操作返回的结果。 */
+typedef enum
+{
+    PARAM_RESULT_OK = 0,
+    PARAM_RESULT_INVALID_ARGUMENT,
+    PARAM_RESULT_INDEX_OUT_OF_RANGE,
+    PARAM_RESULT_NOT_INITIALIZED,
+    PARAM_RESULT_NOT_FOUND,
+    PARAM_RESULT_INVALID_VALUE,
+    PARAM_RESULT_UNSUPPORTED_VERSION,
+    PARAM_RESULT_NO_SPACE,
+} ParamResult_e;
+
+/**
+ * @brief 可持久化参数的只读说明副本。
+ * @note 名称和单位保存在本结构的定长数组中；没有默认值的字段由对应标记说明。
+ *       浮点端点是否包含由 inclusive 字段说明；复合类型可同时使用浮点和整数范围。
+ */
+typedef struct
+{
+    uint16_t key;                         /**< 参数编号。 */
+    ParamValueType_e value_type;          /**< 存储值类型。 */
+    ParamEffectiveMode_e effective_mode;  /**< 参数在哪个阶段生效。 */
+    uint16_t byte_length;                 /**< 固定字节长度。 */
+    uint16_t logical_version;             /**< 当前描述所属逻辑版本。 */
+    uint8_t element_count;                 /**< 元素数量；复合值按成员数填写。 */
+    uint8_t optional;                      /**< 1表示可缺省，0表示必需。 */
+    uint8_t has_default_float;             /**< 1表示 default_float 有效。 */
+    uint8_t has_default_u32;               /**< 1表示 default_u32 有效。 */
+    uint8_t minimum_float_inclusive;       /**< 浮点下边界是否包含，1包含。 */
+    uint8_t maximum_float_inclusive;       /**< 浮点上边界是否包含，1包含。 */
+    float minimum_float;                   /**< 浮点范围下界，单位由 unit 给出。 */
+    float maximum_float;                   /**< 浮点范围上界，单位由 unit 给出。 */
+    float default_float[3];                /**< 最多三个浮点默认值。 */
+    uint32_t minimum_u32;                  /**< 整数范围下界。 */
+    uint32_t maximum_u32;                  /**< 整数范围上界。 */
+    uint32_t default_u32;                  /**< 整数默认值。 */
+    char name[PARAM_DESCRIPTOR_NAME_CAPACITY]; /**< UTF-8名称副本，包含结尾零字节。 */
+    char unit[PARAM_DESCRIPTOR_UNIT_CAPACITY]; /**< 单位副本，包含结尾零字节。 */
+} ParamDescriptor_t;
+
+/**
+ * @brief BMI088 标定参数组。
+ * @note 零偏每轴范围为[-0.1,0.1] rad/s，重力模长范围为[9.0,10.5] m/s²。
+ *       元数据可缺省；存在时结果须为 PARAM_IMU_CALIB_OK，温度范围为(-40,100) °C。
+ */
+typedef struct
+{
+    float gyro_offset_rad_s[3]; /**< x/y/z轴陀螺仪零偏，单位 rad/s。 */
+    float g_norm_m_s2;          /**< 静止重力模长，单位 m/s²。 */
+    ParamImuCalibMeta_t meta;   /**< 可选的结果、摄氏温度和启动秒数。 */
+    uint8_t has_meta;           /**< 取0表示无元数据，取1表示使用 meta；其他值非法。 */
+} ParamImuCalibrationGroup_t;
+
+/**
+ * @brief 调用者保存的参数组候选。Stage 成功后才可交给 Accept。
+ * @note 事务由调用者串行使用；Accept 成功后标记清零，失败时当前 RAM 参数不变。
+ */
+typedef struct
+{
+    ParamImuCalibrationGroup_t candidate;
+    uint8_t staged;
+} ParamImuCalibrationTransaction_t;
+
 /**
  * @brief 首次调用时检查 A/B 区，将可用记录载入 RAM；两区都可用时取序号较大的，相同取 A。
  * @return 首次调用：1 表示载入成功，0 表示两区都不可用，RAM 参数为空，应使用默认值。
  *         后续调用直接返回当前 param_loaded，不重新读取 Flash。
- * @note 应在首次读写参数前调用；检查记录标记、版本、长度和数据 CRC，不检查参数数值范围。
+ * @note 应在首次读写参数前调用；先检查记录格式和 CRC，再检查已知参数组的长度、版本及取值。
+ *       较新记录的已知参数组不合法时，会尝试另一 A/B 记录；Flash 记录格式仍为 v1。
  */
 uint8_t ParamInit(void);
+
+/**
+ * @brief 返回只读描述目录的条目数量。
+ * @return 当前固定目录中的描述项数量；不访问 Flash，也不改写模块状态。
+ */
+size_t ParamGetDescriptorCount(void);
+/**
+ * @brief 按序号复制一条参数描述。
+ * @param[in] index 目录下标，从0开始。
+ * @param[out] output 接收描述；必须非空。
+ * @return 成功返回 PARAM_RESULT_OK；参数为空或下标越界时失败且不改写 output。
+ */
+ParamResult_e ParamGetDescriptor(size_t index, ParamDescriptor_t *output);
+
+/**
+ * @brief 读取 RAM 中已验证的 BMI088 标定组。
+ * @param[out] output 接收偏置、重力模长及可选元数据；必须非空。
+ * @param[out] source_version 接收来源逻辑版本，1表示旧 A/B 记录，2表示新记录；可为空。
+ * @return 找到完整有效参数组时返回 PARAM_RESULT_OK；缺少组、未初始化或参数无效时失败且不改写输出。
+ */
+ParamResult_e ParamImuCalibrationRead(ParamImuCalibrationGroup_t *output,
+                                      uint32_t *source_version);
+/**
+ * @brief 校验 BMI088 候选组并复制到调用者事务。
+ * @param[in] candidate 候选组；偏置每轴范围为[-0.1,0.1] rad/s，重力模长为[9.0,10.5] m/s²。
+ * @param[out] transaction 接收已校验候选；必须非空。
+ * @return 成功返回 PARAM_RESULT_OK；失败时 transaction 保持原值。
+ */
+ParamResult_e ParamImuCalibrationStage(const ParamImuCalibrationGroup_t *candidate,
+                                       ParamImuCalibrationTransaction_t *transaction);
+/**
+ * @brief 将已暂存的整组参数原子接受到 RAM，不执行 Flash 擦写。
+ * @param[in,out] transaction Stage 成功的事务；成功后 staged 清零，可安全复用。
+ * @return 成功返回 PARAM_RESULT_OK；未初始化、参数无效或空间不足时保留整组旧 RAM 值。
+ * @note 新接受值使用逻辑版本2；持久化仍须另行调用 ParamCommit。
+ */
+ParamResult_e ParamImuCalibrationAccept(ParamImuCalibrationTransaction_t *transaction);
 
 /**
  * @brief 设置擦写前后的回调，必须在 ParamCommit/ParamReset 前完成。
@@ -90,12 +232,13 @@ void ParamSetLongOperationGuard(const ParamLongOperationGuard_t *guard);
 uint8_t ParamGet(uint16_t key, void *buf, uint16_t len);
 
 /**
- * @brief 复制参数到 RAM；需要 ParamCommit 才能在掉电后保留。
+ * @brief 复制未纳入已描述参数组的原始参数到 RAM；需要 ParamCommit 才能在掉电后保留。
  * @param[in] key 参数编号；已有同编号时替换内容。
  * @param[in] buf 待复制数据，至少有 len 字节；返回后可改写或释放，NULL 时返回0。
  * @param[in] len 数据字节数，1～508；所有条目连同编号、长度及补齐字节共用512字节。
- * @return 1 表示暂存成功；0 表示参数不符或空间不足。
- * @note 改变已有条目的长度时先移除旧条目；若随后空间不足，旧条目已从 RAM 移除。
+ * @return 1 表示暂存成功；0 表示参数不符、属于受描述参数组或空间不足。
+ * @note 本函数先在候选缓冲中计算完整新条目表；空间不足时旧 RAM 参数保持原样。
+ *       已描述的 BMI088 标定字段和组版本只能通过 ParamImuCalibrationStage/Accept 修改。
  *       Flash 中的记录在本函数内保持原样。
  */
 uint8_t ParamSet(uint16_t key, const void *buf, uint16_t len);

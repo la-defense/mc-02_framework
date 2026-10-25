@@ -1,17 +1,19 @@
 /** @file param_operation_test.c
- * @brief 用模拟 Flash 验证生产参数维护流程、旧记录读取及 CRC 失败不擦写。
+ * @brief 用模拟 Flash 验证生产参数组事务、v1兼容、A/B回退和维护失败处理。
  */
 #define _GNU_SOURCE
 #include "bsp_param.h"
 #include "bsp_flash.h"
 #include "bsp_flash_internal.h"
 #include "crc_injection.h"
+#include "crc.h"
 #include "main.h"
 #include "bsp_watchdog.h"
 #include "task_monitor.h"
 #include "imu_heater.h"
 
 #include <stdint.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,6 +41,8 @@ static uint32_t erase_fail_sector = UINT32_MAX;
 static HAL_StatusTypeDef unlock_status = HAL_OK;
 static uint8_t program_word[32] __attribute__((aligned(32)));
 
+#define PARAM_TEST_GENERIC_KEY 0x7f00u
+
 #define CHECK(condition)                                                         \
     do                                                                           \
     {                                                                            \
@@ -48,6 +52,9 @@ static uint8_t program_word[32] __attribute__((aligned(32)));
             return 1;                                                            \
         }                                                                        \
     } while (0)
+
+static uint8_t ParamOperationGuardBegin(void);
+static uint8_t ParamOperationGuardEnd(uint8_t success);
 
 static void event(char value)
 {
@@ -67,6 +74,301 @@ static void reset_events(void)
     interrupt_context = 0u;
     erase_fail_sector = UINT32_MAX;
     unlock_status = HAL_OK;
+}
+
+static void store_le16(uint8_t *target, uint16_t value)
+{
+    target[0] = (uint8_t)value;
+    target[1] = (uint8_t)(value >> 8);
+}
+
+static void store_le32(uint8_t *target, uint32_t value)
+{
+    target[0] = (uint8_t)value;
+    target[1] = (uint8_t)(value >> 8);
+    target[2] = (uint8_t)(value >> 16);
+    target[3] = (uint8_t)(value >> 24);
+}
+
+static uint16_t append_parameter(uint8_t *payload, uint16_t used, uint16_t key,
+                                 const void *value, uint16_t size)
+{
+    store_le16(&payload[used], key);
+    store_le16(&payload[used + 2u], size);
+    memcpy(&payload[used + 4u], value, size);
+    const uint16_t padded = (uint16_t)((size + 3u) & (uint16_t)~3u);
+    memset(&payload[used + 4u + size], 0, padded - size);
+    return (uint16_t)(used + 4u + padded);
+}
+
+static uint16_t make_calibration_payload(uint8_t *payload, float g_norm,
+                                         uint8_t include_schema, uint32_t schema_version)
+{
+    const float offset[3] = {0.01f, -0.02f, 0.0f};
+    uint16_t used = append_parameter(payload, 0u, PARAM_KEY_IMU_GYRO_OFFSET,
+                                     offset, sizeof(offset));
+    used = append_parameter(payload, used, PARAM_KEY_IMU_G_NORM, &g_norm,
+                            sizeof(g_norm));
+    if (include_schema)
+        used = append_parameter(payload, used, PARAM_KEY_IMU_CALIB_SCHEMA_VERSION,
+                                &schema_version, sizeof(schema_version));
+    return used;
+}
+
+static int write_test_record(uint8_t region, uint32_t sequence,
+                             const uint8_t *payload, uint16_t payload_size)
+{
+    uint8_t *sector = (uint8_t *)(uintptr_t)(PARAM_FLASH_BASE + (uint32_t)region * 0x20000u);
+    uint8_t header[32] = {0};
+    uint32_t crc = 0u;
+    if (CRCCompute(CRC32_IEEE, payload, payload_size, &crc) != CRC_OK)
+        return 0;
+    store_le32(&header[0], PARAM_MAGIC);
+    store_le16(&header[4], PARAM_VERSION);
+    store_le16(&header[6], payload_size);
+    store_le32(&header[8], sequence);
+    store_le32(&header[12], crc);
+    memset(sector, 0xff, 0x20000u);
+    memcpy(sector, header, sizeof(header));
+    memcpy(sector + sizeof(header), payload, payload_size);
+    return 1;
+}
+
+static int test_parameter_group_api(void)
+{
+    CHECK(ParamInit() == 0u);
+    CHECK(ParamGetDescriptorCount() == 4u);
+
+    ParamDescriptor_t descriptor;
+    memset(&descriptor, 0, sizeof(descriptor));
+    CHECK(ParamGetDescriptor(0u, &descriptor) == PARAM_RESULT_OK);
+    CHECK(descriptor.key == PARAM_KEY_IMU_GYRO_OFFSET);
+    CHECK(descriptor.value_type == PARAM_VALUE_FLOAT32_ARRAY);
+    CHECK(descriptor.element_count == 3u && descriptor.byte_length == 12u);
+    CHECK(strcmp(descriptor.unit, "rad/s") == 0);
+    CHECK(descriptor.minimum_float == -0.1f && descriptor.maximum_float == 0.1f);
+    CHECK(descriptor.minimum_float_inclusive == 1u && descriptor.maximum_float_inclusive == 1u);
+    CHECK(descriptor.default_float[0] == 0.0f && descriptor.logical_version == 2u);
+    CHECK(ParamGetDescriptor(2u, &descriptor) == PARAM_RESULT_OK);
+    CHECK(descriptor.value_type == PARAM_VALUE_IMU_CALIB_META && descriptor.optional == 1u);
+    CHECK(descriptor.minimum_float == PARAM_IMU_CALIB_META_TEMP_MIN_C &&
+          descriptor.maximum_float == PARAM_IMU_CALIB_META_TEMP_MAX_C);
+    CHECK(descriptor.minimum_float_inclusive == 0u && descriptor.maximum_float_inclusive == 0u);
+    CHECK(descriptor.minimum_u32 == PARAM_IMU_CALIB_OK &&
+          descriptor.maximum_u32 == PARAM_IMU_CALIB_OK);
+
+    ParamDescriptor_t unchanged;
+    memset(&unchanged, 0x5a, sizeof(unchanged));
+    ParamDescriptor_t before = unchanged;
+    CHECK(ParamGetDescriptor(4u, &unchanged) == PARAM_RESULT_INDEX_OUT_OF_RANGE);
+    CHECK(memcmp(&unchanged, &before, sizeof(unchanged)) == 0);
+
+    ParamImuCalibrationGroup_t group = {
+        .gyro_offset_rad_s = {0.02f, -0.03f, 0.0f},
+        .g_norm_m_s2 = 9.805f,
+        .meta = {.result = PARAM_IMU_CALIB_OK, .temperature = 24.0f, .time_s = 77u},
+        .has_meta = 1u,
+    };
+    ParamImuCalibrationTransaction_t transaction;
+    memset(&transaction, 0xa5, sizeof(transaction));
+    ParamImuCalibrationTransaction_t transaction_before = transaction;
+    ParamImuCalibrationGroup_t invalid = group;
+    invalid.gyro_offset_rad_s[1] = NAN;
+    CHECK(ParamImuCalibrationStage(&invalid, &transaction) == PARAM_RESULT_INVALID_VALUE);
+    CHECK(memcmp(&transaction, &transaction_before, sizeof(transaction)) == 0);
+
+    ParamImuCalibrationGroup_t readback;
+    uint32_t source_version = 99u;
+    memset(&readback, 0x3c, sizeof(readback));
+    CHECK(ParamImuCalibrationRead(&readback, &source_version) == PARAM_RESULT_NOT_FOUND);
+    CHECK(source_version == 99u);
+
+    CHECK(ParamImuCalibrationStage(&group, &transaction) == PARAM_RESULT_OK);
+    CHECK(ParamImuCalibrationAccept(&transaction) == PARAM_RESULT_OK);
+    CHECK(ParamSetFloat(PARAM_KEY_IMU_G_NORM, 10.0f) == 0u);
+    CHECK(ParamImuCalibrationRead(&readback, &source_version) == PARAM_RESULT_OK);
+    CHECK(source_version == 2u && readback.has_meta == 1u);
+    CHECK(readback.gyro_offset_rad_s[0] == group.gyro_offset_rad_s[0]);
+    CHECK(readback.g_norm_m_s2 == group.g_norm_m_s2);
+    CHECK(readback.meta.time_s == group.meta.time_s);
+
+    group.g_norm_m_s2 = 10.5001f;
+    CHECK(ParamImuCalibrationStage(&group, &transaction) == PARAM_RESULT_INVALID_VALUE);
+    CHECK(ParamImuCalibrationRead(&readback, &source_version) == PARAM_RESULT_OK);
+    CHECK(readback.g_norm_m_s2 == 9.805f);
+
+    /* 新版本标记随下一次提交写入，接受参数组本身不触碰 Flash。 */
+    CHECK(event_count == 0u);
+    ParamLongOperationGuard_t guard = {
+        .begin = ParamOperationGuardBegin,
+        .end = ParamOperationGuardEnd,
+    };
+    ParamSetLongOperationGuard(&guard);
+    CHECK(ParamCommit() == 1u);
+    CHECK(param_loaded == 1u && param_seq == 1u);
+    const uint8_t *saved = (const uint8_t *)(uintptr_t)(PARAM_FLASH_BASE + 0x20000u + 32u);
+    const uint8_t *saved_header = (const uint8_t *)(uintptr_t)(PARAM_FLASH_BASE + 0x20000u);
+    const uint16_t saved_payload_size = (uint16_t)(saved_header[6] |
+                                                   ((uint16_t)saved_header[7] << 8));
+    uint32_t saved_schema = 0u;
+    uint8_t saw_schema = 0u;
+    for (uint16_t off = 0u; off + 4u <= saved_payload_size; )
+    {
+        uint16_t key = (uint16_t)(saved[off] | ((uint16_t)saved[off + 1u] << 8));
+        uint16_t size = (uint16_t)(saved[off + 2u] | ((uint16_t)saved[off + 3u] << 8));
+        if (key == PARAM_KEY_IMU_CALIB_SCHEMA_VERSION && size == sizeof(saved_schema))
+        {
+            memcpy(&saved_schema, &saved[off + 4u], sizeof(saved_schema));
+            saw_schema = 1u;
+            break;
+        }
+        off = (uint16_t)(off + 4u + ((size + 3u) & (uint16_t)~3u));
+    }
+    CHECK(saw_schema == 1u && saved_schema == 2u);
+    return 0;
+}
+
+static int test_parameter_group_requires_initialization(void)
+{
+    ParamImuCalibrationGroup_t output;
+    memset(&output, 0x5au, sizeof(output));
+    const ParamImuCalibrationGroup_t before = output;
+    uint32_t source_version = 0x12345678u;
+    CHECK(ParamImuCalibrationRead(&output, &source_version) == PARAM_RESULT_NOT_INITIALIZED);
+    CHECK(memcmp(&output, &before, sizeof(output)) == 0);
+    CHECK(source_version == 0x12345678u);
+    CHECK(ParamImuCalibrationRead(NULL, &source_version) == PARAM_RESULT_INVALID_ARGUMENT);
+
+    ParamImuCalibrationGroup_t valid = {
+        .gyro_offset_rad_s = {0.0f, 0.01f, -0.01f},
+        .g_norm_m_s2 = 9.805f,
+    };
+    ParamImuCalibrationTransaction_t transaction;
+    CHECK(ParamImuCalibrationStage(&valid, &transaction) == PARAM_RESULT_OK);
+    const ParamImuCalibrationTransaction_t transaction_before = transaction;
+    CHECK(ParamImuCalibrationAccept(&transaction) == PARAM_RESULT_NOT_INITIALIZED);
+    CHECK(memcmp(&transaction, &transaction_before, sizeof(transaction)) == 0);
+    return 0;
+}
+
+static int test_parameter_group_legacy_load(void)
+{
+    uint8_t payload[PARAM_MAX_PAYLOAD] = {0};
+    uint16_t payload_size = make_calibration_payload(payload, 9.7f, 0u, 0u);
+    const ParamImuCalibMeta_t old_meta = {
+        .result = PARAM_IMU_CALIB_FAILED,
+        .temperature = NAN,
+        .time_s = 12u,
+    };
+    payload_size = append_parameter(payload, payload_size, PARAM_KEY_IMU_CALIB_META,
+                                    &old_meta, sizeof(old_meta));
+    CHECK(write_test_record(0u, 11u, payload, payload_size));
+    CHECK(ParamInit() == 1u);
+    ParamImuCalibrationGroup_t readback;
+    uint32_t source_version = 0u;
+    CHECK(ParamImuCalibrationRead(&readback, &source_version) == PARAM_RESULT_OK);
+    CHECK(source_version == 1u && readback.g_norm_m_s2 == 9.7f);
+    CHECK(readback.has_meta == 0u);
+    CHECK(param_active_region == 0u && param_seq == 11u);
+    CHECK(event_count == 0u);
+    return 0;
+}
+
+static int test_parameter_group_capacity_failure(void)
+{
+    CHECK(ParamInit() == 0u);
+    ParamImuCalibrationGroup_t original = {
+        .gyro_offset_rad_s = {0.01f, 0.02f, 0.0f},
+        .g_norm_m_s2 = 9.8f,
+        .has_meta = 0u,
+    };
+    ParamImuCalibrationTransaction_t transaction;
+    CHECK(ParamImuCalibrationStage(&original, &transaction) == PARAM_RESULT_OK);
+    CHECK(ParamImuCalibrationAccept(&transaction) == PARAM_RESULT_OK);
+
+    uint8_t filler[476];
+    memset(filler, 0x3c, sizeof(filler));
+    CHECK(ParamSet(0x7f01u, filler, sizeof(filler)) == 1u);
+
+    ParamImuCalibrationGroup_t with_meta = original;
+    with_meta.meta.result = PARAM_IMU_CALIB_OK;
+    with_meta.meta.temperature = 21.5f;
+    with_meta.meta.time_s = 44u;
+    with_meta.has_meta = 1u;
+    CHECK(ParamImuCalibrationStage(&with_meta, &transaction) == PARAM_RESULT_OK);
+    const ParamImuCalibrationTransaction_t transaction_before = transaction;
+    CHECK(ParamImuCalibrationAccept(&transaction) == PARAM_RESULT_NO_SPACE);
+    CHECK(memcmp(&transaction, &transaction_before, sizeof(transaction)) == 0);
+
+    ParamImuCalibrationGroup_t readback;
+    uint32_t source_version = 0u;
+    CHECK(ParamImuCalibrationRead(&readback, &source_version) == PARAM_RESULT_OK);
+    CHECK(source_version == 2u && readback.has_meta == 0u);
+    CHECK(readback.g_norm_m_s2 == original.g_norm_m_s2);
+    uint8_t filler_copy[sizeof(filler)];
+    CHECK(ParamGet(0x7f01u, filler_copy, sizeof(filler_copy)) == 1u);
+    CHECK(memcmp(filler_copy, filler, sizeof(filler)) == 0);
+
+    /* 原始参数扩容失败时同样保留旧条目，而非先删除再报错。 */
+    uint8_t larger_filler[480];
+    memset(larger_filler, 0xa7, sizeof(larger_filler));
+    CHECK(ParamSet(0x7f01u, larger_filler, sizeof(larger_filler)) == 0u);
+    CHECK(ParamGet(0x7f01u, filler_copy, sizeof(filler_copy)) == 1u);
+    CHECK(memcmp(filler_copy, filler, sizeof(filler)) == 0);
+    return 0;
+}
+
+static int test_parameter_group_flash_failure_keeps_old_record(void)
+{
+    uint8_t old_payload[PARAM_MAX_PAYLOAD] = {0};
+    const uint16_t old_size = make_calibration_payload(old_payload, 9.8f, 0u, 0u);
+    CHECK(write_test_record(0u, 8u, old_payload, old_size));
+    uint8_t old_record[64];
+    memcpy(old_record, (const void *)(uintptr_t)PARAM_FLASH_BASE, sizeof(old_record));
+    CHECK(ParamInit() == 1u);
+
+    ParamImuCalibrationGroup_t replacement = {
+        .gyro_offset_rad_s = {-0.01f, 0.03f, 0.0f},
+        .g_norm_m_s2 = 10.0f,
+        .meta = {.result = PARAM_IMU_CALIB_OK, .temperature = 23.0f, .time_s = 90u},
+        .has_meta = 1u,
+    };
+    ParamImuCalibrationTransaction_t transaction;
+    CHECK(ParamImuCalibrationStage(&replacement, &transaction) == PARAM_RESULT_OK);
+    CHECK(ParamImuCalibrationAccept(&transaction) == PARAM_RESULT_OK);
+    const ParamLongOperationGuard_t guard = {
+        .begin = ParamOperationGuardBegin,
+        .end = ParamOperationGuardEnd,
+    };
+    ParamSetLongOperationGuard(&guard);
+    program_status = HAL_ERROR;
+    CHECK(ParamCommit() == 0u);
+    CHECK(param_active_region == 0u && param_seq == 8u);
+    CHECK(memcmp(old_record, (const void *)(uintptr_t)PARAM_FLASH_BASE,
+                 sizeof(old_record)) == 0);
+
+    ParamImuCalibrationGroup_t readback;
+    uint32_t source_version = 0u;
+    CHECK(ParamImuCalibrationRead(&readback, &source_version) == PARAM_RESULT_OK);
+    CHECK(source_version == 2u && readback.g_norm_m_s2 == replacement.g_norm_m_s2);
+    return 0;
+}
+
+static int test_parameter_group_semantic_fallback(void)
+{
+    uint8_t older[PARAM_MAX_PAYLOAD] = {0};
+    uint8_t newer[PARAM_MAX_PAYLOAD] = {0};
+    const uint16_t older_size = make_calibration_payload(older, 9.8f, 0u, 0u);
+    const uint16_t newer_size = make_calibration_payload(newer, 11.0f, 1u, 2u);
+    CHECK(write_test_record(0u, 20u, older, older_size));
+    CHECK(write_test_record(1u, 21u, newer, newer_size));
+    CHECK(ParamInit() == 1u);
+    ParamImuCalibrationGroup_t readback;
+    uint32_t source_version = 0u;
+    CHECK(ParamImuCalibrationRead(&readback, &source_version) == PARAM_RESULT_OK);
+    CHECK(param_active_region == 0u && param_seq == 20u);
+    CHECK(source_version == 1u && readback.g_norm_m_s2 == 9.8f);
+    return 0;
 }
 
 uint8_t IMUHeaterBeginLongOperation(IMUHeater_LongOperation_e operation)
@@ -246,16 +548,53 @@ int main(int argc, char **argv)
     CHECK(BSPFlashProgram(BSP_FLASH_PARTITION_PARAMETER_A, 0u, &program_word[1], 31u, NULL) == BSP_FLASH_ALIGNMENT_ERROR);
     CHECK(event_count == 0u);
 
-    // 固定旧格式记录：key=0x0101，4字节值0x12345678，CRC由独立 zlib 核对。
+    if (argc > 1 && strcmp(argv[1], "group") == 0)
+    {
+        int result = test_parameter_group_api();
+        munmap(flash, FLASH_BYTES);
+        return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc > 1 && strcmp(argv[1], "group-uninitialized") == 0)
+    {
+        int result = test_parameter_group_requires_initialization();
+        munmap(flash, FLASH_BYTES);
+        return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc > 1 && strcmp(argv[1], "legacy-bmi") == 0)
+    {
+        int result = test_parameter_group_legacy_load();
+        munmap(flash, FLASH_BYTES);
+        return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc > 1 && strcmp(argv[1], "semantic-fallback") == 0)
+    {
+        int result = test_parameter_group_semantic_fallback();
+        munmap(flash, FLASH_BYTES);
+        return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc > 1 && strcmp(argv[1], "group-capacity") == 0)
+    {
+        int result = test_parameter_group_capacity_failure();
+        munmap(flash, FLASH_BYTES);
+        return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc > 1 && strcmp(argv[1], "group-commit-failure") == 0)
+    {
+        int result = test_parameter_group_flash_failure_keeps_old_record();
+        munmap(flash, FLASH_BYTES);
+        return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+    // 固定旧格式记录：未知测试键0x7f00，验证保留原始参数读取兼容。
     if (argc > 1)
     {
-        const uint8_t legacy[] = {0x4d, 0x30, 0x43, 0x32, 0x01, 0x00, 0x08, 0x00, 0x07, 0x00, 0x00, 0x00, 0x9b, 0xce, 0x47, 0x1a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x04, 0x00, 0x78, 0x56, 0x34, 0x12};
+        const uint8_t legacy[] = {0x4d, 0x30, 0x43, 0x32, 0x01, 0x00, 0x08, 0x00, 0x07, 0x00, 0x00, 0x00, 0x73, 0x65, 0xba, 0x6a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7f, 0x04, 0x00, 0x78, 0x56, 0x34, 0x12};
         memcpy((void *)(uintptr_t)PARAM_FLASH_BASE, legacy, sizeof(legacy));
         uint8_t fail_read = strcmp(argv[1], "read-failure") == 0;
         if (fail_read) crc_fail_after = 0;
         CHECK(ParamInit() == (fail_read ? 0u : 1u));
         uint32_t value = 0xabcdefu;
-        CHECK(ParamGetU32(PARAM_KEY_IMU_G_NORM, &value) == (fail_read ? 0u : 1u));
+        CHECK(ParamGetU32(PARAM_TEST_GENERIC_KEY, &value) == (fail_read ? 0u : 1u));
         CHECK(value == (fail_read ? 0xabcdefu : 0x12345678u));
         CHECK(event_count == 0u);
         munmap(flash, FLASH_BYTES);
@@ -368,7 +707,7 @@ int main(int argc, char **argv)
        failure while retaining the live RAM cache for the caller. */
     const uint32_t cached_parameter = 0x12345678u;
     uint32_t cached_readback = 0u;
-    CHECK(ParamSetU32(PARAM_KEY_IMU_G_NORM, cached_parameter) == 1u);
+    CHECK(ParamSetU32(PARAM_TEST_GENERIC_KEY, cached_parameter) == 1u);
     param_loaded = 1u;
     param_seq = 23u;
     param_active_region = 1u;
@@ -378,7 +717,7 @@ int main(int argc, char **argv)
     CHECK(ParamReset() == 0u);
     CHECK(heater_inhibited == 1u);
     CHECK(param_loaded == 1u && param_seq == 23u && param_active_region == 1u);
-    CHECK(ParamGetU32(PARAM_KEY_IMU_G_NORM, &cached_readback) == 1u);
+    CHECK(ParamGetU32(PARAM_TEST_GENERIC_KEY, &cached_readback) == 1u);
     CHECK(cached_readback == cached_parameter);
 
     reset_events();
@@ -424,13 +763,13 @@ int main(int argc, char **argv)
     erase_fail_sector = FLASH_SECTOR_7;
     const uint32_t retained_value = 0x89ABCDEFu;
     uint32_t retained_readback = 0u;
-    CHECK(ParamSetU32(PARAM_KEY_IMU_G_NORM, retained_value) == 1u);
+    CHECK(ParamSetU32(PARAM_TEST_GENERIC_KEY, retained_value) == 1u);
     param_loaded = 1u;
     param_seq = 31u;
     param_active_region = 0u;
     CHECK(ParamReset() == 0u);
     CHECK(param_loaded == 1u && param_seq == 31u && param_active_region == 0u);
-    CHECK(ParamGetU32(PARAM_KEY_IMU_G_NORM, &retained_readback) == 1u);
+    CHECK(ParamGetU32(PARAM_TEST_GENERIC_KEY, &retained_readback) == 1u);
     CHECK(retained_readback == retained_value);
 
     // 毫秒计数回绕时仍按无符号差值计算8秒维护期限。

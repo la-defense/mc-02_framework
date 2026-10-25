@@ -487,10 +487,10 @@ spi_failure:
 
 /* pre calibrate parameter to go here */
 #pragma message "REMEMBER TO SET PRE CALIBRATE PARAMETER IF YOU CHOOSE NOT TO CALIBRATE"
-#define BMI088_PRE_CALI_ACC_X_OFFSET 0.0f
-#define BMI088_PRE_CALI_ACC_Y_OFFSET 0.0f
-#define BMI088_PRE_CALI_ACC_Z_OFFSET 0.0f
-#define BMI088_PRE_CALI_G_NORM 9.805f
+#define BMI088_PRE_CALI_GYRO_X_OFFSET PARAM_IMU_GYRO_OFFSET_DEFAULT_RAD_S
+#define BMI088_PRE_CALI_GYRO_Y_OFFSET PARAM_IMU_GYRO_OFFSET_DEFAULT_RAD_S
+#define BMI088_PRE_CALI_GYRO_Z_OFFSET PARAM_IMU_GYRO_OFFSET_DEFAULT_RAD_S
+#define BMI088_PRE_CALI_G_NORM PARAM_IMU_G_NORM_DEFAULT_M_S2
 
 /* 在线标定最多重试3轮；每轮最多收集6000份样本。 */
 #define BMI088_CALI_MAX_ATTEMPTS 3u
@@ -671,9 +671,9 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
     // 离线标定: 上层显式要求(离线调试)时使用编译期默认值
     if (_bmi088->cali_mode == BMI088_LOAD_PRE_CALI_MODE) // 直接使用离线数据
     {
-        _bmi088->gyro_offset[0] = BMI088_PRE_CALI_ACC_X_OFFSET;
-        _bmi088->gyro_offset[1] = BMI088_PRE_CALI_ACC_Y_OFFSET;
-        _bmi088->gyro_offset[2] = BMI088_PRE_CALI_ACC_Z_OFFSET;
+        _bmi088->gyro_offset[0] = BMI088_PRE_CALI_GYRO_X_OFFSET;
+        _bmi088->gyro_offset[1] = BMI088_PRE_CALI_GYRO_Y_OFFSET;
+        _bmi088->gyro_offset[2] = BMI088_PRE_CALI_GYRO_Z_OFFSET;
         _bmi088->gNorm = BMI088_PRE_CALI_G_NORM;
         _bmi088->BMI088_GYRO_SEN = BMI088_GYRO_2000_SEN;
         _bmi088->acc_coef = BMI088_ACCEL_6G_SEN;
@@ -727,61 +727,36 @@ static uint8_t BMI088CalibrationOperationEnd(uint8_t success)
     return within_limit;
 }
 
-/**
- * @brief 标定值合理性检查
- * @note  CRC32 只能证明"写进去的字节没坏", 证不了"数值合理"
- *        (比如参数区被别的固件写过), 所以这里再卡一次范围
- */
-static uint8_t BMI088CalibSanity(const float *off, float gNorm)
-{
-    if (!isfinite(off[0]) || !isfinite(off[1]) || !isfinite(off[2]) || !isfinite(gNorm))
-        return 0;
-    if (fabsf(off[0]) > 0.1f || fabsf(off[1]) > 0.1f || fabsf(off[2]) > 0.1f)
-        return 0;
-    if (gNorm < 9.0f || gNorm > 10.5f)
-        return 0;
-    return 1;
-}
-
 /** @brief 从参数区读标定值并应用; 返回 1=成功 */
 static uint8_t BMI088CalibLoad(BMI088Instance *b)
 {
-    float off[3];
-    float gNorm = 0.0f;
+    ParamImuCalibrationGroup_t calibration;
+    if (ParamImuCalibrationRead(&calibration, NULL) != PARAM_RESULT_OK)
+        return 0;
+    BMI088ApplyCalib(b, calibration.gyro_offset_rad_s, calibration.g_norm_m_s2);
 
-    if (!ParamGetFloats(PARAM_KEY_IMU_GYRO_OFFSET, off, 3))
-        return 0;
-    if (!ParamGetFloat(PARAM_KEY_IMU_G_NORM, &gNorm))
-        return 0;
-    if (!BMI088CalibSanity(off, gNorm))
-    {
-        BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_03);
-        return 0;
-    }
-    BMI088ApplyCalib(b, off, gNorm);
-
-    /* 顺带把"标定时的温度"读出来给 LCD 显示(meta 缺失也不影响标定值的使用) */
-    ParamImuCalibMeta_t meta;
-    if (ParamGet(PARAM_KEY_IMU_CALIB_META, &meta, sizeof(meta)) &&
-        meta.result == (uint32_t)PARAM_IMU_CALIB_OK &&
-        isfinite(meta.temperature) && meta.temperature > -40.0f && meta.temperature < 100.0f)
-        bmi088_calib_temp = meta.temperature;
+    // 元数据只供界面显示；旧记录缺少或含有无效温度时仍可使用有效标定值。
+    if (calibration.has_meta != 0u)
+        bmi088_calib_temp = calibration.meta.temperature;
     return 1;
 }
 
 /** @brief 把当前标定值写进参数区并提交(擦写期间看门狗被参数模块临时放长); 返回 1=成功 */
 static uint8_t BMI088CalibSave(BMI088Instance *b)
 {
-    ParamImuCalibMeta_t meta;
-    float off[3] = {b->gyro_offset[0], b->gyro_offset[1], b->gyro_offset[2]};
-
-    meta.result = (uint32_t)PARAM_IMU_CALIB_OK;
-    meta.temperature = b->temperature;
-    meta.time_s = (uint32_t)(HAL_GetTick() / 1000u);
-
-    if (!ParamSetFloats(PARAM_KEY_IMU_GYRO_OFFSET, off, 3) ||
-        !ParamSetFloat(PARAM_KEY_IMU_G_NORM, b->gNorm) ||
-        !ParamSet(PARAM_KEY_IMU_CALIB_META, &meta, sizeof(meta)))
+    ParamImuCalibrationGroup_t calibration = {
+        .gyro_offset_rad_s = {b->gyro_offset[0], b->gyro_offset[1], b->gyro_offset[2]},
+        .g_norm_m_s2 = b->gNorm,
+        .meta = {
+            .result = (uint32_t)PARAM_IMU_CALIB_OK,
+            .temperature = b->temperature,
+            .time_s = (uint32_t)(HAL_GetTick() / 1000u),
+        },
+        .has_meta = 1u,
+    };
+    ParamImuCalibrationTransaction_t transaction;
+    if (ParamImuCalibrationStage(&calibration, &transaction) != PARAM_RESULT_OK ||
+        ParamImuCalibrationAccept(&transaction) != PARAM_RESULT_OK)
     {
         BSP_LOG_EVENT_0(EV_MODULES_BMI088_BMI088_C_04);
         return 0;
@@ -794,9 +769,9 @@ static uint8_t BMI088CalibSave(BMI088Instance *b)
  */
 static void BMI088CalibInit(BMI088Instance *b, BMI088_Calibrate_Mode_e cfg_mode)
 {
-    const float default_off[3] = {BMI088_PRE_CALI_ACC_X_OFFSET,
-                                  BMI088_PRE_CALI_ACC_Y_OFFSET,
-                                  BMI088_PRE_CALI_ACC_Z_OFFSET};
+    const float default_off[3] = {BMI088_PRE_CALI_GYRO_X_OFFSET,
+                                  BMI088_PRE_CALI_GYRO_Y_OFFSET,
+                                  BMI088_PRE_CALI_GYRO_Z_OFFSET};
 
     ParamInit(); /* 幂等: 已经扫过就直接返回, 不会覆盖 RAM 缓存 */
 

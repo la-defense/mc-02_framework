@@ -281,18 +281,93 @@ uint8_t ParamInit(void)
     }
     return 0u;
 }
-uint8_t ParamGet(uint16_t key, void *buf, uint16_t len) { (void)key; (void)buf; (void)len; return 0u; }
-uint8_t ParamGetFloat(uint16_t key, float *out) { (void)key; (void)out; return 0u; }
-uint8_t ParamGetFloats(uint16_t key, float *out, uint8_t count) { (void)key; (void)out; (void)count; return 0u; }
+ParamResult_e ParamImuCalibrationRead(ParamImuCalibrationGroup_t *output,
+                                      uint32_t *source_version)
+{
+    (void)output;
+    (void)source_version;
+    return PARAM_RESULT_NOT_FOUND;
+}
+ParamResult_e ParamImuCalibrationStage(const ParamImuCalibrationGroup_t *candidate,
+                                       ParamImuCalibrationTransaction_t *transaction)
+{
+    if (candidate == NULL || transaction == NULL)
+        return PARAM_RESULT_INVALID_ARGUMENT;
+    transaction->candidate = *candidate;
+    transaction->staged = 1u;
+    return PARAM_RESULT_OK;
+}
+ParamResult_e ParamImuCalibrationAccept(ParamImuCalibrationTransaction_t *transaction)
+{
+    if (transaction == NULL || transaction->staged != 1u)
+        return PARAM_RESULT_INVALID_ARGUMENT;
+    bmi088_host_fixture.committed_calibration_group = transaction->candidate;
+    bmi088_host_fixture.calibration_group_committed = 1u;
+    if (transaction->candidate.has_meta != 0u)
+    {
+        bmi088_host_fixture.committed_calibration_meta = transaction->candidate.meta;
+        bmi088_host_fixture.calibration_meta_committed = 1u;
+    }
+    transaction->staged = 0u;
+    return PARAM_RESULT_OK;
+}
+static uint8_t BMI088HostIsCalibrationKey(uint16_t key)
+{
+    return (uint8_t)(key >= PARAM_KEY_IMU_GYRO_OFFSET &&
+                     key <= PARAM_KEY_IMU_CALIB_SCHEMA_VERSION);
+}
+
+uint8_t ParamGet(uint16_t key, void *buf, uint16_t len)
+{
+    (void)buf;
+    (void)len;
+    if (BMI088HostIsCalibrationKey(key))
+        bmi088_host_fixture.legacy_calibration_parameter_access_count++;
+    return 0u;
+}
+uint8_t ParamGetFloat(uint16_t key, float *out)
+{
+    (void)out;
+    if (BMI088HostIsCalibrationKey(key))
+        bmi088_host_fixture.legacy_calibration_parameter_access_count++;
+    return 0u;
+}
+uint8_t ParamGetFloats(uint16_t key, float *out, uint8_t count)
+{
+    (void)out;
+    (void)count;
+    if (BMI088HostIsCalibrationKey(key))
+        bmi088_host_fixture.legacy_calibration_parameter_access_count++;
+    return 0u;
+}
 uint8_t ParamSet(uint16_t key, const void *buf, uint16_t len)
 {
-    if (key == PARAM_KEY_IMU_CALIB_META && len == sizeof(bmi088_host_fixture.committed_calibration_meta))
+    if (BMI088HostIsCalibrationKey(key))
     {
-        memcpy(&bmi088_host_fixture.committed_calibration_meta, buf, len);
-        bmi088_host_fixture.calibration_meta_committed = 1u;
+        bmi088_host_fixture.legacy_calibration_parameter_access_count++;
+        return 0u;
     }
     return 1u;
 }
-uint8_t ParamSetFloat(uint16_t key, float value) { (void)key; (void)value; return 1u; }
-uint8_t ParamSetFloats(uint16_t key, const float *in, uint8_t count) { (void)key; (void)in; (void)count; return 1u; }
+uint8_t ParamSetFloat(uint16_t key, float value)
+{
+    (void)value;
+    if (BMI088HostIsCalibrationKey(key))
+    {
+        bmi088_host_fixture.legacy_calibration_parameter_access_count++;
+        return 0u;
+    }
+    return 1u;
+}
+uint8_t ParamSetFloats(uint16_t key, const float *in, uint8_t count)
+{
+    (void)in;
+    (void)count;
+    if (BMI088HostIsCalibrationKey(key))
+    {
+        bmi088_host_fixture.legacy_calibration_parameter_access_count++;
+        return 0u;
+    }
+    return 1u;
+}
 uint8_t ParamCommit(void) { return 1u; }

@@ -37,7 +37,13 @@ int main(void)
 
     if (!bmi088_host_fixture.calibration_meta_committed ||
         bmi088_host_fixture.committed_calibration_meta.result != PARAM_IMU_CALIB_OK)
-        fail("successful startup calibration must commit metadata through the parameter API");
+        fail("successful startup calibration must commit metadata through the parameter group");
+    if (!bmi088_host_fixture.calibration_group_committed ||
+        fabsf(bmi088_host_fixture.committed_calibration_group.g_norm_m_s2 - instance->gNorm) > 0.0001f ||
+        fabsf(bmi088_host_fixture.committed_calibration_group.gyro_offset_rad_s[0] - instance->gyro_offset[0]) > 0.0001f)
+        fail("BMI088 calibration must accept one complete validated parameter group");
+    if (bmi088_host_fixture.legacy_calibration_parameter_access_count != 0u)
+        fail("BMI088 must not read or write managed calibration keys one at a time");
 
     if (bmi088_host_fixture.calibration_monitor_begin_count != 1u ||
         bmi088_host_fixture.calibration_monitor_end_count != 1u ||

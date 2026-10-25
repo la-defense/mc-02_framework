@@ -55,6 +55,8 @@ int main(int argc,char **argv)
     {
         TEST_CHECK(rejected==1 && norm_calls==6001 && cali_diag_acq_ok==6001);
         TEST_CHECK(BMI088CalibIsValid() && bmi088_host_fixture.calibration_meta_committed);
+        TEST_CHECK(bmi088_host_fixture.calibration_group_committed);
+        TEST_CHECK(bmi088_host_fixture.legacy_calibration_parameter_access_count == 0u);
         TEST_CHECK(isfinite(instance->gNorm) && instance->gNorm>9 && instance->gNorm<10.5f);
     }
     return 0;

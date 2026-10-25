@@ -19,6 +19,9 @@ typedef struct
     HAL_StatusTypeDef fail_status;
     uint8_t fail_next_transfer_after_param_init;
     HAL_StatusTypeDef param_init_failure_status;
+    ParamImuCalibrationGroup_t committed_calibration_group;
+    uint8_t calibration_group_committed;
+    uint32_t legacy_calibration_parameter_access_count;
     ParamImuCalibMeta_t committed_calibration_meta;
     uint8_t calibration_meta_committed;
     uint32_t calibration_monitor_begin_count;
