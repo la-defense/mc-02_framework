@@ -51,6 +51,7 @@ extern RCC_TypeDef mc02_test_rcc;
 extern uint32_t mc02_test_irq_disabled;
 extern uint32_t mc02_test_primask;
 extern uint32_t mc02_test_tick;
+extern uint32_t mc02_test_ipsr;
 void NVIC_SystemReset(void);
 void Error_Handler(void);
 void BSP_SafetyTestRecordWrite(const volatile uint32_t *reg, uint32_t value);
@@ -72,6 +73,7 @@ void BSP_SafetyTestRecordWrite(const volatile uint32_t *reg, uint32_t value);
 #define __DSB() ((void)0)
 #define __disable_irq() (mc02_test_irq_disabled = 1u, mc02_test_primask = 1u)
 #define __get_PRIMASK() (mc02_test_primask)
+#define __get_IPSR() (mc02_test_ipsr)
 #define __set_PRIMASK(value) (mc02_test_primask = (value), mc02_test_irq_disabled = ((value) & 1u))
 #define HAL_GetTick() (mc02_test_tick)
 

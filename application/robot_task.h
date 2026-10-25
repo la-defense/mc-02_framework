@@ -181,7 +181,11 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
     for (;;)
     {
         // 1kHz
-        TaskMonitorFeed(TASK_MONITOR_INS);
+        if (TaskMonitorBeginWork(TASK_MONITOR_INS) != TASK_MONITOR_RESULT_OK)
+        {
+            osDelay(1u);
+            continue;
+        }
         /* 用轻量周期计数代替 DWT_GetTimeline_ms(): 后者内部有 64bit 除法, 1kHz 下也不便宜 */
         uint32_t ins_probe = DWT_ProbeStart();
         INS_Task();
@@ -193,8 +197,10 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_02,
                             BSP_LOG_FIELD_U32(r25_task_ins.last_us));
         }
+        (void)TaskMonitorCompleteWork(TASK_MONITOR_INS);
         // 视觉上行数据由 INS_Task 内的 VisionUpdateTx() 填充,
         // VisionSend() 统一在 RobotCMDTask(200Hz) 中调用, 避免多任务并发 DMA 发送
+        (void)TaskMonitorSetWaiting(TASK_MONITOR_INS, TASK_MONITOR_WAIT_PERIOD);
         osDelay(1);
     }
 }
@@ -204,7 +210,11 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_03);
     for (;;)
     {
-        TaskMonitorFeed(TASK_MONITOR_MOTOR);
+        if (TaskMonitorBeginWork(TASK_MONITOR_MOTOR) != TASK_MONITOR_RESULT_OK)
+        {
+            osDelay(1u);
+            continue;
+        }
         uint32_t motor_probe = DWT_ProbeStart();
         MotorControlTask();
         DWT_ProbeDone(&r25_task_motor, motor_probe);
@@ -213,6 +223,8 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_04,
                             BSP_LOG_FIELD_U32(r25_task_motor.last_us));
         }
+        (void)TaskMonitorCompleteWork(TASK_MONITOR_MOTOR);
+        (void)TaskMonitorSetWaiting(TASK_MONITOR_MOTOR, TASK_MONITOR_WAIT_PERIOD);
         osDelay(1);
     }
 }
@@ -249,7 +261,11 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
     for (;;)
     {
         // 100Hz
-        TaskMonitorFeed(TASK_MONITOR_DAEMON);
+        if (TaskMonitorBeginWork(TASK_MONITOR_DAEMON) != TASK_MONITOR_RESULT_OK)
+        {
+            osDelay(10u);
+            continue;
+        }
         uint32_t daemon_probe = DWT_ProbeStart();
 #if LOG_TEST
         static uint32_t s_log_test_tick = 0u;
@@ -284,6 +300,8 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_06,
                             BSP_LOG_FIELD_U32(r25_task_daemon.last_us));
         }
+        (void)TaskMonitorCompleteWork(TASK_MONITOR_DAEMON);
+        (void)TaskMonitorSetWaiting(TASK_MONITOR_DAEMON, TASK_MONITOR_WAIT_PERIOD);
         osDelay(10);
     }
 }
@@ -294,7 +312,11 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
     // 200Hz-500Hz,若有额外的控制任务如平衡步兵可能需要提升至1kHz
     for (;;)
     {
-        TaskMonitorFeed(TASK_MONITOR_ROBOT);
+        if (TaskMonitorBeginWork(TASK_MONITOR_ROBOT) != TASK_MONITOR_RESULT_OK)
+        {
+            osDelay(5u);
+            continue;
+        }
         uint32_t robot_probe = DWT_ProbeStart();
         RobotTask();
         DWT_ProbeDone(&r25_task_robot, robot_probe);
@@ -303,6 +325,8 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_08,
                             BSP_LOG_FIELD_U32(r25_task_robot.last_us));
         }
+        (void)TaskMonitorCompleteWork(TASK_MONITOR_ROBOT);
+        (void)TaskMonitorSetWaiting(TASK_MONITOR_ROBOT, TASK_MONITOR_WAIT_PERIOD);
         osDelay(5);
     }
 }

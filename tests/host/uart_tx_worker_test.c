@@ -8,7 +8,7 @@
 #include "test_check.h"
 #include <setjmp.h>
 static osThreadDef_t captured;
-static unsigned creates, feeds, delays, notifications;
+static unsigned creates, monitor_begins, monitor_completions, monitor_waits, delays, notifications;
 static uint8_t fail_create, kernel_running;
 static jmp_buf finished;
 int32_t osKernelRunning(void)
@@ -22,10 +22,23 @@ osThreadId osThreadCreate(const osThreadDef_t *definition, void *argument)
     ++creates;
     return fail_create ? NULL : &captured;
 }
-void TaskMonitorFeed(TaskMonitor_Id_e id)
+TaskMonitor_Result_e TaskMonitorBeginWork(TaskMonitor_Id_e id)
 {
     TEST_CHECK(id == TASK_MONITOR_UART_TX);
-    ++feeds;
+    ++monitor_begins;
+    return TASK_MONITOR_RESULT_OK;
+}
+TaskMonitor_Result_e TaskMonitorCompleteWork(TaskMonitor_Id_e id)
+{
+    TEST_CHECK(id == TASK_MONITOR_UART_TX);
+    ++monitor_completions;
+    return TASK_MONITOR_RESULT_OK;
+}
+TaskMonitor_Result_e TaskMonitorSetWaiting(TaskMonitor_Id_e id, TaskMonitor_WaitReason_e reason)
+{
+    TEST_CHECK(id == TASK_MONITOR_UART_TX && reason == TASK_MONITOR_WAIT_PERIOD);
+    ++monitor_waits;
+    return TASK_MONITOR_RESULT_OK;
 }
 void osDelay(uint32_t ms)
 {
@@ -92,6 +105,7 @@ int main(void)
     TEST_CHECK(USARTSubmitTx(instance, &request, &id) == USART_SEND_ACCEPTED);
     if (setjmp(finished) == 0)
         captured.entry(NULL);
-    TEST_CHECK(feeds == 2u && delays == 2u && notifications == 1u && uart_model_leases == 0u);
+    TEST_CHECK(monitor_begins == 2u && monitor_completions == 2u && monitor_waits == 2u &&
+               delays == 2u && notifications == 1u && uart_model_leases == 0u);
     return 0;
 }

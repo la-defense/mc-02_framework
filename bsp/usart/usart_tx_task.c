@@ -14,10 +14,16 @@ static void UARTTxTask(void const *argument)
     (void)argument;
     for (;;)
     {
+        if (TaskMonitorBeginWork(TASK_MONITOR_UART_TX) != TASK_MONITOR_RESULT_OK)
+        {
+            osDelay(1u);
+            continue;
+        }
         uint32_t probe = DWT_ProbeStart();
-        TaskMonitorFeed(TASK_MONITOR_UART_TX);
         USARTProcessTx();
         DWT_ProbeDone(&usart_tx_task_probe, probe);
+        (void)TaskMonitorCompleteWork(TASK_MONITOR_UART_TX);
+        (void)TaskMonitorSetWaiting(TASK_MONITOR_UART_TX, TASK_MONITOR_WAIT_PERIOD);
         osDelay(1u);
     }
 }

@@ -24,6 +24,7 @@ RCC_TypeDef mc02_test_rcc;
 uint32_t mc02_test_irq_disabled;
 uint32_t mc02_test_primask;
 uint32_t mc02_test_tick;
+uint32_t mc02_test_ipsr;
 
 static uint32_t watchdog_feed_count;
 static uint32_t logged_after_shutdown;
@@ -37,6 +38,14 @@ static float last_dwt_delay_seconds;
 uint8_t osKernelRunning(void)
 {
     return scheduler_running;
+}
+
+static uint8_t InitializeMonitor(void)
+{
+    scheduler_running = 0u;
+    const uint8_t initialized = TaskMonitorInit();
+    scheduler_running = 1u;
+    return initialized;
 }
 
 void osDelay(uint32_t milliseconds)
@@ -90,12 +99,13 @@ int main(void)
     mc02_test_rcc = (RCC_TypeDef){0};
     mc02_test_irq_disabled = 0u;
     mc02_test_tick = 100u;
+    mc02_test_ipsr = 0u;
     scheduler_running = 1u;
     rtos_delay_count = 0u;
     dwt_delay_count = 0u;
     last_dwt_delay_seconds = 0.0f;
 
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
     TaskMonitorFeed(TASK_MONITOR_DAEMON);
@@ -125,10 +135,16 @@ int main(void)
     mc02_test_tim3.CCER = TIM_CCER_CC4E;
     mc02_test_tim3.CR1 = TIM_CR1_CEN;
 
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
     mc02_test_tick += 6u;
     TaskMonitorTick();
+    CHECK(log_count == 0u);
+    CHECK(watchdog_feed_count == 1u);
 
+    // 调度器首次运行时建立启动基准；零宽限的边界采样仍允许，下一毫秒超时。
+    watchdog_feed_count = 0u;
+    mc02_test_tick += 1u;
+    TaskMonitorTick();
     CHECK(log_count >= 1u);
     CHECK(logged_after_shutdown == log_count);
     CHECK(reported_task_health == 0u);
@@ -150,7 +166,7 @@ int main(void)
     reported_task_health = 1u;
     mc02_test_irq_disabled = 0u;
     mc02_test_primask = 0u;
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
     CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
     mc02_test_tick += 6u;
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
@@ -188,7 +204,7 @@ int main(void)
     reported_task_health = 1u;
     mc02_test_irq_disabled = 0u;
     mc02_test_primask = 0u;
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
     CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
     mc02_test_tick += 15000u;
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
@@ -210,14 +226,14 @@ int main(void)
     CHECK(watchdog_feed_count == 0u);
     CHECK(TaskMonitorAllAlive() == 0u);
 
-    /* Startup grace is only for calibration before the first monitor tick;
-       Flash must never use it to bypass the all-task health check. */
+    /* 调度器首次采样建立宽限基准；没有核心任务启动时，Flash不能绕过启动期限。 */
     mc02_test_tick = 450u;
     watchdog_feed_count = 0u;
     reported_task_health = 1u;
     mc02_test_irq_disabled = 0u;
     mc02_test_primask = 0u;
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
+    TaskMonitorTick();
     mc02_test_tick += 40u;
     CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH) == 0u);
     CHECK(reported_task_health == 0u);
@@ -229,7 +245,7 @@ int main(void)
     reported_task_health = 1u;
     mc02_test_irq_disabled = 0u;
     mc02_test_primask = 0u;
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
     TaskMonitorFeed(TASK_MONITOR_INS);
     mc02_test_tick += 100u;
     CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
@@ -249,7 +265,7 @@ int main(void)
     reported_task_health = 1u;
     mc02_test_irq_disabled = 0u;
     mc02_test_primask = 0u;
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
     CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION) == 1u);
     mc02_test_tick += 6u;
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
@@ -276,7 +292,7 @@ int main(void)
     reported_task_health = 1u;
     mc02_test_irq_disabled = 0u;
     mc02_test_primask = 0u;
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
     TaskMonitorFeed(TASK_MONITOR_INS);
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
@@ -297,7 +313,7 @@ int main(void)
     reported_task_health = 1u;
     mc02_test_irq_disabled = 0u;
     mc02_test_primask = 0u;
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
     TaskMonitorFeed(TASK_MONITOR_INS);
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
@@ -320,7 +336,7 @@ int main(void)
     reported_task_health = 1u;
     mc02_test_irq_disabled = 0u;
     mc02_test_primask = 0u;
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
     TaskMonitorFeed(TASK_MONITOR_INS);
     TaskMonitorFeed(TASK_MONITOR_MOTOR);
     TaskMonitorFeed(TASK_MONITOR_ROBOT);
@@ -338,7 +354,7 @@ int main(void)
     mc02_test_tick = 12000u;
     mc02_test_primask = 0u;
     mc02_test_irq_disabled = 0u;
-    TaskMonitorInit();
+    CHECK(InitializeMonitor() != 0u);
     TaskMonitorFeed(TASK_MONITOR_UART_TX);
     for (unsigned elapsed = 30u; elapsed <= 31u; ++elapsed)
     {

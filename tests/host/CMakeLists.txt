@@ -896,6 +896,17 @@ add_executable(
 target_include_directories(task_monitor_shutdown_test BEFORE PRIVATE task_monitor_fakes fakes)
 target_include_directories(task_monitor_shutdown_test PRIVATE ../../modules/task_monitor ../../bsp/safety)
 add_test(NAME task_monitor_fault_shutdown_order COMMAND task_monitor_shutdown_test)
+set_tests_properties(task_monitor_fault_shutdown_order PROPERTIES TIMEOUT 10)
+
+add_executable(
+  task_monitor_progress_test
+  task_monitor_progress_test.c
+  ../../modules/task_monitor/task_monitor.c
+  ../../bsp/safety/bsp_safety.c)
+target_include_directories(task_monitor_progress_test BEFORE PRIVATE fakes)
+target_include_directories(task_monitor_progress_test PRIVATE ../../modules/task_monitor ../../bsp/safety)
+add_test(NAME task_monitor_progress_deadlines_and_auxiliary_degrade COMMAND task_monitor_progress_test)
+set_tests_properties(task_monitor_progress_deadlines_and_auxiliary_degrade PROPERTIES TIMEOUT 10)
 
 add_executable(
   watchdog_debug_safety_test
