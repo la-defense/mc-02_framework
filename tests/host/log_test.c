@@ -3,8 +3,10 @@
  * @note BSPLogPort_* 仅替换时钟、临界区、任务创建和RTT写入；测试检查在Release下有效。
  */
 #include "bsp_log.h"
+#include "bsp_log_diag.h"
 #include "bsp_log_port.h"
 #include "test_check.h"
+#include "crc.h"
 
 #include <stdarg.h>
 #include <stdatomic.h>
@@ -45,6 +47,13 @@ static uint8_t interrupt_context;
 static uint8_t scheduler_running;
 static uint8_t worker_context;
 static uint32_t format_call_count;
+static uint8_t diagnostic_available = 1u;
+static uint8_t fail_next_diagnostic_submit;
+static BSPLogDiagnosticRx_t diagnostic_receive;
+static uint8_t diagnostic_frames[LOG_OUTPUT_CAPACITY][BSP_LOG_DIAGNOSTIC_FRAME_MAX];
+static size_t diagnostic_lengths[LOG_OUTPUT_CAPACITY];
+static uint32_t diagnostic_frame_count;
+static BSPLogPortDiagnosticState_t diagnostic_port_state;
 
 void BSPLogTestSetNextSequence(uint32_t sequence);
 
@@ -76,6 +85,80 @@ uint8_t BSPLogPortIsWorker(void)
 uint8_t BSPLogPortInit(void)
 {
     return 1u;
+}
+
+uint8_t BSPLogPortDiagnosticInit(BSPLogDiagnosticRx_t receive)
+{
+    diagnostic_receive = receive;
+    diagnostic_port_state.available = diagnostic_available;
+    return diagnostic_available;
+}
+
+uint8_t BSPLogPortSubmitDiagnosticFrame(const uint8_t *data, size_t length)
+{
+    if (fail_next_diagnostic_submit)
+    {
+        fail_next_diagnostic_submit = 0u;
+        diagnostic_port_state.rejected++;
+        return 0u;
+    }
+    if (data == NULL || length == 0u || length > BSP_LOG_DIAGNOSTIC_FRAME_MAX ||
+        diagnostic_frame_count >= LOG_OUTPUT_CAPACITY)
+    {
+        diagnostic_port_state.rejected++;
+        return 0u;
+    }
+    memcpy(diagnostic_frames[diagnostic_frame_count], data, length);
+    diagnostic_lengths[diagnostic_frame_count] = length;
+    diagnostic_frame_count++;
+    diagnostic_port_state.accepted++;
+    return 1u;
+}
+
+uint8_t BSPLogPortGetDiagnosticState(BSPLogPortDiagnosticState_t *state)
+{
+    if (state == NULL)
+        return 0u;
+    *state = diagnostic_port_state;
+    state->available = diagnostic_available;
+    return 1u;
+}
+
+static void inject_diagnostic_bytes(const uint8_t *data, size_t length)
+{
+    TEST_CHECK(diagnostic_receive != NULL);
+    diagnostic_receive(data, length);
+}
+
+static size_t make_diagnostic_request(uint8_t command, uint8_t sequence,
+                                      const uint8_t *payload, uint8_t payload_length,
+                                      uint8_t output_frame[BSP_LOG_DIAG_REQUEST_MAX])
+{
+    output_frame[0] = BSP_LOG_DIAG_SYNC_0;
+    output_frame[1] = BSP_LOG_DIAG_SYNC_1;
+    output_frame[2] = BSP_LOG_DIAG_VERSION;
+    output_frame[3] = command;
+    output_frame[4] = sequence;
+    output_frame[5] = payload_length;
+    if (payload_length != 0u)
+        memcpy(output_frame + BSP_LOG_DIAG_HEADER_SIZE, payload, payload_length);
+    uint32_t crc = 0u;
+    size_t crc_offset = BSP_LOG_DIAG_HEADER_SIZE + payload_length;
+    TEST_CHECK(CRCCompute(CRC16_MODBUS_A5, output_frame, crc_offset, &crc) == CRC_OK);
+    output_frame[crc_offset] = (uint8_t)crc;
+    output_frame[crc_offset + 1u] = (uint8_t)(crc >> 8u);
+    return crc_offset + BSP_LOG_DIAG_CRC_SIZE;
+}
+
+static uint8_t diagnostic_frame_crc_valid(const uint8_t *frame, size_t length)
+{
+    if (frame == NULL || length < BSP_LOG_DIAG_HEADER_SIZE + BSP_LOG_DIAG_CRC_SIZE)
+        return 0u;
+    uint32_t expected = 0u;
+    if (CRCCompute(CRC16_MODBUS_A5, frame, length - BSP_LOG_DIAG_CRC_SIZE, &expected) != CRC_OK)
+        return 0u;
+    return frame[length - 2u] == (uint8_t)expected &&
+           frame[length - 1u] == (uint8_t)(expected >> 8u);
 }
 
 uint8_t BSPLogPortStartWorker(BSPLogWorkerEntry_t entry)
@@ -271,7 +354,8 @@ static void test_sequence_wrap(void)
 static void test_queue(void)
 {
     BSPLogInit();
-#if MC02_LOG_ORDINARY
+#if MC02_LOG_COMPILED_MAX_LEVEL >= 3
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, BSP_LOG_LEVEL_VERBOSE) == BSP_LOG_STATUS_OK);
     for (uint32_t i = 0u; i < BSP_LOG_NORMAL_QUEUE_LIMIT; ++i)
     {
         tick_ms = i * 50u;
@@ -347,9 +431,7 @@ static void test_catalog(void)
     BSPLogInit();
     BSPLogField_t fields[BSP_LOG_MAX_FIELDS];
     uint32_t processed = 0u;
-#if !MC02_LOG_ORDINARY
     uint32_t filtered = 0u;
-#endif
     for (size_t row = 0u; row < sizeof(catalog) / sizeof(catalog[0]); ++row)
     {
         TEST_CHECK(((uint32_t)catalog[row].id >> 8u) == (uint32_t)catalog[row].source);
@@ -376,12 +458,8 @@ static void test_catalog(void)
         BSPLogStatus_t status = BSPLogSubmit(catalog[row].id, fields, count);
         if (catalog[row].category == LOG_CATEGORY_NORMAL)
         {
-#if MC02_LOG_ORDINARY
-            TEST_CHECK(status == BSP_LOG_STATUS_QUEUED);
-#else
             TEST_CHECK(status == BSP_LOG_STATUS_FILTERED);
             filtered++;
-#endif
         }
         else
         {
@@ -391,12 +469,200 @@ static void test_catalog(void)
         }
     }
     TEST_CHECK(output_count == processed);
-#if !MC02_LOG_ORDINARY
     BSPLogState_t state;
     TEST_CHECK(BSPLogGetState(&state) == BSP_LOG_STATUS_OK);
     TEST_CHECK(state.filtered == filtered && filtered > 0u);
-#endif
     TEST_CHECK(format_call_count == 0u);
+}
+
+static void test_levels(void)
+{
+    BSPLogInit();
+    BSPLogLevel_t level = BSP_LOG_LEVEL_OFF;
+    TEST_CHECK(BSPLogGetSourceLevel(SRC_BSP_USB_BSP_USB_C, &level) == BSP_LOG_STATUS_OK);
+#if MC02_LOG_COMPILED_MAX_LEVEL >= BSP_LOG_COMPILED_LEVEL_STATUS
+    TEST_CHECK(level == BSP_LOG_LEVEL_STATUS);
+#else
+    TEST_CHECK(level == BSP_LOG_LEVEL_FAULT);
+#endif
+    TEST_CHECK(BSPLogGetSourceLevel((BSPLogSourceId_t)31u, &level) == BSP_LOG_STATUS_BAD_SOURCE);
+
+    BSPLogField_t normal = BSP_LOG_FIELD_U32(17u);
+    TEST_CHECK(BSPLogSubmit(EV_BSP_USB_BSP_USB_C_01, &normal, 1u) == BSP_LOG_STATUS_FILTERED);
+    TEST_CHECK(BSPLogProcessPending(1u) == BSP_LOG_STATUS_EMPTY);
+    TEST_CHECK(format_call_count == 0u);
+
+#if MC02_LOG_COMPILED_MAX_LEVEL >= 3
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, BSP_LOG_LEVEL_VERBOSE) == BSP_LOG_STATUS_OK);
+    TEST_CHECK(BSPLogGetSourceLevel(SRC_BSP_USB_BSP_USB_C, &level) == BSP_LOG_STATUS_OK);
+    TEST_CHECK(level == BSP_LOG_LEVEL_VERBOSE);
+    TEST_CHECK(BSPLogGetSourceLevel(SRC_BSP_CAN_BSP_CAN_C, &level) == BSP_LOG_STATUS_OK);
+    TEST_CHECK(level == BSP_LOG_LEVEL_STATUS);
+    TEST_CHECK(BSPLogSubmit(EV_BSP_USB_BSP_USB_C_01, &normal, 1u) == BSP_LOG_STATUS_QUEUED);
+    TEST_CHECK(BSPLogProcessPending(1u) == BSP_LOG_STATUS_PROCESSED);
+    TEST_CHECK(output_count == 1u && strstr(output[0], "USB虚拟串口接收队列丢帧") != NULL);
+#else
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, BSP_LOG_LEVEL_VERBOSE) ==
+               BSP_LOG_STATUS_LEVEL_ABOVE_COMPILED);
+    TEST_CHECK(BSPLogGetSourceLevel(SRC_BSP_USB_BSP_USB_C, &level) == BSP_LOG_STATUS_OK);
+#if MC02_LOG_COMPILED_MAX_LEVEL >= BSP_LOG_COMPILED_LEVEL_STATUS
+    TEST_CHECK(level == BSP_LOG_LEVEL_STATUS);
+#else
+    TEST_CHECK(level == BSP_LOG_LEVEL_FAULT);
+#endif
+    TEST_CHECK(BSPLogSubmit(EV_BSP_USB_BSP_USB_C_01, &normal, 1u) == BSP_LOG_STATUS_FILTERED);
+#endif
+
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, (BSPLogLevel_t)9) ==
+               BSP_LOG_STATUS_BAD_ARGUMENT);
+    TEST_CHECK(BSPLogGetSourceLevel(SRC_BSP_USB_BSP_USB_C, NULL) == BSP_LOG_STATUS_BAD_ARGUMENT);
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_MODULES_SAFETY_ROBOT_SAFETY_C,
+                                    BSP_LOG_LEVEL_OFF) == BSP_LOG_STATUS_OK);
+    TEST_CHECK(BSPLogSubmit(EV_MODULES_SAFETY_ROBOT_SAFETY_C_02, NULL, 0u) ==
+               BSP_LOG_STATUS_FILTERED);
+    BSPLogState_t state;
+    TEST_CHECK(BSPLogGetState(&state) == BSP_LOG_STATUS_OK);
+    TEST_CHECK(state.first_fault_sequence != 0u && state.queue_depth == 0u);
+    BSPLogHistoryRecord_t retained;
+    TEST_CHECK(BSPLogGetHistory(state.first_fault_sequence, &retained) == BSP_LOG_STATUS_OK);
+    interrupt_context = 1u;
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, BSP_LOG_LEVEL_FAULT) ==
+               BSP_LOG_STATUS_BAD_CONTEXT);
+    interrupt_context = 0u;
+}
+
+static void test_diagnostic(void)
+{
+    BSPLogInit();
+    TEST_CHECK(diagnostic_receive != NULL);
+#if MC02_LOG_COMPILED_MAX_LEVEL >= 3
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, BSP_LOG_LEVEL_VERBOSE) == BSP_LOG_STATUS_OK);
+#else
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, BSP_LOG_LEVEL_VERBOSE) ==
+               BSP_LOG_STATUS_LEVEL_ABOVE_COMPILED);
+#endif
+    BSPLogField_t field = BSP_LOG_FIELD_U32(5u);
+    BSPLogStatus_t submit = BSPLogSubmit(EV_BSP_USB_BSP_USB_C_01, &field, 1u);
+#if MC02_LOG_COMPILED_MAX_LEVEL >= 3
+    TEST_CHECK(submit == BSP_LOG_STATUS_QUEUED);
+    TEST_CHECK(BSPLogProcessPending(1u) == BSP_LOG_STATUS_PROCESSED);
+#else
+    TEST_CHECK(submit == BSP_LOG_STATUS_FILTERED);
+    TEST_CHECK(BSPLogProcessPending(1u) == BSP_LOG_STATUS_EMPTY);
+#endif
+    /* 日志事件只走RTT，诊断串口不镜像日志帧。 */
+    TEST_CHECK(diagnostic_frame_count == 0u);
+
+    uint8_t payload[2] = {SRC_BSP_USB_BSP_USB_C, BSP_LOG_LEVEL_STATUS};
+    uint8_t request[BSP_LOG_DIAG_REQUEST_MAX];
+    size_t request_length = make_diagnostic_request(BSP_LOG_DIAG_SET_LEVEL, 42u,
+                                                    payload, sizeof(payload), request);
+    inject_diagnostic_bytes(request, 4u);
+    BSPLogLevel_t level = BSP_LOG_LEVEL_OFF;
+    TEST_CHECK(BSPLogGetSourceLevel(SRC_BSP_USB_BSP_USB_C, &level) == BSP_LOG_STATUS_OK);
+#if MC02_LOG_COMPILED_MAX_LEVEL >= 3
+    TEST_CHECK(level == BSP_LOG_LEVEL_VERBOSE);
+#elif MC02_LOG_COMPILED_MAX_LEVEL >= BSP_LOG_COMPILED_LEVEL_STATUS
+    TEST_CHECK(level == BSP_LOG_LEVEL_STATUS);
+#else
+    TEST_CHECK(level == BSP_LOG_LEVEL_FAULT);
+#endif
+    inject_diagnostic_bytes(request + 4u, request_length - 4u);
+    TEST_CHECK(BSPLogGetSourceLevel(SRC_BSP_USB_BSP_USB_C, &level) == BSP_LOG_STATUS_OK);
+#if MC02_LOG_COMPILED_MAX_LEVEL >= BSP_LOG_COMPILED_LEVEL_STATUS
+    TEST_CHECK(level == BSP_LOG_LEVEL_STATUS);
+#else
+    TEST_CHECK(level == BSP_LOG_LEVEL_FAULT);
+#endif
+    TEST_CHECK(diagnostic_frame_count == 1u);
+    const uint8_t *reply = diagnostic_frames[0];
+    TEST_CHECK(reply[3] == (uint8_t)(BSP_LOG_DIAG_SET_LEVEL | BSP_LOG_DIAG_REPLY_BIT));
+    TEST_CHECK(reply[4] == 42u && diagnostic_frame_crc_valid(reply, diagnostic_lengths[0]));
+#if MC02_LOG_COMPILED_MAX_LEVEL >= BSP_LOG_COMPILED_LEVEL_STATUS
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE] == BSP_LOG_STATUS_OK);
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE + 2u] == BSP_LOG_LEVEL_STATUS);
+#else
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE] == BSP_LOG_STATUS_LEVEL_ABOVE_COMPILED);
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE + 2u] == BSP_LOG_LEVEL_FAULT);
+#endif
+
+    payload[1] = BSP_LOG_LEVEL_VERBOSE;
+    request_length = make_diagnostic_request(BSP_LOG_DIAG_SET_LEVEL, 44u,
+                                             payload, sizeof(payload), request);
+    inject_diagnostic_bytes(request, request_length);
+    TEST_CHECK(diagnostic_frame_count == 2u);
+    reply = diagnostic_frames[1];
+#if MC02_LOG_COMPILED_MAX_LEVEL >= 3
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE] == BSP_LOG_STATUS_OK);
+    TEST_CHECK(BSPLogGetSourceLevel(SRC_BSP_USB_BSP_USB_C, &level) == BSP_LOG_STATUS_OK);
+    TEST_CHECK(level == BSP_LOG_LEVEL_VERBOSE);
+#else
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE] == BSP_LOG_STATUS_LEVEL_ABOVE_COMPILED);
+    TEST_CHECK(BSPLogGetSourceLevel(SRC_BSP_USB_BSP_USB_C, &level) == BSP_LOG_STATUS_OK);
+#if MC02_LOG_COMPILED_MAX_LEVEL >= BSP_LOG_COMPILED_LEVEL_STATUS
+    TEST_CHECK(level == BSP_LOG_LEVEL_STATUS);
+#else
+    TEST_CHECK(level == BSP_LOG_LEVEL_FAULT);
+#endif
+#endif
+
+    uint8_t source = SRC_BSP_USB_BSP_USB_C;
+    request_length = make_diagnostic_request(BSP_LOG_DIAG_GET_LEVEL, 43u, &source, 1u, request);
+    inject_diagnostic_bytes(request, request_length);
+    TEST_CHECK(diagnostic_frame_count == 3u);
+    reply = diagnostic_frames[2];
+    TEST_CHECK(reply[3] == (uint8_t)(BSP_LOG_DIAG_GET_LEVEL | BSP_LOG_DIAG_REPLY_BIT));
+    TEST_CHECK(reply[4] == 43u && diagnostic_frame_crc_valid(reply, diagnostic_lengths[2]));
+#if MC02_LOG_COMPILED_MAX_LEVEL >= 3
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE + 2u] == BSP_LOG_LEVEL_VERBOSE);
+#else
+#if MC02_LOG_COMPILED_MAX_LEVEL >= BSP_LOG_COMPILED_LEVEL_STATUS
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE + 2u] == BSP_LOG_LEVEL_STATUS);
+#else
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE + 2u] == BSP_LOG_LEVEL_FAULT);
+#endif
+#endif
+
+    request_length = make_diagnostic_request(3u, 45u, NULL, 0u, request);
+    inject_diagnostic_bytes(request, request_length);
+    TEST_CHECK(diagnostic_frame_count == 4u);
+    reply = diagnostic_frames[3];
+    TEST_CHECK(reply[BSP_LOG_DIAG_HEADER_SIZE] == BSP_LOG_STATUS_BAD_ARGUMENT);
+
+    request[request_length - 1u] ^= 0x80u;
+    inject_diagnostic_bytes(request, request_length);
+    TEST_CHECK(diagnostic_frame_count == 4u);
+    fail_next_diagnostic_submit = 1u;
+    request_length = make_diagnostic_request(BSP_LOG_DIAG_GET_LEVEL, 46u,
+                                             &source, 1u, request);
+    inject_diagnostic_bytes(request, request_length);
+    TEST_CHECK(diagnostic_frame_count == 4u);
+    BSPLogState_t state;
+    TEST_CHECK(BSPLogGetState(&state) == BSP_LOG_STATUS_OK);
+    TEST_CHECK(state.diagnostic_crc_errors == 1u);
+#if MC02_LOG_COMPILED_MAX_LEVEL >= 3
+    TEST_CHECK(state.diagnostic_command_errors == 1u);
+#elif MC02_LOG_COMPILED_MAX_LEVEL >= BSP_LOG_COMPILED_LEVEL_STATUS
+    TEST_CHECK(state.diagnostic_command_errors == 2u);
+#else
+    TEST_CHECK(state.diagnostic_command_errors == 3u);
+#endif
+    TEST_CHECK(state.diagnostic_response_dropped == 1u);
+    TEST_CHECK(state.diagnostic_tx_accepted == diagnostic_port_state.accepted);
+    TEST_CHECK(state.diagnostic_tx_rejected == 1u);
+}
+
+static void test_diagnostic_unavailable(void)
+{
+    diagnostic_available = 0u;
+    BSPLogInit();
+    BSPLogState_t state;
+    TEST_CHECK(BSPLogGetState(&state) == BSP_LOG_STATUS_OK);
+    TEST_CHECK(state.backend_available == 1u && state.diagnostic_uart_available == 0u);
+    TEST_CHECK(BSPLogSubmit(EV_MODULES_SAFETY_ROBOT_SAFETY_C_02, NULL, 0u) ==
+               BSP_LOG_STATUS_QUEUED);
+    TEST_CHECK(BSPLogProcessPending(1u) == BSP_LOG_STATUS_PROCESSED);
+    TEST_CHECK(output_count == 1u);
 }
 
 static void test_task(void)
@@ -424,10 +690,11 @@ static void test_task(void)
     scheduler_running = 0u;
 }
 
-#if MC02_LOG_ORDINARY
+#if MC02_LOG_COMPILED_MAX_LEVEL >= 3
 static void test_ordinary(void)
 {
     BSPLogInit();
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, BSP_LOG_LEVEL_VERBOSE) == BSP_LOG_STATUS_OK);
     for (uint32_t i = 0u; i < 8u; ++i)
     {
         BSPLogField_t field = BSP_LOG_FIELD_U32(i);
@@ -446,6 +713,7 @@ static void test_ordinary(void)
 static void test_fairness(void)
 {
     BSPLogInit();
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, BSP_LOG_LEVEL_VERBOSE) == BSP_LOG_STATUS_OK);
     BSPLogField_t normal_a = BSP_LOG_FIELD_U32(1u);
     BSPLogField_t normal_b = BSP_LOG_FIELD_U32(2u);
     TEST_CHECK(BSPLogSubmit(EV_BSP_USB_BSP_USB_C_01, &normal_a, 1u) == BSP_LOG_STATUS_QUEUED);
@@ -473,6 +741,7 @@ static void test_format_overflow(void)
     };
 
     BSPLogInit();
+    TEST_CHECK(BSPLogSetSourceLevel(SRC_MODULES_LCD_LCD_STATS_C, BSP_LOG_LEVEL_VERBOSE) == BSP_LOG_STATUS_OK);
     TEST_CHECK(BSPLogSubmit(EV_MODULES_LCD_LCD_STATS_C_01, fields, 8u) == BSP_LOG_STATUS_QUEUED);
     scheduler_running = 1u;
     worker_context = 1u;
@@ -500,6 +769,12 @@ static void *producer(void *argument)
     ProducerArgs_t *args = (ProducerArgs_t *)argument;
     for (uint32_t i = 0u; i < 100u; ++i)
     {
+        BSPLogLevel_t requested = (i & 1u) ? BSP_LOG_LEVEL_STATUS : BSP_LOG_LEVEL_VERBOSE;
+        BSPLogLevel_t current = BSP_LOG_LEVEL_OFF;
+        if (BSPLogSetSourceLevel(SRC_BSP_USB_BSP_USB_C, requested) != BSP_LOG_STATUS_OK ||
+            BSPLogGetSourceLevel(SRC_BSP_USB_BSP_USB_C, &current) != BSP_LOG_STATUS_OK ||
+            (current != BSP_LOG_LEVEL_STATUS && current != BSP_LOG_LEVEL_VERBOSE))
+            atomic_store(&thread_failure, 1u);
         BSPLogField_t field = BSP_LOG_FIELD_I32((int32_t)(args->base + i));
         BSPLogStatus_t status = BSPLogSubmit(EV_MODULES_SAFETY_ROBOT_SAFETY_C_04, &field, 1u);
         if (status != BSP_LOG_STATUS_QUEUED && status != BSP_LOG_STATUS_RETAINED &&
@@ -567,7 +842,13 @@ int main(int argc, char **argv)
         test_catalog();
     else if (strcmp(argv[1], "task") == 0)
         test_task();
-#if MC02_LOG_ORDINARY
+    else if (strcmp(argv[1], "levels") == 0)
+        test_levels();
+    else if (strcmp(argv[1], "diagnostic") == 0)
+        test_diagnostic();
+    else if (strcmp(argv[1], "diagnostic-unavailable") == 0)
+        test_diagnostic_unavailable();
+#if MC02_LOG_COMPILED_MAX_LEVEL >= 3
     else if (strcmp(argv[1], "ordinary") == 0)
         test_ordinary();
     else if (strcmp(argv[1], "fairness") == 0)

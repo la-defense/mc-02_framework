@@ -14,12 +14,23 @@
 #define BSP_LOG_PAYLOAD_MAX 96u
 #define BSP_LOG_HISTORY_CAPACITY 16u
 #define BSP_LOG_OUTPUT_CAPACITY 256u
+#define BSP_LOG_DIAGNOSTIC_FRAME_MAX 16u
 #define BSP_LOG_MAX_FIELDS 8u
 #define BSP_LOG_SOURCE_CAPACITY 32u
 #define BSP_LOG_WORKSPACE_MAX 16384u
 
-#ifndef MC02_LOG_ORDINARY
-#define MC02_LOG_ORDINARY 0
+#define BSP_LOG_COMPILED_LEVEL_FAULT 1
+#define BSP_LOG_COMPILED_LEVEL_STATUS 2
+#define BSP_LOG_COMPILED_LEVEL_VERBOSE 3
+
+/** @brief 构建时允许运行等级调整到的最大值，默认VERBOSE；各来源仍默认STATUS。 */
+#ifndef MC02_LOG_COMPILED_MAX_LEVEL
+#define MC02_LOG_COMPILED_MAX_LEVEL BSP_LOG_COMPILED_LEVEL_VERBOSE
+#endif
+
+#if MC02_LOG_COMPILED_MAX_LEVEL < BSP_LOG_COMPILED_LEVEL_FAULT || \
+    MC02_LOG_COMPILED_MAX_LEVEL > BSP_LOG_COMPILED_LEVEL_VERBOSE
+#error "MC02_LOG_COMPILED_MAX_LEVEL must be 1, 2, or 3"
 #endif
 
 typedef enum
@@ -28,6 +39,17 @@ typedef enum
     LOG_SEVERITY_WARNING,
     LOG_SEVERITY_ERROR
 } BSPLogSeverity_t;
+
+/** @brief 每个来源允许排队输出到哪个事件类别；故障和状态记录仍保留在RAM历史。
+ * @note OFF不输出；FAULT包含故障，STATUS包含故障和状态，VERBOSE还包含普通事件。
+ */
+typedef enum
+{
+    BSP_LOG_LEVEL_OFF = 0,
+    BSP_LOG_LEVEL_FAULT,
+    BSP_LOG_LEVEL_STATUS,
+    BSP_LOG_LEVEL_VERBOSE
+} BSPLogLevel_t;
 
 typedef enum
 {
@@ -60,7 +82,9 @@ typedef enum
     BSP_LOG_STATUS_NOT_FOUND,
     BSP_LOG_STATUS_EMPTY,
     BSP_LOG_STATUS_PROCESSED,
-    BSP_LOG_STATUS_TASK_CREATE_FAILED
+    BSP_LOG_STATUS_TASK_CREATE_FAILED,
+    BSP_LOG_STATUS_BAD_SOURCE,
+    BSP_LOG_STATUS_LEVEL_ABOVE_COMPILED
 } BSPLogStatus_t;
 
 typedef enum
@@ -127,17 +151,27 @@ typedef struct
     uint32_t shortened_text_fields;
     uint32_t format_failures;
     uint32_t output_failures;
+    uint32_t diagnostic_response_dropped;
+    uint32_t diagnostic_crc_errors;
+    uint32_t diagnostic_command_errors;
+    uint32_t diagnostic_tx_accepted;
+    uint32_t diagnostic_tx_completed;
+    uint32_t diagnostic_tx_failed;
+    uint32_t diagnostic_tx_rejected;
     uint32_t task_create_failures;
     uint32_t process_cycles;
     uint32_t first_fault_sequence;
+    uint8_t compiled_max_level;
     uint16_t queue_depth;
     uint16_t normal_queue_depth;
     uint16_t queue_high_water;
+    uint16_t diagnostic_tx_queue_depth;
     uint8_t history_count;
     uint8_t backend_available;
+    uint8_t diagnostic_uart_available;
+    uint8_t diagnostic_uart_isolated;
     uint8_t task_started;
     uint8_t task_create_pending;
-    uint8_t ordinary_enabled;
     uint8_t processing;
 } BSPLogState_t;
 
@@ -156,8 +190,8 @@ typedef struct
 /** @brief 十六进制显示的32位字段。 */
 #define BSP_LOG_FIELD_HEX32(value_) BSP_LOG_FIELD_U32(value_)
 
-/** @brief 初始化队列、历史和RTT后端；重复调用保留本次启动的记录。
- * @note 应在DWT初始化后、看门狗及其诊断之前调用；不创建日志任务。
+/** @brief 初始化队列、历史、RTT和等级命令UART；重复调用保留本次启动的记录。
+ * @note 应在DWT初始化后、看门狗及其诊断之前调用；不创建日志任务。日志只经RTT输出。
  */
 void BSPLogInit(void);
 
@@ -188,6 +222,22 @@ BSPLogStatus_t BSPLogProcessPending(uint8_t maximum_records);
  * @return 成功返回OK，否则返回参数或初始化错误。
  */
 BSPLogStatus_t BSPLogGetState(BSPLogState_t *output);
+
+/** @brief 临时设置单个事件来源的最高输出类别；重启后恢复默认等级。
+ * @param[in] source 固定来源目录中的编号；未知编号返回BAD_SOURCE。
+ * @param[in] level OFF、FAULT、STATUS或VERBOSE；不得高于本固件编译上限。
+ * @return OK或参数、上下文、来源及编译上限错误；失败时原等级不变。
+ * @note 仅普通任务调用。默认等级为STATUS，设置只影响之后提交的事件，不重放已过滤记录。
+ * USART10只承载此类等级命令和应答，日志事件不镜像到该串口。
+ */
+BSPLogStatus_t BSPLogSetSourceLevel(BSPLogSourceId_t source, BSPLogLevel_t level);
+
+/** @brief 复制单个来源当前等级。
+ * @param[in] source 固定来源目录中的编号。
+ * @param[out] output 接收等级；失败时保持原值。
+ * @return OK或参数、初始化及来源错误。
+ */
+BSPLogStatus_t BSPLogGetSourceLevel(BSPLogSourceId_t source, BSPLogLevel_t *output);
 
 /** @brief 按非零事件序号复制首次故障或最近16条关键记录。
  * @param[in] sequence 事件序号；序号被覆盖后返回NOT_FOUND。

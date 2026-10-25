@@ -100,7 +100,7 @@ jobs:
           configure_build robot-single-ui-off -DMC02_PROFILE=robot -DMC02_BOARD_ROLE=single -DMC02_VISION_TRANSPORT=usb -DMC02_ENABLE_REFEREE_UI=OFF
           configure_build robot-chassis-ui-off -DMC02_PROFILE=robot -DMC02_BOARD_ROLE=chassis -DMC02_VISION_TRANSPORT=usb -DMC02_ENABLE_REFEREE_UI=OFF
           configure_build robot-single-uart -DMC02_PROFILE=robot -DMC02_BOARD_ROLE=single -DMC02_VISION_TRANSPORT=uart -DMC02_ENABLE_REFEREE_UI=ON
-          configure_build rcdiag-log-test -DMC02_PROFILE=bench_safe -DMC02_BOARD_ROLE=single -DMC02_VISION_TRANSPORT=usb -DMC02_BENCH_RC_DIAGNOSTICS=ON -DMC02_LOG_ORDINARY=ON -DMC02_LOG_TEST=ON -DMC02_ENABLE_REFEREE_UI=OFF
+          configure_build rcdiag-log-test -DMC02_PROFILE=bench_safe -DMC02_BOARD_ROLE=single -DMC02_VISION_TRANSPORT=usb -DMC02_BENCH_RC_DIAGNOSTICS=ON -DMC02_LOG_COMPILED_MAX_LEVEL=VERBOSE -DMC02_LOG_TEST=ON -DMC02_ENABLE_REFEREE_UI=OFF
           configure_build refdiag -DMC02_PROFILE=bench_safe -DMC02_BOARD_ROLE=single -DMC02_VISION_TRANSPORT=usb -DMC02_BENCH_REFEREE_DIAGNOSTICS=ON -DMC02_ENABLE_REFEREE_UI=OFF
           ! grep -q 'modules/referee/referee_UI.c' build/wsl/robot-single-ui-off/mc02-selected-sources.txt
           ! grep -q 'modules/referee/referee_UI.c' build/wsl/robot-chassis-ui-off/mc02-selected-sources.txt

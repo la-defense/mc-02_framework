@@ -244,7 +244,7 @@ Unicom
 
 - [ ] **MC02-0003** [enhancement] [ready-for-agent] 建立 standard_cmd 输入适配与三种模式来源接口。验收：来源模块解析合法输入后按车型映射 SI 单位、明确参考系与源期限的控制意图，连续目标与离散事件分开，不重发续期；robot_cmd 唯一仲裁模式／来源，safety 唯一计算许可。安全手势统一，其余按车型配置，辅助人工击发，健康切换平滑接管。关联0054／0056／0070，不新增其他输入设备。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
-- [ ] **MC02-0004** [enhancement] [ready-for-agent] 统一编译日志上限与模块运行等级。验收：过滤先于格式化，未编译日志不能运行开启；正式默认关键故障和状态变化，独立诊断串口可临时调整编译上限内等级，有界输出与丢弃可查询。异步管线复用 MC02-0066，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [x] **MC02-0004** [enhancement] [ready-for-agent] 统一编译日志上限与模块运行等级。验收：来源默认STATUS、普通事件过滤先于渲染，等级不超过`MC02_LOG_COMPILED_MAX_LEVEL`；USART10仅用CRC保护命令临时设置／查询来源等级，日志只走RTT；状态可查询串口及命令错误。异步管线复用MC02-0066，范围与验证边界见[任务记录](../docs/workflow/tickets/MC02-0004.md)和[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
 #### ==referee==
 

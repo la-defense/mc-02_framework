@@ -9,6 +9,9 @@
 #include "cmsis_os.h"
 #include "task.h"
 #include "main.h"
+#include "usart.h"
+#include "bsp_usart.h"
+#include "usart_tx.h"
 
 #include <limits.h>
 #include <string.h>
@@ -31,6 +34,22 @@ static StackType_t log_worker_stack[BSP_LOG_WORKER_STACK_WORDS] BSP_LOG_STATIC_D
 static StaticTask_t log_worker_tcb BSP_LOG_STATIC_DTCM;
 static TaskHandle_t log_worker_handle;
 static BSPLogWorkerEntry_t log_worker_entry;
+static USARTInstance *diagnostic_uart_instance;
+static BSPLogDiagnosticRx_t diagnostic_receive_callback;
+
+static void BSPLogDiagnosticRx(void *context, const USART_RxBlock_t *block)
+{
+    (void)context;
+    if (diagnostic_receive_callback != NULL && block != NULL)
+        diagnostic_receive_callback(block->data, block->length);
+}
+
+static void BSPLogDiagnosticTxComplete(void *context, const USARTTxEvent_t *event)
+{
+    (void)context;
+    (void)event;
+    /* 发送结果由USART只读统计保留；回调不递归提交日志。 */
+}
 
 static void BSPLogWorkerTask(void *argument)
 {
@@ -143,4 +162,65 @@ void BSPLogPortExitCritical(void)
 void BSPLogPortDelayMs(uint32_t milliseconds)
 {
     osDelay(milliseconds);
+}
+
+uint8_t BSPLogPortDiagnosticInit(BSPLogDiagnosticRx_t receive)
+{
+    if (receive == NULL)
+        return 0u;
+    diagnostic_receive_callback = receive;
+    if (diagnostic_uart_instance != NULL)
+        return 1u;
+
+    USART_Init_Config_s configuration;
+    memset(&configuration, 0, sizeof(configuration));
+    configuration.recv_buff_size = 64u;
+    configuration.usart_handle = &huart10;
+    configuration.module_callback = BSPLogDiagnosticRx;
+    diagnostic_uart_instance = USARTRegister(&configuration);
+    return diagnostic_uart_instance != NULL;
+}
+
+uint8_t BSPLogPortSubmitDiagnosticFrame(const uint8_t *data, size_t length)
+{
+    if (diagnostic_uart_instance == NULL || data == NULL || length == 0u ||
+        length > USART_TX_MAX_BYTES)
+        return 0u;
+
+    USARTTxRequest_t request;
+    memset(&request, 0, sizeof(request));
+    request.data = data;
+    request.length = length;
+    request.mode = USART_TRANSFER_DMA;
+    request.timeout_ms = 100u;
+    request.complete = BSPLogDiagnosticTxComplete;
+    uint32_t id = 0u;
+    return USARTSubmitTx(diagnostic_uart_instance, &request, &id) == USART_SEND_ACCEPTED;
+}
+
+uint8_t BSPLogPortGetDiagnosticState(BSPLogPortDiagnosticState_t *output)
+{
+    if (output == NULL)
+        return 0u;
+    BSPLogPortDiagnosticState_t candidate;
+    memset(&candidate, 0, sizeof(candidate));
+    if (diagnostic_uart_instance == NULL)
+    {
+        *output = candidate;
+        return 1u;
+    }
+
+    candidate.available = 1u;
+    USARTTxState_t state;
+    if (USARTGetTxState(diagnostic_uart_instance, &state) == USART_SEND_ACCEPTED)
+    {
+        candidate.accepted = state.accepted;
+        candidate.completed = state.completed;
+        candidate.failed = state.failed;
+        candidate.rejected = state.rejected;
+        candidate.queue_depth = state.used;
+        candidate.isolated = state.isolated;
+    }
+    *output = candidate;
+    return 1u;
 }

@@ -27,7 +27,7 @@ def _cache_text() -> str:
         "MC02_BENCH_RC_DIAGNOSTICS": "OFF",
         "MC02_BENCH_REFEREE_DIAGNOSTICS": "OFF",
         "MC02_LOG_TEST": "OFF",
-        "MC02_LOG_ORDINARY": "OFF",
+        "MC02_LOG_COMPILED_MAX_LEVEL": "VERBOSE",
     }
     return "\n".join(f"{key}:BOOL={value}" for key, value in values.items()) + "\n"
 

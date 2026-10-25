@@ -117,7 +117,7 @@ def check_cache(cache_path: Path) -> None:
         "MC02_BENCH_RC_DIAGNOSTICS": "OFF",
         "MC02_BENCH_REFEREE_DIAGNOSTICS": "OFF",
         "MC02_LOG_TEST": "OFF",
-        "MC02_LOG_ORDINARY": "OFF",
+        "MC02_LOG_COMPILED_MAX_LEVEL": "VERBOSE",
     }
     for key, value in expected.items():
         if values.get(key) != value:

@@ -3,7 +3,10 @@
  * @note 队列和历史放在日志专用DTCM段；BSPLogInit()首次调用时显式清零。
  */
 #include "bsp_log.h"
+#include "bsp_log_diag.h"
 #include "bsp_log_port.h"
+
+#include "crc.h"
 
 #include <math.h>
 #include <string.h>
@@ -51,7 +54,12 @@ typedef struct
     BSPLogMergeSlot_t last_critical[BSP_LOG_SOURCE_CAPACITY];
     BSPLogHistoryRecord_t processing_record;
     char output[BSP_LOG_OUTPUT_CAPACITY];
+    uint8_t diagnostic_rx[BSP_LOG_DIAG_REQUEST_MAX];
     uint32_t next_sequence;
+    uint32_t diagnostic_response_dropped;
+    uint32_t diagnostic_crc_errors;
+    uint32_t diagnostic_command_errors;
+    uint16_t diagnostic_rx_length;
     uint32_t submitted;
     uint32_t queued;
     uint32_t merged;
@@ -66,6 +74,7 @@ typedef struct
     uint32_t task_create_failures;
     uint32_t process_cycles;
     uint32_t token_tick;
+    uint8_t source_levels[BSP_LOG_SOURCE_CAPACITY];
     uint16_t queue_depth;
     uint16_t normal_queue_depth;
     uint16_t queue_high_water;
@@ -102,6 +111,38 @@ static const BSPLogEventSpec_t log_events[] = {
 };
 #undef BSP_LOG_EVENT
 
+#define BSP_LOG_SOURCE(name, value, module, path) [value] = 1u,
+static const uint8_t log_source_valid[BSP_LOG_SOURCE_CAPACITY] = {
+#include "bsp_log_sources.def"
+};
+#undef BSP_LOG_SOURCE
+
+static BSPLogLevel_t BSPLogCategoryLevel(BSPLogCategory_t category)
+{
+    switch (category)
+    {
+    case LOG_CATEGORY_FAULT:
+        return BSP_LOG_LEVEL_FAULT;
+    case LOG_CATEGORY_STATUS:
+        return BSP_LOG_LEVEL_STATUS;
+    case LOG_CATEGORY_NORMAL:
+        return BSP_LOG_LEVEL_VERBOSE;
+    default:
+        return BSP_LOG_LEVEL_OFF;
+    }
+}
+
+static uint8_t BSPLogSourceIsValid(BSPLogSourceId_t source)
+{
+    return (uint32_t)source < BSP_LOG_SOURCE_CAPACITY && log_source_valid[(uint32_t)source];
+}
+
+static uint8_t BSPLogLevelIsAvailable(BSPLogLevel_t level)
+{
+    return level >= BSP_LOG_LEVEL_OFF && level <= BSP_LOG_LEVEL_VERBOSE &&
+           (uint32_t)level <= MC02_LOG_COMPILED_MAX_LEVEL;
+}
+
 static uint32_t BSPLogSaturatingAdd(uint32_t value, uint32_t add)
 {
     return (UINT32_MAX - value < add) ? UINT32_MAX : value + add;
@@ -110,6 +151,176 @@ static uint32_t BSPLogSaturatingAdd(uint32_t value, uint32_t add)
 static void BSPLogCount(uint32_t *counter)
 {
     *counter = BSPLogSaturatingAdd(*counter, 1u);
+}
+
+static uint8_t BSPLogSubmitDiagnosticFrame(uint8_t type, uint8_t sequence,
+                                            const uint8_t *payload, uint8_t payload_length)
+{
+    uint8_t frame[BSP_LOG_DIAGNOSTIC_FRAME_MAX];
+    size_t length = (size_t)BSP_LOG_DIAG_HEADER_SIZE + payload_length + BSP_LOG_DIAG_CRC_SIZE;
+    if (length > sizeof(frame) || (payload_length != 0u && payload == NULL))
+        return 0u;
+
+    frame[0] = BSP_LOG_DIAG_SYNC_0;
+    frame[1] = BSP_LOG_DIAG_SYNC_1;
+    frame[2] = BSP_LOG_DIAG_VERSION;
+    frame[3] = type;
+    frame[4] = sequence;
+    frame[5] = payload_length;
+    if (payload_length != 0u)
+        memcpy(frame + BSP_LOG_DIAG_HEADER_SIZE, payload, payload_length);
+
+    uint32_t crc = 0u;
+    size_t crc_offset = length - BSP_LOG_DIAG_CRC_SIZE;
+    if (CRCCompute(CRC16_MODBUS_A5, frame, crc_offset, &crc) != CRC_OK)
+        return 0u;
+    frame[crc_offset] = (uint8_t)crc;
+    frame[crc_offset + 1u] = (uint8_t)(crc >> 8u);
+    return BSPLogPortSubmitDiagnosticFrame(frame, length);
+}
+
+static void BSPLogCountDiagnostic(uint32_t *counter)
+{
+    BSPLogPortEnterCritical();
+    BSPLogCount(counter);
+    BSPLogPortExitCritical();
+}
+
+static void BSPLogSendDiagnosticReply(uint8_t command, uint8_t sequence,
+                                      const uint8_t *payload, uint8_t payload_length)
+{
+    if (!BSPLogSubmitDiagnosticFrame((uint8_t)(command | BSP_LOG_DIAG_REPLY_BIT),
+                                     sequence, payload, payload_length))
+        BSPLogCountDiagnostic(&log_workspace.diagnostic_response_dropped);
+}
+
+static void BSPLogHandleDiagnosticRequest(const uint8_t *frame, size_t length)
+{
+    if (frame == NULL || length < BSP_LOG_DIAG_HEADER_SIZE + BSP_LOG_DIAG_CRC_SIZE)
+    {
+        BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+        return;
+    }
+
+    /* 先校验整帧CRC，再解释等级字段，避免坏帧改动运行配置。 */
+    uint8_t payload_length = frame[5];
+    size_t crc_offset = BSP_LOG_DIAG_HEADER_SIZE + payload_length;
+    uint32_t expected_crc = 0u;
+    if (crc_offset + BSP_LOG_DIAG_CRC_SIZE != length ||
+        CRCCompute(CRC16_MODBUS_A5, frame, crc_offset, &expected_crc) != CRC_OK ||
+        frame[crc_offset] != (uint8_t)expected_crc ||
+        frame[crc_offset + 1u] != (uint8_t)(expected_crc >> 8u))
+    {
+        BSPLogCountDiagnostic(&log_workspace.diagnostic_crc_errors);
+        return;
+    }
+
+    uint8_t command = frame[3];
+    uint8_t sequence = frame[4];
+    const uint8_t *request_payload = frame + BSP_LOG_DIAG_HEADER_SIZE;
+    uint8_t reply[80] = {0u};
+    uint8_t reply_length = 0u;
+
+    if (frame[2] != BSP_LOG_DIAG_VERSION)
+    {
+        reply[0] = BSP_LOG_STATUS_BAD_ARGUMENT;
+        reply_length = 1u;
+        BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+    }
+    else if (command == BSP_LOG_DIAG_SET_LEVEL && payload_length == 2u)
+    {
+        BSPLogStatus_t status = BSPLogSetSourceLevel((BSPLogSourceId_t)request_payload[0],
+                                                     (BSPLogLevel_t)request_payload[1]);
+        BSPLogLevel_t current = BSP_LOG_LEVEL_OFF;
+        if (BSPLogGetSourceLevel((BSPLogSourceId_t)request_payload[0], &current) != BSP_LOG_STATUS_OK)
+            current = BSP_LOG_LEVEL_OFF;
+        reply[0] = (uint8_t)status;
+        reply[1] = request_payload[0];
+        reply[2] = (uint8_t)current;
+        reply[3] = MC02_LOG_COMPILED_MAX_LEVEL;
+        reply_length = 4u;
+        if (status != BSP_LOG_STATUS_OK)
+            BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+    }
+    else if (command == BSP_LOG_DIAG_GET_LEVEL && payload_length == 1u)
+    {
+        BSPLogLevel_t current = BSP_LOG_LEVEL_OFF;
+        BSPLogStatus_t status = BSPLogGetSourceLevel((BSPLogSourceId_t)request_payload[0], &current);
+        reply[0] = (uint8_t)status;
+        reply[1] = request_payload[0];
+        reply[2] = (uint8_t)current;
+        reply[3] = MC02_LOG_COMPILED_MAX_LEVEL;
+        reply_length = 4u;
+        if (status != BSP_LOG_STATUS_OK)
+            BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+    }
+    else
+    {
+        reply[0] = BSP_LOG_STATUS_BAD_ARGUMENT;
+        reply_length = 1u;
+        BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+    }
+
+    BSPLogSendDiagnosticReply(command, sequence, reply, reply_length);
+}
+
+static void BSPLogDiagnosticReceive(const uint8_t *data, size_t length)
+{
+    if (data == NULL && length != 0u)
+    {
+        BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+        return;
+    }
+
+    /* UART块可能只含半帧或多帧；只保留一个固定大小的命令候选。 */
+    for (size_t i = 0u; i < length; ++i)
+    {
+        uint8_t value = data[i];
+        uint16_t current_length = log_workspace.diagnostic_rx_length;
+        if (current_length == 0u)
+        {
+            if (value == BSP_LOG_DIAG_SYNC_0)
+                log_workspace.diagnostic_rx[log_workspace.diagnostic_rx_length++] = value;
+            continue;
+        }
+        if (current_length == 1u && value != BSP_LOG_DIAG_SYNC_1)
+        {
+            log_workspace.diagnostic_rx_length = (value == BSP_LOG_DIAG_SYNC_0) ? 1u : 0u;
+            if (log_workspace.diagnostic_rx_length == 1u)
+                log_workspace.diagnostic_rx[0] = value;
+            continue;
+        }
+        if (current_length >= BSP_LOG_DIAG_REQUEST_MAX)
+        {
+            log_workspace.diagnostic_rx_length = 0u;
+            BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+            continue;
+        }
+        log_workspace.diagnostic_rx[log_workspace.diagnostic_rx_length++] = value;
+        current_length = log_workspace.diagnostic_rx_length;
+        if (current_length == BSP_LOG_DIAG_HEADER_SIZE &&
+            log_workspace.diagnostic_rx[5] > BSP_LOG_DIAG_REQUEST_MAX -
+                                                 BSP_LOG_DIAG_HEADER_SIZE - BSP_LOG_DIAG_CRC_SIZE)
+        {
+            /* 头部声明的长度超出命令上限，丢弃候选并等待下一同步字节。 */
+            log_workspace.diagnostic_rx_length = 0u;
+            BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+            continue;
+        }
+        if (current_length >= BSP_LOG_DIAG_HEADER_SIZE)
+        {
+            size_t expected_length = BSP_LOG_DIAG_HEADER_SIZE + log_workspace.diagnostic_rx[5] +
+                                     BSP_LOG_DIAG_CRC_SIZE;
+            if (current_length == expected_length)
+            {
+                uint8_t request[BSP_LOG_DIAG_REQUEST_MAX];
+                memcpy(request, log_workspace.diagnostic_rx, expected_length);
+                log_workspace.diagnostic_rx_length = 0u;
+                /* 回调使用局部副本处理，重用接收数组前已完成CRC和命令解析。 */
+                BSPLogHandleDiagnosticRequest(request, expected_length);
+            }
+        }
+    }
 }
 
 static const BSPLogEventSpec_t *BSPLogFindEvent(BSPLogEventId_t id)
@@ -545,8 +756,54 @@ void BSPLogInit(void)
     log_workspace.next_sequence = 1u;
     log_workspace.tokens = BSP_LOG_TOKEN_BURST;
     log_workspace.token_tick = BSPLogPortNowMs();
+    for (uint32_t source = 0u; source < BSP_LOG_SOURCE_CAPACITY; ++source)
+    {
+        if (log_source_valid[source])
+        {
+            uint8_t default_level = BSP_LOG_COMPILED_LEVEL_STATUS;
+            if (default_level > MC02_LOG_COMPILED_MAX_LEVEL)
+                default_level = MC02_LOG_COMPILED_MAX_LEVEL;
+            log_workspace.source_levels[source] = default_level;
+        }
+    }
     log_workspace.backend_available = BSPLogPortInit();
+    (void)BSPLogPortDiagnosticInit(BSPLogDiagnosticReceive);
     log_workspace_initialized = 1u;
+}
+
+BSPLogStatus_t BSPLogSetSourceLevel(BSPLogSourceId_t source, BSPLogLevel_t level)
+{
+    if (!log_workspace_initialized)
+        return BSP_LOG_STATUS_NOT_INITIALIZED;
+    if (BSPLogPortInInterrupt())
+        return BSP_LOG_STATUS_BAD_CONTEXT;
+    if (level < BSP_LOG_LEVEL_OFF || level > BSP_LOG_LEVEL_VERBOSE)
+        return BSP_LOG_STATUS_BAD_ARGUMENT;
+    if (!BSPLogSourceIsValid(source))
+        return BSP_LOG_STATUS_BAD_SOURCE;
+    if (!BSPLogLevelIsAvailable(level))
+        return BSP_LOG_STATUS_LEVEL_ABOVE_COMPILED;
+
+    BSPLogPortEnterCritical();
+    log_workspace.source_levels[(uint32_t)source] = (uint8_t)level;
+    BSPLogPortExitCritical();
+    return BSP_LOG_STATUS_OK;
+}
+
+BSPLogStatus_t BSPLogGetSourceLevel(BSPLogSourceId_t source, BSPLogLevel_t *output)
+{
+    if (output == NULL)
+        return BSP_LOG_STATUS_BAD_ARGUMENT;
+    if (!log_workspace_initialized)
+        return BSP_LOG_STATUS_NOT_INITIALIZED;
+    if (!BSPLogSourceIsValid(source))
+        return BSP_LOG_STATUS_BAD_SOURCE;
+
+    BSPLogPortEnterCritical();
+    BSPLogLevel_t candidate = (BSPLogLevel_t)log_workspace.source_levels[(uint32_t)source];
+    BSPLogPortExitCritical();
+    *output = candidate;
+    return BSP_LOG_STATUS_OK;
 }
 
 BSPLogStatus_t BSPLogTaskInit(void)
@@ -591,6 +848,8 @@ BSPLogStatus_t BSPLogSubmit(BSPLogEventId_t event_id,
     const BSPLogEventSpec_t *spec = BSPLogFindEvent(event_id);
     if (spec == NULL)
         return BSP_LOG_STATUS_BAD_ARGUMENT;
+    if (!BSPLogSourceIsValid(spec->source))
+        return BSP_LOG_STATUS_BAD_SOURCE;
 
     BSPLogHistoryRecord_t candidate;
     memset(&candidate, 0, sizeof(candidate));
@@ -604,7 +863,11 @@ BSPLogStatus_t BSPLogSubmit(BSPLogEventId_t event_id,
 
     BSPLogPortEnterCritical();
     BSPLogCount(&log_workspace.submitted);
-    if (spec->category == LOG_CATEGORY_NORMAL && !MC02_LOG_ORDINARY)
+    uint8_t source_id = (uint8_t)spec->source;
+    BSPLogLevel_t event_level = BSPLogCategoryLevel(spec->category);
+    uint8_t level_allowed = (uint8_t)(event_level <= MC02_LOG_COMPILED_MAX_LEVEL &&
+                                      event_level <= log_workspace.source_levels[source_id]);
+    if (spec->category == LOG_CATEGORY_NORMAL && !level_allowed)
     {
         BSPLogCount(&log_workspace.filtered);
         BSPLogPortExitCritical();
@@ -629,7 +892,6 @@ BSPLogStatus_t BSPLogSubmit(BSPLogEventId_t event_id,
     if (shortened != 0u)
         log_workspace.shortened_text_fields = BSPLogSaturatingAdd(log_workspace.shortened_text_fields, shortened);
 
-    uint8_t source_id = (uint8_t)spec->source;
     if (spec->category != LOG_CATEGORY_NORMAL && source_id < BSP_LOG_SOURCE_CAPACITY)
     {
         BSPLogMergeSlot_t *merge = &log_workspace.last_critical[source_id];
@@ -648,6 +910,12 @@ BSPLogStatus_t BSPLogSubmit(BSPLogEventId_t event_id,
             int queued = BSPLogFindQueueSequence(merge->record.sequence);
             if (queued >= 0)
                 log_workspace.queue[(uint32_t)queued].record = merge->record;
+            if (!level_allowed)
+            {
+                BSPLogCount(&log_workspace.filtered);
+                BSPLogPortExitCritical();
+                return BSP_LOG_STATUS_FILTERED;
+            }
             BSPLogCount(&log_workspace.merged);
             BSPLogPortExitCritical();
             return BSP_LOG_STATUS_MERGED;
@@ -669,6 +937,13 @@ BSPLogStatus_t BSPLogSubmit(BSPLogEventId_t event_id,
             merge->source_id = source_id;
             merge->record = candidate;
         }
+    }
+
+    if (!level_allowed)
+    {
+        BSPLogCount(&log_workspace.filtered);
+        BSPLogPortExitCritical();
+        return BSP_LOG_STATUS_FILTERED;
     }
 
     if (spec->category == LOG_CATEGORY_NORMAL)
@@ -805,6 +1080,9 @@ BSPLogStatus_t BSPLogGetState(BSPLogState_t *output)
     candidate.shortened_text_fields = log_workspace.shortened_text_fields;
     candidate.format_failures = log_workspace.format_failures;
     candidate.output_failures = log_workspace.output_failures;
+    candidate.diagnostic_response_dropped = log_workspace.diagnostic_response_dropped;
+    candidate.diagnostic_crc_errors = log_workspace.diagnostic_crc_errors;
+    candidate.diagnostic_command_errors = log_workspace.diagnostic_command_errors;
     candidate.task_create_failures = log_workspace.task_create_failures;
     candidate.process_cycles = log_workspace.process_cycles;
     candidate.first_fault_sequence = log_workspace.first_fault_valid ? log_workspace.first_fault.sequence : 0u;
@@ -815,9 +1093,22 @@ BSPLogStatus_t BSPLogGetState(BSPLogState_t *output)
     candidate.backend_available = log_workspace.backend_available;
     candidate.task_started = log_workspace.task_started;
     candidate.task_create_pending = log_workspace.task_create_pending;
-    candidate.ordinary_enabled = MC02_LOG_ORDINARY ? 1u : 0u;
+    candidate.compiled_max_level = MC02_LOG_COMPILED_MAX_LEVEL;
     candidate.processing = log_workspace.processing;
     BSPLogPortExitCritical();
+
+    BSPLogPortDiagnosticState_t diagnostic_state;
+    memset(&diagnostic_state, 0, sizeof(diagnostic_state));
+    if (BSPLogPortGetDiagnosticState(&diagnostic_state))
+    {
+        candidate.diagnostic_tx_accepted = diagnostic_state.accepted;
+        candidate.diagnostic_tx_completed = diagnostic_state.completed;
+        candidate.diagnostic_tx_failed = diagnostic_state.failed;
+        candidate.diagnostic_tx_rejected = diagnostic_state.rejected;
+        candidate.diagnostic_tx_queue_depth = diagnostic_state.queue_depth;
+        candidate.diagnostic_uart_available = diagnostic_state.available;
+        candidate.diagnostic_uart_isolated = diagnostic_state.isolated;
+    }
     *output = candidate;
     return BSP_LOG_STATUS_OK;
 }
