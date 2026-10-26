@@ -13,6 +13,8 @@ extern uint16_t uart_model_tx_length[8];
 extern uint8_t uart_model_irq_enabled[32], uart_model_lease_denied;
 void UARTModelInit(void);
 void UARTModelCheckRuntimeAllocation(void);
+void UARTModelGetAllocationCounts(uint32_t *allocations, uint32_t *frees);
+void UARTModelFailNextAllocation(void);
 void UARTModelDMAComplete(unsigned port);
 void UARTModelComplete(unsigned port);
 #endif

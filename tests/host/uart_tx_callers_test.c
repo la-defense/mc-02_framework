@@ -50,11 +50,6 @@ void osDelay(uint32_t ms)
     (void)ms;
     TEST_CHECK(0);
 }
-static void rx(void *context, const USART_RxBlock_t *block)
-{
-    (void)context;
-    (void)block;
-}
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
@@ -62,32 +57,100 @@ int main(int argc, char **argv)
     USARTTxSetServiceReady(1u);
     if (strcmp(argv[1], "servo") == 0)
     {
-        USART_Init_Config_s config = {
-            .recv_buff_size = 10u, .usart_handle = &uart_handles[5], .module_callback = rx};
-        USARTInstance *instance = USARTRegister(&config);
-        TEST_CHECK(instance);
+        TEST_CHECK(ServoInit(NULL) == NULL);
+        Servo_Init_Config_s invalid = {.servo_type = Bus_Servo, .servo_id = SERVO_MOTOR_CNT};
+        TEST_CHECK(ServoInit(&invalid) == NULL);
+        invalid.servo_id = 0u;
+        TEST_CHECK(ServoInit(&invalid) == NULL);
+        invalid.servo_type = Servo_None_Type;
+        invalid._handle = &uart_handles[0];
+        TEST_CHECK(ServoInit(&invalid) == NULL);
+
+        Servo_Init_Config_s config_first = {
+            .servo_type = Bus_Servo, ._handle = &uart_handles[5], .servo_id = 1u};
+        Servo_Init_Config_s config_last = {
+            .servo_type = Bus_Servo, ._handle = &uart_handles[4], .servo_id = 6u};
+        Servo_Init_Config_s config_middle = {
+            .servo_type = Bus_Servo, ._handle = &uart_handles[3], .servo_id = 3u};
+        Servo_Init_Config_s config_zero = {
+            .servo_type = Bus_Servo, ._handle = &uart_handles[2], .servo_id = 0u};
+        Servo_Init_Config_s config_copy = config_first;
+        ServoInstance *first = ServoInit(&config_first);
+        ServoInstance *last = ServoInit(&config_last);
+        TEST_CHECK(first != NULL && last != NULL);
+        TEST_CHECK(memcmp(&config_first, &config_copy, sizeof(config_first)) == 0);
+
+        uint32_t alloc_before, free_before, alloc_after, free_after;
+        UARTModelGetAllocationCounts(&alloc_before, &free_before);
+        Servo_Init_Config_s duplicate_id = {
+            .servo_type = Bus_Servo, ._handle = &uart_handles[3], .servo_id = 1u};
+        TEST_CHECK(ServoInit(&duplicate_id) == NULL);
+        UARTModelGetAllocationCounts(&alloc_after, &free_after);
+        TEST_CHECK(alloc_after == alloc_before && free_after == free_before);
+
+        Servo_Init_Config_s duplicate_uart = {
+            .servo_type = Bus_Servo, ._handle = &uart_handles[5], .servo_id = 3u};
+        TEST_CHECK(ServoInit(&duplicate_uart) == NULL);
+        UARTModelGetAllocationCounts(&alloc_after, &free_after);
+        TEST_CHECK(alloc_after == alloc_before + 1u && free_after == free_before + 1u);
+
+        UARTModelGetAllocationCounts(&alloc_before, &free_before);
+        UARTModelFailNextAllocation();
+        TEST_CHECK(ServoInit(&config_middle) == NULL);
+        UARTModelGetAllocationCounts(&alloc_after, &free_after);
+        TEST_CHECK(alloc_after == alloc_before + 1u && free_after == free_before);
+
+        static TIM_HandleTypeDef fake_pwm_handle;
+        Servo_Init_Config_s failed_pwm = {
+            .servo_type = PWM_Servo,
+            .servo_id = 0u,
+            .pwm_init_config = {.htim = &fake_pwm_handle}};
+        UARTModelGetAllocationCounts(&alloc_before, &free_before);
+        TEST_CHECK(ServoInit(&failed_pwm) == NULL);
+        UARTModelGetAllocationCounts(&alloc_after, &free_after);
+        TEST_CHECK(alloc_after == alloc_before + 1u && free_after == free_before + 1u);
+        ServoInstance *middle = ServoInit(&config_middle);
+        ServoInstance *zero = ServoInit(&config_zero);
+        TEST_CHECK(middle != NULL && zero != NULL);
         UARTModelCheckRuntimeAllocation();
-        ServoInstance servo = {.servo_type = Bus_Servo, .usart_instance = instance};
         TEST_CHECK(ServoSetAngle(NULL, 1.0f) == USART_SEND_BAD_ARGUMENT);
-        TEST_CHECK(ServoSetAngle(&servo, NAN) == USART_SEND_BAD_ARGUMENT &&
-                   ServoSetAngle(&servo, 65536.0f) == USART_SEND_BAD_ARGUMENT);
-        TEST_CHECK(ServoSetAngle(&servo, 1000.0f) == USART_SEND_ACCEPTED);
+        TEST_CHECK(ServoSetAngle(first, NAN) == USART_SEND_BAD_ARGUMENT &&
+                   ServoSetAngle(first, 65536.0f) == USART_SEND_BAD_ARGUMENT);
+        TEST_CHECK(ServoSetAngle(first, 1000.0f) == USART_SEND_ACCEPTED);
         USARTProcessTx();
         const uint8_t golden[] = {0x55, 0x55, 8, 3, 1, 0xf4, 1, 1, 0xe8, 3, 0x55, 0x55, 4, 0x15, 1, 1};
         TEST_CHECK(uart_model_tx_length[5] == 16u && memcmp(uart_model_tx[5], golden, sizeof(golden)) == 0);
-        TEST_CHECK(ServoSetAngle(&servo, 2.0f) == USART_SEND_ACCEPTED);
+        TEST_CHECK(ServoSetAngle(last, 2000.0f) == USART_SEND_ACCEPTED);
+        USARTProcessTx();
+        const uint8_t second_golden[] = {0x55, 0x55, 8, 3, 1, 0xf4, 1, 1, 0xd0, 0x07, 0x55, 0x55, 4, 0x15, 1, 1};
+        TEST_CHECK(uart_model_tx_length[4] == sizeof(second_golden) &&
+                   memcmp(uart_model_tx[4], second_golden, sizeof(second_golden)) == 0);
+        TEST_CHECK(ServoSetAngle(first, 2.0f) == USART_SEND_ACCEPTED);
+        USARTProcessTx();
         TEST_CHECK(memcmp(uart_model_tx[5], golden, sizeof(golden)) == 0);
         UARTModelDMAComplete(5u);
         UARTModelComplete(5u);
+        UARTModelDMAComplete(4u);
+        UARTModelComplete(4u);
         USARTProcessTx();
         USARTTxEvent_t latest;
         uint32_t failures;
-        TEST_CHECK(ServoGetTxState(&servo, &latest, &failures) == USART_SEND_ACCEPTED);
+        TEST_CHECK(ServoGetTxState(first, &latest, &failures) == USART_SEND_ACCEPTED);
         TEST_CHECK(latest.result == USART_TX_COMPLETE && latest.id != 0u && failures == 0u);
-        TEST_CHECK(uart_model_tx[5][8] == 2u);
-        uart_model_ms = 50u;
+        const uint8_t queued_golden[] = {0x55, 0x55, 8, 3, 1, 0xf4, 1, 1, 2, 0, 0x55, 0x55, 4, 0x15, 1, 1};
+        TEST_CHECK(uart_model_tx_length[5] == sizeof(queued_golden) &&
+                   memcmp(uart_model_tx[5], queued_golden, sizeof(queued_golden)) == 0);
+        TEST_CHECK(ServoGetTxState(last, &latest, &failures) == USART_SEND_ACCEPTED);
+        TEST_CHECK(latest.result == USART_TX_COMPLETE && latest.id != 0u && failures == 0u);
+        UARTModelDMAComplete(5u);
+        UARTModelComplete(5u);
         USARTProcessTx();
-        TEST_CHECK(ServoGetTxState(&servo, &latest, &failures) == USART_SEND_ACCEPTED);
+        uart_model_ms = 50u;
+        TEST_CHECK(ServoSetAngle(middle, 3000.0f) == USART_SEND_ACCEPTED);
+        USARTProcessTx();
+        uart_model_ms = 100u;
+        USARTProcessTx();
+        TEST_CHECK(ServoGetTxState(middle, &latest, &failures) == USART_SEND_ACCEPTED);
         TEST_CHECK(failures == 1u && latest.result == USART_TX_EXPIRED);
         return 0;
     }

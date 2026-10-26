@@ -19,19 +19,27 @@ uint8_t *uart_model_rx[8], *uart_model_tx[8];
 uint16_t uart_model_tx_length[8];
 uint8_t uart_model_irq_enabled[32], uart_model_lease_denied;
 static _Atomic unsigned allocation_calls, free_calls;
+static _Atomic uint8_t fail_next_allocation;
 static unsigned allocation_baseline, free_baseline;
 static uint8_t check_allocations;
 void *__real_malloc(size_t size);
 void *__real_calloc(size_t count, size_t size);
 void __real_free(void *pointer);
+static uint8_t UARTModelConsumeAllocationFailure(void)
+{
+    // Release优化可能把分配后清零合并为calloc，因此两种分配入口共用故障标记。
+    return atomic_exchange(&fail_next_allocation, 0u);
+}
 void *__wrap_malloc(size_t size)
 {
     atomic_fetch_add(&allocation_calls, 1u);
+    if (UARTModelConsumeAllocationFailure()) return NULL;
     return __real_malloc(size);
 }
 void *__wrap_calloc(size_t count, size_t size)
 {
     atomic_fetch_add(&allocation_calls, 1u);
+    if (UARTModelConsumeAllocationFailure()) return NULL;
     return __real_calloc(count, size);
 }
 void __wrap_free(void *pointer)
@@ -44,6 +52,15 @@ void UARTModelCheckRuntimeAllocation(void)
     allocation_baseline = allocation_calls;
     free_baseline = free_calls;
     check_allocations = 1u;
+}
+void UARTModelGetAllocationCounts(uint32_t *allocations, uint32_t *frees)
+{
+    if (allocations != NULL) *allocations = atomic_load(&allocation_calls);
+    if (frees != NULL) *frees = atomic_load(&free_calls);
+}
+void UARTModelFailNextAllocation(void)
+{
+    atomic_store(&fail_next_allocation, 1u);
 }
 __attribute__((destructor)) static void CheckNoRuntimeAllocation(void)
 {

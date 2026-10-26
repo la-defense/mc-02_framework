@@ -45,12 +45,12 @@ typedef struct
     uint32_t tx_failures;
 }ServoInstance;
 
-/** @brief 按类型注册 UART 或 PWM，并保存到本地实例表。
-* @param[in] Servo_Init_Config 有效配置；servo_id 须从 0 连续编号且小于 7，底层外设须先配置。
-* @return 分配对象；当前未检查容量、内存或底层注册失败，不提供可靠的失败返回。
-* @note 总线接收只支持当前单 UART 方式；公共命令帧内设备编号固定，尚未按 servo_id 改写发送编号。
+/** @brief 在启动阶段注册 UART 或 PWM 舵机并保存长期实例。
+ * @param[in] Servo_Init_Config 非空配置；servo_id 范围为0～6且不得重复，所选底层外设须先配置。
+ * @return 成功返回长期有效实例；参数、ID、内存或底层注册失败返回NULL，配置及已有实例保持不变。
+ * @note 仅限调度器启动前串行注册；实例无运行期注销接口。总线帧仍保留固定设备编号，实际协议对应关系未在此修复。
 */
-ServoInstance *ServoInit(Servo_Init_Config_s *Servo_Init_Config);
+ServoInstance *ServoInit(const Servo_Init_Config_s *Servo_Init_Config);
 /** @brief 更新PWM占空比或复制总线命令入队。
  * @param[in,out] servo 已初始化实例，NULL返回参数错误；须保存到发送完成。
  * @param[in] angle PWM为0～1占空比，总线为0～65535有限原始位置数值。

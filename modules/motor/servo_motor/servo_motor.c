@@ -2,47 +2,72 @@
 * @brief 总线固定命令及PWM选择；长期实例通过ServoSetAngle复制提交，结果由任务通知。
 */
 #include "servo_motor.h"
-#include "stdlib.h"
-#include "memory.h"
+#include <stdlib.h>
+#include <string.h>
 #include <math.h>
-#include "bsp_log.h"
 uint8_t servo_angle_read[6]={0x55 ,0x55 ,0x04, 0x15 ,0x01 ,0x01 ,};
 uint8_t servo_angle_write[16]={0x55 ,0x55, 0x08, 0x03, 0x01 ,0xF4 ,0x01 ,0x01 ,0x20 ,0x03,0x55 ,0x55 ,0x04, 0x15 ,0x01 ,0x01 ,};
 uint8_t servo_unload[6]={0x55,0x55,0x04,0x14,0x01,0x01};
 
-// 本地表保留现有注册方式；接收回调只访问注册时传入的舵机对象。
+// ID表用于拒绝重复注册，并让稀疏编号保存在对应槽位。
 static ServoInstance *servo_motor_instance[SERVO_MOTOR_CNT];
-static uint8_t servo_idx = 0; // register servo_idx,是该文件的全局舵机索引,在注册时使用
 static void DecodeServo(void *context, const USART_RxBlock_t *block);
-// 通过此函数注册一个舵机
-ServoInstance *ServoInit(Servo_Init_Config_s *Servo_Init_Config)
+ServoInstance *ServoInit(const Servo_Init_Config_s *config)
 {
-    ServoInstance *servo = (ServoInstance *)malloc(sizeof(ServoInstance));
-    memset(servo, 0, sizeof(ServoInstance));
-    USART_Init_Config_s config = {0};
-    config.context = servo;
-    servo->servo_type = Servo_Init_Config->servo_type;
-    // 总线舵机注册串口接收，PWM 舵机注册定时器；未知类型只记录错误。
-    switch (Servo_Init_Config->servo_type)
+    if (config == NULL || config->servo_id >= SERVO_MOTOR_CNT ||
+        (config->servo_type != Bus_Servo && config->servo_type != PWM_Servo))
+        return NULL;
+
+    if ((config->servo_type == Bus_Servo && config->_handle == NULL) ||
+        (config->servo_type == PWM_Servo && config->pwm_init_config.htim == NULL))
+        return NULL;
+
+    // 同一ID只能对应一个实例；先检查再申请，失败不会占用槽位。
+    if (servo_motor_instance[config->servo_id] != NULL)
+        return NULL;
+
+    ServoInstance *servo = (ServoInstance *)malloc(sizeof(*servo));
+    if (servo == NULL)
+        return NULL;
+    memset(servo, 0, sizeof(*servo));
+    servo->servo_id = config->servo_id;
+    servo->servo_type = config->servo_type;
+
+    switch (config->servo_type)
     {
     case Bus_Servo:
-        config.module_callback = DecodeServo;
-        config.recv_buff_size = Servo_MAX_BUFF;
-        config.usart_handle = Servo_Init_Config->_handle;
-        servo->usart_instance = USARTRegister(&config);
-        break;
-    case PWM_Servo:
-        servo->pwm_instance = PWMRegister(&Servo_Init_Config->pwm_init_config);
-        break;
-    default:
-        BSP_LOG_EVENT_0(EV_MODULES_MOTOR_SERVO_MOTOR_SERVO_MOTOR_C_01);
+    {
+        USART_Init_Config_s usart_config = {
+            .context = servo,
+            .module_callback = DecodeServo,
+            .recv_buff_size = Servo_MAX_BUFF,
+            .usart_handle = config->_handle};
+        servo->usart_instance = USARTRegister(&usart_config);
+        if (servo->usart_instance == NULL)
+            goto registration_failed;
         break;
     }
-    servo->servo_id = Servo_Init_Config->servo_id;
-    servo_idx++;
-    servo_motor_instance[servo->servo_id] = servo;
+    case PWM_Servo:
+    {
+        // 底层注册接口接收可写配置；使用副本避免改动调用者保存的数据。
+        PWM_Init_Config_s pwm_config = config->pwm_init_config;
+        servo->pwm_instance = PWMRegister(&pwm_config);
+        if (servo->pwm_instance == NULL)
+            goto registration_failed;
+        break;
+    }
+    default:
+        free(servo);
+        return NULL;
+    }
 
+    // 资源均就绪后才公开对象，接收回调从此可安全使用长期上下文。
+    servo_motor_instance[servo->servo_id] = servo;
     return servo;
+
+registration_failed:
+    free(servo);
+    return NULL;
 }
 //@todo PWM舵机的角度设置需要根据相应定时器PWM等参数进行计算(是否需要规范定时器PWM的初始化参数，以便于计算)
 static void ServoTxCompleted(void *context,const USARTTxEvent_t *event)
@@ -60,7 +85,7 @@ USARTSendStatus_t ServoSetAngle(ServoInstance *servo, float angle)
         servo->angle=angle;PWMSetDutyRatio(servo->pwm_instance,angle);return USART_SEND_ACCEPTED;
     }
     if(servo->servo_type!=Bus_Servo || angle<0.0f || angle>65535.0f)return USART_SEND_BAD_ARGUMENT;
-    // 保留旧帧和固定设备编号；本次只修复异步数组寿命，协议接入仍由MOTOR-06跟踪。
+    // 保留旧帧和固定设备编号；MOTOR-06只覆盖注册和发送缓冲，设备协议仍待单独核实。
     uint8_t frame[16];memcpy(frame,servo_angle_write,sizeof(frame));
     uint16_t value=(uint16_t)angle;frame[8]=(uint8_t)value;frame[9]=(uint8_t)(value>>8u);
     USARTTxRequest_t request={frame,sizeof(frame),USART_TRANSFER_DMA,50u,ServoTxCompleted,NULL,servo};
