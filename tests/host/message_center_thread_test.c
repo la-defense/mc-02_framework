@@ -36,6 +36,7 @@ static const MessageTopicDescriptor_t descriptors[] = {
         .source_clock = MESSAGE_CLOCK_LOCAL,
         .publisher_mask = 1u,
         .subscriber_mask = 2u,
+        .diagnostics_enabled = 1u,
     },
     {
         .topic_id = 2u,
@@ -47,6 +48,7 @@ static const MessageTopicDescriptor_t descriptors[] = {
         .source_clock = MESSAGE_CLOCK_LOCAL,
         .publisher_mask = 1u,
         .subscriber_mask = 2u,
+        .diagnostics_enabled = 0u,
     },
 };
 
@@ -107,6 +109,17 @@ static void *ReadRecords(void *unused)
              record.marker != (record.sequence ^ 0xa55aa55au)))
             atomic_store(&failed, 1);
 
+        MessageTopicDiagnostic_t diagnostic = {0};
+        if (MessageGetTopicDiagnostic(0u, &diagnostic) != MESSAGE_OK ||
+            diagnostic.descriptor.topic_id != 1u ||
+            diagnostic.active_publisher_mask != 1u ||
+            diagnostic.active_subscriber_mask != 2u ||
+            diagnostic.queue_depth > diagnostic.queue_capacity ||
+            diagnostic.queue_remaining !=
+                (uint8_t)(diagnostic.queue_capacity - diagnostic.queue_depth) ||
+            diagnostic.stats.peak_backlog < diagnostic.queue_depth)
+            atomic_store(&failed, 1);
+
         MessageRecord_t event = {0};
         const MessageStatus_t event_status = MessageReadEvent(event_subscriber,
             &event, sizeof(event), 0u, NULL);
@@ -150,6 +163,14 @@ int main(void)
     MessageRecord_t last = {0};
     TEST_CHECK(MessageReadSnapshot(subscriber, &last, sizeof(last), 0u, NULL) == MESSAGE_OK);
     TEST_CHECK(last.sequence == 200000u && last.complement == ~last.sequence);
+    MessageTopicDiagnostic_t topic_diagnostic = {0};
+    TEST_CHECK(MessageGetTopicDiagnostic(0u, &topic_diagnostic) == MESSAGE_OK);
+    TEST_CHECK(topic_diagnostic.stats.published == 200000u &&
+               topic_diagnostic.queue_depth == 1u && topic_diagnostic.queue_capacity == 1u &&
+               topic_diagnostic.stats.peak_backlog == 1u);
+    uint8_t diagnostic_count = 0u;
+    TEST_CHECK(MessageGetDiagnosticTopicCount(&diagnostic_count) == MESSAGE_OK &&
+               diagnostic_count == 1u);
 
     MessageTopicStats_t event_stats = {0};
     TEST_CHECK(MessageGetTopicStats(2u, &event_stats) == MESSAGE_OK);

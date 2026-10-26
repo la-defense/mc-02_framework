@@ -33,7 +33,8 @@ typedef enum
     MESSAGE_ERR_EMPTY,
     MESSAGE_ERR_EXPIRED,
     MESSAGE_ERR_CLOCK_DOMAIN,
-    MESSAGE_ERR_CAPACITY
+    MESSAGE_ERR_CAPACITY,
+    MESSAGE_ERR_RANGE
 } MessageStatus_t;
 
 typedef enum
@@ -66,15 +67,33 @@ typedef struct
     MessageClockDomain_t source_clock;
     uint32_t publisher_mask;
     uint32_t subscriber_mask;
+    uint8_t diagnostics_enabled; /**< 设为1时可通过复制接口和USART10查询该话题。 */
 } MessageTopicDescriptor_t;
 
+/** @brief 话题累计次数；队列容量和当前积压在读取时单独计算。 */
 typedef struct
 {
-    uint32_t published;
-    uint32_t overwritten;
-    uint32_t rejected;
-    uint32_t expired;
+    uint32_t published;   /**< 成功发布的调用次数，每次发布最多加1。 */
+    uint32_t overwritten; /**< 所有订阅队列中被新数据替换的旧项数。 */
+    uint32_t rejected;    /**< 因满队列被拒绝的发布调用数。 */
+    uint32_t expired;     /**< 读者发现并丢弃／标记过期的订阅队列项数。 */
+    uint8_t peak_backlog; /**< 所有活动订阅队列合计的最高占用，最大64项。 */
 } MessageTopicStats_t;
+
+/** @brief 一次复制取得的话题关系、队列占用和累计次数。 */
+typedef struct
+{
+    MessageTopicDescriptor_t descriptor;
+    MessageTopicStats_t stats;
+    uint32_t active_publisher_mask;  /**< 实际注册的发布端点，位n对应端点n+1。 */
+    uint32_t active_subscriber_mask; /**< 实际注册的订阅端点，位n对应端点n+1。 */
+    uint32_t captured_ms; /**< 查询时的HAL毫秒值，0合法；不用于消息新鲜度计算。 */
+    uint8_t publisher_count;
+    uint8_t subscriber_count;
+    uint8_t queue_depth;      /**< 所有订阅者当前保存的消息总数，最大64项。 */
+    uint8_t queue_capacity;   /**< 所有活动订阅者队列容量之和，最大64项。 */
+    uint8_t queue_remaining;  /**< queue_capacity - queue_depth。 */
+} MessageTopicDiagnostic_t;
 
 typedef struct MessagePublisher MessagePublisher_t;
 typedef struct MessageSubscriber MessageSubscriber_t;
@@ -149,11 +168,25 @@ MessageStatus_t MessageReadEvent(MessageSubscriber_t *subscriber, void *output,
                                  size_t output_size, uint32_t now_ms,
                                  MessageFreshness_t *freshness);
 
-/** @brief 复制话题统计，不消费队列或推进过期处理。
+/** @brief 复制话题累计次数，不消费队列或推进过期处理。
  * @param[in] topic_id 已登记的话题编号。
- * @param[out] stats 输出统计；参数错误时保持原值。
+ * @param[out] stats 输出累计次数和历史最高积压；参数错误时保持原值。
  * @return 成功返回MESSAGE_OK；未初始化或未知编号返回对应错误。
  */
 MessageStatus_t MessageGetTopicStats(MessageTopicId_t topic_id, MessageTopicStats_t *stats);
+
+/** @brief 读取显式启用诊断的话题数量；不清理队列或推进过期处理。
+ * @param[out] count 接收诊断目录项数，范围0～MESSAGE_CENTER_MAX_TOPICS。
+ * @return 成功返回MESSAGE_OK；失败时保持count原值。
+ */
+MessageStatus_t MessageGetDiagnosticTopicCount(uint8_t *count);
+
+/** @brief 按诊断目录序号复制一个话题的配置、端点关系及队列统计。
+ * @param[in] index 按MessageCenterInit目录顺序排列的诊断话题序号，从0开始。
+ * @param[out] output 接收同一临界区内复制的完整结果；失败时保持原值。
+ * @return 成功返回MESSAGE_OK；目录未初始化、序号越界或话题未启用诊断时返回对应状态。
+ * @note 队列深度、容量和余量合计所有已登记订阅者。读取不消费消息、不改变源时间。
+ */
+MessageStatus_t MessageGetTopicDiagnostic(uint8_t index, MessageTopicDiagnostic_t *output);
 
 #endif

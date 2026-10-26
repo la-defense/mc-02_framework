@@ -16,6 +16,9 @@
 #include "vehicle_health.h"
 #include "bsp_safety.h"
 #include "bsp_reset_recovery.h"
+#if defined(MC02_PROFILE_ROBOT)
+#include "topics/robot_topics_diag.h"
+#endif
 #if MC02_BENCH_RC_DIAGNOSTICS
 #include "remote_bench.h"
 #endif
@@ -156,6 +159,11 @@ uint8_t RobotInit(void)
     InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
     ROBOT_INIT_CHECK(ChassisInit(), INIT_STAGE_APPLICATION, INIT_MODULE_CHASSIS,
                      INIT_FAILURE_DEPENDENCY, 0u);
+#endif
+
+#if defined(MC02_PROFILE_ROBOT)
+    // 话题统计只用于调试；注册失败不改变控制任务的启动结果。
+    (void)RobotTopicsDiagnosticInit();
 #endif
 
     InitDiagnosticSetStage(INIT_STAGE_TASKS);

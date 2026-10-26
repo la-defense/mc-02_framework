@@ -24,6 +24,7 @@ int main(void)
         .source_clock = MESSAGE_CLOCK_LOCAL,
         .publisher_mask = 1u,
         .subscriber_mask = 0x1ffu,
+        .diagnostics_enabled = 0u,
     };
     TEST_CHECK(MessageCenterInit(&descriptor, 1u) == MESSAGE_OK);
 

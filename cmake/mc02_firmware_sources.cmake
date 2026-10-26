@@ -173,7 +173,9 @@ set(MC02_APPLICATION_GIMBAL_C_SOURCES
     application/shoot/shoot.c)
 
 if(MC02_PROFILE STREQUAL "robot")
-    list(APPEND MC02_APPLICATION_COMMON_C_SOURCES application/topics/robot_topics.c)
+    list(APPEND MC02_APPLICATION_COMMON_C_SOURCES
+        application/topics/robot_topics.c
+        application/topics/robot_topics_diag.c)
 endif()
 if(MC02_VISION_PROTOCOL STREQUAL "v2")
     list(APPEND MC02_COMMON_MODULE_C_SOURCES

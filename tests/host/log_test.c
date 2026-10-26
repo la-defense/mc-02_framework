@@ -13,6 +13,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(LOG_TOPIC_DIAGNOSTIC_TEST)
+#include "message_center.h"
+#include "robot_topics_diag.h"
+#endif
 
 #if defined(LOG_TEST_THREADS)
 #include <pthread.h>
@@ -68,6 +72,13 @@ uint32_t BSPLogPortNowMs(void)
 {
     return __atomic_load_n(&tick_ms, __ATOMIC_RELAXED);
 }
+
+#if defined(LOG_TOPIC_DIAGNOSTIC_TEST)
+uint32_t HAL_GetTick(void)
+{
+    return tick_ms;
+}
+#endif
 
 uint8_t BSPLogPortInInterrupt(void)
 {
@@ -715,6 +726,112 @@ static void test_diagnostic_unavailable(void)
     TEST_CHECK(output_count == 1u);
 }
 
+#if defined(LOG_TOPIC_DIAGNOSTIC_TEST)
+static void test_topic_diagnostics(void)
+{
+    static const MessageTopicDescriptor_t descriptors[] = {
+        {0x1234u, sizeof(uint32_t), 100u, 1u, MESSAGE_DELIVERY_SNAPSHOT,
+         MESSAGE_OVERFLOW_REPLACE_OLDEST, MESSAGE_CLOCK_LOCAL, 1u, 6u, 1u},
+        {0x5678u, sizeof(uint32_t), 25u, 2u, MESSAGE_DELIVERY_EVENT_FIFO,
+         MESSAGE_OVERFLOW_REJECT_NEWEST, MESSAGE_CLOCK_LOCAL, 1u, 4u, 1u},
+        {0x9ABCu, sizeof(uint32_t), 25u, 1u, MESSAGE_DELIVERY_SNAPSHOT,
+         MESSAGE_OVERFLOW_REPLACE_OLDEST, MESSAGE_CLOCK_LOCAL, 1u, 8u, 0u},
+    };
+    TEST_CHECK(RobotTopicsDiagnosticInit() == BSP_LOG_STATUS_NOT_INITIALIZED);
+    BSPLogInit();
+    TEST_CHECK(MessageCenterInit(descriptors, sizeof(descriptors) / sizeof(descriptors[0])) ==
+               MESSAGE_OK);
+    MessagePublisher_t *snapshot_pub = MessagePublisherRegister(0x1234u, 1u);
+    MessageSubscriber_t *snapshot_sub = MessageSubscriberRegister(0x1234u, 2u);
+    MessageSubscriber_t *snapshot_sub_second = MessageSubscriberRegister(0x1234u, 3u);
+    MessagePublisher_t *event_pub = MessagePublisherRegister(0x5678u, 1u);
+    MessageSubscriber_t *event_sub = MessageSubscriberRegister(0x5678u, 3u);
+    TEST_CHECK(snapshot_pub != NULL && snapshot_sub != NULL && snapshot_sub_second != NULL &&
+               event_pub != NULL && event_sub != NULL);
+    TEST_CHECK(RobotTopicsDiagnosticInit() == BSP_LOG_STATUS_OK);
+    TEST_CHECK(RobotTopicsDiagnosticInit() == BSP_LOG_STATUS_HANDLER_ALREADY_REGISTERED);
+
+    tick_ms = 120u;
+    uint32_t value = 1u;
+    TEST_CHECK(MessagePublishAt(snapshot_pub, &value, 110u, 110u, 110u,
+                                MESSAGE_CLOCK_LOCAL) == MESSAGE_OK);
+    value = 2u;
+    TEST_CHECK(MessagePublishAt(snapshot_pub, &value, 111u, 111u, 111u,
+                                MESSAGE_CLOCK_LOCAL) == MESSAGE_OK);
+    value = 10u;
+    TEST_CHECK(MessagePublishAt(event_pub, &value, 100u, 100u, 100u,
+                                MESSAGE_CLOCK_LOCAL) == MESSAGE_OK);
+    value = 11u;
+    TEST_CHECK(MessagePublishAt(event_pub, &value, 101u, 101u, 101u,
+                                MESSAGE_CLOCK_LOCAL) == MESSAGE_OK);
+    value = 12u;
+    TEST_CHECK(MessagePublishAt(event_pub, &value, 102u, 102u, 102u,
+                                MESSAGE_CLOCK_LOCAL) == MESSAGE_ERR_CAPACITY);
+
+    const uint8_t requested_index = 0u;
+    uint8_t request[BSP_LOG_DIAG_REQUEST_MAX];
+    size_t request_length = make_diagnostic_request(
+        BSP_LOG_DIAG_GET_TOPIC_DIAGNOSTICS, 91u, &requested_index, 1u, request);
+    inject_diagnostic_bytes(request, 3u);
+    TEST_CHECK(diagnostic_frame_count == 0u);
+    inject_diagnostic_bytes(request + 3u, request_length - 3u);
+    TEST_CHECK(diagnostic_frame_count == 1u);
+    const uint8_t *frame = diagnostic_frames[0];
+    TEST_CHECK(diagnostic_lengths[0] == BSP_LOG_DIAG_HEADER_SIZE +
+               BSP_LOG_DIAG_TOPIC_REPLY_SIZE + BSP_LOG_DIAG_CRC_SIZE);
+    TEST_CHECK(frame[3] == (BSP_LOG_DIAG_GET_TOPIC_DIAGNOSTICS | BSP_LOG_DIAG_REPLY_BIT));
+    TEST_CHECK(frame[4] == 91u && frame[5] == BSP_LOG_DIAG_TOPIC_REPLY_SIZE &&
+               diagnostic_frame_crc_valid(frame, diagnostic_lengths[0]));
+    static const uint8_t expected_reply[BSP_LOG_DIAG_TOPIC_REPLY_SIZE] = {
+        0u, 1u, 0u, 2u,
+        0x34u, 0x12u, 4u, 0u, 100u, 0u, 0u, 0u,
+        1u, 1u, 1u, 1u,
+        1u, 0u, 0u, 0u, 6u, 0u, 0u, 0u,
+        1u, 0u, 0u, 0u, 6u, 0u, 0u, 0u,
+        2u, 0u, 0u, 0u, 2u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+        2u, 1u, 2u, 2u, 2u, 0u, 120u, 0u, 0u, 0u,
+    };
+    TEST_CHECK(memcmp(frame + BSP_LOG_DIAG_HEADER_SIZE, expected_reply,
+                      sizeof(expected_reply)) == 0);
+    uint32_t received_snapshot = 0u;
+    TEST_CHECK(MessageReadSnapshot(snapshot_sub, &received_snapshot,
+        sizeof(received_snapshot), tick_ms, NULL) == MESSAGE_OK && received_snapshot == 2u);
+    TEST_CHECK(MessageReadSnapshot(snapshot_sub_second, &received_snapshot,
+        sizeof(received_snapshot), tick_ms, NULL) == MESSAGE_OK && received_snapshot == 2u);
+
+    uint8_t invalid_index = 2u;
+    size_t invalid_length = make_diagnostic_request(
+        BSP_LOG_DIAG_GET_TOPIC_DIAGNOSTICS, 92u, &invalid_index, 1u, request);
+    inject_diagnostic_bytes(request, invalid_length);
+    TEST_CHECK(diagnostic_frame_count == 2u);
+    frame = diagnostic_frames[1];
+    TEST_CHECK(frame[4] == 92u && frame[5] == 4u &&
+               frame[BSP_LOG_DIAG_HEADER_SIZE] == MESSAGE_ERR_RANGE &&
+               frame[BSP_LOG_DIAG_HEADER_SIZE + 3u] == 2u &&
+               diagnostic_frame_crc_valid(frame, diagnostic_lengths[1]));
+
+    request_length = make_diagnostic_request(BSP_LOG_DIAG_GET_TOPIC_DIAGNOSTICS,
+        93u, &requested_index, 1u, request);
+    request[request_length - 1u] ^= 1u;
+    inject_diagnostic_bytes(request, request_length);
+    TEST_CHECK(diagnostic_frame_count == 2u);
+
+    MessageTopicDiagnostic_t diagnostic = {0};
+    TEST_CHECK(MessageGetTopicDiagnostic(1u, &diagnostic) == MESSAGE_OK &&
+               diagnostic.stats.published == 2u && diagnostic.stats.rejected == 1u &&
+               diagnostic.queue_depth == 2u && diagnostic.queue_remaining == 0u);
+    uint32_t received = 0u;
+    TEST_CHECK(MessageReadEvent(event_sub, &received, sizeof(received), 127u, NULL) ==
+               MESSAGE_ERR_EXPIRED);
+    TEST_CHECK(MessageGetTopicDiagnostic(1u, &diagnostic) == MESSAGE_OK &&
+               diagnostic.stats.expired == 2u && diagnostic.queue_depth == 0u &&
+               diagnostic.queue_remaining == 2u);
+    TEST_CHECK(MessageGetTopicDiagnostic(2u, &diagnostic) == MESSAGE_ERR_RANGE);
+    TEST_CHECK(output_count == 0u);
+}
+#endif
+
 static void test_task(void)
 {
     BSPLogInit();
@@ -898,6 +1015,10 @@ int main(int argc, char **argv)
         test_diagnostic();
     else if (strcmp(argv[1], "diagnostic-unavailable") == 0)
         test_diagnostic_unavailable();
+#if defined(LOG_TOPIC_DIAGNOSTIC_TEST)
+    else if (strcmp(argv[1], "topic-diagnostics") == 0)
+        test_topic_diagnostics();
+#endif
 #if MC02_LOG_COMPILED_MAX_LEVEL >= 3
     else if (strcmp(argv[1], "ordinary") == 0)
         test_ordinary();

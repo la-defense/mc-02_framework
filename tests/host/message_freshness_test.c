@@ -5,26 +5,35 @@
 #include "test_check.h"
 #include "message_center.h"
 #include <stdint.h>
+#include <string.h>
 
 uint32_t HAL_GetTick(void) { return 0u; }
 
 static const MessageTopicDescriptor_t topics[] = {
     { 1u, sizeof(uint32_t), 50u, 1u, MESSAGE_DELIVERY_SNAPSHOT,
-      MESSAGE_OVERFLOW_REPLACE_OLDEST, MESSAGE_CLOCK_LOCAL, 1u << 0, 1u << 1 },
+      MESSAGE_OVERFLOW_REPLACE_OLDEST, MESSAGE_CLOCK_LOCAL, 1u << 0, 1u << 1, 1u },
     { 2u, sizeof(uint32_t), 10u, 2u, MESSAGE_DELIVERY_EVENT_FIFO,
-      MESSAGE_OVERFLOW_REJECT_NEWEST, MESSAGE_CLOCK_REMOTE_RAW, 1u << 2, 1u << 3 },
+      MESSAGE_OVERFLOW_REJECT_NEWEST, MESSAGE_CLOCK_REMOTE_RAW, 1u << 2, 1u << 3, 1u },
     { 3u, sizeof(uint32_t), 10u, 2u, MESSAGE_DELIVERY_EVENT_FIFO,
-      MESSAGE_OVERFLOW_REPLACE_OLDEST, MESSAGE_CLOCK_LOCAL, 1u << 4, 1u << 5 },
+      MESSAGE_OVERFLOW_REPLACE_OLDEST, MESSAGE_CLOCK_LOCAL, 1u << 4, 1u << 5, 1u },
 };
 
 int main(void)
 {
+    uint8_t diagnostic_count = 0xA5u;
+    MessageTopicDiagnostic_t diagnostic;
+    memset(&diagnostic, 0xA5, sizeof(diagnostic));
+    TEST_CHECK(MessageGetDiagnosticTopicCount(&diagnostic_count) == MESSAGE_ERR_NOT_INITIALIZED &&
+               diagnostic_count == 0xA5u);
+    TEST_CHECK(MessageGetTopicDiagnostic(0u, &diagnostic) == MESSAGE_ERR_NOT_INITIALIZED &&
+               diagnostic.descriptor.topic_id == UINT16_C(0xA5A5));
     TEST_CHECK(MessageCenterInit(topics, sizeof(topics) / sizeof(topics[0])) == MESSAGE_OK);
     MessagePublisher_t *pub = MessagePublisherRegister(1u, 1u);
     MessageSubscriber_t *sub = MessageSubscriberRegister(1u, 2u);
     TEST_CHECK(pub != 0 && sub != 0);
     uint32_t sent = 0x12345678u, received = 0u;
     MessageFreshness_t meta;
+    MessageTopicStats_t stats;
 
     MessageStatus_t status = MessageReadSnapshot(sub, &received, sizeof(received), 0u, &meta);
     TEST_CHECK(status == MESSAGE_ERR_EMPTY);
@@ -36,12 +45,32 @@ int main(void)
     TEST_CHECK(received == sent && meta.valid && meta.sequence == 1u &&
                meta.source_time_ms == 0u && meta.received_time_ms == 0u &&
                meta.published_time_ms == 4u && meta.timestamp_ms == 0u);
+    diagnostic_count = 0u;
+    memset(&diagnostic, 0, sizeof(diagnostic));
+    TEST_CHECK(MessageGetDiagnosticTopicCount(&diagnostic_count) == MESSAGE_OK &&
+               diagnostic_count == 3u);
+    TEST_CHECK(MessageGetTopicDiagnostic(0u, &diagnostic) == MESSAGE_OK &&
+               diagnostic.descriptor.topic_id == 1u &&
+               diagnostic.active_publisher_mask == 1u &&
+               diagnostic.active_subscriber_mask == 2u &&
+               diagnostic.stats.published == 1u && diagnostic.stats.peak_backlog == 1u &&
+               diagnostic.queue_depth == 1u && diagnostic.queue_capacity == 1u &&
+               diagnostic.queue_remaining == 0u);
     status = MessageReadSnapshot(sub, &received, sizeof(received), 50u, &meta);
     TEST_CHECK(status == MESSAGE_OK);
     TEST_CHECK(received == sent && meta.sequence == 1u);
     status = MessageReadSnapshot(sub, &received, sizeof(received), 51u, &meta);
     TEST_CHECK(status == MESSAGE_ERR_EXPIRED);
     TEST_CHECK(received == 0u && !meta.valid);
+    TEST_CHECK(MessageGetTopicStats(1u, &stats) == MESSAGE_OK && stats.expired == 1u);
+    TEST_CHECK(MessageReadSnapshot(sub, &received, sizeof(received), 52u, &meta) ==
+               MESSAGE_ERR_EXPIRED);
+    TEST_CHECK(MessageGetTopicStats(1u, &stats) == MESSAGE_OK && stats.expired == 1u);
+    TEST_CHECK(MessageGetTopicDiagnostic(0u, &diagnostic) == MESSAGE_OK &&
+               diagnostic.queue_depth == 1u && diagnostic.queue_remaining == 0u);
+    TEST_CHECK(MessageGetTopicDiagnostic(3u, &diagnostic) == MESSAGE_ERR_RANGE &&
+               diagnostic.descriptor.topic_id == 1u);
+    TEST_CHECK(MessageGetTopicDiagnostic(0u, NULL) == MESSAGE_ERR_ARGUMENT);
 
     /* A new publication refreshes age and replaces the last-value snapshot. */
     sent = 0x87654321u;
@@ -101,11 +130,14 @@ int main(void)
     sent = 0x66666666u;
     TEST_CHECK(MessagePublishAt(event_pub, &sent, 302u, 302u, 302u,
                                 MESSAGE_CLOCK_REMOTE_RAW) == MESSAGE_ERR_CAPACITY);
+    TEST_CHECK(MessageGetTopicDiagnostic(1u, &diagnostic) == MESSAGE_OK &&
+               diagnostic.stats.published == 5u && diagnostic.stats.rejected == 1u &&
+               diagnostic.queue_depth == 2u && diagnostic.queue_capacity == 2u &&
+               diagnostic.queue_remaining == 0u && diagnostic.stats.peak_backlog == 2u);
     status = MessageReadEvent(events, &received, sizeof(received), 305u, &meta);
     TEST_CHECK(status == MESSAGE_OK && received == 0x44444444u && meta.sequence == 4u);
     status = MessageReadEvent(events, &received, sizeof(received), 305u, &meta);
     TEST_CHECK(status == MESSAGE_OK && received == 0x55555555u && meta.sequence == 5u);
-    MessageTopicStats_t stats;
     TEST_CHECK(MessageGetTopicStats(2u, &stats) == MESSAGE_OK);
     TEST_CHECK(stats.rejected == 1u && stats.expired == 0u && stats.published == 5u);
 

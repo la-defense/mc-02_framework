@@ -13,7 +13,7 @@
 #define SNAPSHOT_TOPIC(id, type, age, clock, publisher, subscriber) \
     { (id), (uint16_t)sizeof(type), (age), 1u, MESSAGE_DELIVERY_SNAPSHOT, \
       MESSAGE_OVERFLOW_REPLACE_OLDEST, (clock), ENDPOINT_MASK(publisher), \
-      ENDPOINT_MASK(subscriber) }
+      ENDPOINT_MASK(subscriber), 1u }
 
 static const MessageTopicDescriptor_t robot_topics[] = {
     SNAPSHOT_TOPIC(ROBOT_TOPIC_CHASSIS_COMMAND, Chassis_Ctrl_Cmd_s, 50u,

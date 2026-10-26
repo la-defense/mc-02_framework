@@ -313,7 +313,7 @@ Unicom
 
 #### message_center
 
-- [ ] **MC02-0012** [enhancement] [ready-for-agent] 提供只读话题关系、队列余量和有界统计。验收：最新快照／FIFO 的发布、覆盖、溢出、过期和积压计数准确，按配置启用，独立诊断串口导出；查询不消费消息、不延长源期限且跨任务一致。关联 MC02-0070、R25-14，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [x] **MC02-0012** [enhancement] 提供只读话题关系、队列余量和有界统计。验收完成：生产接口覆盖快照／FIFO发布、覆盖、拒绝、过期及多订阅者积压；机器人话题显式开放诊断，USART10固定帧查询不消费队列，跨任务复制一致。WSL Debug／Release全量417/417、专项ASan／UBSan 3/3及十种ARM禁热构建通过；未做物理USART10回归。见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)、[任务记录](../docs/workflow/tickets/MC02-0012.md)和[学习笔记20](../docs/学习笔记/20-SP固定帧与CRC校验.md)。
 - [ ] **MC02-0013** [enhancement] [needs-triage] 评估 message_center 直接传递指针的接口。验收：明确所有权、生命周期、队列满和并发规则，并以测量证明收益后再决定是否实现。
 
 #### can_comm

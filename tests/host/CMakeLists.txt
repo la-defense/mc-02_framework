@@ -1390,11 +1390,14 @@ if(UNIX)
 endif()
 add_test(NAME production_lcd_referee_group_freshness COMMAND lcd_referee_rows_test)
 # 生产日志核心只替代平台时钟、临界区、任务创建和整条RTT写入。
-add_executable(log_test log_test.c ../../bsp/log/bsp_log.c)
-target_include_directories(log_test PRIVATE . ../../bsp/log)
+add_executable(log_test log_test.c ../../bsp/log/bsp_log.c
+  ../../modules/message_center/message_center.c ../../application/topics/robot_topics_diag.c)
+target_include_directories(log_test BEFORE PRIVATE init_resource_fakes)
+target_include_directories(log_test PRIVATE . ../../bsp/log ../../modules/message_center
+  ../../application/topics)
 target_include_directories(log_test PRIVATE ../../modules/algorithm)
 target_compile_definitions(log_test PRIVATE LOG_TEST=1 LOG_TEST_WRAP_FORMAT=1 BSP_LOG_TESTING=1
-  MC02_LOG_COMPILED_MAX_LEVEL=3)
+  MC02_LOG_COMPILED_MAX_LEVEL=3 LOG_TOPIC_DIAGNOSTIC_TEST=1)
 target_compile_options(log_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(log_test PRIVATE mc02_software_crc)
 if(UNIX)
@@ -1407,7 +1410,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(log_test PRIVATE -Wl,--wrap=vsnprintf -Wl,--wrap=snprintf
     -Wl,--wrap=__vsnprintf_chk -Wl,--wrap=__snprintf_chk)
 endif()
-foreach(case IN ITEMS values history sequence queue catalog task levels diagnostic diagnostic-unavailable ordinary fairness format-overflow threads)
+foreach(case IN ITEMS values history sequence queue catalog task levels diagnostic diagnostic-unavailable
+    topic-diagnostics ordinary fairness format-overflow threads)
   if(case STREQUAL "threads" AND NOT UNIX)
     continue()
   endif()

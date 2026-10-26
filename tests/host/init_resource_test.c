@@ -97,6 +97,7 @@ static void check_message_topic_contract(void)
         .source_clock = MESSAGE_CLOCK_LOCAL,
         .publisher_mask = 1u,
         .subscriber_mask = 2u,
+        .diagnostics_enabled = 0u,
     };
     MessageTopicDescriptor_t invalid = valid;
     invalid.payload_size = 0u;
@@ -106,6 +107,9 @@ static void check_message_topic_contract(void)
     TEST_CHECK(MessageCenterInit(&invalid, 1u) == MESSAGE_ERR_DIRECTORY);
     invalid = valid;
     invalid.topic_id = 0u;
+    TEST_CHECK(MessageCenterInit(&invalid, 1u) == MESSAGE_ERR_DIRECTORY);
+    invalid = valid;
+    invalid.diagnostics_enabled = 2u;
     TEST_CHECK(MessageCenterInit(&invalid, 1u) == MESSAGE_ERR_DIRECTORY);
 
     const size_t before = live_allocations;

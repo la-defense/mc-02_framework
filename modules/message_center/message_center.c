@@ -17,6 +17,7 @@
 typedef struct
 {
     MessageFreshness_t freshness;
+    uint8_t expiry_counted;
 } MessageSlot_t;
 
 typedef struct
@@ -72,6 +73,13 @@ static uint8_t IsEndpointValid(MessageEndpointId_t endpoint_id)
                      endpoint_id <= MESSAGE_ENDPOINT_MAX);
 }
 
+static void CountOnce(uint32_t *counter)
+{
+    // 到达上限后保持原值，避免无符号回绕让累计次数变小。
+    if (*counter != UINT32_MAX)
+        ++(*counter);
+}
+
 static uint8_t IsDescriptorEqual(const MessageTopicDescriptor_t *left,
                                  const MessageTopicDescriptor_t *right)
 {
@@ -83,7 +91,8 @@ static uint8_t IsDescriptorEqual(const MessageTopicDescriptor_t *left,
                      left->overflow == right->overflow &&
                      left->source_clock == right->source_clock &&
                      left->publisher_mask == right->publisher_mask &&
-                     left->subscriber_mask == right->subscriber_mask);
+                     left->subscriber_mask == right->subscriber_mask &&
+                     left->diagnostics_enabled == right->diagnostics_enabled);
 }
 
 static int FindTopicIndex(MessageTopicId_t topic_id)
@@ -102,6 +111,8 @@ static uint8_t IsDescriptorValid(const MessageTopicDescriptor_t *descriptor)
         descriptor->capacity == 0u ||
         descriptor->capacity > MESSAGE_CENTER_MAX_QUEUE_DEPTH ||
         descriptor->publisher_mask == 0u || descriptor->subscriber_mask == 0u)
+        return 0u;
+    if (descriptor->diagnostics_enabled > 1u)
         return 0u;
 
     if (descriptor->source_clock != MESSAGE_CLOCK_LOCAL &&
@@ -285,7 +296,7 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
             if (subscriber->active && subscriber->topic_index == (uint8_t)topic_index &&
                 subscriber->count == topic->descriptor.capacity)
             {
-                topic->stats.rejected++;
+                CountOnce(&topic->stats.rejected);
                 taskEXIT_CRITICAL();
                 return MESSAGE_ERR_CAPACITY;
             }
@@ -295,7 +306,7 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
     topic->sequence++;
     if (topic->sequence == 0u)
         topic->sequence = 1u;
-    topic->stats.published++;
+    CountOnce(&topic->stats.published);
 
     for (size_t i = 0u; i < MESSAGE_CENTER_MAX_SUBSCRIBERS; ++i)
     {
@@ -313,7 +324,7 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
             }
             subscriber->head = (uint8_t)((subscriber->head + 1u) % capacity);
             subscriber->count--;
-            topic->stats.overwritten++;
+            CountOnce(&topic->stats.overwritten);
         }
 
         const uint8_t tail = (uint8_t)((subscriber->head + subscriber->count) % capacity);
@@ -326,8 +337,16 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
         slot->freshness.received_time_ms = received_time_ms;
         slot->freshness.published_time_ms = published_time_ms;
         slot->freshness.source_clock = (uint8_t)source_clock;
+        slot->expiry_counted = 0u;
         subscriber->count++;
     }
+    uint8_t backlog = 0u;
+    // 统计全部订阅者当前占用，便于判断该话题整体积压。
+    for (size_t i = 0u; i < MESSAGE_CENTER_MAX_SUBSCRIBERS; ++i)
+        if (subscribers[i].active && subscribers[i].topic_index == (uint8_t)topic_index)
+            backlog = (uint8_t)(backlog + subscribers[i].count);
+    if (backlog > topic->stats.peak_backlog)
+        topic->stats.peak_backlog = backlog;
     taskEXIT_CRITICAL();
     return MESSAGE_OK;
 }
@@ -398,9 +417,15 @@ MessageStatus_t MessageReadSnapshot(MessageSubscriber_t *subscriber, void *outpu
         return MESSAGE_ERR_EMPTY;
     }
     const MessageTopicDescriptor_t *descriptor = &topics[subscriber->topic_index].descriptor;
-    const MessageSlot_t *slot = GetSlotMetadata(subscriber, subscriber->head);
+    MessageSlot_t *slot = GetSlotMetadata(subscriber, subscriber->head);
     if (!IsMessageFresh(descriptor, &slot->freshness, now_ms))
     {
+        // 快照保留在队列里供诊断；同一条数据只在首次被读到过期时计数。
+        if (slot->expiry_counted == 0u)
+        {
+            CountOnce(&topics[subscriber->topic_index].stats.expired);
+            slot->expiry_counted = 1u;
+        }
         memset(output, 0, output_size);
         if (freshness != NULL)
             memset(freshness, 0, sizeof(*freshness));
@@ -442,7 +467,7 @@ MessageStatus_t MessageReadEvent(MessageSubscriber_t *subscriber, void *output,
         }
         subscriber->head = (uint8_t)((subscriber->head + 1u) % descriptor->capacity);
         subscriber->count--;
-        topics[subscriber->topic_index].stats.expired++;
+        CountOnce(&topics[subscriber->topic_index].stats.expired);
         expired_any = 1u;
     }
     memset(output, 0, output_size);
@@ -463,6 +488,82 @@ MessageStatus_t MessageGetTopicStats(MessageTopicId_t topic_id, MessageTopicStat
         return MESSAGE_ERR_TOPIC;
     taskENTER_CRITICAL();
     *stats = topics[topic_index].stats;
+    taskEXIT_CRITICAL();
+    return MESSAGE_OK;
+}
+
+MessageStatus_t MessageGetDiagnosticTopicCount(uint8_t *count)
+{
+    if (count == NULL)
+        return MESSAGE_ERR_ARGUMENT;
+    if (!directory_ready)
+        return MESSAGE_ERR_NOT_INITIALIZED;
+
+    uint8_t candidate = 0u;
+    taskENTER_CRITICAL();
+    // 目录保持原登记顺序，串口请求据此使用稳定的零起始序号。
+    for (size_t i = 0u; i < topic_count; ++i)
+        if (topics[i].active && topics[i].descriptor.diagnostics_enabled != 0u)
+            ++candidate;
+    taskEXIT_CRITICAL();
+    *count = candidate;
+    return MESSAGE_OK;
+}
+
+MessageStatus_t MessageGetTopicDiagnostic(uint8_t index, MessageTopicDiagnostic_t *output)
+{
+    if (output == NULL)
+        return MESSAGE_ERR_ARGUMENT;
+    if (!directory_ready)
+        return MESSAGE_ERR_NOT_INITIALIZED;
+
+    taskENTER_CRITICAL();
+    uint8_t diagnostic_index = 0u;
+    int selected_topic = -1;
+    // 跳过未开放诊断的话题，使查询序号只对应显式启用项。
+    for (size_t i = 0u; i < topic_count; ++i)
+    {
+        if (!topics[i].active || topics[i].descriptor.diagnostics_enabled == 0u)
+            continue;
+        if (diagnostic_index == index)
+        {
+            selected_topic = (int)i;
+            break;
+        }
+        ++diagnostic_index;
+    }
+    if (selected_topic < 0)
+    {
+        taskEXIT_CRITICAL();
+        return MESSAGE_ERR_RANGE;
+    }
+
+    MessageTopicStorage_t *topic = &topics[selected_topic];
+    MessageTopicDiagnostic_t candidate = {0};
+    candidate.descriptor = topic->descriptor;
+    candidate.stats = topic->stats;
+    candidate.captured_ms = HAL_GetTick();
+    for (size_t i = 0u; i < MESSAGE_CENTER_MAX_SUBSCRIBERS; ++i)
+    {
+        const MessagePublisherStorage_t *publisher = &publisher_storage[i];
+        if (publisher->active && publisher->topic_id == topic->descriptor.topic_id)
+        {
+            candidate.active_publisher_mask |= UINT32_C(1) << (publisher->endpoint_id - 1u);
+            ++candidate.publisher_count;
+        }
+
+        const struct MessageSubscriber *subscriber = &subscribers[i];
+        if (subscriber->active && subscriber->topic_index == (uint8_t)selected_topic)
+        {
+            candidate.active_subscriber_mask |= UINT32_C(1) << (subscriber->endpoint_id - 1u);
+            ++candidate.subscriber_count;
+            candidate.queue_depth = (uint8_t)(candidate.queue_depth + subscriber->count);
+            candidate.queue_capacity = (uint8_t)(candidate.queue_capacity +
+                                                  topic->descriptor.capacity);
+        }
+    }
+    candidate.queue_remaining = (uint8_t)(candidate.queue_capacity - candidate.queue_depth);
+    *output = candidate;
     taskEXIT_CRITICAL();
     return MESSAGE_OK;
 }

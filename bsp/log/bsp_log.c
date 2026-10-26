@@ -56,6 +56,7 @@ typedef struct
     char output[BSP_LOG_OUTPUT_CAPACITY];
     uint8_t diagnostic_rx[BSP_LOG_DIAG_REQUEST_MAX];
     BSPLogHealthSnapshotHandler_t health_snapshot_handler;
+    BSPLogTopicDiagnosticsHandler_t topic_diagnostics_handler;
     uint32_t next_sequence;
     uint32_t diagnostic_response_dropped;
     uint32_t diagnostic_crc_errors;
@@ -263,6 +264,19 @@ static void BSPLogHandleDiagnosticRequest(const uint8_t *frame, size_t length)
             (reply_length == 0u) || (reply_length > sizeof(reply)))
         {
             reply[0] = BSP_LOG_STATUS_BAD_ARGUMENT;
+            reply_length = 1u;
+            BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
+        }
+    }
+    else if (command == BSP_LOG_DIAG_GET_TOPIC_DIAGNOSTICS && payload_length == 1u)
+    {
+        BSPLogTopicDiagnosticsHandler_t handler = log_workspace.topic_diagnostics_handler;
+        if ((handler == NULL) ||
+            (handler(request_payload, payload_length, reply,
+                     (uint8_t)sizeof(reply), &reply_length) == 0u) ||
+            (reply_length == 0u) || (reply_length > sizeof(reply)))
+        {
+            reply[0] = BSP_LOG_STATUS_NOT_FOUND;
             reply_length = 1u;
             BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
         }
@@ -832,6 +846,21 @@ BSPLogStatus_t BSPLogRegisterHealthSnapshotHandler(BSPLogHealthSnapshotHandler_t
         return BSP_LOG_STATUS_HANDLER_ALREADY_REGISTERED;
     // 注册被限制在调度器启动前；此时接收任务尚未派发，不需进入RTOS临界区。
     log_workspace.health_snapshot_handler = handler;
+    return BSP_LOG_STATUS_OK;
+}
+
+BSPLogStatus_t BSPLogRegisterTopicDiagnosticsHandler(BSPLogTopicDiagnosticsHandler_t handler)
+{
+    if (handler == NULL)
+        return BSP_LOG_STATUS_BAD_ARGUMENT;
+    if (!log_workspace_initialized)
+        return BSP_LOG_STATUS_NOT_INITIALIZED;
+    if (BSPLogPortInInterrupt() || BSPLogPortSchedulerRunning())
+        return BSP_LOG_STATUS_BAD_CONTEXT;
+
+    if (log_workspace.topic_diagnostics_handler != NULL)
+        return BSP_LOG_STATUS_HANDLER_ALREADY_REGISTERED;
+    log_workspace.topic_diagnostics_handler = handler;
     return BSP_LOG_STATUS_OK;
 }
 

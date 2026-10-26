@@ -94,6 +94,21 @@ typedef uint8_t (*BSPLogHealthSnapshotHandler_t)(uint8_t *payload,
                                                  uint8_t capacity,
                                                  uint8_t *length);
 
+/** @brief 按需生成只读诊断回复；回调不拥有传入或传出缓冲区。
+ * @param[in] request 请求负载；本命令长度为1字节，内容是零起始话题序号。
+ * @param[in] request_length 请求字节数，当前固定为1。
+ * @param[out] reply 接收回复负载，空间由调用方提供，最多120字节。
+ * @param[in] reply_capacity reply可写容量，单位为字节。
+ * @param[out] reply_length 成功时写入回复字节数；必须不大于reply_capacity。
+ * @return 非零表示已生成回复；零表示参数或容量不合适，调用方会返回错误状态。
+ * @note 在USART接收块派发的普通任务上下文调用，不得等待或访问控制输出。
+ */
+typedef uint8_t (*BSPLogTopicDiagnosticsHandler_t)(const uint8_t *request,
+                                                   uint8_t request_length,
+                                                   uint8_t *reply,
+                                                   uint8_t reply_capacity,
+                                                   uint8_t *reply_length);
+
 typedef enum
 {
 #define BSP_LOG_SOURCE(name, value, module, path) name = value,
@@ -259,6 +274,13 @@ BSPLogStatus_t BSPLogGetHistory(uint32_t sequence, BSPLogHistoryRecord_t *output
  * @note 在BSPLogInit后、启动调度器前由普通启动代码调用一次。回调在USART接收块派发时执行，不能等待或访问控制输出。
  */
 BSPLogStatus_t BSPLogRegisterHealthSnapshotHandler(BSPLogHealthSnapshotHandler_t handler);
+
+/** @brief 注册按需消息中心统计回复处理器，不向串口推送周期数据。
+ * @param[in] handler 接收请求字节并写入最多120字节回复的长期回调。
+ * @return OK，或参数、上下文、未初始化及重复注册错误。
+ * @note 在BSPLogInit后、调度器启动前调用；回调运行在USART接收派发的普通任务上下文。
+ */
+BSPLogStatus_t BSPLogRegisterTopicDiagnosticsHandler(BSPLogTopicDiagnosticsHandler_t handler);
 
 /** @brief 统计零结尾文本的可读前缀；limit为上限，字符串未在上限内结束时会多读1字节。 */
 BSPLogField_t BSPLogFieldFromCString(const char *text, size_t limit);
