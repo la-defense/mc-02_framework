@@ -837,6 +837,18 @@ if(UNIX)
 endif()
 add_test(NAME production_command_task_v2_independent_topics COMMAND robot_cmd_v2_test)
 set_tests_properties(production_command_task_v2_independent_topics PROPERTIES TIMEOUT 10)
+# 直接编译生产云台任务；仅将 INS、消息中心和电机操作接到固定的主机替身。
+add_executable(gimbal_mode_test gimbal_mode_test.c ../../application/gimbal/gimbal.c)
+target_include_directories(gimbal_mode_test BEFORE PRIVATE gimbal_mode_fakes)
+target_include_directories(gimbal_mode_test PRIVATE . ../../application ../../application/gimbal
+  ../../application/topics ../../modules/imu ../../modules/master_machine ../../modules/motor
+  ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon
+  ../../modules/message_center ../../modules ../../bsp/can)
+target_compile_definitions(gimbal_mode_test PRIVATE MC02_PROFILE_BENCH_SAFE=1)
+target_compile_options(gimbal_mode_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+target_link_libraries(gimbal_mode_test PRIVATE m)
+add_test(NAME production_gimbal_mode_state_transitions COMMAND gimbal_mode_test)
+set_tests_properties(production_gimbal_mode_state_transitions PROPERTIES TIMEOUT 10)
 # Linux 基准使用 CPU 亲和设置和 GNU ld 包装；输入为生产 RobotCMD 路径，分别统计复制量和线程 CPU 时间。
 # 两项目标隔离计数插桩；构建或 CTest 失败时由对应命令返回非零状态。
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

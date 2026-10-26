@@ -135,9 +135,9 @@ typedef enum
 // 云台模式设置
 typedef enum
 {
-    GIMBAL_ZERO_FORCE = 0, // 电流零输入
-    GIMBAL_FREE_MODE,      // 保留的自由模式；当前 GimbalTask 与 GYRO 模式同样选择外部 IMU 反馈。
-    GIMBAL_GYRO_MODE,      // 云台陀螺仪反馈模式,反馈值为陀螺仪pitch,total_yaw_angle,底盘可以为小陀螺和跟随模式
+    GIMBAL_ZERO_FORCE = 0, // 命令缺失、过期或停机时停止电机并清零参考。
+    GIMBAL_FREE_MODE,      // 当前与 GYRO 行为相同，角度和速度环都使用外部 IMU。
+    GIMBAL_GYRO_MODE,      // 使用外部 IMU 闭环；yaw、pitch 命令以度传入并换成弧度参考。
 } gimbal_mode_e;
 
 // 发射模式设置

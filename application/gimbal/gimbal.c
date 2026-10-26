@@ -8,6 +8,7 @@
 #include "message_center.h"
 #include "topics/robot_topics.h"
 #include "general_def.h"
+#include "main.h"
 #include <string.h>
 
 static attitude_t *gimba_IMU_data; // 云台IMU数据
@@ -196,8 +197,8 @@ void GimbalTask()
                             HAL_GetTick(), NULL) != MESSAGE_OK)
         memset(&gimbal_cmd_recv, 0, sizeof(gimbal_cmd_recv));
 
-    // 电机单圈角度仍用于计算底盘与云台的偏转方向；控制反馈目前选外部 IMU。
-    // 根据控制模式进行电机反馈切换和过渡,视觉模式在robot_cmd模块就已经设置好,gimbal只看yaw_ref和pitch_ref
+    // 闭环反馈使用外部 IMU；上传给上层的状态仍包含 yaw 电机单圈角度。
+    // GYRO 与 FREE 当前使用同一套外部 IMU 反馈；ZERO_FORCE 和未知模式停止输出。
     switch (gimbal_cmd_recv.gimbal_mode)
     {
     // 停止
@@ -207,8 +208,8 @@ void GimbalTask()
         DJIMotorSetRef(yaw_motor, 0.0f);
         DJIMotorSetRef(pitch_motor, 0.0f);
         break;
-    // 使用陀螺仪的反馈,底盘根据yaw电机的offset跟随云台或视觉模式采用
-    case GIMBAL_GYRO_MODE: // 后续只保留此模式
+    // yaw、pitch 命令以度接收，按电机配置的弧度参考转换后送入闭环。
+    case GIMBAL_GYRO_MODE:
         DJIMotorEnable(yaw_motor);
         DJIMotorEnable(pitch_motor);
         DJIMotorChangeFeed(yaw_motor, ANGLE_LOOP, OTHER_FEED);
@@ -218,8 +219,8 @@ void GimbalTask()
         DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw * DEGREE_2_RAD);
         DJIMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch * DEGREE_2_RAD);
         break;
-    // 自由模式当前也选择外部 IMU 反馈，与上面的 GYRO 分支处理相同。
-    case GIMBAL_FREE_MODE: // 后续删除,或加入云台追地盘的跟随模式(响应速度更快)
+    // FREE 目前与 GYRO 行为相同，尚未实现独立的底盘跟随控制。
+    case GIMBAL_FREE_MODE:
         DJIMotorEnable(yaw_motor);
         DJIMotorEnable(pitch_motor);
         DJIMotorChangeFeed(yaw_motor, ANGLE_LOOP, OTHER_FEED);

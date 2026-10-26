@@ -79,6 +79,16 @@ LK 仍分别选择 `angle_feedback_source` 和 `speed_feedback_source`，速度�
 
 误差绝对值不大于 `DeadBand` 时，输出、本次积分增量和累计积分都清零。打开堵转检查后，`ERRORCount` 按调用次数累计，参考值接近0或输出很小时不计数；误差比例连续超过95%，计数大于500后标记堵转。这个数字表示调用次数，换算成时间要结合 PID 实际调用频率。
 
+<a id="云台模式的实际行为app-09"></a>
+
+## 云台模式的实际行为（APP-09）
+
+`GimbalTask()` 读取最多保存50 ms的云台命令。没有新命令、命令过期或读取失败时，本地命令会清零并进入 `GIMBAL_ZERO_FORCE` 分支。
+
+`GIMBAL_GYRO_MODE` 和 `GIMBAL_FREE_MODE` 当前执行相同动作：使能 yaw、pitch 电机，把角度环和速度环的反馈来源设为 `OTHER_FEED`，并将命令中的度换成弧度后设置参考值。外部角度反馈来自 INS 的 yaw 总角度和 pitch 角度，速度反馈分别使用 Z 轴和 X 轴陀螺仪；数据单位为 rad、rad/s，反馈允许年龄为5 ms。`FREE` 目前没有独立的底盘跟随行为，不能按名称推断它改用编码器。
+
+零力和未知模式都会调用 `DJIMotorStop()` 并把两路参考设为零。停止接口设置软件标志，后续电机发送周期据此清零对应发送槽；任务返回不能证明 CAN 已完成发送或电机机械运动已经停止。生产状态转换由 [gimbal_mode_test.c](../../tests/host/gimbal_mode_test.c) 检查，模式说明见 [gimbal.md](../../application/gimbal/gimbal.md) 与 [APP-09 记录](../workflow/tickets/APP-09.md)。本机测试不验证真实电机响应、方向或物理停止时间。
+
 ### 时间由谁测量
 
 电机使用 [motor_pid.c](../../modules/motor/motor_pid.c) 保存每个电机的控制调用时刻；驱动读取现有微秒时基，一轮串级计算只取一次 dt。反馈接收的间隔仍单独保存，不能拿它代替控制任务的调用间隔。电机当前允许10微秒到50毫秒，两端都允许。
