@@ -1,5 +1,6 @@
 /** @file tfminiplus.c
 * @brief 发送 TFmini Plus I²C 取数请求并组合响应中的原始字段；设备数据有效性仍未验证。
+* @note 主要入口为 GetDistance()；使用前先初始化 HAL I²C 与 DWT，再通过 TFMiniRegister() 登记实例。
 */
 #include "tfminiplus.h"
 #include "bsp_dwt.h"
