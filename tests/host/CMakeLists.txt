@@ -807,6 +807,8 @@ if(UNIX)
 endif()
 add_test(NAME production_command_task_v2_independent_topics COMMAND robot_cmd_v2_test)
 set_tests_properties(production_command_task_v2_independent_topics PROPERTIES TIMEOUT 10)
+# Linux 基准使用 CPU 亲和设置和 GNU ld 包装；输入为生产 RobotCMD 路径，分别统计复制量和线程 CPU 时间。
+# 两项目标隔离计数插桩；构建或 CTest 失败时由对应命令返回非零状态。
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(ROBOT_CMD_PERF_SOURCES robot_cmd_perf_test.c ../../application/cmd/robot_cmd.c
     ../../modules/remote/remote_safety.c ../../application/topics/robot_topics.c

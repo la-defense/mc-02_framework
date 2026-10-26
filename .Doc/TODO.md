@@ -378,7 +378,7 @@ Unicom
 
 #### robot_cmd
 
-- [x] **MC02-0028** [enhancement] [done] 移除 RobotCMD 中无人消费的底盘反馈快照，减少每周期复制和临界区工作。验收：WSL GCC 11.4 生产路径基线对比中，每轮 `memcpy` 从51字节降至42字节；50,000次调用批均值P50由77ns降至60ns，P95由94ns降至81ns，100批最大均值中位数由98ns降至84ns；RobotCMD相关Debug／Release与ASan／UBSan回归通过，十种ARM禁热构建通过。上述时间为WSL线程CPU批均值，不代表H723 WCET。见[MC02-0028任务记录](../docs/workflow/tickets/MC02-0028.md)及[学习笔记21](../docs/学习笔记/21-从TODO到可重复验证的工程闭环.md#怎样验证-robotcmd-每轮确实少做了工作-mc02-0028)。
+- [ ] **MC02-0028** [enhancement] [ready-for-agent] 移除 RobotCMD 中无人消费的底盘反馈快照，减少每周期复制和临界区工作。验收：通过提交的基线对比脚本记录生产路径每轮耗时与复制量；复制量下降，五次运行中“100组、每组50,000次任务调用”的最大批均值中位数下降；单板／双板、旧版／V2及无效输入路径回归通过，WSL全量 Debug／Release 和 ARM 配置通过。批均值是本机观测指标，不代表 H723 单轮 WCET。见[MC02-0028任务记录](../docs/workflow/tickets/MC02-0028.md)及[学习笔记21](../docs/学习笔记/21-从TODO到可重复验证的工程闭环.md#怎样验证-robotcmd-每轮确实少做了工作-mc02-0028)。
 
 #### gimbal
 

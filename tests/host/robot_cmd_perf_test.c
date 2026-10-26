@@ -1,6 +1,7 @@
 /** @file robot_cmd_perf_test.c
  * @brief 用生产 RobotCMDTask 和消息中心测量单轮执行时间及复制字节数。
  * @note 仅用于 WSL 主机对比；主机耗时不代表 STM32H723 的执行时间。
+ * @note 入口为 main()；仅在 Linux 主机编译，使用 CPU 亲和设置和 GNU 链接器包装。
  * @author MC-02 project contributors
  * @copyright Copyright (c) HNU YueLu EC 2022 all rights reserved
  */
