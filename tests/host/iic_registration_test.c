@@ -25,6 +25,11 @@ static uint32_t irq_disable_count;
 static uint32_t irq_restore_count;
 static uint32_t dmb_count;
 static uint32_t hal_transfer_count;
+static uint16_t last_iic_tx_size;
+static uint16_t last_iic_rx_size;
+static uint8_t last_iic_tx_data[5];
+static uint8_t iic_response_data[11];
+static uint16_t iic_response_size;
 static uint32_t mem_read_count;
 static uint32_t mem_write_count;
 static uint32_t hal_delay_count;
@@ -113,14 +118,21 @@ static HAL_StatusTypeDef record_transfer(void)
 HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *handle, uint16_t address,
                                          uint8_t *data, uint16_t size, uint32_t timeout)
 {
-    (void)handle; (void)address; (void)data; (void)size; (void)timeout;
+    (void)handle; (void)address; (void)timeout;
+    last_iic_tx_size = size;
+    if (size == sizeof(last_iic_tx_data))
+        memcpy(last_iic_tx_data, data, sizeof(last_iic_tx_data));
     return record_transfer();
 }
 
 HAL_StatusTypeDef HAL_I2C_Master_Receive(I2C_HandleTypeDef *handle, uint16_t address,
                                          uint8_t *data, uint16_t size, uint32_t timeout)
 {
-    (void)handle; (void)address; (void)data; (void)size; (void)timeout;
+    (void)handle; (void)address; (void)timeout;
+    last_iic_rx_size = size;
+    // 模拟设备只写入实际提供的字节，额外数据留在源数组中供越界检查使用。
+    uint16_t copy_size = iic_response_size < size ? iic_response_size : size;
+    memcpy(data, iic_response_data, copy_size);
     return record_transfer();
 }
 
@@ -387,6 +399,65 @@ static void check_tfmini_failure_and_recovery(void)
     TEST_CHECK(dwt_delay_count == delay_before + 1u);
 }
 
+static void check_tfmini_frame_bounds(void)
+{
+    static I2C_HandleTypeDef handle;
+    IIC_Init_Config_s config = make_config(&handle, 0x10u, IIC_BLOCK_MODE, NULL, NULL);
+    IICInstance *iic = IICRegister(&config);
+    TEST_CHECK(iic != NULL);
+
+    union
+    {
+        TFMiniInstance instance;
+        uint8_t bytes[sizeof(TFMiniInstance)];
+    } guarded;
+    const size_t guard_offset = offsetof(TFMiniInstance, buf) + TFMINI_DATA_FRAME_SIZE;
+    memset(&guarded, 0xA5, sizeof(guarded));
+    guarded.instance.iic = iic;
+
+    // 短响应只更新收到的字节；接口没有实际长度返回值，因此不据此判断读数有效。
+    memset(iic_response_data, 0, sizeof(iic_response_data));
+    iic_response_data[0] = 0x5Au;
+    iic_response_data[1] = 0x11u;
+    iic_response_data[2] = 0x34u;
+    iic_response_size = 3u;
+    last_iic_rx_size = 0u;
+    (void)GetDistance(&guarded.instance);
+    TEST_CHECK(last_iic_rx_size == TFMINI_DATA_FRAME_SIZE);
+    TEST_CHECK(iic->rx_buffer == guarded.instance.buf &&
+               iic->rx_len == TFMINI_DATA_FRAME_SIZE);
+    TEST_CHECK(guarded.instance.buf[0] == 0x5Au && guarded.instance.buf[2] == 0x34u);
+    TEST_CHECK(guarded.instance.buf[3] == 0xA5u);
+    for (size_t i = guard_offset; i < sizeof(guarded.bytes); ++i)
+        TEST_CHECK(guarded.bytes[i] == 0xA5u);
+
+    // 完整 9 字节响应保持现有小端字段偏移和取数命令。
+    memset(iic_response_data, 0, sizeof(iic_response_data));
+    const uint8_t complete_response[TFMINI_DATA_FRAME_SIZE] =
+        {0x5Au, 0x11u, 0x34u, 0x12u, 0x78u, 0x56u, 0x9Au, 0x00u, 0x00u};
+    memcpy(iic_response_data, complete_response, sizeof(complete_response));
+    iic_response_size = TFMINI_DATA_FRAME_SIZE;
+    TEST_CHECK(GetDistance(&guarded.instance) == 4660.0f);
+    TEST_CHECK(last_iic_tx_size == sizeof(last_iic_tx_data));
+    const uint8_t expected_command[5] = {0x5Au, 0x05u, 0x00u, 0x06u, 0x65u};
+    TEST_CHECK(memcmp(last_iic_tx_data, expected_command, sizeof(expected_command)) == 0);
+    TEST_CHECK(guarded.instance.Mode == 0x9Au);
+    TEST_CHECK(guarded.instance.Dist == 0x1234u);
+    TEST_CHECK(guarded.instance.Strength == 0x5678u);
+    for (size_t i = guard_offset; i < sizeof(guarded.bytes); ++i)
+        TEST_CHECK(guarded.bytes[i] == 0xA5u);
+
+    // 即使测试源提供 11 字节，生产接收调用仍只允许 HAL 写入 9 字节。
+    iic_response_data[9] = 0xEEu;
+    iic_response_data[10] = 0xFFu;
+    iic_response_size = (uint16_t)sizeof(iic_response_data);
+    TEST_CHECK(GetDistance(&guarded.instance) == 4660.0f);
+    TEST_CHECK(last_iic_rx_size == TFMINI_DATA_FRAME_SIZE);
+    TEST_CHECK(guarded.instance.buf[8] == 0x00u);
+    for (size_t i = guard_offset; i < sizeof(guarded.bytes); ++i)
+        TEST_CHECK(guarded.bytes[i] == 0xA5u);
+}
+
 static void check_ist8310_failure_and_recovery(void)
 {
     TEST_CHECK(IST8310Init(NULL) == NULL);
@@ -527,6 +598,11 @@ int main(int argc, char **argv)
         iic_test_tfmini_handle = (I2C_HandleTypeDef){0};
         check_tfmini_failure_and_recovery();
         check_ist8310_failure_and_recovery();
+        return 0;
+    }
+    if (strcmp(argv[1], "tfmini-frame") == 0)
+    {
+        check_tfmini_frame_bounds();
         return 0;
     }
     return EXIT_FAILURE;
