@@ -1,5 +1,6 @@
 /** @file ws2812.c
 * @brief 将三色各八位编成 24 个 SPI 字节，再发送低电平字节让彩灯接收新颜色。
+* @note PA5 是 ADC1_INP19 的按键输入；初始化只把 PA7 配为 SPI6 MOSI，SCK 不映射到 GPIO。
 */
 #include "ws2812.h"
 #include "stm32h7xx_hal.h"
@@ -10,7 +11,7 @@
 static SPI_HandleTypeDef hspi6;
 static uint8_t spi6_inited = 0;
 
-/* SPI6 初始化 + GPIO 配置 (PA5=SCK, PA7=MOSI), 自包含, 不依赖 CubeMX 生成 */
+/* SPI6 时钟由外设内部使用；只把数据输出接到 PA7，保留 PA5 的 ADC 模拟输入。 */
 static void WS2812_SPI6_Init(void)
 {
     RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
@@ -27,8 +28,8 @@ static void WS2812_SPI6_Init(void)
     __HAL_RCC_SPI6_CLK_ENABLE();
     __HAL_RCC_GPIOA_CLK_ENABLE();
 
-    /* PA5 -> SPI6_SCK, PA7 -> SPI6_MOSI */
-    GPIO_InitStruct.Pin = GPIO_PIN_5 | GPIO_PIN_7;
+    /* PA5 接 ADC 按键采样；此处只配置 WS2812 数据线 PA7。 */
+    GPIO_InitStruct.Pin = GPIO_PIN_7;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;

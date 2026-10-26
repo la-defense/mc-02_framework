@@ -178,6 +178,15 @@ target_compile_options(time_mapping_test PRIVATE -Wall -Wextra -Werror -fno-fast
 add_test(NAME production_time_mapping_wrap_expiry_and_recovery COMMAND time_mapping_test)
 set_tests_properties(production_time_mapping_wrap_expiry_and_recovery PROPERTIES TIMEOUT 10)
 
+# 生产 WS2812 初始化只配置 PA7，避免改写 ADC 按键的 PA5 模拟输入。
+add_executable(ws2812_pin_ownership_test ws2812_pin_ownership_test.c
+  ../../bsp/ws2812/ws2812.c)
+target_include_directories(ws2812_pin_ownership_test BEFORE PRIVATE ws2812_pin_fakes)
+target_include_directories(ws2812_pin_ownership_test PRIVATE . ../../bsp/ws2812)
+target_compile_options(ws2812_pin_ownership_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_ws2812_preserves_adc_key_pin COMMAND ws2812_pin_ownership_test)
+set_tests_properties(production_ws2812_preserves_adc_key_pin PROPERTIES TIMEOUT 10)
+
 function(mc02_add_vehicle_health_test suffix)
   set(target vehicle_health_${suffix}_test)
   add_executable(${target} vehicle_health_test.c ../../application/vehicle_health.c

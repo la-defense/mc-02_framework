@@ -169,7 +169,7 @@
 - [x] **BSPIIC-01** [bug] 修复 I²C 注册重复分配、配置校验及注册表容量不一致，并让 TFmini/IST8310 在登记失败时回滚候选对象。验收完成：分配计数确认成功登记仅分配一个实例；空参数、空句柄、非法地址/模式、重复、分配失败及第9项拒绝均不覆盖旧对象或消耗槽位；同句柄不同地址、不同句柄同地址和0x00/0x7F边界通过；两个调用方覆盖外层分配、I²C 分配/重复/容量失败，并确认失败不延时、不登记GPIO、不访问设备。WSL Debug/Release 各161/161，Windows支持子集各72/72，ASan/UBSan 33/33；六种禁热固件、ELF配置、非法选项拒绝及CMake增量检查通过。按 `arm-none-eabi-size` 比较 e9 基线，六种配置的 text+data 变化为−128～−136 B，data+bss 不变；本轮未连接开发板。见 [BSPIIC-01任务记录](../docs/workflow/tickets/BSPIIC-01.md) 和 [学习笔记03](../docs/学习笔记/03-非阻塞通信与CAN收发技术细节.md)。
 - [x] **BSPMISC-02** [bug] 核查 PID 积分限幅辅助函数中的静态临时状态。验收：多个 PID 实例交错调用时互不影响，生产函数回归覆盖调用顺序变化。 验收完成：软件提交 `1b10845`，WSL Debug／Release 各112/112、Windows 可移植子集各14/14、六种禁热固件及 ELF／非法配置检查通过；裸板烧录 verify 与参数逐字节保留通过，60.22秒被动收到12042个 CRC 正确且四元数有限的状态帧，发送0帧，IMU递增、禁热／输出隔离及无新增复位迹象检查通过。见[实施与证据](../docs/workflow/tickets/MC02-0015.md)和[教学23](../docs/学习笔记/23-Ozone辅助PID调参.md)。真实闭环及加热性能不在本轮验收范围。
 - [x] **BSPMISC-03** [bug] 修复旧float_rounding的负数、半数边界和静态临时状态。验收完成：MathRoundI32取最近整数、半数远离0，检查int32_t范围后转换，无共享临时状态；正负边界／非有限值／交错及Linux并发回归通过，Debug／Release检查均生效。与MC02-0076共用[实施证据](../docs/workflow/tickets/MC02-0076.md)和[教学24](../docs/学习笔记/24-嵌入式固件问题定位.md#纯数值入口的范围重叠和失败输出mc02-0076bspmisc-03)，本轮仅本机验收。
-- [ ] **BSPMISC-06** [bug] [needs-triage] 核查 WS2812 与 ADC 的引脚/外设资源冲突是否仍存在。验收：当前板级映射和初始化配置中不存在同时启用的资源冲突；若冲突存在，互斥配置有构建或测试验证。
+- [x] **BSPMISC-06** [bug] 修复 WS2812 初始化占用 ADC 按键的 PA5。验收完成：ADC1 通道19继续使用 PA5；WS2812 只将 PA7配置为 SPI6 MOSI，SPI6 SCK不映射到 GPIO。生产初始化主机测试修改前失败、修改后通过；WSL Debug／Release全量各419/419及10种 ARM 固件构建通过。未验证实际灯珠波形，详见[任务记录](../docs/workflow/tickets/BSPMISC-06.md)和[学习笔记25](../docs/学习笔记/25-引脚与外设资源冲突.md)。
 - [ ] **BSPMISC-07** [enhancement] [needs-triage] 核查历史报告提出的 SPI 时序问题是否仍可复现。验收：记录当前配置、目标外设规格及逻辑分析仪波形；确认满足时序，或提交修复和复测结果。
 - [x] **BUILD-02** [enhancement] [ready-for-agent] 统一为唯一 CMake 构建入口，替代双入口维护方案。验收完成：删除根 Makefile 和对应编辑器任务，按平台／车型显式选择源码及头依赖；干净／增量构建选择一致，非法组合和缺失依赖明确拒绝，未选模块不进入编译及链接。WSL 主机测试、10种主固件、附加配置、角色／ELF隔离和10种增量变化场景均通过。保留 MC02-0032 的远端 CI 待验状态。详见[任务记录](../docs/workflow/tickets/BUILD-02.md)及[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [x] **CORE-03** [bug] [ready-for-agent] 将 `BSPInit()` 实现移出公共头，消除多源文件链接时的多重定义。验收：公共头只声明接口、单个源文件提供定义；两个独立调用源文件共同链接生产实现，启动顺序及参数回归通过。详见[验收记录](../docs/workflow/tickets/CORE-03.md)。
@@ -358,7 +358,7 @@ Unicom
 
 #### 板载 RGB
 
-- [ ] **MC02-0025** [enhancement] [needs-info] 修复现有 SPI 板载单灯 RGB，替代原 PWM WS2816 候选路线。验收：确认实际灯珠及波形，解决当前 SPI 与 ADC 按键的局部资源冲突；初始化、提交、完成、错误和超时有结果，有界异步刷新且失败辅助降级。单灯实测波形与裸板验证可复现，不扩展多灯或 R10 的全板资源系统；关联 BSPMISC-06、MC02-0084，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0025** [enhancement] [needs-info] 修复现有 SPI 板载单灯 RGB，替代原 PWM WS2816 候选路线。验收：确认实际灯珠及波形；PA5 与 ADC 按键的源码配置冲突已由 BSPMISC-06 修复，仍须用实物测量确认 LED 数据时序；初始化、提交、完成、错误和超时有结果，有界异步刷新且失败辅助降级。单灯实测波形与裸板验证可复现，不扩展多灯或 R10 的全板资源系统；关联 BSPMISC-06、MC02-0084，范围见 [范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 
 ---
 
