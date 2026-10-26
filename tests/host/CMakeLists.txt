@@ -500,6 +500,25 @@ if(UNIX AND NOT APPLE)
   add_test(NAME production_message_center_cross_thread_snapshot COMMAND message_center_thread_test)
   set_tests_properties(production_message_center_cross_thread_snapshot PROPERTIES TIMEOUT 10)
 
+  # 对比生产复制读写与只读租约视图模型；模型只用于评估，不进入固件。
+  add_executable(message_center_pointer_eval_test message_center_pointer_eval_test.c
+    ../../application/topics/robot_topics.c ../../modules/message_center/message_center.c)
+  target_include_directories(message_center_pointer_eval_test BEFORE PRIVATE
+    message_center_thread_fakes robot_cmd_fakes)
+  target_include_directories(message_center_pointer_eval_test PRIVATE . ../../application
+    ../../application/topics ../../application/config ../../modules ../../modules/imu
+    ../../modules/master_machine ../../modules/message_center ../../modules/algorithm
+    ../../bsp/usart)
+  target_compile_definitions(message_center_pointer_eval_test PRIVATE ONE_BOARD=1)
+  target_compile_options(message_center_pointer_eval_test PRIVATE -Wall -Wextra -Werror
+    -fno-builtin-memcpy -include ${CMAKE_CURRENT_SOURCE_DIR}/robot_cmd_fakes/main.h)
+  target_link_options(message_center_pointer_eval_test PRIVATE -Wl,--wrap=memcpy)
+  target_link_libraries(message_center_pointer_eval_test PRIVATE Threads::Threads m)
+  add_test(NAME production_message_center_pointer_interface_evaluation
+    COMMAND message_center_pointer_eval_test)
+  set_tests_properties(production_message_center_pointer_interface_evaluation
+    PROPERTIES TIMEOUT 10)
+
   add_executable(dwt_timeline_thread_test dwt_timeline_thread_test.c
     ../../bsp/dwt/bsp_dwt.c host_critical_model.c)
   target_include_directories(dwt_timeline_thread_test BEFORE PRIVATE dwt_thread_fakes)
