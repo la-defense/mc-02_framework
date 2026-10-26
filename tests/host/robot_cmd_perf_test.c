@@ -188,7 +188,7 @@ int main(void)
     qsort(batch_mean_ns, BATCH_COUNT, sizeof(batch_mean_ns[0]), CompareU64);
 
     const size_t total_cycles = BATCH_COUNT * BATCH_CYCLES;
-    // 最近秩分位数取 ceil(百分位 × 样本数) 对应的下标；P50使用第50个样本。
+    // 最近秩分位数取 ceil(百分位 × 样本数) 对应的下标；P50和P95分别取第50、第95个样本。
     const size_t p50_index = ((BATCH_COUNT * 50u + 99u) / 100u) - 1u;
     const size_t p95_index = ((BATCH_COUNT * 95u + 99u) / 100u) - 1u;
     printf("{\"scenario\":\"one_board_manual_ready\",\"cpu\":%d,"
