@@ -24,15 +24,16 @@
 
 | 来源 | 查到的做法 | 对MC02可参考之处 |
 |---|---|---|
-| [PX4安全与失效保护](https://docs.px4.io/main/en/config/safety) | 按故障提供警告、Hold、Return、Land、Disarm或Terminate等动作；遥控链路和电机异常会按模式及配置选择动作。 | 可恢复的来源问题优先采用针对来源的控制动作，不把所有失效都变成整机复位。该文档没有规定恢复重启次数或稳定时长。 |
-| [ArduPilot Rover崩溃检查源码](https://github.com/ArduPilot/ardupilot/blob/master/Rover/crash_check.cpp) | 连续满足配置的崩溃条件后切入Hold，配置要求时解除电机使能。 | 机械或运动异常优先停止／保持车辆；不因一个普通运行状态异常统一重启。 |
-| [ArduPilot崩溃记录上锁检查](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Arming/AP_Arming.cpp) | 有崩溃记录时默认产生解锁前错误；只有显式设置高级参数才跳过该检查，代码警告崩溃后的车辆可能不适合继续飞行。 | 把“程序重启成功”和“允许重新使能”分开；需检查或明确确认后才能解除。 |
-| [ESP-IDF致命错误处理](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/fatal-errors.html) | 将CPU异常、看门狗、欠压、栈溢出、堆完整性错误和断言列为致命错误；可配置为保存寄存器后重启或停机。 | 致命错误类别应由目标平台明确列出，复位或停机是策略选择，不能从“可重启”推导“可重新使能”。 |
-| [Zephyr任务看门狗](https://docs.zephyrproject.org/latest/services/task_wdt/index.html) | 多任务系统可以用多个看门狗通道分别检查线程；硬件看门狗可作为任务看门狗或调度器故障的后备。 | 核心任务进度应分别检查，硬件看门狗用于软件监控自身失效时的后备。该文档不提供跨启动重试次数。 |
-| [systemd启动频率限制](https://www.freedesktop.org/software/systemd/man/260/systemd.unit.html) | 用时间窗和允许启动次数限制反复启动；达到上限后不再自动重启，管理员可以等待窗口或显式清理失败状态。 | 可参考“达到上限后停止自动循环”和“解除动作必须明确”。它运行在有管理员和更完整存储的主机上，不能照搬到MCU安全锁定。 |
-| [ST STM32H723/733 RM0468](https://www.st.com/resource/en/reference_manual/dm00603761.pdf) | RCC复位状态寄存器提供POR、BOR、IWDG、WWDG、软件及引脚等复位来源标志。 | 启动代码应在既有清标志步骤前保存原始标志，并按硬件实际组合解释；软件标志不能替代断电、欠压和复位引脚实测。 |
+| [PX4 v1.14安全与失效保护](https://docs.px4.io/v1.14/en/config/safety) | 按故障提供警告、Hold、Return、Land、Disarm或Terminate等动作；遥控链路和电机异常会按模式及配置选择动作。 | 可恢复的来源问题优先采用针对来源的控制动作，不把所有失效都变成整机复位。该文档没有规定恢复重启次数或稳定时长。 |
+| [PX4 v1.14.3 HardFault计数源码](https://raw.githubusercontent.com/PX4/PX4-Autopilot/v1.14.3/src/systemcmds/hardfault_log/hardfault_log.c) | 提供读取／递增HardFault重启计数，以及显式提交或清除记录的入口；该路径没有给出通用自动重试上限或稳定清零时长。 | 故障记录和重启次数应可检查，清理动作应明确；不能把该项目的计数接口解释为MC02应采用的次数。 |
+| [ArduPilot Rover 4.6.0崩溃检查源码](https://github.com/ArduPilot/ardupilot/blob/Copter-4.6.0/Rover/crash_check.cpp) | 连续满足配置的崩溃条件后切入Hold，配置要求时解除电机使能。 | 机械或运动异常优先停止／保持车辆；不因一个普通运行状态异常统一重启。 |
+| [ArduPilot 4.6.0崩溃记录上锁检查](https://github.com/ArduPilot/ardupilot/blob/Copter-4.6.0/libraries/AP_Arming/AP_Arming.cpp) | 有崩溃记录时默认产生解锁前错误；高级参数`CRSDP_IGN`允许用户显式忽略，代码警告崩溃后的车辆可能不适合继续飞行。 | 把“程序重启成功”和“允许重新使能”分开。该机制要求明确确认，但不是不可解除的永久锁。 |
+| [ESP-IDF v5.5致命错误处理](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32/api-guides/fatal-errors.html) | 将CPU异常、看门狗、欠压、栈溢出、堆完整性错误和断言列为致命错误；可配置为保存寄存器后重启或停机。 | 致命错误类别应由目标平台明确列出，复位或停机是策略选择，不能从“可重启”推导“可重新使能”。 |
+| [Zephyr v4.2.0任务看门狗](https://github.com/zephyrproject-rtos/zephyr/blob/v4.2.0/doc/services/task_wdt/index.rst) | 多任务系统可以用多个看门狗通道分别检查线程；硬件看门狗可作为任务看门狗或调度器故障的后备。 | 核心任务进度应分别检查，硬件看门狗用于软件监控自身失效时的后备。该文档不提供跨启动重试次数。 |
+| [systemd 255启动频率限制](https://www.freedesktop.org/software/systemd/man/255/systemd.unit.html) | 用时间窗和允许启动次数限制反复启动；达到上限后不再自动重启，管理员可等待窗口或显式清理失败状态。 | 可参考“达到上限后停止自动循环”和“解除动作必须明确”。它运行在有管理员和更完整存储的主机上，不能照搬到MCU安全锁定。 |
+| [ST STM32H723/733 RM0468 Rev.3](https://www.st.com/resource/en/reference_manual/rm0468-stm32h723733-stm32h725735-and-stm32h730-value-line-advanced-armbased-32bit-mcus-stmicroelectronics.pdf) | RCC复位状态寄存器提供POR、BOR、IWDG、WWDG、软件及引脚等复位来源标志。 | 启动代码应在既有清标志步骤前保存原始标志，并按硬件实际组合解释；软件标志不能替代断电、欠压和复位引脚实测。 |
 
-资料的共同点是分类处理、限制故障重启循环，并将锁定与重新使能分开。不同项目的用途和硬件不同；没有来源能证明“3次”或“30秒”是通用标准。
+资料的共同点是分类处理、限制故障重启循环，并将锁定与重新使能分开。PX4计数入口没有给出通用重试阈值；ArduPilot的崩溃记录检查允许高级参数显式忽略，也不等于永久锁定。不同项目的用途和硬件不同；没有来源能证明“3次”或“30秒”是通用标准。
 
 ## 对当前MC02参数的建议
 
