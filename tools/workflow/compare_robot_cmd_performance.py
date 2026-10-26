@@ -151,7 +151,7 @@ def main() -> int:
     current_sha = run_checked(["git", "rev-parse", "HEAD"], cwd=ROOT).stdout.strip()
     merge_base = run_checked(["git", "merge-base", baseline_sha, current_sha], cwd=ROOT).stdout.strip()
     if merge_base != baseline_sha:
-        print("The baseline reference must be an ancestor of HEAD.", file=sys.stderr)
+        print("基线提交必须是当前 HEAD 的祖先。", file=sys.stderr)
         return 2
 
     available_cpus = sorted(os.sched_getaffinity(0))
