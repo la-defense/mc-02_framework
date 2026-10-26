@@ -807,6 +807,32 @@ if(UNIX)
 endif()
 add_test(NAME production_command_task_v2_independent_topics COMMAND robot_cmd_v2_test)
 set_tests_properties(production_command_task_v2_independent_topics PROPERTIES TIMEOUT 10)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(ROBOT_CMD_PERF_SOURCES robot_cmd_perf_test.c ../../application/cmd/robot_cmd.c
+    ../../modules/remote/remote_safety.c ../../application/topics/robot_topics.c
+    ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
+    ../../modules/master_machine/vision_control.c ../../modules/daemon/daemon.c)
+  function(add_robot_cmd_perf_target target)
+    add_executable(${target} ${ROBOT_CMD_PERF_SOURCES})
+    target_include_directories(${target} BEFORE PRIVATE robot_cmd_fakes)
+    target_include_directories(${target} PRIVATE . ../../application ../../application/cmd
+      ../../application/config ../../modules ../../modules/remote ../../modules/imu
+      ../../modules/master_machine ../../modules/message_center ../../modules/safety
+      ../../modules/daemon ../../bsp/usart)
+    target_compile_definitions(${target} PRIVATE ONE_BOARD=1)
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(${target} PRIVATE m)
+  endfunction()
+  add_robot_cmd_perf_target(robot_cmd_perf_test)
+  target_compile_definitions(robot_cmd_perf_test PRIVATE ROBOT_CMD_COUNT_COPY_BYTES=1)
+  target_compile_options(robot_cmd_perf_test PRIVATE -fno-builtin-memcpy)
+  target_link_options(robot_cmd_perf_test PRIVATE -Wl,--wrap=memcpy)
+  add_test(NAME production_robot_cmd_performance_measurement COMMAND robot_cmd_perf_test)
+  set_tests_properties(production_robot_cmd_performance_measurement PROPERTIES TIMEOUT 10)
+  add_robot_cmd_perf_target(robot_cmd_time_test)
+  add_test(NAME production_robot_cmd_cpu_time COMMAND robot_cmd_time_test)
+  set_tests_properties(production_robot_cmd_cpu_time PROPERTIES TIMEOUT 10)
+endif()
 add_executable(robot_cmd_dual_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c ../../modules/safety/robot_safety.c
   ../../application/topics/robot_topics.c
@@ -819,7 +845,7 @@ target_compile_definitions(robot_cmd_dual_test PRIVATE GIMBAL_BOARD=1)
 if(UNIX)
   target_link_libraries(robot_cmd_dual_test PRIVATE m)
 endif()
-add_test(NAME production_dual_board_command_snapshot_path COMMAND robot_cmd_dual_test dual-board)
+add_test(NAME production_dual_board_command_skips_unused_feedback_read COMMAND robot_cmd_dual_test dual-board)
 foreach(target IN ITEMS robot_cmd_task_test robot_cmd_vision_test robot_cmd_v2_test robot_cmd_dual_test)
   target_sources(${target} PRIVATE ../../modules/daemon/daemon.c)
   target_include_directories(${target} PRIVATE ../../modules/daemon)

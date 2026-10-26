@@ -378,7 +378,7 @@ Unicom
 
 #### robot_cmd
 
-- [ ] **MC02-0028** [enhancement] [ready-for-agent] 优化 robot_cmd 消息发布和接收性能。验收：先记录现有周期耗时和复制量，优化后行为回归通过且最坏耗时有可复现改善。
+- [x] **MC02-0028** [enhancement] [done] 移除 RobotCMD 中无人消费的底盘反馈快照，减少每周期复制和临界区工作。验收：WSL GCC 11.4 生产路径基线对比中，每轮 `memcpy` 从51字节降至42字节；50,000次调用批均值P50由77ns降至60ns，P95由94ns降至81ns，100批最大均值中位数由98ns降至84ns；RobotCMD相关Debug／Release与ASan／UBSan回归通过，十种ARM禁热构建通过。上述时间为WSL线程CPU批均值，不代表H723 WCET。见[MC02-0028任务记录](../docs/workflow/tickets/MC02-0028.md)及[学习笔记21](../docs/学习笔记/21-从TODO到可重复验证的工程闭环.md#怎样验证-robotcmd-每轮确实少做了工作-mc02-0028)。
 
 #### gimbal
 

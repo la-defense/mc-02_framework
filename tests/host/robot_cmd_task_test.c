@@ -146,10 +146,10 @@ int main(int argc, char **argv)
         CHECK(dual_init_config.send_data_len == sizeof(Chassis_Ctrl_Cmd_s));
         CHECK(dual_init_config.recv_data_len == sizeof(Chassis_Upload_Data_s));
         RobotCMDTask(); /* No gimbal feedback: the production task must publish safe CAN output. */
-        CHECK(dual_snapshot_calls == 1u && dual_send_calls == 1u);
+        CHECK(dual_snapshot_calls == 0u && dual_send_calls == 1u);
         CHECK(dual_sent_chassis.chassis_mode == CHASSIS_ZERO_FORCE);
         CHECK(dual_sent_chassis.vx == 0.0f && dual_sent_chassis.vy == 0.0f && dual_sent_chassis.wz == 0.0f);
-        puts("PASS: production dual-board command path reads snapshot and sends fail-safe output");
+        puts("PASS: production dual-board command path skips unused feedback and sends fail-safe output");
         return 0;
     }
 #endif

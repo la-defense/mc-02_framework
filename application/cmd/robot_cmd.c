@@ -64,14 +64,10 @@ static uint8_t manual_reference_ready;
 static CANCommInstance *cmd_can_comm; // 双板通信
 #endif
 #ifdef ONE_BOARD
-static MessagePublisher_t *chassis_cmd_pub;   // 底盘控制消息发布者
-static MessageSubscriber_t *chassis_feed_sub; // 底盘反馈信息订阅者
+static MessagePublisher_t *chassis_cmd_pub; // 底盘控制消息发布者
 #endif                                 // ONE_BOARD
 
 static Chassis_Ctrl_Cmd_s chassis_cmd_send;      // 发送给底盘应用的信息,包括控制信息和UI绘制相关
-#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
-static Chassis_Upload_Data_s chassis_fetch_data; // 从底盘应用接收的反馈信息信息,底盘功率枪口热量与底盘运动状态等
-#endif
 
 static RemoteControlSnapshot_s remote_snapshot;
 static RC_ctrl_t *const rc_data = &remote_snapshot.input;
@@ -127,8 +123,6 @@ uint8_t RobotCMDInit(void)
 #ifdef ONE_BOARD // 双板兼容
     chassis_cmd_pub = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND,
                                                 ROBOT_TOPIC_ENDPOINT_COMMAND);
-    chassis_feed_sub = MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_FEEDBACK,
-                                                  ROBOT_TOPIC_ENDPOINT_COMMAND);
 #endif // ONE_BOARD
 #ifdef GIMBAL_BOARD
     CANComm_Init_Config_s comm_conf = {
@@ -160,7 +154,7 @@ uint8_t RobotCMDInit(void)
     if (gimbal_cmd_pub == NULL || gimbal_feed_sub == NULL || shoot_cmd_pub == NULL)
         return 0u;
 #ifdef ONE_BOARD
-    if (chassis_cmd_pub == NULL || chassis_feed_sub == NULL)
+    if (chassis_cmd_pub == NULL)
         return 0u;
 #endif
     return 1u;
@@ -471,17 +465,7 @@ void RobotCMDTask()
    // 来源离线事件在整车任务中执行，确保撤销遥控许可与视觉清理不挤入监控任务。
    (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_ROBOT_TASK, DAEMON_EVENT_MAX_DEPTH, NULL);
    // BMI088Acquire(bmi088_test,&bmi088_data) ;
-    // 从其他应用获取回传数据
-#ifdef ONE_BOARD
-    if (MessageReadSnapshot(chassis_feed_sub, &chassis_fetch_data, sizeof(chassis_fetch_data),
-                            HAL_GetTick(), NULL) != MESSAGE_OK)
-        memset(&chassis_fetch_data, 0, sizeof(chassis_fetch_data));
-#endif // ONE_BOARD
-#ifdef GIMBAL_BOARD
-    if (!CANCommGetSnapshot(cmd_can_comm, &chassis_fetch_data, sizeof(chassis_fetch_data),
-                            HAL_GetTick(), MESSAGE_DEFAULT_MAX_AGE_MS, NULL))
-        memset(&chassis_fetch_data, 0, sizeof(chassis_fetch_data));
-#endif // GIMBAL_BOARD
+    // 控制选择不读取底盘回传；避免单板消息中心复制或双板 CAN 快照锁定。
     const uint8_t feedback_received = (uint8_t)(MessageReadSnapshot(gimbal_feed_sub,
         &gimbal_fetch_data, sizeof(gimbal_fetch_data), HAL_GetTick(), NULL) == MESSAGE_OK);
 
