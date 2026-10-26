@@ -465,7 +465,7 @@ void RobotCMDTask()
    // 来源离线事件在整车任务中执行，确保撤销遥控许可与视觉清理不挤入监控任务。
    (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_ROBOT_TASK, DAEMON_EVENT_MAX_DEPTH, NULL);
    // BMI088Acquire(bmi088_test,&bmi088_data) ;
-    // 控制选择不读取底盘回传；避免单板消息中心复制或双板 CAN 快照锁定。
+    // 控制选择不读取底盘回传，避免单板复制未使用的反馈或双板为它加锁。
     const uint8_t feedback_received = (uint8_t)(MessageReadSnapshot(gimbal_feed_sub,
         &gimbal_fetch_data, sizeof(gimbal_fetch_data), HAL_GetTick(), NULL) == MESSAGE_OK);
 

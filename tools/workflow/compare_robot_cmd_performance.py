@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Compare the committed RobotCMD production path with an ancestor baseline.
+"""比较 RobotCMD 生产路径与某个祖先提交中的基线实现。
 
-Usage: pass an ancestor commit with --baseline-ref; optionally select repeated
-paired runs, an allowed CPU, and a JSONL output path. The tool builds the two
-Linux host benchmark targets, compiles the baseline RobotCMD source with the
-current target flags, links baseline executables, and saves each result row.
-It returns 0 only when copy volume and the median sampled worst-batch mean
-both improve; build, measurement, or validation failures return nonzero.
-The comparison measures Linux host behavior, not STM32H723 WCET.
+用法：通过 ``--baseline-ref`` 指定基线提交，可设置配对次数、CPU和JSONL输出路径。
+脚本构建两个Linux主机测试目标，按当前目标编译参数编译基线源文件，并保存每次结果。
+复制量和100组批均值最大值的五次中位数都下降时返回0；构建、测量或输入校验失败时返回非零。
+本工具测量Linux主机表现，不测量STM32H723的最坏执行时间。
 """
 
 from __future__ import annotations
@@ -32,14 +29,14 @@ MEASURED_FIELDS = ("p50_batch_mean_ns", "p95_batch_mean_ns", "max_batch_mean_ns"
 
 
 def run_checked(arguments: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Run one build or Git command and preserve its diagnostic on failure."""
+    """运行一条构建或Git命令；失败时保留命令错误并停止后续步骤。"""
     return subprocess.run(arguments, cwd=cwd, check=True, text=True, capture_output=True)
 
 
 def compile_baseline_object(
     target: str, baseline_source: Path, baseline_object: Path
 ) -> None:
-    """Compile the baseline RobotCMD file using the selected target's real flags."""
+    """读取目标编译参数，并将基线 RobotCMD 源码编译为临时对象文件。"""
     database = json.loads((BUILD_DIR / "compile_commands.json").read_text(encoding="utf-8"))
     source_resolved = ROBOT_CMD_SOURCE.resolve()
     entry = next(
@@ -69,7 +66,7 @@ def compile_baseline_object(
 
 
 def link_baseline_binary(target: str, baseline_object: Path, output: Path) -> None:
-    """Reuse CMake's actual link command while substituting only RobotCMD."""
+    """复用CMake生成的链接命令，只把 RobotCMD 对象换成基线对象。"""
     commands = run_checked(["ninja", "-t", "commands", target], cwd=BUILD_DIR).stdout
     link_line = next(
         line
@@ -89,7 +86,7 @@ def link_baseline_binary(target: str, baseline_object: Path, output: Path) -> No
 
 
 def _has_output(arguments: list[str], target: str) -> bool:
-    """Return whether a Ninja command links the requested test executable."""
+    """检查Ninja命令是否生成指定的测试程序。"""
     return any(
         arguments[index] == "-o" and Path(arguments[index + 1]).name == target
         for index in range(len(arguments) - 1)
@@ -97,7 +94,7 @@ def _has_output(arguments: list[str], target: str) -> bool:
 
 
 def run_measurement(binary: Path, cpu: int) -> dict[str, int | str | None]:
-    """Run one fixed-input benchmark with its process pinned to the selected CPU."""
+    """将测试程序固定到指定CPU运行一次，并解析最后一行JSON结果。"""
     completed = subprocess.run(
         [str(binary)],
         check=True,
@@ -109,43 +106,45 @@ def run_measurement(binary: Path, cpu: int) -> dict[str, int | str | None]:
 
 
 def median_values(samples: list[dict[str, int | str | None]], field: str) -> int | float:
+    """计算多次运行某项结果的中位数。"""
     values = [int(sample[field]) for sample in samples]
     median = statistics.median(values)
     return int(median) if int(median) == median else median
 
 
 def parse_args() -> argparse.Namespace:
+    """解析基线提交、配对次数、输出路径和可选CPU。"""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline-ref", required=True, help="ancestor commit used as baseline")
-    parser.add_argument("--runs", type=int, default=5, help="paired runs for each measurement (minimum 5)")
+    parser.add_argument("--baseline-ref", required=True, help="用作基线的祖先提交")
+    parser.add_argument("--runs", type=int, default=5, help="每组配对运行次数，最少5次")
     parser.add_argument(
         "--output",
         type=Path,
         default=Path("build/mc02-0028-comparison.jsonl"),
-        help="JSONL destination; relative paths are resolved from the repository root",
+        help="JSONL输出文件；相对路径以仓库根目录为起点",
     )
-    parser.add_argument("--cpu", type=int, help="CPU selected from the process affinity mask")
+    parser.add_argument("--cpu", type=int, help="指定一个当前进程允许使用的CPU编号")
     return parser.parse_args()
 
 
 def main() -> int:
+    """检查输入，构建基线与当前程序，运行配对测量并写入JSONL。"""
     args = parse_args()
     if not sys.platform.startswith("linux"):
-        print("This measurement requires Linux sched affinity and GNU ld.", file=sys.stderr)
+        print("此测量需要Linux CPU亲和设置和GNU链接器。", file=sys.stderr)
         return 2
     if args.runs < 5:
-        print("--runs must be at least 5 to compare repeated batch maxima.", file=sys.stderr)
+        print("--runs至少为5，才能比较多次运行的批次最大均值。", file=sys.stderr)
         return 2
+    changed_paths = [
+        "application/cmd/robot_cmd.c",
+        "tests/host/robot_cmd_perf_test.c",
+        "tests/host/CMakeLists.txt",
+    ]
     if subprocess.run(
-        ["git", "diff", "--quiet", "HEAD", "--", "application/cmd/robot_cmd.c",
-         "tests/host/robot_cmd_perf_test.c", "tests/host/CMakeLists.txt"],
-        cwd=ROOT,
-    ).returncode != 0 or subprocess.run(
-        ["git", "diff", "--cached", "--quiet", "HEAD", "--", "application/cmd/robot_cmd.c",
-         "tests/host/robot_cmd_perf_test.c", "tests/host/CMakeLists.txt"],
-        cwd=ROOT,
+        ["git", "diff", "--quiet", "HEAD", "--", *changed_paths], cwd=ROOT
     ).returncode != 0:
-        print("Commit RobotCMD and benchmark source changes before comparing.", file=sys.stderr)
+        print("请先提交 RobotCMD 和性能测试源码，再运行对比。", file=sys.stderr)
         return 2
 
     baseline_sha = run_checked(["git", "rev-parse", args.baseline_ref], cwd=ROOT).stdout.strip()
@@ -158,7 +157,7 @@ def main() -> int:
     available_cpus = sorted(os.sched_getaffinity(0))
     cpu = available_cpus[0] if args.cpu is None else args.cpu
     if cpu not in available_cpus:
-        print(f"CPU {cpu} is outside the process affinity mask {available_cpus}.", file=sys.stderr)
+        print(f"CPU {cpu} 不在当前进程允许使用的列表 {available_cpus} 中。", file=sys.stderr)
         return 2
 
     output_path = args.output if args.output.is_absolute() else ROOT / args.output
@@ -253,7 +252,7 @@ def main() -> int:
         print(json.dumps({"output": str(output_path), **summaries}, indent=2, sort_keys=True))
         return 0 if copies_reduced and worst_batch_mean_reduced else 1
     except (OSError, KeyError, StopIteration, subprocess.CalledProcessError, json.JSONDecodeError) as error:
-        print(f"RobotCMD comparison failed: {error}", file=sys.stderr)
+        print(f"RobotCMD对比失败：{error}", file=sys.stderr)
         return 2
 
 

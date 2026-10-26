@@ -1,5 +1,5 @@
 /** @file robot_cmd_perf_test.c
- * @brief 用生产 RobotCMDTask 和消息中心测量单轮执行时间及复制字节数。
+ * @brief 用生产 RobotCMDTask 和消息中心测量每批平均时间及复制字节数。
  * @note 仅用于 WSL 主机对比；主机耗时不代表 STM32H723 的执行时间。
  * @note 入口为 main()；仅在 Linux 主机编译，使用 CPU 亲和设置和 GNU 链接器包装。
  * @author MC-02 project contributors
@@ -188,7 +188,8 @@ int main(void)
     qsort(batch_mean_ns, BATCH_COUNT, sizeof(batch_mean_ns[0]), CompareU64);
 
     const size_t total_cycles = BATCH_COUNT * BATCH_CYCLES;
-    const size_t p50_index = BATCH_COUNT / 2u;
+    // 最近秩分位数取 ceil(百分位 × 样本数) 对应的下标；P50使用第50个样本。
+    const size_t p50_index = ((BATCH_COUNT * 50u + 99u) / 100u) - 1u;
     const size_t p95_index = ((BATCH_COUNT * 95u + 99u) / 100u) - 1u;
     printf("{\"scenario\":\"one_board_manual_ready\",\"cpu\":%d,"
            "\"chassis_feedback_size\":%zu,"
