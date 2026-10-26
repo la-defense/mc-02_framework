@@ -69,6 +69,23 @@ jobs:
             done
           done
 
+      - name: Create downloadable firmware archives
+        run: |
+          for preset in bench-debug bench-rel rcdiag-debug rcdiag-rel \
+                        robot-single-debug robot-single-rel \
+                        robot-chassis-debug robot-chassis-rel \
+                        robot-gimbal-debug robot-gimbal-rel; do
+            python3 tools/workflow/archive_firmware.py --preset "$preset" --output-dir build/firmware-archives
+          done
+
+      - name: Upload firmware archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: mc02-firmware-${{ github.sha }}
+          path: build/firmware-archives/*.zip
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Reject unsafe and conflicting configurations
         shell: bash
         run: |

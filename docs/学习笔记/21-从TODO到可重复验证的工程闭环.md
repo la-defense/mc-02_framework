@@ -224,6 +224,16 @@ MC02-0078把KF改为调用者长期保存实例及工作区。主机验证回答
 
 MC02-0020继续使用WSL Debug／Release主机预设和ARM GCC固件预设；Windows原生构建不是验收前置条件。版本、文件指纹、工具链、十种禁热构建及内存报告见[任务记录](../workflow/tickets/MC02-0020.md)和[机器可读构建证据](../workflow/tickets/MC02-0020-baseline.json)。
 
+## 固件归档怎样绑定到一次构建（MC02-0103）
+
+本地与 CI 都调用 [`archive_firmware.py`](../../tools/workflow/archive_firmware.py)，输入是 CMake 预设已经生成的 ELF、HEX、BIN、map 和 `mc02-selected-sources.txt`。脚本先核对 CMakeCache、预设、源码选择摘要、禁热配置和 ELF GNU Build ID，再生成 ZIP；缺少文件或身份不匹配时返回失败，不输出貌似成功的包。
+
+包内 `build-info.json` 记录完整 Git 提交、是否有已跟踪改动、改动路径及其清单指纹、构建预设、车型／板卡角色、视觉传输、协议、姿态后端、Debug／RelWithDebInfo、工具链版本、工具链文件 SHA-256、源码清单散列和 Build ID。路径指纹只标识哪些文件有改动，不哈希工作区文件内容；构建产物自身的 SHA-256 则准确检查归档中字节。清单不记录本机绝对路径；ELF 和 map 保留现有调试路径以便定位匹配源码。文件名带预设、提交短 SHA、Build ID 和清单指纹；归档名冲突且内容不同时拒绝覆盖。
+
+在 WSL 完成构建后运行 `python3 tools/workflow/archive_firmware.py --preset bench-debug`，默认输出到 `build/firmware-archives/`。CI 对十种常规禁热预设逐个调用同一脚本，并上传这些 ZIP；本地运行能核对打包过程和内容，只有工作流真正运行后才能确认 GitHub 下载行为。本任务不推送或手动触发远端 CI，因此远端下载仍按 TODO 记录为待证据。
+
+Build ID 关联 ELF 的链接映像，SHA-256 检查文件字节，Git SHA 标识仓库提交，三者不能互相替代。`.vscode/launch.json` 与公共 Ozone 项目默认指向 `bench-debug`；选择其他角色时，需从同配置包中使用 ELF 和 map。ZIP 仅整理产物，不能证明它已写入开发板或整片 Flash 与文件相同。
+
 ## 相关实现
 
 - [MC-02 主机安全测试](../../tests/host/CMakeLists.txt)

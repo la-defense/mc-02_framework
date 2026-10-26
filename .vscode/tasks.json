@@ -19,6 +19,15 @@
             "group": {"kind": "build", "isDefault": true}
         },
         {
+            "label": "archive bench-debug firmware (WSL)",
+            "type": "process",
+            "command": "wsl.exe",
+            "args": ["--cd", "${workspaceFolder}", "--exec", "python3", "tools/workflow/archive_firmware.py", "--preset", "bench-debug"],
+            "dependsOn": "build task",
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        },
+        {
             "label": "configure robot single Debug (WSL)",
             "type": "process",
             "command": "wsl.exe",

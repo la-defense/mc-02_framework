@@ -13,7 +13,10 @@
 ```sh
 cmake --preset bench-debug
 cmake --build --preset bench-debug
+python3 tools/workflow/archive_firmware.py --preset bench-debug
 ```
+
+归档命令会在 `build/firmware-archives/` 生成 ZIP，内含匹配的 ELF、HEX、BIN、map、构建身份清单和 SHA-256 校验表。CI 调用同一脚本后上传这些 ZIP；归档不会自动烧录，也不替代整片 Flash 回读。VSCode 可运行任务 `archive bench-debug firmware (WSL)` 完成默认安全构建和打包。
 
 机器人单板、底盘板和云台板使用 `robot-single-debug`、`robot-chassis-debug`、`robot-gimbal-debug`；Release 证据使用名称末尾为 `-rel` 的 RelWithDebInfo 预设。主机测试预设位于 `tests/host/`。板角色与视觉 USB／UART 选择见 [BUILD-02 任务记录](docs/workflow/tickets/BUILD-02.md) 和 [VSCode／Ozone 指南](docs/development/VSCode与Ozone调试指南.md)。历史 Makefile 教程仅作为上游资料，不是当前构建方法。
 

@@ -9,9 +9,12 @@
 ```sh
 cmake --preset bench-debug
 cmake --build --preset bench-debug
+python3 tools/workflow/archive_firmware.py --preset bench-debug
 ```
 
 正式角色预设为 `robot-single-*`、`robot-chassis-*` 和 `robot-gimbal-*`，后缀 `debug` 表示 Debug，`rel` 表示 RelWithDebInfo。预设固定使用 Ninja，并把产物放在 `build/wsl/<预设名>/`，例如 `build/wsl/robot-chassis-debug/Basic_Framework_MC02_chassis_robot.elf`。VSCode 的默认下载任务只使用 `bench-debug` 产物；选择其他角色调试时，应同步选择匹配的 ELF 和硬件配置。
+
+归档工具读取已完成的预设构建，在 `build/firmware-archives/` 输出包含 ELF、HEX、BIN、map、构建身份和 SHA-256 校验表的 ZIP。Windows VSCode 通过任务 `archive bench-debug firmware (WSL)` 调用同一工具；CI 也执行该脚本，再上传相同目录结构的归档。Ozone 公共入口当前打开 `bench-debug` ELF；若调试其他预设，应从对应归档中取出 ELF，并同时加载同包的 map，不能沿用 bench 符号文件。打包只整理本机产物，不会烧录或复位开发板。
 
 源码由 `cmake/mc02_firmware_sources.cmake` 显式登记。新增固件 `.c` 文件必须加入对应清单；未登记文件不会自动编入。`MC02_BOARD_ROLE` 选择唯一板角色，`MC02_VISION_TRANSPORT` 选择 USB VCP 或备用 UART，不能通过额外编译宏覆盖预设。
 
