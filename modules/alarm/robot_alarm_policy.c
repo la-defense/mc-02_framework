@@ -332,6 +332,8 @@ static RobotAlarmStatus_t RobotAlarmApplyLed(RobotAlarmPolicy_t *policy,
     }
     if (result == ROBOT_ALARM_WRITE_BUSY)
     {
+        // 在途请求可能改变物理颜色；重新确认目标，不能沿用旧缓存。
+        policy->led_output_valid = 0u;
         policy->state.led_busy_count = RobotAlarmSaturatingIncrement(
             policy->state.led_busy_count);
         return ROBOT_ALARM_DEGRADED;

@@ -290,8 +290,19 @@ static void TestOutputs(void)
 {
     RobotAlarmPolicy_t policy;
     InitPolicy(&policy);
+    RobotAlarmInput_t input = {.state = ROBOT_ALARM_STATE_INIT};
+    TEST_CHECK(RobotAlarmPolicyUpdate(&policy, &input, 0u) == ROBOT_ALARM_OK);
+    // A 已确认，B 发送忙后又回到 A；硬件仍可能完成 B，必须重新提交 A。
     output_log.led_result = ROBOT_ALARM_WRITE_BUSY;
-    RobotAlarmInput_t input = {.state = ROBOT_ALARM_STATE_READY};
+    TEST_CHECK(RobotAlarmPolicyUpdate(&policy, &input, 10u) == ROBOT_ALARM_DEGRADED);
+    const uint32_t led_calls = output_log.led_calls;
+    output_log.led_result = ROBOT_ALARM_WRITE_APPLIED;
+    TEST_CHECK(RobotAlarmPolicyUpdate(&policy, &input, 20u) == ROBOT_ALARM_OK);
+    TEST_CHECK(output_log.led_calls == led_calls + 1u);
+
+    InitPolicy(&policy);
+    output_log.led_result = ROBOT_ALARM_WRITE_BUSY;
+    input = (RobotAlarmInput_t){.state = ROBOT_ALARM_STATE_READY};
     TEST_CHECK(RobotAlarmPolicyUpdate(&policy, &input, 1u) == ROBOT_ALARM_DEGRADED);
     RobotAlarmState_t state;
     TEST_CHECK(RobotAlarmPolicyGetState(&policy, &state) == ROBOT_ALARM_OK);
