@@ -225,6 +225,17 @@ SECTIONS
   } >RAM_D2
   ASSERT(SIZEOF(.can_workspace) <= 0x8000, "CAN workspace exceeds 32 KiB RAM_D2 budget")
 
+  /* SPI6 BDMA 仅访问 D3 域；发送前由驱动填充整个数组。 */
+  .ws2812_dma (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __ws2812_dma_start__ = .;
+    KEEP(*(.ws2812_dma))
+    . = ALIGN(32);
+    __ws2812_dma_end__ = .;
+  } >RAM_D3
+  ASSERT(SIZEOF(.ws2812_dma) <= 128, "WS2812 DMA buffer exceeds its fixed budget")
+
   
   /* Uninitialized data section */
   . = ALIGN(4);

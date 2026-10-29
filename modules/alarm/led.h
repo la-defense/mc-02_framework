@@ -18,14 +18,19 @@ typedef enum
 } LEDStatus_t;
 
 /** @brief 初始化 SPI6 RGB 输出。
- * @return 成功为 LED_STATUS_OK；时钟或 SPI 初始化失败为 LED_STATUS_TRANSFER。
+ * @return 成功为 LED_STATUS_OK；资源忙为 BUSY，其余初始化失败为 TRANSFER。
  * @note 可重复调用；不调用 Error_Handler，也不修改 ADC 按键 PA5。
  */
 LEDStatus_t LEDInit(void);
+
+/** @brief 在普通任务推进 LED 发送和超时恢复，不改变 safety 状态。
+ * @note 由唯一告警任务约每10ms调用；初始化失败时不执行操作。
+ */
+void LEDProcess(void);
 /** @brief 提交一组 RGB 颜色。
  * @param[in] r,g,b 红、绿、蓝分量，范围 0～255。
- * @return 本机 SPI 发送完成为 OK；忙、未初始化或 HAL 错误返回对应状态。
- * @note 普通任务上下文调用；单次 SPI 操作使用 2 ms HAL 超时，不代表灯珠已显示。
+ * @return 对应颜色本机 SPI 发送完成为 OK；待启动／在途为 BUSY，其余失败返回对应状态。
+ * @note 普通任务串行调用；本机发送完成不代表灯珠已显示。
  */
 LEDStatus_t LEDSetRGB(uint8_t r, uint8_t g, uint8_t b);
 

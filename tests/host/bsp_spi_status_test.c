@@ -18,6 +18,20 @@ SPI_TypeDef spi_registers[2];
 DMA_Stream_TypeDef dma_registers[16];
 _Thread_local uint32_t mc02_test_ipsr, mc02_test_primask, mc02_test_basepri, mc02_test_faultmask;
 static SPI_HandleTypeDef handles[2];
+static SPI_HandleTypeDef *ws2812_owned_handle;
+static uint32_t ws2812_completions, ws2812_errors;
+uint8_t WS2812_OnTxComplete(SPI_HandleTypeDef *handle)
+{
+    if (ws2812_owned_handle == NULL || handle != ws2812_owned_handle) return 0u;
+    ++ws2812_completions;
+    return 1u;
+}
+uint8_t WS2812_OnError(SPI_HandleTypeDef *handle)
+{
+    if (ws2812_owned_handle == NULL || handle != ws2812_owned_handle) return 0u;
+    ++ws2812_errors;
+    return 1u;
+}
 static DMA_HandleTypeDef dmas[4];
 static GPIO_TypeDef gpio;
 static uint8_t irq_enabled[18];
@@ -373,6 +387,20 @@ static void late_completion(void)
     TEST_CHECK(SPIProcessTimeouts() == HAL_OK && submit(a, 2) == HAL_OK);
     complete(&handles[0], 2); TEST_CHECK(callbacks == 1u && SPIUnregister(a));
 }
+static void ws2812_dispatch(void)
+{
+    SPI_HandleTypeDef other = {0};
+    ws2812_owned_handle = &other;
+    HAL_SPI_TxCpltCallback(&other);
+    HAL_SPI_ErrorCallback(&other);
+    TEST_CHECK(ws2812_completions == 1u && ws2812_errors == 1u);
+    // 同时验证 SPI1 的回调仍交给原事务，不被 SPI6 处理器吞掉。
+    SPIInstance *a = device(0u, 1u, SPI_IT_MODE);
+    TEST_CHECK(submit(a, 0) == HAL_OK);
+    complete(&handles[0], 0);
+    TEST_CHECK(state(a).phase == SPI_TRANSFER_SUCCEEDED && ws2812_completions == 1u);
+    TEST_CHECK(SPIUnregister(a));
+}
 #ifdef SPI_TEST_THREADS
 typedef struct { SPIInstance *instance; HAL_StatusTypeDef result; } ThreadCall;
 static void *contend(void *argument)
@@ -432,6 +460,7 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "early")) early();
     else if (!strcmp(argv[1], "dirty-start")) dirty_start();
     else if (!strcmp(argv[1], "late")) late_completion();
+    else if (!strcmp(argv[1], "ws2812-dispatch")) ws2812_dispatch();
 #ifdef SPI_TEST_THREADS
     else if (!strcmp(argv[1], "threads")) concurrency();
 #endif

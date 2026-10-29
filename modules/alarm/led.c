@@ -7,6 +7,12 @@
 
 static uint8_t led_initialized;
 
+void LEDProcess(void)
+{
+    if (led_initialized != 0u)
+        (void)WS2812_Process();
+}
+
 LEDStatus_t LEDInit(void)
 {
     const HAL_StatusTypeDef result = WS2812_Init();

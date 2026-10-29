@@ -16,6 +16,7 @@ typedef enum
 } LEDStatus_t;
 
 LEDStatus_t LEDInit(void);
+void LEDProcess(void);
 LEDStatus_t LEDSetRGB(uint8_t r, uint8_t g, uint8_t b);
 
 #endif

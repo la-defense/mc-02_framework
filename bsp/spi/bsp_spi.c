@@ -4,6 +4,7 @@
 #include "bsp_spi.h"
 #include "bsp_dwt.h"
 #include "bsp_hal_tick.h"
+#include "ws2812.h"
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -414,10 +415,14 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *handle) { SPIComplete(handle, SPI
 /** @brief HAL 全双工完成入口；迟到或错误完成不发布数据。 */
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *handle) { SPIComplete(handle, SPI_OP_TXRX); }
 /** @brief HAL 发送完成入口；不会调用接收业务回调。 */
-void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *handle) { SPIComplete(handle, SPI_OP_TX); }
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *handle)
+{
+    if (WS2812_OnTxComplete(handle) == 0u) SPIComplete(handle, SPI_OP_TX);
+}
 /** @brief HAL 错误入口；只登记失败，停止流程延至任务。 */
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *handle)
 {
+    if (WS2812_OnError(handle) != 0u) return;
     int index = SPIBusIndex(handle);
     if (index < 0) return;
     uint32_t saved = SPIEnter();

@@ -203,7 +203,7 @@ typedef RobotAlarmWriteResult_t (*RobotAlarmWriteBuzzerFn)(void *context,
 RobotAlarmStatus_t RobotAlarmInit(const RobotAlarmConfig_t *config);
 /** @brief 读取一致 safety 快照并推进当前告警一次。
  * @return 两个通道均可用为 OK；通道忙或不可用为 DEGRADED；未初始化时返回错误。
- * @note 在普通任务中调用，时间使用 HAL 毫秒计数；当前 LED 驱动使用有超时参数的阻塞发送。
+ * @note 在普通任务中调用，时间使用 HAL 毫秒计数；LED 发送异步推进，故障恢复按任务轮次检查。
  */
 RobotAlarmStatus_t RobotAlarmTask(void);
 /** @brief 为当前允许静音的故障提交一次限时静音请求。

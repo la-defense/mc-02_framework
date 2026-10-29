@@ -115,6 +115,8 @@ RobotAlarmStatus_t RobotAlarmTask(void)
     if (robot_alarm_initialized == 0u)
         return ROBOT_ALARM_ERROR_UNINITIALIZED;
 
+    // 即使本轮安全快照暂不可读，也要推进在途 LED 事务的完成与超时。
+    LEDProcess();
     RobotSafetySnapshot_t safety_snapshot;
     if (RobotSafetyGetSnapshot(&safety_snapshot) == 0u)
         return ROBOT_ALARM_ERROR_ARGUMENT;

@@ -18,6 +18,7 @@ static uint8_t snapshot_valid = 1u;
 static LEDStatus_t led_init_result = LED_STATUS_OK;
 static BuzzerStatus_t buzzer_init_result = BUZZER_STATUS_OK;
 static uint32_t led_init_calls;
+static uint32_t led_process_calls;
 static uint32_t buzzer_init_calls;
 static uint32_t led_write_calls;
 static uint32_t buzzer_write_calls;
@@ -51,6 +52,8 @@ LEDStatus_t LEDInit(void)
     ++led_init_calls;
     return led_init_result;
 }
+
+void LEDProcess(void) { ++led_process_calls; }
 
 LEDStatus_t LEDSetRGB(uint8_t r, uint8_t g, uint8_t b)
 {
@@ -131,6 +134,7 @@ static void ResetFakeState(void)
     led_init_result = LED_STATUS_OK;
     buzzer_init_result = BUZZER_STATUS_OK;
     led_init_calls = 0u;
+    led_process_calls = 0u;
     buzzer_init_calls = 0u;
     led_write_calls = 0u;
     buzzer_write_calls = 0u;
@@ -213,6 +217,7 @@ static void TestSnapshotFailure(void)
     TEST_CHECK(RobotAlarmGetState(&before) == ROBOT_ALARM_OK);
     snapshot_valid = 0u;
     TEST_CHECK(RobotAlarmTask() == ROBOT_ALARM_ERROR_ARGUMENT);
+    TEST_CHECK(led_process_calls == 2u);
     TEST_CHECK(RobotAlarmGetState(&after) == ROBOT_ALARM_OK);
     TEST_CHECK(memcmp(&before, &after, sizeof(before)) == 0);
 }

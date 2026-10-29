@@ -180,12 +180,21 @@ set_tests_properties(production_time_mapping_wrap_expiry_and_recovery PROPERTIES
 
 # 生产 WS2812 初始化只配置 PA7，避免改写 ADC 按键的 PA5 模拟输入。
 add_executable(ws2812_pin_ownership_test ws2812_pin_ownership_test.c
-  ../../bsp/ws2812/ws2812.c)
+  ../../bsp/ws2812/ws2812.c ../../modules/alarm/led.c ../../modules/alarm/robot_alarm_policy.c)
 target_include_directories(ws2812_pin_ownership_test BEFORE PRIVATE ws2812_pin_fakes)
-target_include_directories(ws2812_pin_ownership_test PRIVATE . ../../bsp/ws2812 ../../Core/Inc)
+target_include_directories(ws2812_pin_ownership_test PRIVATE . ../../bsp/ws2812 ../../Core/Inc ../../modules/alarm)
 target_compile_options(ws2812_pin_ownership_test PRIVATE -Wall -Wextra -Werror)
-add_test(NAME production_ws2812_preserves_adc_key_pin COMMAND ws2812_pin_ownership_test)
-set_tests_properties(production_ws2812_preserves_adc_key_pin PROPERTIES TIMEOUT 10)
+foreach(scenario success timeout isolation error cache dirty cache-active early early-error late false-ready start-error complete-error policy resource-busy dma-stop-error spi-stop-error)
+  add_test(NAME production_ws2812_${scenario} COMMAND ws2812_pin_ownership_test ${scenario})
+  set_tests_properties(production_ws2812_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+if(UNIX AND NOT APPLE)
+  find_package(Threads REQUIRED)
+  target_compile_definitions(ws2812_pin_ownership_test PRIVATE WS2812_TEST_THREADS=1)
+  target_link_libraries(ws2812_pin_ownership_test PRIVATE Threads::Threads)
+  add_test(NAME production_ws2812_threads COMMAND ws2812_pin_ownership_test threads)
+  set_tests_properties(production_ws2812_threads PROPERTIES TIMEOUT 10)
+endif()
 
 # 告警策略使用生产纯逻辑，独立覆盖仲裁、节奏、静音期限和输出通道降级。
 add_executable(robot_alarm_policy_test robot_alarm_policy_test.c
@@ -1077,7 +1086,7 @@ add_executable(bsp_spi_status_test bsp_spi_status_test.c)
 target_include_directories(bsp_spi_status_test BEFORE PRIVATE bsp_spi_fakes)
 target_include_directories(bsp_spi_status_test PRIVATE ../../bsp/spi)
 target_link_libraries(bsp_spi_status_test PRIVATE bsp_spi_host_model)
-foreach(spi_case IN ITEMS registration operations invalid ownership wait timeout wrap error isolation false-ready early dirty-start late)
+foreach(spi_case IN ITEMS registration operations invalid ownership wait timeout wrap error isolation false-ready early dirty-start late ws2812-dispatch)
   add_test(NAME production_spi_${spi_case} COMMAND bsp_spi_status_test ${spi_case})
   set_tests_properties(production_spi_${spi_case} PROPERTIES TIMEOUT 10)
 endforeach()
