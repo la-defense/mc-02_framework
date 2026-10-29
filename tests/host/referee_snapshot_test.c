@@ -532,6 +532,7 @@ static void *interaction_writer(void *argument)
     return NULL;
 }
 
+// 接收线程运行时检查每次副本的首尾字节与线上序号一致。
 static void *interaction_reader(void *argument)
 {
     (void)argument;
@@ -544,6 +545,7 @@ static void *interaction_reader(void *argument)
     return NULL;
 }
 
+// 初始记录准备好后并行运行读写任务，检查没有混合两条内容。
 static void check_interaction_concurrent(void)
 {
     uint8_t payload[118] = {0};
@@ -566,6 +568,7 @@ static void check_concurrent_snapshots(void)
     TEST_CHECK(atomic_load(&reader_failures)==0u);
 }
 #else
+// 不支持线程的构建跳过并行场景，其他收发测试仍运行。
 static void check_interaction_concurrent(void) { }
 static void check_concurrent_snapshots(void)
 {

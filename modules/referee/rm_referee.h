@@ -61,6 +61,7 @@ RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output);
  * @note 普通任务调用，查询不消费记录或刷新时间；received为0表示从未接收。
  *       内容ID为0x0200～0x02FF，长度为0～112字节。后来的合法记录会覆盖旧记录，
  *       业务自行判断来源年龄及是否允许使用；数据不携带服务器生成时间或对端确认。
+ *       接收检查合法编号、同队及新鲜本机接收目标，尚未按比赛阶段限制角色收发方向。
  */
 RefereeStatus_t RefereeGetInteraction(RefereeInteractionRecord_t *output);
 
