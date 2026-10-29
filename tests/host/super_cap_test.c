@@ -22,6 +22,7 @@ static atomic_uint reader_errors;
 void *__real_malloc(size_t size);
 void *__real_calloc(size_t count, size_t size);
 void __real_free(void *pointer);
+// 分配替身用于注入失败并记录成功次数。
 void *__wrap_malloc(size_t size)
 {
     if (fail_allocation) return NULL;
@@ -29,6 +30,7 @@ void *__wrap_malloc(size_t size)
     if (pointer != NULL) ++allocations;
     return pointer;
 }
+// Release可能把分配后清零优化为calloc，需一并注入失败。
 void *__wrap_calloc(size_t count, size_t size)
 {
     if (fail_allocation) return NULL;
@@ -36,6 +38,7 @@ void *__wrap_calloc(size_t count, size_t size)
     if (pointer != NULL) ++allocations;
     return pointer;
 }
+// 计数释放次数，检查注册失败是否回收候选对象。
 void __wrap_free(void *pointer)
 {
     if (pointer != NULL) ++frees;
@@ -96,6 +99,7 @@ static void *reader(void *context)
     return NULL;
 }
 
+// 每个CTest场景使用独立进程，避免增加生产注册表重置接口。
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);

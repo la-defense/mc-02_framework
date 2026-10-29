@@ -21,9 +21,11 @@ static Motor_Init_Config_s motor_configs[4];
 static unsigned motor_count;
 static unsigned operation_order;
 static SuperCapInstance cap;
+static int fail_cap, fail_motor;
 
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {
+    if (fail_motor) return NULL;
     if (motor_count >= 4)
         return NULL;
     motor_configs[motor_count] = *config;
@@ -37,14 +39,19 @@ void DJIMotorEnable(DJIMotorInstance *motor)
 { if (motor) { motor->enabled = 1; ++motor->enable_count; motor->enable_order = ++operation_order; } }
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
 { (void)motor; memset(summary, 0, sizeof(*summary)); }
-SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config) { (void)config; return &cap; }
+SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config) { (void)config; return fail_cap ? NULL : &cap; }
 RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *config)
 { (void)handle; (void)config; return REFEREE_OK; }
 void MC02ChassisTestLogError(void) {}
 
-int main(void)
+int main(int argc, char **argv)
 {
-    ChassisInit();
+    if (argc == 2 && strcmp(argv[1], "cap-failure") == 0) fail_cap = 1;
+    if (argc == 2 && strcmp(argv[1], "motor-failure") == 0) fail_motor = 1;
+    uint8_t initialized = ChassisInit();
+    // 未实现普通功率回退前，电容注册或核心电机失败都保留原失败结果。
+    if (fail_cap || fail_motor) { CHECK(initialized == 0u); return 0; }
+    CHECK(initialized != 0u);
     CHECK(motor_count == 4);
     for (unsigned i = 0; i < 4; ++i) {
         CHECK(motor_configs[i].output_axis.gear_ratio == REDUCTION_RATIO_WHEEL);

@@ -52,6 +52,7 @@ SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *supercap_config);
 * @param[in] data 至少可读length字节；具体字段和比例由实际电容协议决定。
 * @param[in] length 缓冲长度，必须恰为8字节。
 * @return CAN提交结果；接受仅表示本机已复制，不代表设备收到或执行。
+* @note 仅普通任务调用；中断等不允许提交的上下文由CAN调度器返回相应错误。
  */
 CAN_TxSubmitStatus_t SuperCapSend(SuperCapInstance *instance, const uint8_t *data, size_t length);
 
@@ -62,6 +63,8 @@ CAN_TxSubmitStatus_t SuperCapSend(SuperCapInstance *instance, const uint8_t *dat
 * @param[out] output 非空时接收副本；失败保留原内容。
 * @return SUPERCAP_OK或SUPERCAP_ERROR_ARGUMENT。
 * @note 普通任务调用；无反馈及过期值不得用作电容供电许可，查询不续期。
+*       当前32位时间差无法识别反馈停更超过完整计数周期（约49.7天），
+*       因此FRESH仅用于诊断，不能单独作为功率授权。
  */
 SuperCapStatus_t SuperCapGet(const SuperCapInstance *instance, uint32_t now_ms,
                             uint32_t max_age_ms, SuperCapFeedback_t *output);

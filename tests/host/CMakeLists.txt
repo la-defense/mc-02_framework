@@ -828,6 +828,10 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
   endif()
   add_test(NAME production_chassis_task_${chassis_limits_profile} COMMAND ${target})
 endforeach()
+foreach(scenario cap-failure motor-failure)
+  add_test(NAME production_chassis_init_${scenario} COMMAND chassis_task_configured_test ${scenario})
+  set_tests_properties(production_chassis_init_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
 add_executable(robot_cmd_task_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c
   ../../application/topics/robot_topics.c
