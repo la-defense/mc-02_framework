@@ -106,7 +106,7 @@ uint8_t RobotInit(void)
                                     INIT_FAILURE_DEPENDENCY, 0u);
         goto init_failed;
     }
-    /* 告警输出属于辅助通道；LED 或蜂鸣器失败不阻断控制任务启动。 */
+    // 告警输出属于辅助通道；LED 或蜂鸣器失败不阻断控制任务启动。
     (void)RobotAlarmInit(robot_config->alarm_config);
     BSP_ResetRecoveryState_t recovery_state = {0};
     const uint8_t recovery_state_valid = BSP_ResetRecoveryGetState(&recovery_state);

@@ -160,7 +160,7 @@ static RobotAlarmSelection_t RobotAlarmSelect(const RobotAlarmConfig_t *config,
         for (uint8_t i = 0u; i < config->fault_rule_count; ++i)
         {
             const RobotAlarmFaultRule_t *rule = &config->fault_rules[i];
-            /* 只替换更高优先级；相同优先级保留表中较早的规则。 */
+            // 只替换更高优先级；相同优先级保留表中较早的规则。
             if ((known_flags & rule->fault_bit) != 0u &&
                 (best == NULL || rule->priority < best->priority))
                 best = rule;
@@ -415,7 +415,7 @@ RobotAlarmStatus_t RobotAlarmPolicyUpdate(RobotAlarmPolicy_t *policy,
     const RobotAlarmSelection_t selection = RobotAlarmSelect(policy->config, input);
     if (RobotAlarmEventChanged(&policy->state, &selection))
     {
-        /* 新事件撤销旧静音和输出缓存，使灯声从同一新起点开始。 */
+        // 新事件撤销旧静音和输出缓存，使灯声从同一新起点开始。
         policy->state.event_kind = selection.kind;
         policy->state.event_id = selection.id;
         policy->state.event_started_ms = now_ms;
@@ -429,7 +429,7 @@ RobotAlarmStatus_t RobotAlarmPolicyUpdate(RobotAlarmPolicy_t *policy,
     }
     else
     {
-        /* 每轮累加相邻时差，避免一个完整32位计数周期后相位跳回起点。 */
+        // 每轮累加相邻时差，避免一个完整32位计数周期后相位跳回起点。
         policy->elapsed_ms += (uint32_t)(now_ms - policy->last_update_ms);
     }
     policy->last_update_ms = now_ms;

@@ -18,7 +18,7 @@ static HAL_StatusTypeDef WS2812_SPI6_Init(void)
     RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-    /* SPI6 时钟源选择 HSE */
+    // 使用 HSE 作为 SPI6 时钟源，保持现有灯带编码速率配置。
     PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI6;
     PeriphClkInitStruct.Spi6ClockSelection = RCC_SPI6CLKSOURCE_HSE;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
@@ -27,7 +27,7 @@ static HAL_StatusTypeDef WS2812_SPI6_Init(void)
     __HAL_RCC_SPI6_CLK_ENABLE();
     __HAL_RCC_GPIOA_CLK_ENABLE();
 
-    /* PA5 接 ADC 按键采样；此处只配置 WS2812 数据线 PA7。 */
+    // PA5 接 ADC 按键采样；此处只配置 WS2812 数据线 PA7。
     GPIO_InitStruct.Pin = GPIO_PIN_7;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -86,7 +86,7 @@ HAL_StatusTypeDef WS2812_SetRGB(uint8_t r, uint8_t g, uint8_t b)
         txbuf[15 - i] = (((r >> i) & 0x01) ? WS2812_HighLevel : WS2812_LowLevel) >> 1;
         txbuf[23 - i] = (((b >> i) & 0x01) ? WS2812_HighLevel : WS2812_LowLevel) >> 1;
     }
-    /* HAL 超时依赖毫秒时基；时基不可用时不进入可能无限等待的发送。 */
+    // HAL 超时依赖毫秒时基；时基不可用时不进入可能无限等待的发送。
     if (BSP_HALTickTryAcquireBlockingWait() == 0u)
         return HAL_BUSY;
     const HAL_StatusTypeDef result = HAL_SPI_Transmit(&hspi6, txbuf,
