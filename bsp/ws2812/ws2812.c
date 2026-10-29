@@ -47,6 +47,7 @@ static uint32_t WS2812_Enter(void)
     return saved;
 }
 
+// 恢复进入临界区之前的中断状态。
 static void WS2812_Exit(uint32_t saved)
 {
     __set_PRIMASK(saved);
@@ -302,10 +303,20 @@ HAL_StatusTypeDef WS2812_Process(void)
         if ((hspi6.Instance->CR1 & SPI_CR1_CSTART) != 0u)
             SET_BIT(hspi6.Instance->CR1, SPI_CR1_CSUSP);
         saved = WS2812_Enter();
+        uint8_t release = 0u;
         if (dma_stop != HAL_OK)
+        {
             phase = WS2812_ISOLATED;
+            release = tick_lease;
+            tick_lease = 0u;
+        }
         WS2812_Exit(saved);
-        if (dma_stop != HAL_OK) return HAL_ERROR;
+        if (dma_stop != HAL_OK)
+        {
+            // 不再等待硬件；保留数组，但不能永久占用其他模块的时基。
+            if (release != 0u) BSP_HALTickReleaseBlockingWait();
+            return HAL_ERROR;
+        }
         saved = WS2812_Enter();
     }
     if (phase == WS2812_RECOVERING)
@@ -316,10 +327,16 @@ HAL_StatusTypeDef WS2812_Process(void)
             HAL_DMA_GetState(&hdma_spi6_tx) == HAL_DMA_STATE_READY);
         if (stopped == 0u)
         {
+            uint8_t release = 0u;
             if ((uint32_t)(HAL_GetTick() - recovery_started_ms) >= 20u)
+            {
                 phase = WS2812_ISOLATED;
+                release = tick_lease;
+                tick_lease = 0u;
+            }
             const WS2812Phase_t current = phase;
             WS2812_Exit(saved);
+            if (release != 0u) BSP_HALTickReleaseBlockingWait();
             return current == WS2812_ISOLATED ? HAL_ERROR : HAL_BUSY;
         }
         WS2812_Exit(saved);
@@ -330,7 +347,8 @@ HAL_StatusTypeDef WS2812_Process(void)
         saved = WS2812_Enter();
         phase = safe != 0u ? WS2812_FAILED : WS2812_ISOLATED;
         completed_valid = 0u;
-        const uint8_t release = (uint8_t)(safe != 0u && tick_lease != 0u);
+        // 已结束恢复，不再等待时基；隔离时数组仍不允许复用。
+        const uint8_t release = tick_lease;
         if (release != 0u) tick_lease = 0u;
         WS2812_Exit(saved);
         if (release != 0u) BSP_HALTickReleaseBlockingWait();
@@ -392,5 +410,7 @@ HAL_StatusTypeDef WS2812_GetState(WS2812TransferState_t *state)
     return HAL_OK;
 }
 
+// SPI6 中断入口将本驱动的句柄交给 HAL 处理。
 void SPI6_IRQHandler(void) { HAL_SPI_IRQHandler(&hspi6); }
+// BDMA 通道0中断入口将发送句柄交给 HAL 处理。
 void BDMA_Channel0_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_spi6_tx); }

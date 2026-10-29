@@ -209,7 +209,7 @@ static void TestTimeout(uint8_t isolate)
     TEST_CHECK(WS2812_GetState(&state) == HAL_OK && state.last_result == HAL_TIMEOUT);
     TEST_CHECK(state.phase == (isolate != 0u ? WS2812_TRANSFER_ISOLATED : WS2812_TRANSFER_FAILED));
     TEST_CHECK(state.buffer_reusable == (isolate != 0u ? 0u : 1u));
-    TEST_CHECK(disabled_irqs == 2u && releases == (isolate != 0u ? 0u : 1u));
+    TEST_CHECK(disabled_irqs == 2u && releases == 1u);
     TEST_CHECK(WS2812_OnTxComplete(active_spi) == 1u);
     TEST_CHECK(WS2812_SetRGB(4u, 5u, 6u) == HAL_ERROR && starts == 1u);
 }
@@ -294,7 +294,7 @@ static void TestFalseReady(void)
     tick_ms = 20u;
     TEST_CHECK(WS2812_Process() == HAL_BUSY && aborts == 0u && releases == 0u);
     tick_ms = 40u;
-    TEST_CHECK(WS2812_Process() == HAL_ERROR && aborts == 0u && releases == 0u);
+    TEST_CHECK(WS2812_Process() == HAL_ERROR && aborts == 0u && releases == 1u);
     WS2812TransferState_t state;
     TEST_CHECK(WS2812_GetState(&state) == HAL_OK && state.last_result == HAL_ERROR);
 }
@@ -338,7 +338,7 @@ static void TestRecoveryFailure(uint8_t dma_failure)
     }
     WS2812TransferState_t state;
     TEST_CHECK(WS2812_GetState(&state) == HAL_OK && state.phase == WS2812_TRANSFER_ISOLATED &&
-               state.buffer_reusable == 0u && releases == 0u);
+               state.buffer_reusable == 0u && releases == 1u);
     TEST_CHECK(WS2812_SetRGB(2u, 3u, 4u) == HAL_ERROR && starts == 1u);
 }
 
