@@ -41,6 +41,8 @@ typedef struct
     uint8_t mute_allowed;
     uint32_t mute_started_ms;
     uint32_t mute_duration_ms;
+    uint32_t last_update_ms; /**< 上次推进时刻；两次调用间隔须小于一个计数周期。 */
+    uint64_t elapsed_ms; /**< 当前事件累计时长，避免完整32位计数周期后节奏归零。 */
 } RobotAlarmPolicy_t;
 
 /** @brief 检查车型表、模式、段数、单段时长和周期总时长。
@@ -64,7 +66,7 @@ RobotAlarmStatus_t RobotAlarmPolicyInit(RobotAlarmPolicy_t *policy,
 /** @brief 选择最高告警并按 now_ms 计算两个输出，成功后提交新状态。
  * @param[in,out] policy 已初始化策略对象。
  * @param[in] input 同一 safety 临界区复制的状态、fault 和急停标记。
- * @param[in] now_ms 当前本机毫秒计数，可从零开始并允许 uint32_t 回绕。
+ * @param[in] now_ms 当前本机毫秒计数，可从零开始并允许 uint32_t 回绕；相邻调用间隔须小于一个完整计数周期。
  * @return 完整输出为 OK；通道忙、故障或已禁用为 DEGRADED。
  */
 RobotAlarmStatus_t RobotAlarmPolicyUpdate(RobotAlarmPolicy_t *policy,

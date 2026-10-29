@@ -48,6 +48,13 @@ typedef enum
     ROBOT_ALARM_LED_SEGMENTED,
 } RobotAlarmLedMode_t;
 
+/** @brief 分段灯效结束后的处理；单次播放结束时保持最后一段颜色。 */
+typedef enum
+{
+    ROBOT_ALARM_REPEAT_LOOP = 0,
+    ROBOT_ALARM_REPEAT_ONCE_HOLD,
+} RobotAlarmRepeat_t;
+
 typedef enum
 {
     BUZZER_SILENT = 0,
@@ -85,6 +92,7 @@ typedef struct
     uint8_t r; /**< 非分段模式的红色，范围0～255。 */
     uint8_t g; /**< 非分段模式的绿色，范围0～255。 */
     uint8_t b; /**< 非分段模式的蓝色，范围0～255。 */
+    RobotAlarmRepeat_t repeat; /**< 分段循环或单次保持末段；其他模式填默认0。 */
     uint8_t segment_count; /**< 分段数量，范围0～ROBOT_ALARM_MAX_SEGMENTS。 */
     const RobotAlarmLedSegment_t *segments; /**< 分段模式的只读数组；周期总长不得超限。 */
 } RobotAlarmLedPattern_t;

@@ -17,11 +17,13 @@ typedef struct
     uint8_t mute_allowed;
 } RobotAlarmSelection_t;
 
+/* 诊断计数到达上限后保持，避免回绕成零。 */
 static uint32_t RobotAlarmSaturatingIncrement(uint32_t value)
 {
     return value == UINT32_MAX ? UINT32_MAX : value + 1u;
 }
 
+/* 计算已配置灯段的单轮时长，调用方随后检查上限。 */
 static uint32_t RobotAlarmLedCycleMs(const RobotAlarmLedPattern_t *pattern)
 {
     uint32_t total = 0u;
@@ -30,6 +32,7 @@ static uint32_t RobotAlarmLedCycleMs(const RobotAlarmLedPattern_t *pattern)
     return total;
 }
 
+/* 声音使用独立节奏，需要单独计算周期。 */
 static uint32_t RobotAlarmSoundCycleMs(const RobotAlarmSoundPattern_t *pattern)
 {
     uint32_t total = 0u;
@@ -38,6 +41,7 @@ static uint32_t RobotAlarmSoundCycleMs(const RobotAlarmSoundPattern_t *pattern)
     return total;
 }
 
+/* 检查模式和分段后，运行时才可安全求余及访问数组。 */
 static uint8_t RobotAlarmStyleIsValid(const RobotAlarmStyle_t *style,
                                       uint16_t max_pattern_ms)
 {
@@ -46,6 +50,12 @@ static uint8_t RobotAlarmStyleIsValid(const RobotAlarmStyle_t *style,
         return 0u;
 
     const RobotAlarmLedPattern_t *led = &style->led;
+    if (led->repeat != ROBOT_ALARM_REPEAT_LOOP &&
+        led->repeat != ROBOT_ALARM_REPEAT_ONCE_HOLD)
+        return 0u;
+    if (led->mode != ROBOT_ALARM_LED_SEGMENTED &&
+        led->repeat != ROBOT_ALARM_REPEAT_LOOP)
+        return 0u;
     switch (led->mode)
     {
     case ROBOT_ALARM_LED_OFF:
@@ -137,21 +147,11 @@ RobotAlarmStatus_t RobotAlarmConfigValidate(const RobotAlarmConfig_t *config)
     return ROBOT_ALARM_OK;
 }
 
+/* 先选择故障；没有故障时才按急停和普通运行状态选择样式。 */
 static RobotAlarmSelection_t RobotAlarmSelect(const RobotAlarmConfig_t *config,
                                                const RobotAlarmInput_t *input)
 {
     RobotAlarmSelection_t selection = {0};
-    if (input->estop_latched != 0u)
-    {
-        selection.kind = ROBOT_ALARM_EVENT_ESTOP;
-        selection.id = 0u;
-        selection.style = &config->state_rules[0].style;
-        for (uint8_t i = 0u; i < config->state_rule_count; ++i)
-            if (config->state_rules[i].state == ROBOT_ALARM_STATE_ESTOP)
-                selection.style = &config->state_rules[i].style;
-        return selection;
-    }
-
     const uint32_t known_flags = input->fault_flags & ROBOT_ALARM_KNOWN_FAULT_MASK;
     const uint32_t unknown_flags = input->fault_flags & ~ROBOT_ALARM_KNOWN_FAULT_MASK;
     if (known_flags != 0u)
@@ -160,6 +160,7 @@ static RobotAlarmSelection_t RobotAlarmSelect(const RobotAlarmConfig_t *config,
         for (uint8_t i = 0u; i < config->fault_rule_count; ++i)
         {
             const RobotAlarmFaultRule_t *rule = &config->fault_rules[i];
+            /* 只替换更高优先级；相同优先级保留表中较早的规则。 */
             if ((known_flags & rule->fault_bit) != 0u &&
                 (best == NULL || rule->priority < best->priority))
                 best = rule;
@@ -177,6 +178,17 @@ static RobotAlarmSelection_t RobotAlarmSelect(const RobotAlarmConfig_t *config,
         selection.kind = ROBOT_ALARM_EVENT_UNKNOWN_FAULT;
         selection.id = unknown_flags;
         selection.style = &config->unknown_fault_style;
+        return selection;
+    }
+
+    if (input->estop_latched != 0u)
+    {
+        selection.kind = ROBOT_ALARM_EVENT_ESTOP;
+        selection.id = 0u;
+        selection.style = &config->state_rules[0].style;
+        for (uint8_t i = 0u; i < config->state_rule_count; ++i)
+            if (config->state_rules[i].state == ROBOT_ALARM_STATE_ESTOP)
+                selection.style = &config->state_rules[i].style;
         return selection;
     }
 
@@ -199,14 +211,16 @@ static RobotAlarmSelection_t RobotAlarmSelect(const RobotAlarmConfig_t *config,
     return selection;
 }
 
+/* 状态或故障身份变化时需要重新建立共同起点。 */
 static uint8_t RobotAlarmEventChanged(const RobotAlarmState_t *state,
                                       const RobotAlarmSelection_t *selection)
 {
     return state->event_kind != selection->kind || state->event_id != selection->id;
 }
 
+/* 按累计时长选取当前颜色；单次模式结束后保持末段。 */
 static void RobotAlarmSelectLed(const RobotAlarmLedPattern_t *pattern,
-                                uint32_t elapsed_ms,
+                                uint64_t elapsed_ms,
                                 uint8_t *r,
                                 uint8_t *g,
                                 uint8_t *b)
@@ -233,7 +247,7 @@ static void RobotAlarmSelectLed(const RobotAlarmLedPattern_t *pattern,
         return;
     case ROBOT_ALARM_LED_BREATHE:
     {
-        const uint32_t phase = elapsed_ms % pattern->period_ms;
+        const uint32_t phase = (uint32_t)(elapsed_ms % pattern->period_ms);
         const uint32_t half = pattern->period_ms / 2u;
         const uint32_t level = phase < half ? (phase * 255u) / half :
                                ((pattern->period_ms - phase) * 255u) /
@@ -246,7 +260,9 @@ static void RobotAlarmSelectLed(const RobotAlarmLedPattern_t *pattern,
     case ROBOT_ALARM_LED_SEGMENTED:
     {
         const uint32_t cycle = RobotAlarmLedCycleMs(pattern);
-        uint32_t phase = elapsed_ms % cycle;
+        uint32_t phase = pattern->repeat == ROBOT_ALARM_REPEAT_ONCE_HOLD &&
+                         elapsed_ms >= cycle ? cycle - 1u :
+                         (uint32_t)(elapsed_ms % cycle);
         for (uint8_t i = 0u; i < pattern->segment_count; ++i)
         {
             const RobotAlarmLedSegment_t *segment = &pattern->segments[i];
@@ -266,8 +282,9 @@ static void RobotAlarmSelectLed(const RobotAlarmLedPattern_t *pattern,
     }
 }
 
+/* 声音与灯光共用起点，但按自己的周期选择段。 */
 static void RobotAlarmSelectSound(const RobotAlarmSoundPattern_t *pattern,
-                                  uint32_t elapsed_ms,
+                                  uint64_t elapsed_ms,
                                   BuzzerNote_t *note,
                                   uint16_t *duty_permille)
 {
@@ -277,7 +294,7 @@ static void RobotAlarmSelectSound(const RobotAlarmSoundPattern_t *pattern,
         return;
 
     const uint32_t cycle = RobotAlarmSoundCycleMs(pattern);
-    uint32_t phase = elapsed_ms % cycle;
+    uint32_t phase = (uint32_t)(elapsed_ms % cycle);
     for (uint8_t i = 0u; i < pattern->segment_count; ++i)
     {
         const RobotAlarmSoundSegment_t *segment = &pattern->segments[i];
@@ -291,6 +308,7 @@ static void RobotAlarmSelectSound(const RobotAlarmSoundPattern_t *pattern,
     }
 }
 
+/* 颜色未变时不重复发送；故障只禁用本辅助通道。 */
 static RobotAlarmStatus_t RobotAlarmApplyLed(RobotAlarmPolicy_t *policy,
                                               uint8_t r,
                                               uint8_t g,
@@ -325,6 +343,7 @@ static RobotAlarmStatus_t RobotAlarmApplyLed(RobotAlarmPolicy_t *policy,
     return ROBOT_ALARM_DEGRADED;
 }
 
+/* 音调未变时不重复设置；忙与错误分别记录。 */
 static RobotAlarmStatus_t RobotAlarmApplyBuzzer(RobotAlarmPolicy_t *policy,
                                                  BuzzerNote_t note,
                                                  uint16_t duty_permille)
@@ -396,6 +415,7 @@ RobotAlarmStatus_t RobotAlarmPolicyUpdate(RobotAlarmPolicy_t *policy,
     const RobotAlarmSelection_t selection = RobotAlarmSelect(policy->config, input);
     if (RobotAlarmEventChanged(&policy->state, &selection))
     {
+        /* 新事件撤销旧静音和输出缓存，使灯声从同一新起点开始。 */
         policy->state.event_kind = selection.kind;
         policy->state.event_id = selection.id;
         policy->state.event_started_ms = now_ms;
@@ -405,12 +425,19 @@ RobotAlarmStatus_t RobotAlarmPolicyUpdate(RobotAlarmPolicy_t *policy,
         policy->state.mute_active = 0u;
         policy->led_output_valid = 0u;
         policy->buzzer_output_valid = 0u;
+        policy->elapsed_ms = 0u;
     }
+    else
+    {
+        /* 每轮累加相邻时差，避免一个完整32位计数周期后相位跳回起点。 */
+        policy->elapsed_ms += (uint32_t)(now_ms - policy->last_update_ms);
+    }
+    policy->last_update_ms = now_ms;
     policy->mute_allowed = selection.mute_allowed;
     policy->state.mute_level = selection.mute_level;
     policy->state.mute_allowed = selection.mute_allowed;
 
-    const uint32_t elapsed_ms = now_ms - policy->state.event_started_ms;
+    const uint64_t elapsed_ms = policy->elapsed_ms;
     if (policy->state.mute_active != 0u &&
         (uint32_t)(now_ms - policy->mute_started_ms) >= policy->mute_duration_ms)
         policy->state.mute_active = 0u;

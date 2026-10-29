@@ -27,6 +27,7 @@ static const RobotAlarmLedSegment_t sentinel_estop_led[] = {
                .segments = (_sound)}}
 #define SENTINEL_SEGMENTED(_segments, _sound) \
     {.led = {.mode = ROBOT_ALARM_LED_SEGMENTED, \
+             .repeat = ROBOT_ALARM_REPEAT_LOOP, \
              .segment_count = (uint8_t)(sizeof(_segments) / sizeof((_segments)[0])), \
              .segments = (_segments)}, \
      .sound = {.segment_count = (uint8_t)(sizeof(_sound) / sizeof((_sound)[0])), \

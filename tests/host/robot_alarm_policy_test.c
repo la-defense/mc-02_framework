@@ -160,17 +160,20 @@ static void TestPriority(void)
                    (1u << 2) | (1u << 1), 0u, 11u);
     TEST_CHECK(state.event_id == (1u << 1));
 
-    // 急停始终压过普通故障；清除后立刻显示当前最高剩余项。
+    // 故障优先于状态提示；急停保持时，故障清除后才显示急停状态。
     state = Update(&policy, ROBOT_ALARM_STATE_READY,
                    (1u << 4) | (1u << 1), 1u, 12u);
-    TEST_CHECK(state.event_kind == ROBOT_ALARM_EVENT_ESTOP);
-    state = Update(&policy, ROBOT_ALARM_STATE_READY, (1u << 4), 0u, 13u);
+    TEST_CHECK(state.event_kind == ROBOT_ALARM_EVENT_FAULT &&
+               state.event_id == (1u << 1));
+    state = Update(&policy, ROBOT_ALARM_STATE_READY, (1u << 4), 1u, 13u);
     TEST_CHECK(state.event_kind == ROBOT_ALARM_EVENT_FAULT &&
                state.event_id == (1u << 4));
-    state = Update(&policy, ROBOT_ALARM_STATE_READY, 0u, 0u, 14u);
+    state = Update(&policy, ROBOT_ALARM_STATE_READY, 0u, 1u, 14u);
+    TEST_CHECK(state.event_kind == ROBOT_ALARM_EVENT_ESTOP);
+    state = Update(&policy, ROBOT_ALARM_STATE_READY, 0u, 0u, 15u);
     TEST_CHECK(state.event_kind == ROBOT_ALARM_EVENT_STATE &&
                state.event_id == ROBOT_ALARM_STATE_READY);
-    state = Update(&policy, ROBOT_ALARM_STATE_READY, 1u << 20, 0u, 15u);
+    state = Update(&policy, ROBOT_ALARM_STATE_READY, 1u << 20, 1u, 16u);
     TEST_CHECK(state.event_kind == ROBOT_ALARM_EVENT_UNKNOWN_FAULT &&
                state.event_id == (1u << 20));
 }
@@ -199,6 +202,28 @@ static void TestTiming(void)
     state = Update(&policy, ROBOT_ALARM_STATE_READY, 1u, 0u, 2u);
     TEST_CHECK(state.event_started_ms == UINT32_MAX - 3u);
     TEST_CHECK(output_log.note == OCTAVE_1); // 跨回绕已走过6ms，仍在首个音符段。
+
+    // 同一故障跨过完整计数周期时，节奏应继续按累计时间推进。
+    InitPolicy(&policy);
+    (void)Update(&policy, ROBOT_ALARM_STATE_READY, 1u, 0u, 0u);
+    (void)Update(&policy, ROBOT_ALARM_STATE_READY, 1u, 0u, UINT32_MAX);
+    (void)Update(&policy, ROBOT_ALARM_STATE_READY, 1u, 0u, 0u);
+    TEST_CHECK(output_log.r == 0u && output_log.b == 255u);
+    TEST_CHECK(output_log.note == BUZZER_SILENT);
+
+    // 单次播放结束保持末段，循环模式在同一边界重新进入首段。
+    fault_rules[0].style.led.repeat = ROBOT_ALARM_REPEAT_ONCE_HOLD;
+    InitPolicy(&policy);
+    (void)Update(&policy, ROBOT_ALARM_STATE_READY, 1u, 0u, 0u);
+    (void)Update(&policy, ROBOT_ALARM_STATE_READY, 1u, 0u, 30u);
+    TEST_CHECK(output_log.r == 0u && output_log.b == 255u);
+    (void)Update(&policy, ROBOT_ALARM_STATE_READY, 1u, 0u, 100u);
+    TEST_CHECK(output_log.r == 0u && output_log.b == 255u);
+    fault_rules[0].style.led.repeat = ROBOT_ALARM_REPEAT_LOOP;
+    InitPolicy(&policy);
+    (void)Update(&policy, ROBOT_ALARM_STATE_READY, 1u, 0u, 0u);
+    (void)Update(&policy, ROBOT_ALARM_STATE_READY, 1u, 0u, 30u);
+    TEST_CHECK(output_log.r == 255u && output_log.b == 0u);
 }
 
 static void TestMute(void)
@@ -247,6 +272,16 @@ static void TestValidation(void)
     TEST_CHECK(RobotAlarmConfigValidate(&config) == ROBOT_ALARM_ERROR_CONFIG);
     sound_segments[0].duty_permille = 100u;
     fault_rules[0] = saved;
+
+    saved = fault_rules[0];
+    fault_rules[0].style.led.repeat = (RobotAlarmRepeat_t)99;
+    TEST_CHECK(RobotAlarmConfigValidate(&config) == ROBOT_ALARM_ERROR_CONFIG);
+    fault_rules[0] = saved;
+
+    saved = fault_rules[1];
+    fault_rules[1].style.led.repeat = ROBOT_ALARM_REPEAT_ONCE_HOLD;
+    TEST_CHECK(RobotAlarmConfigValidate(&config) == ROBOT_ALARM_ERROR_CONFIG);
+    fault_rules[1] = saved;
 
     TEST_CHECK(RobotAlarmConfigValidate(NULL) == ROBOT_ALARM_ERROR_ARGUMENT);
 }
