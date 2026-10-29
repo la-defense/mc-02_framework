@@ -37,7 +37,7 @@ void DJIMotorEnable(DJIMotorInstance *motor)
 { if (motor) { motor->enabled = 1; ++motor->enable_count; motor->enable_order = ++operation_order; } }
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
 { (void)motor; memset(summary, 0, sizeof(*summary)); }
-SuperCapInstance *SuperCapInit(SuperCap_Init_Config_s *config) { (void)config; return &cap; }
+SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config) { (void)config; return &cap; }
 RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *config)
 { (void)handle; (void)config; return REFEREE_OK; }
 void MC02ChassisTestLogError(void) {}

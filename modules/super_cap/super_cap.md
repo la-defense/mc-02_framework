@@ -1,54 +1,21 @@
 <!--
- * @Descripttion: 
- * @version: 
  * @Author: Chenfu
  * @Date: 2022-12-02 21:32:47
- * @LastEditTime: 2022-12-05 15:27:57
+ * 本文介绍现有单实例超级电容接口和未选型时的使用边界。
 -->
-# super_can
+# 超级电容 CAN 接口
 
-## 代码结构
+设备型号和协议尚未确认。现有接收格式只把前六个字节按高字节在前组成三个原始整数；不能直接当成 V、A 或 W。发送固定8字节内容，字段、设备 CAN ID 和比例都须在选型后按设备资料核对。
 
-.h中放置的是数据定义和外部接口，以及协议的定义和宏，.c中包含一些私有函数。
+`SuperCapInit()` 在接收任务运行前串行调用，成功对象由模块长期持有，重复初始化返回 `NULL`。CAN 收到的帧至少有6字节才更新三项数值和原始接收时间；短帧不会覆盖旧记录或刷新时间。`SuperCapGet()` 按调用者传入的本机毫秒时间和期限复制状态，区分未收到、新鲜和过期，恰好到期仍新鲜。读出的过期数值只供诊断；本接口不建立功率许可。
 
-## 外部接口
-
-```c
-SuperCapInstance *SuperCapInit(SuperCap_Init_Config_s* supercap_config);
-void SuperCapSend(SuperCapInstance *instance, uint8_t *data);
-```
-## 私有函数和变量
+`SuperCapSend(instance, bytes, length)` 要求长度恰好为8字节，提交时由 CAN 调度器复制，返回值只反映本机提交。不能将一个两字节变量强转为指针后当作八字节缓冲使用。例如：
 
 ```c
-static SuperCapInstance *super_cap_instance = NULL;
-static uint8_t *rxbuff;
-static void SuperCapRxCallback(can_instance *_instance)
+uint8_t bytes[8] = {0x03, 0x21, 0, 0, 0, 0, 0, 0};
+CAN_TxSubmitStatus_t status = SuperCapSend(instance, bytes, sizeof(bytes));
 ```
 
-`SuperCapRxCallback()`是super cap初始化can实例时的回调函数，用于can接收中断，进行协议解析。
+这个字节数组只说明容量，不定义任何设备命令。发送失败、队列忙或设备离线都不能证明电容接收或执行了数据。
 
-## 使用范例
-
-初始化时设置如下：
-
-```c
-SuperCap_Init_Config_s capconfig = {
-		.can_config = {
-			.can_handle = &hcan1,
-			.rx_id = 0x301,
-			.tx_id = 0x302
-		},
-		.recv_data_len = 4*sizeof(uint16_t),
-		.send_data_len = sizeof(uint8_t)
-	};
-SuperCapInstance *ins =SuperCapInit(&capconfig);
-```
-
-
-发送通过`SuperCapSend()`，建议使用强制类型转换：
-
-```c
-uint16_t tx = 0x321;
-SuperCapSend(ins, (uint8_t*)&tx);
-```
-
+当前 `PowerManager` 没有实现可验证的普通供电功率限制；底盘仍保留电容注册失败时的原启动检查。电容不可用后的普通供电回退尚未完成，不能把本机接口测试当作设备协议、物理电压或功率保护验收。详见 [MISC-04 记录](../../docs/workflow/tickets/MISC-04.md)。

@@ -9,22 +9,30 @@
 #define SUPER_CAP_H
 
 #include "bsp_can.h"
+#include <stddef.h>
 
-#pragma pack(1)
 typedef struct
 {
     uint16_t vol; // 原始电压整数，比例及单位待设备协议确认。
     uint16_t current; // 原始电流整数，尚未换算为 A。
     uint16_t power; // 原始功率整数，尚未换算为 W。
 } SuperCap_Msg_s;
-#pragma pack()
+/** @brief 唯一实例由模块持有，调用方不能自行释放或修改。 */
+typedef struct SuperCapInstance SuperCapInstance;
 
-/* 超级电容实例 */
-typedef struct
-{
-    CANInstance *can_ins; // CAN实例
-    SuperCap_Msg_s cap_msg; // 超级电容信息
-} SuperCapInstance;
+/** @brief 最近帧是否在调用方给定的期限内。 */
+typedef enum {
+    SUPERCAP_FEEDBACK_UNSEEN = 0,
+    SUPERCAP_FEEDBACK_FRESH,
+    SUPERCAP_FEEDBACK_EXPIRED
+} SuperCapFeedbackState_t;
+typedef enum { SUPERCAP_OK = 0, SUPERCAP_ERROR_ARGUMENT } SuperCapStatus_t;
+typedef struct {
+    SuperCap_Msg_s value; /**< 未经设备协议换算的原始整数。 */
+    uint32_t source_rx_ms; /**< CAN队列接收到该帧时的本机毫秒数，0有效。 */
+    uint32_t age_ms; /**< 与调用方提供的当前时间之差。 */
+    SuperCapFeedbackState_t state;
+} SuperCapFeedback_t;
 
 /* 超级电容初始化配置 */
 typedef struct
@@ -33,15 +41,29 @@ typedef struct
 } SuperCap_Init_Config_s;
 
 /** @brief 注册唯一超级电容对象及其 CAN 接收回调。
-* @param[in] supercap_config 有效配置，内部复制 CAN 配置并填写对象地址与回调。
-* @return 成功返回长期有效对象，NULL、重复初始化或分配、CAN 注册失败返回 NULL。
+* @param[in] supercap_config 非空配置，CAN句柄必须长期有效；内部复制配置并填写对象地址与回调。
+* @return 成功返回长期有效对象；参数无效、重复初始化或分配、CAN注册失败返回NULL。
+* @note 须在接收派发任务运行前串行初始化；成功对象由模块长期保存，无注销入口。
  */
-SuperCapInstance *SuperCapInit(SuperCap_Init_Config_s *supercap_config);
+SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *supercap_config);
 
-/** @brief 复制八字节控制数据到 CAN 实例并尝试发送，不报告发送结果。
-* @param[in] instance 初始化成功的有效对象，不能为 NULL。
-* @param[in] data 至少可读八字节；具体字段和比例由实际电容协议决定，本接口不换算。
+/** @brief 提交八字节控制内容，CAN调度器在提交期间复制。
+* @param[in] instance 初始化成功的长期有效对象，不能为 NULL。
+* @param[in] data 至少可读length字节；具体字段和比例由实际电容协议决定。
+* @param[in] length 缓冲长度，必须恰为8字节。
+* @return CAN提交结果；接受仅表示本机已复制，不代表设备收到或执行。
  */
-CAN_TxSubmitStatus_t SuperCapSend(SuperCapInstance *instance, const uint8_t *data);
+CAN_TxSubmitStatus_t SuperCapSend(SuperCapInstance *instance, const uint8_t *data, size_t length);
+
+/** @brief 复制最近一次有效反馈并按调用方期限检查新鲜度。
+* @param[in] instance 初始化成功的实例，不能为空。
+* @param[in] now_ms 当前本机毫秒时间，与CAN接收时钟同源；允许回绕。
+* @param[in] max_age_ms 允许的最大年龄，范围1～INT32_MAX毫秒，边界允许。
+* @param[out] output 非空时接收副本；失败保留原内容。
+* @return SUPERCAP_OK或SUPERCAP_ERROR_ARGUMENT。
+* @note 普通任务调用；无反馈及过期值不得用作电容供电许可，查询不续期。
+ */
+SuperCapStatus_t SuperCapGet(const SuperCapInstance *instance, uint32_t now_ms,
+                            uint32_t max_age_ms, SuperCapFeedback_t *output);
 
 #endif // !SUPER_CAP_H

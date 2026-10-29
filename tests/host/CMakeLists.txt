@@ -1467,6 +1467,16 @@ if(UNIX)
   target_compile_definitions(referee_snapshot_test PRIVATE REFEREE_TEST_THREADS=1)
 endif()
 add_test(NAME production_referee_snapshot COMMAND referee_snapshot_test)
+# 使用生产超级电容接口，CAN 由主机模型提供；每次测试进程重新初始化。
+add_executable(super_cap_test super_cap_test.c ../../modules/super_cap/super_cap.c)
+target_include_directories(super_cap_test BEFORE PRIVATE super_cap_fakes ../../modules/super_cap)
+target_compile_options(super_cap_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(super_cap_test PRIVATE Threads::Threads)
+target_link_options(super_cap_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
+foreach(scenario normal allocation registration threads)
+  add_test(NAME production_super_cap_${scenario} COMMAND super_cap_test ${scenario})
+  set_tests_properties(production_super_cap_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
 # 模拟器是独立仓库；存在时检查互通，固件单独检出时不把它当成隐式依赖。
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/referee_sim/referee_sim_app/protocol/frame.py")
   add_test(NAME referee_interaction_simulator_frame COMMAND ${Python3_EXECUTABLE}
