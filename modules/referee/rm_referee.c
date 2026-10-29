@@ -33,6 +33,7 @@ static USARTInstance *referee_usart_instance;
 static DaemonInstance *referee_daemon;
 static RefereeConfig_t referee_config;
 static RefereeSnapshot_t referee_published;
+static RefereeInteractionRecord_t referee_interaction;
 static uint8_t referee_initialized;
 static uint8_t referee_has_valid_frame;
 static uint8_t referee_link_active;
@@ -118,7 +119,8 @@ static uint8_t RefereeDecode(int index, const uint8_t *p, size_t length,
                              RefereeCommandData_t *out, uint32_t now_ms)
 {
     if (index < 0 || index >= REFEREE_COMMAND_COUNT || p == NULL || out == NULL ||
-        length != referee_wire[index].payload_length) return 0u;
+        (index == REF_CMD_INTERACTIVE ? (length < 6u || length > 118u) :
+         length != referee_wire[index].payload_length)) return 0u;
     RefereeCommandData_t candidate = {0};
     switch ((RefereeCommandIndex_t)index) {
     case REF_CMD_GAME_STATE:
@@ -226,8 +228,11 @@ static uint8_t RefereeDecode(int index, const uint8_t *p, size_t length,
         candidate.interactive.content_id = ReadU16LE(p);
         candidate.interactive.sender_id = ReadU16LE(p+2u);
         candidate.interactive.receiver_id = ReadU16LE(p+4u);
-        memcpy(candidate.interactive.data, p+6u, sizeof(candidate.interactive.data));
-        if (candidate.interactive.content_id != Communicate_Data_ID ||
+        // 旧分组快照只保留前五字节；完整内容另由复制接口读取。
+        const size_t preview = length - 6u < sizeof(candidate.interactive.data) ?
+            length - 6u : sizeof(candidate.interactive.data);
+        memcpy(candidate.interactive.data, p+6u, preview);
+        if (candidate.interactive.content_id < 0x0200u || candidate.interactive.content_id > 0x02ffu ||
             !RefereeIsLegalRobotId(candidate.interactive.sender_id) ||
             !RefereeIsLegalRobotId(candidate.interactive.receiver_id) ||
             !RefereeSameTeam(candidate.interactive.sender_id, candidate.interactive.receiver_id)) return 0u;
@@ -283,13 +288,34 @@ static void RefereeShift(RefereeStream *stream, size_t count)
 }
 
 static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8_t wire_sequence,
-                              uint32_t source_rx_ms, uint32_t now_ms)
+                              uint32_t source_rx_ms, uint32_t now_ms,
+                              const uint8_t *payload, size_t payload_length)
 {
     if (data == NULL || index < 0 || index >= REFEREE_COMMAND_COUNT) return 0u;
     taskENTER_CRITICAL();
     if (referee_stream.reset_requested || (uint32_t)(now_ms-source_rx_ms) > REFEREE_ASSEMBLY_TIMEOUT_MS) {
         taskEXIT_CRITICAL();
         return 0u;
+    }
+    if (index == REF_CMD_INTERACTIVE) {
+        // 提交时再次检查本机身份，避免身份失效后发布候选内容。
+        const RefereeCommandSnapshot_t *robot = &referee_published.command[REF_CMD_ROBOT_STATE];
+        if (robot->receive_count == 0u ||
+            (uint32_t)(now_ms-robot->source_rx_ms) > referee_config.timeout_10hz_ms ||
+            robot->data.robot_state.robot_id != data->interactive.receiver_id) {
+            taskEXIT_CRITICAL();
+            return 0u;
+        }
+        referee_interaction.content_id = data->interactive.content_id;
+        referee_interaction.sender_id = data->interactive.sender_id;
+        referee_interaction.receiver_id = data->interactive.receiver_id;
+        referee_interaction.source_rx_ms = source_rx_ms;
+        referee_interaction.wire_sequence = wire_sequence;
+        referee_interaction.length = (uint8_t)(payload_length - 6u);
+        memset(referee_interaction.data, 0, sizeof(referee_interaction.data));
+        memcpy(referee_interaction.data, payload + 6u, referee_interaction.length);
+        referee_interaction.received = 1u;
+        if (referee_interaction.receive_count != UINT32_MAX) ++referee_interaction.receive_count;
     }
     RefereeCommandSnapshot_t *entry = &referee_published.command[index];
     entry->data = *data;
@@ -314,7 +340,22 @@ static uint8_t RefereeAccept(const uint8_t *frame, size_t frame_length, uint32_t
     RefereeCommandData_t candidate;
     uint32_t now_ms = HAL_GetTick();
     if (!RefereeDecode(index, frame+DATA_Offset, payload_length, &candidate, now_ms)) return 0u;
-    return RefereePublish(index, &candidate, frame[3], source_rx_ms, now_ms);
+    return RefereePublish(index, &candidate, frame[3], source_rx_ms, now_ms,
+                          frame+DATA_Offset, payload_length);
+}
+
+RefereeStatus_t RefereeGetInteraction(RefereeInteractionRecord_t *output)
+{
+    if (output == NULL) return REFEREE_ERROR_ARGUMENT;
+    taskENTER_CRITICAL();
+    if (!referee_initialized) {
+        taskEXIT_CRITICAL();
+        memset(output, 0, sizeof(*output));
+        return REFEREE_ERROR_NOT_INITIALIZED;
+    }
+    *output = referee_interaction;
+    taskEXIT_CRITICAL();
+    return REFEREE_OK;
 }
 
 // 每个字节都保留原接收块时间，CRC失败时移走一个字节继续找后面的帧头。
@@ -447,6 +488,7 @@ RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *c
     taskENTER_CRITICAL();
     referee_config = *selected;
     memset(&referee_published, 0, sizeof(referee_published));
+    memset(&referee_interaction, 0, sizeof(referee_interaction));
     memset(&referee_stream, 0, sizeof(referee_stream));
     referee_last_valid_rx_ms = 0u;
     referee_has_valid_frame = 0u;
@@ -466,6 +508,7 @@ RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *c
         taskENTER_CRITICAL();
         referee_daemon = NULL;
         memset(&referee_published, 0, sizeof(referee_published));
+        memset(&referee_interaction, 0, sizeof(referee_interaction));
         memset(&referee_stream, 0, sizeof(referee_stream));
         referee_last_valid_rx_ms = 0u;
         referee_has_valid_frame = 0u;

@@ -120,6 +120,21 @@ int main(int argc, char **argv)
         TEST_CHECK(other != NULL);
     }
     UARTModelCheckRuntimeAllocation();
+    if (strcmp(argv[1], "fixed-interaction") == 0)
+    {
+        const uint8_t data[] = {0x11u, 0x22u, 0x33u};
+        const uint8_t expected[] = {0xa5u,0x09u,0x00u,0x00u,0x4du,0x01u,0x03u,0x34u,0x02u,
+            0x03u,0x00u,0x01u,0x00u,0x11u,0x22u,0x33u,0xe0u,0x2fu};
+        RefereeTxRequest_t request = {1u, 0x0234u, data, sizeof(data), 100u, done, NULL, NULL};
+        uint32_t id = 0u;
+        TEST_CHECK(RefereeSubmit(&request, &id) == REFEREE_SEND_ACCEPTED && id != 0u);
+        USARTProcessTx();
+        TEST_CHECK(uart_model_tx_length[0] == sizeof(expected) &&
+                   memcmp(uart_model_tx[0], expected, sizeof(expected)) == 0);
+        complete();
+        TEST_CHECK(notifications == 1u && events[0].result == USART_TX_COMPLETE);
+        return 0;
+    }
     if (strcmp(argv[1], "arguments") == 0)
     {
         uint8_t bytes[113] = {0};

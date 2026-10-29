@@ -97,7 +97,17 @@ typedef struct { uint32_t info_bits_1; uint16_t info_bits_2; uint64_t info_bits_
 /** @brief 0x020E低两位是机会数，其余位含双倍易伤和加密等级等标志。 */
 typedef struct { uint8_t info_bits; } RefereeRadarInfo_t;
 typedef struct { float target_x_m, target_y_m; uint8_t keyboard_bits, target_robot_id; uint16_t source_id; } RefereeMapCommand_t;
+/** @brief 分组快照中的交互身份及前五字节预览；完整内容见 RefereeInteractionRecord_t。 */
 typedef struct { uint16_t content_id, sender_id, receiver_id; uint8_t data[5]; } RefereeInteractive_t;
+
+/** @brief 最近一次机器人交互记录；内容按线上字节保存，不代表仍具备业务许可。 */
+typedef struct {
+    uint32_t source_rx_ms; /**< 首个接收块的本机毫秒时间，0有效。 */
+    uint32_t receive_count; /**< 合法交互计数，达到上限后保持。 */
+    uint16_t content_id, sender_id, receiver_id;
+    uint8_t received, wire_sequence, length;
+    uint8_t data[112]; /**< 只有前length字节有效，未使用部分为零。 */
+} RefereeInteractionRecord_t;
 
 /** @brief 不同命令解码后的字段；保留字段以原始字节保存，不作物理量解释。 */
 typedef union {

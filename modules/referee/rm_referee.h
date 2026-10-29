@@ -54,6 +54,16 @@ RefereeStatus_t RefereeInit(UART_HandleTypeDef *referee_usart_handle, const Refe
  */
 RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output);
 
+/**
+ * @brief 复制最近一条合法机器人交互内容及其接收信息。
+ * @param[out] output 非空时接收副本；未初始化时清零，空指针返回参数错误。
+ * @return REFEREE_OK、REFEREE_ERROR_ARGUMENT或REFEREE_ERROR_NOT_INITIALIZED。
+ * @note 普通任务调用，查询不消费记录或刷新时间；received为0表示从未接收。
+ *       内容ID为0x0200～0x02FF，长度为0～112字节。后来的合法记录会覆盖旧记录，
+ *       业务自行判断来源年龄及是否允许使用；数据不携带服务器生成时间或对端确认。
+ */
+RefereeStatus_t RefereeGetInteraction(RefereeInteractionRecord_t *output);
+
 /** @brief 用0x0201本组期限检查机器人身份，普通任务可调用。
  * @param[in] robot_id 需要匹配的线上机器人编号。
  * @return 1为已收到、仍新鲜且编号相同，否则0；不会续期或消费数据。

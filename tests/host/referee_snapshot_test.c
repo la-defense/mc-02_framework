@@ -128,6 +128,60 @@ static void feed_frame(uint16_t command,const uint8_t *payload,size_t length,uin
 {
     uint8_t frame[128];size_t n=make_frame(frame,command,payload,length,sequence);feed(frame,n);
 }
+
+// 变长交互通过生产接收链路发布；无效帧不能覆盖最近一次有效记录。
+static void check_interaction_lengths(void)
+{
+    uint8_t robot[LEN_game_robot_state] = {0};
+    uint8_t payload[119] = {0}, frame[128];
+    RefereeInteractionRecord_t record, previous;
+    RefereeSnapshot_t before, after;
+    robot[0] = 1u;
+    set_tick(0u);
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 1u);
+    write_u16le(payload, 0x02ffu);
+    write_u16le(payload + 2u, 3u);
+    write_u16le(payload + 4u, 1u);
+    feed_frame(ID_student_interactive, payload, 6u, 2u);
+    TEST_CHECK(RefereeGetInteraction(&record) == REFEREE_OK);
+    TEST_CHECK(record.received && record.length == 0u && record.content_id == 0x02ffu &&
+               record.source_rx_ms == 0u && record.wire_sequence == 2u);
+    for (size_t i = 0u; i < 112u; ++i) payload[6u+i] = (uint8_t)i;
+    size_t length = make_frame(frame, ID_student_interactive, payload, 118u, 3u);
+    for (size_t split = 1u; split < length; ++split) {
+        feed(frame, split);
+        feed(frame + split, length - split);
+    }
+    TEST_CHECK(RefereeGetInteraction(&record) == REFEREE_OK && record.length == 112u &&
+               record.data[111] == 111u && record.wire_sequence == 3u);
+    previous = record;
+    TEST_CHECK(RefereeGetSnapshot(&before) == REFEREE_OK);
+    payload[2] = 101u; // 对方阵营不应替换已有记录。
+    feed_frame(ID_student_interactive, payload, 118u, 4u);
+    payload[2] = 3u;
+    feed_frame(ID_student_interactive, payload, 119u, 5u);
+    feed_frame(ID_student_interactive, payload, 5u, 6u);
+    length = make_frame(frame, ID_student_interactive, payload, 118u, 7u);
+    frame[length-1u] ^= 1u;
+    feed(frame, length);
+    set_tick(301u); // 身份过期时不得接收新交互。
+    feed_frame(ID_student_interactive, payload, 118u, 8u);
+    TEST_CHECK(RefereeGetInteraction(&record) == REFEREE_OK &&
+               memcmp(&record, &previous, sizeof(record)) == 0);
+    TEST_CHECK(RefereeGetSnapshot(&after) == REFEREE_OK &&
+               after.command[REF_CMD_INTERACTIVE].receive_count == before.command[REF_CMD_INTERACTIVE].receive_count &&
+               after.link_source_rx_ms == before.link_source_rx_ms);
+    TEST_CHECK(RefereeGetInteraction(NULL) == REFEREE_ERROR_ARGUMENT);
+    set_tick(302u);
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 9u);
+    // 固定线上字节与模拟器编码另行交叉核对，避免仅依赖本测试的逐位算法。
+    const uint8_t fixed[] = {0xa5u,0x09u,0x00u,0x42u,0xb7u,0x01u,0x03u,0x34u,0x02u,
+        0x03u,0x00u,0x01u,0x00u,0x11u,0x22u,0x33u,0x74u,0x88u};
+    feed(fixed, sizeof(fixed));
+    TEST_CHECK(RefereeGetInteraction(&record) == REFEREE_OK && record.content_id == 0x0234u &&
+               record.length == 3u && record.data[0] == 0x11u && record.data[2] == 0x33u &&
+               record.data[3] == 0u && record.wire_sequence == 0x42u);
+}
 static void make_valid_payload(uint16_t command,uint8_t *payload,size_t length)
 {
     memset(payload,0,length);
@@ -178,6 +232,8 @@ static void check_protocol_and_lengths(void)
         TEST_CHECK(RefereeGetSnapshot(&snapshot)==REFEREE_OK);
         TEST_CHECK(snapshot.command[commands[i].index].receive_count==1u);
         TEST_CHECK(snapshot.command[commands[i].index].source_rx_ms==HAL_GetTick());
+        // 交互内容长度可变，其边界另行测试。
+        if (commands[i].index == REF_CMD_INTERACTIVE) continue;
         size_t n=make_frame(frame,commands[i].id,payload,commands[i].length-1u,sequence++);
         feed(frame,n);
         TEST_CHECK(RefereeGetSnapshot(&snapshot)==REFEREE_OK && snapshot.command[commands[i].index].receive_count==1u);
@@ -332,7 +388,7 @@ static void check_failures_and_stream(void)
                after.command[REF_CMD_ROBOT_POSITION].receive_count==current);
     uint32_t shot_count=after.command[REF_CMD_SHOOT_DATA].receive_count;
     TEST_CHECK(shot_count==2u && after.command[REF_CMD_ROBOT_STATE].data.robot_state.robot_id==1u);
-    make_valid_payload(ID_student_interactive,payload,LEN_receive_data);payload[0]=1u;
+    make_valid_payload(ID_student_interactive,payload,LEN_receive_data);payload[1]=1u;
     feed_frame(ID_student_interactive,payload,LEN_receive_data,80u);
     make_valid_payload(ID_student_interactive,payload,LEN_receive_data);payload[2]=101u;
     feed_frame(ID_student_interactive,payload,LEN_receive_data,81u);
@@ -459,6 +515,48 @@ static void *reader_thread(void *argument)
     }
     return NULL;
 }
+
+// 一个任务接收变长内容，另一个任务同时复制并核对内容与序号。
+static void *interaction_writer(void *argument)
+{
+    (void)argument;
+    uint8_t payload[118] = {0};
+    write_u16le(payload, 0x0200u);
+    write_u16le(payload + 2u, 3u);
+    write_u16le(payload + 4u, 1u);
+    for (uint32_t i = 0u; i < 5000u; ++i) {
+        memset(payload + 6u, (uint8_t)i, 112u);
+        feed_frame(ID_student_interactive, payload, sizeof(payload), (uint8_t)i);
+    }
+    atomic_store_explicit(&producer_done, 1u, memory_order_release);
+    return NULL;
+}
+
+static void *interaction_reader(void *argument)
+{
+    (void)argument;
+    RefereeInteractionRecord_t record;
+    while (!atomic_load_explicit(&producer_done, memory_order_acquire)) {
+        if (RefereeGetInteraction(&record) != REFEREE_OK || !record.received || record.length != 112u ||
+            record.data[0] != record.wire_sequence || record.data[111] != record.wire_sequence)
+            atomic_fetch_add(&reader_failures, 1u);
+    }
+    return NULL;
+}
+
+static void check_interaction_concurrent(void)
+{
+    uint8_t payload[118] = {0};
+    write_u16le(payload, 0x0200u); write_u16le(payload + 2u, 3u); write_u16le(payload + 4u, 1u);
+    feed_frame(ID_student_interactive, payload, sizeof(payload), 0u);
+    atomic_store(&producer_done, 0u);
+    atomic_store(&reader_failures, 0u);
+    pthread_t writer, reader;
+    TEST_CHECK(pthread_create(&writer, NULL, interaction_writer, NULL) == 0);
+    TEST_CHECK(pthread_create(&reader, NULL, interaction_reader, NULL) == 0);
+    TEST_CHECK(pthread_join(writer, NULL) == 0 && pthread_join(reader, NULL) == 0);
+    TEST_CHECK(atomic_load(&reader_failures) == 0u);
+}
 static void check_concurrent_snapshots(void)
 {
     uint8_t initial[LEN_game_state]={0};feed_frame(ID_game_state,initial,sizeof(initial),0u);
@@ -468,6 +566,7 @@ static void check_concurrent_snapshots(void)
     TEST_CHECK(atomic_load(&reader_failures)==0u);
 }
 #else
+static void check_interaction_concurrent(void) { }
 static void check_concurrent_snapshots(void)
 {
     RefereeSnapshot_t snapshot;uint8_t payload[LEN_game_state]={0};
@@ -488,6 +587,10 @@ int main(void)
 {
     handle.hdmarx=&dma;
     RefereeSnapshot_t snapshot;
+    RefereeInteractionRecord_t interaction;
+    memset(&interaction, 0xff, sizeof(interaction));
+    TEST_CHECK(RefereeGetInteraction(&interaction)==REFEREE_ERROR_NOT_INITIALIZED);
+    TEST_CHECK(memcmp(&interaction,&(RefereeInteractionRecord_t){0},sizeof(interaction))==0);
     TEST_CHECK(RefereeGetSnapshot(&snapshot)==REFEREE_ERROR_NOT_INITIALIZED);
     TEST_CHECK(memcmp(&snapshot,&(RefereeSnapshot_t){0},sizeof(snapshot))==0);
     UART_HandleTypeDef *handle_pointer=&handle;
@@ -505,5 +608,7 @@ int main(void)
     check_failures_and_stream();
     check_expiry();
     check_concurrent_snapshots();
+    check_interaction_lengths();
+    check_interaction_concurrent();
     return 0;
 }
