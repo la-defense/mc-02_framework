@@ -144,7 +144,9 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/super_cap/super_cap.c
     modules/task_monitor/task_monitor.c
     modules/alarm/buzzer.c
-    modules/alarm/led.c)
+    modules/alarm/led.c
+    modules/alarm/robot_alarm.c
+    modules/alarm/robot_alarm_policy.c)
 
 if(MC02_IMU_BACKEND STREQUAL "fusion")
     list(APPEND MC02_COMMON_MODULE_C_SOURCES Middlewares/Third_Party/Fusion/FusionAhrs.c)

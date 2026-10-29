@@ -17,7 +17,7 @@
 #include "master_process.h"
 #include "daemon.h"
 #include "HT04.h"
-#include "buzzer.h"
+#include "robot_alarm.h"
 #include "task_monitor.h"
 #include "lcd_task.h"
 #include "bsp_crash.h"
@@ -242,15 +242,6 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 
 __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 {
-    uint8_t buzzer_ready = BuzzerInit();
-    if (!buzzer_ready)
-    {
-        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_BUZZER,
-                                    INIT_FAILURE_RESOURCE, 0u);
-        RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
-        IMUHeaterForceOff();
-        BSP_SafetyStartupLatchOutputsOff();
-    }
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_05);
 #if LOG_TEST
     /* 类型化日志自测默认关闭；普通事件也需在bench_safe显式开启诊断输出。 */
@@ -291,8 +282,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         // 电压诊断只记录读取结果，内部每 250ms 更新一次，不参与控制许可。
         BSP_ADCUpdateDiagnostics();
         DaemonTask();
-        if (buzzer_ready)
-            BuzzerTask();
+        (void)RobotAlarmTask();
         CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */
         TaskMonitorTick();
 #if MC02_BENCH_CRASH_DIAGNOSTICS

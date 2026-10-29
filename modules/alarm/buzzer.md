@@ -1,20 +1,23 @@
-# buzzer
+# 蜂鸣器与统一告警
 
-用于拉响蜂鸣器警报
+蜂鸣器是 `RobotAlarmTask()` 使用的单路 PWM 输出。故障优先级、音符序列、占空比和允许静音的等级由车型配置给出；蜂鸣器驱动本身不再保存多份报警对象，也不仲裁整车故障。
 
-## 使用范例
+## 初始化与调用
 
-```c
-Buzzer_config_s buzzer_config ={
-        .alarm_level = ALARM_LEVEL_HIGH, //设置警报等级 同一状态下 高等级的响应
-        .loudness=  0.4, //设置响度
-        .octave=  OCTAVE_1, // 设置音阶
-    };
-robocmd_alarm = BuzzerRegister(&buzzer_config);
+`RobotInit()` 先选择车型配置并调用 `RobotAlarmInit()`。该入口注册 TIM12 通道2并把 PWM 占空比设为零。PWM 注册失败会使蜂鸣器告警通道标记为不可用，不报告整车初始化故障，也不改变 safety 许可。
 
-AlarmSetStatus(robocmd_alarm, ALARM_ON);
-AlarmSetStatus(robocmd_alarm, ALARM_OFF);
+Daemon 每轮调用 `RobotAlarmTask()`。它读取一致的 safety 快照，由 `robot_alarm_policy.c` 选择当前最高优先级事件，再按实际经过的 HAL 毫秒数决定当前音符。不同告警切换时重新建立时间起点；静音请求只作用于当前允许静音的故障声音，并在配置时限到达后恢复原节奏。
 
-```
+驱动接口为：
 
-@todo: 将音阶改为可供选择的搭配 如 Do Re Mi Fa So La Si 自由组合 用户只需输入字符串"DoReMi"即可
+- `BuzzerInit()`：注册单个 PWM 实例；重复调用不重复注册。
+- `BuzzerSetTone(note, duty_permille)`：播放 `OCTAVE_1`～`OCTAVE_8`，占空比范围为1～1000‰。
+- `BuzzerSilence()`：将占空比置零。
+
+`OCTAVE_1`～`OCTAVE_8` 对应523、587、659、698、784、880、988、1046 Hz。PWM 接口不返回定时器硬件运行状态，因此“成功”只表示本机 PWM 寄存器接口接受了请求，不代表已测得引脚波形或声压。
+
+普通业务不应直接调用驱动覆盖告警。提交静音请使用 `RobotAlarmMuteFor()`；查询用 `RobotAlarmGetState()`，该接口只复制最近状态，不推进播放时间线。
+
+## 验证边界
+
+WSL 主机测试链接生产告警策略、运行适配层、蜂鸣器音符映射和 WS2812 编码，检查故障仲裁、状态灯效、实际毫秒推进、静音到期、外设失败降级及完整 SPI 发送字节。ARM 构建检查源码和链接。上述结果不证明灯珠波形、蜂鸣器频率或实际声音；单灯物理时序仍由 MC02-0025 裸板测量验收。

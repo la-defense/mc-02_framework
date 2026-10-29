@@ -182,10 +182,47 @@ set_tests_properties(production_time_mapping_wrap_expiry_and_recovery PROPERTIES
 add_executable(ws2812_pin_ownership_test ws2812_pin_ownership_test.c
   ../../bsp/ws2812/ws2812.c)
 target_include_directories(ws2812_pin_ownership_test BEFORE PRIVATE ws2812_pin_fakes)
-target_include_directories(ws2812_pin_ownership_test PRIVATE . ../../bsp/ws2812)
+target_include_directories(ws2812_pin_ownership_test PRIVATE . ../../bsp/ws2812 ../../Core/Inc)
 target_compile_options(ws2812_pin_ownership_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_ws2812_preserves_adc_key_pin COMMAND ws2812_pin_ownership_test)
 set_tests_properties(production_ws2812_preserves_adc_key_pin PROPERTIES TIMEOUT 10)
+
+# 告警策略使用生产纯逻辑，独立覆盖仲裁、节奏、静音期限和输出通道降级。
+add_executable(robot_alarm_policy_test robot_alarm_policy_test.c
+  ../../modules/alarm/robot_alarm_policy.c)
+target_include_directories(robot_alarm_policy_test PRIVATE ../../modules/alarm)
+target_compile_options(robot_alarm_policy_test PRIVATE -Wall -Wextra -Werror
+  -fno-fast-math)
+foreach(scenario priority timing mute validation outputs)
+  add_test(NAME production_robot_alarm_${scenario} COMMAND robot_alarm_policy_test ${scenario})
+  set_tests_properties(production_robot_alarm_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+
+# 蜂鸣器目标链接生产音符映射；仅以记录 PWM 调用的替身代替定时器外设。
+add_executable(buzzer_driver_test buzzer_driver_test.c ../../modules/alarm/buzzer.c)
+target_include_directories(buzzer_driver_test BEFORE PRIVATE alarm_driver_fakes)
+target_include_directories(buzzer_driver_test PRIVATE ../../modules/alarm)
+target_compile_options(buzzer_driver_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+if(UNIX)
+  target_link_libraries(buzzer_driver_test PRIVATE m)
+endif()
+foreach(scenario notes failure)
+  add_test(NAME production_buzzer_${scenario} COMMAND buzzer_driver_test ${scenario})
+  set_tests_properties(production_buzzer_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+
+# 告警运行桥接链接生产策略和适配层；仅替换 HAL、安全快照及两个外设驱动。
+add_executable(robot_alarm_adapter_test robot_alarm_adapter_test.c
+  ../../modules/alarm/robot_alarm.c ../../modules/alarm/robot_alarm_policy.c)
+target_include_directories(robot_alarm_adapter_test BEFORE PRIVATE robot_alarm_adapter_fakes)
+target_include_directories(robot_alarm_adapter_test PRIVATE ../../modules/alarm)
+target_compile_options(robot_alarm_adapter_test PRIVATE -Wall -Wextra -Werror
+  -fno-fast-math)
+foreach(scenario init-degraded partial mute-generation mute-serial snapshot-failure unknown-state idempotent-init)
+  add_test(NAME production_robot_alarm_adapter_${scenario}
+    COMMAND robot_alarm_adapter_test ${scenario})
+  set_tests_properties(production_robot_alarm_adapter_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
 
 function(mc02_add_vehicle_health_test suffix)
   set(target vehicle_health_${suffix}_test)

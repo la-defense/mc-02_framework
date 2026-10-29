@@ -35,7 +35,7 @@ python3 tools/workflow/archive_firmware.py --preset bench-debug
 | 模块 | 内容 |
 |---|---|
 | 基础/算法 | general_def 单位换算；原 user_lib 已按 MC02-0076 拆为标量／角度、向量和采样平均接口；RLS 使用调用者工作区 |
-| alarm | `alarm_def.h` 公共枚举、buzzer 重命名+`BuzzerSetOctave`、新增 LED 模块（用 WS2812 经 SPI6，替代远程 htim5 三路 PWM） |
+| alarm | safety 快照驱动的统一 RGB／蜂鸣器策略；哨兵映射、优先级、分段节奏和限时静音见 `robot_alarm.h`／`sentinel_config.c`，WS2812 使用 SPI6 |
 | motor | `Motor_Online_Flag_e`/`enable` 字段、`DR04`/`XMCY` 类型、`DJIMotorIsOnline`/`DJIMotorCloseLoop`、XMmotor 骨架、DRmotor 占位、HT04 扭矩系数宏 |
 | power | `power_manager.c/.h` 功率管理（k1/k2/k3 模型，RLS 待启用） |
 | referee | 新版 RM 协议（game_robot_state 13B、新增 0x0104/0x0105）、`refresh_flag`、交互结构新字段 |

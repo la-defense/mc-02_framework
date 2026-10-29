@@ -7,6 +7,8 @@
 #include "robot_def.h"
 #include "robot_task.h"
 #include "robot_safety.h"
+#include "config.h"
+#include "robot_alarm.h"
 #include "task_monitor.h"
 #include "bsp_watchdog.h"
 #include "master_process.h"
@@ -97,6 +99,15 @@ uint8_t RobotInit(void)
     
     BSPInit();
     RobotSafetyInit();
+    Robot_Config_s *robot_config = RobotConfigInit(ROBOT_ID);
+    if (robot_config == NULL)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                    INIT_FAILURE_DEPENDENCY, 0u);
+        goto init_failed;
+    }
+    /* 告警输出属于辅助通道；LED 或蜂鸣器失败不阻断控制任务启动。 */
+    (void)RobotAlarmInit(robot_config->alarm_config);
     BSP_ResetRecoveryState_t recovery_state = {0};
     const uint8_t recovery_state_valid = BSP_ResetRecoveryGetState(&recovery_state);
     if (recovery_state_valid == 0u || recovery_state.locked_out != 0u)

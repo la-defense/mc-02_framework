@@ -3,6 +3,100 @@
  */
 #include "sentinel_config.h"
 #include "general_def.h"
+#include "robot_safety.h"
+
+/* 这些是哨兵软件默认提示色和节奏，不代表灯珠实测亮度、蜂鸣器声压或故障安全等级标定。 */
+static const RobotAlarmSoundSegment_t sentinel_beep_short[] = {
+    {100u, OCTAVE_5, 220u}, {180u, BUZZER_SILENT, 0u}};
+static const RobotAlarmSoundSegment_t sentinel_beep_double[] = {
+    {90u, OCTAVE_6, 220u}, {100u, BUZZER_SILENT, 0u},
+    {90u, OCTAVE_6, 220u}, {720u, BUZZER_SILENT, 0u}};
+static const RobotAlarmSoundSegment_t sentinel_beep_urgent[] = {
+    {90u, OCTAVE_7, 250u}, {90u, BUZZER_SILENT, 0u},
+    {90u, OCTAVE_7, 250u}, {90u, BUZZER_SILENT, 0u},
+    {90u, OCTAVE_7, 250u}, {550u, BUZZER_SILENT, 0u}};
+static const RobotAlarmLedSegment_t sentinel_estop_led[] = {
+    {160u, 255u, 0u, 0u}, {160u, 0u, 0u, 0u},
+    {160u, 0u, 0u, 255u}, {520u, 0u, 0u, 0u}};
+
+#define SENTINEL_LED(_mode, _period, _r, _g, _b) \
+    {.led = {.mode = (_mode), .period_ms = (_period), .r = (_r), .g = (_g), .b = (_b)}}
+#define SENTINEL_LED_SOUND(_mode, _period, _r, _g, _b, _sound) \
+    {.led = {.mode = (_mode), .period_ms = (_period), .r = (_r), .g = (_g), .b = (_b)}, \
+     .sound = {.segment_count = (uint8_t)(sizeof(_sound) / sizeof((_sound)[0])), \
+               .segments = (_sound)}}
+#define SENTINEL_SEGMENTED(_segments, _sound) \
+    {.led = {.mode = ROBOT_ALARM_LED_SEGMENTED, \
+             .segment_count = (uint8_t)(sizeof(_segments) / sizeof((_segments)[0])), \
+             .segments = (_segments)}, \
+     .sound = {.segment_count = (uint8_t)(sizeof(_sound) / sizeof((_sound)[0])), \
+               .segments = (_sound)}}
+
+static const RobotAlarmFaultRule_t sentinel_alarm_faults[] = {
+    {.fault_bit = ROBOT_FAULT_INIT_FAILURE, .priority = 0u, .mute_level = 0u,
+     .style = SENTINEL_LED_SOUND(ROBOT_ALARM_LED_BLINK, 240u, 255u, 0u, 0u,
+                                 sentinel_beep_urgent)},
+    {.fault_bit = ROBOT_FAULT_RESET_LOCKOUT, .priority = 1u, .mute_level = 1u,
+     .style = SENTINEL_LED_SOUND(ROBOT_ALARM_LED_BLINK, 300u, 255u, 0u, 180u,
+                                 sentinel_beep_urgent)},
+    {.fault_bit = ROBOT_FAULT_TASK_TIMEOUT, .priority = 2u, .mute_level = 2u,
+     .style = SENTINEL_LED_SOUND(ROBOT_ALARM_LED_BLINK, 360u, 255u, 0u, 0u,
+                                 sentinel_beep_double)},
+    {.fault_bit = ROBOT_FAULT_RC_OFFLINE, .priority = 3u, .mute_level = 3u,
+     .style = SENTINEL_LED_SOUND(ROBOT_ALARM_LED_BLINK, 500u, 255u, 100u, 0u,
+                                 sentinel_beep_double)},
+    {.fault_bit = ROBOT_FAULT_MOTOR_OFFLINE, .priority = 4u, .mute_level = 4u,
+     .style = SENTINEL_LED_SOUND(ROBOT_ALARM_LED_BREATHE, 900u, 255u, 30u, 0u,
+                                 sentinel_beep_short)},
+    {.fault_bit = ROBOT_FAULT_CAN_BUSOFF, .priority = 5u, .mute_level = 5u,
+     .style = SENTINEL_LED_SOUND(ROBOT_ALARM_LED_BLINK, 700u, 255u, 120u, 0u,
+                                 sentinel_beep_short)},
+    {.fault_bit = ROBOT_FAULT_IMU_INVALID, .priority = 6u, .mute_level = 6u,
+     .style = SENTINEL_LED_SOUND(ROBOT_ALARM_LED_BLINK, 900u, 120u, 0u, 255u,
+                                 sentinel_beep_short)},
+    {.fault_bit = ROBOT_FAULT_TILT, .priority = 7u, .mute_level = 7u,
+     .style = SENTINEL_SEGMENTED(sentinel_estop_led, sentinel_beep_double)},
+    {.fault_bit = ROBOT_FAULT_CALIB_INVALID, .priority = 8u, .mute_level = 7u,
+     .style = SENTINEL_LED_SOUND(ROBOT_ALARM_LED_BLINK, 1200u, 0u, 180u, 255u,
+                                 sentinel_beep_short)},
+};
+
+static const RobotAlarmStateRule_t sentinel_alarm_states[] = {
+    {.state = ROBOT_ALARM_STATE_STOP,
+     .style = SENTINEL_LED(ROBOT_ALARM_LED_OFF, 0u, 0u, 0u, 0u)},
+    {.state = ROBOT_ALARM_STATE_INIT,
+     .style = SENTINEL_LED(ROBOT_ALARM_LED_BLINK, 1000u, 0u, 60u, 255u)},
+    {.state = ROBOT_ALARM_STATE_SAFE,
+     .style = SENTINEL_LED(ROBOT_ALARM_LED_SOLID, 0u, 0u, 40u, 120u)},
+    {.state = ROBOT_ALARM_STATE_CALIB,
+     .style = SENTINEL_LED(ROBOT_ALARM_LED_BREATHE, 1400u, 255u, 150u, 0u)},
+    {.state = ROBOT_ALARM_STATE_READY,
+     .style = SENTINEL_LED(ROBOT_ALARM_LED_SOLID, 0u, 0u, 180u, 0u)},
+    {.state = ROBOT_ALARM_STATE_FAULT,
+     .style = SENTINEL_LED(ROBOT_ALARM_LED_BLINK, 600u, 255u, 0u, 0u)},
+    {.state = ROBOT_ALARM_STATE_ESTOP,
+     .style = SENTINEL_SEGMENTED(sentinel_estop_led, sentinel_beep_urgent)},
+};
+
+static const RobotAlarmConfig_t sentinel_alarm_config = {
+    .fault_rule_count = (uint8_t)(sizeof(sentinel_alarm_faults) /
+                                  sizeof(sentinel_alarm_faults[0])),
+    .fault_rules = sentinel_alarm_faults,
+    .state_rule_count = (uint8_t)(sizeof(sentinel_alarm_states) /
+                                  sizeof(sentinel_alarm_states[0])),
+    .state_rules = sentinel_alarm_states,
+    .unknown_fault_style = SENTINEL_LED_SOUND(ROBOT_ALARM_LED_BLINK, 450u,
+                                              255u, 0u, 180u, sentinel_beep_urgent),
+    .unknown_state_style = SENTINEL_LED(ROBOT_ALARM_LED_BLINK, 1600u,
+                                        255u, 180u, 0u),
+    .mute_level_mask = 0xF0u,
+    .max_mute_ms = 30000u,
+    .max_pattern_ms = ROBOT_ALARM_MAX_PATTERN_MS,
+};
+
+#undef SENTINEL_LED
+#undef SENTINEL_LED_SOUND
+#undef SENTINEL_SEGMENTED
 
 /*
  * 哨兵机器人配置. hcan1/hcan2 直接映射到本地 hfdcan1/hfdcan2
@@ -12,6 +106,7 @@
 Robot_Config_s *SentinelConfigInit(void)
 {
     static Robot_Config_s sentinel_config = {
+        .alarm_config = &sentinel_alarm_config,
         .chassis_param = {
             .chassis_motor_id[MOTOR_LF] = 3,
             .chassis_motor_id[MOTOR_RF] = 2,
