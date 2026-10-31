@@ -38,7 +38,7 @@ uint8_t CanTopicLinkInit(CanTopicLink_t *link, const CAN_Init_Config_s *can_conf
  */
 uint8_t CanTopicLinkAttachTimeSync(CanTopicLink_t *link, CanTimeSync_t *sync);
 
-/** @brief 检查来源同步并尝试提交一条新本地快照。
+/** @brief 检查来源同步并尝试提交一条新的本地数据。
  * @param[in,out] link 已初始化对象，由CAN接收派发所在任务串行调用。
  * @param[in] now_ms 当前本机毫秒时间。
  * @param[out] request_id 成功提交时写入，其他情况保持原值。

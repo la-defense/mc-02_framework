@@ -1,5 +1,5 @@
 /** @file can_topic_bridge.h
- * @brief 将一条已配置的消息中心快照与CAN话题传输相连。
+ * @brief 将消息中心的一路最新数据与CAN话题传输相连。
  * @note 来源映射由调用者提供；无有效映射时禁止发布远端消息。
  */
 #ifndef CAN_TOPIC_BRIDGE_H
@@ -31,6 +31,7 @@ typedef struct {
     uint32_t last_remote_source_ms;
     uint32_t last_conservative_ms;
     uint8_t has_remote_source;
+    uint8_t published_valid;
 } CanTopicBridge_t;
 typedef enum {
     CAN_BRIDGE_OK=0, CAN_BRIDGE_INCOMPLETE, CAN_BRIDGE_ARGUMENT, CAN_BRIDGE_CONFIG, CAN_BRIDGE_EMPTY,
@@ -40,8 +41,8 @@ typedef enum {
 /** @brief 绑定一个收发方向；允许只发送或只接收。
  * @param[out] bridge 长期保存的对象，失败保持原值。
  * @param[in] transport 已初始化传输对象。
- * @param[in] outgoing 本地快照订阅句柄，可为NULL；时间域须为本地或已映射。
- * @param[in] incoming 远端快照发布句柄，可为NULL；目录须使用LOCAL_MAPPED。
+ * @param[in] outgoing 本地最新数据订阅句柄，可为NULL；时间域须为本地或已映射。
+ * @param[in] incoming 远端最新数据发布句柄，可为NULL；目录须使用LOCAL_MAPPED。
  * @param[in] outgoing_codec,incoming_codec 启用方向所用的固定长度编码／解码，初始化时复制。
  * @param[in] map_time,map_context 远端时钟映射和长期上下文；无映射时接收保持失效。
  * @return 状态；至少启用一个方向，目录长度为1～64字节。
@@ -51,7 +52,7 @@ CanTopicBridgeStatus_t CanTopicBridgeInit(CanTopicBridge_t *bridge, CanTopicTran
     const CanTopicCodec_t *outgoing_codec, const CanTopicCodec_t *incoming_codec,
     CanTopicMapTime_t map_time, void *map_context);
 
-/** @brief 读取新鲜本地快照并尝试提交一次，不重复发送已入队的同一版本。
+/** @brief 读取未过期的本地数据并尝试提交一次，不重复发送已入队的同一版本。
  * @param[in,out] bridge 已初始化对象，调用者串行访问。
  * @param[in] now_ms 当前本机毫秒时刻。
  * @param[out] request_id 成功入队时填写；失败保持原值。
@@ -67,7 +68,7 @@ CanTopicBridgeStatus_t CanTopicBridgeSend(CanTopicBridge_t *bridge, uint32_t now
  * @param[in] now_ms 当前本机毫秒时刻。
  * @return 状态；失同步、过期、话题或长度不符时不发布。
  * @note 使用映射时刻减误差上限作为本地来源时间，避免误差使消息比源期限更长；
- *       同一来源时刻及更旧消息被拒绝。发送板复位后须重新建立同步并重新初始化桥接。
+ *       同一来源时刻及更旧消息被拒绝。发送板复位后先撤销旧来源，再重新建立同步。
  */
 CanTopicBridgeStatus_t CanTopicBridgePublish(CanTopicBridge_t *bridge, const CanTopicMessage_t *message,
                                              uint32_t now_ms);

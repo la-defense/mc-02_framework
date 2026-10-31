@@ -177,7 +177,7 @@ uint8_t RobotInit(void)
 
 #if defined(MC02_PROFILE_ROBOT)
 #if defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD)
-    ROBOT_INIT_CHECK(RobotCanBridgeInit(), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+    ROBOT_INIT_CHECK(RobotCanBridgeInit(&robot_config->can_bridge), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
                      INIT_FAILURE_DEPENDENCY, 2u);
 #endif
     // 话题统计只用于调试；注册失败不改变控制任务的启动结果。

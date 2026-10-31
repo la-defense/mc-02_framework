@@ -2,6 +2,7 @@
  * @brief 测试双板实际启动入口、对时帧接收和供诊断读取的状态。
  */
 #include "robot_can_bridge.h"
+#include "robot_topics.h"
 #include "can_time_sync.h"
 #include "fdcan.h"
 #include "test_check.h"
@@ -16,6 +17,9 @@ static void (*receive_callback)(CANInstance *);
 static uint8_t frames[2][8];
 static size_t frame_count;
 static uint32_t next_id;
+static FDCAN_HandleTypeDef *expected_handle;
+static FDCAN_HandleTypeDef *serviced_handle;
+static uint16_t expected_tx, expected_rx;
 
 uint32_t HAL_GetTick(void) { return now_ms; }
 
@@ -23,11 +27,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
     if (config == NULL || receive_callback != NULL)
         return NULL;
-#if defined(CHASSIS_BOARD)
-    TEST_CHECK(config->can_handle == &hcan2 && config->tx_id == 0x311u && config->rx_id == 0x312u);
-#else
-    TEST_CHECK(config->can_handle == &hcan1 && config->tx_id == 0x312u && config->rx_id == 0x311u);
-#endif
+    TEST_CHECK(config->can_handle == expected_handle && config->tx_id == expected_tx && config->rx_id == expected_rx);
     registered_can.can_handle = config->can_handle;
     registered_can.tx_id = config->tx_id;
     registered_can.id = config->id;
@@ -41,7 +41,7 @@ void CANUnregisterInstance(CANInstance *instance)
         receive_callback = NULL;
 }
 
-void CANProcessTxBus(FDCAN_HandleTypeDef *handle) { (void)handle; }
+void CANProcessTxBus(FDCAN_HandleTypeDef *handle) { serviced_handle=handle; }
 
 CAN_TxSubmitStatus_t CANSubmitInterruptibleBatch(FDCAN_HandleTypeDef *handle, const void *source,
     const CAN_TxFrame_t *input, size_t count, CAN_TxPriority_t priority,
@@ -57,6 +57,13 @@ CAN_TxSubmitStatus_t CANSubmitInterruptibleBatch(FDCAN_HandleTypeDef *handle, co
     }
     *request_id = ++next_id;
     return CAN_TX_SUBMIT_ACCEPTED;
+}
+
+CAN_TxSubmitStatus_t CANSubmitInterruptibleBatchUntil(FDCAN_HandleTypeDef *handle, const void *source,
+    const CAN_TxFrame_t *input, size_t count, CAN_TxPriority_t priority,
+    uint32_t expiry_ms, uint32_t *request_id)
+{
+    return CANSubmitInterruptibleBatch(handle,source,input,count,priority,expiry_ms-now_ms,request_id);
 }
 
 uint8_t CANGetTxRequestState(uint32_t request_id, CAN_TxResult_t *result)
@@ -76,7 +83,23 @@ int main(void)
     uint32_t updated_ms = 456u;
     TEST_CHECK(!RobotCanBridgeGetTimeSyncState(&state, &updated_ms));
     TEST_CHECK(state.accepted_samples == 123u && updated_ms == 456u);
-    TEST_CHECK(RobotCanBridgeInit());
+    RobotCanBridgeConfig_t config = {
+        .can_handle=&hcan2, .tx_id=0x421u, .rx_id=0x422u,
+        .command_topic=ROBOT_TOPIC_CHASSIS_COMMAND, .feedback_topic=ROBOT_TOPIC_CHASSIS_FEEDBACK};
+    expected_handle=config.can_handle; expected_tx=config.tx_id; expected_rx=config.rx_id;
+    TEST_CHECK(!RobotCanBridgeInit(NULL));
+    RobotCanBridgeConfig_t invalid=config;
+    invalid.command_topic=0u;
+    TEST_CHECK(!RobotCanBridgeInit(&invalid) && receive_callback==NULL);
+    invalid=config; invalid.rx_id=invalid.tx_id;
+    TEST_CHECK(!RobotCanBridgeInit(&invalid) && receive_callback==NULL);
+    invalid=config; invalid.feedback_topic=0u;
+    TEST_CHECK(!RobotCanBridgeInit(&invalid) && receive_callback==NULL);
+    invalid=config; invalid.rx_id=0x800u;
+    TEST_CHECK(!RobotCanBridgeInit(&invalid) && receive_callback==NULL);
+    TEST_CHECK(RobotCanBridgeInit(&config));
+    RobotCanBridgeServiceTx();
+    TEST_CHECK(serviced_handle==config.can_handle);
     TEST_CHECK(!RobotCanBridgeGetTimeSyncState(&state, &updated_ms));
 
     CANInstance peer_can = {.can_handle = &hcan1, .tx_id = 0x311u};

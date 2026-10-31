@@ -332,6 +332,17 @@ CAN_TxSubmitStatus_t CANSubmitInterruptibleBatch(FDCAN_HandleTypeDef *hcan, cons
     const CAN_TxFrame_t *frames, size_t frame_count, CAN_TxPriority_t priority,
     uint32_t deadline_ms, uint32_t *request_id);
 
+/** @brief 提交可中断帧组，使用来源数据的本机绝对截止时刻。
+ * @param[in] hcan,source,frames,frame_count,priority 与可中断批量提交相同。
+ * @param[in] expiry_ms 本机HAL毫秒计数的截止时刻，支持32位回绕。
+ * @param[out] request_id 成功时写入；失败保持原值。
+ * @return 提交结果；到达期限或剩余时间大于INT32_MAX时拒绝。
+ * @note 队列内读取当前时间并检查截止时刻，等待或抢占不会延长数据期限。
+ */
+CAN_TxSubmitStatus_t CANSubmitInterruptibleBatchUntil(FDCAN_HandleTypeDef *hcan, const void *source,
+    const CAN_TxFrame_t *frames, size_t frame_count, CAN_TxPriority_t priority,
+    uint32_t expiry_ms, uint32_t *request_id);
+
 /** @brief 在1ms级普通任务中推进每条总线最多一帧，按优先级与期限调度。
 * @note 只在 MotorControlTask() 或专用自测任务调用；不等待 FIFO 空闲，每条总线每次至多尝试一帧。
  */

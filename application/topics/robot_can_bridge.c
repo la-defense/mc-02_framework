@@ -18,26 +18,30 @@ static TimeMappingState_t published_sync;
 static uint32_t published_sync_ms;
 static uint8_t published_sync_ready;
 
-uint8_t RobotCanBridgeInit(void)
+uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
 {
+    // 当前编解码只认识底盘命令和反馈；不支持的车型话题必须明确拒绝。
+    if (config==NULL || config->can_handle==NULL || config->tx_id>0x7ffu ||
+        config->rx_id>0x7ffu || config->tx_id==config->rx_id ||
+        config->command_topic!=ROBOT_TOPIC_CHASSIS_COMMAND ||
+        config->feedback_topic!=ROBOT_TOPIC_CHASSIS_FEEDBACK) return 0u;
     if (!RobotTopicsInit()) return 0u;
 #if defined(CHASSIS_BOARD)
-    MessageSubscriber_t *outgoing=MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_FEEDBACK,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
-    MessagePublisher_t *incoming=MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
+    MessageSubscriber_t *outgoing=MessageSubscriberRegister(config->feedback_topic,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
+    MessagePublisher_t *incoming=MessagePublisherRegister(config->command_topic,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
     const CanTopicCodec_t encode={ChassisFeedbackBridgeEncode,NULL,CHASSIS_FEEDBACK_WIRE_BYTES};
     const CanTopicCodec_t decode={ChassisCommandBridgeDecode,NULL,CHASSIS_COMMAND_WIRE_BYTES};
-    CAN_Init_Config_s config={.can_handle=&hcan2,.tx_id=0x311u,.rx_id=0x312u};
 #elif defined(GIMBAL_BOARD)
-    MessageSubscriber_t *outgoing=MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
-    MessagePublisher_t *incoming=MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_FEEDBACK,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
+    MessageSubscriber_t *outgoing=MessageSubscriberRegister(config->command_topic,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
+    MessagePublisher_t *incoming=MessagePublisherRegister(config->feedback_topic,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
     const CanTopicCodec_t encode={ChassisCommandBridgeEncode,NULL,CHASSIS_COMMAND_WIRE_BYTES};
     const CanTopicCodec_t decode={ChassisFeedbackBridgeDecode,NULL,CHASSIS_FEEDBACK_WIRE_BYTES};
-    CAN_Init_Config_s config={.can_handle=&hcan1,.tx_id=0x312u,.rx_id=0x311u};
 #else
 #error "robot_can_bridge requires a dual-board role"
 #endif
     if (outgoing==NULL || incoming==NULL) return 0u;
-    if (!CanTopicLinkInit(&robot_link,&config,outgoing,incoming,&encode,&decode,NULL,NULL,50u))
+    const CAN_Init_Config_s can_config={.can_handle=config->can_handle,.tx_id=config->tx_id,.rx_id=config->rx_id};
+    if (!CanTopicLinkInit(&robot_link,&can_config,outgoing,incoming,&encode,&decode,NULL,NULL,50u))
         return 0u;
     // 对时使用同一个接收端点；失败时释放本次注册，不能启动无映射的双板控制。
     if (!CanTimeSyncInit(&robot_time_sync,robot_link.transport.can) ||
@@ -91,9 +95,6 @@ uint8_t RobotCanBridgeGetTimeSyncState(TimeMappingState_t *output, uint32_t *upd
 void RobotCanBridgeServiceTx(void)
 {
     // 额外机会只作用于当前桥接总线，避免改变其他总线每轮的提交次数。
-#if defined(CHASSIS_BOARD)
-    CANProcessTxBus(&hcan2);
-#else
-    CANProcessTxBus(&hcan1);
-#endif
+    if (robot_link.ready && robot_link.transport.can!=NULL)
+        CANProcessTxBus(robot_link.transport.can->can_handle);
 }

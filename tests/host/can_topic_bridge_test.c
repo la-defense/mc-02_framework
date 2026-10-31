@@ -21,6 +21,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
 }
 static CAN_TxSubmitStatus_t tx_result=CAN_TX_SUBMIT_ACCEPTED;
 static uint32_t captured_deadline;
+static uint32_t captured_expiry;
 static CAN_TxResultState_t request_state=CAN_TX_RESULT_COMPLETE;
 static uint8_t request_pending;
 static unsigned cancellations;
@@ -52,6 +53,14 @@ CAN_TxSubmitStatus_t CANSubmitInterruptibleBatch(FDCAN_HandleTypeDef *handle,con
         if (*id==8u) request_state=CAN_TX_RESULT_QUEUED;
     }
     return tx_result;
+}
+CAN_TxSubmitStatus_t CANSubmitInterruptibleBatchUntil(FDCAN_HandleTypeDef *handle,const void *source,
+    const CAN_TxFrame_t *frames,size_t count,CAN_TxPriority_t priority,uint32_t expiry,uint32_t *id)
+{
+    captured_expiry=expiry;
+    const uint32_t remaining=expiry-fake_now_ms;
+    if (remaining==0u || remaining>INT32_MAX) return CAN_TX_SUBMIT_INVALID;
+    return CANSubmitInterruptibleBatch(handle,source,frames,count,priority,remaining,id);
 }
 uint8_t CANGetTxRequestState(uint32_t id,CAN_TxResult_t *result)
 {
@@ -100,10 +109,16 @@ int main(void)
     TEST_CHECK(CanTopicBridgeInit(&bridge,&transport,out,remote,&codec,&codec,map_time,&synchronized)==CAN_BRIDGE_OK);
     uint32_t value=123u, id=99u;
     TEST_CHECK(MessagePublishAt(local,&value,100u,100u,100u,MESSAGE_CLOCK_LOCAL)==MESSAGE_OK);
+    fake_now_ms=110u;
     tx_result=CAN_TX_SUBMIT_FULL;
     TEST_CHECK(CanTopicBridgeSend(&bridge,110u,&id)==CAN_BRIDGE_SEND && id==99u && captured_deadline==40u);
     tx_result=CAN_TX_SUBMIT_ACCEPTED;
+    // 即使调用开始时数据未过期，入队前被抢占到截止时刻也不能提交。
+    fake_now_ms=150u;
+    TEST_CHECK(CanTopicBridgeSend(&bridge,110u,&id)==CAN_BRIDGE_SEND && id==99u);
+    fake_now_ms=110u;
     TEST_CHECK(CanTopicBridgeSend(&bridge,110u,&id)==CAN_BRIDGE_OK && id==8u);
+    TEST_CHECK(captured_expiry==150u);
     TEST_CHECK(CanTopicBridgeSend(&bridge,111u,&id)==CAN_BRIDGE_EMPTY);
     TEST_CHECK(MessagePublishAt(local,&value,112u,112u,112u,MESSAGE_CLOCK_LOCAL)==MESSAGE_OK);
     conversion_fail=1u; id=99u;
@@ -184,10 +199,28 @@ int main(void)
     TEST_CHECK(link.last_receive==CAN_BRIDGE_OK);
     TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),133u,&freshness)==MESSAGE_OK &&
                freshness.source_time_ms==128u && freshness.received_time_ms==131u);
-    synchronized=0u; id=99u;
+    // 旧数据超期后，新消息分几轮到达；每轮检查不能反复丢弃正在接收的新分片。
     CanTopicBridgeStatus_t sync_status=CAN_BRIDGE_OK;
-    TEST_CHECK(CanTopicLinkService(&link,134u,&id,&sync_status)==CAN_BRIDGE_OK && id==8u && sync_status==CAN_BRIDGE_UNSYNCED);
-    TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),134u,&freshness)==MESSAGE_ERR_EMPTY);
+    fake_now_ms=180u;
+    (void)CanTopicLinkService(&link,180u,&id,&sync_status);
+    TEST_CHECK(sync_status==CAN_BRIDGE_UNSYNCED);
+    TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),180u,NULL)==MESSAGE_ERR_EMPTY);
+    TEST_CHECK(CanTopicBridgePublish(&link.bridge,&message,180u)==CAN_BRIDGE_WIRE);
+    message.source_ms=81u;
+    TEST_CHECK(CanTopicEncode(&message,10u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    for (size_t i=0u;i<count;++i) {
+        registered_can.rx_len=frames[i].length;
+        memcpy(registered_can.rx_buff,frames[i].bytes,frames[i].length);
+        fake_now_ms=181u+(uint32_t)i; registered_can.rx_timestamp_ms=fake_now_ms;
+        registered_callback(&registered_can);
+        (void)CanTopicLinkService(&link,fake_now_ms,&id,&sync_status);
+        TEST_CHECK(sync_status==CAN_BRIDGE_OK);
+    }
+    TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),fake_now_ms,NULL)==MESSAGE_OK && output==value);
+    synchronized=0u; id=99u;
+    (void)CanTopicLinkService(&link,190u,&id,&sync_status);
+    TEST_CHECK(sync_status==CAN_BRIDGE_UNSYNCED);
+    TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),190u,&freshness)==MESSAGE_ERR_EMPTY);
     MessagePublisher_t *chassis_pub=MessagePublisherRegister(4u,8u);
     MessageSubscriber_t *chassis_sub=MessageSubscriberRegister(4u,9u);
     TEST_CHECK(chassis_pub && chassis_sub);

@@ -378,7 +378,7 @@ add_test(NAME production_can_full_queue_burst COMMAND lk_motor_bsp_can_test rx-b
 set_tests_properties(production_can_full_queue_burst PROPERTIES TIMEOUT 10)
 add_test(NAME production_dji_parser_full_queue_burst COMMAND lk_motor_bsp_can_test dji-rx-burst)
 set_tests_properties(production_dji_parser_full_queue_burst PROPERTIES TIMEOUT 10)
-foreach(can_tx_scenario IN ITEMS arguments-copy queue-batch-buses topic-group topic-interrupt topic-contention topic-shared topic-drain topic-sync-budget topic-pending topic-cancel topic-rx periodic-budget expiry-cancel-wrap
+foreach(can_tx_scenario IN ITEMS arguments-copy queue-batch-buses topic-group topic-interrupt topic-contention topic-shared topic-drain topic-sync-budget topic-absolute-deadline topic-pending topic-cancel topic-rx periodic-budget expiry-cancel-wrap
     retry-abort budget-large-arithmetic retry-priority)
   string(REPLACE "-" "_" can_tx_test_suffix "${can_tx_scenario}")
   add_test(NAME production_can_tx_${can_tx_test_suffix}

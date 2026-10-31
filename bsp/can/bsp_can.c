@@ -595,13 +595,13 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
 static CAN_TxSubmitStatus_t CANSubmitBatchInternal(FDCAN_HandleTypeDef *hcan, const void *source,
                                            const CAN_TxFrame_t *frames, size_t frame_count,
                                            CAN_TxPriority_t priority, uint32_t deadline_ms,
-                                           uint32_t *request_id, uint8_t interruptible)
+                                           uint32_t *request_id, uint8_t interruptible, uint8_t absolute)
 {
     const uint8_t bus_index = CANBusIndexFromHandle(hcan);
     if (request_id == NULL || frames == NULL || frame_count == 0u ||
         frame_count > CAN_TX_MAX_BATCH_FRAMES ||
         priority < CAN_TX_PRIORITY_URGENT || priority > CAN_TX_PRIORITY_BACKGROUND ||
-        !CANTxRequestDeadlineValid(deadline_ms))
+        (!absolute && !CANTxRequestDeadlineValid(deadline_ms)))
         return CAN_TX_SUBMIT_INVALID;
     for (size_t i = 0u; i < frame_count; ++i)
         if (!CANFrameValid(&frames[i]))
@@ -615,6 +615,12 @@ static CAN_TxSubmitStatus_t CANSubmitBatchInternal(FDCAN_HandleTypeDef *hcan, co
     taskENTER_CRITICAL();
     CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler;
     const uint32_t now = HAL_GetTick();
+    if (absolute && !CANTxRequestDeadlineValid(deadline_ms-now))
+    {
+        // 截止时刻已到或相距过远时拒绝，不能从本次入队重新计算有效期。
+        taskEXIT_CRITICAL();
+        return CAN_TX_SUBMIT_INVALID;
+    }
     CANTxExpireQueue(scheduler, now);
     const int queue_index = CANTxFindFreeQueueSlot(scheduler);
     if (queue_index < 0 || scheduler->queued_count >= scheduler->config.queue_capacity)
@@ -643,7 +649,7 @@ static CAN_TxSubmitStatus_t CANSubmitBatchInternal(FDCAN_HandleTypeDef *hcan, co
     queued->result_index = (uint8_t)result_index;
     queued->priority = (uint8_t)priority;
     queued->interruptible = interruptible;
-    queued->expiry_ms = now + deadline_ms;
+    queued->expiry_ms = absolute ? deadline_ms : now + deadline_ms;
     queued->source = source;
     for (size_t i = 0u; i < frame_count; ++i)
         CANTxCopyFrame(&queued->frames[i], &frames[i]);
@@ -660,14 +666,21 @@ CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void
     const CAN_TxFrame_t *frames, size_t frame_count, CAN_TxPriority_t priority,
     uint32_t deadline_ms, uint32_t *request_id)
 {
-    return CANSubmitBatchInternal(hcan,source,frames,frame_count,priority,deadline_ms,request_id,0u);
+    return CANSubmitBatchInternal(hcan,source,frames,frame_count,priority,deadline_ms,request_id,0u,0u);
 }
 
 CAN_TxSubmitStatus_t CANSubmitInterruptibleBatch(FDCAN_HandleTypeDef *hcan, const void *source,
     const CAN_TxFrame_t *frames, size_t frame_count, CAN_TxPriority_t priority,
     uint32_t deadline_ms, uint32_t *request_id)
 {
-    return CANSubmitBatchInternal(hcan,source,frames,frame_count,priority,deadline_ms,request_id,1u);
+    return CANSubmitBatchInternal(hcan,source,frames,frame_count,priority,deadline_ms,request_id,1u,0u);
+}
+
+CAN_TxSubmitStatus_t CANSubmitInterruptibleBatchUntil(FDCAN_HandleTypeDef *hcan, const void *source,
+    const CAN_TxFrame_t *frames, size_t frame_count, CAN_TxPriority_t priority,
+    uint32_t expiry_ms, uint32_t *request_id)
+{
+    return CANSubmitBatchInternal(hcan,source,frames,frame_count,priority,expiry_ms,request_id,1u,1u);
 }
 
 CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *source,

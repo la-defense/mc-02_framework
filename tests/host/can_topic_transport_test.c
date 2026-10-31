@@ -22,6 +22,11 @@ CAN_TxSubmitStatus_t CANSubmitInterruptibleBatch(FDCAN_HandleTypeDef *handle, co
     *id=7u;
     return CAN_TX_SUBMIT_ACCEPTED;
 }
+CAN_TxSubmitStatus_t CANSubmitInterruptibleBatchUntil(FDCAN_HandleTypeDef *handle, const void *source,
+    const CAN_TxFrame_t *frames, size_t count, CAN_TxPriority_t priority, uint32_t expiry, uint32_t *id)
+{
+    return CANSubmitInterruptibleBatch(handle,source,frames,count,priority,expiry,id);
+}
 int main(void)
 {
     FDCAN_HandleTypeDef handle={0}; CANInstance can={.can_handle=&handle,.tx_id=0x321u};

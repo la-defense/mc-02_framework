@@ -32,6 +32,16 @@ uint8_t CanTopicTransportInit(CanTopicTransport_t *transport, CANInstance *can);
 CAN_TxSubmitStatus_t CanTopicTransportSend(CanTopicTransport_t *transport,
     const CanTopicMessage_t *message, uint32_t deadline_ms, uint32_t *request_id);
 
+/** @brief 提交话题帧组，保留来源数据的本机绝对截止时刻。
+ * @param[in,out] transport 已初始化的传输对象。
+ * @param[in] message 待编码话题，成功提交时复制。
+ * @param[in] expiry_ms 本机HAL毫秒截止时刻；允许回绕。
+ * @param[out] request_id 成功时写入，失败保持原值。
+ * @return 队列提交结果；已到期时拒绝。
+ */
+CAN_TxSubmitStatus_t CanTopicTransportSendUntil(CanTopicTransport_t *transport,
+    const CanTopicMessage_t *message, uint32_t expiry_ms, uint32_t *request_id);
+
 /** @brief 消费CAN接收对象当前帧，完成后复制结果。
  * @param[in,out] transport 已初始化对象，接收回调中普通任务串行调用。
  * @param[in] now_ms 当前本机毫秒时刻。

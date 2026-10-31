@@ -1270,6 +1270,34 @@ static void test_can_tx_topic_drain(void)
     TEST_CHECK(tx_accept_count[0]==30u && tx_accept_count[1]==0u && tx_accept_count[2]==0u);
 }
 
+// 任务在计算期限后被抢占，入队时应保留原来的绝对截止时刻。
+static void test_can_tx_topic_absolute_deadline(void)
+{
+    CAN_Init_Config_s config={0};
+    config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
+    config.can_module_callback=scheduler_rx_callback;
+    TEST_CHECK(CANRegister(&config)!=NULL);
+    const uint8_t data=0x11u;
+    const CAN_TxFrame_t frame=scheduler_frame(0x321u,CAN_TX_ID_STANDARD,&data,1u);
+    uint32_t id=99u;
+    now_us=115000u;
+    TEST_CHECK(CANSubmitInterruptibleBatchUntil(&hfdcan1,&data,&frame,1u,
+        CAN_TX_PRIORITY_NORMAL,150u,&id)==CAN_TX_SUBMIT_ACCEPTED);
+    now_us=150000u;
+    CANProcessTx();
+    CAN_TxResult_t result;
+    TEST_CHECK(CANGetTxRequestState(id,&result) && result.state==CAN_TX_RESULT_EXPIRED);
+    id=99u;
+    TEST_CHECK(CANSubmitInterruptibleBatchUntil(&hfdcan1,&data,&frame,1u,
+        CAN_TX_PRIORITY_NORMAL,150u,&id)==CAN_TX_SUBMIT_INVALID && id==99u);
+    now_us=(uint64_t)(UINT32_MAX-2u)*1000u;
+    TEST_CHECK(CANSubmitInterruptibleBatchUntil(&hfdcan1,&data,&frame,1u,
+        CAN_TX_PRIORITY_NORMAL,2u,&id)==CAN_TX_SUBMIT_ACCEPTED);
+    now_us=(uint64_t)2u*1000u;
+    CANProcessTx();
+    TEST_CHECK(CANGetTxRequestState(id,&result) && result.state==CAN_TX_RESULT_EXPIRED);
+}
+
 // 模拟专用桥接总线同时发送底盘话题、对时和可选电容命令。
 static void test_can_tx_topic_sync_budget(void)
 {
@@ -1689,6 +1717,8 @@ int main(int argc, char **argv)
         test_can_tx_topic_drain();
     else if (strcmp(argv[1], "tx-topic-sync-budget") == 0)
         test_can_tx_topic_sync_budget();
+    else if (strcmp(argv[1], "tx-topic-absolute-deadline") == 0)
+        test_can_tx_topic_absolute_deadline();
     else if (strcmp(argv[1], "tx-topic-shared") == 0)
         test_can_tx_topic_shared();
     else if (strcmp(argv[1], "tx-topic-pending") == 0)

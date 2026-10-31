@@ -5,11 +5,13 @@
 #ifndef ROBOT_CAN_BRIDGE_H
 #define ROBOT_CAN_BRIDGE_H
 #include <stdint.h>
+#include "robot_can_bridge_config.h"
 #include "time_mapping.h"
 /** @brief 注册本板的CAN和话题端点。
+ * @param[in] config 车型提供的板间总线、ID和话题声明；调用时复制必要信息。
  * @return 1为成功，0为资源或配置错误；调度器启动前串行调用一次。
  */
-uint8_t RobotCanBridgeInit(void);
+uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config);
 /** @brief 在CAN接收派发任务中推进发送与同步检查。
  * @note 每次最多提交一个当前话题；对时未有效时接收侧保持失效。
  */

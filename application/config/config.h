@@ -8,6 +8,7 @@
 #include "controller.h"
 #include "motor_def.h"
 #include "robot_alarm.h"
+#include "topics/robot_can_bridge_config.h"
 
 /*
  * 机器人配置框架. VISION_USE_VCP / VISION_USE_UART / ONE_BOARD 等板级宏
@@ -122,6 +123,9 @@ typedef struct
     Gimbal_Config_s gimbal_param;
     Shoot_Config_s shoot_param;
     const RobotAlarmConfig_t *alarm_config; // 长期只读的状态与故障提示表。
+#if defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD)
+    RobotCanBridgeConfig_t can_bridge; // 本板的板间总线、ID和底盘话题。
+#endif
 } Robot_Config_s;
 
 // 机器人类型

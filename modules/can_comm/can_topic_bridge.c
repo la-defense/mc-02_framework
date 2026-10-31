@@ -1,5 +1,5 @@
 /** @file can_topic_bridge.c
- * @brief 转发消息中心快照，并在远端来源时间可信时发布。
+ * @brief 转发消息中心最新数据，并在远端来源时间可信时发布。
  */
 #include "can_topic_bridge.h"
 #include <limits.h>
@@ -84,8 +84,8 @@ CanTopicBridgeStatus_t CanTopicBridgeSend(CanTopicBridge_t *bridge, uint32_t now
     if (!bridge->outgoing_codec.convert(bridge->outgoing_codec.context,data,bridge->outgoing_desc.payload_size,
                                         message.payload,message.length)) return CAN_BRIDGE_WIRE;
     // 队列期限不能超过来源的剩余时间；达到期限即由队列丢弃。
-    CAN_TxSubmitStatus_t status=CanTopicTransportSend(bridge->transport,&message,
-        bridge->outgoing_desc.max_age_ms-age,request_id);
+    CAN_TxSubmitStatus_t status=CanTopicTransportSendUntil(bridge->transport,&message,
+        freshness.source_time_ms+bridge->outgoing_desc.max_age_ms,request_id);
     if (status!=CAN_TX_SUBMIT_ACCEPTED) return CAN_BRIDGE_SEND;
     bridge->last_sent_sequence=freshness.sequence;
     bridge->pending_request_id=*request_id;
@@ -118,6 +118,7 @@ CanTopicBridgeStatus_t CanTopicBridgePublish(CanTopicBridge_t *bridge, const Can
     bridge->last_remote_source_ms=message->source_ms;
     bridge->last_conservative_ms=conservative_ms;
     bridge->has_remote_source=1u;
+    bridge->published_valid=1u;
     return CAN_BRIDGE_OK;
 }
 
@@ -142,6 +143,7 @@ CanTopicBridgeStatus_t CanTopicBridgeResetPeer(CanTopicBridge_t *bridge)
     bridge->last_remote_source_ms = 0u;
     bridge->last_conservative_ms = 0u;
     bridge->has_remote_source = 0u;
+    bridge->published_valid = 0u;
     return CAN_BRIDGE_OK;
 }
 
@@ -154,12 +156,14 @@ CanTopicBridgeStatus_t CanTopicBridgeCheckSync(CanTopicBridge_t *bridge, uint32_
         const uint32_t earliest=mapped-uncertainty;
         const uint32_t moved_earlier=bridge->last_conservative_ms-earliest;
         // 新映射不能让已发布值的真实年龄大于原先估计，过期也要撤销。
-        if (!bridge->has_remote_source ||
+        if (!bridge->published_valid ||
             ((uint32_t)(now_ms-earliest)<=bridge->incoming_desc.max_age_ms &&
              (moved_earlier==0u || moved_earlier>=0x80000000u))) return CAN_BRIDGE_OK;
     }
     // 失同步时旧值不可继续被读取，未完成分片也不能在恢复后拼到新消息。
     bridge->transport->receiver.active=0u;
     if (MessagePublisherInvalidate(bridge->incoming)!=MESSAGE_OK) return CAN_BRIDGE_PUBLISH;
+    // 保留上次来源时间用于拒绝旧消息；撤销后允许下一条新消息跨任务周期组装。
+    bridge->published_valid=0u;
     return CAN_BRIDGE_UNSYNCED;
 }

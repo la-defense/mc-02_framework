@@ -4,6 +4,7 @@
 #include "sentinel_config.h"
 #include "general_def.h"
 #include "robot_safety.h"
+#include "topics/robot_topics.h"
 
 /* 这些是哨兵软件默认提示色和节奏，不代表灯珠实测亮度、蜂鸣器声压或故障安全等级标定。 */
 static const RobotAlarmSoundSegment_t sentinel_beep_short[] = {
@@ -108,6 +109,11 @@ Robot_Config_s *SentinelConfigInit(void)
 {
     static Robot_Config_s sentinel_config = {
         .alarm_config = &sentinel_alarm_config,
+#if defined(CHASSIS_BOARD)
+        .can_bridge = {&hcan2, 0x311u, 0x312u, ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_CHASSIS_FEEDBACK},
+#elif defined(GIMBAL_BOARD)
+        .can_bridge = {&hcan1, 0x312u, 0x311u, ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_CHASSIS_FEEDBACK},
+#endif
         .chassis_param = {
             .chassis_motor_id[MOTOR_LF] = 3,
             .chassis_motor_id[MOTOR_RF] = 2,

@@ -17,11 +17,11 @@ uint8_t CanTopicTransportInit(CanTopicTransport_t *transport, CANInstance *can)
     return 1u;
 }
 
-CAN_TxSubmitStatus_t CanTopicTransportSend(CanTopicTransport_t *transport,
-    const CanTopicMessage_t *message, uint32_t deadline_ms, uint32_t *request_id)
+static CAN_TxSubmitStatus_t CanTopicTransportSendInternal(CanTopicTransport_t *transport,
+    const CanTopicMessage_t *message, uint32_t deadline_ms, uint32_t *request_id, uint8_t absolute)
 {
     if (transport == NULL || transport->can == NULL || request_id == NULL ||
-        deadline_ms == 0u || deadline_ms > INT32_MAX) return CAN_TX_SUBMIT_INVALID;
+        (!absolute && (deadline_ms == 0u || deadline_ms > INT32_MAX))) return CAN_TX_SUBMIT_INVALID;
     CanTopicFrame_t encoded[CAN_TOPIC_MAX_FRAMES];
     size_t count = 0u;
     if (CanTopicEncode(message, transport->next_sequence, encoded, CAN_TOPIC_MAX_FRAMES, &count) != CAN_TOPIC_OK)
@@ -34,10 +34,25 @@ CAN_TxSubmitStatus_t CanTopicTransportSend(CanTopicTransport_t *transport,
         frames[i].length=encoded[i].length;
     }
     // 批量提交复制所有分片；拒绝时不消耗序号，避免假定半包已发送。
-    CAN_TxSubmitStatus_t status=CANSubmitInterruptibleBatch(transport->can->can_handle, transport,
-        frames, count, CAN_TX_PRIORITY_NORMAL, deadline_ms, request_id);
+    CAN_TxSubmitStatus_t status=absolute ?
+        CANSubmitInterruptibleBatchUntil(transport->can->can_handle, transport, frames, count,
+                                         CAN_TX_PRIORITY_NORMAL, deadline_ms, request_id) :
+        CANSubmitInterruptibleBatch(transport->can->can_handle, transport, frames, count,
+                                    CAN_TX_PRIORITY_NORMAL, deadline_ms, request_id);
     if (status == CAN_TX_SUBMIT_ACCEPTED) transport->next_sequence++;
     return status;
+}
+
+CAN_TxSubmitStatus_t CanTopicTransportSend(CanTopicTransport_t *transport,
+    const CanTopicMessage_t *message, uint32_t deadline_ms, uint32_t *request_id)
+{
+    return CanTopicTransportSendInternal(transport,message,deadline_ms,request_id,0u);
+}
+
+CAN_TxSubmitStatus_t CanTopicTransportSendUntil(CanTopicTransport_t *transport,
+    const CanTopicMessage_t *message, uint32_t expiry_ms, uint32_t *request_id)
+{
+    return CanTopicTransportSendInternal(transport,message,expiry_ms,request_id,1u);
 }
 
 CanTopicWireStatus_t CanTopicTransportReceive(CanTopicTransport_t *transport,
