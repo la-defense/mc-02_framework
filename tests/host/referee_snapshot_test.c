@@ -156,6 +156,9 @@ static void check_interaction_lengths(void)
                record.data[111] == 111u && record.wire_sequence == 3u);
     previous = record;
     TEST_CHECK(RefereeGetSnapshot(&before) == REFEREE_OK);
+    payload[2] = 2u; // 同队但不在接收掩码中的对象不能覆盖旧记录。
+    feed_frame(ID_student_interactive, payload, 118u, 4u);
+    TEST_CHECK(RefereeGetInteraction(&record) == REFEREE_OK && memcmp(&record, &previous, sizeof(record)) == 0);
     payload[2] = 101u; // 对方阵营不应替换已有记录。
     feed_frame(ID_student_interactive, payload, 118u, 4u);
     payload[2] = 3u;
@@ -181,6 +184,19 @@ static void check_interaction_lengths(void)
     TEST_CHECK(RefereeGetInteraction(&record) == REFEREE_OK && record.content_id == 0x0234u &&
                record.length == 3u && record.data[0] == 0x11u && record.data[2] == 0x33u &&
                record.data[3] == 0u && record.wire_sequence == 0x42u);
+    robot[0] = 101u;
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 10u);
+    write_u16le(payload + 2u, 103u); write_u16le(payload + 4u, 101u);
+    feed_frame(ID_student_interactive, payload, 6u, 11u);
+    TEST_CHECK(RefereeGetInteraction(&record) == REFEREE_OK && record.sender_id == 103u && record.receiver_id == 101u);
+    previous = record;
+    robot[0] = 102u; // 身份仍是同队，但本机编号与固定配置不符。
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 12u);
+    write_u16le(payload + 4u, 102u);
+    feed_frame(ID_student_interactive, payload, 6u, 13u);
+    TEST_CHECK(RefereeGetInteraction(&record) == REFEREE_OK && memcmp(&record, &previous, sizeof(record)) == 0);
+    robot[0] = 1u;
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 14u);
 }
 static void make_valid_payload(uint16_t command,uint8_t *payload,size_t length)
 {
@@ -597,11 +613,13 @@ int main(void)
     TEST_CHECK(RefereeGetSnapshot(&snapshot)==REFEREE_ERROR_NOT_INITIALIZED);
     TEST_CHECK(memcmp(&snapshot,&(RefereeSnapshot_t){0},sizeof(snapshot))==0);
     UART_HandleTypeDef *handle_pointer=&handle;
-    RefereeConfig_t invalid={0u,1000u,3000u,3000u};
+    RefereeConfig_t invalid={.timeout_3hz_ms=1000u,.timeout_1hz_ms=3000u,.timeout_map_ms=3000u};
     TEST_CHECK(RefereeInit(handle_pointer,&invalid)==REFEREE_ERROR_CONFIG);
-    invalid=(RefereeConfig_t){UINT32_MAX,1000u,3000u,3000u};
+    invalid=(RefereeConfig_t){.timeout_10hz_ms=UINT32_MAX,.timeout_3hz_ms=1000u,.timeout_1hz_ms=3000u,.timeout_map_ms=3000u};
     TEST_CHECK(RefereeInit(handle_pointer,&invalid)==REFEREE_ERROR_CONFIG);
-    RefereeConfig_t config={300u,1000u,3000u,3000u};
+    // 测试对象掩码不是任何比赛的官方许可表。
+    RefereeConfig_t config={.timeout_10hz_ms=300u,.timeout_3hz_ms=1000u,.timeout_1hz_ms=3000u,.timeout_map_ms=3000u,
+        .interaction={REFEREE_COMPETITION_RMUC_2026,REFEREE_PROTOCOL_2026_V2,1u,0x01ffu,1u << 2u}};
     TEST_CHECK(RefereeInit(handle_pointer,&config)==REFEREE_OK);
     config.timeout_10hz_ms=1u; // 初始化后修改源对象不能改变模块保存的期限。
     TEST_CHECK(dma_bytes!=NULL && dma_capacity==255u);

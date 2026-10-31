@@ -108,6 +108,18 @@ static uint8_t RefereeSameTeam(uint16_t a, uint16_t b)
     return (uint8_t)((a < 100u) == (b < 100u));
 }
 
+// 收发方向分开核对；赛项标记和掩码不替代调用者对比赛规则的核验。
+static uint8_t RefereePolicyAllows(uint16_t own, uint16_t peer, uint8_t sending)
+{
+    const RefereeInteractionPolicy_t *policy = &referee_config.interaction;
+    if (policy->competition == REFEREE_COMPETITION_NONE || !RefereeIsLegalRobotId(own) ||
+        !RefereeIsLegalRobotId(peer) || !RefereeSameTeam(own, peer)) return 0u;
+    const uint16_t own_role = own > 100u ? (uint16_t)(own - 100u) : own;
+    const uint16_t peer_role = peer > 100u ? (uint16_t)(peer - 100u) : peer;
+    const uint16_t roles = sending ? policy->tx_roles : policy->rx_roles;
+    return (uint8_t)(own_role == policy->local_role && (roles & (uint16_t)(1u << (peer_role - 1u))) != 0u);
+}
+
 static int RefereeFindCommand(uint16_t wire_id)
 {
     for (size_t i = 0u; i < REFEREE_COMMAND_COUNT; ++i)
@@ -244,7 +256,7 @@ static uint8_t RefereeDecode(int index, const uint8_t *p, size_t length,
             own_id = robot->data.robot_state.robot_id;
         taskEXIT_CRITICAL();
         if (own_id == 0u || candidate.interactive.receiver_id != own_id ||
-            !RefereeIsLegalRobotId(own_id) || !RefereeSameTeam(own_id, candidate.interactive.sender_id)) return 0u;
+            !RefereePolicyAllows(own_id, candidate.interactive.sender_id, 0u)) return 0u;
         break;
     }
     case REFEREE_COMMAND_COUNT:
@@ -302,7 +314,8 @@ static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8
         const RefereeCommandSnapshot_t *robot = &referee_published.command[REF_CMD_ROBOT_STATE];
         if (robot->receive_count == 0u ||
             (uint32_t)(now_ms-robot->source_rx_ms) > referee_config.timeout_10hz_ms ||
-            robot->data.robot_state.robot_id != data->interactive.receiver_id) {
+            robot->data.robot_state.robot_id != data->interactive.receiver_id ||
+            !RefereePolicyAllows(data->interactive.receiver_id, data->interactive.sender_id, 0u)) {
             taskEXIT_CRITICAL();
             return 0u;
         }
@@ -429,6 +442,15 @@ static void RefereeLostCallback(const DaemonEvent_t *event, void *arg)
 
 static uint8_t RefereeConfigValid(const RefereeConfig_t *config)
 {
+    if (config == NULL) return 0u;
+    const RefereeInteractionPolicy_t *policy = &config->interaction;
+    if (policy->competition == REFEREE_COMPETITION_NONE) {
+        if (policy->protocol != REFEREE_PROTOCOL_NONE || policy->local_role != 0u ||
+            policy->tx_roles != 0u || policy->rx_roles != 0u) return 0u;
+    } else if ((policy->competition != REFEREE_COMPETITION_RMUC_2026 &&
+                policy->competition != REFEREE_COMPETITION_RMUL_2026) ||
+               policy->protocol != REFEREE_PROTOCOL_2026_V2 || policy->local_role < 1u || policy->local_role > 9u ||
+               (policy->tx_roles & ~0x01ffu) != 0u || (policy->rx_roles & ~0x01ffu) != 0u) return 0u;
     return (uint8_t)(config != NULL && config->timeout_10hz_ms != 0u && config->timeout_10hz_ms <= INT32_MAX &&
                      config->timeout_3hz_ms != 0u && config->timeout_3hz_ms <= INT32_MAX &&
                      config->timeout_1hz_ms != 0u && config->timeout_1hz_ms <= INT32_MAX &&
@@ -465,7 +487,8 @@ RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *c
     if (handle == NULL) return REFEREE_ERROR_ARGUMENT;
     if (referee_initialized || referee_usart_instance != NULL || referee_daemon != NULL)
         return REFEREE_ERROR_ALREADY_INITIALIZED;
-    const RefereeConfig_t defaults = {300u, 1000u, 3000u, 3000u};
+    const RefereeConfig_t defaults = {.timeout_10hz_ms=300u, .timeout_3hz_ms=1000u,
+                                      .timeout_1hz_ms=3000u, .timeout_map_ms=3000u};
     const RefereeConfig_t *selected = config == NULL ? &defaults : config;
     if (!RefereeConfigValid(selected)) return REFEREE_ERROR_CONFIG;
 
@@ -613,7 +636,7 @@ RefereeSendStatus_t RefereeSubmit(const RefereeTxRequest_t *request, uint32_t *i
     uint8_t destination;
     if (request->content_id >= 0x0200u)
     {
-        destination = RefereeTxRobotId(receiver) && RefereeSameTeam(sender, receiver);
+        destination = RefereePolicyAllows(sender, receiver, 1u);
     }
     else
     {

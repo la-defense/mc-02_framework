@@ -53,7 +53,7 @@ typedef struct
  * @param[out] id 非NULL，成功写入非零编号；拒绝保持原值、不通知、不消耗序号。
  * @return 具体提交状态，ACCEPTED不表示已启动；并发提交争用时立即返回BUSY。
  * @note 普通任务使用；UI保留上层115ms节奏。入队后不自动重发。
- *       当前检查合法编号、同队及新鲜本机身份，尚未检查赛规可能要求的角色收发方向。
+ *       机器人交互检查初始化时配置的目标掩码；具体赛项及阶段的规则由配置者核验。
  */
 RefereeSendStatus_t RefereeSubmit(const RefereeTxRequest_t *request, uint32_t *id);
 /** @brief 请求取消本模块编号；终态观察及通知仍在UART发送任务中执行。

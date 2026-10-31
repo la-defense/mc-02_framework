@@ -297,7 +297,10 @@ static void transport(void)
     TEST_CHECK(RefereeSubmit(NULL,&ticket)==REFEREE_SEND_BAD_ARGUMENT);
     request.timeout_ms=0u;TEST_CHECK(RefereeSubmit(&request,&ticket)==REFEREE_SEND_BAD_ARGUMENT);request.timeout_ms=100u;
     request.length=113u;TEST_CHECK(RefereeSubmit(&request,&ticket)==REFEREE_SEND_BAD_ARGUMENT);request.length=3u;
-    UART_HandleTypeDef h={0};TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_OK);
+    // 掩码仅用于测试发送流程，不作为比赛规则。
+    RefereeConfig_t config={.timeout_10hz_ms=300u,.timeout_3hz_ms=1000u,.timeout_1hz_ms=3000u,.timeout_map_ms=3000u,
+        .interaction={REFEREE_COMPETITION_RMUC_2026,REFEREE_PROTOCOL_2026_V2,1u,0x01ffu,0x01ffu}};
+    UART_HandleTypeDef h={0};TEST_CHECK(RefereeInit(&h,&config)==REFEREE_OK);
     now_ms=10u;publish_robot_state(1u);
     USARTSendStatus_t statuses[]={USART_SEND_BUSY,USART_SEND_ERROR,USART_SEND_NOT_READY,USART_SEND_BAD_ARGUMENT};
     UIStatus_t expected[]={UI_SEND_BUSY,UI_SEND_ERROR,UI_NOT_INITIALIZED,UI_SEND_ERROR};

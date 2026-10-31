@@ -1692,7 +1692,7 @@ target_include_directories(referee_budget_test PRIVATE . ../../modules/referee .
 target_link_libraries(referee_budget_test PRIVATE mc02_software_crc Threads::Threads m)
 target_compile_options(referee_budget_test PRIVATE -Wall -Wextra -Werror)
 target_link_options(referee_budget_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
-foreach(scenario fixed-interaction arguments fifo threads ui-expire window radar receiver sequence errors wrap-identity cancel-expire busy-isolate)
+foreach(scenario no-policy policy fixed-interaction arguments fifo threads ui-expire window radar receiver sequence errors wrap-identity cancel-expire busy-isolate)
   add_test(NAME production_referee_budget_${scenario} COMMAND referee_budget_test ${scenario})
   set_tests_properties(production_referee_budget_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()

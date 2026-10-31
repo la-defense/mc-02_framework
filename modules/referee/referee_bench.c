@@ -66,7 +66,11 @@ uint8_t RefereeBenchInit(UART_HandleTypeDef *handle)
     referee_bench_diag.version = 1u;
     for (unsigned i = 0u; i < sizeof(full_content); ++i)
         full_content[i] = (uint8_t)i;
-    return (uint8_t)(RefereeInit(handle, NULL) == REFEREE_OK);
+    // 仅供裸板测试模型使用的3→4方向，不代表任何赛项官方许可。
+    const RefereeConfig_t config = {.timeout_10hz_ms = 300u, .timeout_3hz_ms = 1000u,
+        .timeout_1hz_ms = 3000u, .timeout_map_ms = 3000u,
+        .interaction = {REFEREE_COMPETITION_RMUC_2026, REFEREE_PROTOCOL_2026_V2, 3u, 1u << 3u, 0u}};
+    return (uint8_t)(RefereeInit(handle, &config) == REFEREE_OK);
 }
 void RefereeBenchTask(void)
 {

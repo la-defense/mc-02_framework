@@ -109,8 +109,63 @@ int main(int argc, char **argv)
     TEST_CHECK(argc == 2);
     UARTModelInit();
     USARTTxSetServiceReady(1u);
-    TEST_CHECK(RefereeInit(&uart_handles[0], NULL) == REFEREE_OK);
+    // 测试用掩码只用于检查配置机制，不代表任一赛项官方允许表。
+    RefereeConfig_t config = { .timeout_10hz_ms=300u, .timeout_3hz_ms=1000u,
+        .timeout_1hz_ms=3000u, .timeout_map_ms=3000u,
+        .interaction = { REFEREE_COMPETITION_RMUC_2026, REFEREE_PROTOCOL_2026_V2, 3u, 0x01ffu, 0x01ffu } };
+    if (strcmp(argv[1], "policy") == 0)
+    {
+        RefereeConfig_t bad = config;
+        bad.interaction.competition = (RefereeCompetition_t)99;
+        TEST_CHECK(RefereeInit(&uart_handles[0], &bad) == REFEREE_ERROR_CONFIG);
+        bad = config; bad.interaction.local_role = 0u;
+        TEST_CHECK(RefereeInit(&uart_handles[0], &bad) == REFEREE_ERROR_CONFIG);
+        bad = config; bad.interaction.protocol = (RefereeInteractionProtocol_t)99;
+        TEST_CHECK(RefereeInit(&uart_handles[0], &bad) == REFEREE_ERROR_CONFIG);
+        bad = config; bad.interaction.tx_roles = 0x0200u;
+        TEST_CHECK(RefereeInit(&uart_handles[0], &bad) == REFEREE_ERROR_CONFIG);
+        bad = config; bad.interaction.competition = REFEREE_COMPETITION_NONE;
+        TEST_CHECK(RefereeInit(&uart_handles[0], &bad) == REFEREE_ERROR_CONFIG);
+        config.interaction.competition = REFEREE_COMPETITION_RMUL_2026;
+        config.interaction.tx_roles = 1u << 3u;
+    }
+    TEST_CHECK(RefereeInit(&uart_handles[0], strcmp(argv[1], "no-policy") == 0 ? NULL : &config) == REFEREE_OK);
     identity(3u);
+    if (strcmp(argv[1], "policy") == 0)
+    {
+        uint8_t data = 0u;
+        uint32_t id = 77u;
+        RefereeTxRequest_t request = {5u, 0x0200u, &data, 1u, 100u, done, NULL, NULL};
+        config.interaction.tx_roles = 0x01ffu; // 修改原配置不能放宽运行中的权限。
+        TEST_CHECK(RefereeSubmit(&request, &id) == REFEREE_SEND_IDENTITY && id == 77u);
+        request.receiver_id = 4u;
+        TEST_CHECK(RefereeSubmit(&request, &id) == REFEREE_SEND_ACCEPTED);
+        USARTProcessTx(); complete();
+        identity(2u); id = 77u;
+        TEST_CHECK(RefereeSubmit(&request, &id) == REFEREE_SEND_IDENTITY && id == 77u);
+        identity(103u); request.receiver_id = 104u;
+        TEST_CHECK(RefereeSubmit(&request, &id) == REFEREE_SEND_ACCEPTED);
+        return 0;
+    }
+    if (strcmp(argv[1], "no-policy") == 0)
+    {
+        uint8_t data = 0u;
+        uint32_t id = 77u;
+        RefereeTxRequest_t request = {4u, 0x0200u, &data, 1u, 100u, done, NULL, NULL};
+        TEST_CHECK(RefereeSubmit(&request, &id) == REFEREE_SEND_IDENTITY && id == 77u);
+        uint8_t frame[15] = {0xa5u, 6u, 0u, 1u, 0u, 1u, 3u, 0u, 2u, 4u, 0u, 3u, 0u, 0u, 0u};
+        uint32_t crc;
+        TEST_CHECK(CRCCompute(CRC8_REFEREE, frame, 4u, &crc) == CRC_OK);
+        frame[4] = (uint8_t)crc;
+        TEST_CHECK(CRCCompute(CRC16_SP_REFEREE, frame, 13u, &crc) == CRC_OK);
+        frame[13] = (uint8_t)crc; frame[14] = (uint8_t)(crc >> 8u);
+        memcpy(uart_model_rx[0], frame, sizeof(frame));
+        HAL_UARTEx_RxEventCallback(&uart_handles[0], sizeof(frame));
+        USARTProcessRx();
+        RefereeInteractionRecord_t record;
+        TEST_CHECK(RefereeGetInteraction(&record) == REFEREE_OK && !record.received);
+        return 0;
+    }
     USARTInstance *other = NULL;
     if (strcmp(argv[1], "busy-isolate") == 0)
     {
@@ -348,12 +403,12 @@ int main(int argc, char **argv)
     USARTProcessTx();
     complete();
     advance(12u);
-    identity(2u);
-    submit(4u, 0u, 100u);
+    identity(103u);
+    submit(104u, 0u, 100u);
     USARTProcessTx();
     TEST_CHECK(uart_model_calls == 1u);
     uart_model_ms = 13u;
-    identity(2u);
+    identity(103u);
     USARTProcessTx();
     TEST_CHECK(uart_model_calls == 2u);
     complete();
