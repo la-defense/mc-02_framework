@@ -86,6 +86,9 @@ static uint8_t RobotParamFlashOperationEnd(uint8_t success)
 #include "shoot.h"
 #include "robot_cmd.h"
 #endif
+#if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
+#include "topics/robot_can_bridge.h"
+#endif
 
 
 uint8_t RobotInit(void)
@@ -173,6 +176,10 @@ uint8_t RobotInit(void)
 #endif
 
 #if defined(MC02_PROFILE_ROBOT)
+#if defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD)
+    ROBOT_INIT_CHECK(RobotCanBridgeInit(), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                     INIT_FAILURE_DEPENDENCY, 2u);
+#endif
     // 话题统计只用于调试；注册失败不改变控制任务的启动结果。
     (void)RobotTopicsDiagnosticInit();
 #endif

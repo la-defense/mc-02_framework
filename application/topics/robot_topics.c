@@ -1,6 +1,6 @@
 /** @file robot_topics.c
- * @brief 声明单板控制与新版视觉业务的固定话题关系。
- * @note 当前应用话题均为最新快照；跨设备时间映射尚由后续对时模块提供。
+ * @brief 声明单板、双板控制及新版视觉业务的固定话题关系。
+ * @note 应用话题均为最新快照；双板来源时间须经 CAN 对时换算后交付。
  */
 #include "robot_topics.h"
 
@@ -16,12 +16,28 @@
       ENDPOINT_MASK(subscriber), 1u }
 
 static const MessageTopicDescriptor_t robot_topics[] = {
+#if defined(CHASSIS_BOARD)
+    SNAPSHOT_TOPIC(ROBOT_TOPIC_CHASSIS_COMMAND, Chassis_Ctrl_Cmd_s, 50u,
+                   MESSAGE_CLOCK_LOCAL_MAPPED, ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE,
+                   ROBOT_TOPIC_ENDPOINT_CHASSIS),
+    SNAPSHOT_TOPIC(ROBOT_TOPIC_CHASSIS_FEEDBACK, Chassis_Upload_Data_s, 50u,
+                   MESSAGE_CLOCK_LOCAL, ROBOT_TOPIC_ENDPOINT_CHASSIS,
+                   ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE),
+#elif defined(GIMBAL_BOARD)
+    SNAPSHOT_TOPIC(ROBOT_TOPIC_CHASSIS_COMMAND, Chassis_Ctrl_Cmd_s, 50u,
+                   MESSAGE_CLOCK_LOCAL, ROBOT_TOPIC_ENDPOINT_COMMAND,
+                   ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE),
+    SNAPSHOT_TOPIC(ROBOT_TOPIC_CHASSIS_FEEDBACK, Chassis_Upload_Data_s, 50u,
+                   MESSAGE_CLOCK_LOCAL_MAPPED, ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE,
+                   ROBOT_TOPIC_ENDPOINT_COMMAND),
+#else
     SNAPSHOT_TOPIC(ROBOT_TOPIC_CHASSIS_COMMAND, Chassis_Ctrl_Cmd_s, 50u,
                    MESSAGE_CLOCK_LOCAL, ROBOT_TOPIC_ENDPOINT_COMMAND,
                    ROBOT_TOPIC_ENDPOINT_CHASSIS),
     SNAPSHOT_TOPIC(ROBOT_TOPIC_CHASSIS_FEEDBACK, Chassis_Upload_Data_s, 50u,
                    MESSAGE_CLOCK_LOCAL, ROBOT_TOPIC_ENDPOINT_CHASSIS,
                    ROBOT_TOPIC_ENDPOINT_COMMAND),
+#endif
     SNAPSHOT_TOPIC(ROBOT_TOPIC_GIMBAL_COMMAND, Gimbal_Ctrl_Cmd_s, 50u,
                    MESSAGE_CLOCK_LOCAL, ROBOT_TOPIC_ENDPOINT_COMMAND,
                    ROBOT_TOPIC_ENDPOINT_GIMBAL),

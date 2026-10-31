@@ -74,6 +74,7 @@ typedef struct
     uint8_t attempts;
     uint8_t result_index;
     uint8_t priority;
+    uint8_t interruptible;
     uint32_t expiry_ms;
     const void *source;
     uint32_t key;
@@ -355,10 +356,18 @@ static int CANTxAllocateResult(CANTxScheduler_t *scheduler)
     {
         uint8_t index = (uint8_t)((scheduler->result_cursor + attempt) % CAN_TX_RESULT_HISTORY);
         CANTxResultSlot_t *result = &scheduler->results[index];
+        uint8_t queued_reference = 0u;
+        // 中断可能先标记失败，任务稍后才清理该组；期间结果槽仍被队列引用。
+        if (result->used && result->pending_hw == 0u &&
+            (result->state == CAN_TX_RESULT_COMPLETE || result->state == CAN_TX_RESULT_FAILED ||
+             result->state == CAN_TX_RESULT_EXPIRED || result->state == CAN_TX_RESULT_CANCELLED ||
+             result->state == CAN_TX_RESULT_SUPERSEDED))
+            for (uint8_t q = 0u; q < CAN_TX_MAX_QUEUE_ITEMS; ++q)
+                if (scheduler->queue[q].used && scheduler->queue[q].result_index == index) queued_reference = 1u;
         if (result->used == 0u ||
             ((result->state == CAN_TX_RESULT_COMPLETE || result->state == CAN_TX_RESULT_FAILED ||
               result->state == CAN_TX_RESULT_EXPIRED || result->state == CAN_TX_RESULT_CANCELLED ||
-              result->state == CAN_TX_RESULT_SUPERSEDED) && result->pending_hw == 0u))
+              result->state == CAN_TX_RESULT_SUPERSEDED) && result->pending_hw == 0u && !queued_reference))
         {
             scheduler->result_cursor = (uint16_t)((index + 1u) % CAN_TX_RESULT_HISTORY);
             memset(result, 0, sizeof(*result));
@@ -583,10 +592,10 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
     return queue_index >= 0 ? CAN_TX_SUBMIT_COALESCED : CAN_TX_SUBMIT_ACCEPTED;
 }
 
-CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void *source,
+static CAN_TxSubmitStatus_t CANSubmitBatchInternal(FDCAN_HandleTypeDef *hcan, const void *source,
                                            const CAN_TxFrame_t *frames, size_t frame_count,
                                            CAN_TxPriority_t priority, uint32_t deadline_ms,
-                                           uint32_t *request_id)
+                                           uint32_t *request_id, uint8_t interruptible)
 {
     const uint8_t bus_index = CANBusIndexFromHandle(hcan);
     if (request_id == NULL || frames == NULL || frame_count == 0u ||
@@ -633,6 +642,7 @@ CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void
     queued->frame_count = (uint8_t)frame_count;
     queued->result_index = (uint8_t)result_index;
     queued->priority = (uint8_t)priority;
+    queued->interruptible = interruptible;
     queued->expiry_ms = now + deadline_ms;
     queued->source = source;
     for (size_t i = 0u; i < frame_count; ++i)
@@ -644,6 +654,20 @@ CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void
     *request_id = token;
     taskEXIT_CRITICAL();
     return CAN_TX_SUBMIT_ACCEPTED;
+}
+
+CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void *source,
+    const CAN_TxFrame_t *frames, size_t frame_count, CAN_TxPriority_t priority,
+    uint32_t deadline_ms, uint32_t *request_id)
+{
+    return CANSubmitBatchInternal(hcan,source,frames,frame_count,priority,deadline_ms,request_id,0u);
+}
+
+CAN_TxSubmitStatus_t CANSubmitInterruptibleBatch(FDCAN_HandleTypeDef *hcan, const void *source,
+    const CAN_TxFrame_t *frames, size_t frame_count, CAN_TxPriority_t priority,
+    uint32_t deadline_ms, uint32_t *request_id)
+{
+    return CANSubmitBatchInternal(hcan,source,frames,frame_count,priority,deadline_ms,request_id,1u);
 }
 
 CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *source,
@@ -786,13 +810,14 @@ static uint8_t CANTxHardwareIndex(uint32_t buffer_mask)
     return CAN_TX_INVALID_RESULT_INDEX;
 }
 
-void CANProcessTx(void)
+static void CANProcessTxSelected(uint8_t selected_bus)
 {
     if (__get_IPSR() != 0u || can_service_started == 0u)
         return;
 
     for (uint8_t bus_index = 0u; bus_index < DEVICE_CAN_CNT; ++bus_index)
     {
+        if (selected_bus != CAN_TX_INVALID_RESULT_INDEX && bus_index != selected_bus) continue;
         CANBusState_t *bus = &can_bus[bus_index];
         CANTxScheduler_t *scheduler = &bus->tx_scheduler;
         CANTxSchedulerEnsureInitialized(bus_index);
@@ -805,6 +830,22 @@ void CANProcessTx(void)
         if (queue_index != CAN_TX_INVALID_RESULT_INDEX &&
             scheduler->queue[queue_index].used == 0u)
             queue_index = CAN_TX_INVALID_RESULT_INDEX;
+        if (queue_index != CAN_TX_INVALID_RESULT_INDEX && scheduler->queue[queue_index].interruptible)
+        {
+            CANQueuedRequest_t *active = &scheduler->queue[queue_index];
+            for (uint8_t i=0u; i<CAN_TX_MAX_QUEUE_ITEMS; ++i)
+            {
+                CANQueuedRequest_t *waiting = &scheduler->queue[i];
+                if (waiting->used && !waiting->active && waiting->priority < active->priority)
+                {
+                    // 已接受的帧不能撤回，放弃余帧并报告失败，使控制帧在下一次服务中优先提交。
+                    CANTxSetTerminal(scheduler,active->result_index,CAN_TX_RESULT_FAILED);
+                    CANTxReleaseQueueSlot(scheduler,queue_index);
+                    queue_index=CAN_TX_INVALID_RESULT_INDEX;
+                    break;
+                }
+            }
+        }
         if (queue_index == CAN_TX_INVALID_RESULT_INDEX)
             queue_index = CANTxSelectNextRequest(bus, now);
         if (queue_index == CAN_TX_INVALID_RESULT_INDEX)
@@ -815,6 +856,14 @@ void CANProcessTx(void)
         }
 
         CANQueuedRequest_t *queued = &scheduler->queue[queue_index];
+        // 中断可能已将已接受的帧标为失败；丢弃尚未提交的余帧，避免发送不完整的旧消息。
+        if (CANTxStateTerminal(scheduler->results[queued->result_index].state))
+        {
+            CANTxReleaseQueueSlot(scheduler, queue_index);
+            taskEXIT_CRITICAL();
+            DWT_ProbeDone(&can_prof_tx, probe_start);
+            continue;
+        }
         if (queued->next_frame >= queued->frame_count)
         {
             CANTxReleaseQueueSlot(scheduler, queue_index);
@@ -893,6 +942,19 @@ void CANProcessTx(void)
     }
 }
 
+void CANProcessTx(void)
+{
+    CANProcessTxSelected(CAN_TX_INVALID_RESULT_INDEX);
+}
+
+void CANProcessTxBus(FDCAN_HandleTypeDef *hcan)
+{
+    if (hcan==NULL || __get_IPSR()!=0u) return;
+    uint8_t bus_index=CANBusIndexFromHandle(hcan);
+    if (bus_index==CAN_TX_INVALID_RESULT_INDEX) return;
+    CANProcessTxSelected(bus_index);
+}
+
 uint8_t CANGetTxRequestState(uint32_t request_id, CAN_TxResult_t *result)
 {
     if (request_id == 0u || result == NULL || __get_IPSR() != 0u)
@@ -914,6 +976,7 @@ uint8_t CANGetTxRequestState(uint32_t request_id, CAN_TxResult_t *result)
         .frame_count = slot->frame_count,
         .accepted_frames = slot->accepted_frames,
         .completed_frames = slot->completed_frames,
+        .pending_frames = slot->pending_hw,
         .last_hal_error = slot->last_hal_error,
     };
     *result = candidate;

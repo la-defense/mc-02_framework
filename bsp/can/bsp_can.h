@@ -130,7 +130,8 @@ typedef struct
 } CAN_TxStats_t;
 
 #define CAN_TX_MAX_QUEUE_ITEMS 16u
-#define CAN_TX_MAX_BATCH_FRAMES 8u
+// 允许新版桥接一次提交64字节内容和时间、校验字段所需的13个分片。
+#define CAN_TX_MAX_BATCH_FRAMES 13u
 
 /** @brief CAN 帧标识符类型；经典帧数据区最多 8 字节。 */
 typedef enum
@@ -197,6 +198,7 @@ typedef struct
     uint8_t frame_count;
     uint8_t accepted_frames;      /**< HAL 已接受的帧数，不代表已在线上发送。 */
     uint8_t completed_frames;     /**< 收到 FDCAN 完成中断的帧数。 */
+    uint8_t pending_frames;       /**< HAL已接受且尚未收到完成或中止的帧数。 */
     uint32_t last_hal_error;      /**< 最近一次提交失败的 HAL 状态值。 */
 } CAN_TxResult_t;
 
@@ -320,10 +322,26 @@ CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void
                                            CAN_TxPriority_t priority, uint32_t deadline_ms,
                                            uint32_t *request_id);
 
+/** @brief 提交允许被更高优先级请求中断的一组帧。
+ * @param[in] hcan,source,frames,frame_count,priority,deadline_ms 与CANSubmitOneShotBatch相同。
+ * @param[out] request_id 成功返回编号，失败保持原值。
+ * @return 队列提交状态；被中断的组最终记为FAILED，不自动重发。
+ * @note 已交给HAL的帧无法撤回；接收方须在期限内收到完整组并检查校验后才能使用。
+ */
+CAN_TxSubmitStatus_t CANSubmitInterruptibleBatch(FDCAN_HandleTypeDef *hcan, const void *source,
+    const CAN_TxFrame_t *frames, size_t frame_count, CAN_TxPriority_t priority,
+    uint32_t deadline_ms, uint32_t *request_id);
+
 /** @brief 在1ms级普通任务中推进每条总线最多一帧，按优先级与期限调度。
 * @note 只在 MotorControlTask() 或专用自测任务调用；不等待 FIFO 空闲，每条总线每次至多尝试一帧。
  */
 void CANProcessTx(void);
+
+/** @brief 只对指定总线额外推进至多一帧。
+ * @param[in] hcan 已支持的FDCAN句柄；NULL或未知句柄直接返回。
+ * @note 仅普通任务串行调用；不等待FIFO，优先级、期限和失败处理与CANProcessTx相同。
+ */
+void CANProcessTxBus(FDCAN_HandleTypeDef *hcan);
 
 /** @brief 查询请求入队、HAL接受及完成状态；读取不推进队列。
 * @param[in] request_id 非零请求编号。

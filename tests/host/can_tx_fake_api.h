@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CAN_TX_MAX_BATCH_FRAMES 8u
+#define CAN_TX_MAX_BATCH_FRAMES 13u
 
 typedef enum
 {
@@ -63,6 +63,7 @@ typedef struct
     uint8_t frame_count;
     uint8_t accepted_frames;
     uint8_t completed_frames;
+    uint8_t pending_frames;
     uint32_t last_hal_error;
 } CAN_TxResult_t;
 

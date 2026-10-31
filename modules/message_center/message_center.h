@@ -98,6 +98,27 @@ typedef struct
 typedef struct MessagePublisher MessagePublisher_t;
 typedef struct MessageSubscriber MessageSubscriber_t;
 
+/** @brief 复制发布句柄对应的话题定义，不改变话题或队列。
+ * @param[in] publisher 已注册且长期有效的发布句柄。
+ * @param[out] output 接收定义；失败保持原值。
+ * @return 成功、参数错误、未初始化或句柄无效。
+ */
+MessageStatus_t MessagePublisherGetDescriptor(const MessagePublisher_t *publisher, MessageTopicDescriptor_t *output);
+
+/** @brief 复制订阅句柄对应的话题定义，不读取或消费消息。
+ * @param[in] subscriber 已注册且长期有效的订阅句柄。
+ * @param[out] output 接收定义；失败保持原值。
+ * @return 成功、参数错误、未初始化或句柄无效。
+ */
+MessageStatus_t MessageSubscriberGetDescriptor(const MessageSubscriber_t *subscriber, MessageTopicDescriptor_t *output);
+
+/** @brief 撤销单一发布端点话题的所有未消费数据。
+ * @param[in] publisher 已注册且长期有效的发布句柄；话题只能声明一个发布端点。
+ * @return 成功、参数错误、未初始化或话题关系不符；失败不改变数据。
+ * @note 不改变消息序号或来源时间；用于来源失效后撤销旧值，不替代调用方的控制许可。
+ */
+MessageStatus_t MessagePublisherInvalidate(MessagePublisher_t *publisher);
+
 /** @brief 初始化固定话题目录；重复传入相同目录返回 MESSAGE_OK。
  * @param[in] descriptors 只读描述数组，调用期间至少可读count项；成功后内容被复制。
  * @param[in] count 目录项数，范围1～MESSAGE_CENTER_MAX_TOPICS。

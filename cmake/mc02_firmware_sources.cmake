@@ -167,15 +167,18 @@ set(MC02_APPLICATION_SINGLE_C_SOURCES
     application/gimbal/gimbal.c
     application/shoot/shoot.c)
 set(MC02_APPLICATION_CHASSIS_C_SOURCES
+    application/topics/robot_can_bridge.c
     application/chassis/chassis.c
     application/chassis/chassis_motion.c)
 set(MC02_APPLICATION_GIMBAL_C_SOURCES
+    application/topics/robot_can_bridge.c
     application/cmd/robot_cmd.c
     application/gimbal/gimbal.c
     application/shoot/shoot.c)
 
 if(MC02_PROFILE STREQUAL "robot")
     list(APPEND MC02_APPLICATION_COMMON_C_SOURCES
+        application/topics/chassis_topic_codec.c
         application/topics/robot_topics.c
         application/topics/robot_topics_diag.c)
 endif()
@@ -185,6 +188,17 @@ if(MC02_VISION_PROTOCOL STREQUAL "v2")
         modules/time_sync/time_mapping.c)
 else()
     list(APPEND MC02_COMMON_MODULE_C_SOURCES modules/master_machine/vision_protocol.c)
+endif()
+
+# 只有双板固件使用板间话题与时间交换；单板不占用这些源码。
+if(MC02_PROFILE STREQUAL "robot" AND NOT MC02_BOARD_ROLE STREQUAL "single")
+    list(APPEND MC02_COMMON_MODULE_C_SOURCES
+        modules/can_comm/can_topic_wire.c
+        modules/can_comm/can_topic_transport.c
+        modules/can_comm/can_topic_bridge.c
+        modules/can_comm/can_topic_link.c
+        modules/can_comm/can_time_sync.c
+        modules/time_sync/time_mapping.c)
 endif()
 
 # 按配置追加确实被入口调用的可选实现；其他保留模块不进入固件。

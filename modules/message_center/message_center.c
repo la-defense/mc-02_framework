@@ -257,6 +257,53 @@ MessageSubscriber_t *MessageSubscriberRegister(MessageTopicId_t topic_id,
     return NULL;
 }
 
+MessageStatus_t MessagePublisherGetDescriptor(const MessagePublisher_t *publisher, MessageTopicDescriptor_t *output)
+{
+    if (publisher == NULL || output == NULL || publisher->storage_index >= MESSAGE_CENTER_MAX_SUBSCRIBERS)
+        return MESSAGE_ERR_ARGUMENT;
+    if (!directory_ready) return MESSAGE_ERR_NOT_INITIALIZED;
+    taskENTER_CRITICAL();
+    const MessagePublisherStorage_t *handle=&publisher_storage[publisher->storage_index];
+    const int index=handle->active ? FindTopicIndex(handle->topic_id) : -1;
+    if (index < 0) { taskEXIT_CRITICAL(); return MESSAGE_ERR_TOPIC; }
+    *output=topics[index].descriptor;
+    taskEXIT_CRITICAL();
+    return MESSAGE_OK;
+}
+
+MessageStatus_t MessageSubscriberGetDescriptor(const MessageSubscriber_t *subscriber, MessageTopicDescriptor_t *output)
+{
+    if (subscriber == NULL || output == NULL) return MESSAGE_ERR_ARGUMENT;
+    if (!directory_ready) return MESSAGE_ERR_NOT_INITIALIZED;
+    taskENTER_CRITICAL();
+    if (!subscriber->active || subscriber->topic_index >= topic_count) {
+        taskEXIT_CRITICAL(); return MESSAGE_ERR_TOPIC;
+    }
+    *output=topics[subscriber->topic_index].descriptor;
+    taskEXIT_CRITICAL();
+    return MESSAGE_OK;
+}
+
+MessageStatus_t MessagePublisherInvalidate(MessagePublisher_t *publisher)
+{
+    if (publisher==NULL || publisher->storage_index>=MESSAGE_CENTER_MAX_SUBSCRIBERS) return MESSAGE_ERR_ARGUMENT;
+    if (!directory_ready) return MESSAGE_ERR_NOT_INITIALIZED;
+    taskENTER_CRITICAL();
+    const MessagePublisherStorage_t *handle=&publisher_storage[publisher->storage_index];
+    const int index=handle->active ? FindTopicIndex(handle->topic_id) : -1;
+    if (index<0) { taskEXIT_CRITICAL(); return MESSAGE_ERR_TOPIC; }
+    const uint32_t mask=topics[index].descriptor.publisher_mask;
+    if (mask==0u || (mask & (mask-1u))!=0u) { taskEXIT_CRITICAL(); return MESSAGE_ERR_RELATION; }
+    // 只撤销该单一来源的订阅数据；其他话题和发布顺序不变。
+    for (size_t i=0u;i<MESSAGE_CENTER_MAX_SUBSCRIBERS;++i)
+        if (subscribers[i].active && subscribers[i].topic_index==(uint8_t)index) {
+            subscribers[i].head=0u;
+            subscribers[i].count=0u;
+        }
+    taskEXIT_CRITICAL();
+    return MESSAGE_OK;
+}
+
 MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data,
                                  uint32_t source_time_ms, uint32_t received_time_ms,
                                  uint32_t published_time_ms,

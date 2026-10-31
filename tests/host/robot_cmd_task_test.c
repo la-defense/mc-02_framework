@@ -8,9 +8,6 @@
 #include "message_center.h"
 #include "topics/robot_topics.h"
 #include "vision_control.h"
-#ifdef GIMBAL_BOARD
-#include "can_comm.h"
-#endif
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"FAIL:%d %s\n",__LINE__,#c); return 1; } } while(0)
 UART_HandleTypeDef huart5, huart9;
 CAN_HandleTypeDef hcan1;
@@ -20,19 +17,6 @@ static uint32_t tick=100;
 static Vision_Recv_s wire;
 static Vision_Status_t status;
 static unsigned snapshots;
-#ifdef GIMBAL_BOARD
-static CANCommInstance dual_comm;
-static CANComm_Init_Config_s dual_init_config;
-static Chassis_Ctrl_Cmd_s dual_sent_chassis;
-static unsigned dual_snapshot_calls, dual_send_calls, dual_init_calls;
-CANCommInstance *CANCommInit(CANComm_Init_Config_s *config)
-{ dual_init_config=*config; ++dual_init_calls; return &dual_comm; }
-uint8_t CANCommGetSnapshot(CANCommInstance *instance, void *data, uint8_t len,
-                           uint32_t now, uint32_t max_age, MessageFreshness_t *freshness)
-{ (void)instance; (void)now; (void)max_age; (void)freshness; ++dual_snapshot_calls; memset(data,0,len); return 0u; }
-void CANCommSend(CANCommInstance *instance, uint8_t *data)
-{ (void)instance; memcpy(&dual_sent_chassis,data,sizeof(dual_sent_chassis)); ++dual_send_calls; }
-#endif
 uint32_t HAL_GetTick(void) { return tick; }
 const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *h) { (void)h; return remote; }
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
@@ -142,14 +126,14 @@ int main(int argc, char **argv)
     CHECK(RobotCMDInit());
 #ifdef GIMBAL_BOARD
     if (argc > 1 && !strcmp(argv[1], "dual-board")) {
-        CHECK(dual_init_calls == 1u);
-        CHECK(dual_init_config.send_data_len == sizeof(Chassis_Ctrl_Cmd_s));
-        CHECK(dual_init_config.recv_data_len == sizeof(Chassis_Upload_Data_s));
-        RobotCMDTask(); /* No gimbal feedback: the production task must publish safe CAN output. */
-        CHECK(dual_snapshot_calls == 0u && dual_send_calls == 1u);
-        CHECK(dual_sent_chassis.chassis_mode == CHASSIS_ZERO_FORCE);
-        CHECK(dual_sent_chassis.vx == 0.0f && dual_sent_chassis.vy == 0.0f && dual_sent_chassis.wz == 0.0f);
-        puts("PASS: production dual-board command path skips unused feedback and sends fail-safe output");
+        MessageSubscriber_t *bridge=MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
+        CHECK(bridge != NULL);
+        RobotCMDTask(); // 缺少云台反馈时仍向桥接话题发布停止命令。
+        Chassis_Ctrl_Cmd_s sent={0};
+        CHECK(MessageReadSnapshot(bridge,&sent,sizeof(sent),tick,NULL)==MESSAGE_OK);
+        CHECK(sent.chassis_mode == CHASSIS_ZERO_FORCE);
+        CHECK(sent.vx == 0.0f && sent.vy == 0.0f && sent.wz == 0.0f);
+        puts("PASS: dual-board command publishes fail-safe topic output");
         return 0;
     }
 #endif

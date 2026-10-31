@@ -6,6 +6,8 @@
 #include "LK9025.h"
 #include "dji_motor.h"
 #include "bsp_can.h"
+#include "can_topic_transport.h"
+#include "can_topic_link.h"
 #include "bsp_dwt.h"
 #include "general_def.h"
 #include "test_check.h"
@@ -1016,6 +1018,8 @@ static void test_can_tx_queue_batch_and_buses(void)
                                      CAN_TX_PRIORITY_NORMAL, 30u,
                                      &rejected_id) == CAN_TX_SUBMIT_INVALID);
 
+    // 64字节话题连同时间和校验按新版格式需要13帧，必须整组提交。
+    TEST_CHECK(CAN_TX_MAX_BATCH_FRAMES >= 13u);
     CAN_TxFrame_t maximum_batch[CAN_TX_MAX_BATCH_FRAMES];
     for (size_t i = 0u; i < CAN_TX_MAX_BATCH_FRAMES; ++i)
     {
@@ -1050,15 +1054,312 @@ static void test_can_tx_queue_batch_and_buses(void)
                                 CAN_TX_PRIORITY_NORMAL, 10u,
                                 &earlier_deadline_id) == CAN_TX_SUBMIT_ACCEPTED);
     CANProcessTx();
-    TEST_CHECK(tx_id_history[0][11] == 0x500u);
+    TEST_CHECK(tx_id_history[0][3u + CAN_TX_MAX_BATCH_FRAMES] == 0x500u);
     scheduler_complete_latest(&hfdcan1);
     CANProcessTx();
-    TEST_CHECK(tx_id_history[0][12] == 0x501u);
+    TEST_CHECK(tx_id_history[0][4u + CAN_TX_MAX_BATCH_FRAMES] == 0x501u);
     scheduler_complete_latest(&hfdcan1);
     TEST_CHECK(CANGetTxRequestState(later_deadline_id, &result) == 1u &&
                result.state == CAN_TX_RESULT_COMPLETE);
     TEST_CHECK(CANGetTxRequestState(earlier_deadline_id, &result) == 1u &&
                result.state == CAN_TX_RESULT_COMPLETE);
+}
+
+// 生产调度器按组发送完整话题，并将内容从实际提交的帧中还原。
+static void test_can_tx_topic_group(void)
+{
+    CAN_Init_Config_s config={0};
+    config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
+    config.can_module_callback=scheduler_rx_callback;
+    CANInstance *can=CANRegister(&config);
+    TEST_CHECK(can != NULL);
+    CanTopicTransport_t transport;
+    TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicMessage_t input={.topic_id=7u,.length=64u,.source_ms=25u};
+    for (unsigned i=0u;i<64u;++i) input.payload[i]=(uint8_t)i;
+    uint32_t topic_id=0u;
+    TEST_CHECK(CanTopicTransportSend(&transport,&input,30u,&topic_id)==CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx(); scheduler_complete_latest(&hfdcan1);
+    uint8_t normal_byte=0u; uint32_t normal_id=0u;
+    CAN_TxFrame_t normal=scheduler_frame(0x102u,CAN_TX_ID_STANDARD,&normal_byte,1u);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1,NULL,&normal,CAN_TX_PRIORITY_NORMAL,30u,&normal_id)==CAN_TX_SUBMIT_ACCEPTED);
+    for (size_t i=1u;i<CAN_TOPIC_MAX_FRAMES;++i) {
+        CANProcessTx(); scheduler_complete_latest(&hfdcan1);
+        TEST_CHECK(tx_id_history[0][i]==0x321u);
+    }
+    CANProcessTx(); scheduler_complete_latest(&hfdcan1);
+    TEST_CHECK(tx_id_history[0][CAN_TOPIC_MAX_FRAMES]==0x102u);
+    CAN_TxResult_t result;
+    TEST_CHECK(CANGetTxRequestState(topic_id,&result) && result.state==CAN_TX_RESULT_COMPLETE && result.completed_frames==13u);
+    CanTopicReceiver_t receiver={0}; CanTopicMessage_t output={0};
+    for (size_t i=0u;i<CAN_TOPIC_MAX_FRAMES;++i) {
+        CanTopicFrame_t frame={.length=tx_length_history[0][i]};
+        memcpy(frame.bytes,tx_data_history[0][i],frame.length);
+        CanTopicWireStatus_t status=CanTopicReceive(&receiver,&frame,(uint32_t)i,(uint32_t)i,50u,&output);
+        TEST_CHECK(status==(i+1u==CAN_TOPIC_MAX_FRAMES ? CAN_TOPIC_OK : CAN_TOPIC_INCOMPLETE));
+    }
+    TEST_CHECK(output.source_ms==25u && output.first_rx_ms==0u && output.length==64u && output.payload[63]==63u);
+}
+
+// 控制请求到达后放弃可中断的旧话题组，不让剩余分片占用控制期限。
+static void test_can_tx_topic_interrupt(void)
+{
+    CAN_Init_Config_s config={0};
+    config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
+    config.can_module_callback=scheduler_rx_callback;
+    CANInstance *can=CANRegister(&config); TEST_CHECK(can != NULL);
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicMessage_t input={.topic_id=7u,.length=64u,.source_ms=25u};
+    uint32_t topic_id=0u;
+    TEST_CHECK(CanTopicTransportSend(&transport,&input,30u,&topic_id)==CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx(); scheduler_complete_latest(&hfdcan1);
+    uint8_t byte=0u; uint32_t control_id=0u;
+    CAN_TxFrame_t control=scheduler_frame(0x101u,CAN_TX_ID_STANDARD,&byte,1u);
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1,&byte,1u,&control,CAN_TX_PRIORITY_CONTROL,4u,1000u,&control_id)==CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx(); scheduler_complete_latest(&hfdcan1);
+    TEST_CHECK(tx_id_history[0][1u]==0x101u);
+    CAN_TxResult_t result;
+    TEST_CHECK(CANGetTxRequestState(topic_id,&result) && result.state==CAN_TX_RESULT_FAILED && result.accepted_frames==1u);
+    CANProcessTx(); TEST_CHECK(tx_accept_count[0]==2u);
+}
+
+// 来源和本机时钟在此测试中相同；真实双板必须由对时模块提供映射。
+static uint8_t test_topic_map(void *context,uint32_t remote,uint32_t now,uint32_t *local,uint32_t *uncertainty)
+{
+    (void)now;
+    if (!*(uint8_t *)context) return 0u;
+    *local=remote; *uncertainty=0u; return 1u;
+}
+static uint8_t test_topic_copy(void *context,const void *input,size_t input_size,void *output,size_t output_size)
+{
+    (void)context;
+    if (input_size!=4u || output_size!=4u) return 0u;
+    memcpy(output,input,4u); return 1u;
+}
+// 从生产中断队列进入CAN派发、拼包、映射和生产消息中心。
+static void test_can_tx_topic_rx(void)
+{
+    const MessageTopicDescriptor_t descriptor={19u,4u,50u,1u,MESSAGE_DELIVERY_SNAPSHOT,
+        MESSAGE_OVERFLOW_REPLACE_OLDEST,MESSAGE_CLOCK_LOCAL_MAPPED,1u,2u,0u};
+    TEST_CHECK(MessageCenterInit(&descriptor,1u)==MESSAGE_OK);
+    MessagePublisher_t *publisher=MessagePublisherRegister(19u,1u);
+    MessageSubscriber_t *subscriber=MessageSubscriberRegister(19u,2u);
+    TEST_CHECK(publisher && subscriber);
+    CanTopicLink_t link={0}; uint8_t synchronized=1u;
+    const CanTopicCodec_t codec={test_topic_copy,NULL,4u};
+    CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x501u;
+    TEST_CHECK(CanTopicLinkInit(&link,&config,NULL,publisher,NULL,&codec,test_topic_map,&synchronized,50u));
+    CanTopicMessage_t message={.topic_id=19u,.length=4u,.source_ms=100u,.payload={1u,2u,3u,4u}};
+    CanTopicFrame_t frames[CAN_TOPIC_MAX_FRAMES]; size_t count=0u;
+    TEST_CHECK(CanTopicEncode(&message,1u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    for (size_t i=0u;i<count;++i) {
+        TestRxFrame_t *item=&rx_frames[0][i]; memset(item,0,sizeof(*item));
+        item->header.Identifier=0x501u; item->header.DataLength=(uint32_t)frames[i].length<<16u;
+        item->header.RxFrameType=FDCAN_DATA_FRAME; item->header.IdType=FDCAN_STANDARD_ID;
+        memcpy(item->data,frames[i].bytes,frames[i].length);
+    }
+    rx_frame_count[0]=(uint8_t)count; rx_frame_read[0]=0u; now_us=100000u;
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1,FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    CANProcessRx();
+    uint8_t output[4]={0}; MessageFreshness_t freshness;
+    TEST_CHECK(link.last_receive==CAN_BRIDGE_OK);
+    TEST_CHECK(MessageReadSnapshot(subscriber,output,sizeof(output),100u,&freshness)==MESSAGE_OK &&
+               memcmp(output,message.payload,4u)==0 && freshness.received_time_ms==100u);
+    message.source_ms=101u;
+    TEST_CHECK(CanTopicEncode(&message,2u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    frames[count-1u].bytes[frames[count-1u].length-1u]^=1u;
+    for (size_t i=0u;i<count;++i) {
+        rx_frames[0][i].header.DataLength=(uint32_t)frames[i].length<<16u;
+        memcpy(rx_frames[0][i].data,frames[i].bytes,frames[i].length);
+    }
+    rx_frame_count[0]=(uint8_t)count; rx_frame_read[0]=0u; now_us=101000u;
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1,FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    CANProcessRx();
+    TEST_CHECK(link.last_receive==CAN_BRIDGE_WIRE);
+    TEST_CHECK(MessageReadSnapshot(subscriber,output,sizeof(output),101u,&freshness)==MESSAGE_OK &&
+               freshness.received_time_ms==100u && freshness.source_time_ms==100u);
+    synchronized=0u; uint32_t id=0u; CanTopicBridgeStatus_t sync;
+    TEST_CHECK(CanTopicLinkService(&link,101u,&id,&sync)==CAN_BRIDGE_UNSYNCED);
+    TEST_CHECK(MessageReadSnapshot(subscriber,output,sizeof(output),101u,&freshness)==MESSAGE_ERR_EMPTY);
+}
+
+// 新版本到达时停止旧组，已经进入硬件的帧结束前不能提交新组。
+static void test_can_tx_topic_cancel(void)
+{
+    const MessageTopicDescriptor_t descriptor={19u,4u,50u,1u,MESSAGE_DELIVERY_SNAPSHOT,
+        MESSAGE_OVERFLOW_REPLACE_OLDEST,MESSAGE_CLOCK_LOCAL,1u,2u,0u};
+    TEST_CHECK(MessageCenterInit(&descriptor,1u)==MESSAGE_OK);
+    MessagePublisher_t *publisher=MessagePublisherRegister(19u,1u);
+    MessageSubscriber_t *subscriber=MessageSubscriberRegister(19u,2u);
+    TEST_CHECK(publisher && subscriber);
+    CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x501u;
+    config.can_module_callback=scheduler_rx_callback;
+    CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    const CanTopicCodec_t codec={test_topic_copy,NULL,4u};
+    CanTopicBridge_t bridge;
+    TEST_CHECK(CanTopicBridgeInit(&bridge,&transport,subscriber,NULL,&codec,NULL,NULL,NULL)==CAN_BRIDGE_OK);
+    uint32_t value=1u, first_id=0u, second_id=0xabcdu;
+    TEST_CHECK(MessagePublishAt(publisher,&value,0u,0u,0u,MESSAGE_CLOCK_LOCAL)==MESSAGE_OK);
+    TEST_CHECK(CanTopicBridgeSend(&bridge,0u,&first_id)==CAN_BRIDGE_OK);
+    CANProcessTx(); uint32_t first_mask=tx_latest_buffer[0];
+    value=2u; now_us=1000u;
+    TEST_CHECK(MessagePublishAt(publisher,&value,1u,1u,1u,MESSAGE_CLOCK_LOCAL)==MESSAGE_OK);
+    TEST_CHECK(CanTopicBridgeSend(&bridge,1u,&second_id)==CAN_BRIDGE_SEND && second_id==0xabcdu);
+    CAN_TxResult_t result;
+    TEST_CHECK(CANGetTxRequestState(first_id,&result) && result.state==CAN_TX_RESULT_CANCELLED && result.pending_frames==1u);
+    HAL_FDCAN_TxBufferCompleteCallback(&hfdcan1,first_mask);
+    TEST_CHECK(CanTopicBridgeSend(&bridge,1u,&second_id)==CAN_BRIDGE_OK && second_id!=0xabcdu);
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0]==2u && tx_data_history[0][1u][0]==0xa0u && tx_data_history[0][1u][1]==1u);
+}
+
+// 同总线每轮都有控制帧时，话题期限耗尽必须报告过期，不能伪称已发送。
+static void test_can_tx_topic_contention(void)
+{
+    CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
+    config.can_module_callback=scheduler_rx_callback;
+    CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicMessage_t message={.topic_id=7u,.length=64u}; uint32_t topic_id=0u;
+    TEST_CHECK(CanTopicTransportSend(&transport,&message,5u,&topic_id)==CAN_TX_SUBMIT_ACCEPTED);
+    uint8_t data=0u; CAN_TxFrame_t control=scheduler_frame(0x101u,CAN_TX_ID_STANDARD,&data,1u);
+    for (unsigned i=0u;i<5u;++i) {
+        now_us=(uint64_t)i*1000u; uint32_t control_id=0u;
+        TEST_CHECK(CANSubmitPeriodic(&hfdcan1,&data,1u,&control,CAN_TX_PRIORITY_CONTROL,4u,1000u,
+                                     &control_id)==CAN_TX_SUBMIT_ACCEPTED);
+        CANProcessTx(); scheduler_complete_latest(&hfdcan1);
+        TEST_CHECK(tx_id_history[0][i]==0x101u);
+    }
+    now_us=5000u; CANProcessTx();
+    CAN_TxResult_t result;
+    TEST_CHECK(CANGetTxRequestState(topic_id,&result) && result.state==CAN_TX_RESULT_EXPIRED &&
+               result.accepted_frames==0u);
+}
+
+// 专用桥接总线每5ms产生5帧，并故意漏掉每组首轮服务，验证有界补充推进。
+static void test_can_tx_topic_drain(void)
+{
+    CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
+    config.can_module_callback=scheduler_rx_callback;
+    CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicMessage_t message={.topic_id=7u,.length=21u}; uint32_t ids[6]={0};
+    for (unsigned tick=0u;tick<30u;++tick) {
+        now_us=(uint64_t)tick*1000u;
+        if (tick%5u==0u) {
+            message.source_ms=tick;
+            TEST_CHECK(CanTopicTransportSend(&transport,&message,50u,&ids[tick/5u])==CAN_TX_SUBMIT_ACCEPTED);
+            if (tick==0u) {
+                CANProcessTxBus(NULL);
+                test_ipsr=1u; CANProcessTxBus(&hfdcan1); test_ipsr=0u;
+                TEST_CHECK(tx_accept_count[0]==0u);
+            }
+            continue; // 模拟服务任务本轮没有得到调度。
+        }
+        for (unsigned attempt=0u;attempt<2u;++attempt) {
+            uint32_t before=tx_accept_count[0];
+            CANProcessTxBus(&hfdcan1);
+            if (tx_accept_count[0]!=before) scheduler_complete_latest(&hfdcan1);
+        }
+    }
+    for (unsigned i=0u;i<6u;++i) {
+        CAN_TxResult_t result;
+        TEST_CHECK(CANGetTxRequestState(ids[i],&result) && result.state==CAN_TX_RESULT_COMPLETE && result.completed_frames==5u);
+    }
+    TEST_CHECK(tx_accept_count[0]==30u && tx_accept_count[1]==0u && tx_accept_count[2]==0u);
+}
+
+// 模拟专用桥接总线同时发送底盘话题、对时和可选电容命令。
+static void test_can_tx_topic_sync_budget(void)
+{
+    CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
+    config.can_module_callback=scheduler_rx_callback;
+    CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTimeSync_t sync={0}; TEST_CHECK(CanTimeSyncInit(&sync,can));
+    CanTopicMessage_t message={.topic_id=7u,.length=21u};
+    uint32_t ids[6]={0u};
+    uint8_t cap_data[8]={0u};
+    CAN_TxFrame_t cap=scheduler_frame(0x302u,CAN_TX_ID_STANDARD,cap_data,8u);
+    // 固定 CRC8/0x31 向量：请求编号0x1234，发送板时间1000ms。
+    const uint8_t peer_probe[8]={0xc1u,0x34u,0x12u,0xe8u,0x03u,0u,0u,0x84u};
+    for (unsigned tick=0u;tick<30u;++tick) {
+        now_us=(uint64_t)tick*1000u;
+        if (tick%5u==0u) {
+            if (tick>0u) {
+                CAN_TxResult_t previous;
+                TEST_CHECK(CANGetTxRequestState(ids[tick/5u-1u],&previous) &&
+                           previous.state==CAN_TX_RESULT_COMPLETE && previous.completed_frames==5u);
+            }
+            if (tick==0u) TEST_CHECK(CanTimeSyncService(&sync,0u)==CAN_TIME_SYNC_OK);
+            if (tick==10u)
+                TEST_CHECK(CanTimeSyncReceive(&sync,peer_probe,8u,10u,10u)==CAN_TIME_SYNC_OK);
+            if (tick%10u==0u) {
+                uint32_t cap_id=0u;
+                TEST_CHECK(CANSubmitPeriodic(&hfdcan1,&cap_data,1u,&cap,CAN_TX_PRIORITY_NORMAL,
+                                             20u,10000u,&cap_id)==CAN_TX_SUBMIT_ACCEPTED);
+            }
+            message.source_ms=tick;
+            TEST_CHECK(CanTopicTransportSend(&transport,&message,50u,&ids[tick/5u])==CAN_TX_SUBMIT_ACCEPTED);
+            continue; // 每组首轮不推进，给任务调度抖动留出一轮余量。
+        }
+        for (unsigned attempt=0u;attempt<2u;++attempt) {
+            const uint32_t before=tx_accept_count[0];
+            CANProcessTxBus(&hfdcan1);
+            if (tx_accept_count[0]!=before) scheduler_complete_latest(&hfdcan1);
+        }
+    }
+    CAN_TxResult_t final;
+    TEST_CHECK(CANGetTxRequestState(ids[5],&final) && final.state==CAN_TX_RESULT_COMPLETE &&
+               final.completed_frames==5u);
+    TEST_CHECK(tx_accept_count[0]==36u && tx_accept_count[1]==0u && tx_accept_count[2]==0u);
+}
+
+// 即使有额外推进机会，共用总线上的新控制帧仍会中止未发送完的话题。
+static void test_can_tx_topic_shared(void)
+{
+    CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
+    config.can_module_callback=scheduler_rx_callback;
+    CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicMessage_t message={.topic_id=7u,.length=21u}; uint32_t topic_id=0u;
+    TEST_CHECK(CanTopicTransportSend(&transport,&message,50u,&topic_id)==CAN_TX_SUBMIT_ACCEPTED);
+    uint8_t data=0u; CAN_TxFrame_t control=scheduler_frame(0x101u,CAN_TX_ID_STANDARD,&data,1u);
+    uint32_t control_id=0u;
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1,&data,1u,&control,CAN_TX_PRIORITY_CONTROL,4u,1000u,&control_id)==CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx(); scheduler_complete_latest(&hfdcan1);
+    CANProcessTxBus(&hfdcan1); scheduler_complete_latest(&hfdcan1);
+    TEST_CHECK(tx_id_history[0][0u]==0x101u && tx_id_history[0][1u]==0x321u);
+    now_us=1000u;
+    TEST_CHECK(CANSubmitPeriodic(&hfdcan1,&data,1u,&control,CAN_TX_PRIORITY_CONTROL,4u,1000u,&control_id)==CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx(); scheduler_complete_latest(&hfdcan1);
+    CANProcessTxBus(&hfdcan1);
+    CAN_TxResult_t result;
+    TEST_CHECK(tx_accept_count[0]==3u && tx_id_history[0][2u]==0x101u);
+    TEST_CHECK(CANGetTxRequestState(topic_id,&result) && result.state==CAN_TX_RESULT_FAILED && result.accepted_frames==1u);
+}
+
+// 同一轮两帧可同时被HAL接受，完成回调逆序时仍要等待整组结束。
+static void test_can_tx_topic_pending(void)
+{
+    CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
+    config.can_module_callback=scheduler_rx_callback;
+    CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicMessage_t message={.topic_id=7u,.length=21u}; uint32_t topic_id=0u;
+    TEST_CHECK(CanTopicTransportSend(&transport,&message,50u,&topic_id)==CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx(); uint32_t first=tx_latest_buffer[0];
+    CANProcessTxBus(&hfdcan1); uint32_t second=tx_latest_buffer[0];
+    TEST_CHECK(first!=second && tx_accept_count[0]==2u);
+    CAN_TxResult_t result;
+    TEST_CHECK(CANGetTxRequestState(topic_id,&result) && result.pending_frames==2u);
+    HAL_FDCAN_TxBufferCompleteCallback(&hfdcan1,second);
+    HAL_FDCAN_TxBufferCompleteCallback(&hfdcan1,first);
+    TEST_CHECK(CANGetTxRequestState(topic_id,&result) && result.pending_frames==0u &&
+               result.completed_frames==2u && result.state==CAN_TX_RESULT_ACTIVE);
+    for (unsigned i=2u;i<5u;++i) { CANProcessTxBus(&hfdcan1); scheduler_complete_latest(&hfdcan1); }
+    TEST_CHECK(CANGetTxRequestState(topic_id,&result) && result.completed_frames==5u && result.state==CAN_TX_RESULT_COMPLETE);
 }
 
 static void test_can_tx_periodic_latest_and_budget(void)
@@ -1291,6 +1592,24 @@ static void test_can_tx_retry_boundary_and_abort(void)
     TEST_CHECK(result.state == CAN_TX_RESULT_FAILED && result.accepted_frames == 1u);
     CANProcessTx();
     TEST_CHECK(tx_accept_count[0] == 1u);
+
+    // 多帧组中任一已接受帧中止后，未提交的后续分片不得继续发送。
+    CAN_TxFrame_t group[3]={frame,frame,frame};
+    uint32_t group_id=0u;
+    TEST_CHECK(CANSubmitOneShotBatch(&hfdcan1,NULL,group,3u,CAN_TX_PRIORITY_NORMAL,100u,&group_id)==CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0]==2u);
+    HAL_FDCAN_TxBufferAbortCallback(&hfdcan1,tx_latest_buffer[0]);
+    // 结果历史回绕时，尚未清理的失败组仍持有自己的结果槽。
+    for (unsigned i=0u;i<40u;++i) {
+        uint32_t temporary_id=0u;
+        TEST_CHECK(CANSubmitOneShot(&hfdcan1,NULL,&frame,CAN_TX_PRIORITY_NORMAL,100u,&temporary_id)==CAN_TX_SUBMIT_ACCEPTED);
+        TEST_CHECK(CANCancelTxRequest(temporary_id));
+    }
+    TEST_CHECK(CANGetTxRequestState(group_id,&result) && result.state==CAN_TX_RESULT_FAILED);
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0]==2u);
+    TEST_CHECK(CANGetTxRequestState(group_id,&result) && result.state==CAN_TX_RESULT_FAILED);
 }
 
 static void test_can_tx_retry_yields_for_priority(void)
@@ -1356,6 +1675,24 @@ int main(int argc, char **argv)
         test_can_tx_arguments_and_copy();
     else if (strcmp(argv[1], "tx-queue-batch-buses") == 0)
         test_can_tx_queue_batch_and_buses();
+    else if (strcmp(argv[1], "tx-topic-group") == 0)
+        test_can_tx_topic_group();
+    else if (strcmp(argv[1], "tx-topic-interrupt") == 0)
+        test_can_tx_topic_interrupt();
+    else if (strcmp(argv[1], "tx-topic-rx") == 0)
+        test_can_tx_topic_rx();
+    else if (strcmp(argv[1], "tx-topic-cancel") == 0)
+        test_can_tx_topic_cancel();
+    else if (strcmp(argv[1], "tx-topic-contention") == 0)
+        test_can_tx_topic_contention();
+    else if (strcmp(argv[1], "tx-topic-drain") == 0)
+        test_can_tx_topic_drain();
+    else if (strcmp(argv[1], "tx-topic-sync-budget") == 0)
+        test_can_tx_topic_sync_budget();
+    else if (strcmp(argv[1], "tx-topic-shared") == 0)
+        test_can_tx_topic_shared();
+    else if (strcmp(argv[1], "tx-topic-pending") == 0)
+        test_can_tx_topic_pending();
     else if (strcmp(argv[1], "tx-periodic-budget") == 0)
         test_can_tx_periodic_latest_and_budget();
     else if (strcmp(argv[1], "tx-expiry-cancel-wrap") == 0)

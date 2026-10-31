@@ -22,6 +22,10 @@ static unsigned motor_count;
 static unsigned operation_order;
 static SuperCapInstance cap;
 static int fail_cap, fail_motor;
+#ifdef CHASSIS_BOARD
+static attitude_t chassis_attitude;
+attitude_t *INS_GetStorage(void) { return &chassis_attitude; }
+#endif
 
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {
@@ -53,6 +57,21 @@ int main(int argc, char **argv)
     if (fail_cap || fail_motor) { CHECK(initialized == 0u); return 0; }
     CHECK(initialized != 0u);
     CHECK(motor_count == 4);
+#ifdef CHASSIS_BOARD
+    // 未收到映射后的远端命令时保持停止；撤销已发布数据后立即停止。
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    MessagePublisher_t *bridge=MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
+    CHECK(bridge != NULL);
+    Chassis_Ctrl_Cmd_s incoming={.vx=100.0f,.chassis_mode=CHASSIS_NO_FOLLOW};
+    CHECK(MessagePublishAt(bridge,&incoming,0u,0u,0u,MESSAGE_CLOCK_LOCAL_MAPPED)==MESSAGE_OK);
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled);
+    CHECK(MessagePublisherInvalidate(bridge)==MESSAGE_OK);
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    return 0;
+#endif
     for (unsigned i = 0; i < 4; ++i) {
         CHECK(motor_configs[i].output_axis.gear_ratio == REDUCTION_RATIO_WHEEL);
         CHECK(motor_configs[i].output_axis.direction == MOTOR_AXIS_DIRECTION_REVERSE);

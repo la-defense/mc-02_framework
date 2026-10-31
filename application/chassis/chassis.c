@@ -25,15 +25,13 @@
 
 /* 底盘应用包含的模块和信息存储,底盘是单例模式,因此不需要为底盘建立单独的结构体 */
 #ifdef CHASSIS_BOARD // 如果是底盘板,使用板载IMU获取底盘转动角速度
-#include "can_comm.h"
 #include "ins_task.h"
-static CANCommInstance *chasiss_can_comm; // 双板通信CAN comm
 attitude_t *Chassis_IMU_data;
 #endif // CHASSIS_BOARD
-#ifdef ONE_BOARD
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
 static MessagePublisher_t *chassis_pub;              // 用于发布底盘的数据
 static MessageSubscriber_t *chassis_sub;             // 用于订阅底盘的控制命令
-#endif                                              // !ONE_BOARD
+#endif
 static Chassis_Ctrl_Cmd_s chassis_cmd_recv;         // 底盘接收到的控制命令
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
 static Chassis_Upload_Data_s chassis_feedback_data; // 底盘回传的反馈数据
@@ -116,33 +114,23 @@ uint8_t ChassisInit(void)
 #ifdef CHASSIS_BOARD
     Chassis_IMU_data = INS_GetStorage(); // INS 由调度器启动后的专属任务初始化
 
-    CANComm_Init_Config_s comm_conf = {
-        .can_config = {
-            .can_handle = &hcan2,
-            .tx_id = 0x311,
-            .rx_id = 0x312,
-        },
-        .recv_data_len = sizeof(Chassis_Ctrl_Cmd_s),
-        .send_data_len = sizeof(Chassis_Upload_Data_s),
-    };
-    chasiss_can_comm = CANCommInit(&comm_conf); // can comm初始化
 #endif                                          // CHASSIS_BOARD
 
-#ifdef ONE_BOARD // 单板控制整车,则通过pubsub来传递消息
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     chassis_sub = MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,
                                             ROBOT_TOPIC_ENDPOINT_CHASSIS);
     chassis_pub = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_FEEDBACK,
                                            ROBOT_TOPIC_ENDPOINT_CHASSIS);
-#endif // ONE_BOARD
+#endif
     if (motor_lf == NULL || motor_rf == NULL || motor_lb == NULL || motor_rb == NULL ||
         referee_status != REFEREE_OK || cap == NULL)
         return 0u;
-#ifdef ONE_BOARD
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     if (chassis_sub == NULL || chassis_pub == NULL)
         return 0u;
 #endif
 #ifdef CHASSIS_BOARD
-    if (Chassis_IMU_data == NULL || chasiss_can_comm == NULL)
+    if (Chassis_IMU_data == NULL)
         return 0u;
 #endif
     return 1u;
@@ -176,14 +164,9 @@ void ChassisTask()
 {
     // 单板消息和双板通信都按 50 ms 检查命令，失败后清零，不沿用旧速度。
     uint8_t command_fresh = 0u;
-#ifdef ONE_BOARD
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     command_fresh = (uint8_t)(MessageReadSnapshot(chassis_sub, &chassis_cmd_recv,
         sizeof(chassis_cmd_recv), HAL_GetTick(), NULL) == MESSAGE_OK);
-#endif
-#ifdef CHASSIS_BOARD
-    command_fresh = CANCommGetSnapshot(chasiss_can_comm, &chassis_cmd_recv,
-                                       sizeof(chassis_cmd_recv), HAL_GetTick(),
-                                       MESSAGE_DEFAULT_MAX_AGE_MS, NULL);
 #endif
     if (!command_fresh)
         memset(&chassis_cmd_recv, 0, sizeof(chassis_cmd_recv));
@@ -257,12 +240,9 @@ void ChassisTask()
     // // 当前只做了17mm热量的数据获取,后续根据robot_def中的宏切换双枪管和英雄42mm的情况
 
     // 推送反馈消息
-#ifdef ONE_BOARD
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     (void)MessagePublishNow(chassis_pub, &chassis_feedback_data);
 #endif
-#ifdef CHASSIS_BOARD
-    CANCommSend(chasiss_can_comm, (void *)&chassis_feedback_data);
-#endif // CHASSIS_BOARD
 }
 
 void Chassis_GetMotorSummary(Chassis_Motor_Summary_t *summary)

@@ -59,13 +59,9 @@ static uint8_t previous_vision_active;
 static uint8_t manual_reference_ready;
 
 /* cmd应用包含的模块实例指针和交互信息存储*/
-#ifdef GIMBAL_BOARD // 对双板的兼容,条件编译
-#include "can_comm.h"
-static CANCommInstance *cmd_can_comm; // 双板通信
-#endif
-#ifdef ONE_BOARD
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
 static MessagePublisher_t *chassis_cmd_pub; // 底盘控制消息发布者
-#endif                                 // ONE_BOARD
+#endif
 
 static Chassis_Ctrl_Cmd_s chassis_cmd_send;      // 发送给底盘应用的信息,包括控制信息和UI绘制相关
 
@@ -120,24 +116,10 @@ uint8_t RobotCMDInit(void)
                                                  ROBOT_TOPIC_ENDPOINT_COMMAND);
     shoot_cmd_pub = MessagePublisherRegister(ROBOT_TOPIC_SHOOT_COMMAND,
                                               ROBOT_TOPIC_ENDPOINT_COMMAND);
-#ifdef ONE_BOARD // 双板兼容
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     chassis_cmd_pub = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND,
                                                 ROBOT_TOPIC_ENDPOINT_COMMAND);
-#endif // ONE_BOARD
-#ifdef GIMBAL_BOARD
-    CANComm_Init_Config_s comm_conf = {
-        .can_config = {
-            .can_handle = &hcan1,
-            .tx_id = 0x312,
-            .rx_id = 0x311,
-        },
-        .recv_data_len = sizeof(Chassis_Upload_Data_s),
-        .send_data_len = sizeof(Chassis_Ctrl_Cmd_s),
-    };
-    cmd_can_comm = CANCommInit(&comm_conf);
-    if (cmd_can_comm == NULL)
-        return 0u;
-#endif // GIMBAL_BOARD
+#endif
     gimbal_cmd_send.pitch = 0;
 
     // 上电默认安全: 所有控制量保持0/失能, 由RobotSafety状态机确认后才会进入READY
@@ -153,7 +135,7 @@ uint8_t RobotCMDInit(void)
     manual_reference_ready = 0u;
     if (gimbal_cmd_pub == NULL || gimbal_feed_sub == NULL || shoot_cmd_pub == NULL)
         return 0u;
-#ifdef ONE_BOARD
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     if (chassis_cmd_pub == NULL)
         return 0u;
 #endif
@@ -497,11 +479,8 @@ void RobotCMDTask()
         EmergencyHandler(remote_snapshot.remote_online);
         ApplySafeCommands();
         VisionSend();
-#ifdef ONE_BOARD
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
         (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
-#endif
-#ifdef GIMBAL_BOARD
-        CANCommSend(cmd_can_comm, (void *)&chassis_cmd_send);
 #endif
         (void)MessagePublishNow(shoot_cmd_pub, &shoot_cmd_send);
         (void)MessagePublishNow(gimbal_cmd_pub, &gimbal_cmd_send);
@@ -602,12 +581,9 @@ void RobotCMDTask()
 
     // 推送消息,双板通信等
     // 其他应用所需的控制数据在remotecontrolsetmode和mousekeysetmode中完成设置
-#ifdef ONE_BOARD
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
 #endif // ONE_BOARD
-#ifdef GIMBAL_BOARD
-    CANCommSend(cmd_can_comm, (void *)&chassis_cmd_send);
-#endif // GIMBAL_BOARD
     (void)MessagePublishNow(shoot_cmd_pub, &shoot_cmd_send);
     (void)MessagePublishNow(gimbal_cmd_pub, &gimbal_cmd_send);
 }

@@ -16,6 +16,10 @@ volatile DWT_Probe_t motor_prof_all = {0};
 volatile DWT_Probe_t motor_prof_dji = {0};
 volatile DWT_Probe_t motor_prof_lk = {0};
 
+#if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
+#include "robot_can_bridge.h"
+#endif
+
 void MotorControlTask()
 {
     // static uint8_t cnt = 0; 设定不同电机的任务频率
@@ -26,6 +30,10 @@ void MotorControlTask()
 
     // 先按顺序解码已排队的反馈，再使用这些测量值计算；不要另建并发派发调用者。
     CANProcessRx();
+#if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
+    // 收发和同步检查由同一任务串行执行，避免接收状态被并发改写。
+    RobotCanBridgeService();
+#endif
     // UART 和 USB 也在这里运行模块解析，避免将协议计算放在中断里；排队过时的数据由 BSP 跳过。
     USARTProcessRx();
     (void)USBTransportProcessRx();
@@ -58,5 +66,8 @@ void MotorControlTask()
     // StepMotorControl();
     // 控制模块只提交复制后的候选帧；唯一发送推进点统一仲裁并写入各总线 FIFO。
     CANProcessTx();
+#if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
+    RobotCanBridgeServiceTx();
+#endif
     DWT_ProbeDone(&motor_prof_all, probe_all);
 }

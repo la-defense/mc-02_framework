@@ -342,13 +342,17 @@ add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_feedback.c
   ../../modules/motor/motor_pid.c
   ../../modules/motor/DJImotor/dji_motor.c
-  ../../modules/algorithm/controller.c ../../modules/daemon/daemon.c ../../bsp/can/bsp_can.c)
+  ../../modules/algorithm/controller.c ../../modules/daemon/daemon.c ../../bsp/can/bsp_can.c
+  ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_topic_transport.c
+  ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_topic_bridge.c
+  ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c
+  ../../modules/message_center/message_center.c)
 target_include_directories(lk_motor_bsp_can_test BEFORE PRIVATE ../../bsp/can lk_motor_can_fakes
   lk_motor_fakes . ../../modules/motor/LKmotor ../../modules/motor ../../modules
-  ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/message_center)
+  ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/message_center ../../modules/can_comm ../../modules/time_sync)
 target_compile_options(lk_motor_bsp_can_test PRIVATE -Wall -Wextra -Werror
   -Wno-type-limits -ffunction-sections -fdata-sections -fno-builtin-malloc -fno-builtin-free)
-target_link_libraries(lk_motor_bsp_can_test PRIVATE mc02_numeric)
+target_link_libraries(lk_motor_bsp_can_test PRIVATE mc02_numeric mc02_software_crc)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
    (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE))
   target_compile_definitions(lk_motor_bsp_can_test PRIVATE LK_TEST_ALLOC_WRAP=1)
@@ -374,7 +378,7 @@ add_test(NAME production_can_full_queue_burst COMMAND lk_motor_bsp_can_test rx-b
 set_tests_properties(production_can_full_queue_burst PROPERTIES TIMEOUT 10)
 add_test(NAME production_dji_parser_full_queue_burst COMMAND lk_motor_bsp_can_test dji-rx-burst)
 set_tests_properties(production_dji_parser_full_queue_burst PROPERTIES TIMEOUT 10)
-foreach(can_tx_scenario IN ITEMS arguments-copy queue-batch-buses periodic-budget expiry-cancel-wrap
+foreach(can_tx_scenario IN ITEMS arguments-copy queue-batch-buses topic-group topic-interrupt topic-contention topic-shared topic-drain topic-sync-budget topic-pending topic-cancel topic-rx periodic-budget expiry-cancel-wrap
     retry-abort budget-large-arithmetic retry-priority)
   string(REPLACE "-" "_" can_tx_test_suffix "${can_tx_scenario}")
   add_test(NAME production_can_tx_${can_tx_test_suffix}
@@ -591,6 +595,63 @@ if(UNIX)
   target_link_options(can_comm_freshness_test PRIVATE -Wl,--gc-sections)
 endif()
 add_test(NAME can_comm_crc_and_snapshot_expiry COMMAND can_comm_freshness_test)
+add_executable(can_topic_wire_test can_topic_wire_test.c ../../modules/can_comm/can_topic_wire.c)
+target_include_directories(can_topic_wire_test PRIVATE ../../modules/can_comm)
+target_link_libraries(can_topic_wire_test PRIVATE mc02_software_crc)
+target_compile_options(can_topic_wire_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+add_test(NAME production_can_topic_wire COMMAND can_topic_wire_test)
+set_tests_properties(production_can_topic_wire PROPERTIES TIMEOUT 10)
+add_executable(can_time_sync_test can_time_sync_test.c
+  ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c)
+target_include_directories(can_time_sync_test BEFORE PRIVATE can_comm_fakes)
+target_include_directories(can_time_sync_test PRIVATE ../../modules/can_comm ../../modules/time_sync)
+target_link_libraries(can_time_sync_test PRIVATE mc02_software_crc)
+target_compile_options(can_time_sync_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+add_test(NAME production_can_time_sync COMMAND can_time_sync_test)
+set_tests_properties(production_can_time_sync PROPERTIES TIMEOUT 10)
+add_executable(can_topic_transport_test can_topic_transport_test.c
+  ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c)
+target_include_directories(can_topic_transport_test BEFORE PRIVATE can_comm_fakes)
+target_include_directories(can_topic_transport_test PRIVATE ../../modules/can_comm)
+target_link_libraries(can_topic_transport_test PRIVATE mc02_software_crc)
+target_compile_options(can_topic_transport_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+add_test(NAME production_can_topic_transport COMMAND can_topic_transport_test)
+set_tests_properties(production_can_topic_transport PROPERTIES TIMEOUT 10)
+add_executable(can_topic_bridge_test can_topic_bridge_test.c ../../modules/can_comm/can_topic_bridge.c
+  ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c
+  ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c
+  ../../modules/message_center/message_center.c ../../application/topics/chassis_topic_codec.c)
+target_include_directories(can_topic_bridge_test BEFORE PRIVATE can_comm_fakes init_resource_fakes chassis_fakes)
+target_include_directories(can_topic_bridge_test PRIVATE ../../modules/can_comm ../../modules/message_center ../../modules/time_sync ../../application ../../application/topics)
+target_link_libraries(can_topic_bridge_test PRIVATE mc02_software_crc)
+target_compile_options(can_topic_bridge_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+add_test(NAME production_can_topic_bridge COMMAND can_topic_bridge_test)
+set_tests_properties(production_can_topic_bridge PROPERTIES TIMEOUT 10)
+foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
+  string(TOLOWER ${role} role_name)
+  add_executable(robot_can_bridge_${role_name}_test robot_can_bridge_test.c
+    ../../application/topics/robot_can_bridge.c ../../application/topics/robot_topics.c
+    ../../application/topics/chassis_topic_codec.c ../../modules/message_center/message_center.c
+    ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_topic_bridge.c
+    ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c
+    ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c)
+  target_include_directories(robot_can_bridge_${role_name}_test BEFORE PRIVATE
+    can_bridge_fakes can_comm_fakes init_resource_fakes chassis_fakes)
+  target_include_directories(robot_can_bridge_${role_name}_test PRIVATE
+    ../../application ../../application/topics ../../modules/can_comm ../../modules/message_center
+    ../../modules/time_sync ../../modules/imu ../../modules/master_machine)
+  target_compile_definitions(robot_can_bridge_${role_name}_test PRIVATE ${role}=1 MC02_PROFILE_ROBOT=1)
+  target_link_libraries(robot_can_bridge_${role_name}_test PRIVATE mc02_software_crc)
+  target_compile_options(robot_can_bridge_${role_name}_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+  add_test(NAME production_robot_can_bridge_${role_name} COMMAND robot_can_bridge_${role_name}_test)
+  set_tests_properties(production_robot_can_bridge_${role_name} PROPERTIES TIMEOUT 10)
+endforeach()
+add_executable(chassis_topic_codec_test chassis_topic_codec_test.c ../../application/topics/chassis_topic_codec.c)
+target_include_directories(chassis_topic_codec_test BEFORE PRIVATE chassis_fakes)
+target_include_directories(chassis_topic_codec_test PRIVATE ../../application ../../application/topics)
+target_compile_options(chassis_topic_codec_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+add_test(NAME production_chassis_topic_codec COMMAND chassis_topic_codec_test)
+set_tests_properties(production_chassis_topic_codec PROPERTIES TIMEOUT 10)
 add_executable(init_resource_test init_resource_test.c
   ../../modules/daemon/daemon.c ../../modules/message_center/message_center.c)
 target_include_directories(init_resource_test BEFORE PRIVATE init_resource_fakes)
@@ -828,6 +889,18 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
   endif()
   add_test(NAME production_chassis_task_${chassis_limits_profile} COMMAND ${target})
 endforeach()
+add_executable(chassis_dual_topic_test chassis_task_test.c
+  ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
+  ../../application/topics/robot_topics.c ../../modules/message_center/message_center.c)
+target_include_directories(chassis_dual_topic_test BEFORE PRIVATE chassis_fakes)
+target_include_directories(chassis_dual_topic_test PRIVATE ../../application ../../application/chassis
+  ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine)
+target_compile_definitions(chassis_dual_topic_test PRIVATE CHASSIS_BOARD=1 CHASSIS_TASK_EXPECT_CONFIGURED=1
+  CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=10.0f
+  CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
+target_link_libraries(chassis_dual_topic_test PRIVATE m)
+add_test(NAME production_chassis_dual_topic_invalidation COMMAND chassis_dual_topic_test)
+set_tests_properties(production_chassis_dual_topic_invalidation PROPERTIES TIMEOUT 10)
 foreach(scenario cap-failure motor-failure)
   add_test(NAME production_chassis_init_${scenario} COMMAND chassis_task_configured_test ${scenario})
   set_tests_properties(production_chassis_init_${scenario} PROPERTIES TIMEOUT 10)
