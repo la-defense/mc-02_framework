@@ -69,6 +69,7 @@ set(MC02_PLATFORM_C_SOURCES
 
 set(MC02_BSP_C_SOURCES
     bsp/os/platform_os_freertos.c # 任务接口的 FreeRTOS 后端。
+    bsp/os/platform_sync_freertos.c # 任务临界区与原有毫秒时钟的后端。
     bsp/observation/bsp_observation.c
     bsp/bsp_init.c
     bsp/bsp_tools.c

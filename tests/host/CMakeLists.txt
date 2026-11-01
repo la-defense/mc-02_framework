@@ -15,6 +15,17 @@ if(UNIX)
 endif()
 include(../../cmake/mc02_dsp.cmake)
 mc02_add_dsp(mc02_dsp_host TRUE)
+# 每个消息中心测试都编译自己的平台适配器，使其使用该测试配置的锁和时钟替身。
+set(MC02_HOST_MESSAGE_CENTER_SOURCES
+  ../../modules/message_center/message_center.c # 实际话题实现。
+  ../../bsp/os/platform_sync_freertos.c) # 该目标所选的任务临界区和计时替身。
+# 消息中心单独取得平台公共头，其他主机测试不继承额外路径。
+set_property(SOURCE ../../modules/message_center/message_center.c APPEND PROPERTY
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+# 仅提供框架头，验证消息中心本身不依赖 HAL／FreeRTOS 头路径。
+add_library(mc02_message_center_portable OBJECT ../../modules/message_center/message_center.c)
+target_include_directories(mc02_message_center_portable PRIVATE ../../modules/message_center ../../bsp/os)
+target_compile_options(mc02_message_center_portable PRIVATE -Wall -Wextra -Werror)
 # 不继承厂商头路径，确保公共数值头可被独立业务编译。
 add_library(mc02_numeric_public_headers OBJECT numeric_public_headers.c)
 target_include_directories(mc02_numeric_public_headers PRIVATE ../../modules/algorithm)
@@ -39,6 +50,15 @@ endif()
 
 
 if(UNIX AND NOT APPLE)
+  # 使用生产同步后端和可嵌套主机锁，验证任务临界区配对及毫秒回绕。
+  add_executable(platform_sync_test platform_sync_test.c ../../bsp/os/platform_sync_freertos.c
+    host_critical_model.c)
+  target_include_directories(platform_sync_test BEFORE PRIVATE daemon_source_fakes)
+  target_include_directories(platform_sync_test PRIVATE ../../bsp/os .)
+  target_compile_options(platform_sync_test PRIVATE -Wall -Wextra -Werror)
+  target_link_libraries(platform_sync_test PRIVATE Threads::Threads)
+  add_test(NAME production_platform_sync_nesting_and_wrap COMMAND platform_sync_test)
+  set_tests_properties(production_platform_sync_nesting_and_wrap PROPERTIES TIMEOUT 10)
   add_executable(daemon_source_monitor_test daemon_source_monitor_test.c
     ../../modules/daemon/daemon.c ../../modules/daemon/daemon_event_task.c
     ../../bsp/os/platform_os_freertos.c # 用生产适配器调用测试中的 CMSIS 替身。
@@ -96,7 +116,7 @@ if(UNIX AND NOT APPLE)
     ../../modules/master_machine/vision_protocol_v2.c
     ../../modules/time_sync/time_mapping.c
     ../../application/topics/robot_topics.c
-    ../../modules/message_center/message_center.c)
+    ${MC02_HOST_MESSAGE_CENTER_SOURCES})
   target_include_directories(vision_v2_link_test BEFORE PRIVATE
     vision_v2_link_fakes crc_protocol_fakes)
   target_include_directories(vision_v2_link_test PRIVATE
@@ -353,7 +373,7 @@ add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_topic_transport.c
   ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_topic_bridge.c
   ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c
-  ../../modules/message_center/message_center.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES})
 target_include_directories(lk_motor_bsp_can_test BEFORE PRIVATE ../../bsp/can lk_motor_can_fakes
   lk_motor_fakes . ../../modules/motor/LKmotor ../../modules/motor ../../modules
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/message_center ../../modules/can_comm ../../modules/time_sync)
@@ -569,13 +589,13 @@ target_compile_options(attitude_filter_test PRIVATE -Wall -Wextra -Werror -fno-f
 add_test(NAME production_attitude_backends_quality_prediction_and_isolation COMMAND attitude_filter_test)
 set_tests_properties(production_attitude_backends_quality_prediction_and_isolation PROPERTIES TIMEOUT 10)
 
-add_executable(message_freshness_test message_freshness_test.c ../../modules/message_center/message_center.c)
+add_executable(message_freshness_test message_freshness_test.c ${MC02_HOST_MESSAGE_CENTER_SOURCES})
 target_include_directories(message_freshness_test BEFORE PRIVATE init_resource_fakes)
 target_include_directories(message_freshness_test PRIVATE ../../modules/message_center)
 add_test(NAME message_freshness_age_and_snapshot_consistency COMMAND message_freshness_test)
 set_tests_properties(message_freshness_age_and_snapshot_consistency PROPERTIES TIMEOUT 10)
 add_executable(message_center_capacity_test message_center_capacity_test.c
-  ../../modules/message_center/message_center.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES})
 target_include_directories(message_center_capacity_test BEFORE PRIVATE init_resource_fakes)
 target_include_directories(message_center_capacity_test PRIVATE ../../modules/message_center)
 add_test(NAME production_message_center_payload_storage_capacity COMMAND message_center_capacity_test)
@@ -583,7 +603,7 @@ set_tests_properties(production_message_center_payload_storage_capacity PROPERTI
 if(UNIX AND NOT APPLE)
   find_package(Threads REQUIRED)
   add_executable(message_center_thread_test message_center_thread_test.c
-    ../../modules/message_center/message_center.c)
+    ${MC02_HOST_MESSAGE_CENTER_SOURCES})
   target_include_directories(message_center_thread_test BEFORE PRIVATE message_center_thread_fakes)
   target_include_directories(message_center_thread_test PRIVATE ../../modules/message_center)
   target_link_libraries(message_center_thread_test PRIVATE Threads::Threads)
@@ -593,7 +613,7 @@ if(UNIX AND NOT APPLE)
 
   # 对比生产复制读写与只读租约视图模型；模型只用于评估，不进入固件。
   add_executable(message_center_pointer_eval_test message_center_pointer_eval_test.c
-    ../../application/topics/robot_topics.c ../../modules/message_center/message_center.c)
+    ../../application/topics/robot_topics.c ${MC02_HOST_MESSAGE_CENTER_SOURCES})
   target_include_directories(message_center_pointer_eval_test BEFORE PRIVATE
     message_center_thread_fakes robot_cmd_fakes)
   target_include_directories(message_center_pointer_eval_test PRIVATE . ../../application
@@ -652,7 +672,7 @@ set_tests_properties(production_can_topic_transport PROPERTIES TIMEOUT 10)
 add_executable(can_topic_bridge_test can_topic_bridge_test.c ../../modules/can_comm/can_topic_bridge.c
   ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c
   ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c
-  ../../modules/message_center/message_center.c ../../application/topics/chassis_topic_codec.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../application/topics/chassis_topic_codec.c)
 target_include_directories(can_topic_bridge_test BEFORE PRIVATE can_comm_fakes init_resource_fakes chassis_fakes)
 target_include_directories(can_topic_bridge_test PRIVATE ../../modules/can_comm ../../modules/message_center ../../modules/time_sync ../../application ../../application/topics)
 target_link_libraries(can_topic_bridge_test PRIVATE mc02_software_crc)
@@ -663,7 +683,7 @@ foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
   string(TOLOWER ${role} role_name)
   set(robot_can_bridge_test_sources robot_can_bridge_test.c
     ../../application/topics/robot_can_bridge.c ../../application/topics/robot_topics.c
-    ../../application/topics/chassis_topic_codec.c ../../modules/message_center/message_center.c
+    ../../application/topics/chassis_topic_codec.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
     ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_topic_bridge.c
     ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c
     ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c)
@@ -689,7 +709,7 @@ target_compile_options(chassis_topic_codec_test PRIVATE -Wall -Wextra -Werror -f
 add_test(NAME production_chassis_topic_codec COMMAND chassis_topic_codec_test)
 set_tests_properties(production_chassis_topic_codec PROPERTIES TIMEOUT 10)
 add_executable(init_resource_test init_resource_test.c
-  ../../modules/daemon/daemon.c ../../modules/message_center/message_center.c)
+  ../../modules/daemon/daemon.c ${MC02_HOST_MESSAGE_CENTER_SOURCES})
 target_include_directories(init_resource_test BEFORE PRIVATE init_resource_fakes)
 target_include_directories(init_resource_test PRIVATE ../../bsp/dwt ../../modules/daemon
   ../../modules/message_center ../../modules/alarm)
@@ -873,7 +893,7 @@ add_executable(remote_command_integration_test remote_command_integration_test.c
   ../../bsp/usart/bsp_usart.c ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
   ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
   ../../application/topics/robot_topics.c
-  ../../modules/message_center/message_center.c ../../modules/master_machine/vision_control.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/master_machine/vision_control.c)
 target_include_directories(remote_command_integration_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
 target_include_directories(remote_command_integration_test PRIVATE ../../application ../../application/cmd
   ../../modules
@@ -888,7 +908,7 @@ add_executable(pc_vision_integration_test remote_command_integration_test.c
   ../../bsp/usart/bsp_usart.c ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
   ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
   ../../application/topics/robot_topics.c
-  ../../modules/message_center/message_center.c ../../modules/master_machine/vision_control.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/master_machine/vision_control.c)
 target_include_directories(pc_vision_integration_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
 target_include_directories(pc_vision_integration_test PRIVATE ../../application ../../application/cmd
   ../../modules ../../application/config ../../modules/remote ../../modules/daemon ../../modules/safety
@@ -921,7 +941,7 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
     ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
     ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c
     ../../application/topics/robot_topics.c
-    ../../modules/message_center/message_center.c)
+    ${MC02_HOST_MESSAGE_CENTER_SOURCES})
   target_include_directories(${target} BEFORE PRIVATE chassis_fakes)
   target_include_directories(${target} PRIVATE ../../application ../../application/chassis
     ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine)
@@ -945,7 +965,7 @@ endforeach()
 add_executable(chassis_dual_topic_test chassis_task_test.c
   ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
     ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c
-  ../../application/topics/robot_topics.c ../../modules/message_center/message_center.c
+  ../../application/topics/robot_topics.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
   ../../modules/safety/robot_safety.c)
 target_include_directories(chassis_dual_topic_test BEFORE PRIVATE chassis_fakes)
 target_include_directories(chassis_dual_topic_test PRIVATE ../../application ../../application/chassis
@@ -961,7 +981,7 @@ add_executable(chassis_bridge_integration_test chassis_task_test.c
   ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
     ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c
   ../../application/topics/robot_topics.c ../../application/topics/chassis_topic_codec.c
-  ../../modules/message_center/message_center.c ../../modules/can_comm/can_topic_link.c
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/can_comm/can_topic_link.c
   ../../modules/can_comm/can_topic_bridge.c ../../modules/can_comm/can_topic_transport.c
   ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_time_sync.c
   ../../modules/time_sync/time_mapping.c ../../modules/safety/robot_safety.c)
@@ -985,7 +1005,7 @@ endforeach()
 add_executable(robot_cmd_task_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c
   ../../application/topics/robot_topics.c
-  ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
+  ../../modules/safety/robot_safety.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
   ../../modules/master_machine/vision_control.c)
 target_include_directories(robot_cmd_task_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_cmd_task_test PRIVATE ../../application ../../application/cmd ../../application/config
@@ -1001,7 +1021,7 @@ add_test(NAME production_remote_gesture_tick_zero COMMAND robot_cmd_task_test ge
 add_executable(robot_cmd_vision_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c
   ../../application/topics/robot_topics.c
-  ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
+  ../../modules/safety/robot_safety.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
   ../../modules/master_machine/vision_control.c)
 target_include_directories(robot_cmd_vision_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_cmd_vision_test PRIVATE ../../application ../../application/cmd ../../application/config
@@ -1019,7 +1039,7 @@ add_test(NAME production_command_task_vision_fault_recovery COMMAND robot_cmd_vi
 add_test(NAME production_shoot_vision_source_switches COMMAND robot_cmd_vision_test shoot-switches)
 add_executable(robot_cmd_v2_test robot_cmd_v2_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c ../../application/topics/robot_topics.c
-  ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
+  ../../modules/safety/robot_safety.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
   ../../modules/master_machine/vision_control.c)
 target_include_directories(robot_cmd_v2_test BEFORE PRIVATE robot_cmd_fakes init_resource_fakes)
 target_include_directories(robot_cmd_v2_test PRIVATE . ../../application ../../application/cmd
@@ -1054,7 +1074,7 @@ set_tests_properties(production_gimbal_mode_state_transitions PROPERTIES TIMEOUT
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(ROBOT_CMD_PERF_SOURCES robot_cmd_perf_test.c ../../application/cmd/robot_cmd.c
     ../../modules/remote/remote_safety.c ../../application/topics/robot_topics.c
-    ../../modules/safety/robot_safety.c ../../modules/message_center/message_center.c
+    ../../modules/safety/robot_safety.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
     ../../modules/master_machine/vision_control.c ../../modules/daemon/daemon.c)
   function(add_robot_cmd_perf_target target)
     add_executable(${target} ${ROBOT_CMD_PERF_SOURCES})
@@ -1080,7 +1100,7 @@ endif()
 add_executable(robot_cmd_dual_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c ../../modules/safety/robot_safety.c
   ../../application/topics/robot_topics.c
-  ../../modules/message_center/message_center.c ../../modules/master_machine/vision_control.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/master_machine/vision_control.c)
 target_include_directories(robot_cmd_dual_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_cmd_dual_test PRIVATE ../../application ../../application/cmd ../../application/config
   ../../modules ../../modules/remote ../../modules/imu ../../modules/master_machine ../../modules/message_center
@@ -1096,7 +1116,7 @@ foreach(target IN ITEMS robot_cmd_task_test robot_cmd_vision_test robot_cmd_v2_t
 endforeach()
 add_executable(shoot_freshness_test shoot_freshness_test.c
   ../../application/shoot/shoot.c ../../application/topics/robot_topics.c
-  ../../modules/message_center/message_center.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES})
 target_include_directories(shoot_freshness_test BEFORE PRIVATE shoot_fakes init_resource_fakes)
 target_include_directories(shoot_freshness_test PRIVATE ../../application ../../application/shoot
   ../../modules ../../modules/message_center ../../modules/master_machine ../../modules/imu
@@ -1651,7 +1671,7 @@ endif()
 add_test(NAME production_lcd_referee_group_freshness COMMAND lcd_referee_rows_test)
 # 生产日志核心只替代平台时钟、临界区、任务创建和整条RTT写入。
 add_executable(log_test log_test.c ../../bsp/log/bsp_log.c
-  ../../modules/message_center/message_center.c ../../application/topics/robot_topics_diag.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../application/topics/robot_topics_diag.c)
 target_include_directories(log_test BEFORE PRIVATE init_resource_fakes)
 target_include_directories(log_test PRIVATE . ../../bsp/log ../../modules/message_center
   ../../application/topics)
@@ -1872,7 +1892,8 @@ endforeach()
 get_property(host_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS host_targets)
   get_target_property(type ${target} TYPE)
-  if(type STREQUAL "EXECUTABLE" OR type STREQUAL "STATIC_LIBRARY")
+  # 独立头文件和可移植性编译目标同样需要仓库的格式诊断。
+  if(type STREQUAL "EXECUTABLE" OR type STREQUAL "STATIC_LIBRARY" OR type STREQUAL "OBJECT_LIBRARY")
     mc02_apply_format_diagnostics(${target})
   endif()
 endforeach()

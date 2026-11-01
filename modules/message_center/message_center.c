@@ -7,9 +7,7 @@
 
 #include <limits.h>
 #include <string.h>
-#include "main.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "platform_sync.h"
 
 #define MESSAGE_ENDPOINT_MIN 1u
 #define MESSAGE_ENDPOINT_MAX 31u
@@ -145,7 +143,7 @@ MessageStatus_t MessageCenterInit(const MessageTopicDescriptor_t *descriptors, s
                 return MESSAGE_ERR_DIRECTORY;
     }
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (directory_ready)
     {
         uint8_t same = (uint8_t)(count == topic_count);
@@ -155,7 +153,7 @@ MessageStatus_t MessageCenterInit(const MessageTopicDescriptor_t *descriptors, s
             same = (uint8_t)(index >= 0 &&
                 IsDescriptorEqual(&topics[index].descriptor, &descriptors[i]));
         }
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return same ? MESSAGE_OK : MESSAGE_ERR_DIRECTORY;
     }
 
@@ -173,7 +171,7 @@ MessageStatus_t MessageCenterInit(const MessageTopicDescriptor_t *descriptors, s
         topics[i].active = 1u;
     }
     directory_ready = 1u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return MESSAGE_OK;
 }
 
@@ -187,13 +185,13 @@ MessagePublisher_t *MessagePublisherRegister(MessageTopicId_t topic_id,
         (topics[topic_index].descriptor.publisher_mask & (1u << (endpoint_id - 1u))) == 0u)
         return NULL;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     for (size_t i = 0u; i < MESSAGE_CENTER_MAX_SUBSCRIBERS; ++i)
     {
         if (publisher_storage[i].active && publisher_storage[i].topic_id == topic_id &&
             publisher_storage[i].endpoint_id == endpoint_id)
         {
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return &publishers[i];
         }
     }
@@ -205,11 +203,11 @@ MessagePublisher_t *MessagePublisherRegister(MessageTopicId_t topic_id,
             publisher_storage[i].topic_id = topic_id;
             publisher_storage[i].endpoint_id = endpoint_id;
             publishers[i].storage_index = (uint8_t)i;
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return &publishers[i];
         }
     }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return NULL;
 }
 
@@ -223,12 +221,12 @@ MessageSubscriber_t *MessageSubscriberRegister(MessageTopicId_t topic_id,
         (topics[topic_index].descriptor.subscriber_mask & (1u << (endpoint_id - 1u))) == 0u)
         return NULL;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     for (size_t i = 0u; i < MESSAGE_CENTER_MAX_SUBSCRIBERS; ++i)
         if (subscribers[i].active && subscribers[i].topic_index == (uint8_t)topic_index &&
             subscribers[i].endpoint_id == endpoint_id)
         {
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return &subscribers[i];
         }
 
@@ -240,7 +238,7 @@ MessageSubscriber_t *MessageSubscriberRegister(MessageTopicId_t topic_id,
                 (size_t)descriptor->payload_size * descriptor->capacity;
             if (payload_bytes > MESSAGE_CENTER_MAX_PAYLOAD_STORAGE_BYTES - payload_storage_used)
             {
-                taskEXIT_CRITICAL();
+                PlatformTaskCriticalExit();
                 return NULL;
             }
             memset(&subscribers[i], 0, sizeof(subscribers[i]));
@@ -250,10 +248,10 @@ MessageSubscriber_t *MessageSubscriberRegister(MessageTopicId_t topic_id,
             subscribers[i].payload_offset = (uint16_t)payload_storage_used;
             payload_storage_used += payload_bytes;
             subscribers[i].active = 1u;
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return &subscribers[i];
         }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return NULL;
 }
 
@@ -262,12 +260,12 @@ MessageStatus_t MessagePublisherGetDescriptor(const MessagePublisher_t *publishe
     if (publisher == NULL || output == NULL || publisher->storage_index >= MESSAGE_CENTER_MAX_SUBSCRIBERS)
         return MESSAGE_ERR_ARGUMENT;
     if (!directory_ready) return MESSAGE_ERR_NOT_INITIALIZED;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     const MessagePublisherStorage_t *handle=&publisher_storage[publisher->storage_index];
     const int index=handle->active ? FindTopicIndex(handle->topic_id) : -1;
-    if (index < 0) { taskEXIT_CRITICAL(); return MESSAGE_ERR_TOPIC; }
+    if (index < 0) { PlatformTaskCriticalExit(); return MESSAGE_ERR_TOPIC; }
     *output=topics[index].descriptor;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return MESSAGE_OK;
 }
 
@@ -275,12 +273,12 @@ MessageStatus_t MessageSubscriberGetDescriptor(const MessageSubscriber_t *subscr
 {
     if (subscriber == NULL || output == NULL) return MESSAGE_ERR_ARGUMENT;
     if (!directory_ready) return MESSAGE_ERR_NOT_INITIALIZED;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (!subscriber->active || subscriber->topic_index >= topic_count) {
-        taskEXIT_CRITICAL(); return MESSAGE_ERR_TOPIC;
+        PlatformTaskCriticalExit(); return MESSAGE_ERR_TOPIC;
     }
     *output=topics[subscriber->topic_index].descriptor;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return MESSAGE_OK;
 }
 
@@ -288,19 +286,19 @@ MessageStatus_t MessagePublisherInvalidate(MessagePublisher_t *publisher)
 {
     if (publisher==NULL || publisher->storage_index>=MESSAGE_CENTER_MAX_SUBSCRIBERS) return MESSAGE_ERR_ARGUMENT;
     if (!directory_ready) return MESSAGE_ERR_NOT_INITIALIZED;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     const MessagePublisherStorage_t *handle=&publisher_storage[publisher->storage_index];
     const int index=handle->active ? FindTopicIndex(handle->topic_id) : -1;
-    if (index<0) { taskEXIT_CRITICAL(); return MESSAGE_ERR_TOPIC; }
+    if (index<0) { PlatformTaskCriticalExit(); return MESSAGE_ERR_TOPIC; }
     const uint32_t mask=topics[index].descriptor.publisher_mask;
-    if (mask==0u || (mask & (mask-1u))!=0u) { taskEXIT_CRITICAL(); return MESSAGE_ERR_RELATION; }
+    if (mask==0u || (mask & (mask-1u))!=0u) { PlatformTaskCriticalExit(); return MESSAGE_ERR_RELATION; }
     // 只撤销该单一来源的订阅数据；其他话题和发布顺序不变。
     for (size_t i=0u;i<MESSAGE_CENTER_MAX_SUBSCRIBERS;++i)
         if (subscribers[i].active && subscribers[i].topic_index==(uint8_t)index) {
             subscribers[i].head=0u;
             subscribers[i].count=0u;
         }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return MESSAGE_OK;
 }
 
@@ -314,23 +312,23 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
     if (!directory_ready)
         return MESSAGE_ERR_NOT_INITIALIZED;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     const MessagePublisherStorage_t *handle = &publisher_storage[publisher->storage_index];
     if (!handle->active)
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return MESSAGE_ERR_TOPIC;
     }
     const int topic_index = FindTopicIndex(handle->topic_id);
     if (topic_index < 0)
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return MESSAGE_ERR_TOPIC;
     }
     MessageTopicStorage_t *topic = &topics[topic_index];
     if (source_clock != topic->descriptor.source_clock)
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return MESSAGE_ERR_CLOCK_DOMAIN;
     }
 
@@ -344,7 +342,7 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
                 subscriber->count == topic->descriptor.capacity)
             {
                 CountOnce(&topic->stats.rejected);
-                taskEXIT_CRITICAL();
+                PlatformTaskCriticalExit();
                 return MESSAGE_ERR_CAPACITY;
             }
         }
@@ -366,7 +364,7 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
         {
             if (topic->descriptor.overflow == MESSAGE_OVERFLOW_REJECT_NEWEST)
             {
-                taskEXIT_CRITICAL();
+                PlatformTaskCriticalExit();
                 return MESSAGE_ERR_CAPACITY;
             }
             subscriber->head = (uint8_t)((subscriber->head + 1u) % capacity);
@@ -394,13 +392,13 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
             backlog = (uint8_t)(backlog + subscribers[i].count);
     if (backlog > topic->stats.peak_backlog)
         topic->stats.peak_backlog = backlog;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return MESSAGE_OK;
 }
 
 MessageStatus_t MessagePublishNow(MessagePublisher_t *publisher, const void *data)
 {
-    const uint32_t now_ms = HAL_GetTick();
+    const uint32_t now_ms = PlatformTimeNowMs();
     return MessagePublishAt(publisher, data, now_ms, now_ms, now_ms, MESSAGE_CLOCK_LOCAL);
 }
 
@@ -454,13 +452,13 @@ MessageStatus_t MessageReadSnapshot(MessageSubscriber_t *subscriber, void *outpu
     if (status != MESSAGE_OK)
         return status;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (subscriber->count == 0u)
     {
         memset(output, 0, output_size);
         if (freshness != NULL)
             memset(freshness, 0, sizeof(*freshness));
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return MESSAGE_ERR_EMPTY;
     }
     const MessageTopicDescriptor_t *descriptor = &topics[subscriber->topic_index].descriptor;
@@ -476,13 +474,13 @@ MessageStatus_t MessageReadSnapshot(MessageSubscriber_t *subscriber, void *outpu
         memset(output, 0, output_size);
         if (freshness != NULL)
             memset(freshness, 0, sizeof(*freshness));
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return MESSAGE_ERR_EXPIRED;
     }
     memcpy(output, GetSlotData(subscriber, descriptor, subscriber->head), output_size);
     if (freshness != NULL)
         *freshness = slot->freshness;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return MESSAGE_OK;
 }
 
@@ -495,7 +493,7 @@ MessageStatus_t MessageReadEvent(MessageSubscriber_t *subscriber, void *output,
     if (status != MESSAGE_OK)
         return status;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     const MessageTopicDescriptor_t *descriptor = &topics[subscriber->topic_index].descriptor;
     uint8_t expired_any = 0u;
     // 队列头部过期事件必须丢弃，不能越过顺序执行后面的新事件。
@@ -509,7 +507,7 @@ MessageStatus_t MessageReadEvent(MessageSubscriber_t *subscriber, void *output,
                 *freshness = slot->freshness;
             subscriber->head = (uint8_t)((subscriber->head + 1u) % descriptor->capacity);
             subscriber->count--;
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return MESSAGE_OK;
         }
         subscriber->head = (uint8_t)((subscriber->head + 1u) % descriptor->capacity);
@@ -520,7 +518,7 @@ MessageStatus_t MessageReadEvent(MessageSubscriber_t *subscriber, void *output,
     memset(output, 0, output_size);
     if (freshness != NULL)
         memset(freshness, 0, sizeof(*freshness));
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return expired_any != 0u ? MESSAGE_ERR_EXPIRED : MESSAGE_ERR_EMPTY;
 }
 
@@ -533,9 +531,9 @@ MessageStatus_t MessageGetTopicStats(MessageTopicId_t topic_id, MessageTopicStat
     const int topic_index = FindTopicIndex(topic_id);
     if (topic_index < 0)
         return MESSAGE_ERR_TOPIC;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     *stats = topics[topic_index].stats;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return MESSAGE_OK;
 }
 
@@ -547,12 +545,12 @@ MessageStatus_t MessageGetDiagnosticTopicCount(uint8_t *count)
         return MESSAGE_ERR_NOT_INITIALIZED;
 
     uint8_t candidate = 0u;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     // 目录保持原登记顺序，串口请求据此使用稳定的零起始序号。
     for (size_t i = 0u; i < topic_count; ++i)
         if (topics[i].active && topics[i].descriptor.diagnostics_enabled != 0u)
             ++candidate;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     *count = candidate;
     return MESSAGE_OK;
 }
@@ -564,7 +562,7 @@ MessageStatus_t MessageGetTopicDiagnostic(uint8_t index, MessageTopicDiagnostic_
     if (!directory_ready)
         return MESSAGE_ERR_NOT_INITIALIZED;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     uint8_t diagnostic_index = 0u;
     int selected_topic = -1;
     // 跳过未开放诊断的话题，使查询序号只对应显式启用项。
@@ -581,7 +579,7 @@ MessageStatus_t MessageGetTopicDiagnostic(uint8_t index, MessageTopicDiagnostic_
     }
     if (selected_topic < 0)
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return MESSAGE_ERR_RANGE;
     }
 
@@ -589,7 +587,7 @@ MessageStatus_t MessageGetTopicDiagnostic(uint8_t index, MessageTopicDiagnostic_
     MessageTopicDiagnostic_t candidate = {0};
     candidate.descriptor = topic->descriptor;
     candidate.stats = topic->stats;
-    candidate.captured_ms = HAL_GetTick();
+    candidate.captured_ms = PlatformTimeNowMs();
     for (size_t i = 0u; i < MESSAGE_CENTER_MAX_SUBSCRIBERS; ++i)
     {
         const MessagePublisherStorage_t *publisher = &publisher_storage[i];
@@ -611,6 +609,6 @@ MessageStatus_t MessageGetTopicDiagnostic(uint8_t index, MessageTopicDiagnostic_
     }
     candidate.queue_remaining = (uint8_t)(candidate.queue_capacity - candidate.queue_depth);
     *output = candidate;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return MESSAGE_OK;
 }
