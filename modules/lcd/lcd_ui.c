@@ -13,7 +13,9 @@
 #include "task_monitor.h"
 #include "remote_control.h"
 #include "master_process.h"
+#if MC02_FEATURE_HEATER
 #include "imu_heater.h"
+#endif
 #include "ins_task.h"
 #include "referee_task.h"
 #include "rm_referee.h"
@@ -61,7 +63,9 @@ static const Lcd_CnChar_e L_TARGET[] = LCD_LABEL_TARGET;
 static const Lcd_CnChar_e L_DUTY[] = LCD_LABEL_DUTY;
 static const Lcd_CnChar_e L_HEAT[] = LCD_LABEL_HEAT;
 static const Lcd_CnChar_e L_VALID[] = LCD_LABEL_VALID;
+#if MC02_FEATURE_HEATER
 static const Lcd_CnChar_e L_INVALID[] = {LCD_CN_WU2, LCD_CN_XIAO, LCD_CN_COUNT};
+#endif
 static const Lcd_CnChar_e L_REFEREE[] = LCD_LABEL_REFEREE;
 static const Lcd_CnChar_e L_STAGE[] = LCD_LABEL_STAGE;
 static const Lcd_CnChar_e L_HP[] = LCD_LABEL_HP;
@@ -570,6 +574,7 @@ static void draw_page1_static(void)
 // 第 1 页读取当前加热与姿态数据；姿态地址不可用时以 -- 替代角度。
 static void draw_page1_values(void)
 {
+#if MC02_FEATURE_HEATER
     IMUHeaterStatus_t hs;
     IMUHeaterGetStatus(&hs);
 
@@ -627,6 +632,13 @@ static void draw_page1_values(void)
     draw_value_ascii(3, buf);
 
     draw_value_cn(4, hs.sensor_valid ? L_VALID : L_INVALID, LCD_CN_LENGTH(L_VALID));
+#else
+    draw_value_ascii(0, "--");
+    draw_value_ascii(1, "--");
+    draw_value_ascii(2, "--");
+    draw_value_ascii(3, "DISABLED");
+    draw_value_ascii(4, "--");
+#endif
 
     attitude_t *att = INS_GetAttitude();
     if (att == NULL)

@@ -26,7 +26,9 @@
 #include "arm_math.h"
 #include "bmi088.h"
 #include "robot_safety.h"
+#if MC02_FEATURE_HEATER
 #include "imu_heater.h"
+#endif
 #include "task_monitor.h"
 #include <math.h>
 #include <float.h>

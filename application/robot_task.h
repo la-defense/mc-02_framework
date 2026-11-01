@@ -35,7 +35,9 @@
 #endif
 #include "bsp_crash.h"
 #include "bsp_safety.h"
+#if MC02_FEATURE_HEATER
 #include "imu_heater.h"
+#endif
 #include "init_diagnostic.h"
 #include "robot_safety.h"
 
@@ -278,7 +280,9 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
                                     INIT_FAILURE_RESOURCE, 0u);
         RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
         RobotSafetyRequestDisable();
+#if MC02_FEATURE_HEATER
         IMUHeaterForceOff();
+#endif
         BSP_SafetyStartupLatchOutputsOff();
 #endif
         // 算法初始化失败后保持输出关闭，但继续更新诊断和本任务记录，供人工读取。

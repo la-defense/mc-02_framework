@@ -114,7 +114,6 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/BMI088/bmi088.c
     modules/daemon/daemon.c
     modules/daemon/daemon_event_task.c
-    modules/imu/imu_heater.c
     modules/imu/ins_task.c
     modules/lcd/lcd.c
     modules/lcd/lcd_buf.c
@@ -181,6 +180,10 @@ if(MC02_PROFILE STREQUAL "robot")
         application/topics/robot_topics_diag.c)
 endif()
 set(MC02_NEEDS_TIME_MAPPING FALSE)
+if(MC02_FEATURE_HEATER)
+    # 温控未选用时不编译加热器驱动；禁热状态下的长操作仍由任务监控限时。
+    list(APPEND MC02_COMMON_MODULE_C_SOURCES modules/imu/imu_heater.c)
+endif()
 if(MC02_FEATURE_VISION)
     # 视觉适配与控制仅在车型启用视觉时进入固件。
     list(APPEND MC02_COMMON_MODULE_C_SOURCES

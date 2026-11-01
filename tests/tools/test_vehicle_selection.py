@@ -9,6 +9,129 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class VehicleSelectionTest(unittest.TestCase):
+    @staticmethod
+    def _evaluate_feature_disabled_condition(expression):
+        # 只关闭视觉／温控开关；未知平台条件按可达处理，避免无关宏掩盖未保护调用。
+        expression = re.sub(
+            r"defined\s*\(?\s*([A-Za-z_]\w*)\s*\)?",
+            lambda match: "1",
+            expression,
+        )
+        values = {
+            "MC02_FEATURE_VISION": "0",
+            "MC02_FEATURE_HEATER": "0",
+            "MC02_VISION_PROTOCOL_V2": "1",
+        }
+        expression = re.sub(
+            r"\b[A-Za-z_]\w*\b",
+            lambda match: values.get(match.group(0), "1"),
+            expression,
+        )
+        tokens = re.findall(r"\d+|&&|\|\||==|!=|>=|<=|>|<|!|\(|\)", expression)
+        if "".join(tokens) != re.sub(r"\s+", "", expression):
+            raise AssertionError(f"unsupported preprocessor condition: {expression}")
+
+        position = 0
+
+        def parse_primary():
+            nonlocal position
+            if tokens[position] == "(":
+                position += 1
+                result = parse_or()
+                if tokens[position] != ")":
+                    raise AssertionError(f"unclosed preprocessor condition: {expression}")
+                position += 1
+                return result
+            value = int(tokens[position])
+            position += 1
+            return value
+
+        def parse_comparison():
+            nonlocal position
+            left = parse_primary()
+            if position < len(tokens) and tokens[position] in ("==", "!=", ">=", "<=", ">", "<"):
+                operator = tokens[position]
+                position += 1
+                right = parse_primary()
+                return {
+                    "==": left == right,
+                    "!=": left != right,
+                    ">=": left >= right,
+                    "<=": left <= right,
+                    ">": left > right,
+                    "<": left < right,
+                }[operator]
+            return left
+
+        def parse_unary():
+            nonlocal position
+            if position < len(tokens) and tokens[position] == "!":
+                position += 1
+                return not parse_unary()
+            return parse_comparison()
+
+        def parse_and():
+            nonlocal position
+            result = bool(parse_unary())
+            while position < len(tokens) and tokens[position] == "&&":
+                position += 1
+                right = bool(parse_unary())
+                result = result and right
+            return result
+
+        def parse_or():
+            nonlocal position
+            result = bool(parse_and())
+            while position < len(tokens) and tokens[position] == "||":
+                position += 1
+                right = bool(parse_and())
+                result = result or right
+            return result
+
+        result = parse_or()
+        if position != len(tokens):
+            raise AssertionError(f"unparsed preprocessor condition: {expression}")
+        return bool(result)
+
+    def assert_feature_calls_disabled(self, relative_path, call_pattern):
+        source = (ROOT / relative_path).read_text(encoding="utf-8")
+        conditions = []
+        active = True
+        for line in source.splitlines():
+            directive = re.match(r"\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)", line)
+            if directive:
+                kind, expression = directive.groups()
+                if kind in ("if", "ifdef", "ifndef"):
+                    parent_active = active
+                    if kind == "ifdef":
+                        expression = f"defined({expression.strip()})"
+                    elif kind == "ifndef":
+                        expression = f"!defined({expression.strip()})"
+                    branch_active = self._evaluate_feature_disabled_condition(expression)
+                    conditions.append([parent_active, branch_active, parent_active and branch_active])
+                    active = parent_active and branch_active
+                elif kind == "elif":
+                    parent_active, branch_taken, _ = conditions[-1]
+                    branch_active = (not branch_taken and
+                                     self._evaluate_feature_disabled_condition(expression))
+                    conditions[-1][1] = branch_taken or branch_active
+                    conditions[-1][2] = parent_active and branch_active
+                    active = conditions[-1][2]
+                elif kind == "else":
+                    parent_active, branch_taken, _ = conditions[-1]
+                    branch_active = not branch_taken
+                    conditions[-1][1] = True
+                    conditions[-1][2] = parent_active and branch_active
+                    active = conditions[-1][2]
+                elif conditions:
+                    conditions.pop()
+                    active = conditions[-1][2] if conditions else True
+
+            stripped = line.lstrip()
+            if (not stripped.startswith(("//", "/*", "*")) and
+                    re.search(call_pattern, line)):
+                self.assertFalse(active, f"{relative_path}: {line.strip()}")
+
     def run_case(self, body):
         with tempfile.TemporaryDirectory(prefix="mc02-0054-") as directory:
             script = pathlib.Path(directory) / "check.cmake"
@@ -53,14 +176,16 @@ class VehicleSelectionTest(unittest.TestCase):
         health_names = re.findall(r"VEHICLE_HEALTH_MODULE_([A-Z_]+)", health_body.group(1))
         self.assertEqual(c_names, health_names)
 
-    def test_disabled_vision_sources_and_ins_calls_are_excluded(self):
+    def test_disabled_feature_sources_and_calls_are_excluded(self):
         for protocol in ("sp", "v2"):
-            with self.subTest(protocol=protocol), tempfile.TemporaryDirectory(prefix="mc02-0054-sources-") as directory:
-                temp = pathlib.Path(directory)
-                source_dir = temp / "source"
-                source_dir.mkdir()
-                build_dir = temp / "build"
-                project = f'''cmake_minimum_required(VERSION 3.22)
+            for heater_enabled in (False, True):
+                with self.subTest(protocol=protocol, heater=heater_enabled), \
+                        tempfile.TemporaryDirectory(prefix="mc02-0054-sources-") as directory:
+                    temp = pathlib.Path(directory)
+                    source_dir = temp / "source"
+                    source_dir.mkdir()
+                    build_dir = temp / "build"
+                    project = f'''cmake_minimum_required(VERSION 3.22)
 project(mc02_role_sources NONE)
 # 让生产源码清单的文件存在检查指向仓库，同时把测试构建留在临时目录。
 set(CMAKE_SOURCE_DIR "{ROOT.as_posix()}")
@@ -70,38 +195,37 @@ set(MC02_CHASSIS_TYPE omni)
 set(MC02_VISION_PROTOCOL {protocol})
 set(MC02_FEATURE_CHASSIS TRUE)
 set(MC02_FEATURE_VISION FALSE)
+set(MC02_FEATURE_HEATER {str(heater_enabled).upper()})
 include("{(ROOT / "cmake/mc02_firmware_sources.cmake").as_posix()}")
 file(WRITE "${{CMAKE_BINARY_DIR}}/selected-sources.txt" "${{MC02_SELECTED_SOURCES}}")
 '''
-                (source_dir / "CMakeLists.txt").write_text(project, encoding="utf-8")
-                result = subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)],
-                                        text=True, capture_output=True, timeout=30)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                sources = (build_dir / "selected-sources.txt").read_text(encoding="utf-8").split(";")
-                self.assertIn("modules/imu/ins_task.c", sources)
-                for vision_source in (
-                    "modules/master_machine/master_process.c",
-                    "modules/master_machine/vision_control.c",
-                    "modules/master_machine/vision_protocol.c",
-                    "modules/master_machine/vision_protocol_v2.c",
-                ):
-                    self.assertNotIn(vision_source, sources)
+                    (source_dir / "CMakeLists.txt").write_text(project, encoding="utf-8")
+                    result = subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+                                            text=True, capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    sources = (build_dir / "selected-sources.txt").read_text(encoding="utf-8").split(";")
+                    self.assertIn("modules/imu/ins_task.c", sources)
+                    for vision_source in (
+                        "modules/master_machine/master_process.c",
+                        "modules/master_machine/vision_control.c",
+                        "modules/master_machine/vision_protocol.c",
+                        "modules/master_machine/vision_protocol_v2.c",
+                    ):
+                        self.assertNotIn(vision_source, sources)
+                    self.assertEqual("modules/imu/imu_heater.c" in sources, heater_enabled)
 
-        ins_source = (ROOT / "modules/imu/ins_task.c").read_text(encoding="utf-8")
-        conditions = []
-        for line in ins_source.splitlines():
-            directive = re.match(r"\s*#\s*(if|ifdef|ifndef|endif)\b(.*)", line)
-            if directive:
-                kind, expression = directive.groups()
-                if kind == "endif":
-                    if conditions:
-                        conditions.pop()
-                else:
-                    conditions.append(expression)
-            stripped = line.lstrip()
-            if (not stripped.startswith(("//", "/*", "*")) and
-                    re.search(r"\bVisionUpdate(?:Tx|IMUSample)\s*\(", line)):
-                self.assertTrue(any("MC02_FEATURE_VISION" in condition for condition in conditions), line)
+        for path, pattern in (
+            ("modules/imu/ins_task.c", r"\bVisionUpdate(?:Tx|IMUSample)\s*\("),
+            ("application/robot.c", r"\bVision(?:Init|Send)\s*\("),
+            ("application/vehicle_health_port_stm32.c", r"\bVisionGetSnapshot\s*\("),
+            ("application/robot.c", r"\bIMUHeater(?:BeginLongOperation|EndLongOperation)\s*\("),
+            ("application/robot_task.h", r"\bIMUHeaterForceOff\s*\("),
+            ("application/vehicle_health_port_stm32.c", r"\bIMUHeaterGetStatus\s*\("),
+            ("modules/imu/ins_task.c", r"\bIMUHeater(?:Init|Update|ForceOff)\s*\("),
+            ("modules/BMI088/bmi088.c", r"\bIMUHeater(?:BeginLongOperation|EndLongOperation)\s*\("),
+            ("modules/lcd/lcd_ui.c", r"\bIMUHeaterGetStatus\s*\("),
+        ):
+            self.assert_feature_calls_disabled(path, pattern)
 
     def test_graph(self):
         prefix = 'set(MC02_DEP_SAFETY "")\nset(MC02_DEP_IMU SAFETY)\n'

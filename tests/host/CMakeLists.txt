@@ -1568,6 +1568,7 @@ foreach(target IN ITEMS bmi088_calibration_temperature_test bmi088_init_failure_
     bmi088_post_reset_dummy_read_test bmi088_init_write_error_test bmi088_sample_status_test
     bmi088_numeric_test)
   if(TARGET ${target})
+    target_include_directories(${target} PRIVATE ../../application)
     target_link_libraries(${target} PRIVATE mc02_numeric)
   endif()
 endforeach()

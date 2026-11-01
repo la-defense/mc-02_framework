@@ -15,7 +15,9 @@
 #include "robot_safety.h"
 #include "task_monitor.h"
 #include "ins_task.h"
+#if MC02_FEATURE_HEATER
 #include "imu_heater.h"
+#endif
 #if MC02_FEATURE_REMOTE
 #include "remote_control.h"
 #endif
@@ -239,6 +241,8 @@ uint8_t VehicleHealthSourceCapture(VehicleHealthSourceSnapshot_t *output)
         }
     }
 
+    // 未选择温控时不读取其状态，也不把未启用模块记为降级。
+#if MC02_FEATURE_HEATER
     IMUHeaterStatus_t heater = {0};
     IMUHeaterGetStatus(&heater);
     candidate.heater_initialized = heater.initialized;
@@ -254,6 +258,7 @@ uint8_t VehicleHealthSourceCapture(VehicleHealthSourceSnapshot_t *output)
         MarkAvailable(&candidate, VEHICLE_HEALTH_MODULE_HEATER);
     if ((heater.initialized == 0u) || (heater.sensor_valid == 0u) || (heater.fault != 0u))
         MarkDegraded(&candidate, VEHICLE_HEALTH_MODULE_HEATER);
+#endif
 
     BSPLogState_t logging = {0};
     if (BSPLogGetState(&logging) == BSP_LOG_STATUS_OK)

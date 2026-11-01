@@ -12,7 +12,10 @@
 #include "bsp_param.h"
 #include "robot_safety.h"
 #include "task_monitor.h"
+#include "config/build_selection.h"
+#if MC02_FEATURE_HEATER
 #include "imu_heater.h"
+#endif
 #include "cmsis_os.h"
 #include "bsp_dwt.h"
 #include <math.h>
@@ -708,11 +711,15 @@ static void BMI088ApplyCalib(BMI088Instance *b, const float *off, float gNorm)
 
 static uint8_t BMI088CalibrationOperationBegin(void)
 {
+#if MC02_FEATURE_HEATER
     if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION))
         return 0u;
+#endif
     if (!TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION))
     {
+#if MC02_FEATURE_HEATER
         IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION, 0u);
+#endif
         return 0u;
     }
     return 1u;
@@ -722,8 +729,10 @@ static uint8_t BMI088CalibrationOperationEnd(uint8_t success)
 {
     uint8_t within_limit = TaskMonitorEndLongOperation(TASK_MONITOR_INS,
                                                        TASK_MONITOR_LONG_OPERATION_CALIBRATION);
+#if MC02_FEATURE_HEATER
     IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION,
                               (uint8_t)(success && within_limit));
+#endif
     return within_limit;
 }
 
