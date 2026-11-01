@@ -68,6 +68,7 @@ set(MC02_PLATFORM_C_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c)
 
 set(MC02_BSP_C_SOURCES
+    bsp/os/platform_os_freertos.c # 任务接口的 FreeRTOS 后端。
     bsp/observation/bsp_observation.c
     bsp/bsp_init.c
     bsp/bsp_tools.c

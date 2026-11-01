@@ -9,10 +9,13 @@
 #include <stdint.h>
 typedef void (*os_pthread)(void const *argument);
 typedef void *osThreadId;
-typedef struct {os_pthread entry; uint32_t priority; uint32_t stack_size;} osThreadDef_t;
+typedef int osPriority;
+typedef struct {char *name; os_pthread pthread; osPriority tpriority; uint32_t instances; uint32_t stacksize;} osThreadDef_t;
 #define osPriorityBelowNormal 1u
+#define osPriorityNormal 2u
+#define osPriorityAboveNormal 3u
 #define osThreadDef(name, thread, priority, instances, stacksz) \
-    const osThreadDef_t os_thread_def_##name = {thread, priority, stacksz}
+    const osThreadDef_t os_thread_def_##name = {#name, thread, priority, instances, stacksz}
 #define osThread(name) (&os_thread_def_##name)
 osThreadId osThreadCreate(const osThreadDef_t *definition, void *argument);
 void osDelay(uint32_t milliseconds);

@@ -6,6 +6,7 @@
  */
 #include "daemon.h"
 #include "cmsis_os.h"
+#include "platform_os.h"
 #include "test_check.h"
 
 #include <pthread.h>
@@ -24,6 +25,37 @@ static unsigned received_event_count;
 static unsigned consumer_one_events;
 static unsigned consumer_two_events;
 static _Atomic unsigned thread_finished;
+
+static void PlatformTestEntry(void const *argument)
+{
+    (void)argument; // 替身只检查任务入口，不实际启动它。
+}
+
+static void ScenarioPlatformTaskValidation(void)
+{
+    PlatformTaskConfig_t config = {
+        .name = "platform_test", // 验证传给后端的任务名称。
+        .entry = PlatformTestEntry, // 使用不会执行实际工作的入口。
+        .argument = NULL, // 此场景不需要入口参数。
+        .stack_words = 128u, // 测试栈容量按 FreeRTOS 栈字给出。
+        .priority = PLATFORM_TASK_NORMAL, // 验证普通优先级的映射。
+    };
+    TEST_CHECK(PlatformTaskCreate(NULL) == 0u); // 空配置必须在调用后端前拒绝。
+    config.stack_words = 0u; // 零栈不能创建任务。
+    TEST_CHECK(PlatformTaskCreate(&config) == 0u && task_create_calls == 0u);
+    config.stack_words = (uint32_t)UINT16_MAX + 1u; // FreeRTOS 栈深类型容不下时不得静默截断。
+    TEST_CHECK(PlatformTaskCreate(&config) == 0u && task_create_calls == 0u);
+    config.stack_words = 128u; // 恢复有效栈容量。
+    config.priority = (PlatformTaskPriority_t)99; // 未声明优先级不能映射到后端。
+    TEST_CHECK(PlatformTaskCreate(&config) == 0u && task_create_calls == 0u);
+    config.priority = PLATFORM_TASK_NORMAL; // 有效配置应成功提交。
+    TEST_CHECK(PlatformTaskCreate(&config) == 1u && task_create_calls == 1u);
+    TEST_CHECK(last_task_definition.tpriority == osPriorityNormal && last_task_definition.stacksize == 128u);
+    config.priority = PLATFORM_TASK_ABOVE_NORMAL; // 检查较高优先级不会被当作普通任务。
+    TEST_CHECK(PlatformTaskCreate(&config) == 1u && last_task_definition.tpriority == osPriorityAboveNormal);
+    PlatformTaskDelayMs(7u); // 等待值原样传给后端，避免默默改变单位。
+    TEST_CHECK(atomic_load_explicit(&test_tick, memory_order_relaxed) == 7u);
+}
 
 uint32_t HAL_GetTick(void)
 {
@@ -307,8 +339,8 @@ static void ScenarioConsumersAndIndependentTask(void)
     TEST_CHECK(stats.task_started == 0u && stats.task_failed == 1u);
     TEST_CHECK(DaemonEventTaskInit() == DAEMON_OK);
     TEST_CHECK(DaemonEventTaskInit() == DAEMON_OK);
-    TEST_CHECK(task_create_calls == 2u && last_task_definition.stack_size == 512u);
-    TEST_CHECK(last_task_definition.priority == osPriorityBelowNormal);
+    TEST_CHECK(task_create_calls == 2u && last_task_definition.stacksize == 512u);
+    TEST_CHECK(last_task_definition.tpriority == osPriorityBelowNormal);
     TEST_CHECK(DaemonGetStats(NULL, &stats) == DAEMON_OK && stats.task_started == 1u &&
                stats.task_failed == 0u);
     TEST_CHECK(DaemonReportAt(independent, 0u, DAEMON_REPORT_TRANSPORT_VALID |
@@ -373,7 +405,9 @@ static void ScenarioConcurrentAccess(void)
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
-    if (strcmp(argv[1], "deadlines") == 0)
+    if (strcmp(argv[1], "platform-task") == 0)
+        ScenarioPlatformTaskValidation();
+    else if (strcmp(argv[1], "deadlines") == 0)
         ScenarioRegistrationAndDeadlines();
     else if (strcmp(argv[1], "wrap") == 0)
         ScenarioClockWrap();

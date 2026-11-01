@@ -41,12 +41,13 @@ endif()
 if(UNIX AND NOT APPLE)
   add_executable(daemon_source_monitor_test daemon_source_monitor_test.c
     ../../modules/daemon/daemon.c ../../modules/daemon/daemon_event_task.c
+    ../../bsp/os/platform_os_freertos.c # 用生产适配器调用测试中的 CMSIS 替身。
     host_critical_model.c)
   target_include_directories(daemon_source_monitor_test BEFORE PRIVATE daemon_source_fakes)
-  target_include_directories(daemon_source_monitor_test PRIVATE ../../modules/daemon .)
+  target_include_directories(daemon_source_monitor_test PRIVATE ../../modules/daemon ../../bsp/os .)
   target_compile_options(daemon_source_monitor_test PRIVATE -Wall -Wextra -Werror)
   target_link_libraries(daemon_source_monitor_test PRIVATE Threads::Threads)
-  foreach(scenario IN ITEMS deadlines wrap fifo-overflow policies expiration consumers-task-retry threads)
+  foreach(scenario IN ITEMS platform-task deadlines wrap fifo-overflow policies expiration consumers-task-retry threads)
     add_test(NAME production_daemon_${scenario} COMMAND daemon_source_monitor_test ${scenario})
     set_tests_properties(production_daemon_${scenario} PROPERTIES TIMEOUT 10)
   endforeach()

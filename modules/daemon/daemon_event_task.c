@@ -4,7 +4,7 @@
  */
 #include "daemon.h"
 
-#include "cmsis_os.h"
+#include "platform_os.h"
 
 #include <stddef.h>
 
@@ -19,7 +19,7 @@ static void DaemonIndependentEventTask(void const *argument)
         uint8_t processed = 0u;
         (void)DaemonProcessTaskEvents(DAEMON_EVENT_TASK_CONSUMER,
                                       DAEMON_EVENT_TASK_BATCH, &processed);
-        osDelay(1u);
+        PlatformTaskDelayMs(1u); // 给其他任务运行机会，保持原来的毫秒等待。
     }
 }
 
@@ -35,11 +35,16 @@ DaemonStatus_t DaemonEventTaskInit(void)
     if (DaemonGetStats(NULL, &stats) == DAEMON_OK && stats.task_started != 0u)
         return DAEMON_OK;
 
-    osThreadDef(daemon_event_task, DaemonIndependentEventTask, osPriorityBelowNormal, 0,
-                DAEMON_EVENT_TASK_STACK_WORDS);
+    const PlatformTaskConfig_t task = {
+        .name = "daemon_event_task", // 与原 CMSIS 任务名称一致。
+        .entry = DaemonIndependentEventTask, // 在任务中派发来源事件。
+        .argument = NULL, // 当前任务不需要外部参数。
+        .stack_words = DAEMON_EVENT_TASK_STACK_WORDS, // 保持原有栈字数。
+        .priority = PLATFORM_TASK_BELOW_NORMAL, // 保持原有后台优先级。
+    };
     // 任务可能在 osThreadCreate 返回前运行，先开放它的消费者编号。
     DaemonSetEventTaskResult(1u, 0u);
-    if (osThreadCreate(osThread(daemon_event_task), NULL) == NULL)
+    if (PlatformTaskCreate(&task) == 0u)
     {
         DaemonSetEventTaskResult(0u, 1u);
         return DAEMON_ERR_TASK_CREATE;
