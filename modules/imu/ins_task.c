@@ -23,7 +23,7 @@
 #if MC02_FEATURE_VISION
 #include "master_process.h"
 #endif
-#include "arm_math.h"
+#include "fast_trig.h"
 #include "bmi088.h"
 #include "robot_safety.h"
 #if MC02_FEATURE_HEATER
@@ -535,56 +535,62 @@ static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[
         fabsf(param->Pitch - lastPitchOffset) > 0.001f ||
         fabsf(param->Roll - lastRollOffset) > 0.001f || param->flag)
     {
-        cosYaw = arm_cos_f32(param->Yaw / 57.295779513f);
-        cosPitch = arm_cos_f32(param->Pitch / 57.295779513f);
-        cosRoll = arm_cos_f32(param->Roll / 57.295779513f);
-        sinYaw = arm_sin_f32(param->Yaw / 57.295779513f);
-        sinPitch = arm_sin_f32(param->Pitch / 57.295779513f);
-        sinRoll = arm_sin_f32(param->Roll / 57.295779513f);
+        cosYaw = FastTrigCosF32(param->Yaw / 57.295779513f); // yaw 偏角转弧度并求余弦。
+        cosPitch = FastTrigCosF32(param->Pitch / 57.295779513f); // pitch 偏角转弧度并求余弦。
+        cosRoll = FastTrigCosF32(param->Roll / 57.295779513f); // roll 偏角转弧度并求余弦。
+        sinYaw = FastTrigSinF32(param->Yaw / 57.295779513f); // yaw 偏角转弧度并求正弦。
+        sinPitch = FastTrigSinF32(param->Pitch / 57.295779513f); // pitch 偏角转弧度并求正弦。
+        sinRoll = FastTrigSinF32(param->Roll / 57.295779513f); // roll 偏角转弧度并求正弦。
 
         // 1.yaw(alpha) 2.pitch(beta) 3.roll(gamma)
-        c_11 = cosYaw * cosRoll + sinYaw * sinPitch * sinRoll;
-        c_12 = cosPitch * sinYaw;
-        c_13 = cosYaw * sinRoll - cosRoll * sinYaw * sinPitch;
-        c_21 = cosYaw * sinPitch * sinRoll - cosRoll * sinYaw;
-        c_22 = cosYaw * cosPitch;
-        c_23 = -sinYaw * sinRoll - cosYaw * cosRoll * sinPitch;
-        c_31 = -cosPitch * sinRoll;
-        c_32 = sinPitch;
-        c_33 = cosPitch * cosRoll;
-        param->flag = 0;
+        c_11 = cosYaw * cosRoll + sinYaw * sinPitch * sinRoll; // 原 X 对目标 X 的系数。
+        c_12 = cosPitch * sinYaw; // 原 Y 对目标 X 的系数。
+        c_13 = cosYaw * sinRoll - cosRoll * sinYaw * sinPitch; // 原 Z 对目标 X 的系数。
+        c_21 = cosYaw * sinPitch * sinRoll - cosRoll * sinYaw; // 原 X 对目标 Y 的系数。
+        c_22 = cosYaw * cosPitch; // 原 Y 对目标 Y 的系数。
+        c_23 = -sinYaw * sinRoll - cosYaw * cosRoll * sinPitch; // 原 Z 对目标 Y 的系数。
+        c_31 = -cosPitch * sinRoll; // 原 X 对目标 Z 的系数。
+        c_32 = sinPitch; // 原 Y 对目标 Z 的系数。
+        c_33 = cosPitch * cosRoll; // 原 Z 对目标 Z 的系数。
+        param->flag = 0; // 本次已应用强制更新请求。
     }
     float gyro_temp[3];
-    for (uint8_t i = 0; i < 3; ++i)
-        gyro_temp[i] = gyro[i] * param->scale[i];
+    for (uint8_t i = 0; i < 3; ++i) // 三轴先缩放并留存，避免原地写入覆盖后续输入。
+        gyro_temp[i] = gyro[i] * param->scale[i]; // 应用该轴的陀螺仪比例系数。
 
+    // 旋转矩阵第一行将原始三轴投影到目标 X 轴。
     gyro[X] = c_11 * gyro_temp[X] +
               c_12 * gyro_temp[Y] +
               c_13 * gyro_temp[Z];
+    // 第二行将原始三轴投影到目标 Y 轴。
     gyro[Y] = c_21 * gyro_temp[X] +
               c_22 * gyro_temp[Y] +
               c_23 * gyro_temp[Z];
+    // 第三行将原始三轴投影到目标 Z 轴。
     gyro[Z] = c_31 * gyro_temp[X] +
               c_32 * gyro_temp[Y] +
               c_33 * gyro_temp[Z];
 
     float accel_temp[3];
-    for (uint8_t i = 0; i < 3; ++i)
-        accel_temp[i] = accel[i];
+    for (uint8_t i = 0; i < 3; ++i) // 先复制三轴，后续原地写入不会破坏输入。
+        accel_temp[i] = accel[i]; // 保存当前轴的加速度。
 
+    // 第一行计算目标 X 轴加速度。
     accel[X] = c_11 * accel_temp[X] +
                c_12 * accel_temp[Y] +
                c_13 * accel_temp[Z];
+    // 第二行计算目标 Y 轴加速度。
     accel[Y] = c_21 * accel_temp[X] +
                c_22 * accel_temp[Y] +
                c_23 * accel_temp[Z];
+    // 第三行计算目标 Z 轴加速度。
     accel[Z] = c_31 * accel_temp[X] +
                c_32 * accel_temp[Y] +
                c_33 * accel_temp[Z];
 
-    lastYawOffset = param->Yaw;
-    lastPitchOffset = param->Pitch;
-    lastRollOffset = param->Roll;
+    lastYawOffset = param->Yaw; // 保存本次 yaw 偏角，供下次判断是否重算矩阵。
+    lastPitchOffset = param->Pitch; // 保存本次 pitch 偏角。
+    lastRollOffset = param->Roll; // 保存本次 roll 偏角。
 }
 
 //------------------------------------functions below are not used in this demo-------------------------------------------------
@@ -620,17 +626,17 @@ void QuaternionToEularAngle(float *q, float *Yaw, float *Pitch, float *Roll)
 void EularAngleToQuaternion(float Yaw, float Pitch, float Roll, float *q)
 {
     float cosPitch, cosYaw, cosRoll, sinPitch, sinYaw, sinRoll;
-    Yaw /= 57.295779513f;
-    Pitch /= 57.295779513f;
-    Roll /= 57.295779513f;
-    cosPitch = arm_cos_f32(Pitch / 2);
-    cosYaw = arm_cos_f32(Yaw / 2);
-    cosRoll = arm_cos_f32(Roll / 2);
-    sinPitch = arm_sin_f32(Pitch / 2);
-    sinYaw = arm_sin_f32(Yaw / 2);
-    sinRoll = arm_sin_f32(Roll / 2);
-    q[0] = cosPitch * cosRoll * cosYaw + sinPitch * sinRoll * sinYaw;
-    q[1] = sinPitch * cosRoll * cosYaw - cosPitch * sinRoll * sinYaw;
-    q[2] = sinPitch * cosRoll * sinYaw + cosPitch * sinRoll * cosYaw;
-    q[3] = cosPitch * cosRoll * sinYaw - sinPitch * sinRoll * cosYaw;
+    Yaw /= 57.295779513f; // 偏航输入从度转换为弧度。
+    Pitch /= 57.295779513f; // 俯仰输入从度转换为弧度。
+    Roll /= 57.295779513f; // 横滚输入从度转换为弧度。
+    cosPitch = FastTrigCosF32(Pitch / 2); // 俯仰半角余弦用于组合四元数。
+    cosYaw = FastTrigCosF32(Yaw / 2); // 偏航半角余弦用于组合四元数。
+    cosRoll = FastTrigCosF32(Roll / 2); // 横滚半角余弦用于组合四元数。
+    sinPitch = FastTrigSinF32(Pitch / 2); // 俯仰半角正弦用于组合四元数。
+    sinYaw = FastTrigSinF32(Yaw / 2); // 偏航半角正弦用于组合四元数。
+    sinRoll = FastTrigSinF32(Roll / 2); // 横滚半角正弦用于组合四元数。
+    q[0] = cosPitch * cosRoll * cosYaw + sinPitch * sinRoll * sinYaw; // 写入四元数 w 分量。
+    q[1] = sinPitch * cosRoll * cosYaw - cosPitch * sinRoll * sinYaw; // 写入四元数 x 分量。
+    q[2] = sinPitch * cosRoll * sinYaw + cosPitch * sinRoll * cosYaw; // 写入四元数 y 分量。
+    q[3] = cosPitch * cosRoll * sinYaw - sinPitch * sinRoll * cosYaw; // 写入四元数 z 分量。
 }

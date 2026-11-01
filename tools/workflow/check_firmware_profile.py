@@ -47,6 +47,10 @@ DSP_SOURCES = {
     "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/MatrixFunctions/arm_mat_trans_f32.c",
     "Middlewares/Third_Party/CMSIS-DSP-1.7.0/Source/MatrixFunctions/arm_mat_inverse_f32.c",
 }
+# 数值适配器编入DSP静态库，单独列出以免误认作厂商源码或漏登记的业务源码。
+NUMERIC_ADAPTER_SOURCES = {
+    "modules/algorithm/fast_trig_cmsis.c",  # 快速三角函数的CMSIS-DSP后端。
+}
 ASSEMBLY_SOURCES = {
     "startup_stm32h723xx.s",
     "Middlewares/Third_Party/SEGGER/RTT/SEGGER_RTT_ASM_ARMv7M.s",
@@ -136,7 +140,7 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         except ValueError:
             continue
         compiler_commands.append(entry.get("command", ""))
-    expected_compiled = selected | DSP_SOURCES | ASSEMBLY_SOURCES
+    expected_compiled = selected | DSP_SOURCES | NUMERIC_ADAPTER_SOURCES | ASSEMBLY_SOURCES
     missing = expected_compiled - compiled
     unexpected_compiled = compiled - expected_compiled
     unexpected = OPTIONAL_SOURCES & compiled

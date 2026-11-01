@@ -9,7 +9,7 @@
 #include "mecanum.h"
 #include "../config/build_selection.h"
 
-#include "arm_math.h"
+#include "fast_trig.h"
 
 #include <math.h>
 #include <string.h>
@@ -87,8 +87,8 @@ uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
 
     // 按云台与底盘的角度差，把平移速度转到底盘方向。
     const float angle_rad = input->offset_angle_deg * radians_per_degree;
-    const float cos_theta = arm_cos_f32(angle_rad);
-    const float sin_theta = arm_sin_f32(angle_rad);
+    const float cos_theta = FastTrigCosF32(angle_rad); // 计算方向变换需要的余弦。
+    const float sin_theta = FastTrigSinF32(angle_rad); // 计算方向变换需要的正弦。
     const float vx_mm_s = input->vx_mm_s * cos_theta - input->vy_mm_s * sin_theta;
     const float vy_mm_s = input->vx_mm_s * sin_theta + input->vy_mm_s * cos_theta;
     // 输入数字正常，计算结果仍可能过大；此时保留清零输出。

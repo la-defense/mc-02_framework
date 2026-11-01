@@ -902,6 +902,7 @@ add_executable(chassis_motion_test chassis_motion_test.c ../../application/chass
     ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c)
 target_include_directories(chassis_motion_test BEFORE PRIVATE chassis_fakes)
 target_include_directories(chassis_motion_test PRIVATE ../../application/chassis)
+target_link_libraries(chassis_motion_test PRIVATE mc02_dsp_host)
 if(UNIX)
   target_link_libraries(chassis_motion_test PRIVATE m)
 endif()
@@ -916,6 +917,7 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
   target_include_directories(${target} BEFORE PRIVATE chassis_fakes)
   target_include_directories(${target} PRIVATE ../../application ../../application/chassis
     ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine)
+  target_link_libraries(${target} PRIVATE mc02_dsp_host)
   if(UNIX)
     target_link_libraries(${target} PRIVATE m)
   endif()
@@ -944,7 +946,7 @@ target_include_directories(chassis_dual_topic_test PRIVATE ../../application ../
 target_compile_definitions(chassis_dual_topic_test PRIVATE CHASSIS_BOARD=1 CHASSIS_TASK_EXPECT_CONFIGURED=1
   CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=10.0f
   CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
-target_link_libraries(chassis_dual_topic_test PRIVATE m)
+target_link_libraries(chassis_dual_topic_test PRIVATE mc02_dsp_host m)
 add_test(NAME production_chassis_dual_topic_invalidation COMMAND chassis_dual_topic_test)
 set_tests_properties(production_chassis_dual_topic_invalidation PROPERTIES TIMEOUT 10)
 add_executable(chassis_bridge_integration_test chassis_task_test.c
@@ -962,7 +964,7 @@ target_include_directories(chassis_bridge_integration_test PRIVATE ../../applica
 target_compile_definitions(chassis_bridge_integration_test PRIVATE CHASSIS_BOARD=1 CHASSIS_BRIDGE_INTEGRATION=1
   CHASSIS_TASK_EXPECT_CONFIGURED=1 CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=10.0f
   CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
-target_link_libraries(chassis_bridge_integration_test PRIVATE mc02_software_crc)
+target_link_libraries(chassis_bridge_integration_test PRIVATE mc02_software_crc mc02_dsp_host)
 if(UNIX)
   target_link_libraries(chassis_bridge_integration_test PRIVATE m)
 endif()

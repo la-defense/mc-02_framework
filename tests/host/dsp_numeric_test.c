@@ -3,6 +3,7 @@
  */
 #include "test_check.h"
 #include "dsp_matrix.h"
+#include "fast_trig.h"
 #include <math.h>
 #include <float.h>
 #include <string.h>
@@ -89,9 +90,9 @@ int main(void)
     const double pi=3.14159265358979323846;
     // 包含零、整周、四分之一周和负角度；比较传入float本身代表的角度。
     for(int i=-8192;i<=8192;i++) {
-        float angle=(float)(i*pi/1024.0);
-        near(arm_sin_f32(angle),sin((double)angle),3e-5);
-        near(arm_cos_f32(angle),cos((double)angle),3e-5);
+        float angle=(float)(i*pi/1024.0); // 取从负四周到正四周的代表角度。
+        near(FastTrigSinF32(angle),sin((double)angle),3e-5); // 正弦与双精度参考比较。
+        near(FastTrigCosF32(angle),cos((double)angle),3e-5); // 余弦使用相同角度和误差限。
     }
     return 0;
 }
