@@ -106,7 +106,6 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/algorithm/QuaternionEKF.c
     modules/algorithm/controller.c
     modules/algorithm/crc.c
-    modules/algorithm/dsp_matrix.c
     modules/algorithm/kalman_filter.c
     modules/algorithm/math_utils.c
     modules/algorithm/sample_filter.c

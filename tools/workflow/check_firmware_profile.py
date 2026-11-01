@@ -50,6 +50,7 @@ DSP_SOURCES = {
 # 数值适配器编入DSP静态库，单独列出以免误认作厂商源码或漏登记的业务源码。
 NUMERIC_ADAPTER_SOURCES = {
     "modules/algorithm/fast_trig_cmsis.c",  # 快速三角函数的CMSIS-DSP后端。
+    "modules/algorithm/dsp_matrix.c",  # 矩阵接口的CMSIS-DSP后端。
 }
 ASSEMBLY_SOURCES = {
     "startup_stm32h723xx.s",

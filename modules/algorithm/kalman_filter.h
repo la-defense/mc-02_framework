@@ -5,7 +5,7 @@
  */
 #ifndef MC02_KALMAN_FILTER_H
 #define MC02_KALMAN_FILTER_H
-#include "arm_math.h"
+#include "dsp_matrix.h"
 #include <stddef.h>
 #include <stdint.h>
 typedef enum {
@@ -71,8 +71,25 @@ typedef struct kf_t {
     float *temp_vector_data,*temp_vector_data1,*MeasuredVector,*z_data;
     float *ControlVector,*u_data,*StateMinVariance,*inverse_workspace;
     uint8_t *selected_rows;
-    arm_matrix_instance_f32 xhat,P,xhatminus,Pminus,F,FT,Q,B,H,HT,K,R,S;
-    arm_matrix_instance_f32 temp_matrix,temp_matrix1,temp_vector,temp_vector1,z,u;
+    DSPMatrixF32_t xhat; /**< 当前候选状态。 */
+    DSPMatrixF32_t P; /**< 当前候选协方差。 */
+    DSPMatrixF32_t xhatminus; /**< 本轮预测状态。 */
+    DSPMatrixF32_t Pminus; /**< 本轮预测协方差。 */
+    DSPMatrixF32_t F; /**< 状态转移模型。 */
+    DSPMatrixF32_t FT; /**< 状态转移模型的转置。 */
+    DSPMatrixF32_t Q; /**< 过程噪声协方差。 */
+    DSPMatrixF32_t B; /**< 控制输入模型。 */
+    DSPMatrixF32_t H; /**< 量测模型。 */
+    DSPMatrixF32_t HT; /**< 量测模型的转置。 */
+    DSPMatrixF32_t K; /**< 本轮校正增益。 */
+    DSPMatrixF32_t R; /**< 量测噪声协方差。 */
+    DSPMatrixF32_t S; /**< 量测残差协方差。 */
+    DSPMatrixF32_t temp_matrix; /**< 第一块临时矩阵。 */
+    DSPMatrixF32_t temp_matrix1; /**< 第二块临时矩阵。 */
+    DSPMatrixF32_t temp_vector; /**< 第一块临时向量。 */
+    DSPMatrixF32_t temp_vector1; /**< 第二块临时向量。 */
+    DSPMatrixF32_t z; /**< 本轮存在的量测。 */
+    DSPMatrixF32_t u; /**< 本轮控制输入。 */
 } KalmanFilter_t;
 /** @brief 查询存储要求，不分配内存。
  * @param[in] config 合法配置，方差比有限且>=1，max_dt_s有限且>0，时限不超过INT32_MAX。

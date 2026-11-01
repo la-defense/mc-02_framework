@@ -46,9 +46,9 @@ static KFStatus_t IMU_QuaternionEKF_F_Linearization_P_Fading(KalmanFilter_t *,vo
 static KFStatus_t IMU_QuaternionEKF_SetH(KalmanFilter_t *,void *);
 static KFStatus_t IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *,void *);
 // 每次矩阵调用立即检查，后续成功不能覆盖前一次失败。
-static KFStatus_t check_matrix(arm_status status,const arm_matrix_instance_f32 *output)
+static KFStatus_t check_matrix(DSPMatrixStatus_t status,const DSPMatrixF32_t *output)
 {
-    if(status!=ARM_MATH_SUCCESS) return KF_ERROR_MATRIX;
+    if(status!=DSP_MATRIX_OK) return KF_ERROR_MATRIX;
     for(size_t i=0;i<(size_t)output->numRows*output->numCols;++i)
         if(!isfinite(output->pData[i])) return KF_ERROR_NUMERIC;
     return KF_OK;
@@ -86,7 +86,7 @@ KFStatus_t IMU_QuaternionEKF_InstanceInit(QEKF_INS_t *instance,const float *init
     prepared.ChiSquareTestThreshold=1e-8f; prepared.Initialized=1u;
     memcpy(prepared.q,initial,4u*sizeof(float));
     memcpy(prepared.IMU_QuaternionEKF.F_data,IMU_QuaternionEKF_F,sizeof(IMU_QuaternionEKF_F));
-    prepared.ChiSquare=(arm_matrix_instance_f32){1,1,prepared.ChiSquare_Data};
+    prepared.ChiSquare=(DSPMatrixF32_t){1,1,prepared.ChiSquare_Data};
     *instance=prepared;
     // 结构复制后重新绑定实例自己的数组，避免留下栈上对象的地址。
     instance->ChiSquare.pData=instance->ChiSquare_Data;
@@ -368,22 +368,22 @@ static KFStatus_t IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf,void *context)
 
     float q0, q1, q2, q3;
 
-    Q_MATRIX(arm_mat_trans_f32(&kf->H, &kf->HT),&kf->HT); // z|x => x|z
-    kf->temp_matrix.numRows = kf->H.numRows;
-    kf->temp_matrix.numCols = kf->Pminus.numCols;
-    Q_MATRIX(arm_mat_mult_f32(&kf->H, &kf->Pminus, &kf->temp_matrix),&kf->temp_matrix); // temp_matrix = H·P'(k)
-    kf->temp_matrix1.numRows = kf->temp_matrix.numRows;
-    kf->temp_matrix1.numCols = kf->HT.numCols;
-    Q_MATRIX(arm_mat_mult_f32(&kf->temp_matrix, &kf->HT, &kf->temp_matrix1),&kf->temp_matrix1); // temp_matrix1 = H·P'(k)·HT
-    kf->S.numRows = kf->R.numRows;
-    kf->S.numCols = kf->R.numCols;
-    Q_MATRIX(arm_mat_add_f32(&kf->temp_matrix1, &kf->R, &kf->S),&kf->S); // S = H P'(k) HT + R
+    Q_MATRIX(DSPMatrixTransposeF32(&kf->H, &kf->HT),&kf->HT); // 把量测模型转置供后续乘法使用。
+    kf->temp_matrix.numRows = kf->H.numRows; // H*P 的行数等于量测维度。
+    kf->temp_matrix.numCols = kf->Pminus.numCols; // H*P 的列数等于状态维度。
+    Q_MATRIX(DSPMatrixMultiplyF32(&kf->H, &kf->Pminus, &kf->temp_matrix),&kf->temp_matrix); // temp_matrix = H·P'(k)
+    kf->temp_matrix1.numRows = kf->temp_matrix.numRows; // H*P*Hᵀ 的行数。
+    kf->temp_matrix1.numCols = kf->HT.numCols; // H*P*Hᵀ 的列数。
+    Q_MATRIX(DSPMatrixMultiplyF32(&kf->temp_matrix, &kf->HT, &kf->temp_matrix1),&kf->temp_matrix1); // temp_matrix1 = H·P'(k)·HT
+    kf->S.numRows = kf->R.numRows; // 残差协方差行数与量测噪声一致。
+    kf->S.numCols = kf->R.numCols; // 残差协方差列数与量测噪声一致。
+    Q_MATRIX(DSPMatrixAddF32(&kf->temp_matrix1, &kf->R, &kf->S),&kf->S); // S = H P'(k) HT + R
     Q_MATRIX(DSPMatrixInverseF32(&kf->S,&kf->temp_matrix1,kf->inverse_workspace,18u),&kf->temp_matrix1);     // temp_matrix1 = inv(H·P'(k)·HT + R)
 
-    q0 = kf->xhatminus_data[0];
-    q1 = kf->xhatminus_data[1];
-    q2 = kf->xhatminus_data[2];
-    q3 = kf->xhatminus_data[3];
+    q0 = kf->xhatminus_data[0]; // 读取预测四元数 w。
+    q1 = kf->xhatminus_data[1]; // 读取预测四元数 x。
+    q2 = kf->xhatminus_data[2]; // 读取预测四元数 y。
+    q3 = kf->xhatminus_data[3]; // 读取预测四元数 z。
 
     kf->temp_vector.numRows = kf->H.numRows;
     kf->temp_vector.numCols = 1;
@@ -401,16 +401,16 @@ static KFStatus_t IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf,void *context)
     // 用加速度计数据修正预测姿态。
     kf->temp_vector1.numRows = kf->z.numRows;
     kf->temp_vector1.numCols = 1;
-    Q_MATRIX(arm_mat_sub_f32(&kf->z, &kf->temp_vector, &kf->temp_vector1),&kf->temp_vector1); // temp_vector1 = z(k) - h(xhat'(k))
+    Q_MATRIX(DSPMatrixSubF32(&kf->z, &kf->temp_vector, &kf->temp_vector1),&kf->temp_vector1); // temp_vector1 = z(k) - h(xhat'(k))
 
     // 计算测量方向与预测方向的差距，并结合噪声大小判断本轮测量是否可信。
     kf->temp_matrix.numRows = kf->temp_vector1.numRows;
     kf->temp_matrix.numCols = 1;
-    Q_MATRIX(arm_mat_mult_f32(&kf->temp_matrix1, &kf->temp_vector1, &kf->temp_matrix),&kf->temp_matrix); // 把测量方向的差距按当前估计和噪声大小换算，作为后面的差距检查值。
+    Q_MATRIX(DSPMatrixMultiplyF32(&kf->temp_matrix1, &kf->temp_vector1, &kf->temp_matrix),&kf->temp_matrix); // 把测量方向的差距按当前估计和噪声大小换算，作为后面的差距检查值。
     kf->temp_vector.numRows = 1;
     kf->temp_vector.numCols = kf->temp_vector1.numRows;
-    Q_MATRIX(arm_mat_trans_f32(&kf->temp_vector1, &kf->temp_vector),&kf->temp_vector); // temp_vector = z(k) - h(xhat'(k))'
-    Q_MATRIX(arm_mat_mult_f32(&kf->temp_vector, &kf->temp_matrix, &owner->ChiSquare),&owner->ChiSquare);
+    Q_MATRIX(DSPMatrixTransposeF32(&kf->temp_vector1, &kf->temp_vector),&kf->temp_vector); // temp_vector = z(k) - h(xhat'(k))'
+    Q_MATRIX(DSPMatrixMultiplyF32(&kf->temp_vector, &kf->temp_matrix, &owner->ChiSquare),&owner->ChiSquare); // 得到量测方向差距的标量。
     // 预测方向和加速度计方向接近时，记录滤波器已进入收敛状态。
     if (owner->ChiSquare_Data[0] < 0.5f * owner->ChiSquareTestThreshold)
     {
@@ -440,8 +440,8 @@ static KFStatus_t IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf,void *context)
     // cal kf-gain K
     kf->temp_matrix.numRows = kf->Pminus.numRows;
     kf->temp_matrix.numCols = kf->HT.numCols;
-    Q_MATRIX(arm_mat_mult_f32(&kf->Pminus, &kf->HT, &kf->temp_matrix),&kf->temp_matrix); // temp_matrix = P'(k)·HT
-    Q_MATRIX(arm_mat_mult_f32(&kf->temp_matrix, &kf->temp_matrix1, &kf->K),&kf->K);
+    Q_MATRIX(DSPMatrixMultiplyF32(&kf->Pminus, &kf->HT, &kf->temp_matrix),&kf->temp_matrix); // temp_matrix = P'(k)·HT
+    Q_MATRIX(DSPMatrixMultiplyF32(&kf->temp_matrix, &kf->temp_matrix1, &kf->K),&kf->K); // 乘残差协方差逆得到增益。
 
     // 对所有增益元素应用上面算出的修正力度。
     for (uint8_t i = 0; i < kf->K.numRows * kf->K.numCols; ++i)
@@ -458,7 +458,7 @@ static KFStatus_t IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf,void *context)
 
     kf->temp_vector.numRows = kf->K.numRows;
     kf->temp_vector.numCols = 1;
-    Q_MATRIX(arm_mat_mult_f32(&kf->K, &kf->temp_vector1, &kf->temp_vector),&kf->temp_vector); // temp_vector = K(k)·(z(k) - H·xhat'(k))
+    Q_MATRIX(DSPMatrixMultiplyF32(&kf->K, &kf->temp_vector1, &kf->temp_vector),&kf->temp_vector); // temp_vector = K(k)·(z(k) - H·xhat'(k))
 
     // 收敛后限制每次零偏改变量，避免单次测量让估计跳得太远。
     if (owner->ConvergeFlag)
@@ -477,9 +477,8 @@ static KFStatus_t IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf,void *context)
     }
 
     // 加速度计只能提供重力方向，无法单独判断绕重力方向的转动，因此不修正 yaw。
-    // 加速度计看不到绕重力方向的转动，这一分量不由它修正。
     kf->temp_vector.pData[3] = 0;
-    Q_MATRIX(arm_mat_add_f32(&kf->xhatminus, &kf->temp_vector, &kf->xhat),&kf->xhat);
+    Q_MATRIX(DSPMatrixAddF32(&kf->xhatminus, &kf->temp_vector, &kf->xhat),&kf->xhat); // 把可观测的修正量加入预测状态。
     float norm=0.0f;
     for(unsigned i=0;i<4u;++i) norm+=kf->xhat_data[i]*kf->xhat_data[i];
     // 校正产生退化或过大四元数时使用已检查的预测，不能发布异常姿态。

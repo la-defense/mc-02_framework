@@ -3,6 +3,7 @@
  */
 #include "test_check.h"
 #include "kalman_filter.h"
+#include "arm_math.h" // 链接包装器直接注入厂商矩阵函数失败。
 #include <string.h>
 static int calls,fail_at=-1;
 #define WRAP_BINARY(name) \

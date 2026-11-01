@@ -33,8 +33,8 @@ static void inverse(void)
     for(unsigned n=1;n<=8;n++) {
         for(unsigned i=0;i<n;i++) for(unsigned j=0;j<n;j++) a[i*n+j]=i==j?10.0f+i:((int)(i+j)%3-1)*.125f;
         memcpy(old,a,n*n*sizeof(float)); reference(a,expected,n);
-        arm_matrix_instance_f32 input={n,n,a},output={n,n,out};
-        TEST_CHECK(DSPMatrixInverseF32(&input,&output,scratch,2*n*n)==ARM_MATH_SUCCESS);
+        DSPMatrixF32_t input={n,n,a},output={n,n,out};
+        TEST_CHECK(DSPMatrixInverseF32(&input,&output,scratch,2*n*n)==DSP_MATRIX_OK);
         TEST_CHECK(memcmp(a,old,n*n*sizeof(float))==0);
         for(unsigned i=0;i<n*n;i++) near(out[i],expected[i],2e-6);
         for(unsigned i=0;i<n;i++) for(unsigned j=0;j<n;j++) {
@@ -42,47 +42,56 @@ static void inverse(void)
             TEST_CHECK(fabs(residual-(i==j))<2e-6);
         }
     }
-    float pivot[4]={0,2,1,3}; arm_matrix_instance_f32 input={2,2,pivot},output={2,2,out};
-    TEST_CHECK(DSPMatrixInverseF32(&input,&output,scratch,8)==ARM_MATH_SUCCESS);
+    float pivot[4]={0,2,1,3}; DSPMatrixF32_t input={2,2,pivot},output={2,2,out};
+    TEST_CHECK(DSPMatrixInverseF32(&input,&output,scratch,8)==DSP_MATRIX_OK);
     near(out[0],-1.5,1e-6); near(out[1],1,1e-6); near(out[2],.5,1e-6); near(out[3],0,1e-6);
     float saved[4];memcpy(saved,out,sizeof(saved));
-    arm_matrix_instance_f32 alias=input;
-    TEST_CHECK(DSPMatrixInverseF32(&input,&alias,scratch,8)==ARM_MATH_ARGUMENT_ERROR);
+    DSPMatrixF32_t alias=input;
+    TEST_CHECK(DSPMatrixInverseF32(&input,&alias,scratch,8)==DSP_MATRIX_ARGUMENT);
     alias=output;alias.numRows=1;
-    TEST_CHECK(DSPMatrixInverseF32(&input,&alias,scratch,8)==ARM_MATH_SIZE_MISMATCH);
+    TEST_CHECK(DSPMatrixInverseF32(&input,&alias,scratch,8)==DSP_MATRIX_SIZE);
     for(unsigned fault=0;fault<9;fault++) {
-        float bad[4]={1,2,2,4},copy[4]; input=(arm_matrix_instance_f32){2,2,bad};
+        float bad[4]={1,2,2,4},copy[4]; input=(DSPMatrixF32_t){2,2,bad};
         if(fault==1)bad[0]=NAN; if(fault==2)bad[0]=INFINITY;
         if(fault==3){bad[0]=FLT_TRUE_MIN;bad[1]=bad[2]=0;bad[3]=1;}
         if(fault==4)input.numCols=1;
         memcpy(copy,bad,sizeof(copy));
-        arm_status s;
+        DSPMatrixStatus_t s;
         if(fault==5)s=DSPMatrixInverseF32(&input,&output,scratch,7);
         else if(fault==6)s=DSPMatrixInverseF32(&input,&output,bad,8);
         else if(fault==7)s=DSPMatrixInverseF32(NULL,&output,scratch,8);
         else if(fault==8)s=DSPMatrixInverseF32(&input,&output,(float *)((uint8_t *)scratch+1),8);
         else s=DSPMatrixInverseF32(&input,&output,scratch,8);
-        TEST_CHECK(s!=ARM_MATH_SUCCESS && memcmp(saved,out,sizeof(saved))==0 && memcmp(copy,bad,sizeof(copy))==0);
+        TEST_CHECK(s!=DSP_MATRIX_OK && memcmp(saved,out,sizeof(saved))==0 && memcmp(copy,bad,sizeof(copy))==0);
     }
 }
 static void matrices(void)
 {
     float a[6]={1,2,3,4,5,6},b[6]={-1,0,2,3,4,5},out[9]={0};
-    arm_matrix_instance_f32 x,y,z;arm_mat_init_f32(&x,2,3,a);arm_mat_init_f32(&y,2,3,b);arm_mat_init_f32(&z,2,3,out);
+    DSPMatrixF32_t x,y,z;DSPMatrixInitF32(&x,2,3,a);DSPMatrixInitF32(&y,2,3,b);DSPMatrixInitF32(&z,2,3,out);
     TEST_CHECK(x.numRows==2 && x.numCols==3 && x.pData==a);
-    TEST_CHECK(arm_mat_add_f32(&x,&y,&z)==ARM_MATH_SUCCESS);
+    TEST_CHECK(DSPMatrixAddF32(&x,&y,&z)==DSP_MATRIX_OK);
     for(unsigned i=0;i<6;i++)near(out[i],(double)a[i]+b[i],0);
-    TEST_CHECK(arm_mat_sub_f32(&x,&y,&z)==ARM_MATH_SUCCESS);
+    TEST_CHECK(DSPMatrixSubF32(&x,&y,&z)==DSP_MATRIX_OK);
     for(unsigned i=0;i<6;i++)near(out[i],(double)a[i]-b[i],0);
-    z.numRows=3;z.numCols=2; TEST_CHECK(arm_mat_trans_f32(&x,&z)==ARM_MATH_SUCCESS);
+    z.numRows=3;z.numCols=2; TEST_CHECK(DSPMatrixTransposeF32(&x,&z)==DSP_MATRIX_OK);
     const float transpose[6]={1,4,2,5,3,6};TEST_CHECK(memcmp(out,transpose,sizeof(transpose))==0);
-    float product[4];arm_matrix_instance_f32 result={2,2,product};
-    TEST_CHECK(arm_mat_mult_f32(&x,&z,&result)==ARM_MATH_SUCCESS);
+    float product[4];DSPMatrixF32_t result={2,2,product};
+    TEST_CHECK(DSPMatrixMultiplyF32(&x,&z,&result)==DSP_MATRIX_OK);
     near(product[0],14,0);near(product[1],32,0);near(product[2],32,0);near(product[3],77,0);
-    TEST_CHECK(arm_mat_mult_f32(&x,&y,&result)==ARM_MATH_SIZE_MISMATCH);
-    TEST_CHECK(arm_mat_add_f32(&x,&y,&result)==ARM_MATH_SIZE_MISMATCH);
-    TEST_CHECK(arm_mat_sub_f32(&x,&y,&result)==ARM_MATH_SIZE_MISMATCH);
-    TEST_CHECK(arm_mat_trans_f32(&x,&result)==ARM_MATH_SIZE_MISMATCH);
+    TEST_CHECK(DSPMatrixMultiplyF32(&x,&y,&result)==DSP_MATRIX_SIZE);
+    TEST_CHECK(DSPMatrixAddF32(&x,&y,&result)==DSP_MATRIX_SIZE);
+    TEST_CHECK(DSPMatrixSubF32(&x,&y,&result)==DSP_MATRIX_SIZE);
+    TEST_CHECK(DSPMatrixTransposeF32(&x,&result)==DSP_MATRIX_SIZE);
+    float previous[4];
+    memcpy(previous,product,sizeof(previous)); // 保留上次乘积，检查非法输入不改写输出。
+    DSPMatrixF32_t missing=x;
+    missing.pData=NULL; // 使用空数据地址模拟无效描述符。
+    TEST_CHECK(DSPMatrixMultiplyF32(NULL,&z,&result)==DSP_MATRIX_ARGUMENT);
+    TEST_CHECK(DSPMatrixAddF32(&x,&missing,&result)==DSP_MATRIX_ARGUMENT);
+    TEST_CHECK(DSPMatrixSubF32(&x,&y,NULL)==DSP_MATRIX_ARGUMENT);
+    TEST_CHECK(DSPMatrixTransposeF32(&missing,&result)==DSP_MATRIX_ARGUMENT);
+    TEST_CHECK(memcmp(previous,product,sizeof(previous))==0); // 所有拒绝路径保留旧结果。
 }
 int main(void)
 {

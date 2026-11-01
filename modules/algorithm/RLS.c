@@ -1,11 +1,11 @@
 /**
  * @file RLS.c
  * @brief 用调用者工作区执行递推最小二乘更新。
- * 入口见 RLS.h；模块依赖同源 CMSIS-DSP 矩阵函数，不申请堆内存。
+ * 入口见 RLS.h；模块通过框架矩阵接口计算，不申请堆内存。
  */
 #include "RLS.h"
 
-#include "arm_math.h"
+#include "dsp_matrix.h"
 
 #include <math.h>
 #include <string.h>
@@ -510,15 +510,15 @@ RLSStatus_t RLSUpdate(RLS_t *rls, const float *input, size_t input_count,
     float q;
     float scalar_result = 0.0f;
     RLSWorkspaceLayout_t layout;
-    arm_matrix_instance_f32 covariance_matrix;
-    arm_matrix_instance_f32 input_column;
-    arm_matrix_instance_f32 input_row;
-    arm_matrix_instance_f32 params_column;
-    arm_matrix_instance_f32 px_column;
-    arm_matrix_instance_f32 row_matrix;
-    arm_matrix_instance_f32 scalar_matrix;
-    arm_matrix_instance_f32 outer_matrix;
-    arm_matrix_instance_f32 candidate_matrix;
+    DSPMatrixF32_t covariance_matrix; // 旧协方差矩阵 P。
+    DSPMatrixF32_t input_column; // 当前输入 x 的列向量。
+    DSPMatrixF32_t input_row; // 当前输入 x 的行向量。
+    DSPMatrixF32_t params_column; // 旧参数列向量。
+    DSPMatrixF32_t px_column; // P*x 及归一化后的增益。
+    DSPMatrixF32_t row_matrix; // xᵀ*P 的临时行向量。
+    DSPMatrixF32_t scalar_matrix; // 点积结果的 1×1 矩阵。
+    DSPMatrixF32_t outer_matrix; // 增益与临时行向量的外积。
+    DSPMatrixF32_t candidate_matrix; // 待检查的新协方差矩阵。
 
     status = RLSValidateInitialized(rls, &workspace_bytes, &float_bytes);
     if (status != RLS_STATUS_OK)
@@ -566,47 +566,50 @@ RLSStatus_t RLSUpdate(RLS_t *rls, const float *input, size_t input_count,
 
     RLSBuildWorkspaceLayout(rls->_workspace, rls->_dimension, float_bytes,
                             &layout);
-    covariance_matrix.numRows = rls->_dimension;
-    covariance_matrix.numCols = rls->_dimension;
-    covariance_matrix.pData = layout.covariance;
-    input_column.numRows = rls->_dimension;
-    input_column.numCols = 1U;
-    input_column.pData = (float *)input;
-    input_row.numRows = 1U;
-    input_row.numCols = rls->_dimension;
-    input_row.pData = (float *)input;
-    params_column.numRows = rls->_dimension;
-    params_column.numCols = 1U;
-    params_column.pData = layout.params;
-    px_column.numRows = rls->_dimension;
-    px_column.numCols = 1U;
-    px_column.pData = layout.px;
-    row_matrix.numRows = 1U;
-    row_matrix.numCols = rls->_dimension;
-    row_matrix.pData = layout.row;
-    scalar_matrix.numRows = 1U;
-    scalar_matrix.numCols = 1U;
-    scalar_matrix.pData = &scalar_result;
-    outer_matrix.numRows = rls->_dimension;
-    outer_matrix.numCols = rls->_dimension;
-    outer_matrix.pData = layout.outer_product;
-    candidate_matrix.numRows = rls->_dimension;
-    candidate_matrix.numCols = rls->_dimension;
-    candidate_matrix.pData = layout.covariance_candidate;
+    covariance_matrix.numRows = rls->_dimension; // P 的行数等于参数个数。
+    covariance_matrix.numCols = rls->_dimension; // P 的列数也等于参数个数。
+    covariance_matrix.pData = layout.covariance; // 读取上次已接受的 P。
+    input_column.numRows = rls->_dimension; // 输入列向量有一个元素对应一个参数。
+    input_column.numCols = 1U; // 输入列向量只有一列。
+    input_column.pData = (float *)input; // 借用本次输入，后端只读取该数组。
+    input_row.numRows = 1U; // 转置视图只有一行。
+    input_row.numCols = rls->_dimension; // 行向量包含全部输入元素。
+    input_row.pData = (float *)input; // 与列向量共享只读输入，不复制。
+    params_column.numRows = rls->_dimension; // 参数列向量的行数。
+    params_column.numCols = 1U; // 参数列向量只有一列。
+    params_column.pData = layout.params; // 读取上次已接受的参数。
+    px_column.numRows = rls->_dimension; // P*x 的结果行数。
+    px_column.numCols = 1U; // P*x 是列向量。
+    px_column.pData = layout.px; // 临时结果写入独立工作区。
+    row_matrix.numRows = 1U; // xᵀ*P 只有一行。
+    row_matrix.numCols = rls->_dimension; // 每个参数对应一列。
+    row_matrix.pData = layout.row; // 临时行向量写入工作区。
+    scalar_matrix.numRows = 1U; // 点积结果只有一行。
+    scalar_matrix.numCols = 1U; // 点积结果只有一列。
+    scalar_matrix.pData = &scalar_result; // 接收单个点积结果。
+    outer_matrix.numRows = rls->_dimension; // 外积的行数与参数个数相同。
+    outer_matrix.numCols = rls->_dimension; // 外积的列数与参数个数相同。
+    outer_matrix.pData = layout.outer_product; // 外积保存在临时工作区。
+    candidate_matrix.numRows = rls->_dimension; // 新协方差的行数。
+    candidate_matrix.numCols = rls->_dimension; // 新协方差的列数。
+    candidate_matrix.pData = layout.covariance_candidate; // 候选值通过检查后才能接受。
 
     /* 先按旧P求P*x和xᵀP；任一DSP步骤失败都只影响临时数组。 */
-    if (arm_mat_mult_f32(&covariance_matrix, &input_column, &px_column) !=
-        ARM_MATH_SUCCESS)
+    // 左乘输入列向量，得到 P*x。
+    if (DSPMatrixMultiplyF32(&covariance_matrix, &input_column, &px_column) !=
+        DSP_MATRIX_OK)
     {
         return RLS_ERROR_MATRIX;
     }
-    if (arm_mat_mult_f32(&input_row, &covariance_matrix, &row_matrix) !=
-        ARM_MATH_SUCCESS)
+    // 输入行向量左乘 P，得到 xᵀ*P。
+    if (DSPMatrixMultiplyF32(&input_row, &covariance_matrix, &row_matrix) !=
+        DSP_MATRIX_OK)
     {
         return RLS_ERROR_MATRIX;
     }
-    if (arm_mat_mult_f32(&input_row, &px_column, &scalar_matrix) !=
-        ARM_MATH_SUCCESS)
+    // 将输入与 P*x 相乘，得到分母所需的标量。
+    if (DSPMatrixMultiplyF32(&input_row, &px_column, &scalar_matrix) !=
+        DSP_MATRIX_OK)
     {
         return RLS_ERROR_MATRIX;
     }
@@ -632,8 +635,9 @@ RLSStatus_t RLSUpdate(RLS_t *rls, const float *input, size_t input_count,
 
     /* 预测使用旧参数，残差再与未乘残差的K相乘更新参数。 */
     scalar_result = 0.0f;
-    if (arm_mat_mult_f32(&input_row, &params_column, &scalar_matrix) !=
-        ARM_MATH_SUCCESS)
+    // 当前输入乘旧参数，得到本轮预测值。
+    if (DSPMatrixMultiplyF32(&input_row, &params_column, &scalar_matrix) !=
+        DSP_MATRIX_OK)
     {
         return RLS_ERROR_MATRIX;
     }
@@ -659,13 +663,15 @@ RLSStatus_t RLSUpdate(RLS_t *rls, const float *input, size_t input_count,
     }
 
     /* 协方差公式使用未缩放的K，零残差时P仍按lambda更新。 */
-    if (arm_mat_mult_f32(&px_column, &row_matrix, &outer_matrix) !=
-        ARM_MATH_SUCCESS)
+    // 增益列向量乘 xᵀ*P，得到协方差修正项。
+    if (DSPMatrixMultiplyF32(&px_column, &row_matrix, &outer_matrix) !=
+        DSP_MATRIX_OK)
     {
         return RLS_ERROR_MATRIX;
     }
-    if (arm_mat_sub_f32(&covariance_matrix, &outer_matrix,
-                        &candidate_matrix) != ARM_MATH_SUCCESS)
+    // 从旧协方差减去修正项，结果仍保留在候选区。
+    if (DSPMatrixSubF32(&covariance_matrix, &outer_matrix,
+                        &candidate_matrix) != DSP_MATRIX_OK)
     {
         return RLS_ERROR_MATRIX;
     }

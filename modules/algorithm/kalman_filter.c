@@ -50,19 +50,30 @@ KFStatus_t KFGetWorkspaceRequirements(const KFConfig_t *c,size_t *bytes,size_t *
     *alignment=KF_WORKSPACE_ALIGNMENT;
     return KF_OK;
 }
-static void matrix(arm_matrix_instance_f32 *m,uint16_t rows,uint16_t cols,float *data)
-{ arm_mat_init_f32(m,rows,cols,data); }
+static void matrix(DSPMatrixF32_t *m,uint16_t rows,uint16_t cols,float *data)
+{ DSPMatrixInitF32(m,rows,cols,data); }
 static void bind_matrices(KalmanFilter_t *f)
 {
-    uint16_t n=f->xhatSize,u=f->uSize,m=f->zSize,d=(uint16_t)KF_MAX_DIM(n,m);
-    matrix(&f->xhat,n,1,f->xhat_data); matrix(&f->P,n,n,f->P_data);
-    matrix(&f->xhatminus,n,1,f->xhatminus_data); matrix(&f->Pminus,n,n,f->Pminus_data);
-    matrix(&f->F,n,n,f->F_data); matrix(&f->FT,n,n,f->FT_data); matrix(&f->Q,n,n,f->Q_data);
-    matrix(&f->B,n,u,f->B_data); matrix(&f->u,u,1,f->u_data);
-    matrix(&f->H,m,n,f->H_data); matrix(&f->HT,n,m,f->HT_data); matrix(&f->K,n,m,f->K_data);
-    matrix(&f->R,m,m,f->R_data); matrix(&f->S,m,m,f->S_data); matrix(&f->z,m,1,f->z_data);
-    matrix(&f->temp_matrix,d,d,f->temp_matrix_data); matrix(&f->temp_matrix1,d,d,f->temp_matrix_data1);
-    matrix(&f->temp_vector,d,1,f->temp_vector_data); matrix(&f->temp_vector1,d,1,f->temp_vector_data1);
+    uint16_t n=f->xhatSize,u=f->uSize,m=f->zSize,d=(uint16_t)KF_MAX_DIM(n,m); // 取状态、控制、量测和临时容量。
+    matrix(&f->xhat,n,1,f->xhat_data); // 候选状态向量。
+    matrix(&f->P,n,n,f->P_data); // 候选状态协方差。
+    matrix(&f->xhatminus,n,1,f->xhatminus_data); // 预测状态向量。
+    matrix(&f->Pminus,n,n,f->Pminus_data); // 预测状态协方差。
+    matrix(&f->F,n,n,f->F_data); // 状态转移模型。
+    matrix(&f->FT,n,n,f->FT_data); // 状态转移模型转置。
+    matrix(&f->Q,n,n,f->Q_data); // 过程噪声协方差。
+    matrix(&f->B,n,u,f->B_data); // 控制输入模型。
+    matrix(&f->u,u,1,f->u_data); // 控制输入向量。
+    matrix(&f->H,m,n,f->H_data); // 量测模型。
+    matrix(&f->HT,n,m,f->HT_data); // 量测模型转置。
+    matrix(&f->K,n,m,f->K_data); // 校正增益。
+    matrix(&f->R,m,m,f->R_data); // 量测噪声协方差。
+    matrix(&f->S,m,m,f->S_data); // 量测残差协方差。
+    matrix(&f->z,m,1,f->z_data); // 当前量测向量。
+    matrix(&f->temp_matrix,d,d,f->temp_matrix_data); // 第一块临时矩阵。
+    matrix(&f->temp_matrix1,d,d,f->temp_matrix_data1); // 第二块临时矩阵。
+    matrix(&f->temp_vector,d,1,f->temp_vector_data); // 第一块临时向量。
+    matrix(&f->temp_vector1,d,1,f->temp_vector_data1); // 第二块临时向量。
 }
 KFStatus_t KFInit(KalmanFilter_t *f,const KFConfig_t *c,void *workspace,size_t bytes,
     const float *state,const float *covariance)
@@ -135,9 +146,9 @@ static KFStatus_t invalid(KalmanFilter_t *f,KFStatus_t cause,int fatal)
     if(fatal) f->fatal=1u;
     return cause;
 }
-static KFStatus_t checked(arm_status status,const arm_matrix_instance_f32 *out)
+static KFStatus_t checked(DSPMatrixStatus_t status,const DSPMatrixF32_t *out)
 {
-    if(status!=ARM_MATH_SUCCESS) return KF_ERROR_MATRIX;
+    if(status!=DSP_MATRIX_OK) return KF_ERROR_MATRIX;
     return finite_values(out->pData,(size_t)out->numRows*out->numCols)?KF_OK:KF_ERROR_NUMERIC;
 }
 // 扩展步骤只能成功或返回失败；正数不能冒充已发布的有限预测。
@@ -149,13 +160,13 @@ static KFStatus_t predict(KalmanFilter_t *f,const KFStep_t *step)
     size_t n=f->xhatSize,u=f->uSize;
     if(!finite_values(f->F_data,n*n) || !finite_values(f->Q_data,n*n) ||
        !finite_values(f->ControlVector,u) || !finite_values(f->B_data,n*u)) return KF_ERROR_NUMERIC;
-    MATRIX(arm_mat_mult_f32(&f->F,&f->xhat,&f->xhatminus),&f->xhatminus);
+    MATRIX(DSPMatrixMultiplyF32(&f->F,&f->xhat,&f->xhatminus),&f->xhatminus); // 按模型预测状态。
     if(u!=0u)
     {
         memcpy(f->u_data,f->ControlVector,u*sizeof(float));
         matrix(&f->temp_vector,(uint16_t)n,1,f->temp_vector_data);
-        MATRIX(arm_mat_mult_f32(&f->B,&f->u,&f->temp_vector),&f->temp_vector);
-        MATRIX(arm_mat_add_f32(&f->xhatminus,&f->temp_vector,&f->xhatminus),&f->xhatminus);
+        MATRIX(DSPMatrixMultiplyF32(&f->B,&f->u,&f->temp_vector),&f->temp_vector); // 将控制输入换成状态增量。
+        MATRIX(DSPMatrixAddF32(&f->xhatminus,&f->temp_vector,&f->xhatminus),&f->xhatminus); // 把增量加入预测。
     }
     if(f->config.after_state_prediction!=NULL)
     {
@@ -164,33 +175,34 @@ static KFStatus_t predict(KalmanFilter_t *f,const KFStep_t *step)
     }
     if(!finite_values(f->xhatminus_data,n) || !covariance_valid(f->P_data,n) ||
        !finite_values(f->F_data,n*n)) return KF_ERROR_NUMERIC;
-    MATRIX(arm_mat_trans_f32(&f->F,&f->FT),&f->FT);
+    MATRIX(DSPMatrixTransposeF32(&f->F,&f->FT),&f->FT); // 准备状态转移模型的转置。
     matrix(&f->temp_matrix,(uint16_t)n,(uint16_t)n,f->temp_matrix_data);
-    MATRIX(arm_mat_mult_f32(&f->F,&f->P,&f->temp_matrix),&f->temp_matrix);
-    MATRIX(arm_mat_mult_f32(&f->temp_matrix,&f->FT,&f->Pminus),&f->Pminus);
-    MATRIX(arm_mat_add_f32(&f->Pminus,&f->Q,&f->Pminus),&f->Pminus);
+    MATRIX(DSPMatrixMultiplyF32(&f->F,&f->P,&f->temp_matrix),&f->temp_matrix); // 左乘旧协方差。
+    MATRIX(DSPMatrixMultiplyF32(&f->temp_matrix,&f->FT,&f->Pminus),&f->Pminus); // 右乘转置得到预测协方差。
+    MATRIX(DSPMatrixAddF32(&f->Pminus,&f->Q,&f->Pminus),&f->Pminus); // 加入过程噪声。
     return covariance_valid(f->Pminus_data,n)?KF_OK:KF_ERROR_NUMERIC;
 }
 static KFStatus_t linear_correction(KalmanFilter_t *f)
 {
     uint16_t n=f->xhatSize,m=f->z.numRows;
-    MATRIX(arm_mat_trans_f32(&f->H,&f->HT),&f->HT);
+    MATRIX(DSPMatrixTransposeF32(&f->H,&f->HT),&f->HT); // 准备量测模型的转置。
     matrix(&f->temp_matrix,m,n,f->temp_matrix_data);
-    MATRIX(arm_mat_mult_f32(&f->H,&f->Pminus,&f->temp_matrix),&f->temp_matrix);
+    MATRIX(DSPMatrixMultiplyF32(&f->H,&f->Pminus,&f->temp_matrix),&f->temp_matrix); // 把预测协方差投影到量测空间。
     matrix(&f->temp_matrix1,m,m,f->temp_matrix_data1);
-    MATRIX(arm_mat_mult_f32(&f->temp_matrix,&f->HT,&f->temp_matrix1),&f->temp_matrix1);
-    MATRIX(arm_mat_add_f32(&f->temp_matrix1,&f->R,&f->S),&f->S);
+    MATRIX(DSPMatrixMultiplyF32(&f->temp_matrix,&f->HT,&f->temp_matrix1),&f->temp_matrix1); // 完成量测空间协方差。
+    MATRIX(DSPMatrixAddF32(&f->temp_matrix1,&f->R,&f->S),&f->S); // 加入量测噪声得到 S。
+    // 对 S 求逆，结果暂存于独立工作区，失败时不发布校正结果。
     MATRIX(DSPMatrixInverseF32(&f->S,&f->temp_matrix1,f->inverse_workspace,
                               2u*(size_t)f->config.measurement_capacity*f->config.measurement_capacity),&f->temp_matrix1);
     matrix(&f->temp_matrix,n,m,f->temp_matrix_data);
-    MATRIX(arm_mat_mult_f32(&f->Pminus,&f->HT,&f->temp_matrix),&f->temp_matrix);
-    MATRIX(arm_mat_mult_f32(&f->temp_matrix,&f->temp_matrix1,&f->K),&f->K);
+    MATRIX(DSPMatrixMultiplyF32(&f->Pminus,&f->HT,&f->temp_matrix),&f->temp_matrix); // 计算增益的左半部分。
+    MATRIX(DSPMatrixMultiplyF32(&f->temp_matrix,&f->temp_matrix1,&f->K),&f->K); // 乘以 S 的逆得到增益。
     matrix(&f->temp_vector,m,1,f->temp_vector_data); matrix(&f->temp_vector1,m,1,f->temp_vector_data1);
-    MATRIX(arm_mat_mult_f32(&f->H,&f->xhatminus,&f->temp_vector),&f->temp_vector);
-    MATRIX(arm_mat_sub_f32(&f->z,&f->temp_vector,&f->temp_vector1),&f->temp_vector1);
+    MATRIX(DSPMatrixMultiplyF32(&f->H,&f->xhatminus,&f->temp_vector),&f->temp_vector); // 计算模型预测量测。
+    MATRIX(DSPMatrixSubF32(&f->z,&f->temp_vector,&f->temp_vector1),&f->temp_vector1); // 求实际与预测的差值。
     matrix(&f->temp_vector,n,1,f->temp_vector_data);
-    MATRIX(arm_mat_mult_f32(&f->K,&f->temp_vector1,&f->temp_vector),&f->temp_vector);
-    MATRIX(arm_mat_add_f32(&f->xhatminus,&f->temp_vector,&f->xhat),&f->xhat);
+    MATRIX(DSPMatrixMultiplyF32(&f->K,&f->temp_vector1,&f->temp_vector),&f->temp_vector); // 增益将量测差转为状态修正。
+    MATRIX(DSPMatrixAddF32(&f->xhatminus,&f->temp_vector,&f->xhat),&f->xhat); // 加入预测得到候选状态。
     return KF_OK;
 }
 static KFStatus_t correct(KalmanFilter_t *f,const KFStep_t *step,uint16_t active)
@@ -218,9 +230,9 @@ static KFStatus_t correct(KalmanFilter_t *f,const KFStep_t *step,uint16_t active
     if(status!=KF_OK) return status;
     matrix(&f->temp_matrix,(uint16_t)n,(uint16_t)n,f->temp_matrix_data);
     matrix(&f->temp_matrix1,(uint16_t)n,(uint16_t)n,f->temp_matrix_data1);
-    MATRIX(arm_mat_mult_f32(&f->K,&f->H,&f->temp_matrix),&f->temp_matrix);
-    MATRIX(arm_mat_mult_f32(&f->temp_matrix,&f->Pminus,&f->temp_matrix1),&f->temp_matrix1);
-    MATRIX(arm_mat_sub_f32(&f->Pminus,&f->temp_matrix1,&f->P),&f->P);
+    MATRIX(DSPMatrixMultiplyF32(&f->K,&f->H,&f->temp_matrix),&f->temp_matrix); // 计算增益与量测模型的乘积。
+    MATRIX(DSPMatrixMultiplyF32(&f->temp_matrix,&f->Pminus,&f->temp_matrix1),&f->temp_matrix1); // 求协方差修正量。
+    MATRIX(DSPMatrixSubF32(&f->Pminus,&f->temp_matrix1,&f->P),&f->P); // 从预测协方差减去修正量。
     for(size_t i=0;i<n;++i)
     {
         if(!isfinite(f->StateMinVariance[i]) || f->StateMinVariance[i]<0.0f) return KF_ERROR_CONFIG;

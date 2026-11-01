@@ -14,7 +14,9 @@ set(MC02_DSP_SOURCES
 
 # host 为真时使用该版本自带的 GCC 可移植分支，仅相关测试继承头文件所需宏。
 function(mc02_add_dsp target host)
-  add_library(${target} STATIC ${MC02_DSP_SOURCES} ${MC02_TRIG_INTERFACE_DIR}/fast_trig_cmsis.c)
+  add_library(${target} STATIC ${MC02_DSP_SOURCES}
+    ${MC02_TRIG_INTERFACE_DIR}/fast_trig_cmsis.c # 三角函数中立接口的 CMSIS 后端。
+    ${MC02_TRIG_INTERFACE_DIR}/dsp_matrix.c) # 矩阵中立接口的 CMSIS 后端。
   target_include_directories(${target} PUBLIC ${MC02_DSP_ROOT}/Include ${MC02_TRIG_INTERFACE_DIR})
   target_compile_definitions(${target} PRIVATE ARM_MATH_MATRIX_CHECK ARM_DSP_CONFIG_TABLES
     ARM_FAST_ALLOW_TABLES ARM_TABLE_SIN_F32)

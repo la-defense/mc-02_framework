@@ -58,7 +58,7 @@ typedef struct
     float R;  // 加速度计测量噪声
 
     float dt; // 姿态更新周期
-    arm_matrix_instance_f32 ChiSquare;
+    DSPMatrixF32_t ChiSquare; // 指向本轮方向差距的 1×1 矩阵。
     float ChiSquare_Data[1];      // 本轮加速度方向与预测方向的差距
     float ChiSquareTestThreshold; // 用来判断方向差距是否过大的界限
     float lambda;                 // 控制滤波器逐渐减少对旧零偏估计的依赖
