@@ -190,7 +190,7 @@ static int ConcurrentSafetySnapshots(void)
 
 static int ImmediateInhibit(void)
 {
-    /* 上报后不运行状态机，验证旧 READY 状态不能继续授权。 */
+    // 上报后不运行状态机，验证旧 READY 状态不能继续授权。
     for (unsigned scenario = 0; scenario < 8; ++scenario) {
         HealthyInputs();
         RobotSafetyRequestEnable();
@@ -208,6 +208,14 @@ static int ImmediateInhibit(void)
         }
         CHECK(RobotSafetyGetState() == ROBOT_READY);
         CHECK(!RobotSafetyIsReady());
+        if (scenario >= 4) {
+            const Robot_Fault_e faults[] = {ROBOT_FAULT_RC_OFFLINE, ROBOT_FAULT_IMU_INVALID,
+                                             ROBOT_FAULT_CALIB_INVALID, ROBOT_FAULT_TASK_TIMEOUT};
+            // 即使故障位被清除，尚未恢复的输入也不能允许运行。
+            RobotFaultClear(faults[scenario - 4]);
+            CHECK(RobotSafetyGetFaults() == ROBOT_FAULT_NONE);
+            CHECK(!RobotSafetyIsReady());
+        }
     }
     return 0;
 }

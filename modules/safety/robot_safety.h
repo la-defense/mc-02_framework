@@ -96,7 +96,7 @@ Estop_Reason_e EstopGetReason(void);
 /** @brief 读取上次状态更新的结果。
 * @return 当前 Robot_Status_e 状态。 */
 Robot_Status_e RobotSafetyGetState(void);
-/** @brief 读取当前状态是否为 READY。
+/** @brief 查询当前是否允许运行。
 * @return 1 为上次状态为 READY 且当前输入仍允许运行，0 为其他情况。
 * @note 故障、急停、失能和标定请求在上报后立即使该查询返回 0；状态名称仍由 Update 推进。 */
 uint8_t RobotSafetyIsReady(void);
