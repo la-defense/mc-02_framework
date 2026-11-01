@@ -114,7 +114,6 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/BMI088/bmi088.c
     modules/daemon/daemon.c
     modules/daemon/daemon_event_task.c
-    modules/imu/BMI088Middleware.c
     modules/imu/imu_heater.c
     modules/imu/ins_task.c
     modules/lcd/lcd.c
@@ -158,6 +157,8 @@ set(MC02_APPLICATION_COMMON_C_SOURCES
     application/vehicle_health_port_stm32.c
     application/robot.c
     application/robot_def.c
+    application/config/module_plan.c
+    application/config/vehicle_selection.c
     application/config/sentinel_robot/sentinel_config.c)
 set(MC02_APPLICATION_SINGLE_C_SOURCES
     application/chassis/chassis.c
@@ -198,6 +199,40 @@ if(MC02_PROFILE STREQUAL "robot" AND NOT MC02_BOARD_ROLE STREQUAL "single")
         modules/can_comm/can_topic_link.c
         modules/can_comm/can_time_sync.c
         modules/time_sync/time_mapping.c)
+endif()
+
+# 未启用模块连同其输出驱动退出源码清单；依赖者使用同一份生成选择。
+if(NOT MC02_FEATURE_LCD)
+    list(FILTER MC02_COMMON_MODULE_C_SOURCES EXCLUDE REGEX "^modules/lcd/")
+endif()
+if(NOT MC02_FEATURE_ALARM)
+    list(FILTER MC02_COMMON_MODULE_C_SOURCES EXCLUDE REGEX "^modules/alarm/")
+    list(REMOVE_ITEM MC02_BSP_C_SOURCES bsp/ws2812/ws2812.c)
+endif()
+foreach(pair IN ITEMS "DJI;DJImotor/dji_motor.c" "LK;LKmotor/LK9025.c" "HT;HTmotor/HT04.c")
+    list(GET pair 0 driver)
+    list(GET pair 1 implementation)
+    if(NOT MC02_SELECTED_DRIVER_${driver})
+        list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES "modules/motor/${implementation}")
+    endif()
+endforeach()
+if(NOT MC02_FEATURE_SUPERCAP)
+    list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES modules/super_cap/super_cap.c)
+endif()
+if(NOT MC02_FEATURE_MOTOR_CONTROL)
+    list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES modules/motor/motor_task.c)
+endif()
+if(NOT MC02_FEATURE_REFEREE)
+    list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES modules/referee/referee_task.c
+        modules/referee/referee_tx_budget.c modules/referee/rm_referee.c)
+endif()
+if(NOT MC02_FEATURE_REMOTE)
+    list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES modules/remote/remote_control.c
+        modules/remote/remote_safety.c)
+endif()
+if(MC02_PROFILE STREQUAL "robot" AND MC02_FEATURE_CHASSIS)
+    list(APPEND MC02_APPLICATION_COMMON_C_SOURCES application/chassis/chassis_kinematics.c
+        "application/chassis/${MC02_CHASSIS_TYPE}.c")
 endif()
 
 # 按配置追加确实被入口调用的可选实现；其他保留模块不进入固件。

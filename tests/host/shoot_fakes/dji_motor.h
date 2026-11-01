@@ -26,6 +26,6 @@ void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);
 Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *motor,
                                                      uint32_t now_ms,
                                                      Motor_Feedback_Snapshot_s *snapshot);
-extern DJIMotorInstance shoot_fake_motors[3];
+extern DJIMotorInstance shoot_fake_motors[5];
 extern uint32_t shoot_fake_motor_init_count;
 #endif

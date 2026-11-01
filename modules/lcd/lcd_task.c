@@ -126,8 +126,13 @@ _Alignas(uint32_t) volatile char lcd_stats_name[LCD_TASK_STATS_MAX][12] = {{0}};
 _Alignas(uint32_t) volatile uint16_t lcd_stats_stack[LCD_TASK_STATS_MAX] = {0};
 
 /* 其它模块的分段探针(定义见各自的 .c), 用于 RTT 汇总行 */
+#if MC02_FEATURE_MOTOR_CONTROL
 extern volatile DWT_Probe_t motor_prof_all, motor_prof_dji, motor_prof_lk;
-extern volatile DWT_Probe_t dji_prof_all, dji_prof_pid, dji_prof_send;
+#endif
+extern volatile DWT_Probe_t dji_prof_all;
+#if MC02_SELECTED_DRIVER_DJI
+extern volatile DWT_Probe_t dji_prof_pid, dji_prof_send;
+#endif
 extern volatile DWT_Probe_t ins_prof_all, ins_prof_read, ins_prof_ekf, ins_prof_temp;
 extern volatile DWT_Probe_t can_prof_tx, can_prof_rx_isr;
 extern volatile uint32_t can_prof_tx_spins, can_prof_tx_full, can_prof_rx_frames;
@@ -185,8 +190,16 @@ static void lcd_stats_prepare_logs(uint32_t delta_total, const uint32_t *deltas)
         "tx_calls", "tx_full", "tx_spins", "tx_max", "rx_frames", "rx_isr_max"};
     static const char *const lcd_names[4] = {"upd", "clear", "init", "recover"};
     uint32_t segment_values[10] = {
+#if MC02_FEATURE_MOTOR_CONTROL
         motor_prof_all.last_us, motor_prof_dji.last_us, motor_prof_lk.last_us,
+#else
+        0u, 0u, 0u,
+#endif
+#if MC02_SELECTED_DRIVER_DJI
         dji_prof_pid.last_us, dji_prof_send.last_us, ins_prof_all.last_us,
+#else
+        0u, 0u, ins_prof_all.last_us,
+#endif
         ins_prof_read.last_us, ins_prof_ekf.last_us, ins_prof_temp.last_us,
         lcd_prof_update_last_us};
     uint32_t can_values[6] = {

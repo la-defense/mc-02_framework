@@ -6,6 +6,8 @@
  * 当前沿用工程原有的四轮计算方式，参数和返回值见 chassis_motion.h。
  */
 #include "chassis_motion.h"
+#include "mecanum.h"
+#include "../config/build_selection.h"
 
 #include "arm_math.h"
 
@@ -94,40 +96,42 @@ uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
         !isfinite(vx_mm_s) || !isfinite(vy_mm_s))
         return 0;
 
-    // 用安装尺寸和云台中心偏移，计算底盘转动给各轮带来的速度。
-    const float half_base = geometry->wheel_base_mm * 0.5f;
-    const float half_track = geometry->track_width_mm * 0.5f;
-    const float lf_center = (half_track + geometry->center_gimbal_offset_x_mm +
-                             half_base - geometry->center_gimbal_offset_y_mm) * radians_per_degree;
-    const float rf_center = (half_track - geometry->center_gimbal_offset_x_mm +
-                             half_base - geometry->center_gimbal_offset_y_mm) * radians_per_degree;
-    const float lb_center = (half_track + geometry->center_gimbal_offset_x_mm +
-                             half_base + geometry->center_gimbal_offset_y_mm) * radians_per_degree;
-    const float rb_center = (half_track - geometry->center_gimbal_offset_x_mm +
-                             half_base + geometry->center_gimbal_offset_y_mm) * radians_per_degree;
-    // 叠加平移与转动带来的轮速，正负号沿用工程原有计算方式。
-    const float wheel_mm_s[4] = {
-        -vx_mm_s - vy_mm_s - wz_deg_s * lf_center,
-        -vx_mm_s + vy_mm_s - wz_deg_s * rf_center,
-        vx_mm_s - vy_mm_s - wz_deg_s * lb_center,
-        vx_mm_s + vy_mm_s - wz_deg_s * rb_center,
-    };
-    // 轮边线速度换成轮子角速度，再乘减速比得到电机轴转速。
-    const float mm_s_to_motor_deg_s = degrees_per_radian * geometry->reduction_ratio /
-                                      geometry->wheel_radius_mm;
-    if (!isfinite(lf_center) || !isfinite(rf_center) ||
-        !isfinite(lb_center) || !isfinite(rb_center) ||
-        !isfinite(mm_s_to_motor_deg_s) || mm_s_to_motor_deg_s <= 0.0f)
-        return 0;
-
+    ChassisWheelSpeeds_t wheels = {0};
+    ChassisKinematicsStatus_t calculation = CHASSIS_KINEMATICS_UNSUPPORTED;
+    // 旧消息的横向为右，进入纯数值模型时显式换为左。
+    const ChassisTwist_t twist = {vx_mm_s * 0.001f, -vy_mm_s * 0.001f,
+                                  wz_deg_s * radians_per_degree};
+    if (geometry->model == 1u)
+    {
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+        calculation = OmniCalculate(&twist, &geometry->omni, &wheels);
+#endif
+    }
+    else if (geometry->model == 0u)
+    {
+#if !defined(MC02_CONFIG_GENERATED) || !MC02_CHASSIS_IS_OMNI
+        const MecanumGeometry_t mecanum = {
+            geometry->wheel_base_mm * 0.0005f, geometry->track_width_mm * 0.0005f,
+            geometry->center_gimbal_offset_x_mm * 0.001f,
+            -geometry->center_gimbal_offset_y_mm * 0.001f,
+            geometry->wheel_radius_mm * 0.001f};
+        calculation = MecanumCalculate(&twist, &mecanum, &wheels);
+        // 旧应用的电机顺序与新轮序不同；保留旧接口的符号和编号结果。
+        const ChassisWheelSpeeds_t canonical = wheels;
+        wheels.rad_s[0] = -canonical.rad_s[3];
+        wheels.rad_s[1] = -canonical.rad_s[1];
+        wheels.rad_s[2] = canonical.rad_s[2];
+        wheels.rad_s[3] = canonical.rad_s[0];
+#endif
+    }
+    if (calculation != CHASSIS_KINEMATICS_OK) return 0;
+    const float wheel_to_motor_deg_s = degrees_per_radian * geometry->reduction_ratio;
     float motor_deg_s[4];
     float largest = 0.0f;
     // 逐轮换算，找出绝对值最大的电机轴转速。
     for (unsigned i = 0; i < 4; ++i)
     {
-        if (!isfinite(wheel_mm_s[i]))
-            return 0;
-        motor_deg_s[i] = wheel_mm_s[i] * mm_s_to_motor_deg_s;
+        motor_deg_s[i] = wheels.rad_s[i] * wheel_to_motor_deg_s;
         if (!isfinite(motor_deg_s[i]))
             return 0;
         const float magnitude = fabsf(motor_deg_s[i]);

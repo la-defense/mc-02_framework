@@ -8,9 +8,11 @@
 
 typedef struct
 {
-    DJIMotorSummary_t friction_l;
-    DJIMotorSummary_t friction_r;
-    DJIMotorSummary_t loader;
+    DJIMotorSummary_t friction_l; /**< 第一套摩擦轮组的第1个电机。 */
+    DJIMotorSummary_t friction_r; /**< 第一套摩擦轮组的第2个电机。 */
+    DJIMotorSummary_t friction_extra[2]; /**< 第3、4个摩擦轮电机。 */
+    uint8_t friction_count; /**< 当前配置启用的摩擦轮数量，范围2～4。 */
+    DJIMotorSummary_t loader; /**< 拨弹盘电机。 */
 } Shoot_Motor_Summary_t;
 
 /** @brief 注册发射机构所需电机和消息，初始化完成后才运行任务。

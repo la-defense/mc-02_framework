@@ -893,7 +893,8 @@ if(UNIX)
   target_link_libraries(vision_limits_test PRIVATE m)
 endif()
 add_test(NAME vision_mechanical_limits_and_conversion COMMAND vision_limits_test)
-add_executable(chassis_motion_test chassis_motion_test.c ../../application/chassis/chassis_motion.c)
+add_executable(chassis_motion_test chassis_motion_test.c ../../application/chassis/chassis_motion.c
+    ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c)
 target_include_directories(chassis_motion_test BEFORE PRIVATE chassis_fakes)
 target_include_directories(chassis_motion_test PRIVATE ../../application/chassis)
 if(UNIX)
@@ -904,6 +905,7 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
   set(target chassis_task_${chassis_limits_profile}_test)
   add_executable(${target} chassis_task_test.c
     ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
+    ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c
     ../../application/topics/robot_topics.c
     ../../modules/message_center/message_center.c)
   target_include_directories(${target} BEFORE PRIVATE chassis_fakes)
@@ -927,6 +929,7 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
 endforeach()
 add_executable(chassis_dual_topic_test chassis_task_test.c
   ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
+    ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c
   ../../application/topics/robot_topics.c ../../modules/message_center/message_center.c
   ../../modules/safety/robot_safety.c)
 target_include_directories(chassis_dual_topic_test BEFORE PRIVATE chassis_fakes)
@@ -941,6 +944,7 @@ add_test(NAME production_chassis_dual_topic_invalidation COMMAND chassis_dual_to
 set_tests_properties(production_chassis_dual_topic_invalidation PROPERTIES TIMEOUT 10)
 add_executable(chassis_bridge_integration_test chassis_task_test.c
   ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
+    ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c
   ../../application/topics/robot_topics.c ../../application/topics/chassis_topic_codec.c
   ../../modules/message_center/message_center.c ../../modules/can_comm/can_topic_link.c
   ../../modules/can_comm/can_topic_bridge.c ../../modules/can_comm/can_topic_transport.c
@@ -1853,3 +1857,22 @@ foreach(target IN LISTS host_targets)
     mc02_apply_format_diagnostics(${target})
   endif()
 endforeach()
+
+# MC02-0054：手算轮速、生产依赖启动及实际CMake选择入口。
+add_test(NAME production_init_auxiliary_failure_not_fatal COMMAND init_diagnostic_test degraded)
+add_executable(chassis_kinematics_test chassis_kinematics_test.c
+  ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c
+  ../../application/chassis/omni.c ../../application/chassis/steering.c
+  ../../application/chassis/wheel_leg.c ../../application/chassis/half_steering.c)
+target_include_directories(chassis_kinematics_test PRIVATE . ../../application/chassis)
+target_link_libraries(chassis_kinematics_test PRIVATE m)
+mc02_apply_format_diagnostics(chassis_kinematics_test)
+add_test(NAME production_chassis_kinematics COMMAND chassis_kinematics_test)
+add_executable(module_plan_test module_plan_test.c ../../application/config/module_plan.c)
+target_include_directories(module_plan_test PRIVATE . ../../application/config)
+mc02_apply_format_diagnostics(module_plan_test)
+add_test(NAME production_vehicle_module_plan COMMAND module_plan_test)
+if(Python3_EXECUTABLE)
+  add_test(NAME production_vehicle_build_selection
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_vehicle_selection.py)
+endif()

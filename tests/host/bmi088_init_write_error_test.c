@@ -36,6 +36,8 @@ int main(void)
             if (bmi088_host_fixture.failed_spi_write_transfer_count != expected_failed_writes ||
                 bmi088_host_fixture.accel_soft_reset_count != expected_resets)
                 fail("failed SPI writes must not reach the sensor model");
+
+            free(instance);
         }
     }
 

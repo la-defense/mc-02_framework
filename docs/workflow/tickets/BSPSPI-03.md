@@ -34,7 +34,7 @@
 | `modules/BMI088/bmi088.c` | SPI2，阻塞全双工，初始化读写及周期读取 | 保留公式与时序配置；已有调用先检查HAL_OK再复制；触发模式仍拒绝 |
 | `modules/imu/ins_task.c` | 配置两个SPI2片选，均为阻塞 | 默认新增期限字段为零，不启用异步 |
 | `modules/lcd/lcd.c`、`lcd_buf.c`、`lcd_ui.c` | SPI1直接HAL收发／停止 | 不迁移；运行时不允许同总线另混用本封装 |
-| `modules/imu/BMI088Middleware.c` | 旧直接HAL字节入口，无生产调用 | 保留厂商兼容文件，不启用 |
+| `modules/imu/BMI088Middleware.c` | MC02-0054 已删除的旧直接HAL字节入口 | Git历史保留来源；现行BMI088驱动位于 `modules/BMI088/` |
 | `bsp/ws2812/ws2812.c` | 其他SPI外设，历史可选路径 | 不迁移，不验证灯珠 |
 | 其他单向提交／改模式调用 | 无生产调用，只有新增测试 | 统一接口，不扩展业务调用 |
 

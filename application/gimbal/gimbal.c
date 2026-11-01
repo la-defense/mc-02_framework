@@ -3,6 +3,7 @@
 */
 #include "gimbal.h"
 #include "robot_def.h"
+#include "config.h"
 #include "dji_motor.h"
 #include "ins_task.h"
 #include "message_center.h"
@@ -13,6 +14,7 @@
 
 static attitude_t *gimba_IMU_data; // 云台IMU数据
 static DJIMotorInstance *yaw_motor, *pitch_motor;
+static const Gimbal_Config_s *gimbal_config;
 
 typedef enum
 {
@@ -83,100 +85,28 @@ uint8_t GimbalInit(void)
 {   
     if (!RobotTopicsInit())
         return 0u;
+    gimbal_config = GimbalConfigFeed();
+    if (gimbal_config == NULL || gimbal_config->gimbal_type != SINGLE_GIMBAL)
+        return 0u;
     gimba_IMU_data = INS_GetStorage(); // INS 由调度器启动后的专属任务初始化
-    // YAW
-    Motor_Init_Config_s yaw_config = {
-        .can_init_config = {
-            .can_handle = &hcan3,
-            .tx_id = 1,
-        },
-        .controller_param_init_config = {
-            .angle_PID = {
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 8, // rad/s per rad; gains retain their ratio when both angle axes use radians.
-                .Ki = 0,
-                .Kd = 0,
-                .DeadBand = 0.1f * DEGREE_2_RAD,
-                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                .IntegralLimit = 100.0f * DEGREE_2_RAD,
-
-                .MaxOut = 500.0f * DEGREE_2_RAD,
-            },
-            .speed_PID = {
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 50,  // 50
-                .Ki = 200, // 200
-                .Kd = 0,
-                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                .IntegralLimit = 3000,
-                .MaxOut = 20000,
-            },
-            .other_angle_feedback = {
-                .read = ReadGimbalSignal, .context = &yaw_position_context, .max_age_ms = 5u,
-                .unit = MOTOR_UNIT_RAD, .reference = MOTOR_REFERENCE_EXTERNAL,
-            },
-            .other_speed_feedback = {
-                .read = ReadGimbalSignal, .context = &yaw_speed_context, .max_age_ms = 5u,
-                .unit = MOTOR_UNIT_RAD_S, .reference = MOTOR_REFERENCE_EXTERNAL,
-            },
-        },
-        .controller_setting_init_config = {
-            .angle_feedback_source = OTHER_FEED,
-            .speed_feedback_source = OTHER_FEED,
-            .outer_loop_type = ANGLE_LOOP,
-            .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
-            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
-        },
-        .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
-        .motor_type = GM6020};
-    // PITCH
-    Motor_Init_Config_s pitch_config = {
-        .can_init_config = {
-            .can_handle = &hcan3,
-            .tx_id = 2,
-        },
-        .controller_param_init_config = {
-            .angle_PID = {
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 10,
-                .Ki = 0,
-                .Kd = 0,
-                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                .IntegralLimit = 100.0f * DEGREE_2_RAD,
-                .MaxOut = 500.0f * DEGREE_2_RAD,
-            },
-            .speed_PID = {
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 50,  // 50
-                .Ki = 350, // 350
-                .Kd = 0,   // 0
-                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                .IntegralLimit = 2500,
-                .MaxOut = 20000,
-            },
-            .other_angle_feedback = {
-                .read = ReadGimbalSignal, .context = &pitch_position_context, .max_age_ms = 5u,
-                .unit = MOTOR_UNIT_RAD, .reference = MOTOR_REFERENCE_EXTERNAL,
-            },
-            .other_speed_feedback = {
-                .read = ReadGimbalSignal, .context = &pitch_speed_context, .max_age_ms = 5u,
-                .unit = MOTOR_UNIT_RAD_S, .reference = MOTOR_REFERENCE_EXTERNAL,
-            },
-        },
-        .controller_setting_init_config = {
-            .angle_feedback_source = OTHER_FEED,
-            .speed_feedback_source = OTHER_FEED,
-            .outer_loop_type = ANGLE_LOOP,
-            .close_loop_type = SPEED_LOOP | ANGLE_LOOP,
-            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
-        },
-        .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
-        .motor_type = GM6020,
-    };
+    Motor_Init_Config_s yaw_config = gimbal_config->yaw_motor_config;
+    Motor_Init_Config_s pitch_config = gimbal_config->pitch_motor_config;
+    yaw_config.controller_param_init_config.other_angle_feedback =
+        (Motor_Signal_Source_s){ReadGimbalSignal, &yaw_position_context,
+                                5u, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL};
+    yaw_config.controller_param_init_config.other_speed_feedback =
+        (Motor_Signal_Source_s){ReadGimbalSignal, &yaw_speed_context,
+                                5u, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL};
+    pitch_config.controller_param_init_config.other_angle_feedback =
+        (Motor_Signal_Source_s){ReadGimbalSignal, &pitch_position_context,
+                                5u, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL};
+    pitch_config.controller_param_init_config.other_speed_feedback =
+        (Motor_Signal_Source_s){ReadGimbalSignal, &pitch_speed_context,
+                                5u, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL};
+    yaw_config.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
+    yaw_config.controller_setting_init_config.speed_feedback_source = OTHER_FEED;
+    pitch_config.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
+    pitch_config.controller_setting_init_config.speed_feedback_source = OTHER_FEED;
     // 这里只注册电机；实际是否运行由周期命令中的模式决定。
     yaw_motor = DJIMotorInit(&yaw_config);
     pitch_motor = DJIMotorInit(&pitch_config);

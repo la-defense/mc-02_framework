@@ -13,15 +13,15 @@
 #include "main.h"
 #include <stddef.h>
 #include <string.h>
+#include <math.h>
 
-#define LOADER_REVERSE_SPEED_DEGS 500 // reverse unload speed (deg/s), TBD on bench
 
 /* 对于双发射机构的机器人,将下面的数据封装成结构体即可,生成两份shoot应用实例 */
-static DJIMotorInstance *friction_l, *friction_r, *loader; // 拨盘电机
+static DJIMotorInstance *friction_motors[4], *loader;
+static uint8_t friction_count;
 // static servo_instance *lid; 需要增加弹舱盖
 
-static Shoot_Config_s *shoot_config; // 拨弹槽数及转子到拨弹盘的传动比例。
-static float loader_output_ratio = 1.0f; // 拨弹盘输出轴与电机转子的总减速比。
+static const Shoot_Config_s *shoot_config;
 static loader_mode_e last_load_mode = LOAD_STOP; // 上次处理的模式，用于判断是否刚进入单发或三发。
 static uint8_t require_load_stop = 1u; // 数据中断后先等一次停止供弹，再允许新的单发或三发。
 
@@ -35,110 +35,75 @@ uint8_t ShootInit(void)
 {
     if (!RobotTopicsInit())
         return 0u;
-    shoot_config = ShootConfigFeed(); // 电机输出轴减速比也使用同一份已准备配置。
+
+    shoot_config = ShootConfigFeed();
     if (shoot_config == NULL)
         return 0u;
-    const float loader_ratio =
-        (shoot_config->loader_gearbox_ratio > 0.0f ? shoot_config->loader_gearbox_ratio : 1.0f) *
-        (shoot_config->loader_disk_ratio > 0.0f ? shoot_config->loader_disk_ratio : 1.0f);
-    loader_output_ratio = loader_ratio;
 
-    // 左摩擦轮
-    Motor_Init_Config_s friction_config = {
-        .can_init_config = {
-            .can_handle = &hcan2,
-        },
-        .controller_param_init_config = {
-            .speed_PID = {
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 0.0f * RAD_2_DEGREE * 19.0f,
-                .Ki = 0.0f * RAD_2_DEGREE * 19.0f,
-                .Kd = 0,
-                .Improve = PID_Integral_Limit,
-                .IntegralLimit = 10000.0f * DEGREE_2_RAD / 19.0f,
-                .MaxOut = 15000,
-            },
-            .current_PID = {
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 0, // 0.7
-                .Ki = 0, // 0.1
-                .Kd = 0,
-                .Improve = PID_Integral_Limit,
-                .IntegralLimit = 10000,
-                .MaxOut = 15000,
-            },
-        },
-        .controller_setting_init_config = {
-            .angle_feedback_source = MOTOR_FEED,
-            .speed_feedback_source = MOTOR_FEED,
+    switch (shoot_config->shoot_type)
+    {
+    case DUAL_SHOOT: friction_count = 2u; break;
+    case THREE_SHOOT: friction_count = 3u; break;
+    case FOUR_SHOOT: friction_count = 4u; break;
+    default: return 0u;
+    }
 
-            .outer_loop_type = SPEED_LOOP,
-            .close_loop_type = SPEED_LOOP | CURRENT_LOOP,
-            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
-        },
-        .output_axis = {19.0f, MOTOR_AXIS_DIRECTION_NORMAL},
-        .motor_type = M3508};
-    friction_config.can_init_config.tx_id = 1,
-    friction_l = DJIMotorInit(&friction_config);
+    const float loader_ratio = shoot_config->loader_gearbox_ratio *
+                               shoot_config->loader_disk_ratio;
+    if (shoot_config->loader_slot_num == 0u ||
+        !isfinite(shoot_config->loader_gearbox_ratio) || shoot_config->loader_gearbox_ratio <= 0.0f ||
+        !isfinite(shoot_config->loader_disk_ratio) || shoot_config->loader_disk_ratio <= 0.0f ||
+        !isfinite(loader_ratio) || loader_ratio <= 0.0f ||
+        !isfinite(shoot_config->friction_default_speed_rad_s) ||
+        shoot_config->friction_default_speed_rad_s <= 0.0f ||
+        !isfinite(shoot_config->loader_reverse_speed_rad_s) ||
+        shoot_config->loader_reverse_speed_rad_s <= 0.0f ||
+        shoot_config->friction_motor_config.can_init_config.can_handle == NULL ||
+        shoot_config->friction_motor_config.motor_type == MOTOR_TYPE_NONE ||
+        shoot_config->loader_motor_config.can_init_config.can_handle == NULL ||
+        shoot_config->loader_motor_config.can_init_config.tx_id == 0u ||
+        shoot_config->loader_motor_config.can_init_config.tx_id > 8u ||
+        shoot_config->loader_motor_config.motor_type == MOTOR_TYPE_NONE)
+        return 0u;
 
-    friction_config.can_init_config.tx_id = 2; // 右摩擦轮,改txid和方向就行
-    friction_config.output_axis.direction = MOTOR_AXIS_DIRECTION_REVERSE;
-    friction_r = DJIMotorInit(&friction_config);
+    for (uint8_t index = 0u; index < friction_count; ++index)
+    {
+        if (shoot_config->friction_motor_id[index] == 0u ||
+            shoot_config->friction_motor_id[index] > 8u ||
+            (shoot_config->friction_motor_reverse_flag[index] != MOTOR_DIRECTION_NORMAL &&
+             shoot_config->friction_motor_reverse_flag[index] != MOTOR_DIRECTION_REVERSE))
+            return 0u;
+        if (shoot_config->friction_motor_config.can_init_config.can_handle ==
+                shoot_config->loader_motor_config.can_init_config.can_handle &&
+            shoot_config->friction_motor_id[index] ==
+                shoot_config->loader_motor_config.can_init_config.tx_id)
+            return 0u;
+        for (uint8_t previous = 0u; previous < index; ++previous)
+            if (shoot_config->friction_motor_id[previous] == shoot_config->friction_motor_id[index])
+                return 0u;
+    }
 
-    // 拨盘电机
-    Motor_Init_Config_s loader_config = {
-        .can_init_config = {
-            .can_handle = &hcan2,
-            .tx_id = 3,
-        },
-        .controller_param_init_config = {
-            .angle_PID = {
-                // 如果启用位置环来控制发弹,需要较大的I值保证输出力矩的线性度否则出现接近拨出的力矩大幅下降
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 0, // 10
-                .Ki = 0,
-                .Kd = 0,
-                .MaxOut = 200.0f * DEGREE_2_RAD / loader_ratio,
-            },
-            .speed_PID = {
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 0.0f * RAD_2_DEGREE * loader_ratio,
-                .Ki = 0.0f * RAD_2_DEGREE * loader_ratio,
-                .Kd = 0,
-                .Improve = PID_Integral_Limit,
-                .IntegralLimit = 5000.0f * DEGREE_2_RAD / loader_ratio,
-                .MaxOut = 5000,
-            },
-            .current_PID = {
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 0, // 0.7
-                .Ki = 0, // 0.1
-                .Kd = 0,
-                .Improve = PID_Integral_Limit,
-                .IntegralLimit = 5000,
-                .MaxOut = 5000,
-            },
-        },
-        .controller_setting_init_config = {
-            .angle_feedback_source = MOTOR_FEED, .speed_feedback_source = MOTOR_FEED,
-            .outer_loop_type = SPEED_LOOP, // 初始化成SPEED_LOOP,让拨盘停在原地,防止拨盘上电时乱转
-            .close_loop_type = CURRENT_LOOP | SPEED_LOOP | ANGLE_LOOP,
-            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL, // 输出轴正方向对应拨弹方向。
-        },
-        .output_axis = {loader_ratio, MOTOR_AXIS_DIRECTION_NORMAL},
-        .motor_type = M2006 // 英雄使用m3508
-    };
+    for (uint8_t index = 0u; index < friction_count; ++index)
+    {
+        Motor_Init_Config_s friction_config = shoot_config->friction_motor_config;
+        friction_config.can_init_config.tx_id = shoot_config->friction_motor_id[index];
+        // 每个摩擦轮的安装方向来自当前车型配置。
+        friction_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
+        friction_config.output_axis.direction =
+            shoot_config->friction_motor_reverse_flag[index] == MOTOR_DIRECTION_REVERSE ?
+                MOTOR_AXIS_DIRECTION_REVERSE : MOTOR_AXIS_DIRECTION_NORMAL;
+        friction_motors[index] = DJIMotorInit(&friction_config);
+        if (friction_motors[index] == NULL)
+            return 0u;
+    }
+
+    Motor_Init_Config_s loader_config = shoot_config->loader_motor_config;
+    loader_config.output_axis.gear_ratio = loader_ratio;
     loader = DJIMotorInit(&loader_config);
 
     shoot_sub = MessageSubscriberRegister(ROBOT_TOPIC_SHOOT_COMMAND,
                                           ROBOT_TOPIC_ENDPOINT_SHOOT);
-    return (uint8_t)(friction_l != NULL && friction_r != NULL && loader != NULL &&
-                     shoot_config != NULL && shoot_sub != NULL);
+    return (uint8_t)(loader != NULL && shoot_sub != NULL);
 }
 
 /* 机器人发射机构控制核心任务 */
@@ -169,14 +134,14 @@ void ShootTask()
     // 发射总开关关闭时先停止全部电机，后面的模式计算仍会继续，但不解除停机标记。
     if (shoot_cmd_recv.shoot_mode == SHOOT_OFF)
     {
-        DJIMotorStop(friction_l);
-        DJIMotorStop(friction_r);
+        for (uint8_t index = 0u; index < friction_count; ++index)
+            DJIMotorStop(friction_motors[index]);
         DJIMotorStop(loader);
     }
     else // 恢复运行
     {
-        DJIMotorEnable(friction_l);
-        DJIMotorEnable(friction_r);
+        for (uint8_t index = 0u; index < friction_count; ++index)
+            DJIMotorEnable(friction_motors[index]);
         DJIMotorEnable(loader);
     }
 
@@ -187,7 +152,7 @@ void ShootTask()
 
     // 若不在休眠状态,根据robotCMD传来的控制模式进行拨盘电机参考值设定和模式切换
     // 发射槽数定义输出轴角度；每发转过整圈的1/slots，单位 rad。
-    const uint8_t slots = shoot_config->loader_slot_num ? shoot_config->loader_slot_num : 10u;
+    const uint8_t slots = shoot_config->loader_slot_num;
     const float one_bullet_delta = 2.0f * PI / slots;
 
     switch (shoot_cmd_recv.load_mode)
@@ -247,7 +212,7 @@ void ShootTask()
     // 反转目标使用输出轴 rad/s，转子减速比由驱动内部处理。
     case LOAD_REVERSE:
         DJIMotorOuterLoop(loader, SPEED_LOOP);
-        DJIMotorSetRef(loader, -LOADER_REVERSE_SPEED_DEGS * DEGREE_2_RAD / loader_output_ratio);
+        DJIMotorSetRef(loader, -shoot_config->loader_reverse_speed_rad_s);
         break;
     default:
         // 未知供弹模式保持等待；此路径不会返回到任务中的下一次运行记录更新。
@@ -258,34 +223,24 @@ void ShootTask()
 
     if (shoot_cmd_recv.friction_mode == FRICTION_ON)
     {
-        // 根据收到的弹速设置设定摩擦轮电机参考值,需实测后填入
+        float friction_speed_rad_s = shoot_config->friction_default_speed_rad_s;
         switch (shoot_cmd_recv.bullet_speed)
         {
         case SMALL_AMU_15:
-            DJIMotorSetRef(friction_l, 0);
-            DJIMotorSetRef(friction_r, 0);
-            break;
         case SMALL_AMU_18:
-            DJIMotorSetRef(friction_l, 0);
-            DJIMotorSetRef(friction_r, 0);
-            break;
         case SMALL_AMU_30:
-            DJIMotorSetRef(friction_l, 0);
-            DJIMotorSetRef(friction_r, 0);
+            friction_speed_rad_s = 0.0f;
             break;
-        default: // 未匹配弹速时沿用约定的转子角速度默认目标，需按实际机构确认。
-        {
-            const float friction_speed_rad_s = 30000.0f * DEGREE_2_RAD / 19.0f;
-            DJIMotorSetRef(friction_l, friction_speed_rad_s);
-            DJIMotorSetRef(friction_r, friction_speed_rad_s);
+        default:
             break;
         }
-        }
+        for (uint8_t index = 0u; index < friction_count; ++index)
+            DJIMotorSetRef(friction_motors[index], friction_speed_rad_s);
     }
     else // 关闭摩擦轮
     {
-        DJIMotorSetRef(friction_l, 0);
-        DJIMotorSetRef(friction_r, 0);
+        for (uint8_t index = 0u; index < friction_count; ++index)
+            DJIMotorSetRef(friction_motors[index], 0.0f);
     }
 
     // 开关弹舱盖
@@ -308,7 +263,14 @@ void Shoot_GetMotorSummary(Shoot_Motor_Summary_t *summary)
 
     *summary = (Shoot_Motor_Summary_t){0};
 
-    DJIMotorGetSummary(friction_l, &summary->friction_l);
-    DJIMotorGetSummary(friction_r, &summary->friction_r);
+    summary->friction_count = friction_count;
+    if (friction_count > 0u)
+        DJIMotorGetSummary(friction_motors[0], &summary->friction_l);
+    if (friction_count > 1u)
+        DJIMotorGetSummary(friction_motors[1], &summary->friction_r);
+    if (friction_count > 2u)
+        DJIMotorGetSummary(friction_motors[2], &summary->friction_extra[0]);
+    if (friction_count > 3u)
+        DJIMotorGetSummary(friction_motors[3], &summary->friction_extra[1]);
     DJIMotorGetSummary(loader, &summary->loader);
 }

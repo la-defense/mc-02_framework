@@ -2,6 +2,7 @@
 #include "message_center.h"
 #include "topics/robot_topics.h"
 #include "robot_def.h"
+#include "config.h"
 #include "referee_task.h"
 #include "super_cap.h"
 #include "general_def.h"
@@ -35,6 +36,29 @@ uint32_t HAL_GetTick(void)
 }
 CAN_HandleTypeDef hcan1, hcan2;
 UART_HandleTypeDef huart1;
+static const Chassis_Config_s chassis_configuration = {
+    .wheel_type = MECANUM_WHEEL,
+    .wheel_measure = {0.0f, 0.0f, 350.0f, 300.0f, RADIUS_WHEEL,
+                      REDUCTION_RATIO_WHEEL},
+    .motion_limits = {
+#if defined(CHASSIS_MOTION_LIMITS_CONFIGURED)
+        .configured = CHASSIS_MOTION_LIMITS_CONFIGURED,
+        .max_wz_deg_s = CHASSIS_MAX_WZ_DEG_S,
+        .rotate_wz_deg_s = CHASSIS_ROTATE_WZ_DEG_S,
+        .max_motor_speed_deg_s = CHASSIS_MAX_MOTOR_SPEED_DEG_S,
+#else
+        .configured = 0u,
+#endif
+    },
+    .chassis_motor_config = {
+        .can_init_config = {.can_handle = &hcan1},
+        .controller_param_init_config = {.speed_PID = {.Kp = 12.0f}},
+        .output_axis = {REDUCTION_RATIO_WHEEL, MOTOR_AXIS_DIRECTION_REVERSE},
+        .motor_type = M3508,
+    },
+    .chassis_motor_id = {1u, 2u, 4u, 3u},
+};
+const Chassis_Config_s *ChassisConfigFeed(void) { return &chassis_configuration; }
 static DJIMotorInstance motors[4];
 static Motor_Init_Config_s motor_configs[4];
 static unsigned motor_count;

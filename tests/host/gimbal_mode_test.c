@@ -5,6 +5,7 @@
  */
 #include "test_check.h"
 #include "gimbal.h"
+#include "config.h"
 #include "main.h"
 #include "message_center.h"
 #include "robot_def.h"
@@ -45,6 +46,41 @@ typedef struct
 } MotorAction_s;
 
 CAN_HandleTypeDef hcan3 = {3u};
+
+static Gimbal_Config_s gimbal_configuration = {
+    .gimbal_type = SINGLE_GIMBAL,
+    .yaw_motor_config = {
+        .can_init_config = {.can_handle = &hcan3, .tx_id = 1u},
+        .controller_param_init_config = {
+            .angle_PID = {.Kp = 3.25f}, .speed_PID = {.Kp = 4.5f},
+        },
+        .controller_setting_init_config = {
+            .angle_feedback_source = MOTOR_FEED,
+            .speed_feedback_source = MOTOR_FEED,
+            .outer_loop_type = ANGLE_LOOP,
+            .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
+            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
+        },
+        .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
+        .motor_type = GM6020,
+    },
+    .pitch_motor_config = {
+        .can_init_config = {.can_handle = &hcan3, .tx_id = 2u},
+        .controller_param_init_config = {
+            .angle_PID = {.Kp = 6.25f}, .speed_PID = {.Kp = 7.5f},
+        },
+        .controller_setting_init_config = {
+            .angle_feedback_source = MOTOR_FEED,
+            .speed_feedback_source = MOTOR_FEED,
+            .outer_loop_type = ANGLE_LOOP,
+            .close_loop_type = ANGLE_LOOP | SPEED_LOOP,
+            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
+        },
+        .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
+        .motor_type = GM6020,
+    },
+};
+const Gimbal_Config_s *GimbalConfigFeed(void) { return &gimbal_configuration; }
 
 static attitude_t imu_storage = {.Roll = 1.0f, .Pitch = 2.0f, .Yaw = 3.0f};
 static INS_Control_Snapshot_s ins_snapshot = {
@@ -290,6 +326,10 @@ int main(void)
 {
     TEST_CHECK(GimbalInit() == 1u);
     TEST_CHECK(topics_init_count == 1u && motor_init_count == 2u);
+    TEST_CHECK(motor_configs[0].controller_param_init_config.angle_PID.Kp == 3.25f &&
+               motor_configs[0].controller_param_init_config.speed_PID.Kp == 4.5f);
+    TEST_CHECK(motor_configs[1].controller_param_init_config.angle_PID.Kp == 6.25f &&
+               motor_configs[1].controller_param_init_config.speed_PID.Kp == 7.5f);
     TestFeedbackConfiguration();
 
     current_time_ms = 100u;
@@ -330,6 +370,10 @@ int main(void)
                    motor_configs[0].controller_param_init_config.other_angle_feedback.context,
                    &unchanged) == MOTOR_FEEDBACK_NOT_READY);
     TEST_CHECK(unchanged.value == 77.0f && unchanged.sequence == 88u);
+
+    gimbal_configuration.gimbal_type = MINI_GIMBAL;
+    TEST_CHECK(GimbalInit() == 0u);
+    TEST_CHECK(motor_init_count == 2u);
 
     return 0;
 }

@@ -10,6 +10,7 @@
 typedef enum { MOTOR_FEED = 0 } Feedback_Source_e;
 typedef enum { SPEED_LOOP = 2, CURRENT_LOOP = 1, ANGLE_LOOP = 4 } Closeloop_Type_e;
 typedef enum { MOTOR_DIRECTION_NORMAL = 0, MOTOR_DIRECTION_REVERSE = 1 } Motor_Reverse_Flag_e;
+typedef enum { DUAL_SHOOT = 0, THREE_SHOOT, FOUR_SHOOT } Shoot_Type_e;
 typedef struct {
     CAN_HandleTypeDef *can_handle;
     uint8_t tx_id;
@@ -29,6 +30,15 @@ typedef struct {
     Motor_Output_Axis_Config_s output_axis;
     Motor_Type_e motor_type;
 } Motor_Init_Config_s;
+typedef struct {
+    Shoot_Type_e shoot_type;
+    Motor_Init_Config_s friction_motor_config, loader_motor_config;
+    uint8_t friction_motor_id[4];
+    Motor_Reverse_Flag_e friction_motor_reverse_flag[4];
+    uint8_t loader_slot_num;
+    float loader_gearbox_ratio, loader_disk_ratio;
+    float friction_default_speed_rad_s, loader_reverse_speed_rad_s;
+} Shoot_Config_s;
 
 typedef enum { SHOOT_OFF = 0, SHOOT_ON } shoot_mode_e;
 typedef enum { FRICTION_OFF = 0, FRICTION_ON } friction_mode_e;
@@ -46,8 +56,4 @@ typedef struct {
     float shoot_rate;
 } Shoot_Ctrl_Cmd_s;
 #pragma pack(pop)
-typedef struct {
-    uint8_t loader_slot_num;
-    float loader_gearbox_ratio, loader_disk_ratio;
-} Shoot_Config_s;
 #endif

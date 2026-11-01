@@ -161,6 +161,8 @@ else()
     add_compile_definitions(MC02_VISION_PROTOCOL_SP=1)
 endif()
 
+# 先检查车型、核心资料和模块依赖，再决定实际参与构建的源码。
+include(cmake/mc02_configure_vehicle.cmake)
 # 源码清单读取已经解析并校验过的配置，确保协议和板级角色只编译所选实现。
 include(cmake/mc02_firmware_sources.cmake)
 if(MC02_IMU_BACKEND STREQUAL "fusion")
@@ -245,7 +247,11 @@ set(MC02_PLATFORM_INCLUDE_DIRS
     Drivers/CMSIS/Include
     Middlewares/Third_Party/SEGGER/RTT
     Middlewares/Third_Party/SEGGER/Config)
-set(MC02_INCLUDE_DIRS ${MC02_PLATFORM_INCLUDE_DIRS} ${MC02_EXTRA_INCLUDE_DIRS})
+# 公共声明仍供现行参数类型引用；实现是否参与链接由源码清单决定。
+set(MC02_INCLUDE_DIRS ${MC02_PLATFORM_INCLUDE_DIRS} ${MC02_EXTRA_INCLUDE_DIRS}
+    application/config application/chassis modules/referee modules/remote
+    modules/motor/DJImotor modules/motor/HTmotor modules/motor/LKmotor
+    modules/super_cap modules/lcd modules/alarm)
 foreach(source IN LISTS MC02_SELECTED_SOURCES)
     get_filename_component(source_dir "${source}" DIRECTORY)
     if(source_dir MATCHES "^(bsp|modules|application)(/|$)")
@@ -270,6 +276,7 @@ set_source_files_properties(Core/Src/freertos.c bsp/usb/usb_transport.c
     bsp/usb/usb_transport_port_stm32.c USB_DEVICE/Target/usbd_conf.c
     PROPERTIES COMPILE_OPTIONS "-fstack-usage")
 target_include_directories(${MC02_OUTPUT_BASENAME}.elf PRIVATE ${MC02_INCLUDE_DIRS})
+target_include_directories(${MC02_OUTPUT_BASENAME}.elf PRIVATE "${CMAKE_BINARY_DIR}/generated")
 mc02_apply_format_diagnostics(${MC02_OUTPUT_BASENAME}.elf)
 mc02_add_dsp(mc02_dsp FALSE)
 target_link_libraries(${MC02_OUTPUT_BASENAME}.elf PRIVATE mc02_dsp m)

@@ -9,6 +9,7 @@
 #define CHASSIS_MOTION_H
 
 #include <stdint.h>
+#include "omni.h"
 
 /** @brief 选择底盘怎样转动，各有效模式下都计算平移速度。 */
 typedef enum
@@ -41,6 +42,8 @@ typedef struct
     float center_gimbal_offset_y_mm; ///< 云台转动中心相对底盘几何中心的 y 方向偏移。
     float wheel_radius_mm;           ///< 轮子半径。
     float reduction_ratio;           ///< 电机轴转速与轮子转速之比。
+    uint8_t model;                   ///< 0=旧麦轮适配，1=四轮全向轮。
+    OmniGeometry_t omni;             ///< model为1时使用，长度单位为米。
 } ChassisMotionGeometry_s;
 
 /** @brief 底盘和电机轴的转速设置，单位均为 deg/s（度/秒）。 */

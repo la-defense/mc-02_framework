@@ -10,16 +10,30 @@
 #include "cmsis_os.h"
 
 #include "robot.h"
+#include "config/build_selection.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "config/vehicle_selection.h"
+#endif
 #include "ins_task.h"
 #include "motor_task.h"
+#if MC02_SELECTED_DRIVER_DJI
 #include "dji_motor.h"
+#endif
+#if MC02_FEATURE_REFEREE || MC02_FEATURE_UI
 #include "referee_task.h"
+#endif
 #include "master_process.h"
 #include "daemon.h"
+#if MC02_SELECTED_DRIVER_HT
 #include "HT04.h"
+#endif
+#if MC02_FEATURE_ALARM
 #include "robot_alarm.h"
+#endif
 #include "task_monitor.h"
+#if MC02_FEATURE_LCD
 #include "lcd_task.h"
+#endif
 #include "bsp_crash.h"
 #include "bsp_safety.h"
 #include "imu_heater.h"
@@ -31,6 +45,7 @@
 #include "bsp_spi.h"
 #include "bsp_adc.h"
 #include "bsp_usart.h"
+#include "bsp_can.h"
 
 #if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_ROBOT)
 /* 保留完整任务轮次最大耗时，供固定只读快照与任务栈数据一起核对。 */
@@ -63,7 +78,7 @@ void StartDAEMONTASK(void const *argument);
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartROBOTTASK(void const *argument);
-#if MC02_ENABLE_REFEREE_UI
+#if MC02_FEATURE_UI
 /** @brief 等待新鲜裁判机器人编号并周期运行 UI；每次循环至少等待 1 ms。
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
@@ -81,13 +96,25 @@ uint8_t OSTaskInit(void)
     // // 后续修改为读取传感器数据准备好的中断处理,
 
     // 电机任务还会派发接收并打印日志，栈容量包含回调和格式化所需空间。
+#if MC02_FEATURE_MOTOR_CONTROL
     osThreadDef(motortask, StartMOTORTASK, osPriorityNormal, 0, 512);
     motorTaskHandle = osThreadCreate(osThread(motortask), NULL);
+#endif
 
     uint8_t uart_tx_created = USARTTxTaskInit();
 
     /* 日志任务是辅助诊断能力，创建失败由日志只读状态报告，不阻断核心任务启动。 */
-    (void)BSPLogTaskInit();
+    const BSPLogStatus_t log_status = BSPLogTaskInit();
+#if defined(MC02_CONFIG_GENERATED)
+    if (log_status != BSP_LOG_STATUS_OK && log_status != BSP_LOG_STATUS_QUEUED)
+    {
+        (void)RobotBuildMarkFailure(ROBOT_MODULE_LOG);
+        InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LOG);
+    }
+#else
+    (void)log_status;
+#endif
 
     // 只有登记了独立事件来源时才创建工作线程；来源事件不能在监控任务里直接恢复模块。
     const DaemonStatus_t event_task_status = DaemonEventTaskInit();
@@ -101,13 +128,22 @@ uint8_t OSTaskInit(void)
     osThreadDef(robottask, StartROBOTTASK, osPriorityNormal, 0, 1024);
     robotTaskHandle = osThreadCreate(osThread(robottask), NULL);
 
-#if MC02_ENABLE_REFEREE_UI
+#if MC02_FEATURE_UI
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_UI))
+    {
+#endif
     osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
     uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
+#if defined(MC02_CONFIG_GENERATED)
+    }
+#endif
 #endif
 
+#if MC02_FEATURE_LCD
     osThreadDef(lcdtask, StartLCDTASK, osPriorityLow, 0, 1024);
     lcdTaskHandle = osThreadCreate(osThread(lcdtask), NULL);
+#endif
     uint8_t all_created = 1u;
     if (!event_task_created)
     {
@@ -126,12 +162,14 @@ uint8_t OSTaskInit(void)
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_INS);
         all_created = 0u;
     }
+#if MC02_FEATURE_MOTOR_CONTROL
     if (motorTaskHandle == NULL)
     {
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_MOTOR);
         all_created = 0u;
     }
+#endif
     if (daemonTaskHandle == NULL)
     {
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
@@ -144,24 +182,42 @@ uint8_t OSTaskInit(void)
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_ROBOT);
         all_created = 0u;
     }
-#if MC02_ENABLE_REFEREE_UI
+#if MC02_FEATURE_UI
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_UI) && uiTaskHandle == NULL)
+#else
     if (uiTaskHandle == NULL)
+#endif
     {
+#if defined(MC02_CONFIG_GENERATED)
+        (void)RobotBuildMarkFailure(ROBOT_MODULE_UI);
+        InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+            INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
+#else
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
         all_created = 0u;
+#endif
     }
 #endif
+#if MC02_FEATURE_LCD
     if (lcdTaskHandle == NULL)
     {
+#if defined(MC02_CONFIG_GENERATED)
+        (void)RobotBuildMarkFailure(ROBOT_MODULE_LCD);
+        InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+            INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
+#else
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
+            INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
         all_created = 0u;
+#endif
     }
+#endif
 
     if (all_created)
     {
-#if !defined(MC02_PROFILE_BENCH_SAFE)
+#if !defined(MC02_PROFILE_BENCH_SAFE) && MC02_SELECTED_DRIVER_HT
         HTMotorControlInit(); // 没有注册HT电机则不会执行
 #endif
     }
@@ -216,6 +272,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
     }
 }
 
+#if MC02_FEATURE_MOTOR_CONTROL
 __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 {
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_03);
@@ -239,6 +296,7 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
         osDelay(1);
     }
 }
+#endif
 
 __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 {
@@ -282,7 +340,12 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         // 电压诊断只记录读取结果，内部每 250ms 更新一次，不参与控制许可。
         BSP_ADCUpdateDiagnostics();
         DaemonTask();
-        (void)RobotAlarmTask();
+#if MC02_FEATURE_ALARM
+#if defined(MC02_CONFIG_GENERATED)
+        if (RobotBuildModuleStarted(ROBOT_MODULE_ALARM))
+#endif
+            (void)RobotAlarmTask();
+#endif
         CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */
         TaskMonitorTick();
 #if MC02_BENCH_CRASH_DIAGNOSTICS
@@ -332,7 +395,7 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
     }
 }
 
-#if MC02_ENABLE_REFEREE_UI
+#if MC02_FEATURE_UI
 __attribute__((noreturn)) void StartUITASK(void const *argument)
 {
     (void)argument;

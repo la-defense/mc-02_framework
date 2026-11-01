@@ -14,14 +14,15 @@
 #include "chassis.h"
 #include "chassis_motion.h"
 #include "robot_def.h"
+#include "config.h"
+#include "config/build_selection.h"
 #include "dji_motor.h"
+#if MC02_FEATURE_SUPERCAP
 #include "super_cap.h"
+#endif
 #include "message_center.h"
 #include "topics/robot_topics.h"
 #include "referee_task.h"
-#if MC02_ENABLE_REFEREE_UI
-#include "config.h"
-#endif
 #include "bsp_log.h"
 #include "general_def.h"
 #ifdef CHASSIS_BOARD
@@ -43,7 +44,10 @@ static Chassis_Ctrl_Cmd_s chassis_cmd_recv;         // 底盘接收到的控制�
 static Chassis_Upload_Data_s chassis_feedback_data; // 底盘回传的反馈数据
 #endif
 
+#if MC02_FEATURE_SUPERCAP
 static SuperCapInstance *cap;                                       // 超级电容
+#endif
+static const Chassis_Config_s *chassis_config;
 static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left right forward back
 #ifdef CHASSIS_BOARD
 static uint8_t chassis_command_rearm_required = 1u;
@@ -58,64 +62,36 @@ static uint32_t chassis_command_max_age_ms = 0u;
 
 uint8_t ChassisInit(void)
 {
+    chassis_config = ChassisConfigFeed();
+    if (chassis_config == NULL)
+        return 0u;
     if (!RobotTopicsInit())
         return 0u;
-    // 四个轮子的参数一样,改tx_id和反转标志位即可
-    Motor_Init_Config_s chassis_motor_config = {
-        .can_init_config.can_handle = &hcan1,
-        .controller_param_init_config = {
-            .speed_PID = {
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                /* 转子 deg/s 改为输出轴 rad/s，按同一物理速度缩放 PID 输入单位。 */
-                .Kp = 10.0f * RAD_2_DEGREE * REDUCTION_RATIO_WHEEL,
-                .Ki = 0,  // 0
-                .Kd = 0,  // 0
-                .IntegralLimit = 3000.0f * DEGREE_2_RAD / REDUCTION_RATIO_WHEEL,
-                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                .MaxOut = 12000,
-            },
-            .current_PID = {
-                .DtMin_s = MOTOR_PID_DT_MIN_S,
-                .DtMax_s = MOTOR_PID_DT_MAX_S,
-                .Kp = 0.5, // 0.4
-                .Ki = 0,   // 0
-                .Kd = 0,
-                .IntegralLimit = 3000,
-                .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
-                .MaxOut = 15000,
-            },
-        },
-        .controller_setting_init_config = {
-            .angle_feedback_source = MOTOR_FEED,
-            .speed_feedback_source = MOTOR_FEED,
-            .outer_loop_type = SPEED_LOOP,
-            .close_loop_type = SPEED_LOOP | CURRENT_LOOP,
-            .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
-        },
-        .output_axis = {REDUCTION_RATIO_WHEEL, MOTOR_AXIS_DIRECTION_REVERSE},
-        .motor_type = M3508,
-    };
-    // 每个电机使用相同的输出轴单位和方向映射，编号仍按CAN反馈ID登记。
-    chassis_motor_config.can_init_config.tx_id = 1;
+    Motor_Init_Config_s chassis_motor_config = chassis_config->chassis_motor_config;
+    chassis_motor_config.can_init_config.tx_id = chassis_config->chassis_motor_id[MOTOR_LF];
     motor_lf = DJIMotorInit(&chassis_motor_config);
 
-    chassis_motor_config.can_init_config.tx_id = 2;
+    chassis_motor_config.can_init_config.tx_id = chassis_config->chassis_motor_id[MOTOR_RF];
     motor_rf = DJIMotorInit(&chassis_motor_config);
 
-    chassis_motor_config.can_init_config.tx_id = 4;
+    chassis_motor_config.can_init_config.tx_id = chassis_config->chassis_motor_id[MOTOR_LB];
     motor_lb = DJIMotorInit(&chassis_motor_config);
 
-    chassis_motor_config.can_init_config.tx_id = 3;
+    chassis_motor_config.can_init_config.tx_id = chassis_config->chassis_motor_id[MOTOR_RB];
     motor_rb = DJIMotorInit(&chassis_motor_config);
 
+#if defined(MC02_CONFIG_GENERATED)
+    RefereeStatus_t referee_status = REFEREE_OK;
+#else
     RefereeStatus_t referee_status = RefereeInit(&huart1, NULL);
 #if MC02_ENABLE_REFEREE_UI
     // UI只读取车型布局和裁判快照；绑定失败只停用显示，不撤销裁判接收。
     UIStatus_t ui_status = UITaskInit(RefereeUIConfigFeed());
     if (ui_status != UI_OK) BSP_LOG_EVENT_1(EV_APPLICATION_CHASSIS_CHASSIS_C_01, BSP_LOG_FIELD_I32((int)ui_status));
 #endif
+#endif
 
+#if MC02_FEATURE_SUPERCAP
     SuperCap_Init_Config_s cap_conf = {
         .can_config = {
             .can_handle = &hcan2,
@@ -123,6 +99,7 @@ uint8_t ChassisInit(void)
             .rx_id = 0x301, // 超级电容默认发送id,注意tx和rx在其他人看来是反的
         }};
     cap = SuperCapInit(&cap_conf); // 超级电容初始化
+#endif
 
     // 发布订阅初始化,如果为双板,则需要can comm来传递消息
 #ifdef CHASSIS_BOARD
@@ -137,7 +114,11 @@ uint8_t ChassisInit(void)
                                            ROBOT_TOPIC_ENDPOINT_CHASSIS);
 #endif
     if (motor_lf == NULL || motor_rf == NULL || motor_lb == NULL || motor_rb == NULL ||
-        referee_status != REFEREE_OK || cap == NULL)
+        referee_status != REFEREE_OK
+#if MC02_FEATURE_SUPERCAP
+        || cap == NULL
+#endif
+        )
         return 0u;
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     if (chassis_sub == NULL || chassis_pub == NULL)
@@ -312,20 +293,18 @@ void ChassisTask()
         .offset_angle_deg = chassis_cmd_recv.offset_angle,
         .mode = motion_mode,
     };
+    const Wheel_Measure_s *wheel_measure = &chassis_config->wheel_measure;
     const ChassisMotionGeometry_s geometry = {
-        .wheel_base_mm = WHEEL_BASE,
-        .track_width_mm = TRACK_WIDTH,
-        .center_gimbal_offset_x_mm = CENTER_GIMBAL_OFFSET_X,
-        .center_gimbal_offset_y_mm = CENTER_GIMBAL_OFFSET_Y,
-        .wheel_radius_mm = RADIUS_WHEEL,
-        .reduction_ratio = REDUCTION_RATIO_WHEEL,
+        .wheel_base_mm = wheel_measure->wheel_base,
+        .track_width_mm = wheel_measure->track_width,
+        .center_gimbal_offset_x_mm = wheel_measure->center_gimbal_offset_x,
+        .center_gimbal_offset_y_mm = wheel_measure->center_gimbal_offset_y,
+        .wheel_radius_mm = wheel_measure->radius_wheel,
+        .reduction_ratio = wheel_measure->reduction_ratio_wheel,
+        .model = (uint8_t)(chassis_config->wheel_type == OMNI_WHEEL),
+        .omni = chassis_config->omni_geometry,
     };
-    const ChassisMotionLimits_s limits = {
-        .configured = CHASSIS_MOTION_LIMITS_CONFIGURED,
-        .max_wz_deg_s = CHASSIS_MAX_WZ_DEG_S,
-        .rotate_wz_deg_s = CHASSIS_ROTATE_WZ_DEG_S,
-        .max_motor_speed_deg_s = CHASSIS_MAX_MOTOR_SPEED_DEG_S,
-    };
+    const ChassisMotionLimits_s limits = chassis_config->motion_limits;
     ChassisMotionOutput_s motion_output;
     uint8_t command_allowed = command_fresh != 0u &&
 #ifdef CHASSIS_BOARD
@@ -373,7 +352,7 @@ void ChassisTask()
     }
     else
     {
-        const float rotor_to_output = -DEGREE_2_RAD / REDUCTION_RATIO_WHEEL;
+        const float rotor_to_output = -DEGREE_2_RAD / wheel_measure->reduction_ratio_wheel;
         DJIMotorSetRef(motor_lf, motion_output.motor_speed_deg_s[0] * rotor_to_output);
         DJIMotorSetRef(motor_rf, motion_output.motor_speed_deg_s[1] * rotor_to_output);
         DJIMotorSetRef(motor_lb, motion_output.motor_speed_deg_s[2] * rotor_to_output);

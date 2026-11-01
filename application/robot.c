@@ -6,6 +6,7 @@
 #include "robot.h"
 #include "robot_def.h"
 #include "robot_task.h"
+#include "config/build_selection.h"
 #include "robot_safety.h"
 #include "config.h"
 #include "robot_alarm.h"
@@ -18,6 +19,38 @@
 #include "vehicle_health.h"
 #include "bsp_safety.h"
 #include "bsp_reset_recovery.h"
+#include "usart.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "config/vehicle_selection.h"
+#include "topics/robot_topics.h"
+#if MC02_FEATURE_REFEREE
+#include "rm_referee.h"
+#if MC02_BENCH_REFEREE_DIAGNOSTICS
+#include "referee_bench.h"
+#endif
+#endif
+#if MC02_FEATURE_REMOTE
+#include "remote_control.h"
+#if MC02_BENCH_RC_DIAGNOSTICS
+#include "remote_bench.h"
+#endif
+#endif
+#if MC02_FEATURE_VISION
+#include "master_process.h"
+#endif
+#if MC02_FEATURE_CHASSIS
+#include "chassis.h"
+#endif
+#if MC02_FEATURE_GIMBAL
+#include "gimbal.h"
+#endif
+#if MC02_FEATURE_SHOOTER
+#include "shoot.h"
+#endif
+#if MC02_FEATURE_UI
+#include "referee_task.h"
+#endif
+#endif
 #if defined(MC02_PROFILE_ROBOT)
 #include "topics/robot_topics_diag.h"
 #endif
@@ -34,9 +67,11 @@ static const TaskMonitorTaskConfig_t robot_task_monitor_config[] = {
     {.id = TASK_MONITOR_INS, .name = "INS", .mode = TASK_MONITOR_MODE_PERIODIC,
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 5u,
      .startup_grace_ms = 100u},
+#if MC02_FEATURE_MOTOR_CONTROL
     {.id = TASK_MONITOR_MOTOR, .name = "MOTOR", .mode = TASK_MONITOR_MODE_PERIODIC,
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 5u,
      .startup_grace_ms = 100u},
+#endif
     {.id = TASK_MONITOR_ROBOT, .name = "ROBOT", .mode = TASK_MONITOR_MODE_PERIODIC,
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 5u, .deadline_ms = 20u,
      .startup_grace_ms = 100u},
@@ -90,6 +125,96 @@ static uint8_t RobotParamFlashOperationEnd(uint8_t success)
 #include "topics/robot_can_bridge.h"
 #endif
 
+#if defined(MC02_CONFIG_GENERATED)
+static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
+{
+    const Robot_Config_s *config = (const Robot_Config_s *)context;
+    if (config == NULL)
+        return 0u;
+    switch (module)
+    {
+    case ROBOT_MODULE_SAFETY:
+    case ROBOT_MODULE_IMU:
+    case ROBOT_MODULE_LOG:
+    case ROBOT_MODULE_HEATER:
+    case ROBOT_MODULE_LCD:
+        return 1u;
+    case ROBOT_MODULE_COMMUNICATION:
+#if defined(MC02_PROFILE_ROBOT)
+        return RobotTopicsInit();
+#else
+        return 1u;
+#endif
+    case ROBOT_MODULE_COMMAND:
+#if MC02_FEATURE_COMMAND
+        return RobotCMDInit();
+#else
+        return 0u;
+#endif
+    case ROBOT_MODULE_CHASSIS:
+#if MC02_FEATURE_CHASSIS
+        return ChassisInit();
+#else
+        return 0u;
+#endif
+    case ROBOT_MODULE_GIMBAL:
+#if MC02_FEATURE_GIMBAL
+        return GimbalInit();
+#else
+        return 0u;
+#endif
+    case ROBOT_MODULE_SHOOTER:
+#if MC02_FEATURE_SHOOTER
+        return ShootInit();
+#else
+        return 0u;
+#endif
+    case ROBOT_MODULE_REFEREE:
+#if MC02_FEATURE_REFEREE
+#if MC02_BENCH_REFEREE_DIAGNOSTICS
+        return RefereeBenchInit(&huart1);
+#else
+        return (uint8_t)(RefereeInit(&huart1, NULL) == REFEREE_OK);
+#endif
+#else
+        return 0u;
+#endif
+    case ROBOT_MODULE_VISION:
+#if MC02_FEATURE_VISION
+        return (uint8_t)(VisionInit(&huart9) != NULL);
+#else
+        return 0u;
+#endif
+    case ROBOT_MODULE_REMOTE:
+#if MC02_FEATURE_REMOTE
+#if MC02_BENCH_RC_DIAGNOSTICS
+        return RemoteBenchInit(&huart5);
+#else
+        return (uint8_t)(RemoteControlInit(&huart5) != NULL);
+#endif
+#else
+        return 0u;
+#endif
+    case ROBOT_MODULE_ALARM:
+#if MC02_FEATURE_ALARM
+        return (uint8_t)(RobotAlarmInit(config->alarm_config) == ROBOT_ALARM_OK);
+#else
+        return 0u;
+#endif
+    case ROBOT_MODULE_UI:
+#if MC02_FEATURE_UI
+        return (uint8_t)(UITaskInit(config->referee_ui_config) == UI_OK);
+#else
+        return 0u;
+#endif
+    case ROBOT_MODULE_SUPERCAP:
+        return 0u;
+    default:
+        return 0u;
+    }
+}
+#endif
+
 
 uint8_t RobotInit(void)
 {  
@@ -102,15 +227,20 @@ uint8_t RobotInit(void)
     
     BSPInit();
     RobotSafetyInit();
-    Robot_Config_s *robot_config = RobotConfigInit(ROBOT_ID);
-    if (robot_config == NULL)
+    const Robot_Config_s *robot_config = NULL;
+    const RobotConfigStatus_t config_status = RobotConfigSelect(
+        ROBOT_CONFIG_SUPPORTED_ID, &robot_config);
+    if (config_status != ROBOT_CONFIG_OK || robot_config == NULL)
     {
         InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
-                                    INIT_FAILURE_DEPENDENCY, 0u);
+                                    INIT_FAILURE_DEPENDENCY,
+                                    (uint16_t)config_status);
         goto init_failed;
     }
-    // 告警输出属于辅助通道；LED 或蜂鸣器失败不阻断控制任务启动。
+#if !defined(MC02_CONFIG_GENERATED)
+    // 兼容旧主机测试构建；正式固件由配置启动器按依赖顺序初始化。
     (void)RobotAlarmInit(robot_config->alarm_config);
+#endif
     BSP_ResetRecoveryState_t recovery_state = {0};
     const uint8_t recovery_state_valid = BSP_ResetRecoveryGetState(&recovery_state);
     if (recovery_state_valid == 0u || recovery_state.locked_out != 0u)
@@ -145,6 +275,26 @@ uint8_t RobotInit(void)
         }                                                                         \
     } while (0)
 
+#if defined(MC02_CONFIG_GENERATED)
+    InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
+    const RobotModuleStatus_t module_status = RobotBuildStart(
+        RobotStartConfiguredModule, (void *)robot_config);
+    if (module_status != ROBOT_MODULE_OK)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                    INIT_FAILURE_DEPENDENCY,
+                                    robot_module_startup.failed_module);
+        goto init_failed;
+    }
+    for (unsigned module = 0u; module < ROBOT_MODULE_COUNT; ++module)
+    {
+        const uint32_t bit = ROBOT_MODULE_BIT(module);
+        if ((robot_module_startup.failed & bit) != 0u ||
+            (robot_module_startup.blocked & bit) != 0u)
+            InitDiagnosticReportDegraded(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                         INIT_FAILURE_DEPENDENCY, module);
+    }
+#else
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
     ROBOT_INIT_CHECK(RobotCMDInit(), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
@@ -173,6 +323,7 @@ uint8_t RobotInit(void)
     InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
     ROBOT_INIT_CHECK(ChassisInit(), INIT_STAGE_APPLICATION, INIT_MODULE_CHASSIS,
                      INIT_FAILURE_DEPENDENCY, 0u);
+#endif
 #endif
 
 #if defined(MC02_PROFILE_ROBOT)
@@ -227,7 +378,30 @@ void RobotTask()
 #if MC02_BENCH_REFEREE_DIAGNOSTICS
     RefereeBenchTask();
 #endif
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_VISION))
+        VisionSend();
+#else
     VisionSend();
+#endif
+#else
+#if defined(MC02_CONFIG_GENERATED)
+#if MC02_FEATURE_COMMAND
+    if (RobotBuildModuleStarted(ROBOT_MODULE_COMMAND))
+        RobotCMDTask();
+#endif
+#if MC02_FEATURE_GIMBAL
+    if (RobotBuildModuleStarted(ROBOT_MODULE_GIMBAL))
+        GimbalTask();
+#endif
+#if MC02_FEATURE_SHOOTER
+    if (RobotBuildModuleStarted(ROBOT_MODULE_SHOOTER))
+        ShootTask();
+#endif
+#if MC02_FEATURE_CHASSIS
+    if (RobotBuildModuleStarted(ROBOT_MODULE_CHASSIS))
+        ChassisTask();
+#endif
 #else
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     RobotCMDTask();
@@ -237,6 +411,7 @@ void RobotTask()
 
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     ChassisTask();
+#endif
 #endif
 #endif
 

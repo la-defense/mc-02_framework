@@ -5,8 +5,13 @@
  */
 #include "vehicle_health.h"
 #include "vehicle_health_source.h"
+#include "config/build_selection.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "config/vehicle_selection.h"
+#endif
 #include <stddef.h>
 #include <math.h>
+#include <string.h>
 
 static VehicleHealthSnapshot_t published_snapshot;
 static uint32_t last_attempt_ms;
@@ -25,6 +30,43 @@ VehicleHealthStatus_t VehicleHealthGetBuildProfile(VehicleHealthBuildProfile_t *
         return VEHICLE_HEALTH_ERROR_ARGUMENT;
 
     VehicleHealthBuildProfile_t candidate = {0};
+#if defined(MC02_CONFIG_GENERATED)
+    if (strcmp(MC02_BUILD_ROLE_NAME, "bench") == 0)
+        candidate.role = VEHICLE_HEALTH_ROLE_BENCH;
+    else if (strcmp(MC02_BUILD_ROLE_NAME, "chassis") == 0)
+        candidate.role = VEHICLE_HEALTH_ROLE_CHASSIS;
+    else if (strcmp(MC02_BUILD_ROLE_NAME, "gimbal") == 0)
+        candidate.role = VEHICLE_HEALTH_ROLE_GIMBAL;
+    else
+        candidate.role = VEHICLE_HEALTH_ROLE_SINGLE;
+    AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_INIT);
+    AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_SAFETY);
+    AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_TASK_MONITOR);
+#define ADD_IF_ENABLED(feature_, module_) \
+    do { if (feature_) AddModule(&candidate.enabled_modules, module_); } while (0)
+    ADD_IF_ENABLED(MC02_FEATURE_IMU, VEHICLE_HEALTH_MODULE_IMU);
+    ADD_IF_ENABLED(MC02_FEATURE_REMOTE, VEHICLE_HEALTH_MODULE_REMOTE);
+    ADD_IF_ENABLED(MC02_FEATURE_VISION, VEHICLE_HEALTH_MODULE_VISION);
+    ADD_IF_ENABLED(MC02_FEATURE_REFEREE, VEHICLE_HEALTH_MODULE_REFEREE);
+    ADD_IF_ENABLED(MC02_FEATURE_HEATER, VEHICLE_HEALTH_MODULE_HEATER);
+    ADD_IF_ENABLED(MC02_FEATURE_LOG, VEHICLE_HEALTH_MODULE_LOG);
+    ADD_IF_ENABLED(MC02_FEATURE_CHASSIS, VEHICLE_HEALTH_MODULE_CHASSIS);
+    ADD_IF_ENABLED(MC02_FEATURE_GIMBAL, VEHICLE_HEALTH_MODULE_GIMBAL);
+    ADD_IF_ENABLED(MC02_FEATURE_SHOOTER, VEHICLE_HEALTH_MODULE_SHOOTER);
+    ADD_IF_ENABLED(MC02_FEATURE_COMMAND, VEHICLE_HEALTH_MODULE_COMMAND);
+    ADD_IF_ENABLED(MC02_FEATURE_COMMUNICATION, VEHICLE_HEALTH_MODULE_COMMUNICATION);
+    ADD_IF_ENABLED(MC02_FEATURE_ALARM, VEHICLE_HEALTH_MODULE_ALARM);
+    ADD_IF_ENABLED(MC02_FEATURE_LCD, VEHICLE_HEALTH_MODULE_LCD);
+    ADD_IF_ENABLED(MC02_FEATURE_UI, VEHICLE_HEALTH_MODULE_UI);
+    ADD_IF_ENABLED(MC02_FEATURE_SUPERCAP, VEHICLE_HEALTH_MODULE_SUPERCAP);
+#undef ADD_IF_ENABLED
+    if (candidate.role != VEHICLE_HEALTH_ROLE_BENCH)
+    {
+        AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_CAN1);
+        AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_CAN2);
+        AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_CAN3);
+    }
+#else
 #if defined(MC02_PROFILE_BENCH_SAFE)
     candidate.role = VEHICLE_HEALTH_ROLE_BENCH;
 #elif defined(CHASSIS_BOARD)
@@ -68,6 +110,7 @@ VehicleHealthStatus_t VehicleHealthGetBuildProfile(VehicleHealthBuildProfile_t *
 #if (defined(VISION_USE_VCP) && (defined(MC02_PROFILE_BENCH_SAFE) || defined(ONE_BOARD) || defined(GIMBAL_BOARD))) || \
     (defined(MC02_BENCH_USB_DIAGNOSTICS) && MC02_BENCH_USB_DIAGNOSTICS)
     AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_USB);
+#endif
 #endif
     *output = candidate;
     return VEHICLE_HEALTH_OK;

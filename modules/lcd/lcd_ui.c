@@ -3,6 +3,7 @@
 * 标签与标题按页重画，值区保留上次内容，相同内容跳过；页面被覆盖后须清除记录。
  */
 #include "lcd_ui.h"
+#include "config/build_selection.h"
 #include "lcd.h"
 #include "lcd_buf.h"
 #include "lcd_font_cn.h"
@@ -519,7 +520,11 @@ static void draw_page0_values(void)
     snprintf(buf, sizeof(buf), "I:%s M:%s R:%s D:%s U:%s", t[0], t[1], t[2], t[3], t[TASK_MONITOR_UART_TX]);
     draw_value_ascii(4, buf);
 
+#if MC02_FEATURE_REMOTE
     draw_value_cn(5, online_label(RemoteControlIsOnline()), LCD_CN_LENGTH(L_ONLINE));
+#else
+    draw_value_ascii(5, "RC:--");
+#endif
 
     Vision_Status_t vs;
     VisionGetStatus(&vs);
@@ -654,7 +659,11 @@ static void draw_page2_static(void)
 static void draw_page2_values(void)
 {
     RefereeSnapshot_t ref = {0};
+#if MC02_FEATURE_REFEREE
     uint8_t available = (uint8_t)(RefereeGetSnapshot(&ref) == REFEREE_OK);
+#else
+    uint8_t available = 0u;
+#endif
     draw_value_cn(0, online_label((uint8_t)(available && ref.link_online)), LCD_CN_LENGTH(L_ONLINE));
     char values[LCD_REFEREE_VALUE_COUNT][LCD_REFEREE_VALUE_SIZE];
     LCDRefereeFormatRows(available ? &ref : NULL, values);

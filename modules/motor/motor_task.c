@@ -3,9 +3,16 @@
 */
 #include "motor_task.h"
 #include "bsp_dwt.h"
+#include "../../application/config/build_selection.h"
+#if MC02_SELECTED_DRIVER_LK
 #include "LK9025.h"
+#endif
+#if MC02_SELECTED_DRIVER_HT
 #include "HT04.h"
+#endif
+#if MC02_SELECTED_DRIVER_DJI
 #include "dji_motor.h"
+#endif
 #include "bsp_can.h"
 #include "bsp_usart.h"
 #include "usb_transport.h"
@@ -43,12 +50,16 @@ void MotorControlTask()
 
     probe_seg = DWT_ProbeStart();
 #if !defined(MC02_PROFILE_BENCH_SAFE)
+#if MC02_SELECTED_DRIVER_DJI
     DJIMotorControl();
+#endif
     DWT_ProbeDone(&motor_prof_dji, probe_seg);
 
     // 当前 LKMotorControl() 已启用；无注册对象时它不会提交发送。
     probe_seg = DWT_ProbeStart();
+#if MC02_SELECTED_DRIVER_LK
     LKMotorControl();
+#endif
     DWT_ProbeDone(&motor_prof_lk, probe_seg);
 // 裸板配置仅做通信派发，跳过电机控制和指令发送。
 #else

@@ -19,6 +19,9 @@ static RemoteSafetyGestures_s remote_gestures;
 #include "robot_safety.h"
 #include "daemon.h"
 #include "vision_control.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "config/vehicle_selection.h"
+#endif
 #if defined(MC02_VISION_PROTOCOL_V2)
 #include "vision_protocol_v2.h"
 #include "referee_snapshot.h"
@@ -43,20 +46,54 @@ _Static_assert((int)LOAD_BURSTFIRE == (int)VISION_CONTROL_LOAD_BURSTFIRE,
 #include "bsp_log.h"
 
 // 私有宏,自动将编码器转换成角度值
-#define YAW_ALIGN_ANGLE (YAW_CHASSIS_ALIGN_ECD * ECD_ANGLE_COEF_DJI) // 对齐时的角度,0-360
-#define PTICH_HORIZON_ANGLE (PITCH_HORIZON_ECD * ECD_ANGLE_COEF_DJI) // pitch水平时电机的角度,0-360
+#if !defined(MC02_CONFIG_GENERATED)
+#define YAW_ALIGN_ANGLE (YAW_CHASSIS_ALIGN_ECD * ECD_ANGLE_COEF_DJI)
+#endif
 
-static const VisionControlLimits_s vision_limits = {
+static VisionControlLimits_s vision_limits = {
     .configured = VISION_LIMITS_CONFIGURED,
     .yaw_constraint = VISION_YAW_CONSTRAINT,
+#if !defined(MC02_CONFIG_GENERATED)
     .pitch_min_deg = PITCH_MIN_ANGLE,
     .pitch_max_deg = PITCH_MAX_ANGLE,
+#endif
     .pitch_zero_offset_deg = VISION_PITCH_ZERO_OFFSET_DEG,
     .yaw_min_deg = VISION_YAW_MIN_DEG,
     .yaw_max_deg = VISION_YAW_MAX_DEG,
 };
+#if defined(MC02_CONFIG_GENERATED) && defined(MC02_VISION_PROTOCOL_V2)
+static const Chassis_Config_s *command_chassis_config;
+#endif
+#if defined(MC02_CONFIG_GENERATED)
+static float yaw_align_angle_deg;
+#else
+static float yaw_align_angle_deg = YAW_ALIGN_ANGLE;
+#endif
 static uint8_t previous_vision_active;
 static uint8_t manual_reference_ready;
+
+// 只接受配置确认且为正数的底盘最大角速度，旧主机夹具沿用宏输入。
+#if defined(MC02_VISION_PROTOCOL_V2)
+static uint8_t GetMaximumChassisYawRateDegS(float *maximum)
+{
+    if (maximum == NULL)
+        return 0u;
+#if defined(MC02_CONFIG_GENERATED)
+    if (command_chassis_config == NULL ||
+        command_chassis_config->motion_limits.configured == 0u ||
+        !isfinite(command_chassis_config->motion_limits.max_wz_deg_s) ||
+        command_chassis_config->motion_limits.max_wz_deg_s <= 0.0f)
+        return 0u;
+    *maximum = command_chassis_config->motion_limits.max_wz_deg_s;
+#else
+    if (CHASSIS_MOTION_LIMITS_CONFIGURED == 0u ||
+        !isfinite(CHASSIS_MAX_WZ_DEG_S) || CHASSIS_MAX_WZ_DEG_S <= 0.0f)
+        return 0u;
+    *maximum = CHASSIS_MAX_WZ_DEG_S;
+#endif
+    return 1u;
+}
+#endif
 
 /* cmd应用包含的模块实例指针和交互信息存储*/
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
@@ -97,10 +134,33 @@ uint8_t RobotCMDInit(void)
 {
     if (!RobotTopicsInit())
         return 0u;
+#if defined(MC02_CONFIG_GENERATED)
+    const Robot_Config_s *config = RobotConfigFeed();
+    if (config == NULL)
+        return 0u;
+    // 云台和底盘机械偏置从本车型唯一配置读取。
+#if defined(MC02_VISION_PROTOCOL_V2)
+    command_chassis_config = &config->chassis_param;
+#endif
+    yaw_align_angle_deg = config->gimbal_param.gimbal_offset.yaw_offset;
+    vision_limits.pitch_min_deg = config->gimbal_param.gimbal_offset.pitch_min_angle;
+    vision_limits.pitch_max_deg = config->gimbal_param.gimbal_offset.pitch_max_angle;
+    if (!isfinite(yaw_align_angle_deg) ||
+        !isfinite(vision_limits.pitch_min_deg) || !isfinite(vision_limits.pitch_max_deg) ||
+        vision_limits.pitch_min_deg >= vision_limits.pitch_max_deg)
+        return 0u;
+#endif
     RemoteSafetyGesturesInit(&remote_gestures);
+#if defined(MC02_CONFIG_GENERATED)
+    // 车辆启动阶段已按模块依赖初始化输入源；命令模块只确认依赖，不重复注册设备。
+    remote_initialized = RobotBuildModuleStarted(ROBOT_MODULE_REMOTE);
+    if (!remote_initialized || !RobotBuildModuleStarted(ROBOT_MODULE_VISION))
+        return 0u;
+#else
     remote_initialized = (uint8_t)(RemoteControlInit(&huart5) != NULL);
     if (!remote_initialized || VisionInit(&huart9) == NULL)
         return 0u;
+#endif
 #if defined(MC02_VISION_PROTOCOL_V2)
     vision_v2_aim_subscriber = MessageSubscriberRegister(ROBOT_TOPIC_VISION_AIM,
         ROBOT_TOPIC_ENDPOINT_COMMAND);
@@ -149,24 +209,18 @@ uint8_t RobotCMDInit(void)
  */
 static void CalcOffsetAngle()
 {
-    // 单圈角度与归中位置相减，跨过一圈边界时补减 360 度。
-    static float angle;
-    angle = gimbal_fetch_data.yaw_motor_single_round_angle; // 从云台获取的当前yaw电机单圈角度
-#if YAW_ECD_GREATER_THAN_4096                               // 如果大于180度
-    if (angle > YAW_ALIGN_ANGLE && angle <= 180.0f + YAW_ALIGN_ANGLE)
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
-    else if (angle > 180.0f + YAW_ALIGN_ANGLE)
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE - 360.0f;
-    else
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
-#else // 小于180度
-    if (angle > YAW_ALIGN_ANGLE)
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
-    else if (angle <= YAW_ALIGN_ANGLE && angle >= YAW_ALIGN_ANGLE - 180.0f)
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE;
-    else
-        chassis_cmd_send.offset_angle = angle - YAW_ALIGN_ANGLE + 360.0f;
-#endif
+    const float angle = (float)gimbal_fetch_data.yaw_motor_single_round_angle;
+    if (!isfinite(angle) || !isfinite(yaw_align_angle_deg))
+    {
+        chassis_cmd_send.offset_angle = 0.0f;
+        return;
+    }
+    float offset = angle - yaw_align_angle_deg;
+    if (offset > 180.0f)
+        offset -= 360.0f;
+    else if (offset < -180.0f)
+        offset += 360.0f;
+    chassis_cmd_send.offset_angle = offset;
 }
 
 #if !defined(MC02_VISION_PROTOCOL_V2)
@@ -212,9 +266,10 @@ static VisionControlInput_s GetVisionV2ControlInput(void)
 
 static uint8_t VisionV2NavigationAllowed(uint8_t autonomous_selected)
 {
+    float max_yaw_rate_deg_s;
     if (autonomous_selected == 0u || vision_status_snapshot.online == 0u ||
         vision_v2_navigation_valid == 0u || RobotSafetyIsReady() == 0u ||
-        CHASSIS_MOTION_LIMITS_CONFIGURED == 0u)
+        !GetMaximumChassisYawRateDegS(&max_yaw_rate_deg_s))
         return 0u;
 
     RefereeSnapshot_t referee;
@@ -239,8 +294,10 @@ static void ApplyVisionV2Navigation(void)
     const float vx_mm_s = vx_m_s * 1000.0f;
     const float vy_mm_s = vy_m_s * 1000.0f;
     const float wz_deg_s = wz_rad_s * RAD_2_DEGREE;
+    float max_yaw_rate_deg_s;
     if (!isfinite(vx_mm_s) || !isfinite(vy_mm_s) || !isfinite(wz_deg_s) ||
-        fabsf(wz_deg_s) > CHASSIS_MAX_WZ_DEG_S)
+        !GetMaximumChassisYawRateDegS(&max_yaw_rate_deg_s) ||
+        fabsf(wz_deg_s) > max_yaw_rate_deg_s)
     {
         chassis_cmd_send.vx = 0.0f;
         chassis_cmd_send.vy = 0.0f;

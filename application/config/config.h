@@ -1,9 +1,11 @@
 /** @file config.h
-* @brief 机器人机械、电机和控制参数类型，以及配置读取入口。
-* 当前只有哨兵配置；这些结构不表示全部参数都已由实车确认，应用仍有自身使用的常量。
+* @brief 机器人机械、电机和控制参数类型，以及只读配置读取入口。
+* 当前只有哨兵配置；未确认的实物参数仍保持未确认状态，不用测试数值替代。
  */
 #pragma once
 
+#include "build_selection.h"
+#include "chassis_motion.h"
 #include "bsp_can.h"
 #include "controller.h"
 #include "motor_def.h"
@@ -17,7 +19,7 @@
  */
 
 /* 当前机器人类型(决定 RobotConfigInit 返回哪套配置) */
-#define ROBOT_ID SENTINEL_ROBOT
+#define ROBOT_CONFIG_SUPPORTED_ID SENTINEL_ROBOT
 
 #define RC_TO_YAW_ANGLE 0.002f    // 每个命令周期、每单位摇杆读数增加的 yaw 角度，单位 deg。
 #define RC_TO_PITCH_ANGLE 0.001f  // 每个命令周期、每单位摇杆读数增加的 pitch 角度，单位 deg。
@@ -42,7 +44,9 @@ typedef enum
 {
     MECANUM_WHEEL = 0,
     OMNI_WHEEL,
-    STEER_WHEEL
+    STEER_WHEEL,
+    WHEEL_LEG,
+    HALF_STEER_WHEEL
 } Wheel_Type_e;
 
 // 底盘轮组参数
@@ -63,6 +67,8 @@ typedef struct
 {
     Wheel_Type_e wheel_type;
     Wheel_Measure_s wheel_measure;
+    ChassisMotionLimits_s motion_limits;
+    OmniGeometry_t omni_geometry;
 
     Motor_Init_Config_s chassis_motor_config;
     PID_Init_Config_s chassis_follow_gimbal_PID;
@@ -81,7 +87,7 @@ typedef enum
 // 云台归中参数
 typedef struct
 {
-    // 云台零位偏移和俯仰上下限，单位为度，具体反馈来源仍由应用选择。
+    // 小 yaw、底盘对齐偏置及 pitch 上下限，角度单位均为度。
     float mini_yaw_offset;
     float yaw_offset;
     float pitch_max_angle, pitch_min_angle;
@@ -115,6 +121,8 @@ typedef struct
     uint8_t loader_slot_num;     // 拨弹盘槽位数(每转一圈发射的弹丸数)
     float loader_gearbox_ratio;  // 电机转子 -> 输出轴减速比(M2006=36, M3508=19)
     float loader_disk_ratio;     // 输出轴 -> 拨弹盘减速比(哨兵=1)
+    float friction_default_speed_rad_s; // 摩擦轮输出轴默认目标速度，rad/s
+    float loader_reverse_speed_rad_s; // 拨弹盘输出轴反转目标速度，rad/s
 } Shoot_Config_s;
 
 // 机器人参数结构体
@@ -147,22 +155,36 @@ typedef enum
 
 /* 配置入口(在 robot_def.c 中实现) */
 /** @brief 选择并保存供后续 Feed 使用的机器人配置。
-* @param[in] id 机器人类型，当前所有未实现或未知编号都会返回哨兵配置。
-* @return 长期有效的内部配置地址，不可释放；再次调用不会恢复已改写的静态配置。
+* @param[in] id 机器人类型，仅支持哨兵；未实现或未知编号返回NULL。
+* @return 长期有效的内部配置地址，不可释放；配置只读；失败不会选择其他车型。
  */
-Robot_Config_s *RobotConfigInit(uint8_t id);
+typedef enum {
+    ROBOT_CONFIG_OK = 0, ROBOT_CONFIG_ARGUMENT, ROBOT_CONFIG_UNSUPPORTED,
+    ROBOT_CONFIG_BAD_PARAMETERS
+} RobotConfigStatus_t;
+/** @brief 选择唯一已实现车型；失败清除活动选择，不退回其他车型。
+ * @param[in] id 车型编号，当前仅支持SENTINEL_ROBOT。
+ * @param[out] output 长期只读配置，不可为NULL；失败时保持输出对象原值。
+ * @return OK、ARGUMENT、UNSUPPORTED或BAD_PARAMETERS；调用不操作硬件。
+ */
+RobotConfigStatus_t RobotConfigSelect(uint8_t id, const Robot_Config_s **output);
+const Robot_Config_s *RobotConfigInit(uint8_t id);
+/** @brief 读取已选车型的完整只读配置。
+ * @return 配置长期有效；尚未成功选择车型时返回NULL。
+ */
+const Robot_Config_s *RobotConfigFeed(void);
 /** @brief 取得已选配置中的底盘部分。
-* @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
+* @return 内部字段地址，长期有效；未初始化或未启用此模块时返回NULL。
  */
-Chassis_Config_s *ChassisConfigFeed(void);
+const Chassis_Config_s *ChassisConfigFeed(void);
 /** @brief 取得已选配置中的云台部分。
-* @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
+* @return 内部字段地址，长期有效；未初始化或未启用此模块时返回NULL。
  */
-Gimbal_Config_s *GimbalConfigFeed(void);
+const Gimbal_Config_s *GimbalConfigFeed(void);
 /** @brief 取得已选配置中的发射部分。
-* @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
+* @return 内部字段地址，长期有效；未初始化或未启用此模块时返回NULL。
  */
-Shoot_Config_s *ShootConfigFeed(void);
+const Shoot_Config_s *ShootConfigFeed(void);
 /** @brief 取得已选配置中的裁判 UI 布局。
 * @return 长期只读布局；未完成 RobotConfigInit() 或车型未配置时返回NULL。
 */

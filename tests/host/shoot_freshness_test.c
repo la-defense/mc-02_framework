@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "shoot.h"
 #include "robot_def.h"
@@ -12,18 +13,39 @@
 } } while (0)
 
 CAN_HandleTypeDef hcan2;
-DJIMotorInstance shoot_fake_motors[3];
+DJIMotorInstance shoot_fake_motors[5];
 uint32_t shoot_fake_motor_init_count;
 static uint32_t now_ms;
 static float timeline_ms;
-static Shoot_Config_s shoot_config = { .loader_slot_num = 10u, .loader_gearbox_ratio = 36.0f, .loader_disk_ratio = 1.0f };
+static Shoot_Config_s shoot_config = {
+    .shoot_type = DUAL_SHOOT,
+    .friction_motor_config = {
+        .can_init_config = {.can_handle = &hcan2},
+        .controller_setting_init_config = {.motor_reverse_flag = MOTOR_DIRECTION_NORMAL},
+        .output_axis = {19.0f, MOTOR_AXIS_DIRECTION_NORMAL},
+        .motor_type = M3508,
+    },
+    .loader_motor_config = {
+        .can_init_config = {.can_handle = &hcan2, .tx_id = 3u},
+        .controller_setting_init_config = {.close_loop_type = SPEED_LOOP | CURRENT_LOOP | ANGLE_LOOP},
+        .output_axis = {36.0f, MOTOR_AXIS_DIRECTION_NORMAL},
+        .motor_type = M2006,
+    },
+    .friction_motor_id = {1u, 2u},
+    .friction_motor_reverse_flag = {MOTOR_DIRECTION_NORMAL, MOTOR_DIRECTION_REVERSE},
+    .loader_slot_num = 10u,
+    .loader_gearbox_ratio = 36.0f,
+    .loader_disk_ratio = 1.0f,
+    .friction_default_speed_rad_s = 30000.0f * 0.01745329252f / 19.0f,
+    .loader_reverse_speed_rad_s = 500.0f * 0.01745329252f / 36.0f,
+};
 
 uint32_t HAL_GetTick(void) { return now_ms; }
 float DWT_GetTimeline_ms(void) { return timeline_ms; }
-Shoot_Config_s *ShootConfigFeed(void) { return &shoot_config; }
+const Shoot_Config_s *ShootConfigFeed(void) { return &shoot_config; }
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {
-    if (config == NULL || shoot_fake_motor_init_count >= 3u)
+    if (config == NULL || shoot_fake_motor_init_count >= 5u)
         return NULL;
     DJIMotorInstance *motor = &shoot_fake_motors[shoot_fake_motor_init_count];
     memset(motor, 0, sizeof(*motor));
@@ -134,6 +156,33 @@ int main(void)
         102.0f * 0.01745329252f / 36.0f + 3.0f * 0.62831853072f;
     CHECK(fabsf(shoot_fake_motors[2].ref - expected_three_bullet_target) < 1e-5f);
 
-    puts("PASS: production shooter initialization, expiry shutdown, and fresh LOAD_STOP re-arm");
+    shoot_config.loader_motor_config.can_init_config.tx_id = 1u;
+    shoot_fake_motor_init_count = 0u;
+    CHECK(ShootInit() == 0u);
+    CHECK(shoot_fake_motor_init_count == 0u);
+    shoot_config.loader_motor_config.can_init_config.tx_id = 3u;
+
+    shoot_config.shoot_type = THREE_SHOOT;
+    shoot_config.friction_motor_id[2] = 5u;
+    shoot_config.friction_motor_reverse_flag[2] = MOTOR_DIRECTION_NORMAL;
+    shoot_fake_motor_init_count = 0u;
+    CHECK(ShootInit() == 1u);
+    CHECK(shoot_fake_motor_init_count == 4u);
+    Shoot_Motor_Summary_t summary = {0};
+    Shoot_GetMotorSummary(&summary);
+    CHECK(summary.friction_count == 3u);
+
+    shoot_config.shoot_type = FOUR_SHOOT;
+    shoot_config.friction_motor_id[2] = 5u;
+    shoot_config.friction_motor_id[3] = 6u;
+    shoot_config.friction_motor_reverse_flag[2] = MOTOR_DIRECTION_NORMAL;
+    shoot_config.friction_motor_reverse_flag[3] = MOTOR_DIRECTION_REVERSE;
+    shoot_fake_motor_init_count = 0u;
+    CHECK(ShootInit() == 1u);
+    CHECK(shoot_fake_motor_init_count == 5u);
+    Shoot_GetMotorSummary(&summary);
+    CHECK(summary.friction_count == 4u);
+
+    puts("PASS: production shooter initialization, expiry shutdown, and configured friction wheel count");
     return 0;
 }

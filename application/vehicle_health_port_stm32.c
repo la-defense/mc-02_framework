@@ -4,6 +4,11 @@
  * @note 仅由RobotTask普通任务调用；各模块保留自己的来源时间和一致读取接口。
  */
 #include "vehicle_health_source.h"
+#include "config/build_selection.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "config/vehicle_selection.h"
+#include "config/module_plan.h"
+#endif
 #include "main.h"
 #include "robot_def.h"
 #include "init_diagnostic.h"
@@ -11,9 +16,13 @@
 #include "task_monitor.h"
 #include "ins_task.h"
 #include "imu_heater.h"
+#if MC02_FEATURE_REMOTE
 #include "remote_control.h"
+#endif
 #include "master_process.h"
+#if MC02_FEATURE_REFEREE
 #include "rm_referee.h"
+#endif
 #include "bsp_can.h"
 #include "usb_transport.h"
 #include "bsp_log.h"
@@ -28,6 +37,25 @@ static void MarkDegraded(VehicleHealthSourceSnapshot_t *output, VehicleHealthMod
 {
     output->degraded_modules |= VEHICLE_HEALTH_MODULE_BIT(module);
 }
+
+#if defined(MC02_CONFIG_GENERATED)
+static void MarkStartupDegraded(VehicleHealthSourceSnapshot_t *output)
+{
+    const uint32_t failed = robot_module_startup.failed | robot_module_startup.blocked;
+    static const VehicleHealthModule_t health_module[ROBOT_MODULE_COUNT] = {
+        VEHICLE_HEALTH_MODULE_SAFETY, VEHICLE_HEALTH_MODULE_IMU,
+        VEHICLE_HEALTH_MODULE_COMMUNICATION, VEHICLE_HEALTH_MODULE_COMMAND,
+        VEHICLE_HEALTH_MODULE_CHASSIS, VEHICLE_HEALTH_MODULE_GIMBAL,
+        VEHICLE_HEALTH_MODULE_SHOOTER, VEHICLE_HEALTH_MODULE_REFEREE,
+        VEHICLE_HEALTH_MODULE_VISION, VEHICLE_HEALTH_MODULE_REMOTE,
+        VEHICLE_HEALTH_MODULE_ALARM, VEHICLE_HEALTH_MODULE_LCD,
+        VEHICLE_HEALTH_MODULE_UI, VEHICLE_HEALTH_MODULE_SUPERCAP,
+        VEHICLE_HEALTH_MODULE_LOG, VEHICLE_HEALTH_MODULE_HEATER};
+    for (unsigned module = 0u; module < ROBOT_MODULE_COUNT; ++module)
+        if ((failed & ROBOT_MODULE_BIT(module)) != 0u)
+            MarkDegraded(output, health_module[module]);
+}
+#endif
 
 static void ConfigureRole(VehicleHealthSourceSnapshot_t *output)
 {
@@ -44,6 +72,9 @@ uint8_t VehicleHealthSourceCapture(VehicleHealthSourceSnapshot_t *output)
 
     VehicleHealthSourceSnapshot_t candidate = {0};
     ConfigureRole(&candidate);
+#if defined(MC02_CONFIG_GENERATED)
+    MarkStartupDegraded(&candidate);
+#endif
 
     InitDiagnosticSnapshot_s init = {0};
     InitDiagnosticGetSnapshot(&init);
@@ -93,6 +124,7 @@ uint8_t VehicleHealthSourceCapture(VehicleHealthSourceSnapshot_t *output)
         MarkDegraded(&candidate, VEHICLE_HEALTH_MODULE_IMU);
 
     const uint32_t enabled = candidate.enabled_modules;
+#if MC02_FEATURE_REMOTE
     if ((enabled & VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_REMOTE)) != 0u)
     {
         RemoteControlDiagnostics_s remote_diagnostics = {0};
@@ -111,6 +143,7 @@ uint8_t VehicleHealthSourceCapture(VehicleHealthSourceSnapshot_t *output)
         else
             MarkDegraded(&candidate, VEHICLE_HEALTH_MODULE_REMOTE);
     }
+#endif
 
     if ((enabled & VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_VISION)) != 0u)
     {
@@ -126,6 +159,7 @@ uint8_t VehicleHealthSourceCapture(VehicleHealthSourceSnapshot_t *output)
             MarkDegraded(&candidate, VEHICLE_HEALTH_MODULE_VISION);
     }
 
+#if MC02_FEATURE_REFEREE
     if ((enabled & VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_REFEREE)) != 0u)
     {
         RefereeSnapshot_t referee = {0};
@@ -149,6 +183,7 @@ uint8_t VehicleHealthSourceCapture(VehicleHealthSourceSnapshot_t *output)
         else
             MarkDegraded(&candidate, VEHICLE_HEALTH_MODULE_REFEREE);
     }
+#endif
 
     for (uint8_t bus = 0u; bus < VEHICLE_HEALTH_CAN_BUS_COUNT; ++bus)
     {

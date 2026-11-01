@@ -59,6 +59,7 @@ typedef enum
     INIT_RESOURCE_TASK_LCD,
     INIT_RESOURCE_TASK_DEFAULT,
     INIT_RESOURCE_TASK_UART_TX,
+    INIT_RESOURCE_TASK_LOG,
 } InitDiagnosticResource_e;
 
 /** @brief 本次启动的诊断记录；调试器按这些字段的类型和顺序读取。 */
@@ -80,6 +81,7 @@ typedef enum
     INIT_DIAGNOSTIC_EVENT_STAGE_CHANGED = 1u,
     INIT_DIAGNOSTIC_EVENT_FAILURE,
     INIT_DIAGNOSTIC_EVENT_READY,
+    INIT_DIAGNOSTIC_EVENT_DEGRADED,
 } InitDiagnosticEventKind_e;
 
 /** @brief 初始化历史事件的严重程度。 */
@@ -87,6 +89,7 @@ typedef enum
 {
     INIT_DIAGNOSTIC_SEVERITY_INFO = 1u,
     INIT_DIAGNOSTIC_SEVERITY_ERROR,
+    INIT_DIAGNOSTIC_SEVERITY_WARNING,
 } InitDiagnosticSeverity_e;
 
 /** @brief 一次阶段变化、初始化失败或 READY 事件；时间为本机 HAL 毫秒，0合法。 */
@@ -137,6 +140,16 @@ void InitDiagnosticSetStage(InitDiagnosticStage_e stage);
  */
 void InitDiagnosticReportFailure(InitDiagnosticStage_e stage, uint8_t module,
                                  InitDiagnosticReason_e reason, uint16_t resource_id);
+
+/** @brief 记录辅助模块失败；不锁存整车失败，不改变首次核心失败或阶段。
+ * @param[in] stage 发生时的启动阶段。
+ * @param[in] module 失败模块编号。
+ * @param[in] reason 具体失败原因。
+ * @param[in] resource_id 具体资源编号。
+ * @note 固定容量事件写入；不分配、不等待，也不解除已有失能。
+ */
+void InitDiagnosticReportDegraded(InitDiagnosticStage_e stage, uint8_t module,
+                                  InitDiagnosticReason_e reason, uint16_t resource_id);
 
 /**
  * @brief 尚无失败时将诊断阶段设为 INIT_STAGE_READY。

@@ -126,9 +126,9 @@ static const RobotAlarmConfig_t sentinel_alarm_config = {
  * (本地 bsp_can.h 已有 #define hcan1 hfdcan1 / #define hcan2 hfdcan2).
  * 机械参数/电机ID/PID 沿用远程 v1.0.0-autoaim-stable, 后续按实车标定.
  */
-Robot_Config_s *SentinelConfigInit(void)
+const Robot_Config_s *SentinelConfigInit(void)
 {
-    static Robot_Config_s sentinel_config = {
+    static const Robot_Config_s sentinel_config = {
         .alarm_config = &sentinel_alarm_config,
         .referee_ui_config = &sentinel_referee_ui_config,
 #if defined(CHASSIS_BOARD)
@@ -143,6 +143,9 @@ Robot_Config_s *SentinelConfigInit(void)
             .chassis_motor_id[MOTOR_LB] = 4,
 
             .wheel_type = OMNI_WHEEL,
+            .motion_limits = {.configured = 0u},
+            // 未测量轮位、滚动方向和限速；生产构建由车型确认状态拒绝。
+            .omni_geometry = {.wheels = {{0}}},
             // 长度使用 mm，减速比无单位；参数沿用移入版本，启用时仍须按实车核对。
             .wheel_measure = {
                 .center_gimbal_offset_x = 0.0,
@@ -361,7 +364,7 @@ Robot_Config_s *SentinelConfigInit(void)
                     .close_loop_type = SPEED_LOOP | CURRENT_LOOP,
                     .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
                 },
-                .output_axis = {19.0f, MOTOR_AXIS_DIRECTION_REVERSE},
+                .output_axis = {19.0f, MOTOR_AXIS_DIRECTION_NORMAL},
                 .motor_type = M3508
             },
 
@@ -414,6 +417,8 @@ Robot_Config_s *SentinelConfigInit(void)
             .loader_slot_num = 7,           // 拨弹盘槽位数(每转一圈发射弹丸数), 待实测确认
             .loader_gearbox_ratio = 36.0f,  // M2006 自带减速箱(转子->输出轴), 用户确认 36
             .loader_disk_ratio = 1.0f,      // 输出轴 -> 拨弹盘减速比(哨兵=1)
+            .friction_default_speed_rad_s = 30000.0f * DEGREE_2_RAD / 19.0f,
+            .loader_reverse_speed_rad_s = 500.0f * DEGREE_2_RAD / 36.0f,
         }
     };
 

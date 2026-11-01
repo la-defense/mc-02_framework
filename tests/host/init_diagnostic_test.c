@@ -90,7 +90,21 @@ static void TestEventHistory(void)
 
 int main(int argc, char **argv)
 {
-    if (argc > 1 && strcmp(argv[1], "history") == 0)
+    if (argc > 1 && strcmp(argv[1], "degraded") == 0)
+    {
+        InitDiagnosticBegin(INIT_STAGE_APPLICATION);
+        InitDiagnosticReportDegraded(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                     INIT_FAILURE_RESOURCE, 7u);
+        InitDiagnosticMarkReady();
+        InitDiagnosticSnapshot_s current = {0};
+        InitDiagnosticEventSnapshot_t events = {0};
+        InitDiagnosticGetSnapshot(&current);
+        TEST_CHECK(!current.failed && current.failure_count == 0u);
+        TEST_CHECK(current.stage == INIT_STAGE_READY);
+        TEST_CHECK(InitDiagnosticGetEvents(&events));
+        TEST_CHECK(events.events[1].severity == INIT_DIAGNOSTIC_SEVERITY_WARNING);
+    }
+    else if (argc > 1 && strcmp(argv[1], "history") == 0)
         TestEventHistory();
     else
         TestFirstFailure();

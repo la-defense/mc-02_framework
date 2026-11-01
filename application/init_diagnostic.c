@@ -100,6 +100,15 @@ void InitDiagnosticReportFailure(InitDiagnosticStage_e stage, uint8_t module,
     ExitCritical(previous);
 }
 
+void InitDiagnosticReportDegraded(InitDiagnosticStage_e stage, uint8_t module,
+                                  InitDiagnosticReason_e reason, uint16_t resource_id)
+{
+    const uint32_t previous = EnterCritical();
+    RecordEventLocked(INIT_DIAGNOSTIC_EVENT_DEGRADED, stage, module, reason,
+                      resource_id, INIT_DIAGNOSTIC_SEVERITY_WARNING);
+    ExitCritical(previous);
+}
+
 void InitDiagnosticMarkReady(void)
 {
     uint32_t previous = EnterCritical();
