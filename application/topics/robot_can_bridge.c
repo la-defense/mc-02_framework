@@ -11,12 +11,23 @@
 #include "task.h"
 #include <string.h>
 #include <limits.h>
+#if defined(CHASSIS_BOARD)
+#include "robot_safety.h"
+#endif
 
 static CanTopicLink_t robot_link;
 static CanTimeSync_t robot_time_sync;
 static TimeMappingState_t published_sync;
 static uint32_t published_sync_ms;
 static uint8_t published_sync_ready;
+
+#if defined(CHASSIS_BOARD)
+static void RobotCanBridgeCommandInvalidated(void *context)
+{
+    (void)context;
+    RobotSafetyRevokeRemoteChassisPermit();
+}
+#endif
 
 uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
 {
@@ -43,6 +54,15 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
     const CAN_Init_Config_s can_config={.can_handle=config->can_handle,.tx_id=config->tx_id,.rx_id=config->rx_id};
     if (!CanTopicLinkInit(&robot_link,&can_config,outgoing,incoming,&encode,&decode,NULL,NULL,50u))
         return 0u;
+#if defined(CHASSIS_BOARD)
+    // 桥接撤销发布快照时同步清除电机许可，不能等底盘任务下一轮轮询。
+    if (CanTopicBridgeSetInvalidateCallback(&robot_link.bridge,
+            RobotCanBridgeCommandInvalidated,NULL)!=CAN_BRIDGE_OK) {
+        CANUnregisterInstance(robot_link.transport.can);
+        memset(&robot_link,0,sizeof(robot_link));
+        return 0u;
+    }
+#endif
     // 对时使用同一个接收端点；失败时释放本次注册，不能启动无映射的双板控制。
     if (!CanTimeSyncInit(&robot_time_sync,robot_link.transport.can) ||
         !CanTopicLinkAttachTimeSync(&robot_link,&robot_time_sync)) {

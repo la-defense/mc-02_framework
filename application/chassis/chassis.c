@@ -52,6 +52,7 @@ static uint8_t chassis_inhibit_generation_valid = 0u;
 static uint32_t chassis_rearm_sequence = 0u;
 static uint32_t chassis_rearm_after_ms = 0u;
 static uint32_t chassis_inhibit_generation = 0u;
+static uint32_t chassis_command_max_age_ms = 0u;
 #endif
 
 uint8_t ChassisInit(void)
@@ -142,6 +143,11 @@ uint8_t ChassisInit(void)
         return 0u;
 #endif
 #ifdef CHASSIS_BOARD
+    MessageTopicDescriptor_t chassis_command_descriptor = {0};
+    if (MessageSubscriberGetDescriptor(chassis_sub, &chassis_command_descriptor) != MESSAGE_OK ||
+        chassis_command_descriptor.max_age_ms == 0u)
+        return 0u;
+    chassis_command_max_age_ms = chassis_command_descriptor.max_age_ms;
     if (Chassis_IMU_data == NULL)
         return 0u;
 #endif
@@ -257,11 +263,27 @@ void ChassisTask()
             chassis_rearm_tracking = 0u;
         }
     }
-    const uint8_t remote_permit = (uint8_t)(command_requests_motion != 0u && local_ready != 0u &&
-                                             chassis_command_rearm_required == 0u);
-    RobotSafetySetRemoteChassisPermit(remote_permit);
+    const uint8_t remote_permit_requested = (uint8_t)(command_requests_motion != 0u &&
+        local_ready != 0u && chassis_command_rearm_required == 0u &&
+        command_freshness.valid != 0u);
+    uint8_t remote_permit = 0u;
+    if (remote_permit_requested != 0u)
+    {
+        remote_permit = RobotSafetyTryGrantRemoteChassisPermit(
+            safety_snapshot.chassis_inhibit_generation,
+            command_freshness.source_time_ms, chassis_command_max_age_ms, HAL_GetTick());
+        if (remote_permit == 0u)
+        {
+            chassis_command_rearm_required = 1u;
+            chassis_rearm_tracking = 0u;
+            chassis_rearm_sequence_valid = 0u;
+        }
+    }
+    else
+        RobotSafetyRevokeRemoteChassisPermit();
     RobotSafetyUpdate();
-    uint8_t local_permit = (uint8_t)(RobotSafetyIsReady() != 0u && local_ready != 0u);
+    uint8_t local_permit = (uint8_t)(RobotSafetyIsReadyAt(HAL_GetTick()) != 0u &&
+                                     local_ready != 0u);
 #endif
 
     ChassisMotionMode_e motion_mode = CHASSIS_MOTION_MODE_INVALID;
@@ -320,12 +342,12 @@ void ChassisTask()
                                 HAL_GetTick(), &latest_freshness) == MESSAGE_OK &&
             latest_freshness.sequence == command_freshness.sequence &&
             latest_freshness.source_time_ms == command_freshness.source_time_ms);
-        if (latest_is_same_and_fresh == 0u || RobotSafetyIsReady() == 0u ||
+        if (latest_is_same_and_fresh == 0u || RobotSafetyIsReadyAt(HAL_GetTick()) == 0u ||
             ChassisMotorFeedbackIsHealthy() == 0u)
         {
             command_allowed = 0u;
             local_permit = 0u;
-            RobotSafetySetRemoteChassisPermit(0u);
+            RobotSafetyRevokeRemoteChassisPermit();
             RobotSafetyUpdate();
         }
     }
@@ -334,7 +356,7 @@ void ChassisTask()
         chassis_command_rearm_required = 1u;
         chassis_rearm_tracking = 0u;
         chassis_rearm_sequence_valid = 0u;
-        RobotSafetySetRemoteChassisPermit(0u);
+        RobotSafetyRevokeRemoteChassisPermit();
         RobotSafetyUpdate();
     }
     if (command_allowed == 0u)

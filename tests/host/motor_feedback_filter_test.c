@@ -63,13 +63,27 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
                                        CAN_TxPriority_t priority, uint32_t deadline_ms,
                                        uint32_t period_us, uint32_t *request_id)
 {
+    return CANSubmitPeriodicPrepared(hcan, source, key, frame, priority, deadline_ms,
+                                     period_us, NULL, request_id);
+}
+
+CAN_TxSubmitStatus_t CANSubmitPeriodicPrepared(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, CAN_TxPeriodicPrepareFn_t prepare,
+                                       uint32_t *request_id)
+{
     (void)hcan; (void)source; (void)key; (void)priority; (void)deadline_ms; (void)period_us;
     TEST_CHECK(frame != NULL && request_id != NULL && frame->length <= sizeof(sent));
 #if defined(CHASSIS_BOARD)
     TEST_CHECK(motor_safety_test_critical_depth != 0u);
 #endif
+    uint8_t payload[sizeof(sent)] = {0};
+    memcpy(payload, frame->data, frame->length);
+    if (prepare != NULL)
+        prepare(source, HAL_GetTick(), payload, frame->length);
     memset(sent, 0, sizeof(sent));
-    memcpy(sent, frame->data, frame->length);
+    memcpy(sent, payload, frame->length);
     *request_id = 1u;
     return CAN_TX_SUBMIT_ACCEPTED;
 }
@@ -142,7 +156,10 @@ static int chassis_safety_output_gate(void)
     RobotSafetySetImuValid(1u);
     RobotSafetySetCalibValid(1u);
     RobotSafetySetTaskHealthy(1u);
-    RobotSafetySetRemoteChassisPermit(1u);
+    RobotSafetySnapshot_t safety_snapshot = {0};
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety_snapshot));
+    TEST_CHECK(RobotSafetyTryGrantRemoteChassisPermit(safety_snapshot.chassis_inhibit_generation,
+        HAL_GetTick(), 50u, HAL_GetTick()));
     RobotSafetyUpdate();
     TEST_CHECK(RobotSafetyIsReady());
 
@@ -176,7 +193,9 @@ static int chassis_safety_output_gate(void)
     RobotFaultClear(ROBOT_FAULT_MOTOR_OFFLINE);
     RobotSafetyUpdate();
     TEST_CHECK(!RobotSafetyIsReady());
-    RobotSafetySetRemoteChassisPermit(1u);
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety_snapshot));
+    TEST_CHECK(RobotSafetyTryGrantRemoteChassisPermit(safety_snapshot.chassis_inhibit_generation,
+        HAL_GetTick(), 50u, HAL_GetTick()));
     RobotSafetyUpdate();
     TEST_CHECK(RobotSafetyIsReady());
     RobotSafetyRequestDisable();

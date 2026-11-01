@@ -44,6 +44,9 @@ typedef enum
     CAN_TX_SUBMIT_CONTEXT
 } CAN_TxSubmitStatus_t;
 
+typedef void (*CAN_TxPeriodicPrepareFn_t)(const void *source, uint32_t now_ms,
+                                          uint8_t *payload, uint8_t length);
+
 typedef enum
 {
     CAN_TX_RESULT_QUEUED = 0,

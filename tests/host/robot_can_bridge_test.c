@@ -6,6 +6,9 @@
 #include "can_time_sync.h"
 #include "fdcan.h"
 #include "test_check.h"
+#if defined(CHASSIS_BOARD)
+#include "robot_safety.h"
+#endif
 
 #include <string.h>
 
@@ -138,5 +141,20 @@ int main(void)
     TEST_CHECK(RobotCanBridgeGetTimeSyncState(&state, &updated_ms) && state.synchronized);
     now_ms = 1905u;
     TEST_CHECK(RobotCanBridgeGetTimeSyncState(&state, &updated_ms) && !state.synchronized);
+#if defined(CHASSIS_BOARD)
+    // 对时失效会通过桥接撤销回调即时清除许可，不等待底盘任务轮询话题。
+    RobotSafetyInit();
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetySnapshot_t safety_snapshot = {0};
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety_snapshot));
+    TEST_CHECK(RobotSafetyTryGrantRemoteChassisPermit(
+        safety_snapshot.chassis_inhibit_generation, now_ms, 50u, now_ms));
+    RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReadyAt(now_ms));
+    RobotCanBridgeService();
+    TEST_CHECK(!RobotSafetyIsReadyAt(now_ms));
+#endif
     return 0;
 }

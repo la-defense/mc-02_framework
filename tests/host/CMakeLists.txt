@@ -378,7 +378,7 @@ add_test(NAME production_can_full_queue_burst COMMAND lk_motor_bsp_can_test rx-b
 set_tests_properties(production_can_full_queue_burst PROPERTIES TIMEOUT 10)
 add_test(NAME production_dji_parser_full_queue_burst COMMAND lk_motor_bsp_can_test dji-rx-burst)
 set_tests_properties(production_dji_parser_full_queue_burst PROPERTIES TIMEOUT 10)
-foreach(can_tx_scenario IN ITEMS arguments-copy queue-batch-buses topic-group topic-interrupt topic-contention topic-shared topic-drain topic-sync-budget topic-absolute-deadline topic-pending topic-cancel topic-rx periodic-budget expiry-cancel-wrap
+foreach(can_tx_scenario IN ITEMS arguments-copy queue-batch-buses topic-group topic-interrupt topic-contention topic-shared topic-drain topic-sync-budget topic-absolute-deadline topic-pending topic-cancel topic-rx periodic-budget periodic-guarded-revoke expiry-cancel-wrap
     retry-abort budget-large-arithmetic retry-priority)
   string(REPLACE "-" "_" can_tx_test_suffix "${can_tx_scenario}")
   add_test(NAME production_can_tx_${can_tx_test_suffix}
@@ -651,17 +651,21 @@ add_test(NAME production_can_topic_bridge COMMAND can_topic_bridge_test)
 set_tests_properties(production_can_topic_bridge PROPERTIES TIMEOUT 10)
 foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
   string(TOLOWER ${role} role_name)
-  add_executable(robot_can_bridge_${role_name}_test robot_can_bridge_test.c
+  set(robot_can_bridge_test_sources robot_can_bridge_test.c
     ../../application/topics/robot_can_bridge.c ../../application/topics/robot_topics.c
     ../../application/topics/chassis_topic_codec.c ../../modules/message_center/message_center.c
     ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_topic_bridge.c
     ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c
     ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c)
+  if(role STREQUAL "CHASSIS_BOARD")
+    list(APPEND robot_can_bridge_test_sources ../../modules/safety/robot_safety.c)
+  endif()
+  add_executable(robot_can_bridge_${role_name}_test ${robot_can_bridge_test_sources})
   target_include_directories(robot_can_bridge_${role_name}_test BEFORE PRIVATE
     can_bridge_fakes can_comm_fakes init_resource_fakes chassis_fakes)
   target_include_directories(robot_can_bridge_${role_name}_test PRIVATE
     ../../application ../../application/topics ../../modules/can_comm ../../modules/message_center
-    ../../modules/time_sync ../../modules/imu ../../modules/master_machine)
+    ../../modules/time_sync ../../modules/imu ../../modules/master_machine ../../modules/safety)
   target_compile_definitions(robot_can_bridge_${role_name}_test PRIVATE ${role}=1 MC02_PROFILE_ROBOT=1)
   target_link_libraries(robot_can_bridge_${role_name}_test PRIVATE mc02_software_crc)
   target_compile_options(robot_can_bridge_${role_name}_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)

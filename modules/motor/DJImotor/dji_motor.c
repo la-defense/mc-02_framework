@@ -805,6 +805,19 @@ static uint8_t DJIMotorChassisFeedbackIsHealthy(uint32_t now_ms)
     }
     return 1u;
 }
+
+static void DJIMotorPrepareChassisOutput(const void *source, uint32_t now_ms,
+                                         uint8_t *payload, uint8_t length)
+{
+    (void)source;
+    // 队列等待期间命令或反馈可能过期，因此按 HAL 即将接受帧的时刻复核。
+    if (payload == NULL || length != 8u || RobotSafetyIsReadyAt(now_ms) == 0u ||
+        DJIMotorChassisFeedbackIsHealthy(now_ms) == 0u)
+    {
+        if (payload != NULL)
+            memset(payload, 0, length);
+    }
+}
 #endif
 
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
@@ -1040,12 +1053,19 @@ void DJIMotorControl()
 #if defined(CHASSIS_BOARD)
             taskENTER_CRITICAL();
             // 许可被其他任务撤销时，只把零目标交给周期队列。
-            if (feedback_healthy == 0u || RobotSafetyIsReady() == 0u)
+            if (feedback_healthy == 0u || RobotSafetyIsReadyAt(HAL_GetTick()) == 0u)
                 memset(sender_assignment[i].tx_buff, 0, sizeof(sender_assignment[i].tx_buff));
 #endif
+#if defined(CHASSIS_BOARD)
+            (void)CANSubmitPeriodicPrepared(sender_assignment[i].can_handle,
+                                    &sender_assignment[i], 0u, &frame,
+                                    CAN_TX_PRIORITY_CONTROL, 4u, 1000u,
+                                    DJIMotorPrepareChassisOutput, &request_id);
+#else
             (void)CANSubmitPeriodic(sender_assignment[i].can_handle,
                                     &sender_assignment[i], 0u, &frame,
                                     CAN_TX_PRIORITY_CONTROL, 4u, 1000u, &request_id);
+#endif
 #if defined(CHASSIS_BOARD)
             taskEXIT_CRITICAL();
 #endif

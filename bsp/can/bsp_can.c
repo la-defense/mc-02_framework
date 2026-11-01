@@ -78,6 +78,7 @@ typedef struct
     uint32_t expiry_ms;
     const void *source;
     uint32_t key;
+    CAN_TxPeriodicPrepareFn_t periodic_prepare;
     CANQueuedFrame_t frames[CAN_TX_MAX_BATCH_FRAMES];
 } CANQueuedRequest_t;
 
@@ -487,10 +488,11 @@ static uint32_t CANTxAllocateRequestId(CANTxScheduler_t *scheduler, uint8_t bus_
     return id;
 }
 
-CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
+CAN_TxSubmitStatus_t CANSubmitPeriodicPrepared(FDCAN_HandleTypeDef *hcan, const void *source,
                                        uint32_t key, const CAN_TxFrame_t *frame,
                                        CAN_TxPriority_t priority, uint32_t deadline_ms,
-                                       uint32_t period_us, uint32_t *request_id)
+                                       uint32_t period_us, CAN_TxPeriodicPrepareFn_t prepare,
+                                       uint32_t *request_id)
 {
     const uint8_t bus_index = CANBusIndexFromHandle(hcan);
     if (request_id == NULL || source == NULL || !CANFrameValid(frame) ||
@@ -581,6 +583,7 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
     queued->expiry_ms = now + deadline_ms;
     queued->source = source;
     queued->key = key;
+    queued->periodic_prepare = prepare;
     CANTxCopyFrame(&queued->frames[0], frame);
 
     scheduler->reservations[target_reservation_index] = candidate_reservation;
@@ -590,6 +593,15 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
     *request_id = token;
     taskEXIT_CRITICAL();
     return queue_index >= 0 ? CAN_TX_SUBMIT_COALESCED : CAN_TX_SUBMIT_ACCEPTED;
+}
+
+CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, uint32_t *request_id)
+{
+    return CANSubmitPeriodicPrepared(hcan, source, key, frame, priority, deadline_ms,
+                                     period_us, NULL, request_id);
 }
 
 static CAN_TxSubmitStatus_t CANSubmitBatchInternal(FDCAN_HandleTypeDef *hcan, const void *source,
@@ -894,7 +906,29 @@ static void CANProcessTxSelected(uint8_t selected_bus)
             continue;
         }
 
-        const CANQueuedFrame_t *frame = &queued->frames[queued->next_frame];
+        CANQueuedFrame_t *frame = &queued->frames[queued->next_frame];
+        now = HAL_GetTick();
+        if (CANTxRequestExpired(queued, now) != 0u)
+        {
+            CANTxSetTerminal(scheduler, queued->result_index, CAN_TX_RESULT_EXPIRED);
+            CANTxReleaseQueueSlot(scheduler, queue_index);
+            taskEXIT_CRITICAL();
+            DWT_ProbeDone(&can_prof_tx, probe_start);
+            continue;
+        }
+        // 周期目标可能已经在队列等待；每次交给 HAL 前都按当前许可改写副本。
+        if (queued->periodic != 0u && queued->periodic_prepare != NULL)
+            queued->periodic_prepare(queued->source, now,
+                                     frame->data, frame->length);
+        now = HAL_GetTick();
+        if (CANTxRequestExpired(queued, now) != 0u)
+        {
+            CANTxSetTerminal(scheduler, queued->result_index, CAN_TX_RESULT_EXPIRED);
+            CANTxReleaseQueueSlot(scheduler, queue_index);
+            taskEXIT_CRITICAL();
+            DWT_ProbeDone(&can_prof_tx, probe_start);
+            continue;
+        }
         FDCAN_TxHeaderTypeDef header = {0};
         header.Identifier = frame->identifier;
         header.IdType = frame->id_type == CAN_TX_ID_EXTENDED ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;

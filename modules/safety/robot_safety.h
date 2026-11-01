@@ -76,11 +76,20 @@ void RobotSafetyRequestDisable(void);
 * @param[in] enable 非 0 请求标定并清除使能请求，为 0 只取消标定；初始化失败时拒绝新标定。 */
 void RobotSafetyRequestCalib(uint8_t enable);
 
-/** @brief 更新双板模式下由云台板授予的底盘运动许可。
- * @param[in] permitted 非0表示本轮收到新鲜且允许运动的底盘命令；0表示禁止或命令失效。
- * @note 仅CHASSIS_BOARD使用；本板任务、姿态、标定、故障和急停检查仍独立生效。
+/** @brief 按安全代际和来源期限原子授予双板底盘运动许可。
+ * @param[in] expected_generation 读取本地安全快照时的底盘抑制代际。
+ * @param[in] source_time_ms 经可信对时映射的来源命令时刻。
+ * @param[in] max_age_ms 来源命令的最大有效期，范围1～INT32_MAX。
+ * @param[in] now_ms 与来源时刻同域的当前本机毫秒时刻。
+ * @return 当前本地条件、代际和来源期限全部匹配时返回1，否则撤销许可并返回0。
+ * @note 仅CHASSIS_BOARD使用；代际比较、输入复核及许可写入在同一临界区完成。
  */
-void RobotSafetySetRemoteChassisPermit(uint8_t permitted);
+uint8_t RobotSafetyTryGrantRemoteChassisPermit(uint32_t expected_generation,
+                                                uint32_t source_time_ms,
+                                                uint32_t max_age_ms,
+                                                uint32_t now_ms);
+/** @brief 立即撤销双板底盘许可；已授予的许可撤销会推进抑制代际。 */
+void RobotSafetyRevokeRemoteChassisPermit(void);
 /** @brief 查询底盘板本地条件是否健康，不包含远端运动命令许可。
 * @return 本地核心状态健康且未急停、标定或故障时返回1，否则返回0。
 * @note 仅CHASSIS_BOARD控制任务用于恢复检查；不代表可以驱动电机。 */
@@ -111,9 +120,14 @@ Estop_Reason_e EstopGetReason(void);
 * @return 当前 Robot_Status_e 状态。 */
 Robot_Status_e RobotSafetyGetState(void);
 /** @brief 查询当前是否允许运行。
-* @return 1 为上次状态为 READY 且当前输入仍允许运行，0 为其他情况。
-* @note 故障、急停、失能和标定请求在上报后立即使该查询返回 0；状态名称仍由 Update 推进。 */
+* @return 1 为 READY 且当前输入仍允许运行，0 为其他情况。
+* @note 故障、急停、失能和标定请求在上报后立即使该查询返回 0；CHASSIS_BOARD 还按当前 HAL 时刻检查远端许可租约。状态名称仍由 Update 推进。 */
 uint8_t RobotSafetyIsReady(void);
+/** @brief 在指定时刻查询运行许可，并检查双板远程命令的来源期限。
+ * @param[in] now_ms 当前本机毫秒时刻。
+ * @return 状态、输入、远程许可和租约均有效时返回1。
+ */
+uint8_t RobotSafetyIsReadyAt(uint32_t now_ms);
 /** @brief 读取已设置的全部故障位。
 * @return Robot_Fault_e 各位的组合。 */
 uint32_t RobotSafetyGetFaults(void);

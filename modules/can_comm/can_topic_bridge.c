@@ -34,6 +34,27 @@ CanTopicBridgeStatus_t CanTopicBridgeInit(CanTopicBridge_t *bridge, CanTopicTran
     return CAN_BRIDGE_OK;
 }
 
+CanTopicBridgeStatus_t CanTopicBridgeSetInvalidateCallback(CanTopicBridge_t *bridge,
+    CanTopicInvalidateFn_t callback, void *context)
+{
+    if (bridge==NULL || bridge->transport==NULL || bridge->incoming==NULL)
+        return CAN_BRIDGE_ARGUMENT;
+    bridge->invalidate_callback=callback;
+    bridge->invalidate_context=context;
+    return CAN_BRIDGE_OK;
+}
+
+static CanTopicBridgeStatus_t CanTopicBridgeInvalidateIncoming(CanTopicBridge_t *bridge)
+{
+    // 只有订阅者读不到旧话题后，才通知安全管理撤销对应许可。
+    if (MessagePublisherInvalidate(bridge->incoming)!=MESSAGE_OK)
+        return CAN_BRIDGE_PUBLISH;
+    bridge->published_valid=0u;
+    if (bridge->invalidate_callback!=NULL)
+        bridge->invalidate_callback(bridge->invalidate_context);
+    return CAN_BRIDGE_OK;
+}
+
 static uint8_t CanTopicPendingFinished(CanTopicBridge_t *bridge)
 {
     if (bridge->pending_request_id==0u) return 1u;
@@ -101,11 +122,19 @@ CanTopicBridgeStatus_t CanTopicBridgePublish(CanTopicBridge_t *bridge, const Can
     // 同一时刻及向后跳变不能覆盖较新的数据；复位后由调用者显式重建桥接。
     uint32_t advance=message->source_ms-bridge->last_remote_source_ms;
     if (bridge->has_remote_source && (advance==0u || advance>=0x80000000u)) return CAN_BRIDGE_WIRE;
-    if (bridge->map_time==NULL) return CAN_BRIDGE_UNSYNCED;
-    uint32_t local_ms=0u, uncertainty_ms=0u;
-    if (!bridge->map_time(bridge->map_context,message->source_ms,now_ms,&local_ms,&uncertainty_ms))
+    if (bridge->map_time==NULL) {
+        if (CanTopicBridgeInvalidateIncoming(bridge)!=CAN_BRIDGE_OK) return CAN_BRIDGE_PUBLISH;
         return CAN_BRIDGE_UNSYNCED;
-    if (uncertainty_ms > (uint32_t)INT32_MAX) return CAN_BRIDGE_UNSYNCED;
+    }
+    uint32_t local_ms=0u, uncertainty_ms=0u;
+    if (!bridge->map_time(bridge->map_context,message->source_ms,now_ms,&local_ms,&uncertainty_ms)) {
+        if (CanTopicBridgeInvalidateIncoming(bridge)!=CAN_BRIDGE_OK) return CAN_BRIDGE_PUBLISH;
+        return CAN_BRIDGE_UNSYNCED;
+    }
+    if (uncertainty_ms > (uint32_t)INT32_MAX) {
+        if (CanTopicBridgeInvalidateIncoming(bridge)!=CAN_BRIDGE_OK) return CAN_BRIDGE_PUBLISH;
+        return CAN_BRIDGE_UNSYNCED;
+    }
     // 用最早可能的源时刻判断期限，接收或发布过程不能刷新它。
     uint32_t conservative_ms=local_ms-uncertainty_ms;
     if ((uint32_t)(now_ms-conservative_ms)>bridge->incoming_desc.max_age_ms ||
@@ -137,13 +166,11 @@ CanTopicBridgeStatus_t CanTopicBridgeResetPeer(CanTopicBridge_t *bridge)
     if (bridge == NULL || bridge->transport == NULL || bridge->incoming == NULL)
         return CAN_BRIDGE_ARGUMENT;
     // 必须先让订阅者读不到旧值，再接受重启后的较小来源时刻。
-    if (MessagePublisherInvalidate(bridge->incoming) != MESSAGE_OK)
-        return CAN_BRIDGE_PUBLISH;
+    if (CanTopicBridgeInvalidateIncoming(bridge)!=CAN_BRIDGE_OK) return CAN_BRIDGE_PUBLISH;
     memset(&bridge->transport->receiver, 0, sizeof(bridge->transport->receiver));
     bridge->last_remote_source_ms = 0u;
     bridge->last_conservative_ms = 0u;
     bridge->has_remote_source = 0u;
-    bridge->published_valid = 0u;
     return CAN_BRIDGE_OK;
 }
 
@@ -165,16 +192,14 @@ CanTopicBridgeStatus_t CanTopicBridgeCheckSync(CanTopicBridge_t *bridge, uint32_
             return CAN_BRIDGE_OK;
 
         // 旧值过期只撤销已发布值；正在接收的新消息仍可完成分片。
-        if (MessagePublisherInvalidate(bridge->incoming)!=MESSAGE_OK)
+        if (CanTopicBridgeInvalidateIncoming(bridge)!=CAN_BRIDGE_OK)
             return CAN_BRIDGE_PUBLISH;
-        bridge->published_valid=0u;
         return CAN_BRIDGE_EXPIRED;
     }
 
     // 时钟映射失效时旧值不可读取，未完成分片也不能跨失同步继续拼接。
     bridge->transport->receiver.active=0u;
-    if (MessagePublisherInvalidate(bridge->incoming)!=MESSAGE_OK) return CAN_BRIDGE_PUBLISH;
+    if (CanTopicBridgeInvalidateIncoming(bridge)!=CAN_BRIDGE_OK) return CAN_BRIDGE_PUBLISH;
     // 保留上次来源时间用于拒绝旧消息；时钟恢复后再接收新的完整消息。
-    bridge->published_valid=0u;
     return CAN_BRIDGE_UNSYNCED;
 }

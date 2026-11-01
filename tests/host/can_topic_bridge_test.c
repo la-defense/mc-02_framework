@@ -29,6 +29,13 @@ static uint8_t captured_sync_frames[2][8];
 static size_t captured_sync_count;
 static uint32_t time_offset=100u;
 static uint8_t conversion_fail;
+static unsigned invalidation_notifications;
+
+static void record_invalidation(void *context)
+{
+    (void)context;
+    ++invalidation_notifications;
+}
 // 测试话题明确为4个原始字节，生产结构体必须使用各自的字段编解码器。
 static uint8_t copy_bytes(void *context,const void *input,size_t input_size,void *output,size_t output_size)
 {
@@ -226,6 +233,8 @@ int main(void)
     synchronized=1u;
     TEST_CHECK(CanTopicBridgeInit(&chassis_bridge,&transport,NULL,chassis_pub,NULL,&command_decoder,
                                   map_time,&synchronized)==CAN_BRIDGE_OK);
+    TEST_CHECK(CanTopicBridgeSetInvalidateCallback(&chassis_bridge,
+        record_invalidation,NULL)==CAN_BRIDGE_OK);
     Chassis_Ctrl_Cmd_s command={.vx=1.0f,.vy=-2.0f,.wz=0.5f,.chassis_mode=CHASSIS_NO_FOLLOW};
     CanTopicMessage_t command_message={.topic_id=4u,.length=CHASSIS_COMMAND_WIRE_BYTES,
         .source_ms=30u,.first_rx_ms=131u};
@@ -239,12 +248,17 @@ int main(void)
     TEST_CHECK(MessageReadSnapshot(chassis_sub,&decoded,sizeof(decoded),134u,NULL)==MESSAGE_OK && decoded.vx==1.0f);
     // 对端重启后先撤销旧值；新对时完成后允许从较小的远端时刻重新开始。
     TEST_CHECK(CanTopicBridgeResetPeer(&chassis_bridge)==CAN_BRIDGE_OK);
+    TEST_CHECK(invalidation_notifications==1u);
     TEST_CHECK(MessageReadSnapshot(chassis_sub,&decoded,sizeof(decoded),134u,NULL)==MESSAGE_ERR_EMPTY);
     time_offset=132u;
     command_message.source_ms=1u; command_message.first_rx_ms=133u;
     TEST_CHECK(ChassisCommandEncode(&command,command_message.payload,sizeof(command_message.payload))==CHASSIS_CODEC_OK);
     TEST_CHECK(CanTopicBridgePublish(&chassis_bridge,&command_message,134u)==CAN_BRIDGE_OK);
     TEST_CHECK(MessageReadSnapshot(chassis_sub,&decoded,sizeof(decoded),134u,NULL)==MESSAGE_OK && decoded.vx==1.0f);
+    synchronized=0u;
+    TEST_CHECK(CanTopicBridgeCheckSync(&chassis_bridge,135u)==CAN_BRIDGE_UNSYNCED);
+    TEST_CHECK(invalidation_notifications==2u);
+    TEST_CHECK(MessageReadSnapshot(chassis_sub,&decoded,sizeof(decoded),135u,NULL)==MESSAGE_ERR_EMPTY);
 
     // 同一个生产 CAN 接收入口先处理对时，再接收经过时间换算的话题。
     CanTopicLink_t timed_link={0};

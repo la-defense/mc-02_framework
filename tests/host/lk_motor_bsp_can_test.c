@@ -831,7 +831,16 @@ static void scheduler_complete_latest(FDCAN_HandleTypeDef *handle)
 {
     const uint8_t bus = bus_for_handle(handle);
     TEST_CHECK(bus < DEVICE_CAN_CNT && tx_latest_buffer[bus] != 0u);
-    HAL_FDCAN_TxBufferCompleteCallback(handle, tx_latest_buffer[bus]);
+    const uint32_t completed = tx_latest_buffer[bus];
+    HAL_FDCAN_TxBufferCompleteCallback(handle, completed);
+    for (uint8_t index = 0u; index < 16u; ++index)
+    {
+        if ((completed & (1u << index)) != 0u)
+        {
+            tx_next_buffer_index[bus] = index;
+            break;
+        }
+    }
 }
 
 static CAN_TxFrame_t scheduler_frame(uint32_t id, CAN_TxIdType_t id_type,
@@ -844,6 +853,69 @@ static CAN_TxFrame_t scheduler_frame(uint32_t id, CAN_TxIdType_t id_type,
         .length = length,
     };
     return frame;
+}
+
+static void scheduler_periodic_guard(const void *source, uint32_t now_ms,
+                                     uint8_t *payload, uint8_t length)
+{
+    (void)now_ms;
+    const uint8_t *allowed = (const uint8_t *)source;
+    if (allowed == NULL || *allowed == 0u)
+        memset(payload, 0, length);
+}
+
+static void test_can_tx_periodic_guard_after_rejected_replacement(void)
+{
+    scheduler_register();
+    static const uint8_t payload_nonzero = 0xA5u;
+    static const uint8_t payload_zero = 0u;
+    static uint8_t allow_nonzero = 1u;
+    CAN_TxFrame_t frame = scheduler_frame(0x356u, CAN_TX_ID_STANDARD,
+                                          &payload_nonzero, 1u);
+    uint32_t request_id = 0u;
+
+    // 先占满所有 HAL 结果槽和硬件缓冲，随后让普通请求填满软件等待队列。
+    for (uint8_t i = 0u; i < 16u; ++i)
+    {
+        const CAN_TxFrame_t filler = scheduler_frame(0x400u + i,
+            CAN_TX_ID_STANDARD, &payload_nonzero, 1u);
+        TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &filler, CAN_TX_PRIORITY_NORMAL,
+                                    100u, &request_id) == CAN_TX_SUBMIT_ACCEPTED);
+        CANProcessTx();
+    }
+    tx_busy_mask = 1u;
+    for (uint8_t i = 0u; i < 15u; ++i)
+    {
+        const CAN_TxFrame_t waiting = scheduler_frame(0x500u + i,
+            CAN_TX_ID_STANDARD, &payload_nonzero, 1u);
+        TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &waiting, CAN_TX_PRIORITY_BACKGROUND,
+                                    100u, &request_id) == CAN_TX_SUBMIT_ACCEPTED);
+    }
+
+    TEST_CHECK(CANSubmitPeriodicPrepared(&hfdcan1, &allow_nonzero, 1u, &frame,
+        CAN_TX_PRIORITY_CONTROL, 100u, 1000u, scheduler_periodic_guard,
+        &request_id) == CAN_TX_SUBMIT_ACCEPTED);
+    const uint32_t guarded_request_id = request_id;
+
+    // 结果记录已满时，新零值提交失败，旧非零周期项仍留在队列中。
+    frame.data = &payload_zero;
+    uint32_t rejected_id = 0xA5A5A5A5u;
+    TEST_CHECK(CANSubmitPeriodicPrepared(&hfdcan1, &allow_nonzero, 1u, &frame,
+        CAN_TX_PRIORITY_CONTROL, 100u, 1000u, scheduler_periodic_guard,
+        &rejected_id) == CAN_TX_SUBMIT_FULL);
+    TEST_CHECK(rejected_id == 0xA5A5A5A5u);
+
+    // 撤销许可后即使队列内仍是旧非零副本，真正交给 HAL 前也会被改为零。
+    allow_nonzero = 0u;
+    scheduler_complete_latest(&hfdcan1);
+    tx_busy_mask = 0u;
+    CANProcessTx();
+    TEST_CHECK(tx_accept_count[0] == 17u);
+    TEST_CHECK(tx_id_history[0][16] == 0x356u);
+    TEST_CHECK(tx_data_history[0][16][0] == 0u);
+    CAN_TxResult_t result = {0};
+    TEST_CHECK(CANGetTxRequestState(guarded_request_id, &result) == 1u);
+    TEST_CHECK(result.state == CAN_TX_RESULT_IN_FLIGHT);
 }
 
 static void test_can_tx_arguments_and_copy(void)
@@ -1725,6 +1797,8 @@ int main(int argc, char **argv)
         test_can_tx_topic_pending();
     else if (strcmp(argv[1], "tx-periodic-budget") == 0)
         test_can_tx_periodic_latest_and_budget();
+    else if (strcmp(argv[1], "tx-periodic-guarded-revoke") == 0)
+        test_can_tx_periodic_guard_after_rejected_replacement();
     else if (strcmp(argv[1], "tx-expiry-cancel-wrap") == 0)
         test_can_tx_expiry_cancel_and_wrap();
     else if (strcmp(argv[1], "tx-budget-large-arithmetic") == 0)

@@ -2,6 +2,8 @@
 
 <p align='right'>neozng1@hnu.edu.cn</p>
 
+> **历史协议说明（MC02-0092）**：本文件描述的结构体直拷贝和固定长度 `CANComm` 旧格式已退出固件编译，不可用于当前双板通信。当前应用使用带版本、序号、分片和来源期限的 `CanTopicLink`／话题桥接；两端需同时运行新版。旧实现和测试仅为历史查阅保留，接入入口见 [can_topic_bridge.h](can_topic_bridge.h) 与[MC02-0092实施记录](../../docs/workflow/tickets/MC02-0092.md)。
+
 > TODO:
 >
 > 1. 对`CANCommGet()`进行修改，使得其可以返回数据是否更新的相关信息。

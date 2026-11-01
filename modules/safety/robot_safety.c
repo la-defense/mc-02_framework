@@ -5,6 +5,7 @@
 #include "robot_safety.h"
 #include "main.h"
 #include "bsp_log.h"
+#include <limits.h>
 
 static Robot_Status_e robot_state = ROBOT_INIT;
 static uint32_t fault_flags = ROBOT_FAULT_NONE;
@@ -16,6 +17,8 @@ static uint8_t enable_requested = 0u;
 static uint8_t calib_requested = 0u;
 static uint8_t estop_latched = 0u;
 static uint8_t remote_chassis_permit = 0u;
+static uint32_t remote_chassis_source_time_ms = 0u;
+static uint32_t remote_chassis_max_age_ms = 0u;
 static uint32_t chassis_inhibit_generation = 0u;
 static Estop_Reason_e estop_reason = ESTOP_REASON_NONE;
 static uint8_t imu_fault_logged = 0u;
@@ -33,6 +36,31 @@ static void RobotSafetyExitCritical(uint32_t previous)
     __set_PRIMASK(previous);
 }
 
+#if defined(CHASSIS_BOARD)
+static uint8_t RobotSafetyChassisLocalReadyLocked(void)
+{
+    return (uint8_t)(((fault_flags & (uint32_t)~ROBOT_FAULT_RC_OFFLINE) == ROBOT_FAULT_NONE &&
+                      imu_valid != 0u && calib_valid != 0u && task_healthy != 0u &&
+                      calib_requested == 0u && estop_latched == 0u) ? 1u : 0u);
+}
+
+static uint8_t RobotSafetyRemoteLeaseFreshLocked(uint32_t now_ms)
+{
+    return (uint8_t)(remote_chassis_permit != 0u && remote_chassis_max_age_ms != 0u &&
+                     (uint32_t)(now_ms - remote_chassis_source_time_ms) <=
+                         remote_chassis_max_age_ms);
+}
+
+static void RobotSafetyClearRemoteChassisPermitLocked(uint8_t advance_generation)
+{
+    if (remote_chassis_permit != 0u && advance_generation != 0u)
+        chassis_inhibit_generation++;
+    remote_chassis_permit = 0u;
+    remote_chassis_source_time_ms = 0u;
+    remote_chassis_max_age_ms = 0u;
+}
+#endif
+
 static void RobotSafetyLogStateChange(Robot_Status_e old_state,
                                       Robot_Status_e new_state)
 {
@@ -48,9 +76,9 @@ static void RobotSafetyReportFaultLocked(Robot_Fault_e fault)
     const uint32_t inhibiting_faults = (uint32_t)fault & (uint32_t)~ROBOT_FAULT_RC_OFFLINE;
     if (inhibiting_faults != 0u)
     {
-        remote_chassis_permit = 0u;
         if ((fault_flags & inhibiting_faults) != inhibiting_faults)
             chassis_inhibit_generation++;
+        RobotSafetyClearRemoteChassisPermitLocked(0u);
     }
 #endif
     fault_flags |= (uint32_t)fault;
@@ -72,7 +100,7 @@ static uint8_t RobotSafetyRequestEstopLocked(Estop_Reason_e reason)
     estop_reason = reason;
     enable_requested = 0u;
 #if defined(CHASSIS_BOARD)
-    remote_chassis_permit = 0u;
+    RobotSafetyClearRemoteChassisPermitLocked(0u);
     chassis_inhibit_generation++;
 #endif
     return 1u;
@@ -93,6 +121,8 @@ void RobotSafetyInit(void)
     calib_requested = 0u;
     estop_latched = 0u;
     remote_chassis_permit = 0u;
+    remote_chassis_source_time_ms = 0u;
+    remote_chassis_max_age_ms = 0u;
     chassis_inhibit_generation = 0u;
     estop_reason = ESTOP_REASON_NONE;
     imu_fault_logged = 0u;
@@ -192,7 +222,7 @@ void RobotSafetyRequestDisable(void)
     enable_requested = 0u;
     calib_requested = 0u;
 #if defined(CHASSIS_BOARD)
-    remote_chassis_permit = 0u;
+    RobotSafetyClearRemoteChassisPermitLocked(0u);
     chassis_inhibit_generation++;
 #endif
     RobotSafetyExitCritical(previous);
@@ -208,7 +238,7 @@ void RobotSafetyRequestCalib(uint8_t enable)
         {
             enable_requested = 0u;
 #if defined(CHASSIS_BOARD)
-            remote_chassis_permit = 0u;
+            RobotSafetyClearRemoteChassisPermitLocked(0u);
             chassis_inhibit_generation++;
 #endif
         }
@@ -216,10 +246,42 @@ void RobotSafetyRequestCalib(uint8_t enable)
     RobotSafetyExitCritical(previous);
 }
 
-void RobotSafetySetRemoteChassisPermit(uint8_t permitted)
+uint8_t RobotSafetyTryGrantRemoteChassisPermit(uint32_t expected_generation,
+                                                uint32_t source_time_ms,
+                                                uint32_t max_age_ms,
+                                                uint32_t now_ms)
 {
     const uint32_t previous = RobotSafetyEnterCritical();
-    remote_chassis_permit = permitted != 0u ? 1u : 0u;
+#if defined(CHASSIS_BOARD)
+    const uint8_t lease_valid = (uint8_t)(max_age_ms != 0u && max_age_ms <= INT32_MAX &&
+        (uint32_t)(now_ms - source_time_ms) <= max_age_ms);
+    const uint8_t granted = (uint8_t)(expected_generation == chassis_inhibit_generation &&
+        RobotSafetyChassisLocalReadyLocked() != 0u && lease_valid != 0u);
+    if (granted != 0u)
+    {
+        remote_chassis_permit = 1u;
+        remote_chassis_source_time_ms = source_time_ms;
+        remote_chassis_max_age_ms = max_age_ms;
+    }
+    else
+        RobotSafetyClearRemoteChassisPermitLocked(1u);
+#else
+    (void)expected_generation;
+    (void)source_time_ms;
+    (void)max_age_ms;
+    (void)now_ms;
+    const uint8_t granted = 0u;
+#endif
+    RobotSafetyExitCritical(previous);
+    return granted;
+}
+
+void RobotSafetyRevokeRemoteChassisPermit(void)
+{
+    const uint32_t previous = RobotSafetyEnterCritical();
+#if defined(CHASSIS_BOARD)
+    RobotSafetyClearRemoteChassisPermitLocked(1u);
+#endif
     RobotSafetyExitCritical(previous);
 }
 
@@ -227,9 +289,7 @@ uint8_t RobotSafetyIsChassisLocalReady(void)
 {
 #if defined(CHASSIS_BOARD)
     const uint32_t previous = RobotSafetyEnterCritical();
-    const uint8_t ready = ((fault_flags & (uint32_t)~ROBOT_FAULT_RC_OFFLINE) == ROBOT_FAULT_NONE &&
-                           imu_valid != 0u && calib_valid != 0u && task_healthy != 0u &&
-                           calib_requested == 0u && estop_latched == 0u) ? 1u : 0u;
+    const uint8_t ready = RobotSafetyChassisLocalReadyLocked();
     RobotSafetyExitCritical(previous);
     return ready;
 #else
@@ -317,14 +377,22 @@ Robot_Status_e RobotSafetyGetState(void)
 
 uint8_t RobotSafetyIsReady(void)
 {
+#if defined(CHASSIS_BOARD)
+    return RobotSafetyIsReadyAt(HAL_GetTick());
+#else
+    return RobotSafetyIsReadyAt(0u);
+#endif
+}
+
+uint8_t RobotSafetyIsReadyAt(uint32_t now_ms)
+{
     const uint32_t previous = RobotSafetyEnterCritical();
 #if defined(CHASSIS_BOARD)
     const uint8_t ready = (robot_state == ROBOT_READY &&
-                           (fault_flags & (uint32_t)~ROBOT_FAULT_RC_OFFLINE) == ROBOT_FAULT_NONE &&
-                           imu_valid != 0u && calib_valid != 0u && task_healthy != 0u &&
-                           remote_chassis_permit != 0u && calib_requested == 0u &&
-                           estop_latched == 0u) ? 1u : 0u;
+                           RobotSafetyChassisLocalReadyLocked() != 0u &&
+                           RobotSafetyRemoteLeaseFreshLocked(now_ms) != 0u) ? 1u : 0u;
 #else
+    (void)now_ms;
     const uint8_t ready = (robot_state == ROBOT_READY && fault_flags == ROBOT_FAULT_NONE &&
                            rc_online != 0u && imu_valid != 0u && calib_valid != 0u &&
                            task_healthy != 0u && enable_requested != 0u &&
@@ -391,6 +459,9 @@ void RobotSafetyUpdate(void)
     const uint32_t active_faults = fault_flags;
 
 #if defined(CHASSIS_BOARD)
+    // 任务周期之外也以租约期限判定；到期立刻撤销旧远端命令并要求新序号重接管。
+    if (remote_chassis_permit != 0u && RobotSafetyRemoteLeaseFreshLocked(HAL_GetTick()) == 0u)
+        RobotSafetyClearRemoteChassisPermitLocked(1u);
     // 底盘板不接收遥控器；运动授权来自云台板的新鲜命令并继续受本地状态约束。
     if ((active_faults & (ROBOT_FAULT_INIT_FAILURE | ROBOT_FAULT_RESET_LOCKOUT)) != 0u)
     {

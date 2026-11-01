@@ -178,6 +178,12 @@ typedef enum
     CAN_TX_SUBMIT_CONTEXT
 } CAN_TxSubmitStatus_t;
 
+/** @brief 在周期帧交给 HAL 前，使用当前时间与可变副本做有界的最终准备／许可检查。
+ * @note 在普通 CAN 服务任务的短临界区内调用；不得阻塞、分配内存或再次提交 CAN 请求。
+ */
+typedef void (*CAN_TxPeriodicPrepareFn_t)(const void *source, uint32_t now_ms,
+                                          uint8_t *payload, uint8_t length);
+
 /** @brief 单次请求的异步处理状态，硬件接受与总线完成分开报告。 */
 typedef enum
 {
@@ -290,6 +296,27 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
                                        uint32_t key, const CAN_TxFrame_t *frame,
                                        CAN_TxPriority_t priority, uint32_t deadline_ms,
                                        uint32_t period_us, uint32_t *request_id);
+
+/** @brief 提交带发送前准备回调的周期目标；未能替换时旧回调仍会保护已排队帧。
+ * @param[in] hcan 已启动服务的总线句柄。
+ * @param[in] source 长期有效的来源标识，也会传给 prepare 作为回调上下文。
+ * @param[in] key 来源内的周期流编号。
+ * @param[in] frame 经典 CAN 数据帧；提交时复制负载。
+ * @param[in] priority 调度优先级。
+ * @param[in] deadline_ms 从提交时刻起的最长期限。
+ * @param[in] period_us 周期流的带宽预算周期。
+ * @param[in] prepare 可为 NULL；非空时在实际交给 HAL 前调用，修改队列自有负载副本。
+ * @param[out] request_id 非空；仅接受或合并成功时写入请求编号。
+ * @return 与 CANSubmitPeriodic 相同；参数错误、容量不足或带宽超限时拒绝。
+ * @note prepare 在短临界区内运行，必须有界，不得阻塞、分配内存或再次提交 CAN 请求。
+ *       prepare 收到的 source 指针及其指向数据须在周期流排队期间保持有效。
+ *       成功替换会同时更新队列帧及回调；提交失败时旧帧和旧回调保持不变。
+ */
+CAN_TxSubmitStatus_t CANSubmitPeriodicPrepared(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, CAN_TxPeriodicPrepareFn_t prepare,
+                                       uint32_t *request_id);
 
 /** @brief 提交一条有界一次性命令。
 * @param[in] hcan 已启动服务的总线句柄。

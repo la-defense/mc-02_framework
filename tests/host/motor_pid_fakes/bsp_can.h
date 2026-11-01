@@ -36,6 +36,11 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
                                        uint32_t key, const CAN_TxFrame_t *frame,
                                        CAN_TxPriority_t priority, uint32_t deadline_ms,
                                        uint32_t period_us, uint32_t *request_id);
+CAN_TxSubmitStatus_t CANSubmitPeriodicPrepared(FDCAN_HandleTypeDef *hcan, const void *source,
+                                       uint32_t key, const CAN_TxFrame_t *frame,
+                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
+                                       uint32_t period_us, CAN_TxPeriodicPrepareFn_t prepare,
+                                       uint32_t *request_id);
 CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *source,
                                       const CAN_TxFrame_t *frame, CAN_TxPriority_t priority,
                                       uint32_t deadline_ms, uint32_t *request_id);

@@ -13,6 +13,8 @@ typedef uint8_t (*CanTopicMapTime_t)(void *context, uint32_t remote_ms, uint32_t
 /** @brief 编码或解码固定长度数据；成功返回1，失败返回0。输入输出可能未对齐。 */
 typedef uint8_t (*CanTopicConvert_t)(void *context, const void *input, size_t input_size,
                                      void *output, size_t output_size);
+/** @brief 通知业务立即撤销依赖此输入的话题许可；回调必须有界且不得阻塞。 */
+typedef void (*CanTopicInvalidateFn_t)(void *context);
 typedef struct {
     CanTopicConvert_t convert; /**< 发送用编码，接收用解码；须完整检查输入。 */
     void *context; /**< 允许NULL；非NULL时须在桥接期间有效。 */
@@ -26,6 +28,8 @@ typedef struct {
     CanTopicCodec_t outgoing_codec, incoming_codec;
     CanTopicMapTime_t map_time;
     void *map_context;
+    CanTopicInvalidateFn_t invalidate_callback;
+    void *invalidate_context;
     uint32_t last_sent_sequence;
     uint32_t pending_request_id;
     uint32_t last_remote_source_ms;
@@ -51,6 +55,16 @@ CanTopicBridgeStatus_t CanTopicBridgeInit(CanTopicBridge_t *bridge, CanTopicTran
     MessageSubscriber_t *outgoing, MessagePublisher_t *incoming,
     const CanTopicCodec_t *outgoing_codec, const CanTopicCodec_t *incoming_codec,
     CanTopicMapTime_t map_time, void *map_context);
+
+/** @brief 设置入站数据撤销回调；每次成功使已发布快照失效时调用。
+ * @param[in,out] bridge 已初始化且有入站发布端的桥接对象。
+ * @param[in] callback 可为NULL；调用须有界且不可阻塞。
+ * @param[in] context 回调上下文，桥接期间须有效。
+ * @return 参数和对象有效返回OK，否则返回ARGUMENT。
+ * @note 在接收和服务任务启动前注册；快照撤销成功后，在触发撤销的任务上下文内调用。
+ */
+CanTopicBridgeStatus_t CanTopicBridgeSetInvalidateCallback(CanTopicBridge_t *bridge,
+    CanTopicInvalidateFn_t callback, void *context);
 
 /** @brief 读取未过期的本地数据并尝试提交一次，不重复发送已入队的同一版本。
  * @param[in,out] bridge 已初始化对象，调用者串行访问。
