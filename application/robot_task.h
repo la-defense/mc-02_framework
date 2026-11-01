@@ -137,6 +137,7 @@ uint8_t OSTaskInit(void)
 
 #if MC02_FEATURE_UI
 #if defined(MC02_CONFIG_GENERATED)
+    // 依赖校验可能跳过未满足前置条件的辅助UI模块，此时不创建对应任务。
     if (RobotBuildModuleStarted(ROBOT_MODULE_UI))
     {
 #endif
@@ -388,6 +389,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         DaemonTask();
 #if MC02_FEATURE_ALARM
 #if defined(MC02_CONFIG_GENERATED)
+        // 启动计划未接受告警模块或其依赖后续失败时，周期任务停止访问告警状态。
         if (RobotBuildModuleStarted(ROBOT_MODULE_ALARM))
 #endif
             (void)RobotAlarmTask();

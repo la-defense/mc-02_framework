@@ -5,7 +5,8 @@
 #define MC02_VEHICLE_SELECTION_H
 #include "module_plan.h"
 typedef struct {
-    uint32_t layout, version;
+    uint32_t layout;  ///< 构建身份结构格式标识，当前固定为ASCII签名“VCF1”。
+    uint32_t version; ///< 车型配置版本，来源于MC02_VEHICLE_CONFIG_VERSION。
     char vehicle[16], platform[16], board[16], rtos[16], role[16];
     uint32_t enabled_modules, required_modules;
 } RobotBuildIdentity_t;

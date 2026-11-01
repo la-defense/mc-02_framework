@@ -17,8 +17,9 @@ typedef enum {
     ROBOT_MODULE_CYCLE, ROBOT_MODULE_CORE_FAILURE
 } RobotModuleStatus_t;
 typedef struct {
-    uint32_t enabled, required;
-    uint32_t dependencies[ROBOT_MODULE_COUNT];
+    uint32_t enabled;   ///< 启用模块位图，位号对应 RobotModule_t 的枚举值。
+    uint32_t required;  ///< 必需模块位图，必须是 enabled 的子集。
+    uint32_t dependencies[ROBOT_MODULE_COUNT]; ///< 下标是模块枚举值，元素是其前置模块位图。
 } RobotModulePlan_t;
 typedef struct {
     uint32_t started; /**< 初始化或异步启动已接受，不表示传感器数据已经可信。 */

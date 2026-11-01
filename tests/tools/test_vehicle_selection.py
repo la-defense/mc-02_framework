@@ -1,5 +1,6 @@
 """核对生产CMake配置入口拒绝非法选择和缺失核心条件。"""
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -29,6 +30,28 @@ class VehicleSelectionTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
         result = self.run_case('mc02_validate_vehicle_identity(sentinel stm32h723 mc02 freertos omni dji)\n')
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_module_order_matches_cmake_and_health_mapping(self):
+        plan_header = (ROOT / "application/config/module_plan.h").read_text(encoding="utf-8")
+        enum_body = re.search(r"typedef enum\s*\{(.*?)ROBOT_MODULE_COUNT", plan_header, re.S)
+        self.assertIsNotNone(enum_body)
+        c_names = re.findall(r"ROBOT_MODULE_([A-Z_]+)", enum_body.group(1))
+
+        cmake_selection = (ROOT / "cmake/mc02_vehicle_selection.cmake").read_text(encoding="utf-8")
+        cmake_body = re.search(r"set\(MC02_MODULE_NAMES\s+(.*?)\)", cmake_selection, re.S)
+        self.assertIsNotNone(cmake_body)
+        cmake_names = re.findall(r"[A-Z][A-Z_]+", cmake_body.group(1))
+        self.assertEqual(c_names, cmake_names)
+
+        health_port = (ROOT / "application/vehicle_health_port_stm32.c").read_text(encoding="utf-8")
+        health_body = re.search(
+            r"static const VehicleHealthModule_t health_module\[ROBOT_MODULE_COUNT\]\s*=\s*\{(.*?)\};",
+            health_port,
+            re.S,
+        )
+        self.assertIsNotNone(health_body)
+        health_names = re.findall(r"VEHICLE_HEALTH_MODULE_([A-Z_]+)", health_body.group(1))
+        self.assertEqual(c_names, health_names)
 
     def test_graph(self):
         prefix = 'set(MC02_DEP_SAFETY "")\nset(MC02_DEP_IMU SAFETY)\n'
