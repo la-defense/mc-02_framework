@@ -28,17 +28,20 @@
 #include "bsp_log.h"
 #include <string.h>
 
+// 将已采集到的模块加入健康快照可用位图。
 static void MarkAvailable(VehicleHealthSourceSnapshot_t *output, VehicleHealthModule_t module)
 {
     output->available_modules |= VEHICLE_HEALTH_MODULE_BIT(module);
 }
 
+// 将模块标记为降级，保留其他模块的可用状态。
 static void MarkDegraded(VehicleHealthSourceSnapshot_t *output, VehicleHealthModule_t module)
 {
     output->degraded_modules |= VEHICLE_HEALTH_MODULE_BIT(module);
 }
 
 #if defined(MC02_CONFIG_GENERATED)
+// 把启动计划的失败和阻塞状态映射为健康快照中的模块状态。
 static void MarkStartupDegraded(VehicleHealthSourceSnapshot_t *output)
 {
     const uint32_t failed = robot_module_startup.failed | robot_module_startup.blocked;
@@ -51,12 +54,14 @@ static void MarkStartupDegraded(VehicleHealthSourceSnapshot_t *output)
         VEHICLE_HEALTH_MODULE_ALARM, VEHICLE_HEALTH_MODULE_LCD,
         VEHICLE_HEALTH_MODULE_UI, VEHICLE_HEALTH_MODULE_SUPERCAP,
         VEHICLE_HEALTH_MODULE_LOG, VEHICLE_HEALTH_MODULE_HEATER};
+    // 此表按 ROBOT_MODULE_* 的枚举顺序对应健康模块编号。
     for (unsigned module = 0u; module < ROBOT_MODULE_COUNT; ++module)
         if ((failed & ROBOT_MODULE_BIT(module)) != 0u)
             MarkDegraded(output, health_module[module]);
 }
 #endif
 
+// 复制构建配置声明的角色与模块集合到本次健康快照。
 static void ConfigureRole(VehicleHealthSourceSnapshot_t *output)
 {
     VehicleHealthBuildProfile_t profile = {0};

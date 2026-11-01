@@ -301,7 +301,8 @@ void ChassisTask()
         .center_gimbal_offset_y_mm = wheel_measure->center_gimbal_offset_y,
         .wheel_radius_mm = wheel_measure->radius_wheel,
         .reduction_ratio = wheel_measure->reduction_ratio_wheel,
-        .model = (uint8_t)(chassis_config->wheel_type == OMNI_WHEEL),
+        .model = chassis_config->wheel_type == OMNI_WHEEL ?
+                     CHASSIS_MOTION_MODEL_OMNI : CHASSIS_MOTION_MODEL_MECANUM,
         .omni = chassis_config->omni_geometry,
     };
     const ChassisMotionLimits_s limits = chassis_config->motion_limits;

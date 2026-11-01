@@ -12,6 +12,7 @@
 #include "robot_alarm.h"
 #include "topics/robot_can_bridge_config.h"
 #include "referee_ui_config.h"
+#include "shoot_config_types.h"
 
 /*
  * 机器人配置框架. VISION_USE_VCP / VISION_USE_UART / ONE_BOARD 等板级宏
@@ -102,14 +103,6 @@ typedef struct
     Motor_Init_Config_s pitch_motor_config;
 } Gimbal_Config_s;
 
-// 机器人发射类型
-typedef enum
-{
-    DUAL_SHOOT = 0,
-    THREE_SHOOT,
-    FOUR_SHOOT,
-} Shoot_Type_e;
-
 typedef struct
 {
     Shoot_Type_e shoot_type;
@@ -154,10 +147,6 @@ typedef enum
 #include "robot_def.h"
 
 /* 配置入口(在 robot_def.c 中实现) */
-/** @brief 选择并保存供后续 Feed 使用的机器人配置。
-* @param[in] id 机器人类型，仅支持哨兵；未实现或未知编号返回NULL。
-* @return 长期有效的内部配置地址，不可释放；配置只读；失败不会选择其他车型。
- */
 typedef enum {
     ROBOT_CONFIG_OK = 0, ROBOT_CONFIG_ARGUMENT, ROBOT_CONFIG_UNSUPPORTED,
     ROBOT_CONFIG_BAD_PARAMETERS
@@ -168,6 +157,10 @@ typedef enum {
  * @return OK、ARGUMENT、UNSUPPORTED或BAD_PARAMETERS；调用不操作硬件。
  */
 RobotConfigStatus_t RobotConfigSelect(uint8_t id, const Robot_Config_s **output);
+/** @brief 选择车型并返回其只读配置，兼容历史调用接口。
+ * @param[in] id 机器人类型；当前仅支持 SENTINEL_ROBOT。
+ * @return 成功时返回长期有效的内部配置地址；选择失败时返回NULL并清除当前选择。
+ */
 const Robot_Config_s *RobotConfigInit(uint8_t id);
 /** @brief 读取已选车型的完整只读配置。
  * @return 配置长期有效；尚未成功选择车型时返回NULL。

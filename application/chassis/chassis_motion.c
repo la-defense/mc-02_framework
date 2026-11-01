@@ -101,13 +101,13 @@ uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
     // 旧消息的横向为右，进入纯数值模型时显式换为左。
     const ChassisTwist_t twist = {vx_mm_s * 0.001f, -vy_mm_s * 0.001f,
                                   wz_deg_s * radians_per_degree};
-    if (geometry->model == 1u)
+    if (geometry->model == CHASSIS_MOTION_MODEL_OMNI)
     {
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
         calculation = OmniCalculate(&twist, &geometry->omni, &wheels);
 #endif
     }
-    else if (geometry->model == 0u)
+    else if (geometry->model == CHASSIS_MOTION_MODEL_MECANUM)
     {
 #if !defined(MC02_CONFIG_GENERATED) || !MC02_CHASSIS_IS_OMNI
         const MecanumGeometry_t mecanum = {

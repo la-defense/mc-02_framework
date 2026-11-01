@@ -20,6 +20,7 @@ static const Robot_Config_s *robot_instance;
 
 #if MC02_FEATURE_CHASSIS || MC02_FEATURE_GIMBAL || MC02_FEATURE_SHOOTER || \
     defined(MC02_PROFILE_ROBOT)
+// 校验配置中的 DJI 电机类型、安装方向和本场景要求的发送 ID。
 static uint8_t IsSupportedDJIMotor(const Motor_Init_Config_s *motor, uint8_t require_id)
 {
     if (motor == NULL || motor->can_init_config.can_handle == NULL ||
@@ -36,6 +37,7 @@ static uint8_t IsSupportedDJIMotor(const Motor_Init_Config_s *motor, uint8_t req
 #endif
 
 #if MC02_FEATURE_CHASSIS
+// 确认底盘尺寸、轮电机编号和已编译运动学模型能够共同计算有效轮速。
 static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
 {
     const Wheel_Measure_s *measure = &chassis->wheel_measure;
@@ -80,6 +82,7 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
         return 0u;
 #endif
 #endif
+    // 检查四个驱动轮都有合法且互不重复的电调编号。
     for (unsigned index = 0u; index < 4u; ++index)
     {
         if (chassis->chassis_motor_id[index] == 0u || chassis->chassis_motor_id[index] > 8u)
@@ -93,6 +96,7 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
 #endif
 
 #if MC02_FEATURE_GIMBAL
+// 校验当前两轴云台的角度范围、电机能力和 CAN 节点唯一性。
 static uint8_t GimbalConfigIsValid(const Gimbal_Config_s *gimbal)
 {
     if (gimbal->gimbal_type != SINGLE_GIMBAL ||
@@ -115,16 +119,11 @@ static uint8_t GimbalConfigIsValid(const Gimbal_Config_s *gimbal)
 #endif
 
 #if MC02_FEATURE_SHOOTER
+// 校验拨弹与摩擦轮参数，并由发射机构类型确定本车启用的摩擦轮数。
 static uint8_t ShootConfigIsValid(const Shoot_Config_s *shoot)
 {
-    uint8_t friction_count;
-    switch (shoot->shoot_type)
-    {
-    case DUAL_SHOOT: friction_count = 2u; break;
-    case THREE_SHOOT: friction_count = 3u; break;
-    case FOUR_SHOOT: friction_count = 4u; break;
-    default: return 0u;
-    }
+    const uint8_t friction_count = ShootFrictionWheelCount(shoot->shoot_type);
+    if (friction_count == 0u) return 0u;
     if (shoot->loader_slot_num == 0u ||
         !isfinite(shoot->loader_gearbox_ratio) || shoot->loader_gearbox_ratio <= 0.0f ||
         !isfinite(shoot->loader_disk_ratio) || shoot->loader_disk_ratio <= 0.0f ||
@@ -134,6 +133,7 @@ static uint8_t ShootConfigIsValid(const Shoot_Config_s *shoot)
         !IsSupportedDJIMotor(&shoot->friction_motor_config, 0u) ||
         !IsSupportedDJIMotor(&shoot->loader_motor_config, 1u))
         return 0u;
+    // 检查启用摩擦轮的编号、方向及与拨弹电机的冲突。
     for (uint8_t index = 0u; index < friction_count; ++index)
     {
         if (shoot->friction_motor_id[index] == 0u || shoot->friction_motor_id[index] > 8u ||
@@ -153,6 +153,7 @@ static uint8_t ShootConfigIsValid(const Shoot_Config_s *shoot)
 }
 #endif
 
+// 按本固件启用的业务能力校验对应配置，未启用的功能不读取其参数。
 static uint8_t RobotConfigParametersAreValid(const Robot_Config_s *config)
 {
     if (config == NULL)

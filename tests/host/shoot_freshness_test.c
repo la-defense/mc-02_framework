@@ -86,6 +86,11 @@ static MessageStatus_t publish(MessagePublisher_t *publisher,
 
 int main(void)
 {
+    CHECK(ShootFrictionWheelCount(DUAL_SHOOT) == 2u);
+    CHECK(ShootFrictionWheelCount(THREE_SHOOT) == 3u);
+    CHECK(ShootFrictionWheelCount(FOUR_SHOOT) == 4u);
+    CHECK(ShootFrictionWheelCount((Shoot_Type_e)99) == 0u);
+
     timeline_ms = 1000.0f;
     CHECK(ShootInit() == 1u);
     CHECK(shoot_fake_motor_init_count == 3u);

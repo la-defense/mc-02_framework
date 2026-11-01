@@ -40,13 +40,8 @@ uint8_t ShootInit(void)
     if (shoot_config == NULL)
         return 0u;
 
-    switch (shoot_config->shoot_type)
-    {
-    case DUAL_SHOOT: friction_count = 2u; break;
-    case THREE_SHOOT: friction_count = 3u; break;
-    case FOUR_SHOOT: friction_count = 4u; break;
-    default: return 0u;
-    }
+    friction_count = ShootFrictionWheelCount(shoot_config->shoot_type);
+    if (friction_count == 0u) return 0u;
 
     const float loader_ratio = shoot_config->loader_gearbox_ratio *
                                shoot_config->loader_disk_ratio;

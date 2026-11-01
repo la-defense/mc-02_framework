@@ -126,6 +126,7 @@ static uint8_t RobotParamFlashOperationEnd(uint8_t success)
 #endif
 
 #if defined(MC02_CONFIG_GENERATED)
+// 仅执行车型计划列出的模块初始化，并返回各模块实际启动结果。
 static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 {
     const Robot_Config_s *config = (const Robot_Config_s *)context;

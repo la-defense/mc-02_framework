@@ -30,6 +30,15 @@ typedef struct
     ChassisMotionMode_e mode;
 } ChassisMotionInput_s;
 
+/** @brief 选择底盘几何计算模型。
+ * @note 车型构建只能选择与当前固件编译进来的运动学实现相匹配的类型。
+ */
+typedef enum
+{
+    CHASSIS_MOTION_MODEL_MECANUM = 0, ///< 使用麦克纳姆轮运动学。
+    CHASSIS_MOTION_MODEL_OMNI = 1,    ///< 使用四轮全向轮运动学。
+} ChassisMotionModel_e;
+
 /**
  * @brief 底盘安装尺寸，长度单位为 mm；轴距、轮距、轮半径和减速比必须大于0。
  * @note 云台中心的两个方向偏移可为负，沿用底盘安装配置中的 x、y 定义。
@@ -42,8 +51,8 @@ typedef struct
     float center_gimbal_offset_y_mm; ///< 云台转动中心相对底盘几何中心的 y 方向偏移。
     float wheel_radius_mm;           ///< 轮子半径。
     float reduction_ratio;           ///< 电机轴转速与轮子转速之比。
-    uint8_t model;                   ///< 0=旧麦轮适配，1=四轮全向轮。
-    OmniGeometry_t omni;             ///< model为1时使用，长度单位为米。
+    ChassisMotionModel_e model;      ///< 当前底盘采用的计算模型。
+    OmniGeometry_t omni;             ///< 全向轮模型使用，长度单位为米。
 } ChassisMotionGeometry_s;
 
 /** @brief 底盘和电机轴的转速设置，单位均为 deg/s（度/秒）。 */

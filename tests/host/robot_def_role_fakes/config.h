@@ -5,6 +5,7 @@
 #define MC02_ROBOT_DEF_ROLE_FAKE_CONFIG_H
 #include <stdint.h>
 #include "omni.h"
+#include "../../../application/config/shoot_config_types.h"
 
 typedef enum { MOTOR_AXIS_DIRECTION_REVERSE = -1, MOTOR_AXIS_DIRECTION_NORMAL = 1 }
     Motor_Axis_Direction_e;
@@ -44,7 +45,6 @@ typedef struct {
     Motor_Init_Config_s yaw_motor_config, pitch_motor_config;
 } Gimbal_Config_s;
 
-typedef enum { DUAL_SHOOT = 0, THREE_SHOOT, FOUR_SHOOT } Shoot_Type_e;
 typedef struct {
     Shoot_Type_e shoot_type;
     Motor_Init_Config_s friction_motor_config, loader_motor_config;
