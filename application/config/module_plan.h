@@ -25,7 +25,11 @@ typedef struct {
     uint32_t failed, blocked;
     uint8_t core_failed, failed_module;
 } RobotModuleStartup_t;
-/** @brief 初始化指定模块；返回非0表示启动已接受，0表示失败；不得启动未指定模块。 */
+/** @brief 初始化一个模块；只允许启动计划中启用的模块。
+ * @param[in] context 原样传给回调的上下文，可为NULL。
+ * @param[in] module 本次需要启动的模块编号，范围为有效模块枚举值。
+ * @return 非零表示模块已接受启动，0表示启动失败。
+ */
 typedef uint8_t (*RobotModuleStartFn_t)(void *context, unsigned module);
 /** @brief 检查启用项、必需项、依赖完整性和循环。
  * @param[in] plan 启动声明，不可为NULL。

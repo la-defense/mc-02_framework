@@ -5,6 +5,14 @@
 #include "config.h"
 #include "sentinel_config.h"
 
+#if MC02_FEATURE_CHASSIS
+#if MC02_CHASSIS_IS_OMNI
+#include "omni.h"
+#else
+#include "mecanum.h"
+#endif
+#endif
+
 #include <math.h>
 #include <stddef.h>
 
@@ -49,18 +57,29 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
 
     if (chassis->wheel_type != MECANUM_WHEEL && chassis->wheel_type != OMNI_WHEEL)
         return 0u;
-    if (chassis->wheel_type == OMNI_WHEEL)
-    {
-        for (unsigned index = 0u; index < 4u; ++index)
-        {
-            const ChassisWheelGeometry_t *wheel = &chassis->omni_geometry.wheels[index];
-            if (!isfinite(wheel->x_m) || !isfinite(wheel->y_m) ||
-                !isfinite(wheel->drive_x) || !isfinite(wheel->drive_y) ||
-                !isfinite(wheel->radius_m) || wheel->radius_m <= 0.0f ||
-                (wheel->drive_x == 0.0f && wheel->drive_y == 0.0f))
-                return 0u;
-        }
-    }
+#if defined(MC02_PROFILE_ROBOT)
+    // 启动校验使用与控制周期相同的计算入口，提前发现滚动方向和轮组秩不足。
+    const ChassisTwist_t zero_twist = {0.0f, 0.0f, 0.0f};
+    ChassisWheelSpeeds_t wheel_speeds;
+#if MC02_CHASSIS_IS_OMNI
+    if (chassis->wheel_type != OMNI_WHEEL ||
+        OmniCalculate(&zero_twist, &chassis->omni_geometry, &wheel_speeds) !=
+            CHASSIS_KINEMATICS_OK)
+        return 0u;
+#else
+    const MecanumGeometry_t geometry = {
+        .half_base_m = measure->wheel_base * 0.0005f,
+        .half_track_m = measure->track_width * 0.0005f,
+        .center_x_m = measure->center_gimbal_offset_x * 0.001f,
+        .center_y_m = -measure->center_gimbal_offset_y * 0.001f,
+        .radius_m = measure->radius_wheel * 0.001f,
+    };
+    if (chassis->wheel_type != MECANUM_WHEEL ||
+        MecanumCalculate(&zero_twist, &geometry, &wheel_speeds) !=
+            CHASSIS_KINEMATICS_OK)
+        return 0u;
+#endif
+#endif
     for (unsigned index = 0u; index < 4u; ++index)
     {
         if (chassis->chassis_motor_id[index] == 0u || chassis->chassis_motor_id[index] > 8u)

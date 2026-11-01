@@ -11,7 +11,9 @@ typedef struct {
 } RobotBuildIdentity_t;
 extern const RobotBuildIdentity_t robot_build_identity;
 extern RobotModuleStartup_t robot_module_startup;
-/** @brief 取得由车型声明生成的依赖表；始终返回长期只读对象。 */
+/** @brief 获取车型配置生成的模块依赖计划。
+ * @return 当前固件配置的只读模块计划；对象在固件运行期间保持有效。
+ */
 const RobotModulePlan_t *RobotBuildGetPlan(void);
 /** @brief 按依赖启动本板启用模块，保存可查询的结果。
  * @param[in] start 业务启动函数，不可为NULL。

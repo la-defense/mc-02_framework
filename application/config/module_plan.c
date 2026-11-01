@@ -9,6 +9,7 @@ uint32_t RobotModuleCoreClosure(const RobotModulePlan_t *plan)
 {
     if (plan == NULL) return 0u;
     uint32_t core = plan->required;
+    // 多轮扩展依赖位图，直到核心模块的完整前置链都包含在内。
     for (unsigned pass = 0u; pass < ROBOT_MODULE_COUNT; ++pass)
         for (unsigned i = 0u; i < ROBOT_MODULE_COUNT; ++i)
             if ((core & ROBOT_MODULE_BIT(i)) != 0u) core |= plan->dependencies[i];
@@ -27,6 +28,7 @@ RobotModuleStatus_t RobotModulePlanValidate(const RobotModulePlan_t *plan, unsig
             if (module != NULL) *module = i;
             return ROBOT_MODULE_DEPENDENCY;
         }
+    // 每轮加入依赖已全部访问的模块；剩余模块含有依赖环，无法排完启动顺序。
     for (unsigned pass = 0u; pass < ROBOT_MODULE_COUNT; ++pass)
         for (unsigned i = 0u; i < ROBOT_MODULE_COUNT; ++i)
             if ((plan->enabled & ROBOT_MODULE_BIT(i)) != 0u &&
@@ -53,6 +55,7 @@ RobotModuleStatus_t RobotModuleStart(const RobotModulePlan_t *plan,
         return result == ROBOT_MODULE_OK ? ROBOT_MODULE_ARGUMENT : result;
     const uint32_t core = RobotModuleCoreClosure(plan);
     uint32_t handled = 0u;
+    // 模块只在依赖已处理后启动；辅助依赖失败时将其下游记为阻塞。
     for (unsigned pass = 0u; pass < ROBOT_MODULE_COUNT && handled != plan->enabled; ++pass)
     {
         for (unsigned i = 0u; i < ROBOT_MODULE_COUNT; ++i)
@@ -87,6 +90,7 @@ RobotModuleStatus_t RobotModuleStartupMarkFailure(const RobotModulePlan_t *plan,
 
     state->failed |= bit;
     state->started &= ~bit;
+    // 沿依赖关系传播运行期故障，避免继续调用依赖失效模块的功能。
     for (unsigned pass = 0u; pass < ROBOT_MODULE_COUNT; ++pass)
         for (unsigned index = 0u; index < ROBOT_MODULE_COUNT; ++index)
             if ((plan->enabled & ROBOT_MODULE_BIT(index)) != 0u &&

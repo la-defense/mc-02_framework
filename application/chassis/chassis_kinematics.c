@@ -22,13 +22,15 @@ ChassisKinematicsStatus_t ChassisKinematicsCalculate(const ChassisTwist_t *input
             !isfinite(w->drive_x) || !isfinite(w->drive_y) ||
             !isfinite(w->radius_m) || w->radius_m <= 0.0f)
             return CHASSIS_KINEMATICS_ARGUMENT;
-        const double a[3] = {w->drive_x, w->drive_y,
+        const double wheel_motion_projection[3] = {w->drive_x, w->drive_y,
             (double)w->x_m * w->drive_y - (double)w->y_m * w->drive_x};
+        // 累加各轮对三个平面自由度的贡献，用Gram行列式检查轮组是否满秩。
         for (unsigned row = 0u; row < 3u; ++row)
             for (unsigned col = 0u; col < 3u; ++col)
-                gram[row][col] += a[row] * a[col];
-        candidate.rad_s[i] = (float)((a[0] * input->vx_m_s + a[1] * input->vy_m_s +
-                                      a[2] * input->wz_rad_s) / w->radius_m);
+                gram[row][col] += wheel_motion_projection[row] * wheel_motion_projection[col];
+        candidate.rad_s[i] = (float)((wheel_motion_projection[0] * input->vx_m_s +
+                                      wheel_motion_projection[1] * input->vy_m_s +
+                                      wheel_motion_projection[2] * input->wz_rad_s) / w->radius_m);
         if (!isfinite(candidate.rad_s[i])) return CHASSIS_KINEMATICS_ARGUMENT;
     }
     const double determinant = gram[0][0]*(gram[1][1]*gram[2][2]-gram[1][2]*gram[2][1]) -

@@ -734,7 +734,7 @@ add_executable(ins_filter_test ins_filter_test.c ../../modules/imu/ins_task.c
   ../../modules/algorithm/attitude_filter.c ../../modules/algorithm/QuaternionEKF.c
   ../../Middlewares/Third_Party/Fusion/FusionAhrs.c)
 target_include_directories(ins_filter_test BEFORE PRIVATE ins_filter_fakes)
-target_include_directories(ins_filter_test PRIVATE ../../modules/imu ../../modules/BMI088
+target_include_directories(ins_filter_test PRIVATE ../../application ../../modules/imu ../../modules/BMI088
   ../../Middlewares/Third_Party/Fusion)
 target_compile_definitions(ins_filter_test PRIVATE MC02_VISION_PROTOCOL_V2=1
   MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=0)
@@ -751,7 +751,7 @@ add_executable(ins_filter_fusion_test ins_filter_test.c ../../modules/imu/ins_ta
   ../../modules/algorithm/attitude_filter.c ../../modules/algorithm/QuaternionEKF.c
   ../../Middlewares/Third_Party/Fusion/FusionAhrs.c)
 target_include_directories(ins_filter_fusion_test BEFORE PRIVATE ins_filter_fakes)
-target_include_directories(ins_filter_fusion_test PRIVATE ../../modules/imu ../../modules/BMI088
+target_include_directories(ins_filter_fusion_test PRIVATE ../../application ../../modules/imu ../../modules/BMI088
   ../../Middlewares/Third_Party/Fusion)
 target_compile_definitions(ins_filter_fusion_test PRIVATE MC02_VISION_PROTOCOL_V2=1
   MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=1)
@@ -1877,21 +1877,42 @@ add_executable(module_plan_test module_plan_test.c ../../application/config/modu
 target_include_directories(module_plan_test PRIVATE . ../../application/config)
 mc02_apply_format_diagnostics(module_plan_test)
 add_test(NAME production_vehicle_module_plan COMMAND module_plan_test)
-# 编译 production robot_def.c 的两种分板功能组合，确保未启用的校验器不被引用。
+# 编译 production robot_def.c 的底盘／云台角色和两种底盘几何选择，检查功能隔离。
 add_library(robot_def_chassis_role_compile OBJECT ../../application/robot_def.c)
 target_include_directories(robot_def_chassis_role_compile BEFORE PRIVATE robot_def_role_fakes)
+target_include_directories(robot_def_chassis_role_compile PRIVATE ../../application/chassis)
 target_compile_definitions(robot_def_chassis_role_compile PRIVATE MC02_PROFILE_ROBOT=1
   MC02_FEATURE_CHASSIS=1 MC02_FEATURE_GIMBAL=0 MC02_FEATURE_SHOOTER=0
-  MC02_FEATURE_ALARM=0 MC02_FEATURE_UI=0)
+  MC02_FEATURE_ALARM=0 MC02_FEATURE_UI=0 MC02_CHASSIS_IS_OMNI=1)
 target_compile_options(robot_def_chassis_role_compile PRIVATE -Wall -Wextra -Werror)
 mc02_apply_format_diagnostics(robot_def_chassis_role_compile)
 add_library(robot_def_gimbal_role_compile OBJECT ../../application/robot_def.c)
 target_include_directories(robot_def_gimbal_role_compile BEFORE PRIVATE robot_def_role_fakes)
+target_include_directories(robot_def_gimbal_role_compile PRIVATE ../../application/chassis)
 target_compile_definitions(robot_def_gimbal_role_compile PRIVATE MC02_PROFILE_ROBOT=1
   MC02_FEATURE_CHASSIS=0 MC02_FEATURE_GIMBAL=1 MC02_FEATURE_SHOOTER=1
   MC02_FEATURE_ALARM=0 MC02_FEATURE_UI=0)
 target_compile_options(robot_def_gimbal_role_compile PRIVATE -Wall -Wextra -Werror)
 mc02_apply_format_diagnostics(robot_def_gimbal_role_compile)
+add_library(robot_def_mecanum_role_compile OBJECT ../../application/robot_def.c)
+target_include_directories(robot_def_mecanum_role_compile BEFORE PRIVATE robot_def_role_fakes)
+target_include_directories(robot_def_mecanum_role_compile PRIVATE ../../application/chassis)
+target_compile_definitions(robot_def_mecanum_role_compile PRIVATE MC02_PROFILE_ROBOT=1
+  MC02_FEATURE_CHASSIS=1 MC02_FEATURE_GIMBAL=0 MC02_FEATURE_SHOOTER=0
+  MC02_FEATURE_ALARM=0 MC02_FEATURE_UI=0 MC02_CHASSIS_IS_OMNI=0)
+target_compile_options(robot_def_mecanum_role_compile PRIVATE -Wall -Wextra -Werror)
+mc02_apply_format_diagnostics(robot_def_mecanum_role_compile)
+add_executable(robot_def_chassis_config_test robot_def_chassis_config_test.c
+  ../../application/robot_def.c ../../application/chassis/chassis_kinematics.c
+  ../../application/chassis/omni.c)
+target_include_directories(robot_def_chassis_config_test BEFORE PRIVATE robot_def_role_fakes)
+target_include_directories(robot_def_chassis_config_test PRIVATE . ../../application/chassis)
+target_compile_definitions(robot_def_chassis_config_test PRIVATE MC02_PROFILE_ROBOT=1
+  MC02_FEATURE_CHASSIS=1 MC02_FEATURE_GIMBAL=0 MC02_FEATURE_SHOOTER=0
+  MC02_FEATURE_ALARM=0 MC02_FEATURE_UI=0 MC02_CHASSIS_IS_OMNI=1)
+target_link_libraries(robot_def_chassis_config_test PRIVATE m)
+mc02_apply_format_diagnostics(robot_def_chassis_config_test)
+add_test(NAME production_chassis_config_rejects_invalid_geometry COMMAND robot_def_chassis_config_test)
 if(Python3_EXECUTABLE)
   add_test(NAME production_vehicle_build_selection
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_vehicle_selection.py)

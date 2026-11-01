@@ -23,6 +23,7 @@
 #include "bmi088.h"
 #include "robot_safety.h"
 #include "imu_heater.h"
+#include "config/build_selection.h"
 #include "task_monitor.h"
 #include <math.h>
 #include <float.h>
@@ -167,9 +168,11 @@ attitude_t *INS_Init(void)
     if (ins_init_result != 0u)
         return (ins_init_result == 3u) ? NULL : (attitude_t *)&INS.Gyro;
     INS.init = 1u;
+#if MC02_FEATURE_HEATER
     // 初始化传感器或读取参数前先关闭加热输出。
     IMUHeaterForceOff();
     IMUHeaterInit();
+#endif
     bmi088_sample_sequence_diag = 0u;
     bmi088_sample_timestamp_ms_diag = 0u;
     imu_sample_valid_diag = 0u;
@@ -194,7 +197,9 @@ attitude_t *INS_Init(void)
     bmi088_ins = BMI088Register(&imu_cfg);
     if (bmi088_ins == NULL)
     {
+#if MC02_FEATURE_HEATER
         IMUHeaterForceOff();
+#endif
         RobotSafetySetImuValid(0u);
         RobotSafetySetCalibValid(0u);
         INS.q[0] = 1.0f;
@@ -221,7 +226,9 @@ attitude_t *INS_Init(void)
         AttitudeFilterInit(&attitude_filter,&attitude_filter_config,init_quaternion,
             attitude_filter_workspace,sizeof(attitude_filter_workspace)) != KF_OK)
     {
+#if MC02_FEATURE_HEATER
         IMUHeaterForceOff();
+#endif
         RobotSafetySetImuValid(0u);
         RobotSafetySetCalibValid(0u);
         ins_init_result = 3u;
@@ -347,9 +354,11 @@ void INS_Task(void)
             VisionUpdateTx(0u, 0.0f, 0.0f, 0.0f, 0.0f,
                            0.0f, 0.0f, 0.0f, 0.0f,
                            VISION_BULLET_SPEED_DEFAULT, 0u);
+#if MC02_FEATURE_HEATER
             Robot_Status_e state = RobotSafetyGetState();
             uint8_t force_off = (state == ROBOT_ESTOP || state == ROBOT_FAULT) ? 1u : 0u;
             IMUHeaterUpdate(NULL, force_off);
+#endif
             goto ins_sample_processed;
         }
         bmi088_sample_sequence_diag = bmi088_data.sequence;
@@ -394,7 +403,9 @@ void INS_Task(void)
             imu_sample_valid_diag=0u;
             RobotSafetySetImuValid(0u);
             VisionUpdateTx(0u,0,0,0,0,0,0,0,0,VISION_BULLET_SPEED_DEFAULT,0u);
+#if MC02_FEATURE_HEATER
             IMUHeaterUpdate(NULL,1u);
+#endif
             goto ins_sample_processed;
         }
 
@@ -444,6 +455,7 @@ void INS_Task(void)
         ins_sample_processed:;
     }
 
+#if MC02_FEATURE_HEATER
     // 每两次任务调用更新一次温控；急停或故障时强制关闭加热。
     if ((count % 2) == 0)
     {
@@ -453,6 +465,7 @@ void INS_Task(void)
         IMUHeaterUpdate(&bmi088_data, force_off);
         DWT_ProbeDone(&ins_prof_temp, probe_seg);
     }
+#endif
 
     if ((count++ % 1000) == 0)
     {

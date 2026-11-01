@@ -4,6 +4,7 @@
 #ifndef MC02_ROBOT_DEF_ROLE_FAKE_CONFIG_H
 #define MC02_ROBOT_DEF_ROLE_FAKE_CONFIG_H
 #include <stdint.h>
+#include "omni.h"
 
 typedef enum { MOTOR_AXIS_DIRECTION_REVERSE = -1, MOTOR_AXIS_DIRECTION_NORMAL = 1 }
     Motor_Axis_Direction_e;
@@ -16,10 +17,6 @@ enum { GM6020 = 1, M3508 = 2, M2006 = 3 };
 enum { MOTOR_DIRECTION_NORMAL = 0, MOTOR_DIRECTION_REVERSE = 1 };
 
 typedef enum { MECANUM_WHEEL = 0, OMNI_WHEEL = 1 } Wheel_Type_e;
-typedef struct {
-    float x_m, y_m, drive_x, drive_y, radius_m;
-} ChassisWheelGeometry_t;
-typedef struct { ChassisWheelGeometry_t wheels[4]; } OmniGeometry_t;
 typedef struct {
     float wheel_base, track_width, radius_wheel, reduction_ratio_wheel;
     float center_gimbal_offset_x, center_gimbal_offset_y;
@@ -71,6 +68,5 @@ typedef enum {
     ROBOT_CONFIG_BAD_PARAMETERS
 } RobotConfigStatus_t;
 enum { SENTINEL_ROBOT = 6 };
-#define MC02_CHASSIS_IS_OMNI 1
 
 #endif
