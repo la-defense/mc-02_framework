@@ -102,6 +102,8 @@
 - [ ] **MC02-0102** [enhancement] [ready-for-agent] 设备监听与字模生成工具维护。验收：USB-CAN 监听仅维护已核对私有格式，校验类型／长度／DLC／ID，读取有界、异常有结果，不冒称通用 CAN 或主动收发。字模工具支持明确字体／输出路径，先校验再交付整组，字符／枚举／字节可重复核对并保留来源；不扩无用字库，保留 LCD-10，关联0026／0085／0097。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 - [ ] **MC02-0103** [enhancement] [ready-for-agent] CI及本地同格式构建归档。验收：CI 可下载与本地同格式构建包，含 ELF／HEX／BIN／map、构建／车型／平台／配置身份、工具链和校验信息，可匹配旧现场；保留 Debug／Release、非法配置及禁热隔离检查。VSCode／OpenOCD／可选 Ozone 指向匹配产物，个人路径／探针／会话分离，失败不伪装成功，不自动上硬件。关联0020／0068、BUILD-02。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)和[实施记录](../docs/workflow/tickets/MC02-0103.md)。
 - [ ] **MC02-0104** [enhancement] [ready-for-agent] 独立裁判模拟器的固件对齐验证。验收：与独立 tools/referee_sim 的 [REFSIM-0001](../tools/referee_sim/TODO.md) 关联，各仓库自管状态；锁定2026 V2.0.0，修正文档旧固件描述，建立已核对字节向量、错误帧、分组失联／恢复、功率／热量及 UI 场景与裸板流程；模拟器修复必要串口写时限／短写结果，两端按 SHA 关联。只登记不运行串口／GUI／MQTT，不新增 GUI／CLI／MQTT 功能，关联0022／0026／0079／0094／0095。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0124** [enhancement] [needs-triage] 评估并接入 H723 CORDIC 数学加速。验收：先与用户确定适用函数、精度、耗时和多任务共享策略；比较现有 CMSIS-DSP 三角函数与定点输入转换的结果、范围和性能，明确忙、超时及失败处理。通过本机回归及对应裸板测量后再决定是否在控制中启用；关联 MC02-0086、MC02-0099。
+- [ ] **MC02-0125** [enhancement] [needs-triage] 评估并接入 H723 FMAC 滤波加速。验收：先与用户确定适用滤波器、精度、耗时和多任务共享策略；对照现有浮点滤波验证定点系数量化、溢出、输出误差和稳定性。通过本机回归及对应裸板测量后再决定是否在控制中启用；关联 MC02-0086、MC02-0077。
 
 ## 2026-10-04：TB47S／6S 裸板供电安全审查
 
