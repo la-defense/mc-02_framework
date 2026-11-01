@@ -3,7 +3,7 @@
  */
 #include "vehicle_selection.h"
 #include "build_selection.h"
-#include "main.h"
+#include "platform_irq.h"
 const RobotBuildIdentity_t robot_build_identity = {
     .layout = 0x56434631u, .version = MC02_VEHICLE_CONFIG_VERSION,
     .vehicle = MC02_VEHICLE_NAME, .platform = MC02_PLATFORM_NAME,
@@ -27,10 +27,9 @@ uint8_t RobotBuildMarkFailure(RobotModule_t module)
 {
     if ((unsigned)module >= ROBOT_MODULE_COUNT ||
         (selected_plan.enabled & ROBOT_MODULE_BIT(module)) == 0u) return 0u;
-    const uint32_t saved = __get_PRIMASK();
-    __disable_irq();
+    const PlatformIrqState_t saved = PlatformIrqSaveAndDisable(); // 保留进入前的中断状态。
     const RobotModuleStatus_t result = RobotModuleStartupMarkFailure(
         &selected_plan, &robot_module_startup, module);
-    __set_PRIMASK(saved);
+    PlatformIrqRestore(saved); // 保持调用前已屏蔽中断的情况。
     return (uint8_t)(result == ROBOT_MODULE_CORE_FAILURE);
 }

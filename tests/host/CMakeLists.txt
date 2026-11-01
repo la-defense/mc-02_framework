@@ -60,6 +60,15 @@ endif()
 
 
 if(UNIX AND NOT APPLE)
+  # 生产车型选择和中断后端共用可控 PRIMASK，覆盖嵌套与核心／辅助故障。
+  add_executable(platform_irq_test platform_irq_test.c ../../bsp/os/platform_irq_stm32.c
+    ../../application/config/vehicle_selection.c ../../application/config/module_plan.c)
+  target_include_directories(platform_irq_test BEFORE PRIVATE platform_irq_fakes)
+  target_include_directories(platform_irq_test PRIVATE ../../bsp/os ../../application/config .)
+  target_compile_definitions(platform_irq_test PRIVATE MC02_CONFIG_GENERATED=1) # 使用测试生成的车型选择。
+  target_compile_options(platform_irq_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME production_platform_irq_restore_and_vehicle_failure COMMAND platform_irq_test)
+  set_tests_properties(production_platform_irq_restore_and_vehicle_failure PROPERTIES TIMEOUT 10)
   # 使用生产同步后端和可嵌套主机锁，验证任务临界区配对及毫秒回绕。
   add_executable(platform_sync_test platform_sync_test.c ../../bsp/os/platform_sync_freertos.c
     host_critical_model.c)
