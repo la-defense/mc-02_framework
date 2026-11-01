@@ -710,6 +710,7 @@ foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
   string(TOLOWER ${role} role_name)
   set(robot_can_bridge_test_sources robot_can_bridge_test.c
     ../../application/topics/robot_can_bridge.c ../../application/topics/robot_topics.c
+    ../../bsp/board/board_can_stm32.c # 用生产板级绑定验证逻辑总线到测试句柄。
     ../../application/topics/chassis_topic_codec.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
     ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_topic_bridge.c
     ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c
@@ -722,7 +723,7 @@ foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
     can_bridge_fakes can_comm_fakes init_resource_fakes chassis_fakes)
   target_include_directories(robot_can_bridge_${role_name}_test PRIVATE
     ../../application ../../application/topics ../../modules/can_comm ../../modules/message_center
-    ../../modules/time_sync ../../modules/imu ../../modules/master_machine ../../modules/safety)
+    ../../modules/time_sync ../../modules/imu ../../modules/master_machine ../../modules/safety ../../bsp/board)
   target_compile_definitions(robot_can_bridge_${role_name}_test PRIVATE ${role}=1 MC02_PROFILE_ROBOT=1)
   target_link_libraries(robot_can_bridge_${role_name}_test PRIVATE mc02_software_crc)
   target_compile_options(robot_can_bridge_${role_name}_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)

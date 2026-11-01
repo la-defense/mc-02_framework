@@ -6,6 +6,7 @@
 #include "can_time_sync.h"
 #include "can_topic_wire.h"
 #include "chassis_topic_codec.h"
+#include "board_can_stm32.h"
 #include "fdcan.h"
 #include "test_check.h"
 #if defined(CHASSIS_BOARD)
@@ -16,6 +17,7 @@
 
 FDCAN_HandleTypeDef hcan1;
 FDCAN_HandleTypeDef hcan2;
+FDCAN_HandleTypeDef hcan3;
 static uint32_t now_ms;
 static CANInstance registered_can;
 static void (*receive_callback)(CANInstance *);
@@ -106,10 +108,18 @@ int main(void)
     TEST_CHECK(!RobotCanBridgeGetTimeSyncState(&state, &updated_ms));
     TEST_CHECK(state.accepted_samples == 123u && updated_ms == 456u);
     RobotCanBridgeConfig_t config = {
-        .can_handle=&hcan2, .tx_id=0x421u, .rx_id=0x422u,
+        .can_bus=PLATFORM_CAN_BUS_2, .tx_id=0x421u, .rx_id=0x422u,
         .command_topic=ROBOT_TOPIC_CHASSIS_COMMAND, .feedback_topic=ROBOT_TOPIC_CHASSIS_FEEDBACK};
-    expected_handle=config.can_handle; expected_tx=config.tx_id; expected_rx=config.rx_id;
+    expected_handle=&hcan2; expected_tx=config.tx_id; expected_rx=config.rx_id;
     TEST_CHECK(!RobotCanBridgeInit(NULL));
+    TEST_CHECK(BoardCanResolve(PLATFORM_CAN_BUS_1) == &hcan1); // 第一条逻辑总线绑定本板 CAN1。
+    TEST_CHECK(BoardCanResolve(PLATFORM_CAN_BUS_2) == &hcan2); // 第二条逻辑总线绑定本板 CAN2。
+    TEST_CHECK(BoardCanResolve(PLATFORM_CAN_BUS_3) == &hcan3); // 第三条逻辑总线绑定本板 CAN3。
+    RobotCanBridgeConfig_t missing = config; // 保留其余合法配置，只改变资源编号。
+    missing.can_bus = PLATFORM_CAN_INVALID; // 未配置总线不能启动桥接。
+    TEST_CHECK(!RobotCanBridgeInit(&missing) && receive_callback==NULL); // 失败前不注册设备。
+    missing.can_bus = (PlatformCanBus_t)99; // 未声明的编号也不能落到默认总线。
+    TEST_CHECK(!RobotCanBridgeInit(&missing) && receive_callback==NULL); // 无隐式回退。
     RobotCanBridgeConfig_t invalid=config;
     invalid.command_topic=0u;
     TEST_CHECK(!RobotCanBridgeInit(&invalid) && receive_callback==NULL);
@@ -121,7 +131,7 @@ int main(void)
     TEST_CHECK(!RobotCanBridgeInit(&invalid) && receive_callback==NULL);
     TEST_CHECK(RobotCanBridgeInit(&config));
     RobotCanBridgeServiceTx();
-    TEST_CHECK(serviced_handle==config.can_handle);
+    TEST_CHECK(serviced_handle==expected_handle);
     TEST_CHECK(!RobotCanBridgeGetTimeSyncState(&state, &updated_ms));
 
     CANInstance peer_can = {.can_handle = &hcan1, .tx_id = 0x311u};

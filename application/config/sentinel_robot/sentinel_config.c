@@ -132,9 +132,21 @@ const Robot_Config_s *SentinelConfigInit(void)
         .alarm_config = &sentinel_alarm_config,
         .referee_ui_config = &sentinel_referee_ui_config,
 #if defined(CHASSIS_BOARD)
-        .can_bridge = {&hcan2, 0x311u, 0x312u, ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_CHASSIS_FEEDBACK},
+        .can_bridge = {
+            .can_bus = PLATFORM_CAN_BUS_2, // 底盘板使用板级声明的第二条 CAN 总线。
+            .tx_id = 0x311u, // 底盘板发送反馈时使用的标准 ID。
+            .rx_id = 0x312u, // 底盘板接收云台侧消息使用的标准 ID。
+            .command_topic = ROBOT_TOPIC_CHASSIS_COMMAND, // 从对端接收的底盘命令话题。
+            .feedback_topic = ROBOT_TOPIC_CHASSIS_FEEDBACK, // 发往对端的底盘反馈话题。
+        },
 #elif defined(GIMBAL_BOARD)
-        .can_bridge = {&hcan1, 0x312u, 0x311u, ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_CHASSIS_FEEDBACK},
+        .can_bridge = {
+            .can_bus = PLATFORM_CAN_BUS_1, // 云台板使用板级声明的第一条 CAN 总线。
+            .tx_id = 0x312u, // 云台板发送命令时使用的标准 ID。
+            .rx_id = 0x311u, // 云台板接收底盘侧消息使用的标准 ID。
+            .command_topic = ROBOT_TOPIC_CHASSIS_COMMAND, // 发往对端的底盘命令话题。
+            .feedback_topic = ROBOT_TOPIC_CHASSIS_FEEDBACK, // 从对端接收的底盘反馈话题。
+        },
 #endif
         .chassis_param = {
             .chassis_motor_id[MOTOR_LF] = 3,

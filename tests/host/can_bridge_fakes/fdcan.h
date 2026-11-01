@@ -6,4 +6,5 @@
 #include "bsp_can.h"
 extern FDCAN_HandleTypeDef hcan1;
 extern FDCAN_HandleTypeDef hcan2;
+extern FDCAN_HandleTypeDef hcan3;
 #endif

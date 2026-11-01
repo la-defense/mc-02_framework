@@ -5,6 +5,7 @@
 #include "robot_topics.h"
 #include "chassis_topic_codec.h"
 #include "can_topic_link.h"
+#include "board_can_stm32.h"
 #include "main.h"
 #include "fdcan.h"
 #include "FreeRTOS.h"
@@ -49,10 +50,12 @@ static void RobotCanBridgeBeforeCommandPublish(void *context, const void *payloa
 uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
 {
     // 当前编解码只认识底盘命令和反馈；不支持的车型话题必须明确拒绝。
-    if (config==NULL || config->can_handle==NULL || config->tx_id>0x7ffu ||
+    if (config==NULL || config->tx_id>0x7ffu ||
         config->rx_id>0x7ffu || config->tx_id==config->rx_id ||
         config->command_topic!=ROBOT_TOPIC_CHASSIS_COMMAND ||
         config->feedback_topic!=ROBOT_TOPIC_CHASSIS_FEEDBACK) return 0u;
+    FDCAN_HandleTypeDef *can_handle = BoardCanResolve(config->can_bus); // 在板级绑定中查找实际控制器。
+    if (can_handle == NULL) return 0u; // 未声明总线时不能注册话题或通信。
     if (!RobotTopicsInit()) return 0u;
 #if defined(CHASSIS_BOARD)
     MessageSubscriber_t *outgoing=MessageSubscriberRegister(config->feedback_topic,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
@@ -68,7 +71,7 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
 #error "robot_can_bridge requires a dual-board role"
 #endif
     if (outgoing==NULL || incoming==NULL) return 0u;
-    const CAN_Init_Config_s can_config={.can_handle=config->can_handle,.tx_id=config->tx_id,.rx_id=config->rx_id};
+    const CAN_Init_Config_s can_config={.can_handle=can_handle,.tx_id=config->tx_id,.rx_id=config->rx_id};
     if (!CanTopicLinkInit(&robot_link,&can_config,outgoing,incoming,&encode,&decode,NULL,NULL,50u))
         return 0u;
 #if defined(CHASSIS_BOARD)
