@@ -4,9 +4,7 @@
  */
 #include "daemon.h"
 
-#include "FreeRTOS.h"
-#include "task.h"
-#include "main.h"
+#include "platform_sync.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -171,18 +169,18 @@ DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config)
     instance->event_policy = (uint8_t)config->event_policy;
     instance->event_handler = config->event_handler;
     instance->owner_id = config->owner_id;
-    instance->registered_ms = HAL_GetTick();
+    instance->registered_ms = PlatformTimeNowMs();
     instance->published_state = DAEMON_SOURCE_WAITING_FIRST_FRAME;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (daemon_count >= DAEMON_MX_CNT || daemon_task_ran != 0u || event_task_started != 0u)
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         free(instance);
         return NULL;
     }
     daemon_instances[daemon_count++] = instance;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return instance;
 }
 
@@ -192,7 +190,7 @@ uint8_t DaemonUnregister(DaemonInstance *instance)
         return 0u;
 
     uint8_t removed = 0u;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (daemon_task_ran == 0u && daemon_event_consumer_ran == 0u && event_task_started == 0u)
     {
         for (uint8_t i = 0u; i < daemon_count; ++i)
@@ -206,7 +204,7 @@ uint8_t DaemonUnregister(DaemonInstance *instance)
             break;
         }
     }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 
     if (removed != 0u)
         free(instance);
@@ -219,28 +217,28 @@ DaemonStatus_t DaemonReportAt(DaemonInstance *instance, uint32_t received_ms, ui
         DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID)) != 0u ||
         ((flags & DAEMON_REPORT_DATA_VALID) != 0u && (flags & DAEMON_REPORT_DATA_PRESENT) == 0u))
         return DAEMON_ERR_ARGUMENT;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (!instance_registered_locked(instance))
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return DAEMON_ERR_NOT_REGISTERED;
     }
     if ((flags & DAEMON_REPORT_TRANSPORT_VALID) == 0u)
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return DAEMON_OK;
     }
-    const uint32_t now_ms = HAL_GetTick();
+    const uint32_t now_ms = PlatformTimeNowMs();
     const uint32_t receive_age_ms = elapsed_ms(now_ms, received_ms);
     if (receive_age_ms > INT32_MAX || receive_age_ms > instance->transport_timeout_ms)
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return DAEMON_ERR_EXPIRED;
     }
     if (instance->has_transport_frame != 0u &&
         elapsed_ms(received_ms, instance->last_transport_rx_ms) > INT32_MAX)
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return DAEMON_ERR_ARGUMENT;
     }
 
@@ -255,7 +253,7 @@ DaemonStatus_t DaemonReportAt(DaemonInstance *instance, uint32_t received_ms, ui
         instance->data_valid = (uint8_t)((flags & DAEMON_REPORT_DATA_VALID) != 0u);
     }
     update_state_locked(instance, now_ms);
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return DAEMON_OK;
 }
 
@@ -265,10 +263,10 @@ DaemonStatus_t DaemonGetSourceStatus(const DaemonInstance *instance, uint32_t no
     if (instance == NULL || output == NULL)
         return DAEMON_ERR_ARGUMENT;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (!instance_registered_locked(instance))
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return DAEMON_ERR_NOT_REGISTERED;
     }
     DaemonSourceStatus_t candidate = {0};
@@ -289,7 +287,7 @@ DaemonStatus_t DaemonGetSourceStatus(const DaemonInstance *instance, uint32_t no
     candidate.transport_online = (uint8_t)(candidate.state == DAEMON_SOURCE_ONLINE_DATA_VALID ||
                                             candidate.state == DAEMON_SOURCE_ONLINE_DATA_INVALID);
     candidate.data_valid = (uint8_t)(candidate.state == DAEMON_SOURCE_ONLINE_DATA_VALID);
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     *output = candidate;
     return DAEMON_OK;
 }
@@ -335,16 +333,16 @@ static DaemonStatus_t process_source_events(DaemonInstance *instance, uint8_t ma
         DaemonEvent_t event;
         void (*handler)(const DaemonEvent_t *, void *) = NULL;
         void *owner = NULL;
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         if (!instance_registered_locked(instance))
         {
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return DAEMON_ERR_NOT_REGISTERED;
         }
         expired |= remove_expired_events_locked(instance, now_ms);
         if (instance->event_count == 0u)
         {
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             break;
         }
         event = instance->events[instance->event_head];
@@ -353,7 +351,7 @@ static DaemonStatus_t process_source_events(DaemonInstance *instance, uint8_t ma
         instance->dispatched = saturating_increment(instance->dispatched);
         handler = instance->event_handler;
         owner = instance->owner_id;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
 
         if (handler != NULL)
             handler(&event, owner);
@@ -389,11 +387,11 @@ DaemonStatus_t DaemonProcessTaskEvents(uint8_t consumer_id, uint8_t max_events,
 
     DaemonInstance *snapshot[DAEMON_MX_CNT];
     uint8_t count;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     daemon_event_consumer_ran = 1u;
     count = daemon_count;
     memcpy(snapshot, daemon_instances, (size_t)count * sizeof(snapshot[0]));
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 
     uint8_t total = 0u;
     uint8_t saw_expired = 0u;
@@ -405,7 +403,7 @@ DaemonStatus_t DaemonProcessTaskEvents(uint8_t consumer_id, uint8_t max_events,
             continue;
         uint8_t handled = 0u;
         const DaemonStatus_t result = process_source_events(instance,
-            (uint8_t)(max_events - total), HAL_GetTick(), &handled);
+            (uint8_t)(max_events - total), PlatformTimeNowMs(), &handled);
         if (result == DAEMON_ERR_NOT_REGISTERED)
             continue;
         if (result == DAEMON_ERR_EXPIRED)
@@ -425,11 +423,11 @@ static DaemonStatus_t process_independent_events(uint8_t max_events, uint8_t *pr
         *processed = 0u;
     DaemonInstance *snapshot[DAEMON_MX_CNT];
     uint8_t count;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     daemon_event_consumer_ran = 1u;
     count = daemon_count;
     memcpy(snapshot, daemon_instances, (size_t)count * sizeof(snapshot[0]));
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 
     uint8_t total = 0u;
     uint8_t saw_expired = 0u;
@@ -440,7 +438,7 @@ static DaemonStatus_t process_independent_events(uint8_t max_events, uint8_t *pr
             continue;
         uint8_t handled = 0u;
         const DaemonStatus_t result = process_source_events(instance,
-            (uint8_t)(max_events - total), HAL_GetTick(), &handled);
+            (uint8_t)(max_events - total), PlatformTimeNowMs(), &handled);
         if (result == DAEMON_ERR_EXPIRED)
             saw_expired = 1u;
         total = (uint8_t)(total + handled);
@@ -453,20 +451,20 @@ static DaemonStatus_t process_independent_events(uint8_t max_events, uint8_t *pr
 uint8_t DaemonHasIndependentSources(void)
 {
     uint8_t found = 0u;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     for (uint8_t i = 0u; i < daemon_count; ++i)
         if (daemon_instances[i]->consumer_mode == DAEMON_CONSUMER_INDEPENDENT_TASK)
             found = 1u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return found;
 }
 
 void DaemonSetEventTaskResult(uint8_t started, uint8_t failed)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     event_task_started = (uint8_t)(started != 0u);
     event_task_failed = (uint8_t)(failed != 0u);
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 DaemonStatus_t DaemonGetStats(const DaemonInstance *instance, DaemonStats_t *output)
@@ -474,12 +472,12 @@ DaemonStatus_t DaemonGetStats(const DaemonInstance *instance, DaemonStats_t *out
     if (output == NULL)
         return DAEMON_ERR_ARGUMENT;
     DaemonStats_t candidate = {0};
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (instance != NULL)
     {
         if (!instance_registered_locked(instance))
         {
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return DAEMON_ERR_NOT_REGISTERED;
         }
         candidate.enqueued = instance->enqueued;
@@ -492,7 +490,7 @@ DaemonStatus_t DaemonGetStats(const DaemonInstance *instance, DaemonStats_t *out
     candidate.task_failed = event_task_failed;
     candidate.global_overflowed = global_event_overflow;
     candidate.global_expired = global_event_expired;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     *output = candidate;
     return DAEMON_OK;
 }
@@ -501,34 +499,34 @@ void DaemonTask(void)
 {
     DaemonInstance *snapshot[DAEMON_MX_CNT];
     uint8_t count;
-    const uint32_t now_ms = HAL_GetTick();
-    taskENTER_CRITICAL();
+    const uint32_t now_ms = PlatformTimeNowMs();
+    PlatformTaskCriticalEnter();
     daemon_task_ran = 1u;
     count = daemon_count;
     memcpy(snapshot, daemon_instances, (size_t)count * sizeof(snapshot[0]));
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 
     for (uint8_t i = 0u; i < count; ++i)
     {
         DaemonInstance *instance = snapshot[i];
         if (instance == NULL)
             continue;
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         update_state_locked(instance, now_ms);
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
     }
 }
 
 void DaemonReload(DaemonInstance *instance)
 {
     if (instance != NULL)
-        (void)DaemonReportAt(instance, HAL_GetTick(),
+        (void)DaemonReportAt(instance, PlatformTimeNowMs(),
             DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
 }
 
 uint8_t DaemonIsOnline(DaemonInstance *instance)
 {
     DaemonSourceStatus_t status;
-    return (uint8_t)(DaemonGetSourceStatus(instance, HAL_GetTick(), &status) == DAEMON_OK &&
+    return (uint8_t)(DaemonGetSourceStatus(instance, PlatformTimeNowMs(), &status) == DAEMON_OK &&
         status.transport_online != 0u);
 }

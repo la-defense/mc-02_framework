@@ -209,7 +209,7 @@ void DaemonSetEventTaskResult(uint8_t started, uint8_t failed);
  */
 DaemonStatus_t DaemonGetStats(const DaemonInstance *instance, DaemonStats_t *output);
 
-/** @brief 兼容旧调用：按HAL当前时刻报告一份合法通信和有效数据。
+/** @brief 兼容旧调用：按平台当前毫秒时刻报告一份合法通信和有效数据。
  * @param[in] instance 来源实例。
  * @note 新接收路径应使用DaemonReportAt并传入原接收时间和校验结果。
  */

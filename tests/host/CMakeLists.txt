@@ -19,9 +19,19 @@ mc02_add_dsp(mc02_dsp_host TRUE)
 set(MC02_HOST_MESSAGE_CENTER_SOURCES
   ../../modules/message_center/message_center.c # 实际话题实现。
   ../../bsp/os/platform_sync_freertos.c) # 该目标所选的任务临界区和计时替身。
+# Daemon 同样使用当前目标选择的同步后端；与消息中心同时使用时 CMake 共用同一源码。
+set(MC02_HOST_DAEMON_SOURCES
+  ../../modules/daemon/daemon.c # 来源状态与期限计算。
+  ../../bsp/os/platform_sync_freertos.c) # 各测试选择自己的锁与时钟替身。
 # 消息中心单独取得平台公共头，其他主机测试不继承额外路径。
 set_property(SOURCE ../../modules/message_center/message_center.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+# Daemon 只需框架同步头，不依赖厂商或 RTOS 的头路径。
+set_property(SOURCE ../../modules/daemon/daemon.c APPEND PROPERTY
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+add_library(mc02_daemon_portable OBJECT ../../modules/daemon/daemon.c)
+target_include_directories(mc02_daemon_portable PRIVATE ../../modules/daemon ../../bsp/os)
+target_compile_options(mc02_daemon_portable PRIVATE -Wall -Wextra -Werror)
 # 仅提供框架头，验证消息中心本身不依赖 HAL／FreeRTOS 头路径。
 add_library(mc02_message_center_portable OBJECT ../../modules/message_center/message_center.c)
 target_include_directories(mc02_message_center_portable PRIVATE ../../modules/message_center ../../bsp/os)
@@ -60,7 +70,7 @@ if(UNIX AND NOT APPLE)
   add_test(NAME production_platform_sync_nesting_and_wrap COMMAND platform_sync_test)
   set_tests_properties(production_platform_sync_nesting_and_wrap PROPERTIES TIMEOUT 10)
   add_executable(daemon_source_monitor_test daemon_source_monitor_test.c
-    ../../modules/daemon/daemon.c ../../modules/daemon/daemon_event_task.c
+    ${MC02_HOST_DAEMON_SOURCES} ../../modules/daemon/daemon_event_task.c
     ../../bsp/os/platform_os_freertos.c # 用生产适配器调用测试中的 CMSIS 替身。
     host_critical_model.c)
   target_include_directories(daemon_source_monitor_test BEFORE PRIVATE daemon_source_fakes)
@@ -345,7 +355,7 @@ endforeach()
 add_executable(lk_motor_registration_test lk_motor_registration_test.c
   ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_feedback.c
   ../../modules/motor/motor_pid.c
-  ../../modules/algorithm/controller.c ../../modules/daemon/daemon.c)
+  ../../modules/algorithm/controller.c ${MC02_HOST_DAEMON_SOURCES})
 target_include_directories(lk_motor_registration_test BEFORE PRIVATE lk_motor_fakes)
 target_include_directories(lk_motor_registration_test PRIVATE ../../modules/motor/LKmotor
   ../../modules/motor ../../modules ../../modules/algorithm ../../modules/daemon)
@@ -369,7 +379,7 @@ add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_feedback.c
   ../../modules/motor/motor_pid.c
   ../../modules/motor/DJImotor/dji_motor.c
-  ../../modules/algorithm/controller.c ../../modules/daemon/daemon.c ../../bsp/can/bsp_can.c
+  ../../modules/algorithm/controller.c ${MC02_HOST_DAEMON_SOURCES} ../../bsp/can/bsp_can.c
   ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_topic_transport.c
   ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_topic_bridge.c
   ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c
@@ -415,7 +425,7 @@ endforeach()
 
 # DM 测试链接生产电机、FDCAN 注册和 Daemon；测试仅替换 HAL、RTOS、时间与日志。
 add_executable(dm_motor_test dm_motor_test.c ../../modules/motor/DMmotor/dmmotor.c
-  ../../bsp/can/bsp_can.c ../../modules/daemon/daemon.c)
+  ../../bsp/can/bsp_can.c ${MC02_HOST_DAEMON_SOURCES})
 target_include_directories(dm_motor_test BEFORE PRIVATE dm_motor_fakes lk_motor_can_fakes .)
 target_include_directories(dm_motor_test PRIVATE ../../modules/motor/DMmotor ../../modules/motor
   ../../modules/algorithm ../../modules/daemon ../../modules/alarm ../../bsp/can
@@ -709,7 +719,7 @@ target_compile_options(chassis_topic_codec_test PRIVATE -Wall -Wextra -Werror -f
 add_test(NAME production_chassis_topic_codec COMMAND chassis_topic_codec_test)
 set_tests_properties(production_chassis_topic_codec PROPERTIES TIMEOUT 10)
 add_executable(init_resource_test init_resource_test.c
-  ../../modules/daemon/daemon.c ${MC02_HOST_MESSAGE_CENTER_SOURCES})
+  ${MC02_HOST_DAEMON_SOURCES} ${MC02_HOST_MESSAGE_CENTER_SOURCES})
 target_include_directories(init_resource_test BEFORE PRIVATE init_resource_fakes)
 target_include_directories(init_resource_test PRIVATE ../../bsp/dwt ../../modules/daemon
   ../../modules/message_center ../../modules/alarm)
@@ -841,7 +851,7 @@ if(UNIX AND NOT APPLE)
 endif()
 add_executable(remote_control_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ../../modules/remote/remote_safety.c
-  ../../modules/remote/remote_control.c ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c)
+  ../../modules/remote/remote_control.c ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c)
 target_include_directories(remote_control_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
 target_include_directories(remote_control_test PRIVATE ../../bsp/usart ../../modules/remote
   ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../modules/message_center ../../application)
@@ -862,7 +872,7 @@ add_test(NAME production_pc_sequence_and_invalid_frames COMMAND remote_control_t
 if(UNIX AND NOT APPLE)
   add_executable(remote_control_thread_test remote_control_test.c ../../bsp/usart/bsp_usart.c
     ../../modules/remote/remote_safety.c ../../modules/remote/remote_control.c
-    ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c host_critical_model.c)
+    ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c host_critical_model.c)
   target_include_directories(remote_control_thread_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
   target_include_directories(remote_control_thread_test PRIVATE ../../bsp/usart ../../modules/remote
     ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine
@@ -883,7 +893,7 @@ add_test(NAME production_uart_immutable_dispatch COMMAND usart_snapshot_test)
 set_tests_properties(production_uart_immutable_dispatch PROPERTIES TIMEOUT 10)
 add_executable(remote_bench_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
-  ../../modules/remote/remote_bench.c ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c)
+  ../../modules/remote/remote_bench.c ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c)
 target_include_directories(remote_bench_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
 target_include_directories(remote_bench_test PRIVATE ../../bsp/usart ../../modules/remote
   ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../modules/message_center ../../application)
@@ -891,7 +901,7 @@ target_compile_definitions(remote_bench_test PRIVATE MC02_PROFILE_BENCH_SAFE=1 M
 add_test(NAME production_remote_bench_never_ready COMMAND remote_bench_test)
 add_executable(remote_command_integration_test remote_command_integration_test.c
   ../../bsp/usart/bsp_usart.c ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
-  ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
+  ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
   ../../application/topics/robot_topics.c
   ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/master_machine/vision_control.c)
 target_include_directories(remote_command_integration_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
@@ -906,7 +916,7 @@ add_test(NAME production_remote_to_command_safety COMMAND remote_command_integra
 add_test(NAME production_pc_command_expiry_and_remote_handoff COMMAND remote_command_integration_test pc-command)
 add_executable(pc_vision_integration_test remote_command_integration_test.c
   ../../bsp/usart/bsp_usart.c ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
-  ../../modules/daemon/daemon.c ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
+  ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
   ../../application/topics/robot_topics.c
   ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/master_machine/vision_control.c)
 target_include_directories(pc_vision_integration_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
@@ -1075,7 +1085,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(ROBOT_CMD_PERF_SOURCES robot_cmd_perf_test.c ../../application/cmd/robot_cmd.c
     ../../modules/remote/remote_safety.c ../../application/topics/robot_topics.c
     ../../modules/safety/robot_safety.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
-    ../../modules/master_machine/vision_control.c ../../modules/daemon/daemon.c)
+    ../../modules/master_machine/vision_control.c ${MC02_HOST_DAEMON_SOURCES})
   function(add_robot_cmd_perf_target target)
     add_executable(${target} ${ROBOT_CMD_PERF_SOURCES})
     target_include_directories(${target} BEFORE PRIVATE robot_cmd_fakes)
@@ -1111,7 +1121,7 @@ if(UNIX)
 endif()
 add_test(NAME production_dual_board_command_skips_unused_feedback_read COMMAND robot_cmd_dual_test dual-board)
 foreach(target IN ITEMS robot_cmd_task_test robot_cmd_vision_test robot_cmd_v2_test robot_cmd_dual_test)
-  target_sources(${target} PRIVATE ../../modules/daemon/daemon.c)
+  target_sources(${target} PRIVATE ${MC02_HOST_DAEMON_SOURCES})
   target_include_directories(${target} PRIVATE ../../modules/daemon)
 endforeach()
 add_executable(shoot_freshness_test shoot_freshness_test.c
