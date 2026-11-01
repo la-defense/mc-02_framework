@@ -50,3 +50,8 @@ Shoot_Config_s *ShootConfigFeed(void)
 {
     return &robot_instance->shoot_param;
 }
+
+const RefereeUIConfig_t *RefereeUIConfigFeed(void)
+{
+    return robot_instance == NULL ? NULL : robot_instance->referee_ui_config;
+}

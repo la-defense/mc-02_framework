@@ -12,6 +12,15 @@
 #include <pthread.h>
 #include <string.h>
 static DaemonInstance daemon_instance;
+static const RefereeUIFieldConfig_t ui_fields[] = {
+    {{'h', 'p', '0'}, "HP:", 120u, 195u, 20u, 2u, UI_Color_Green,
+     REFEREE_UI_SOURCE_ROBOT_HP},
+};
+static const RefereeUIConfig_t ui_config = {
+    .fields = ui_fields,
+    .field_count = (uint8_t)(sizeof(ui_fields) / sizeof(ui_fields[0])),
+    .frame_interval_ms = 115u,
+};
 
 DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config)
 {
@@ -271,11 +280,10 @@ int main(int argc, char **argv)
     }
     if (strcmp(argv[1], "ui-expire") == 0)
     {
-        static Referee_Interactive_info_t data;
         submit(4u, 112u, 100u);
         USARTProcessTx();
         complete();
-        TEST_CHECK(UITaskInit(&data) == UI_OK && MyUIInit() == UI_SUBMITTED && UIRefresh() == UI_SUBMITTED);
+        TEST_CHECK(UITaskInit(&ui_config) == UI_OK && MyUIInit() == UI_SUBMITTED && UIRefresh() == UI_SUBMITTED);
         USARTProcessTx();
         TEST_CHECK(uart_model_calls == 1u && tx_state().wait_reason == REFEREE_TX_WAIT_RATE);
         advance(100u);

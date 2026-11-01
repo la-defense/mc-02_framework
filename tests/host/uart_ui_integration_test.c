@@ -15,7 +15,16 @@ static uint8_t sequence(void)
     return RefereeGetTxState(&value) == USART_SEND_ACCEPTED ? value.next_sequence : 0u;
 }
 static DaemonInstance daemon_instance;
-static Referee_Interactive_info_t data;
+static uint16_t test_hp = 50u;
+static const RefereeUIFieldConfig_t test_ui_fields[] = {
+    {{'h', 'p', '0'}, "HP:", 120u, 195u, 20u, 2u, UI_Color_Green,
+     REFEREE_UI_SOURCE_ROBOT_HP},
+};
+static const RefereeUIConfig_t test_ui_config = {
+    .fields = test_ui_fields,
+    .field_count = (uint8_t)(sizeof(test_ui_fields) / sizeof(test_ui_fields[0])),
+    .frame_interval_ms = 115u,
+};
 static unsigned delays;
 DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config)
 {
@@ -53,6 +62,9 @@ static void identity(uint8_t robot)
 {
     uint8_t frame[26] = {0xa5u, 17u, 0u, 0u, 0u, 1u, 2u};
     frame[7] = robot;
+    frame[9] = (uint8_t)test_hp;
+    frame[10] = (uint8_t)(test_hp >> 8u);
+    frame[11] = 100u;
     uint32_t crc;
     TEST_CHECK(CRCCompute(CRC8_REFEREE, frame, 4u, &crc) == CRC_OK);
     frame[4] = (uint8_t)crc;
@@ -88,7 +100,8 @@ static void advance(void)
 static void init_ui(void)
 {
     TEST_CHECK(MyUIInit() == UI_SUBMITTED);
-    for (unsigned i = 0u; i < 15u; ++i)
+    unsigned total = (unsigned)test_ui_config.field_count + 1u;
+    for (unsigned i = 0u; i < total; ++i)
     {
         advance();
         TEST_CHECK(UIRefresh() == UI_SUBMITTED);
@@ -106,7 +119,7 @@ int main(int argc, char **argv)
     TEST_CHECK(argc == 2);
     UARTModelInit();
     USARTTxSetServiceReady(1u);
-    TEST_CHECK(RefereeInit(&uart_handles[0], NULL) == REFEREE_OK && UITaskInit(&data) == UI_OK);
+    TEST_CHECK(RefereeInit(&uart_handles[0], NULL) == REFEREE_OK && UITaskInit(&test_ui_config) == UI_OK);
     identity(1u);
     UARTModelCheckRuntimeAllocation();
     if (strcmp(argv[1], "identity-before-start") == 0)
@@ -115,11 +128,8 @@ int main(int argc, char **argv)
         identity(2u);
         USARTProcessTx();
         USARTProcessTx();
-        TEST_CHECK(uart_model_calls == 0u && UIRefresh() == UI_NOT_INITIALIZED &&
-                   state().phase == UI_PHASE_NEED_INIT);
-        identity(1u);
-        TEST_CHECK(UIRefresh() == UI_NOT_INITIALIZED && uart_model_calls == 0u);
-        TEST_CHECK(MyUIInit() == UI_SUBMITTED && UIRefresh() == UI_SUBMITTED);
+        TEST_CHECK(uart_model_calls == 0u && UIRefresh() == UI_SUBMITTED &&
+                   state().phase == UI_PHASE_INITIALIZING && state().init_step == 0u);
         USARTProcessTx();
         TEST_CHECK(uart_model_calls == 1u);
         return 0;
@@ -192,26 +202,42 @@ int main(int argc, char **argv)
         return 0;
     }
     init_ui();
-    if (strcmp(argv[1], "demo") == 0)
+    if (strcmp(argv[1], "readonly") == 0)
     {
-        TEST_CHECK(UITask() == UI_OK);
-        for (unsigned i = 0u; i < 114u; ++i)
+        unsigned previous = uart_model_calls;
+        for (unsigned i = 0u; i < 100u; ++i)
         {
             ++uart_model_ms;
-            (void)UITask();
+            identity(1u);
+            TEST_CHECK(UITask() == UI_OK);
+            USARTProcessTx();
         }
-        TEST_CHECK(data.Chassis_Power_Data.chassis_power_mx == 0.0f);
-        ++uart_model_ms;
-        (void)UITask();
-        TEST_CHECK(data.Chassis_Power_Data.chassis_power_mx == 3.5f);
-        for (unsigned i = 0u; i < 100u; ++i)
-            (void)UITask();
-        TEST_CHECK(data.Chassis_Power_Data.chassis_power_mx == 3.5f);
+        TEST_CHECK(uart_model_calls == previous);
+        test_hp = 60u;
+        advance();
+        TEST_CHECK(UIRefresh() == UI_SUBMITTED);
+        USARTProcessTx();
+        TEST_CHECK(memcmp(uart_model_tx[0] + 28u, "HP:60/100", 9u) == 0);
+        complete();
+        TEST_CHECK(UIRefresh() == UI_OK && uart_model_calls == previous + 1u);
+        return 0;
+    }
+    if (strcmp(argv[1], "link-recovery") == 0)
+    {
+        uart_model_ms += 301u;
+        TEST_CHECK(UIRefresh() == UI_NOT_INITIALIZED && state().phase == UI_PHASE_NEED_INIT);
+        identity(1u);
+        TEST_CHECK(UIRefresh() == UI_SUBMITTED && state().phase == UI_PHASE_INITIALIZING &&
+                   state().init_step == 0u);
+        USARTProcessTx();
+        complete();
+        TEST_CHECK(UIRefresh() == UI_OK && state().init_step == 1u);
         return 0;
     }
     if (strcmp(argv[1], "cadence") == 0)
     {
         unsigned previous = uart_model_calls;
+        test_hp = 60u;
         for (unsigned i = 0u; i < 100u; ++i)
         {
             ++uart_model_ms;
@@ -226,15 +252,7 @@ int main(int argc, char **argv)
         TEST_CHECK(uart_model_calls == previous + 1u);
         return 0;
     }
-    for (unsigned i = 0u; i < 6u; ++i)
-    {
-        advance();
-        TEST_CHECK(UIRefresh() == UI_SUBMITTED);
-        USARTProcessTx();
-        complete();
-        TEST_CHECK(UIRefresh() == UI_OK);
-    }
-    data.chassis_mode = CHASSIS_ROTATE;
+    test_hp = 60u;
     advance();
     TEST_CHECK(UIRefresh() == UI_SUBMITTED);
     USARTProcessTx();
@@ -243,22 +261,25 @@ int main(int argc, char **argv)
         uart_model_ms += 100u;
         USARTProcessTx();
         TEST_CHECK(UIRefresh() == UI_NOT_INITIALIZED);
-        TEST_CHECK(state().phase == UI_PHASE_ERROR && data.Referee_Interactive_Flag.chassis_flag);
+        TEST_CHECK(state().phase == UI_PHASE_ERROR);
         TEST_CHECK(uart_model_aborts == 1u && uart_model_leases == 0u);
         RefereeTxState_t tx;
         TEST_CHECK(RefereeGetTxState(&tx) == USART_SEND_ACCEPTED);
         TEST_CHECK(tx.uart.failed == 1u && tx.uart.last_event.result == USART_TX_EXPIRED);
         return 0;
     }
-    data.chassis_mode = CHASSIS_NO_FOLLOW;
+    TEST_CHECK(strcmp(argv[1], "latest") == 0);
+    test_hp = 61u;
+    identity(1u);
     TEST_CHECK(UIRefresh() == UI_OK);
     complete();
-    TEST_CHECK(UIRefresh() == UI_OK && data.Referee_Interactive_Flag.chassis_flag);
+    TEST_CHECK(UIRefresh() == UI_OK);
     advance();
     TEST_CHECK(UIRefresh() == UI_SUBMITTED);
     USARTProcessTx();
+    TEST_CHECK(memcmp(uart_model_tx[0] + 28u, "HP:61/100", 9u) == 0);
     complete();
-    TEST_CHECK(UIRefresh() == UI_OK && !data.Referee_Interactive_Flag.chassis_flag && delays == 0u);
+    TEST_CHECK(UIRefresh() == UI_OK && delays == 0u);
     TEST_CHECK(uart_model_leases == 0u);
     return 0;
 }

@@ -5,6 +5,27 @@
 #include "general_def.h"
 #include "robot_safety.h"
 #include "topics/robot_topics.h"
+#include "referee_protocol.h"
+
+static const RefereeUIFieldConfig_t sentinel_referee_ui_fields[] = {
+    {{'u', '0', '0'}, "stage:", 80u, 150u, 20u, 2u, UI_Color_Cyan,
+     REFEREE_UI_SOURCE_GAME_STAGE_REMAIN},
+    {{'u', '0', '1'}, "HP:", 80u, 195u, 20u, 2u, UI_Color_Green,
+     REFEREE_UI_SOURCE_ROBOT_HP},
+    {{'u', '0', '2'}, "limit:", 80u, 240u, 20u, 2u, UI_Color_Yellow,
+     REFEREE_UI_SOURCE_CHASSIS_POWER_LIMIT},
+    {{'u', '0', '3'}, "buffer:", 80u, 285u, 20u, 2u, UI_Color_Cyan,
+     REFEREE_UI_SOURCE_BUFFER_ENERGY},
+    {{'u', '0', '4'}, "heat:", 80u, 330u, 20u, 2u, UI_Color_Orange,
+     REFEREE_UI_SOURCE_HEAT_17MM},
+};
+
+static const RefereeUIConfig_t sentinel_referee_ui_config = {
+    .fields = sentinel_referee_ui_fields,
+    .field_count = (uint8_t)(sizeof(sentinel_referee_ui_fields) /
+                             sizeof(sentinel_referee_ui_fields[0])),
+    .frame_interval_ms = 115u,
+};
 
 /* 这些是哨兵软件默认提示色和节奏，不代表灯珠实测亮度、蜂鸣器声压或故障安全等级标定。 */
 static const RobotAlarmSoundSegment_t sentinel_beep_short[] = {
@@ -109,6 +130,7 @@ Robot_Config_s *SentinelConfigInit(void)
 {
     static Robot_Config_s sentinel_config = {
         .alarm_config = &sentinel_alarm_config,
+        .referee_ui_config = &sentinel_referee_ui_config,
 #if defined(CHASSIS_BOARD)
         .can_bridge = {&hcan2, 0x311u, 0x312u, ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_CHASSIS_FEEDBACK},
 #elif defined(GIMBAL_BOARD)

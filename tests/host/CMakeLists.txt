@@ -1752,7 +1752,7 @@ target_include_directories(uart_ui_integration_test PRIVATE . ../../modules/refe
   ../../modules/master_machine ../../Core/Inc)
 target_link_libraries(uart_ui_integration_test PRIVATE mc02_software_crc Threads::Threads m)
 target_compile_options(uart_ui_integration_test PRIVATE -Wall -Wextra -Werror)
-foreach(scenario identity-before-start old-generation cadence failure latest queue-full partial-init reinit-inflight demo)
+foreach(scenario identity-before-start old-generation cadence failure latest queue-full partial-init reinit-inflight readonly link-recovery)
   add_test(NAME production_uart_ui_${scenario} COMMAND uart_ui_integration_test ${scenario})
   set_tests_properties(production_uart_ui_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()

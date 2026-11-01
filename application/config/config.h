@@ -9,6 +9,7 @@
 #include "motor_def.h"
 #include "robot_alarm.h"
 #include "topics/robot_can_bridge_config.h"
+#include "referee_ui_config.h"
 
 /*
  * 机器人配置框架. VISION_USE_VCP / VISION_USE_UART / ONE_BOARD 等板级宏
@@ -123,6 +124,7 @@ typedef struct
     Gimbal_Config_s gimbal_param;
     Shoot_Config_s shoot_param;
     const RobotAlarmConfig_t *alarm_config; // 长期只读的状态与故障提示表。
+    const RefereeUIConfig_t *referee_ui_config; // 可选的只读裁判界面布局；不影响裁判接收和控制许可。
 #if defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD)
     RobotCanBridgeConfig_t can_bridge; // 本板的板间总线、ID和底盘话题。
 #endif
@@ -161,3 +163,7 @@ Gimbal_Config_s *GimbalConfigFeed(void);
 * @return 内部字段地址，长期有效；必须先成功调用 RobotConfigInit()，此处不检查是否已初始化。
  */
 Shoot_Config_s *ShootConfigFeed(void);
+/** @brief 取得已选配置中的裁判 UI 布局。
+* @return 长期只读布局；未完成 RobotConfigInit() 或车型未配置时返回NULL。
+*/
+const RefereeUIConfig_t *RefereeUIConfigFeed(void);

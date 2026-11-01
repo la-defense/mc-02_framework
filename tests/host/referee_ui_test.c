@@ -32,6 +32,19 @@ static usart_module_callback receive_callback;
 static void *receive_context;
 static uint32_t now_ms;
 static uint32_t rx_sequence;
+static uint16_t test_hp = 100u, test_max_hp = 200u, test_power_limit = 80u;
+
+static const RefereeUIFieldConfig_t test_ui_fields[] = {
+    {{'t', '0', '0'}, "stage:", 120u, 150u, 20u, 2u, UI_Color_Cyan,
+     REFEREE_UI_SOURCE_GAME_STAGE_REMAIN},
+    {{'h', 'p', '0'}, "HP:", 120u, 195u, 20u, 2u, UI_Color_Green,
+     REFEREE_UI_SOURCE_ROBOT_HP},
+};
+static const RefereeUIConfig_t test_ui_config = {
+    .fields = test_ui_fields,
+    .field_count = (uint8_t)(sizeof(test_ui_fields) / sizeof(test_ui_fields[0])),
+    .frame_interval_ms = 115u,
+};
 
 uint32_t HAL_GetTick(void) { return now_ms; }
 DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *c) { (void)c; return &daemon_instance; }
@@ -129,8 +142,26 @@ static void feed_referee(uint16_t command,const uint8_t *payload,size_t length)
 }
 static void publish_robot_state(uint8_t robot_id)
 {
-    uint8_t payload[17]={0};payload[0]=robot_id;
+    uint8_t payload[17]={0};
+    payload[0]=robot_id;
+    payload[2]=(uint8_t)test_hp;payload[3]=(uint8_t)(test_hp>>8u);
+    payload[4]=(uint8_t)test_max_hp;payload[5]=(uint8_t)(test_max_hp>>8u);
+    payload[10]=(uint8_t)test_power_limit;payload[11]=(uint8_t)(test_power_limit>>8u);
     feed_referee(ID_game_robot_state,payload,sizeof(payload));
+}
+static void publish_game_state(uint8_t progress,uint16_t remain_s)
+{
+    uint8_t payload[11]={0};
+    payload[0]=(uint8_t)(1u|((progress&0x0fu)<<4u));
+    payload[1]=(uint8_t)remain_s;payload[2]=(uint8_t)(remain_s>>8u);
+    feed_referee(ID_game_state,payload,sizeof(payload));
+}
+static void publish_power_heat(uint16_t buffer_j,uint16_t heat_17mm)
+{
+    uint8_t payload[14]={0};
+    payload[8]=(uint8_t)buffer_j;payload[9]=(uint8_t)(buffer_j>>8u);
+    payload[10]=(uint8_t)heat_17mm;payload[11]=(uint8_t)(heat_17mm>>8u);
+    feed_referee(ID_power_heat_data,payload,sizeof(payload));
 }
 static void check_frame(uint16_t content,size_t length,uint8_t sequence)
 {
@@ -326,60 +357,86 @@ static void transport(void)
     notify_result(USART_TX_COMPLETE);
 }
 static void advance_ui(void)
-{ now_ms+=115u;publish_robot_state(1u); }
+{
+    now_ms+=test_ui_config.frame_interval_ms;
+    publish_robot_state(1u);
+    publish_game_state(3u,120u);
+    publish_power_heat(40u,17u);
+}
 static UIState_t ui_state(void)
 { UIState_t result;TEST_CHECK(UIGetState(&result)==UI_OK);return result; }
 static void initialize_ui(void)
 {
     TEST_CHECK(MyUIInit()==UI_SUBMITTED);
-    for(unsigned i=0u;i<15u;++i) {
+    unsigned total=(unsigned)test_ui_config.field_count+1u;
+    for(unsigned i=0u;i<total;++i) {
         advance_ui();unsigned previous=sends;
         TEST_CHECK(UIRefresh()==UI_SUBMITTED && sends==previous+1u);
-        TEST_CHECK(ui_state().phase==UI_PHASE_INITIALIZING);
+        TEST_CHECK(ui_state().phase==UI_PHASE_INITIALIZING && ui_state().init_step==i);
         TEST_CHECK(UIRefresh()==UI_OK);
     }
-    TEST_CHECK(ui_state().phase==UI_PHASE_RUNNING && ui_state().init_step==15u);
+    TEST_CHECK(ui_state().phase==UI_PHASE_RUNNING && ui_state().init_step==total);
 }
 static void task_tests(void)
 {
-    Referee_Interactive_info_t data={0};UART_HandleTypeDef h={0};
+    UART_HandleTypeDef h={0};
     TEST_CHECK(UITask()==UI_NOT_INITIALIZED && MyUIInit()==UI_NOT_INITIALIZED);
     TEST_CHECK(UITaskInit(NULL)==UI_ERROR_ARGUMENT);
-    TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_OK && UITaskInit(&data)==UI_OK);
+    RefereeUIFieldConfig_t invalid_fields[2]={test_ui_fields[0],test_ui_fields[1]};
+    RefereeUIConfig_t invalid_config=test_ui_config;
+    invalid_config.fields=invalid_fields;
+    memcpy(invalid_fields[1].graphic_name, invalid_fields[0].graphic_name,
+           sizeof(invalid_fields[1].graphic_name));
+    TEST_CHECK(!RefereeUIConfigIsValid(&invalid_config) && UITaskInit(&invalid_config)==UI_ERROR_RANGE);
+    invalid_config=test_ui_config;invalid_config.frame_interval_ms=114u;
+    TEST_CHECK(!RefereeUIConfigIsValid(&invalid_config));
+    invalid_config=test_ui_config;invalid_fields[0]=test_ui_fields[0];invalid_fields[0].x=1921u;
+    invalid_config.fields=invalid_fields;TEST_CHECK(!RefereeUIConfigIsValid(&invalid_config));
+    TEST_CHECK(RefereeUIConfigIsValid(&test_ui_config));
+    TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_OK && UITaskInit(&test_ui_config)==UI_OK);
     TEST_CHECK(MyUIInit()==UI_SUBMITTED && UIRefresh()==UI_OK && sends==0u);
     TEST_CHECK(ui_state().phase==UI_PHASE_WAIT_ID);
-    now_ms=10u;publish_robot_state(1u);start_status=USART_SEND_ERROR;
+    now_ms=10u;publish_robot_state(1u);publish_game_state(3u,120u);start_status=USART_SEND_ERROR;
     TEST_CHECK(UIRefresh()==UI_SEND_ERROR && ui_state().phase==UI_PHASE_ERROR && sends==0u);
     // UI失败不撤销接收，仍可发布独立的比赛结果。
     uint8_t result=2u;feed_referee(ID_game_result,&result,1u);
     RefereeSnapshot_t snapshot;TEST_CHECK(RefereeGetSnapshot(&snapshot)==REFEREE_OK &&
         snapshot.command[REF_CMD_GAME_RESULT].data.game_result.winner==2u);
     start_status=USART_SEND_ACCEPTED;initialize_ui();
-    for(unsigned i=0u;i<6u;++i) { advance_ui();TEST_CHECK(UIRefresh()==UI_SUBMITTED);TEST_CHECK(UIRefresh()==UI_OK); }
-    data.chassis_mode=CHASSIS_ROTATE;advance_ui();start_status=USART_SEND_BUSY;
+    test_hp=150u;advance_ui();start_status=USART_SEND_BUSY;
     unsigned previous=sends;uint8_t seq=current_sequence();
-    TEST_CHECK(UIRefresh()==UI_SEND_BUSY && sends==previous && current_sequence()==seq && data.Referee_Interactive_Flag.chassis_flag);
+    TEST_CHECK(UIRefresh()==UI_SEND_BUSY && sends==previous && current_sequence()==seq);
     start_status=USART_SEND_ACCEPTED;complete_on_delay=0;
-    TEST_CHECK(UIRefresh()==UI_SUBMITTED);TEST_CHECK(data.Referee_Interactive_Flag.chassis_flag);
-    data.chassis_mode=CHASSIS_NO_FOLLOW;TEST_CHECK(UIRefresh()==UI_OK);
-    notify_result(USART_TX_COMPLETE);TEST_CHECK(UIRefresh()==UI_OK && data.Referee_Interactive_Flag.chassis_flag);
-    complete_on_delay=1;advance_ui();TEST_CHECK(UIRefresh()==UI_SUBMITTED);TEST_CHECK(UIRefresh()==UI_OK);
-    TEST_CHECK(!data.Referee_Interactive_Flag.chassis_flag);
-    data.Chassis_Power_Data.chassis_power_mx=NAN;advance_ui();previous=sends;
-    TEST_CHECK(UIRefresh()==UI_ERROR_RANGE && sends==previous && data.Referee_Interactive_Flag.Power_flag);
-    data.Chassis_Power_Data.chassis_power_mx=3.5f;initialize_ui();
+    TEST_CHECK(UIRefresh()==UI_SUBMITTED && memcmp(sent+28,"HP:150/200",10u)==0);
+    test_hp=151u;publish_robot_state(1u);TEST_CHECK(UIRefresh()==UI_OK);
+    notify_result(USART_TX_COMPLETE);TEST_CHECK(UIRefresh()==UI_OK);
+    complete_on_delay=1;advance_ui();TEST_CHECK(UIRefresh()==UI_SUBMITTED);
+    TEST_CHECK(memcmp(sent+28,"HP:151/200",10u)==0);TEST_CHECK(UIRefresh()==UI_OK);
+
+    // 比赛阶段过期时显示占位；收到新帧后再显示新的裁判值。
+    now_ms+=3001u;publish_robot_state(1u);previous=sends;
+    TEST_CHECK(UIRefresh()==UI_SUBMITTED && sends==previous+1u);
+    TEST_CHECK(memcmp(sent+28,"stage:--",8u)==0);TEST_CHECK(UIRefresh()==UI_OK);
+    publish_game_state(4u,99u);now_ms+=115u;publish_robot_state(1u);publish_power_heat(40u,17u);
+    previous=sends;TEST_CHECK(UIRefresh()==UI_SUBMITTED && sends==previous+1u);
+    TEST_CHECK(memcmp(sent+28,"stage:4/99s",11u)==0);TEST_CHECK(UIRefresh()==UI_OK);
+
+    // 身份过期后停止；身份恢复时自动启动有限分批重绘。
     now_ms+=301u;TEST_CHECK(UIRefresh()==UI_NOT_INITIALIZED && ui_state().phase==UI_PHASE_NEED_INIT);
-    publish_robot_state(2u);previous=sends;TEST_CHECK(UIRefresh()==UI_NOT_INITIALIZED && sends==previous);
-    TEST_CHECK(MyUIInit()==UI_SUBMITTED);now_ms+=115u;publish_robot_state(2u);
-    TEST_CHECK(UIRefresh()==UI_SUBMITTED && sent[9]==2u && sent[10]==0u);
+    publish_robot_state(1u);publish_game_state(4u,99u);now_ms+=1u;previous=sends;
+    TEST_CHECK(UIRefresh()==UI_SUBMITTED && sends==previous+1u);
+    TEST_CHECK((uint16_t)(sent[7]|((uint16_t)sent[8]<<8u))==UI_Data_ID_Del);
+    TEST_CHECK(ui_state().phase==UI_PHASE_INITIALIZING && ui_state().init_step==0u);
+    TEST_CHECK(MyUIInit()==UI_SUBMITTED && ui_state().phase==UI_PHASE_WAIT_ID);
+    TEST_CHECK(UIRefresh()==UI_OK && ui_state().phase==UI_PHASE_INITIALIZING);
     TEST_CHECK(delays==0u);
 }
 static void initialization_failure(void)
 {
-    Referee_Interactive_info_t data={0};UART_HandleTypeDef h={0};registration_fail=1;
+    UART_HandleTypeDef h={0};registration_fail=1;
     TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_ERROR_RESOURCE && unregisters==1u);
-    TEST_CHECK(UITaskInit(&data)==UI_OK && MyUIInit()==UI_SUBMITTED);
-    TEST_CHECK(UIRefresh()==UI_OK && ui_state().phase==UI_PHASE_WAIT_ID && sends==0u);
+    TEST_CHECK(UITaskInit(&test_ui_config)==UI_OK && MyUIInit()==UI_SUBMITTED);
+    TEST_CHECK(UIRefresh()==UI_NOT_INITIALIZED && ui_state().phase==UI_PHASE_WAIT_ID && sends==0u);
     registration_fail=0;TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_OK);
     initialize_ui();TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_ERROR_ALREADY_INITIALIZED);
 }
