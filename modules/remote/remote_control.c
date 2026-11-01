@@ -1,4 +1,4 @@
-﻿/** @file remote_control.c
+/** @file remote_control.c
 * @brief 检查 18 字节 DBUS 帧，分别维护摇杆在线、键鼠更新及按下次数。
 * UART 派发调用接收函数，Daemon 处理离线；命令任务周期读取当前输入和可用标记。
 */
@@ -8,6 +8,8 @@
 #include "daemon.h"
 #include "bsp_log.h"
 #include "robot_safety.h"
+#include "platform_irq.h"
+#include "platform_sync.h"
 
 #define REMOTE_CONTROL_FRAME_SIZE 18u
 static RC_ctrl_t rc_ctrl[2];
@@ -140,26 +142,23 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
     if (controls == NULL || block == NULL) return;
     const uint8_t *frame = block->data;
     if (block->length != REMOTE_CONTROL_FRAME_SIZE || frame == NULL ||
-        (uint32_t)(HAL_GetTick() - block->received_ms) > 50u)
+        (uint32_t)(PlatformTimeNowMs() - block->received_ms) > 50u)
     {
-        const uint32_t primask = __get_PRIMASK();
-        __disable_irq();
+        const uint32_t primask = PlatformIrqSaveAndDisable();
         remote_control_diag.rejected_length++;
-        __set_PRIMASK(primask);
+        PlatformIrqRestore(primask);
         return;
     }
     RC_ctrl_t candidate;
     if (!DecodeCandidate(frame, &candidate))
     {
-        const uint32_t primask = __get_PRIMASK();
-        __disable_irq();
+        const uint32_t primask = PlatformIrqSaveAndDisable();
         remote_control_diag.rejected_fields++;
-        __set_PRIMASK(primask);
+        PlatformIrqRestore(primask);
         return;
     }
-    const uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    const uint32_t now = HAL_GetTick();
+    const uint32_t primask = PlatformIrqSaveAndDisable();
+    const uint32_t now = PlatformTimeNowMs();
     const uint16_t heartbeat = (uint16_t)(frame[10] | ((uint16_t)frame[11] << 8));
     remote_control_diag.raw_mouse_z = heartbeat;
     remote_control_diag.raw_key_bitmap = candidate.key[0].keys;
@@ -184,7 +183,7 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
         DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
     remote_control_diag.online = 1u;
     RobotSafetySetRcOnline(1u);
-    __set_PRIMASK(primask);
+    PlatformIrqRestore(primask);
 }
 
 // 离线时撤销键鼠并清空摇杆，记录断开时间、请求急停，再重新准备 UART 接收。
@@ -193,19 +192,18 @@ static void RCLostCallback(const DaemonEvent_t *event, void *id)
     (void)id;
     if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
         return;
-    const uint32_t now = HAL_GetTick();
-    const uint32_t primask = __get_PRIMASK();
-    __disable_irq();
+    const uint32_t now = PlatformTimeNowMs();
+    const uint32_t primask = PlatformIrqSaveAndDisable();
     if (remote_control_diag.has_valid_frame != 0u &&
         (uint32_t)(now - remote_control_diag.last_valid_tick) <= 100u)
     {
         // 新帧可能在超时检查后到达；过期回调不能撤销这份新输入。
-        __set_PRIMASK(primask);
+        PlatformIrqRestore(primask);
         return;
     }
     if (remote_control_diag.has_valid_frame == 0u && remote_control_diag.online == 0u)
     {
-        __set_PRIMASK(primask);
+        PlatformIrqRestore(primask);
         return;
     }
     RevokePC(now, REMOTE_PC_REVOKE_RADIO_LOST);
@@ -215,7 +213,7 @@ static void RCLostCallback(const DaemonEvent_t *event, void *id)
     remote_control_diag.has_valid_frame = remote_control_diag.online = 0u;
     memset(rc_ctrl, 0, sizeof(rc_ctrl));
     RobotSafetySetRcOnline(0u);
-    __set_PRIMASK(primask);
+    PlatformIrqRestore(primask);
     EstopRequest(ESTOP_REASON_RC_OFFLINE);
     USARTServiceInit(rc_usart_instance);
     BSP_LOG_EVENT_0(EV_MODULES_REMOTE_REMOTE_CONTROL_C_01);
@@ -234,7 +232,7 @@ const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
     memset(rc_ctrl, 0, sizeof(rc_ctrl));
     memset((void *)&remote_control_diag, 0, sizeof(remote_control_diag));
     pc_authorized = 0u;
-    RevokePC(HAL_GetTick(), REMOTE_PC_REVOKE_NONE);
+    RevokePC(PlatformTimeNowMs(), REMOTE_PC_REVOKE_NONE);
     Daemon_Init_Config_s daemon_conf = {
         .transport_timeout_ms = 100u,
         .data_timeout_ms = 100u,
@@ -266,15 +264,14 @@ const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
 
 uint8_t RemoteControlIsOnline(void)
 {
-    const uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    const uint32_t check_time = HAL_GetTick();
+    const uint32_t primask = PlatformIrqSaveAndDisable();
+    const uint32_t check_time = PlatformTimeNowMs();
     const uint8_t online = (uint8_t)(rc_init_flag != 0u &&
         remote_control_diag.has_valid_frame != 0u &&
         (uint32_t)(check_time - remote_control_diag.last_valid_tick) <= 100u &&
         DaemonIsOnline(rc_daemon_instance));
     remote_control_diag.online = online;
-    __set_PRIMASK(primask);
+    PlatformIrqRestore(primask);
     return online;
 }
 
@@ -282,9 +279,8 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
 {
     if (snapshot == NULL) return;
     (void)RemoteControlIsOnline();
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    const uint32_t now = HAL_GetTick();
+    uint32_t primask = PlatformIrqSaveAndDisable();
+    const uint32_t now = PlatformTimeNowMs();
     const uint8_t online = (uint8_t)(rc_init_flag != 0u &&
         remote_control_diag.has_valid_frame != 0u &&
         (uint32_t)(now - remote_control_diag.last_valid_tick) <= 100u &&
@@ -295,7 +291,7 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
         remote_control_diag.has_valid_frame != 0u && rc_init_flag != 0u);
     snapshot->input = rc_ctrl[TEMP];
     snapshot->pc_valid = (uint8_t)(snapshot->remote_online && pc_authorized);
-    __set_PRIMASK(primask);
+    PlatformIrqRestore(primask);
 }
 
 uint8_t RemoteControlGetDiagnostics(RemoteControlDiagnostics_s *output)
@@ -304,10 +300,9 @@ uint8_t RemoteControlGetDiagnostics(RemoteControlDiagnostics_s *output)
         return 0u;
 
     RemoteControlDiagnostics_s candidate;
-    const uint32_t primask = __get_PRIMASK();
-    __disable_irq();
+    const uint32_t primask = PlatformIrqSaveAndDisable();
     candidate = remote_control_diag;
-    __set_PRIMASK(primask);
+    PlatformIrqRestore(primask);
     *output = candidate;
     return 1u;
 }

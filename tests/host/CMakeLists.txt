@@ -23,11 +23,19 @@ set(MC02_HOST_MESSAGE_CENTER_SOURCES
 set(MC02_HOST_DAEMON_SOURCES
   ../../modules/daemon/daemon.c # 来源状态与期限计算。
   ../../bsp/os/platform_sync_freertos.c) # 各测试选择自己的锁与时钟替身。
+# 遥控输入测试编译生产适配器，仍由目标原有替身控制屏蔽状态和时钟。
+set(MC02_HOST_REMOTE_SOURCES
+  ../../modules/remote/remote_control.c # 遥控输入及租约处理。
+  ../../bsp/os/platform_irq_stm32.c # 保存并恢复测试目标的中断状态。
+  ../../bsp/os/platform_sync_freertos.c) # 使用测试目标的时钟与任务锁。
 # 消息中心单独取得平台公共头，其他主机测试不继承额外路径。
 set_property(SOURCE ../../modules/message_center/message_center.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
 # Daemon 只需框架同步头，不依赖厂商或 RTOS 的头路径。
 set_property(SOURCE ../../modules/daemon/daemon.c APPEND PROPERTY
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+# 遥控源码通过框架头访问时间和中断屏蔽；其硬件串口依赖仍单独处理。
+set_property(SOURCE ../../modules/remote/remote_control.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
 add_library(mc02_daemon_portable OBJECT ../../modules/daemon/daemon.c)
 target_include_directories(mc02_daemon_portable PRIVATE ../../modules/daemon ../../bsp/os)
@@ -860,7 +868,7 @@ if(UNIX AND NOT APPLE)
 endif()
 add_executable(remote_control_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ../../modules/remote/remote_safety.c
-  ../../modules/remote/remote_control.c ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c)
+  ${MC02_HOST_REMOTE_SOURCES} ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c)
 target_include_directories(remote_control_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
 target_include_directories(remote_control_test PRIVATE ../../bsp/usart ../../modules/remote
   ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../modules/message_center ../../application)
@@ -880,7 +888,7 @@ set_tests_properties(production_pc_lease_age_zero production_pc_lease_age_tick_w
 add_test(NAME production_pc_sequence_and_invalid_frames COMMAND remote_control_test pc-boundaries)
 if(UNIX AND NOT APPLE)
   add_executable(remote_control_thread_test remote_control_test.c ../../bsp/usart/bsp_usart.c
-    ../../modules/remote/remote_safety.c ../../modules/remote/remote_control.c
+    ../../modules/remote/remote_safety.c ${MC02_HOST_REMOTE_SOURCES}
     ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c host_critical_model.c)
   target_include_directories(remote_control_thread_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
   target_include_directories(remote_control_thread_test PRIVATE ../../bsp/usart ../../modules/remote
@@ -901,7 +909,7 @@ endif()
 add_test(NAME production_uart_immutable_dispatch COMMAND usart_snapshot_test)
 set_tests_properties(production_uart_immutable_dispatch PROPERTIES TIMEOUT 10)
 add_executable(remote_bench_test remote_control_test.c ../../bsp/usart/bsp_usart.c
-  ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
+  ${MC02_HOST_REMOTE_SOURCES} ../../modules/remote/remote_safety.c
   ../../modules/remote/remote_bench.c ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c)
 target_include_directories(remote_bench_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
 target_include_directories(remote_bench_test PRIVATE ../../bsp/usart ../../modules/remote
@@ -909,7 +917,7 @@ target_include_directories(remote_bench_test PRIVATE ../../bsp/usart ../../modul
 target_compile_definitions(remote_bench_test PRIVATE MC02_PROFILE_BENCH_SAFE=1 MC02_BENCH_RC_DIAGNOSTICS=1)
 add_test(NAME production_remote_bench_never_ready COMMAND remote_bench_test)
 add_executable(remote_command_integration_test remote_command_integration_test.c
-  ../../bsp/usart/bsp_usart.c ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
+  ../../bsp/usart/bsp_usart.c ${MC02_HOST_REMOTE_SOURCES} ../../modules/remote/remote_safety.c
   ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
   ../../application/topics/robot_topics.c
   ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/master_machine/vision_control.c)
@@ -924,7 +932,7 @@ endif()
 add_test(NAME production_remote_to_command_safety COMMAND remote_command_integration_test)
 add_test(NAME production_pc_command_expiry_and_remote_handoff COMMAND remote_command_integration_test pc-command)
 add_executable(pc_vision_integration_test remote_command_integration_test.c
-  ../../bsp/usart/bsp_usart.c ../../modules/remote/remote_control.c ../../modules/remote/remote_safety.c
+  ../../bsp/usart/bsp_usart.c ${MC02_HOST_REMOTE_SOURCES} ../../modules/remote/remote_safety.c
   ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c
   ../../application/topics/robot_topics.c
   ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/master_machine/vision_control.c)
