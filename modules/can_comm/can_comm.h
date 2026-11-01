@@ -1,7 +1,8 @@
 /**
  * @file can_comm.h
  * @author Neo neozng1@hnu.edu.cn
- * @brief  用于多机CAN通信的收发模块
+ * @brief  历史固定长度 CAN 收发格式；当前固件不编译此模块。
+ * @note 无来源时间、消息序号和分片编号，不能用于新版双板控制或判断重放。
  * @version 0.1
  * @date 2022-11-27
  *

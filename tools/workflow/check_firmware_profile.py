@@ -25,6 +25,8 @@ ROLE_FORBIDDEN = {
 }
 OPTIONAL_SOURCES = {
     "modules/algorithm/RLS.c",
+    # 旧版板间格式没有来源时间和序号，只保留源码供历史查阅。
+    "modules/can_comm/can_comm.c",
     "modules/bluetooth/HC05.c", "modules/ist8310/ist8310.c", "modules/oled/oled.c",
     "modules/standard_cmd/std_cmd.c", "modules/unicomm/unicomm.c",
     "modules/TFminiPlus/tfminiplus.c", "modules/motor/DMmotor/dmmotor.c",

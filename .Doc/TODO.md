@@ -318,7 +318,7 @@ Unicom
 
 #### can_comm
 
-- [ ] **MC02-0014** [bug] [ready-for-agent] 处理 CANComm 未更新与跨板新鲜度。验收：完整合法消息才更新相应话题，坏帧／丢片／重复／过期不续期，重组／转发不延长源期限；失效撤销依赖命令，恢复用新有效输入及当前许可。关联0092／0093，保留 R25-11 已完成记录。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
+- [ ] **MC02-0014** [bug] [ready-for-agent] 处理 CANComm 未更新与跨板新鲜度。验收：完整合法消息才更新相应话题，坏帧／丢片／重复／过期不续期，重组／转发不延长源期限；失效撤销依赖命令，恢复用新有效输入及当前许可。关联0092／0093，保留 R25-11 已完成记录。 详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。新版桥接、对时和底盘目标过期／恢复已有主机联测；旧格式不参与固件构建。底盘板独立功能许可仍需与 MC02-0056 衔接，未完成整体验收，见[实施计划](../docs/workflow/tickets/MC02-0014.md)。
 
 #### controller
 

@@ -555,6 +555,23 @@ static void *ReadViewRecords(void *argument)
 
 static uint8_t CheckViewConcurrency(TopicCase_t *topic)
 {
+    // 上一个场景留下任意样本；先发布与编号一致的数据，再启动并发读写。
+    uint8_t initial_data[MESSAGE_CENTER_MAX_PAYLOAD_BYTES];
+    const uint32_t initial_generation = topic->view_topic.next_generation + 1u;
+    if (!FillSample(initial_data, topic->view_topic.payload_size, initial_generation) ||
+        !PointerTopicPublish(&topic->view_topic, initial_data, test_tick_ms, test_tick_ms,
+                             test_tick_ms,
+                             (MessageClockDomain_t)topic->view_topic.descriptor.source_clock))
+        return 0u;
+    // 并发读者可能先运行；启动前已有的数据也必须与其编号一致。
+    PointerView_t initial = {0};
+    if (!PointerViewAcquire(&topic->view_topic, 0u, test_tick_ms, &initial))
+        return 0u;
+    const uint8_t initial_matches = SampleMatches(initial.data, topic->view_topic.payload_size,
+                                                   initial.generation);
+    const uint8_t initial_released = PointerViewRelease(&topic->view_topic, &initial);
+    if (!initial_matches || !initial_released)
+        return 0u;
     ViewConcurrency_t test = {
         .topic = &topic->view_topic,
         .first_sequence = topic->view_topic.next_generation + 1u,

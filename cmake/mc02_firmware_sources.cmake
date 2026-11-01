@@ -112,7 +112,6 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/algorithm/sample_filter.c
     modules/algorithm/vector3.c
     modules/BMI088/bmi088.c
-    modules/can_comm/can_comm.c
     modules/daemon/daemon.c
     modules/daemon/daemon_event_task.c
     modules/imu/BMI088Middleware.c

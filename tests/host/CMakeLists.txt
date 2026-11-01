@@ -901,6 +901,26 @@ target_compile_definitions(chassis_dual_topic_test PRIVATE CHASSIS_BOARD=1 CHASS
 target_link_libraries(chassis_dual_topic_test PRIVATE m)
 add_test(NAME production_chassis_dual_topic_invalidation COMMAND chassis_dual_topic_test)
 set_tests_properties(production_chassis_dual_topic_invalidation PROPERTIES TIMEOUT 10)
+add_executable(chassis_bridge_integration_test chassis_task_test.c
+  ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
+  ../../application/topics/robot_topics.c ../../application/topics/chassis_topic_codec.c
+  ../../modules/message_center/message_center.c ../../modules/can_comm/can_topic_link.c
+  ../../modules/can_comm/can_topic_bridge.c ../../modules/can_comm/can_topic_transport.c
+  ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_time_sync.c
+  ../../modules/time_sync/time_mapping.c)
+target_include_directories(chassis_bridge_integration_test BEFORE PRIVATE chassis_fakes can_comm_fakes)
+target_include_directories(chassis_bridge_integration_test PRIVATE ../../application ../../application/chassis
+  ../../application/topics ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine
+  ../../modules/can_comm ../../modules/time_sync)
+target_compile_definitions(chassis_bridge_integration_test PRIVATE CHASSIS_BOARD=1 CHASSIS_BRIDGE_INTEGRATION=1
+  CHASSIS_TASK_EXPECT_CONFIGURED=1 CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=10.0f
+  CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
+target_link_libraries(chassis_bridge_integration_test PRIVATE mc02_software_crc)
+if(UNIX)
+  target_link_libraries(chassis_bridge_integration_test PRIVATE m)
+endif()
+add_test(NAME production_chassis_bridge_expiry_recovery COMMAND chassis_bridge_integration_test)
+set_tests_properties(production_chassis_bridge_expiry_recovery PROPERTIES TIMEOUT 10)
 foreach(scenario cap-failure motor-failure)
   add_test(NAME production_chassis_init_${scenario} COMMAND chassis_task_configured_test ${scenario})
   set_tests_properties(production_chassis_init_${scenario} PROPERTIES TIMEOUT 10)
