@@ -3,16 +3,18 @@
 */
 #include "bsp_init.h"
 #include "main.h"
+#include "config/build_selection.h"
+#if MC02_FEATURE_VISION
+#include "master_process.h"
+#endif
 #include "robot.h"
 #include "robot_def.h"
 #include "robot_task.h"
-#include "config/build_selection.h"
 #include "robot_safety.h"
 #include "config.h"
 #include "robot_alarm.h"
 #include "task_monitor.h"
 #include "bsp_watchdog.h"
-#include "master_process.h"
 #include "bsp_param.h"
 #include "imu_heater.h"
 #include "init_diagnostic.h"
@@ -34,9 +36,6 @@
 #if MC02_BENCH_RC_DIAGNOSTICS
 #include "remote_bench.h"
 #endif
-#endif
-#if MC02_FEATURE_VISION
-#include "master_process.h"
 #endif
 #if MC02_FEATURE_CHASSIS
 #include "chassis.h"
@@ -311,9 +310,11 @@ uint8_t RobotInit(void)
 #endif
 
 #if defined(MC02_PROFILE_BENCH_SAFE)
+#if MC02_FEATURE_VISION
     InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
     ROBOT_INIT_CHECK(VisionInit(&huart9) != NULL, INIT_STAGE_APPLICATION, INIT_MODULE_VISION,
                      INIT_FAILURE_DEPENDENCY, 0u);
+#endif
 #if MC02_BENCH_REFEREE_DIAGNOSTICS
     ROBOT_INIT_CHECK(RefereeBenchInit(&huart1), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
                      INIT_FAILURE_DEPENDENCY, 0u);
@@ -383,12 +384,14 @@ void RobotTask()
 #if MC02_BENCH_REFEREE_DIAGNOSTICS
     RefereeBenchTask();
 #endif
+#if MC02_FEATURE_VISION
 #if defined(MC02_CONFIG_GENERATED)
     // 依赖计划未接受启动的模块可能尚未初始化，不能仅凭编译开关调用其业务入口。
     if (RobotBuildModuleStarted(ROBOT_MODULE_VISION))
         VisionSend();
 #else
     VisionSend();
+#endif
 #endif
 #else
 #if defined(MC02_CONFIG_GENERATED)

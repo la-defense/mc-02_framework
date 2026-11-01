@@ -123,8 +123,6 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/lcd/lcd_referee_rows.c
     modules/lcd/lcd_task.c
     modules/lcd/lcd_ui.c
-    modules/master_machine/master_process.c
-    modules/master_machine/vision_control.c
     modules/message_center/message_center.c
     modules/motor/DJImotor/dji_motor.c
     modules/motor/HTmotor/HT04.c
@@ -182,12 +180,18 @@ if(MC02_PROFILE STREQUAL "robot")
         application/topics/robot_topics.c
         application/topics/robot_topics_diag.c)
 endif()
-if(MC02_VISION_PROTOCOL STREQUAL "v2")
+set(MC02_NEEDS_TIME_MAPPING FALSE)
+if(MC02_FEATURE_VISION)
+    # 视觉适配与控制仅在车型启用视觉时进入固件。
     list(APPEND MC02_COMMON_MODULE_C_SOURCES
-        modules/master_machine/vision_protocol_v2.c
-        modules/time_sync/time_mapping.c)
-else()
-    list(APPEND MC02_COMMON_MODULE_C_SOURCES modules/master_machine/vision_protocol.c)
+        modules/master_machine/master_process.c
+        modules/master_machine/vision_control.c)
+    if(MC02_VISION_PROTOCOL STREQUAL "v2")
+        list(APPEND MC02_COMMON_MODULE_C_SOURCES modules/master_machine/vision_protocol_v2.c)
+        set(MC02_NEEDS_TIME_MAPPING TRUE)
+    else()
+        list(APPEND MC02_COMMON_MODULE_C_SOURCES modules/master_machine/vision_protocol.c)
+    endif()
 endif()
 
 # 只有双板固件使用板间话题与时间交换；单板不占用这些源码。
@@ -197,8 +201,11 @@ if(MC02_PROFILE STREQUAL "robot" AND NOT MC02_BOARD_ROLE STREQUAL "single")
         modules/can_comm/can_topic_transport.c
         modules/can_comm/can_topic_bridge.c
         modules/can_comm/can_topic_link.c
-        modules/can_comm/can_time_sync.c
-        modules/time_sync/time_mapping.c)
+        modules/can_comm/can_time_sync.c)
+    set(MC02_NEEDS_TIME_MAPPING TRUE)
+endif()
+if(MC02_NEEDS_TIME_MAPPING)
+    list(APPEND MC02_COMMON_MODULE_C_SOURCES modules/time_sync/time_mapping.c)
 endif()
 
 # 未启用模块连同其输出驱动退出源码清单；依赖者使用同一份生成选择。

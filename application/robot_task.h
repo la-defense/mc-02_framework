@@ -22,7 +22,6 @@
 #if MC02_FEATURE_REFEREE || MC02_FEATURE_UI
 #include "referee_task.h"
 #endif
-#include "master_process.h"
 #include "daemon.h"
 #if MC02_SELECTED_DRIVER_HT
 #include "HT04.h"

@@ -1,4 +1,4 @@
-"""核对生产CMake配置入口拒绝非法选择和缺失核心条件。"""
+"""核对车型选择、模块映射和禁用模块的生产源码隔离。"""
 import pathlib
 import re
 import subprocess
@@ -52,6 +52,56 @@ class VehicleSelectionTest(unittest.TestCase):
         self.assertIsNotNone(health_body)
         health_names = re.findall(r"VEHICLE_HEALTH_MODULE_([A-Z_]+)", health_body.group(1))
         self.assertEqual(c_names, health_names)
+
+    def test_disabled_vision_sources_and_ins_calls_are_excluded(self):
+        for protocol in ("sp", "v2"):
+            with self.subTest(protocol=protocol), tempfile.TemporaryDirectory(prefix="mc02-0054-sources-") as directory:
+                temp = pathlib.Path(directory)
+                source_dir = temp / "source"
+                source_dir.mkdir()
+                build_dir = temp / "build"
+                project = f'''cmake_minimum_required(VERSION 3.22)
+project(mc02_role_sources NONE)
+# 让生产源码清单的文件存在检查指向仓库，同时把测试构建留在临时目录。
+set(CMAKE_SOURCE_DIR "{ROOT.as_posix()}")
+set(MC02_PROFILE robot)
+set(MC02_BOARD_ROLE chassis)
+set(MC02_CHASSIS_TYPE omni)
+set(MC02_VISION_PROTOCOL {protocol})
+set(MC02_FEATURE_CHASSIS TRUE)
+set(MC02_FEATURE_VISION FALSE)
+include("{(ROOT / "cmake/mc02_firmware_sources.cmake").as_posix()}")
+file(WRITE "${{CMAKE_BINARY_DIR}}/selected-sources.txt" "${{MC02_SELECTED_SOURCES}}")
+'''
+                (source_dir / "CMakeLists.txt").write_text(project, encoding="utf-8")
+                result = subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+                                        text=True, capture_output=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                sources = (build_dir / "selected-sources.txt").read_text(encoding="utf-8").split(";")
+                self.assertIn("modules/imu/ins_task.c", sources)
+                for vision_source in (
+                    "modules/master_machine/master_process.c",
+                    "modules/master_machine/vision_control.c",
+                    "modules/master_machine/vision_protocol.c",
+                    "modules/master_machine/vision_protocol_v2.c",
+                ):
+                    self.assertNotIn(vision_source, sources)
+
+        ins_source = (ROOT / "modules/imu/ins_task.c").read_text(encoding="utf-8")
+        conditions = []
+        for line in ins_source.splitlines():
+            directive = re.match(r"\s*#\s*(if|ifdef|ifndef|endif)\b(.*)", line)
+            if directive:
+                kind, expression = directive.groups()
+                if kind == "endif":
+                    if conditions:
+                        conditions.pop()
+                else:
+                    conditions.append(expression)
+            stripped = line.lstrip()
+            if (not stripped.startswith(("//", "/*", "*")) and
+                    re.search(r"\bVisionUpdate(?:Tx|IMUSample)\s*\(", line)):
+                self.assertTrue(any("MC02_FEATURE_VISION" in condition for condition in conditions), line)
 
     def test_graph(self):
         prefix = 'set(MC02_DEP_SAFETY "")\nset(MC02_DEP_IMU SAFETY)\n'

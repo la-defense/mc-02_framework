@@ -18,12 +18,15 @@
 #include "tim.h"
 #include "vector3.h"
 #include "general_def.h"
+#include "config/build_selection.h"
+// 不含视觉功能的板卡仍运行姿态任务，但不依赖视觉链路发送模块。
+#if MC02_FEATURE_VISION
 #include "master_process.h"
+#endif
 #include "arm_math.h"
 #include "bmi088.h"
 #include "robot_safety.h"
 #include "imu_heater.h"
-#include "config/build_selection.h"
 #include "task_monitor.h"
 #include <math.h>
 #include <float.h>
@@ -330,7 +333,7 @@ void INS_Task(void)
         for (uint8_t axis = 0u; axis < 3u; ++axis)
             sample_valid = (uint8_t)(sample_valid && isfinite(bmi088_data.acc[axis]));
 
-#if defined(MC02_VISION_PROTOCOL_V2)
+#if defined(MC02_VISION_PROTOCOL_V2) && MC02_FEATURE_VISION
         VisionIMUSample_t vision_imu_sample = {0};
         if (sample_valid != 0u)
         {
@@ -351,9 +354,11 @@ void INS_Task(void)
             imu_sample_valid_diag = 0u;
             bmi088_data.valid = 0u;
             RobotSafetySetImuValid(0u);
+#if MC02_FEATURE_VISION
             VisionUpdateTx(0u, 0.0f, 0.0f, 0.0f, 0.0f,
                            0.0f, 0.0f, 0.0f, 0.0f,
                            VISION_BULLET_SPEED_DEFAULT, 0u);
+#endif
 #if MC02_FEATURE_HEATER
             Robot_Status_e state = RobotSafetyGetState();
             uint8_t force_off = (state == ROBOT_ESTOP || state == ROBOT_FAULT) ? 1u : 0u;
@@ -402,7 +407,9 @@ void INS_Task(void)
             INSInvalidateControlSnapshot();
             imu_sample_valid_diag=0u;
             RobotSafetySetImuValid(0u);
+#if MC02_FEATURE_VISION
             VisionUpdateTx(0u,0,0,0,0,0,0,0,0,VISION_BULLET_SPEED_DEFAULT,0u);
+#endif
 #if MC02_FEATURE_HEATER
             IMUHeaterUpdate(NULL,1u);
 #endif
@@ -444,11 +451,13 @@ void INS_Task(void)
             INSPublishControlSnapshot();
             // 姿态解算完成后填充视觉上行数据(与 sp_vision_25 GimbalToVision 对齐)
             // yaw/pitch 需转弧度, gyro 已是 rad/s; 只有READY状态才向NUC报告自瞄模式
+#if MC02_FEATURE_VISION
             VisionUpdateTx(RobotSafetyIsReady() ? 1 : 0,
                            INS.q[0], INS.q[1], INS.q[2], INS.q[3],
                            INS.Yaw * DEG_2_RAD, INS.Gyro[Z],
                            INS.Pitch * DEG_2_RAD, INS.Gyro[Y],
                            VISION_BULLET_SPEED_DEFAULT, 0);
+#endif
         }
         else
             INSInvalidateControlSnapshot();

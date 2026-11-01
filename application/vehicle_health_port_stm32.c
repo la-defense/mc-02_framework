@@ -19,7 +19,9 @@
 #if MC02_FEATURE_REMOTE
 #include "remote_control.h"
 #endif
+#if MC02_FEATURE_VISION
 #include "master_process.h"
+#endif
 #if MC02_FEATURE_REFEREE
 #include "rm_referee.h"
 #endif
@@ -150,6 +152,7 @@ uint8_t VehicleHealthSourceCapture(VehicleHealthSourceSnapshot_t *output)
     }
 #endif
 
+#if MC02_FEATURE_VISION
     if ((enabled & VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_VISION)) != 0u)
     {
         Vision_Status_t vision = {0};
@@ -163,6 +166,7 @@ uint8_t VehicleHealthSourceCapture(VehicleHealthSourceSnapshot_t *output)
         else
             MarkDegraded(&candidate, VEHICLE_HEALTH_MODULE_VISION);
     }
+#endif
 
 #if MC02_FEATURE_REFEREE
     if ((enabled & VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_REFEREE)) != 0u)
