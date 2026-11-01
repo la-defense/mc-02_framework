@@ -72,6 +72,7 @@ set(MC02_BSP_C_SOURCES
     bsp/os/platform_sync_freertos.c # 任务临界区与原有毫秒时钟的后端。
     bsp/os/platform_irq_stm32.c # STM32 中断屏蔽状态保存与恢复。
     bsp/board/board_can_stm32.c # MC-02 逻辑 CAN 编号和 FDCAN 控制器的板级绑定。
+    bsp/board/board_numeric_caps_mc02.c # MC-02 数值硬件和当前编译能力声明。
     bsp/observation/bsp_observation.c
     bsp/bsp_init.c
     bsp/bsp_tools.c

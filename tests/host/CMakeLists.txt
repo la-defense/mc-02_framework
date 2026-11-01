@@ -68,6 +68,13 @@ endif()
 
 
 if(UNIX AND NOT APPLE)
+  # 查询 H723 固定硬件和当前编译目标能力，避免把未启用的外设当作已使用。
+  add_executable(platform_numeric_caps_test platform_numeric_caps_test.c
+    ../../bsp/board/board_numeric_caps_mc02.c)
+  target_include_directories(platform_numeric_caps_test PRIVATE ../../bsp/board .)
+  target_compile_options(platform_numeric_caps_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME production_platform_numeric_caps COMMAND platform_numeric_caps_test)
+  set_tests_properties(production_platform_numeric_caps PROPERTIES TIMEOUT 10)
   # 生产车型选择和中断后端共用可控 PRIMASK，覆盖嵌套与核心／辅助故障。
   add_executable(platform_irq_test platform_irq_test.c ../../bsp/os/platform_irq_stm32.c
     ../../application/config/vehicle_selection.c ../../application/config/module_plan.c)
