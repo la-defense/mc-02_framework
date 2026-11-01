@@ -16,6 +16,12 @@
 #include "task.h"
 #include "bmi088.h"
 #include "robot_safety.h"
+#include "config/build_selection.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "config/vehicle_selection.h"
+#endif
+#include "init_diagnostic.h"
+#include "bsp_safety.h"
 #include <string.h>
 
 /* 五向摇杆为电阻分压, 板级例程给出的阈值是 12bit ADC, 本机 ADC 为 16bit, 故 x16:
@@ -729,6 +735,33 @@ void StartLCDTASK(void const *argument)
     LCDStatus_t init_status = LCD_UI_Init();
     lcd_prof_init_us = DWT_ProbeElapsedUs(t0);
     lcd_init_done = (uint8_t)(init_status == LCD_OK);
+    if (init_status != LCD_OK)
+    {
+#if defined(MC02_CONFIG_GENERATED)
+        if (RobotBuildMarkFailure(ROBOT_MODULE_LCD) != 0u)
+        {
+            InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_TASKS,
+                                        INIT_FAILURE_RESOURCE, INIT_RESOURCE_TASK_LCD);
+            RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+            RobotSafetyRequestDisable();
+            BSP_SafetyStartupLatchOutputsOff();
+        }
+        else
+            InitDiagnosticReportDegraded(INIT_STAGE_APPLICATION, INIT_MODULE_TASKS,
+                                         INIT_FAILURE_RESOURCE, INIT_RESOURCE_TASK_LCD);
+#else
+        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_RESOURCE, INIT_RESOURCE_TASK_LCD);
+        RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+        RobotSafetyRequestDisable();
+        BSP_SafetyStartupLatchOutputsOff();
+#endif
+        for (;;)
+        {
+            ++lcd_heartbeat;
+            osDelay(100u);
+        }
+    }
     if (init_status == LCD_OK)
         BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_11, BSP_LOG_FIELD_U32((unsigned)(lcd_page + 1u)));
 #if MC02_BENCH_LCD_DIAGNOSTICS

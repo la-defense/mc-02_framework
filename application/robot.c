@@ -67,7 +67,7 @@ static const TaskMonitorTaskConfig_t robot_task_monitor_config[] = {
     {.id = TASK_MONITOR_INS, .name = "INS", .mode = TASK_MONITOR_MODE_PERIODIC,
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 5u,
      .startup_grace_ms = 100u},
-#if MC02_FEATURE_MOTOR_CONTROL
+#if MC02_FEATURE_COMM_DISPATCH
     {.id = TASK_MONITOR_MOTOR, .name = "MOTOR", .mode = TASK_MONITOR_MODE_PERIODIC,
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 5u,
      .startup_grace_ms = 100u},
@@ -197,12 +197,16 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 #endif
     case ROBOT_MODULE_ALARM:
 #if MC02_FEATURE_ALARM
+        if (config->alarm_config == NULL)
+            return 0u;
         return (uint8_t)(RobotAlarmInit(config->alarm_config) == ROBOT_ALARM_OK);
 #else
         return 0u;
 #endif
     case ROBOT_MODULE_UI:
 #if MC02_FEATURE_UI
+        if (config->referee_ui_config == NULL)
+            return 0u;
         return (uint8_t)(UITaskInit(config->referee_ui_config) == UI_OK);
 #else
         return 0u;

@@ -9,6 +9,7 @@
 #include "bsp_log.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #if defined(VEHICLE_HEALTH_TEST_THREADS)
 #include <pthread.h>
 #include <sched.h>
@@ -237,6 +238,9 @@ static void TestBuildProfile(void)
     TEST_CHECK(profile.role == VEHICLE_HEALTH_ROLE_BENCH);
     expected |= VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_VISION);
     expected |= VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_USB);
+#if defined(MC02_CONFIG_GENERATED)
+    expected |= VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_COMMUNICATION);
+#endif
 #elif defined(CHASSIS_BOARD)
     TEST_CHECK(profile.role == VEHICLE_HEALTH_ROLE_CHASSIS);
     expected |= VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_CAN1) |
@@ -267,6 +271,9 @@ static void TestBuildProfile(void)
                 VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_VISION) |
                 VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_USB);
 #endif
+    if (profile.enabled_modules != expected)
+        fprintf(stderr, "build profile mask: actual=0x%08lx expected=0x%08lx\n",
+                (unsigned long)profile.enabled_modules, (unsigned long)expected);
     TEST_CHECK(profile.enabled_modules == expected);
     TEST_CHECK(VehicleHealthGetBuildProfile(NULL) == VEHICLE_HEALTH_ERROR_ARGUMENT);
 }

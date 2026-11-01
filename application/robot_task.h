@@ -66,7 +66,7 @@ osThreadId lcdTaskHandle;
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartINSTASK(void const *argument);
-/** @brief 约每 1 ms 派发通信并运行电机计算。
+/** @brief 约每 1 ms 派发通信；仅机器人配置会继续运行电机计算和发送。
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartMOTORTASK(void const *argument);
@@ -85,8 +85,8 @@ void StartROBOTTASK(void const *argument);
 void StartUITASK(void const *argument);
 #endif
 
-/** @brief 创建INS、电机、UART发送、Daemon、整车、LCD及当前配置所需UI任务。
-* @return 1 为全部创建成功，0 为至少一个失败，并记录失败任务编号；不删除已创建的任务。
+/** @brief 创建INS、通信派发、电机、UART发送、Daemon、整车、LCD及当前配置所需UI任务。
+* @return 1 表示核心任务创建成功；辅助任务失败已记录降级，核心任务失败返回0；不删除已创建任务。
 * @note 由 RobotInit() 在调度器启动前调用一次。
  */
 uint8_t OSTaskInit(void)
@@ -95,22 +95,29 @@ uint8_t OSTaskInit(void)
     insTaskHandle = osThreadCreate(osThread(instask), NULL); // 由于是阻塞读取传感器,为姿态解算设置较高优先级,确保以1khz的频率执行
     // // 后续修改为读取传感器数据准备好的中断处理,
 
-    // 电机任务还会派发接收并打印日志，栈容量包含回调和格式化所需空间。
-#if MC02_FEATURE_MOTOR_CONTROL
+    // 裸板也要消费视觉等通信输入；只在机器人配置中运行电机控制。
+#if MC02_FEATURE_COMM_DISPATCH
     osThreadDef(motortask, StartMOTORTASK, osPriorityNormal, 0, 512);
     motorTaskHandle = osThreadCreate(osThread(motortask), NULL);
 #endif
 
     uint8_t uart_tx_created = USARTTxTaskInit();
+    uint8_t all_created = 1u;
 
-    /* 日志任务是辅助诊断能力，创建失败由日志只读状态报告，不阻断核心任务启动。 */
+    /* 日志配置为辅助时降级继续；若车型核心依赖日志，失败必须锁存启动失败。 */
     const BSPLogStatus_t log_status = BSPLogTaskInit();
 #if defined(MC02_CONFIG_GENERATED)
     if (log_status != BSP_LOG_STATUS_OK && log_status != BSP_LOG_STATUS_QUEUED)
     {
-        (void)RobotBuildMarkFailure(ROBOT_MODULE_LOG);
-        InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LOG);
+        if (RobotBuildMarkFailure(ROBOT_MODULE_LOG) != 0u)
+        {
+            InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                        INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LOG);
+            all_created = 0u;
+        }
+        else
+            InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                         INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LOG);
     }
 #else
     (void)log_status;
@@ -141,10 +148,17 @@ uint8_t OSTaskInit(void)
 #endif
 
 #if MC02_FEATURE_LCD
+#if defined(MC02_CONFIG_GENERATED)
+    // 依赖校验跳过的可选LCD模块不创建任务。
+    if (RobotBuildModuleStarted(ROBOT_MODULE_LCD))
+    {
+#endif
     osThreadDef(lcdtask, StartLCDTASK, osPriorityLow, 0, 1024);
     lcdTaskHandle = osThreadCreate(osThread(lcdtask), NULL);
+#if defined(MC02_CONFIG_GENERATED)
+    }
 #endif
-    uint8_t all_created = 1u;
+#endif
     if (!event_task_created)
     {
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
@@ -162,7 +176,7 @@ uint8_t OSTaskInit(void)
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_INS);
         all_created = 0u;
     }
-#if MC02_FEATURE_MOTOR_CONTROL
+#if MC02_FEATURE_COMM_DISPATCH
     if (motorTaskHandle == NULL)
     {
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
@@ -190,9 +204,15 @@ uint8_t OSTaskInit(void)
 #endif
     {
 #if defined(MC02_CONFIG_GENERATED)
-        (void)RobotBuildMarkFailure(ROBOT_MODULE_UI);
-        InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-            INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
+        if (RobotBuildMarkFailure(ROBOT_MODULE_UI) != 0u)
+        {
+            InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                        INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
+            all_created = 0u;
+        }
+        else
+            InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                         INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
 #else
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
@@ -201,12 +221,22 @@ uint8_t OSTaskInit(void)
     }
 #endif
 #if MC02_FEATURE_LCD
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_LCD) && lcdTaskHandle == NULL)
+#else
     if (lcdTaskHandle == NULL)
+#endif
     {
 #if defined(MC02_CONFIG_GENERATED)
-        (void)RobotBuildMarkFailure(ROBOT_MODULE_LCD);
-        InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-            INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
+        if (RobotBuildMarkFailure(ROBOT_MODULE_LCD) != 0u)
+        {
+            InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                        INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
+            all_created = 0u;
+        }
+        else
+            InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                         INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
 #else
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
             INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
@@ -230,11 +260,27 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
     TaskMonitorFeed(TASK_MONITOR_INS);
     if (INS_Init() == NULL)
     {
+#if defined(MC02_CONFIG_GENERATED)
+        const uint8_t core_failure = RobotBuildMarkFailure(ROBOT_MODULE_IMU);
+        if (core_failure != 0u)
+        {
+            InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_INS,
+                                        INIT_FAILURE_RESOURCE, 0u);
+            RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+            RobotSafetyRequestDisable();
+            BSP_SafetyStartupLatchOutputsOff();
+        }
+        else
+            InitDiagnosticReportDegraded(INIT_STAGE_APPLICATION, INIT_MODULE_INS,
+                                         INIT_FAILURE_RESOURCE, 0u);
+#else
         InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_INS,
-                                    INIT_FAILURE_ALGORITHM_MEMORY, 0u);
+                                    INIT_FAILURE_RESOURCE, 0u);
         RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
+        RobotSafetyRequestDisable();
         IMUHeaterForceOff();
         BSP_SafetyStartupLatchOutputsOff();
+#endif
         // 算法初始化失败后保持输出关闭，但继续更新诊断和本任务记录，供人工读取。
         for (;;)
         {
@@ -272,7 +318,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
     }
 }
 
-#if MC02_FEATURE_MOTOR_CONTROL
+#if MC02_FEATURE_COMM_DISPATCH
 __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 {
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_03);

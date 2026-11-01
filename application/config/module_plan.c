@@ -75,3 +75,34 @@ RobotModuleStatus_t RobotModuleStart(const RobotModulePlan_t *plan,
     }
     return ROBOT_MODULE_OK;
 }
+
+RobotModuleStatus_t RobotModuleStartupMarkFailure(const RobotModulePlan_t *plan,
+    RobotModuleStartup_t *state, RobotModule_t module)
+{
+    if (plan == NULL || state == NULL || (unsigned)module >= ROBOT_MODULE_COUNT)
+        return ROBOT_MODULE_ARGUMENT;
+    const uint32_t bit = ROBOT_MODULE_BIT(module);
+    if ((plan->enabled & bit) == 0u)
+        return ROBOT_MODULE_ARGUMENT;
+
+    state->failed |= bit;
+    state->started &= ~bit;
+    for (unsigned pass = 0u; pass < ROBOT_MODULE_COUNT; ++pass)
+        for (unsigned index = 0u; index < ROBOT_MODULE_COUNT; ++index)
+            if ((plan->enabled & ROBOT_MODULE_BIT(index)) != 0u &&
+                (plan->dependencies[index] & (state->failed | state->blocked)) != 0u)
+            {
+                state->blocked |= ROBOT_MODULE_BIT(index);
+                state->started &= ~ROBOT_MODULE_BIT(index);
+            }
+
+    const uint32_t affected = (state->failed | state->blocked) & RobotModuleCoreClosure(plan);
+    if (affected != 0u)
+    {
+        if (state->core_failed == 0u)
+            state->failed_module = (uint8_t)module;
+        state->core_failed = 1u;
+        return ROBOT_MODULE_CORE_FAILURE;
+    }
+    return ROBOT_MODULE_OK;
+}

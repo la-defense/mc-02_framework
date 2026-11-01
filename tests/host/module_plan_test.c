@@ -23,6 +23,18 @@ int main(void)
     fixture = (Fixture){.fail = 4u};
     TEST_CHECK(RobotModuleStart(&plan, start, &fixture, &state) == ROBOT_MODULE_OK);
     TEST_CHECK(state.failed == 4u && state.started == 3u && !state.core_failed);
+    TEST_CHECK(RobotModuleStartupMarkFailure(&plan, &state, ROBOT_MODULE_SUPERCAP) ==
+               ROBOT_MODULE_ARGUMENT);
+    fixture = (Fixture){0};
+    TEST_CHECK(RobotModuleStart(&plan, start, &fixture, &state) == ROBOT_MODULE_OK);
+    TEST_CHECK(RobotModuleStartupMarkFailure(&plan, &state, ROBOT_MODULE_COMMUNICATION) ==
+               ROBOT_MODULE_OK);
+    TEST_CHECK((state.failed & ROBOT_MODULE_BIT(ROBOT_MODULE_COMMUNICATION)) != 0u &&
+               !state.core_failed);
+    TEST_CHECK(RobotModuleStartupMarkFailure(&plan, &state, ROBOT_MODULE_IMU) ==
+               ROBOT_MODULE_CORE_FAILURE);
+    TEST_CHECK(state.core_failed && state.failed_module == ROBOT_MODULE_IMU &&
+               (state.blocked & ROBOT_MODULE_BIT(ROBOT_MODULE_SAFETY)) != 0u);
     fixture = (Fixture){.fail = 2u};
     TEST_CHECK(RobotModuleStart(&plan, start, &fixture, &state) == ROBOT_MODULE_CORE_FAILURE);
     TEST_CHECK(state.core_failed && (fixture.calls & 1u) == 0u);

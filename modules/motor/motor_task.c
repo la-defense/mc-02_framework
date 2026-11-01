@@ -76,9 +76,11 @@ void MotorControlTask()
 
     // StepMotorControl();
     // 控制模块只提交复制后的候选帧；唯一发送推进点统一仲裁并写入各总线 FIFO。
+#if MC02_FEATURE_MOTOR_CONTROL
     CANProcessTx();
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
     RobotCanBridgeServiceTx();
+#endif
 #endif
     DWT_ProbeDone(&motor_prof_all, probe_all);
 }

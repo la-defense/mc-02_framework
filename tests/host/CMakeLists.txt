@@ -258,6 +258,8 @@ mc02_add_vehicle_health_test(bench MC02_PROFILE_BENCH_SAFE=1 MC02_HEATER_ENABLED
 mc02_add_vehicle_health_test(single MC02_PROFILE_ROBOT=1 ONE_BOARD=1 MC02_HEATER_ENABLED=1 VISION_USE_VCP=1)
 mc02_add_vehicle_health_test(chassis MC02_PROFILE_ROBOT=1 CHASSIS_BOARD=1 MC02_HEATER_ENABLED=1 VISION_USE_UART=1)
 mc02_add_vehicle_health_test(gimbal MC02_PROFILE_ROBOT=1 GIMBAL_BOARD=1 MC02_HEATER_ENABLED=1 VISION_USE_VCP=1)
+mc02_add_vehicle_health_test(generated MC02_CONFIG_GENERATED=1 MC02_PROFILE_BENCH_SAFE=1 VISION_USE_VCP=1)
+target_include_directories(vehicle_health_generated_test BEFORE PRIVATE vehicle_health_generated_fakes)
 # 三位小数入口独立于日志硬件；Python Decimal提供不同实现的数值参考。
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_executable(
@@ -738,6 +740,7 @@ target_compile_definitions(ins_filter_test PRIVATE MC02_VISION_PROTOCOL_V2=1
   MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=0)
 target_link_libraries(ins_filter_test PRIVATE mc02_kf mc02_numeric)
 add_test(NAME production_ins_filter_validity_and_recovery COMMAND ins_filter_test)
+add_test(NAME production_ins_bmi088_registration_failure COMMAND ins_filter_test --bmi-registration-failure)
 add_test(NAME production_ins_numeric_init_failure COMMAND ins_filter_test --math-failure)
 foreach(direction IN ITEMS tilt inverted zero short)
   add_test(NAME production_ins_numeric_initial_${direction} COMMAND ins_filter_test --initial-${direction})
@@ -754,6 +757,8 @@ target_compile_definitions(ins_filter_fusion_test PRIVATE MC02_VISION_PROTOCOL_V
   MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=1)
 target_link_libraries(ins_filter_fusion_test PRIVATE mc02_kf mc02_numeric)
 add_test(NAME production_ins_fusion_backend_validity_and_recovery COMMAND ins_filter_fusion_test)
+add_test(NAME production_ins_fusion_backend_bmi088_registration_failure
+  COMMAND ins_filter_fusion_test --bmi-registration-failure)
 add_test(NAME production_ins_fusion_backend_numeric_init_failure COMMAND ins_filter_fusion_test --math-failure)
 foreach(direction IN ITEMS tilt inverted zero short)
   add_test(NAME production_ins_fusion_backend_initial_${direction} COMMAND ins_filter_fusion_test --initial-${direction})
@@ -1872,6 +1877,21 @@ add_executable(module_plan_test module_plan_test.c ../../application/config/modu
 target_include_directories(module_plan_test PRIVATE . ../../application/config)
 mc02_apply_format_diagnostics(module_plan_test)
 add_test(NAME production_vehicle_module_plan COMMAND module_plan_test)
+# 编译 production robot_def.c 的两种分板功能组合，确保未启用的校验器不被引用。
+add_library(robot_def_chassis_role_compile OBJECT ../../application/robot_def.c)
+target_include_directories(robot_def_chassis_role_compile BEFORE PRIVATE robot_def_role_fakes)
+target_compile_definitions(robot_def_chassis_role_compile PRIVATE MC02_PROFILE_ROBOT=1
+  MC02_FEATURE_CHASSIS=1 MC02_FEATURE_GIMBAL=0 MC02_FEATURE_SHOOTER=0
+  MC02_FEATURE_ALARM=0 MC02_FEATURE_UI=0)
+target_compile_options(robot_def_chassis_role_compile PRIVATE -Wall -Wextra -Werror)
+mc02_apply_format_diagnostics(robot_def_chassis_role_compile)
+add_library(robot_def_gimbal_role_compile OBJECT ../../application/robot_def.c)
+target_include_directories(robot_def_gimbal_role_compile BEFORE PRIVATE robot_def_role_fakes)
+target_compile_definitions(robot_def_gimbal_role_compile PRIVATE MC02_PROFILE_ROBOT=1
+  MC02_FEATURE_CHASSIS=0 MC02_FEATURE_GIMBAL=1 MC02_FEATURE_SHOOTER=1
+  MC02_FEATURE_ALARM=0 MC02_FEATURE_UI=0)
+target_compile_options(robot_def_gimbal_role_compile PRIVATE -Wall -Wextra -Werror)
+mc02_apply_format_diagnostics(robot_def_gimbal_role_compile)
 if(Python3_EXECUTABLE)
   add_test(NAME production_vehicle_build_selection
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_vehicle_selection.py)

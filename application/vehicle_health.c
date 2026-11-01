@@ -60,6 +60,13 @@ VehicleHealthStatus_t VehicleHealthGetBuildProfile(VehicleHealthBuildProfile_t *
     ADD_IF_ENABLED(MC02_FEATURE_UI, VEHICLE_HEALTH_MODULE_UI);
     ADD_IF_ENABLED(MC02_FEATURE_SUPERCAP, VEHICLE_HEALTH_MODULE_SUPERCAP);
 #undef ADD_IF_ENABLED
+#if defined(VISION_USE_VCP) && \
+    (MC02_FEATURE_VISION || MC02_FEATURE_REMOTE || MC02_FEATURE_COMMAND)
+    AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_USB);
+#endif
+#if defined(MC02_BENCH_USB_DIAGNOSTICS) && MC02_BENCH_USB_DIAGNOSTICS
+    AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_USB);
+#endif
     if (candidate.role != VEHICLE_HEALTH_ROLE_BENCH)
     {
         AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_CAN1);

@@ -205,8 +205,8 @@ attitude_t *INS_Init(void)
         DWT_GetDeltaT(&INS_DWT_Count);
         BSP_LOG_EVENT_2(EV_MODULES_IMU_INS_TASK_C_01, BSP_LOG_FIELD_HEX32((unsigned)bmi088_init_error), BSP_LOG_FIELD_U32((unsigned)bmi088_init_retry_count));
         // 保留姿态存储供任务继续运行，但安全状态会记录传感器无效。
-        ins_init_result = 1u;
-        return (attitude_t *)&INS.Gyro;
+        ins_init_result = 3u;
+        return NULL;
     }
     IMU_Param.scale[X] = 1;
     IMU_Param.scale[Y] = 1;

@@ -12,6 +12,8 @@
 #include <string.h>
 static uint32_t now,seq;
 static int scenario,valid,mode,force_off,calib_valid=1;
+static int fail_bmi_registration;
+static unsigned bmi_registration_calls;
 static float frame[4];
 static VisionIMUSample_t vision_imu_sample;
 static uint32_t imu_sample_updates;
@@ -32,7 +34,13 @@ float DWT_GetDeltaT(uint32_t *p){ *p=now;return period_s; }
 uint32_t DWT_ProbeStart(void){ return 0; }
 void DWT_ProbeDone(volatile DWT_Probe_t *p,uint32_t s){(void)p;(void)s;}
 uint32_t HAL_GetTick(void){return now;}
-BMI088Instance *BMI088Register(const BMI088_Init_Config_s *c){static BMI088Instance i;(void)c;return &i;}
+BMI088Instance *BMI088Register(const BMI088_Init_Config_s *c)
+{
+    static BMI088Instance i;
+    (void)c;
+    bmi_registration_calls++;
+    return fail_bmi_registration ? NULL : &i;
+}
 uint8_t BMI088Acquire(BMI088Instance *i,BMI088_Data_t *s){
     (void)i; *s=(BMI088_Data_t){.sequence=++seq,.timestamp_ms=now,.valid=1,.temperature=25};
     s->acc[2]=scenario==1?0:9.8f; if(scenario==2)s->gyro[0]=NAN;
@@ -62,6 +70,13 @@ static void tick(void){now+=(uint32_t)lroundf(period_s*1000);INS_Task();}
 static void invalid(void){TEST_CHECK(!valid && mode==0);for(int i=0;i<4;i++)TEST_CHECK(frame[i]==0);}
 int main(int argc,char **argv)
 {
+    if(argc>1 && strcmp(argv[1],"--bmi-registration-failure")==0)
+    {
+        fail_bmi_registration=1;
+        TEST_CHECK(INS_Init()==NULL && !valid && !calib_valid && force_off);
+        TEST_CHECK(INS_Init()==NULL && bmi_registration_calls==1u);
+        return 0;
+    }
     if(argc>1 && strncmp(argv[1],"--initial-",10)==0)
     {
         const char *kind=argv[1]+10;

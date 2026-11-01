@@ -29,25 +29,8 @@ uint8_t RobotBuildMarkFailure(RobotModule_t module)
         (selected_plan.enabled & ROBOT_MODULE_BIT(module)) == 0u) return 0u;
     const uint32_t saved = __get_PRIMASK();
     __disable_irq();
-    const uint32_t bit = ROBOT_MODULE_BIT(module);
-    robot_module_startup.failed |= bit;
-    robot_module_startup.started &= ~bit;
-    for (unsigned pass = 0u; pass < ROBOT_MODULE_COUNT; ++pass)
-        for (unsigned i = 0u; i < ROBOT_MODULE_COUNT; ++i)
-            if ((selected_plan.enabled & ROBOT_MODULE_BIT(i)) != 0u &&
-                (selected_plan.dependencies[i] &
-                 (robot_module_startup.failed | robot_module_startup.blocked)) != 0u)
-            {
-                robot_module_startup.blocked |= ROBOT_MODULE_BIT(i);
-                robot_module_startup.started &= ~ROBOT_MODULE_BIT(i);
-            }
-    if (((robot_module_startup.failed | robot_module_startup.blocked) &
-         RobotModuleCoreClosure(&selected_plan)) != 0u)
-    {
-        robot_module_startup.core_failed = 1u;
-        robot_module_startup.failed_module = (uint8_t)module;
-    }
-    const uint8_t fatal = robot_module_startup.core_failed;
+    const RobotModuleStatus_t result = RobotModuleStartupMarkFailure(
+        &selected_plan, &robot_module_startup, module);
     __set_PRIMASK(saved);
-    return fatal;
+    return (uint8_t)(result == ROBOT_MODULE_CORE_FAILURE);
 }

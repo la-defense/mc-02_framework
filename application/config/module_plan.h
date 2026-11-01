@@ -42,6 +42,14 @@ RobotModuleStatus_t RobotModulePlanValidate(const RobotModulePlan_t *plan, unsig
  */
 RobotModuleStatus_t RobotModuleStart(const RobotModulePlan_t *plan,
     RobotModuleStartFn_t start, void *context, RobotModuleStartup_t *state);
+/** @brief 记录已启动模块后续失败，并阻止它的下游模块继续运行。
+ * @param[in] plan 已验证的固定模块计划。
+ * @param[in,out] state 当前启动结果。
+ * @param[in] module 发生失败的已启用模块。
+ * @return 失败仅影响辅助功能时返回OK；影响核心闭包时返回CORE_FAILURE。
+ */
+RobotModuleStatus_t RobotModuleStartupMarkFailure(const RobotModulePlan_t *plan,
+    RobotModuleStartup_t *state, RobotModule_t module);
 /** @brief 根据启用集合计算所有核心依赖。
  * @param[in] plan 已通过Validate的声明；NULL返回0。
  * @return 核心模块及其全部必要依赖位图，不改变输入。

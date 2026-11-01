@@ -138,22 +138,6 @@ static uint8_t RobotConfigParametersAreValid(const Robot_Config_s *config)
 {
     if (config == NULL)
         return 0u;
-#if MC02_FEATURE_ALARM
-    if (config->alarm_config == NULL)
-        return 0u;
-#endif
-#if MC02_FEATURE_UI
-    if (config->referee_ui_config == NULL)
-        return 0u;
-#endif
-#if defined(MC02_PROFILE_ROBOT)
-    if (!ChassisConfigIsValid(&config->chassis_param))
-        return 0u;
-    if (!GimbalConfigIsValid(&config->gimbal_param))
-        return 0u;
-    if (!ShootConfigIsValid(&config->shoot_param))
-        return 0u;
-#else
 #if MC02_FEATURE_CHASSIS
     if (!ChassisConfigIsValid(&config->chassis_param))
         return 0u;
@@ -165,7 +149,6 @@ static uint8_t RobotConfigParametersAreValid(const Robot_Config_s *config)
 #if MC02_FEATURE_SHOOTER
     if (!ShootConfigIsValid(&config->shoot_param))
         return 0u;
-#endif
 #endif
     return 1u;
 }
