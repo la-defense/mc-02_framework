@@ -216,11 +216,12 @@ void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);
 Motor_Feedback_Status_e DJIMotorRebaseReference(DJIMotorInstance *motor, uint32_t now_ms);
 
 /**
- * @brief 复制统一反馈快照；读取不刷新样本时间或滤波状态。
+ * @brief 复制统一反馈数据；读取不刷新样本时间或滤波状态。
  * @param[in] motor 已注册实例。
- * @param[in] now_ms 调用方毫秒时刻，允许0和回绕。
+ * @param[in] now_ms 调用方毫秒时刻，允许0和回绕；读取时还会检查同一时钟域的本机时刻。
  * @param[out] snapshot 输出对象；参数或换算失败时保持原值。
  * @return MOTOR_FEEDBACK_OK 表示已收到样本；各字段是否可用由字段 valid 表示。
+ * @note 使用调用时刻与数据复制时刻中较新的本机时刻，避免把并发发布的新样本判为过期。
  */
 Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *motor,
                                                      uint32_t now_ms,

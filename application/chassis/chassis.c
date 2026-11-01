@@ -173,11 +173,12 @@ static void ChassisStopAndClear(void)
 #ifdef CHASSIS_BOARD
 static uint8_t ChassisMotorFeedbackIsHealthy(void)
 {
-    const uint32_t now_ms = HAL_GetTick();
     DJIMotorInstance *motors[4] = {motor_lf, motor_rf, motor_lb, motor_rb};
     uint8_t healthy = 1u;
     for (size_t i = 0u; i < sizeof(motors) / sizeof(motors[0]); ++i)
     {
+        // 每个电机读取前重新取时，避免遍历期间跨毫秒后沿用较早时刻。
+        const uint32_t now_ms = HAL_GetTick();
         Motor_Feedback_Snapshot_s feedback = {0};
         if (DJIMotorGetFeedbackSnapshot(motors[i], now_ms, &feedback) != MOTOR_FEEDBACK_OK ||
             feedback.speed.valid == 0u || feedback.current.valid == 0u)

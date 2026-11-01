@@ -44,6 +44,16 @@ CanTopicBridgeStatus_t CanTopicBridgeSetInvalidateCallback(CanTopicBridge_t *bri
     return CAN_BRIDGE_OK;
 }
 
+CanTopicBridgeStatus_t CanTopicBridgeSetBeforePublishCallback(CanTopicBridge_t *bridge,
+    CanTopicBeforePublishFn_t callback, void *context)
+{
+    if (bridge==NULL || bridge->transport==NULL || bridge->incoming==NULL)
+        return CAN_BRIDGE_ARGUMENT;
+    bridge->before_publish_callback=callback;
+    bridge->before_publish_context=context;
+    return CAN_BRIDGE_OK;
+}
+
 static CanTopicBridgeStatus_t CanTopicBridgeInvalidateIncoming(CanTopicBridge_t *bridge)
 {
     // 只有订阅者读不到旧话题后，才通知安全管理撤销对应许可。
@@ -142,6 +152,9 @@ CanTopicBridgeStatus_t CanTopicBridgePublish(CanTopicBridge_t *bridge, const Can
     uint8_t data[CAN_TOPIC_MAX_PAYLOAD];
     if (!bridge->incoming_codec.convert(bridge->incoming_codec.context,message->payload,message->length,
                                         data,bridge->incoming_desc.payload_size)) return CAN_BRIDGE_WIRE;
+    if (bridge->before_publish_callback!=NULL)
+        bridge->before_publish_callback(bridge->before_publish_context,data,
+                                        bridge->incoming_desc.payload_size);
     if (MessagePublishAt(bridge->incoming,data,conservative_ms,message->first_rx_ms,
                          now_ms,MESSAGE_CLOCK_LOCAL_MAPPED)!=MESSAGE_OK) return CAN_BRIDGE_PUBLISH;
     bridge->last_remote_source_ms=message->source_ms;

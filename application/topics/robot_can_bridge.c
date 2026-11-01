@@ -27,6 +27,23 @@ static void RobotCanBridgeCommandInvalidated(void *context)
     (void)context;
     RobotSafetyRevokeRemoteChassisPermit();
 }
+
+static void RobotCanBridgeBeforeCommandPublish(void *context, const void *payload,
+                                               size_t payload_size)
+{
+    (void)context;
+    if (payload == NULL || payload_size != sizeof(Chassis_Ctrl_Cmd_s))
+    {
+        return;
+    }
+    Chassis_Ctrl_Cmd_s command;
+    memcpy(&command, payload, sizeof(command));
+    // 先撤销旧许可再发布停车命令，避免发送任务继续沿用旧许可。
+    if (command.chassis_mode == CHASSIS_ZERO_FORCE)
+    {
+        RobotSafetyRevokeRemoteChassisPermit();
+    }
+}
 #endif
 
 uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
@@ -55,9 +72,11 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
     if (!CanTopicLinkInit(&robot_link,&can_config,outgoing,incoming,&encode,&decode,NULL,NULL,50u))
         return 0u;
 #if defined(CHASSIS_BOARD)
-    // 桥接撤销发布快照时同步清除电机许可，不能等底盘任务下一轮轮询。
+    // 时钟失效或新停车命令通过检查后，先撤销旧许可再让底盘任务看到新话题。
     if (CanTopicBridgeSetInvalidateCallback(&robot_link.bridge,
-            RobotCanBridgeCommandInvalidated,NULL)!=CAN_BRIDGE_OK) {
+            RobotCanBridgeCommandInvalidated,NULL)!=CAN_BRIDGE_OK ||
+        CanTopicBridgeSetBeforePublishCallback(&robot_link.bridge,
+            RobotCanBridgeBeforeCommandPublish,NULL)!=CAN_BRIDGE_OK) {
         CANUnregisterInstance(robot_link.transport.can);
         memset(&robot_link,0,sizeof(robot_link));
         return 0u;

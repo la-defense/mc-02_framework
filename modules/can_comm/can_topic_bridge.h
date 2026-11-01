@@ -15,6 +15,7 @@ typedef uint8_t (*CanTopicConvert_t)(void *context, const void *input, size_t in
                                      void *output, size_t output_size);
 /** @brief 通知业务立即撤销依赖此输入的话题许可；回调必须有界且不得阻塞。 */
 typedef void (*CanTopicInvalidateFn_t)(void *context);
+typedef void (*CanTopicBeforePublishFn_t)(void *context, const void *payload, size_t payload_size);
 typedef struct {
     CanTopicConvert_t convert; /**< 发送用编码，接收用解码；须完整检查输入。 */
     void *context; /**< 允许NULL；非NULL时须在桥接期间有效。 */
@@ -30,6 +31,8 @@ typedef struct {
     void *map_context;
     CanTopicInvalidateFn_t invalidate_callback;
     void *invalidate_context;
+    CanTopicBeforePublishFn_t before_publish_callback;
+    void *before_publish_context;
     uint32_t last_sent_sequence;
     uint32_t pending_request_id;
     uint32_t last_remote_source_ms;
@@ -56,15 +59,25 @@ CanTopicBridgeStatus_t CanTopicBridgeInit(CanTopicBridge_t *bridge, CanTopicTran
     const CanTopicCodec_t *outgoing_codec, const CanTopicCodec_t *incoming_codec,
     CanTopicMapTime_t map_time, void *map_context);
 
-/** @brief 设置入站数据撤销回调；每次成功使已发布快照失效时调用。
+/** @brief 设置入站数据撤销回调；每次成功使已发布数据失效时调用。
  * @param[in,out] bridge 已初始化且有入站发布端的桥接对象。
  * @param[in] callback 可为NULL；调用须有界且不可阻塞。
  * @param[in] context 回调上下文，桥接期间须有效。
  * @return 参数和对象有效返回OK，否则返回ARGUMENT。
- * @note 在接收和服务任务启动前注册；快照撤销成功后，在触发撤销的任务上下文内调用。
+ * @note 在接收和服务任务启动前注册；已发布数据撤销成功后，在触发撤销的任务上下文内调用。
  */
 CanTopicBridgeStatus_t CanTopicBridgeSetInvalidateCallback(CanTopicBridge_t *bridge,
     CanTopicInvalidateFn_t callback, void *context);
+
+/** @brief 在有效入站数据写入话题前通知业务模块。
+ * @param[in,out] bridge 已初始化且有入站发布端的桥接对象。
+ * @param[in] callback 可为NULL；回调仅在报文、时钟和数据均通过检查后调用。
+ * @param[in] context 回调上下文，桥接期间须有效。
+ * @return 参数和对象有效返回OK，否则返回ARGUMENT。
+ * @note 在接收任务启动前注册；payload只在回调期间有效，回调须有界且不可阻塞。
+ */
+CanTopicBridgeStatus_t CanTopicBridgeSetBeforePublishCallback(CanTopicBridge_t *bridge,
+    CanTopicBeforePublishFn_t callback, void *context);
 
 /** @brief 读取未过期的本地数据并尝试提交一次，不重复发送已入队的同一版本。
  * @param[in,out] bridge 已初始化对象，调用者串行访问。
@@ -106,7 +119,7 @@ CanTopicBridgeStatus_t CanTopicBridgeResetPeer(CanTopicBridge_t *bridge);
 /** @brief 检查已发布数据的映射是否仍有效；失同步时撤销旧话题和未完成分片。
  * @param[in,out] bridge 已初始化对象，由接收派发任务串行访问。
  * @param[in] now_ms 当前本机毫秒时刻。
- * @return 同步有效返回OK；失同步返回UNSYNCED，撤销失败返回PUBLISH。
+ * @return 状态有效返回OK；失同步返回UNSYNCED，旧数据过期返回EXPIRED，撤销失败返回PUBLISH。
  * @note 映射修正导致旧数据可能比原估计更早产生时也会撤销；调用周期决定发现延迟。
  *       此入口不自动重新建立映射或恢复控制许可。
  */

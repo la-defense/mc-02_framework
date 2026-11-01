@@ -297,7 +297,7 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
                                        CAN_TxPriority_t priority, uint32_t deadline_ms,
                                        uint32_t period_us, uint32_t *request_id);
 
-/** @brief 提交带发送前准备回调的周期目标；未能替换时旧回调仍会保护已排队帧。
+/** @brief 提交带发送前准备回调的周期目标；旧周期流已有准备回调时，提交失败会保留该回调。
  * @param[in] hcan 已启动服务的总线句柄。
  * @param[in] source 长期有效的来源标识，也会传给 prepare 作为回调上下文。
  * @param[in] key 来源内的周期流编号。

@@ -515,6 +515,9 @@ target_link_libraries(motor_chassis_safety_test PRIVATE mc02_numeric)
 add_test(NAME production_dji_chassis_safety_output_gate
   COMMAND motor_chassis_safety_test chassis-safety-output)
 set_tests_properties(production_dji_chassis_safety_output_gate PROPERTIES TIMEOUT 10)
+add_test(NAME production_dji_feedback_after_observed_tick
+  COMMAND motor_chassis_safety_test feedback-after-observed-tick)
+set_tests_properties(production_dji_feedback_after_observed_tick PROPERTIES TIMEOUT 10)
 add_executable(motor_feedback_test motor_feedback_test.c ../../modules/motor/motor_feedback.c)
 target_include_directories(motor_feedback_test PRIVATE ../../modules/motor)
 target_include_directories(motor_feedback_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

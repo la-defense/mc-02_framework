@@ -77,7 +77,7 @@ void RobotSafetyRequestDisable(void);
 void RobotSafetyRequestCalib(uint8_t enable);
 
 /** @brief 按安全代际和来源期限原子授予双板底盘运动许可。
- * @param[in] expected_generation 读取本地安全快照时的底盘抑制代际。
+ * @param[in] expected_generation 读取本地安全状态时的底盘抑制代际。
  * @param[in] source_time_ms 经可信对时映射的来源命令时刻。
  * @param[in] max_age_ms 来源命令的最大有效期，范围1～INT32_MAX。
  * @param[in] now_ms 与来源时刻同域的当前本机毫秒时刻。

@@ -746,6 +746,7 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     Motor_Output_Axis_Config_s output_axis;
     uint32_t timestamp_ms;
     uint32_t sequence;
+    uint32_t feedback_read_time_ms;
     uint8_t has_sample;
     uint8_t position_trusted;
     uint8_t speed_valid;
@@ -759,6 +760,7 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     position_trusted = motor->encoder_baseline_valid && motor->output_position_trusted;
     speed_valid = motor->speed_filter_valid;
     current_valid = motor->current_filter_valid;
+    feedback_read_time_ms = HAL_GetTick();
     taskEXIT_CRITICAL();
     if (has_sample == 0u)
         return MOTOR_FEEDBACK_NOT_READY;
@@ -770,8 +772,11 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     if (status != MOTOR_FEEDBACK_OK)
         return status;
 
+    const uint32_t caller_elapsed = feedback_read_time_ms - now_ms;
+    const uint32_t effective_now_ms = caller_elapsed < 0x80000000u ?
+                                      feedback_read_time_ms : now_ms;
     const uint8_t fresh = (DaemonIsOnline(motor->daemon) != 0u) &&
-        ((uint32_t)(now_ms - timestamp_ms) <= DJI_MULTITURN_MAX_GAP_MS);
+        ((uint32_t)(effective_now_ms - timestamp_ms) <= DJI_MULTITURN_MAX_GAP_MS);
     Motor_Feedback_Snapshot_s candidate = {0};
     candidate.sample_sequence = sequence;
     StoreSignal(&candidate.position, position_rad, MOTOR_UNIT_RAD, MOTOR_REFERENCE_OUTPUT_AXIS,

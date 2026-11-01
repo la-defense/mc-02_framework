@@ -150,6 +150,21 @@ static void control_at(uint64_t at_us)
 }
 
 #if defined(CHASSIS_BOARD)
+static int feedback_sample_updated_after_caller_tick(void)
+{
+    Motor_Init_Config_s config = motor_config(1u);
+    DJIMotorInstance *motor = DJIMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+
+    // 其他任务取时后，电机任务在下一毫秒发布新反馈。
+    now_us = 101000u;
+    receive(motor, 101000u, 101u, 20, 200);
+    Motor_Feedback_Snapshot_s feedback = {0};
+    TEST_CHECK(DJIMotorGetFeedbackSnapshot(motor, 100u, &feedback) == MOTOR_FEEDBACK_OK);
+    TEST_CHECK(feedback.speed.valid != 0u && feedback.current.valid != 0u);
+    return EXIT_SUCCESS;
+}
+
 static int chassis_safety_output_gate(void)
 {
     RobotSafetyInit();
@@ -454,6 +469,8 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
 #if defined(CHASSIS_BOARD)
+    if (strcmp(argv[1], "feedback-after-observed-tick") == 0)
+        return feedback_sample_updated_after_caller_tick();
     if (strcmp(argv[1], "chassis-safety-output") == 0)
         return chassis_safety_output_gate();
 #endif

@@ -4,6 +4,8 @@
 #include "robot_can_bridge.h"
 #include "robot_topics.h"
 #include "can_time_sync.h"
+#include "can_topic_wire.h"
+#include "chassis_topic_codec.h"
 #include "fdcan.h"
 #include "test_check.h"
 #if defined(CHASSIS_BOARD)
@@ -80,6 +82,23 @@ uint8_t CANGetTxRequestState(uint32_t request_id, CAN_TxResult_t *result)
 
 uint8_t CANCancelTxRequest(uint32_t request_id) { return request_id != 0u; }
 
+#if defined(CHASSIS_BOARD)
+static void receive_topic_message(const CanTopicMessage_t *message, uint8_t sequence)
+{
+    CanTopicFrame_t topic_frames[CAN_TOPIC_MAX_FRAMES];
+    size_t topic_frame_count = 0u;
+    TEST_CHECK(CanTopicEncode(message, sequence, topic_frames, CAN_TOPIC_MAX_FRAMES,
+                              &topic_frame_count) == CAN_TOPIC_OK);
+    for (size_t i = 0u; i < topic_frame_count; ++i)
+    {
+        memcpy(registered_can.rx_buff, topic_frames[i].bytes, topic_frames[i].length);
+        registered_can.rx_len = topic_frames[i].length;
+        registered_can.rx_timestamp_ms = now_ms;
+        receive_callback(&registered_can);
+    }
+}
+#endif
+
 int main(void)
 {
     TimeMappingState_t state = {.accepted_samples = 123u};
@@ -139,6 +158,39 @@ int main(void)
     TEST_CHECK(RobotCanBridgeGetTimeSyncState(&state, &updated_ms) && !state.synchronized);
     RobotCanBridgeService();
     TEST_CHECK(RobotCanBridgeGetTimeSyncState(&state, &updated_ms) && state.synchronized);
+#if defined(CHASSIS_BOARD)
+    // 新停车命令到达时，底盘任务尚未运行，发送侧也必须先看到许可撤销。
+    RobotSafetyInit();
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetySnapshot_t safety_snapshot = {0};
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety_snapshot));
+    now_ms = 1410u;
+    TEST_CHECK(RobotSafetyTryGrantRemoteChassisPermit(
+        safety_snapshot.chassis_inhibit_generation, now_ms, 50u, now_ms));
+    RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReadyAt(now_ms));
+
+    Chassis_Ctrl_Cmd_s chassis_command = {.vx = 100.0f, .chassis_mode = CHASSIS_NO_FOLLOW};
+    CanTopicMessage_t chassis_message = {
+        .topic_id = ROBOT_TOPIC_CHASSIS_COMMAND,
+        .length = CHASSIS_COMMAND_WIRE_BYTES,
+        .source_ms = 2409u,
+        .first_rx_ms = now_ms,
+    };
+    TEST_CHECK(ChassisCommandEncode(&chassis_command, chassis_message.payload,
+                                   sizeof(chassis_message.payload)) == CHASSIS_CODEC_OK);
+    receive_topic_message(&chassis_message, 40u);
+    TEST_CHECK(RobotSafetyIsReadyAt(now_ms));
+
+    chassis_command = (Chassis_Ctrl_Cmd_s){.chassis_mode = CHASSIS_ZERO_FORCE};
+    chassis_message.source_ms = 2410u;
+    TEST_CHECK(ChassisCommandEncode(&chassis_command, chassis_message.payload,
+                                   sizeof(chassis_message.payload)) == CHASSIS_CODEC_OK);
+    receive_topic_message(&chassis_message, 41u);
+    TEST_CHECK(!RobotSafetyIsReadyAt(now_ms));
+#endif
     now_ms = 1905u;
     TEST_CHECK(RobotCanBridgeGetTimeSyncState(&state, &updated_ms) && !state.synchronized);
 #if defined(CHASSIS_BOARD)
@@ -147,7 +199,7 @@ int main(void)
     RobotSafetySetImuValid(1u);
     RobotSafetySetCalibValid(1u);
     RobotSafetySetTaskHealthy(1u);
-    RobotSafetySnapshot_t safety_snapshot = {0};
+    safety_snapshot = (RobotSafetySnapshot_t){0};
     TEST_CHECK(RobotSafetyGetSnapshot(&safety_snapshot));
     TEST_CHECK(RobotSafetyTryGrantRemoteChassisPermit(
         safety_snapshot.chassis_inhibit_generation, now_ms, 50u, now_ms));
