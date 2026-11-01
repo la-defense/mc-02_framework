@@ -188,8 +188,33 @@ static int ConcurrentSafetySnapshots(void)
 }
 #endif
 
+static int ImmediateInhibit(void)
+{
+    /* 上报后不运行状态机，验证旧 READY 状态不能继续授权。 */
+    for (unsigned scenario = 0; scenario < 8; ++scenario) {
+        HealthyInputs();
+        RobotSafetyRequestEnable();
+        RobotSafetyUpdate();
+        CHECK(RobotSafetyIsReady());
+        switch (scenario) {
+        case 0: RobotFaultReport(ROBOT_FAULT_CAN_BUSOFF); break;
+        case 1: EstopRequest(ESTOP_REASON_MANUAL); break;
+        case 2: RobotSafetyRequestDisable(); break;
+        case 3: RobotSafetyRequestCalib(1); break;
+        case 4: RobotSafetySetRcOnline(0); break;
+        case 5: RobotSafetySetImuValid(0); break;
+        case 6: RobotSafetySetCalibValid(0); break;
+        default: RobotSafetySetTaskHealthy(0); break;
+        }
+        CHECK(RobotSafetyGetState() == ROBOT_READY);
+        CHECK(!RobotSafetyIsReady());
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "immediate")) return ImmediateInhibit();
 #ifdef MC02_THREAD_TEST
     if (argc > 1 && !strcmp(argv[1], "threads")) return ConcurrentSafetySnapshots();
 #endif

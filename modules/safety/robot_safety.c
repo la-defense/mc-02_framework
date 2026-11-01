@@ -269,7 +269,13 @@ Robot_Status_e RobotSafetyGetState(void)
 
 uint8_t RobotSafetyIsReady(void)
 {
-    return RobotSafetyGetState() == ROBOT_READY ? 1u : 0u;
+    const uint32_t previous = RobotSafetyEnterCritical();
+    const uint8_t ready = (robot_state == ROBOT_READY && fault_flags == ROBOT_FAULT_NONE &&
+                           rc_online != 0u && imu_valid != 0u && calib_valid != 0u &&
+                           task_healthy != 0u && enable_requested != 0u &&
+                           calib_requested == 0u && estop_latched == 0u) ? 1u : 0u;
+    RobotSafetyExitCritical(previous);
+    return ready;
 }
 
 uint32_t RobotSafetyGetFaults(void)

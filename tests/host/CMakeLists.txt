@@ -755,6 +755,7 @@ target_include_directories(robot_safety_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_safety_test PRIVATE ../../application ../../modules/imu
   ../../modules/master_machine ../../modules/safety ../../bsp/usart)
 add_test(NAME production_safety_reported_faults COMMAND robot_safety_test)
+add_test(NAME production_safety_immediate_inhibit COMMAND robot_safety_test immediate)
 add_test(NAME production_safety_fault_recovery_priority COMMAND robot_safety_test recovery)
 add_test(NAME production_safety_init_failure_sticky COMMAND robot_safety_test init-failure)
 add_test(NAME production_safety_reset_recovery_lockout COMMAND robot_safety_test reset-lockout)
