@@ -780,6 +780,9 @@ if(UNIX AND NOT APPLE)
   add_test(NAME production_ins_fusion_backend_init_failure COMMAND ins_filter_fusion_test --init-failure)
   add_executable(kf_matrix_failure_test kf_matrix_failure_test.c)
   target_link_libraries(kf_matrix_failure_test PRIVATE mc02_kf)
+  # 故障注入测试直接包装 CMSIS 符号；仅该测试显式使用后端头文件与可移植宏。
+  target_include_directories(kf_matrix_failure_test PRIVATE ${MC02_DSP_ROOT}/Include)
+  target_compile_definitions(kf_matrix_failure_test PRIVATE __GNUC_PYTHON__)
   target_link_options(kf_matrix_failure_test PRIVATE -Wl,--wrap=arm_mat_mult_f32
     -Wl,--wrap=arm_mat_add_f32 -Wl,--wrap=arm_mat_sub_f32
     -Wl,--wrap=arm_mat_trans_f32 -Wl,--wrap=arm_mat_inverse_f32)
@@ -1500,6 +1503,9 @@ endif()
 add_executable(rls_test rls_test.c ../../modules/algorithm/RLS.c)
 target_include_directories(rls_test PRIVATE ../../modules/algorithm)
 target_link_libraries(rls_test PRIVATE mc02_dsp_host)
+# RLS 故障注入包装 CMSIS 符号，测试本身显式依赖后端头和可移植分支。
+target_include_directories(rls_test PRIVATE ${MC02_DSP_ROOT}/Include)
+target_compile_definitions(rls_test PRIVATE __GNUC_PYTHON__)
 if(UNIX)
   target_link_libraries(rls_test PRIVATE m)
   find_package(Threads REQUIRED)

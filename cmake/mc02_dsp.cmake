@@ -17,12 +17,13 @@ function(mc02_add_dsp target host)
   add_library(${target} STATIC ${MC02_DSP_SOURCES}
     ${MC02_TRIG_INTERFACE_DIR}/fast_trig_cmsis.c # 三角函数中立接口的 CMSIS 后端。
     ${MC02_TRIG_INTERFACE_DIR}/dsp_matrix.c) # 矩阵中立接口的 CMSIS 后端。
-  target_include_directories(${target} PUBLIC ${MC02_DSP_ROOT}/Include ${MC02_TRIG_INTERFACE_DIR})
+  target_include_directories(${target} PUBLIC ${MC02_TRIG_INTERFACE_DIR}) # 调用方只继承框架数值接口。
+  target_include_directories(${target} PRIVATE ${MC02_DSP_ROOT}/Include) # 厂商头仅供后端编译。
   target_compile_definitions(${target} PRIVATE ARM_MATH_MATRIX_CHECK ARM_DSP_CONFIG_TABLES
     ARM_FAST_ALLOW_TABLES ARM_TABLE_SIN_F32)
   target_compile_options(${target} PRIVATE -fno-fast-math -ffunction-sections -fdata-sections)
   if(host)
-    target_compile_definitions(${target} PUBLIC __GNUC_PYTHON__)
+    target_compile_definitions(${target} PRIVATE __GNUC_PYTHON__) # 可移植分支宏不泄漏给业务。
   else()
     target_include_directories(${target} PRIVATE ${MC02_DSP_ROOT}/../../../Drivers/CMSIS/Include)
   endif()
