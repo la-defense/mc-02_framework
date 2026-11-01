@@ -384,6 +384,7 @@ void RobotTask()
     RefereeBenchTask();
 #endif
 #if defined(MC02_CONFIG_GENERATED)
+    // 依赖计划未接受启动的模块可能尚未初始化，不能仅凭编译开关调用其业务入口。
     if (RobotBuildModuleStarted(ROBOT_MODULE_VISION))
         VisionSend();
 #else
@@ -391,6 +392,7 @@ void RobotTask()
 #endif
 #else
 #if defined(MC02_CONFIG_GENERATED)
+// 只调度启动计划已接受的模块；被依赖失败阻断或初始化失败的模块保持不调用。
 #if MC02_FEATURE_COMMAND
     if (RobotBuildModuleStarted(ROBOT_MODULE_COMMAND))
         RobotCMDTask();

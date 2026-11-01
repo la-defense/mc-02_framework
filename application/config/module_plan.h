@@ -23,8 +23,10 @@ typedef struct {
 } RobotModulePlan_t;
 typedef struct {
     uint32_t started; /**< 初始化或异步启动已接受，不表示传感器数据已经可信。 */
-    uint32_t failed, blocked;
-    uint8_t core_failed, failed_module;
+    uint32_t failed; /**< 启动或运行失败的模块位图，位号对应 RobotModule_t。 */
+    uint32_t blocked; /**< 因依赖失败而未启动的模块位图，位号对应 RobotModule_t。 */
+    uint8_t core_failed; /**< 非零表示核心功能或其必需依赖已失败。 */
+    uint8_t failed_module; /**< 首个导致核心失败的模块编号；无核心失败时为 ROBOT_MODULE_COUNT。 */
 } RobotModuleStartup_t;
 /** @brief 初始化一个模块；只允许启动计划中启用的模块。
  * @param[in] context 原样传给回调的上下文，可为NULL。
