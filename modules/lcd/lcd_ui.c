@@ -571,7 +571,7 @@ static void draw_page1_static(void)
     draw_label_ascii(8, "CAL"); /* 标定来源 + 标定温度 */
 }
 
-// 第 1 页读取当前加热与姿态数据；姿态地址不可用时以 -- 替代角度。
+// 第 1 页按构建选择显示温控或禁用占位值，并显示姿态数据；姿态不可用时以 -- 替代角度。
 static void draw_page1_values(void)
 {
 #if MC02_FEATURE_HEATER

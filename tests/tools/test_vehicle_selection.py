@@ -10,18 +10,17 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 class VehicleSelectionTest(unittest.TestCase):
     @staticmethod
-    def _evaluate_feature_disabled_condition(expression):
-        # 只关闭视觉／温控开关；未知平台条件按可达处理，避免无关宏掩盖未保护调用。
+    def _evaluate_feature_disabled_condition(expression, feature_values):
+        # 未知平台条件按可达处理，避免无关宏掩盖未保护调用。
         expression = re.sub(
             r"defined\s*\(?\s*([A-Za-z_]\w*)\s*\)?",
             lambda match: "1",
             expression,
         )
         values = {
-            "MC02_FEATURE_VISION": "0",
-            "MC02_FEATURE_HEATER": "0",
             "MC02_VISION_PROTOCOL_V2": "1",
         }
+        values.update(feature_values)
         expression = re.sub(
             r"\b[A-Za-z_]\w*\b",
             lambda match: values.get(match.group(0), "1"),
@@ -93,8 +92,13 @@ class VehicleSelectionTest(unittest.TestCase):
             raise AssertionError(f"unparsed preprocessor condition: {expression}")
         return bool(result)
 
-    def assert_feature_calls_disabled(self, relative_path, call_pattern):
+    def assert_feature_calls_disabled(self, relative_path, call_pattern, disabled_feature):
         source = (ROOT / relative_path).read_text(encoding="utf-8")
+        feature_values = {
+            "MC02_FEATURE_VISION": "1",
+            "MC02_FEATURE_HEATER": "1",
+        }
+        feature_values[f"MC02_FEATURE_{disabled_feature}"] = "0"
         conditions = []
         active = True
         for line in source.splitlines():
@@ -107,13 +111,13 @@ class VehicleSelectionTest(unittest.TestCase):
                         expression = f"defined({expression.strip()})"
                     elif kind == "ifndef":
                         expression = f"!defined({expression.strip()})"
-                    branch_active = self._evaluate_feature_disabled_condition(expression)
+                    branch_active = self._evaluate_feature_disabled_condition(expression, feature_values)
                     conditions.append([parent_active, branch_active, parent_active and branch_active])
                     active = parent_active and branch_active
                 elif kind == "elif":
                     parent_active, branch_taken, _ = conditions[-1]
                     branch_active = (not branch_taken and
-                                     self._evaluate_feature_disabled_condition(expression))
+                                     self._evaluate_feature_disabled_condition(expression, feature_values))
                     conditions[-1][1] = branch_taken or branch_active
                     conditions[-1][2] = parent_active and branch_active
                     active = conditions[-1][2]
@@ -214,18 +218,19 @@ file(WRITE "${{CMAKE_BINARY_DIR}}/selected-sources.txt" "${{MC02_SELECTED_SOURCE
                         self.assertNotIn(vision_source, sources)
                     self.assertEqual("modules/imu/imu_heater.c" in sources, heater_enabled)
 
-        for path, pattern in (
-            ("modules/imu/ins_task.c", r"\bVisionUpdate(?:Tx|IMUSample)\s*\("),
-            ("application/robot.c", r"\bVision(?:Init|Send)\s*\("),
-            ("application/vehicle_health_port_stm32.c", r"\bVisionGetSnapshot\s*\("),
-            ("application/robot.c", r"\bIMUHeater(?:BeginLongOperation|EndLongOperation)\s*\("),
-            ("application/robot_task.h", r"\bIMUHeaterForceOff\s*\("),
-            ("application/vehicle_health_port_stm32.c", r"\bIMUHeaterGetStatus\s*\("),
-            ("modules/imu/ins_task.c", r"\bIMUHeater(?:Init|Update|ForceOff)\s*\("),
-            ("modules/BMI088/bmi088.c", r"\bIMUHeater(?:BeginLongOperation|EndLongOperation)\s*\("),
-            ("modules/lcd/lcd_ui.c", r"\bIMUHeaterGetStatus\s*\("),
+        for feature, path, pattern in (
+            ("VISION", "modules/imu/ins_task.c", r"\bVisionUpdate(?:Tx|IMUSample)\s*\("),
+            ("VISION", "application/robot.c", r"\bVision(?:Init|Send)\s*\("),
+            ("VISION", "application/vehicle_health_port_stm32.c", r"\bVisionGetSnapshot\s*\("),
+            ("HEATER", "application/robot.c", r"\bIMUHeater(?:BeginLongOperation|EndLongOperation)\s*\("),
+            ("HEATER", "application/robot_task.h", r"\bIMUHeaterForceOff\s*\("),
+            ("HEATER", "application/vehicle_health_port_stm32.c", r"\bIMUHeaterGetStatus\s*\("),
+            ("HEATER", "modules/imu/ins_task.c", r"\bIMUHeater(?:Init|Update|ForceOff)\s*\("),
+            ("HEATER", "modules/BMI088/bmi088.c", r"\bIMUHeater(?:BeginLongOperation|EndLongOperation)\s*\("),
+            ("HEATER", "modules/lcd/lcd_ui.c", r"\bIMUHeaterGetStatus\s*\("),
         ):
-            self.assert_feature_calls_disabled(path, pattern)
+            with self.subTest(disabled_feature=feature, source=path):
+                self.assert_feature_calls_disabled(path, pattern, feature)
 
     def test_graph(self):
         prefix = 'set(MC02_DEP_SAFETY "")\nset(MC02_DEP_IMU SAFETY)\n'
