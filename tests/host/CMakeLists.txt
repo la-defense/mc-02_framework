@@ -759,6 +759,12 @@ add_test(NAME production_safety_immediate_inhibit COMMAND robot_safety_test imme
 add_test(NAME production_safety_fault_recovery_priority COMMAND robot_safety_test recovery)
 add_test(NAME production_safety_init_failure_sticky COMMAND robot_safety_test init-failure)
 add_test(NAME production_safety_reset_recovery_lockout COMMAND robot_safety_test reset-lockout)
+add_executable(robot_safety_chassis_test robot_safety_chassis_test.c ../../modules/safety/robot_safety.c)
+target_include_directories(robot_safety_chassis_test BEFORE PRIVATE robot_cmd_fakes)
+target_include_directories(robot_safety_chassis_test PRIVATE ../../application ../../modules/imu
+  ../../modules/master_machine ../../modules/safety ../../bsp/usart)
+target_compile_definitions(robot_safety_chassis_test PRIVATE CHASSIS_BOARD=1)
+add_test(NAME production_safety_chassis_remote_permit COMMAND robot_safety_chassis_test)
 if(UNIX AND NOT APPLE)
   find_package(Threads REQUIRED)
   add_executable(robot_safety_thread_test robot_safety_test.c
@@ -892,10 +898,12 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
 endforeach()
 add_executable(chassis_dual_topic_test chassis_task_test.c
   ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
-  ../../application/topics/robot_topics.c ../../modules/message_center/message_center.c)
+  ../../application/topics/robot_topics.c ../../modules/message_center/message_center.c
+  ../../modules/safety/robot_safety.c)
 target_include_directories(chassis_dual_topic_test BEFORE PRIVATE chassis_fakes)
 target_include_directories(chassis_dual_topic_test PRIVATE ../../application ../../application/chassis
-  ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine)
+  ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine
+  ../../modules/safety ../../bsp/usart)
 target_compile_definitions(chassis_dual_topic_test PRIVATE CHASSIS_BOARD=1 CHASSIS_TASK_EXPECT_CONFIGURED=1
   CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=10.0f
   CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
@@ -908,11 +916,11 @@ add_executable(chassis_bridge_integration_test chassis_task_test.c
   ../../modules/message_center/message_center.c ../../modules/can_comm/can_topic_link.c
   ../../modules/can_comm/can_topic_bridge.c ../../modules/can_comm/can_topic_transport.c
   ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_time_sync.c
-  ../../modules/time_sync/time_mapping.c)
+  ../../modules/time_sync/time_mapping.c ../../modules/safety/robot_safety.c)
 target_include_directories(chassis_bridge_integration_test BEFORE PRIVATE chassis_fakes can_comm_fakes)
 target_include_directories(chassis_bridge_integration_test PRIVATE ../../application ../../application/chassis
   ../../application/topics ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine
-  ../../modules/can_comm ../../modules/time_sync)
+  ../../modules/can_comm ../../modules/time_sync ../../modules/safety ../../bsp/usart)
 target_compile_definitions(chassis_bridge_integration_test PRIVATE CHASSIS_BOARD=1 CHASSIS_BRIDGE_INTEGRATION=1
   CHASSIS_TASK_EXPECT_CONFIGURED=1 CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=10.0f
   CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)

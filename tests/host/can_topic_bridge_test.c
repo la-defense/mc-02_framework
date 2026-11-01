@@ -171,7 +171,7 @@ int main(void)
     TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),123u,&freshness)==MESSAGE_OK &&
                freshness.source_time_ms==118u && freshness.received_time_ms==121u && output==value);
     time_offset=99u;
-    TEST_CHECK(CanTopicBridgeCheckSync(&bridge,123u)==CAN_BRIDGE_UNSYNCED);
+    TEST_CHECK(CanTopicBridgeCheckSync(&bridge,123u)==CAN_BRIDGE_EXPIRED);
     TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),123u,&freshness)==MESSAGE_ERR_EMPTY);
     time_offset=100u;
     message.source_ms=21u; message.first_rx_ms=123u;
@@ -199,24 +199,21 @@ int main(void)
     TEST_CHECK(link.last_receive==CAN_BRIDGE_OK);
     TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),133u,&freshness)==MESSAGE_OK &&
                freshness.source_time_ms==128u && freshness.received_time_ms==131u);
-    // 旧数据超期后，新消息分几轮到达；每轮检查不能反复丢弃正在接收的新分片。
+    // 旧数据超期时已有新消息首片；期限撤销旧值但不能丢弃这组新分片。
     CanTopicBridgeStatus_t sync_status=CAN_BRIDGE_OK;
-    fake_now_ms=180u;
-    (void)CanTopicLinkService(&link,180u,&id,&sync_status);
-    TEST_CHECK(sync_status==CAN_BRIDGE_UNSYNCED);
-    TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),180u,NULL)==MESSAGE_ERR_EMPTY);
-    TEST_CHECK(CanTopicBridgePublish(&link.bridge,&message,180u)==CAN_BRIDGE_WIRE);
     message.source_ms=81u;
     TEST_CHECK(CanTopicEncode(&message,10u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     for (size_t i=0u;i<count;++i) {
         registered_can.rx_len=frames[i].length;
         memcpy(registered_can.rx_buff,frames[i].bytes,frames[i].length);
-        fake_now_ms=181u+(uint32_t)i; registered_can.rx_timestamp_ms=fake_now_ms;
+        fake_now_ms=179u+(uint32_t)i; registered_can.rx_timestamp_ms=fake_now_ms;
         registered_callback(&registered_can);
         (void)CanTopicLinkService(&link,fake_now_ms,&id,&sync_status);
-        TEST_CHECK(sync_status==CAN_BRIDGE_OK);
+        TEST_CHECK(sync_status==(i==0u ? CAN_BRIDGE_EXPIRED : CAN_BRIDGE_OK));
     }
-    TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),fake_now_ms,NULL)==MESSAGE_OK && output==value);
+    TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),fake_now_ms,&freshness)==MESSAGE_OK && output==value);
+    TEST_CHECK(CanTopicBridgePublish(&link.bridge,&message,fake_now_ms)==CAN_BRIDGE_WIRE);
+    TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),fake_now_ms,&freshness)==MESSAGE_OK && output==value);
     synchronized=0u; id=99u;
     (void)CanTopicLinkService(&link,190u,&id,&sync_status);
     TEST_CHECK(sync_status==CAN_BRIDGE_UNSYNCED);

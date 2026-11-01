@@ -15,6 +15,7 @@ static uint8_t task_healthy = 1u;
 static uint8_t enable_requested = 0u;
 static uint8_t calib_requested = 0u;
 static uint8_t estop_latched = 0u;
+static uint8_t remote_chassis_permit = 0u;
 static Estop_Reason_e estop_reason = ESTOP_REASON_NONE;
 static uint8_t imu_fault_logged = 0u;
 static uint8_t task_fault_logged = 0u;
@@ -77,6 +78,7 @@ void RobotSafetyInit(void)
     enable_requested = 0u;
     calib_requested = 0u;
     estop_latched = 0u;
+    remote_chassis_permit = 0u;
     estop_reason = ESTOP_REASON_NONE;
     imu_fault_logged = 0u;
     task_fault_logged = 0u;
@@ -189,6 +191,13 @@ void RobotSafetyRequestCalib(uint8_t enable)
     RobotSafetyExitCritical(previous);
 }
 
+void RobotSafetySetRemoteChassisPermit(uint8_t permitted)
+{
+    const uint32_t previous = RobotSafetyEnterCritical();
+    remote_chassis_permit = permitted != 0u ? 1u : 0u;
+    RobotSafetyExitCritical(previous);
+}
+
 void RobotFaultReport(Robot_Fault_e fault)
 {
     const uint32_t previous = RobotSafetyEnterCritical();
@@ -270,10 +279,18 @@ Robot_Status_e RobotSafetyGetState(void)
 uint8_t RobotSafetyIsReady(void)
 {
     const uint32_t previous = RobotSafetyEnterCritical();
+#if defined(CHASSIS_BOARD)
+    const uint8_t ready = (robot_state == ROBOT_READY &&
+                           (fault_flags & (uint32_t)~ROBOT_FAULT_RC_OFFLINE) == ROBOT_FAULT_NONE &&
+                           imu_valid != 0u && calib_valid != 0u && task_healthy != 0u &&
+                           remote_chassis_permit != 0u && calib_requested == 0u &&
+                           estop_latched == 0u) ? 1u : 0u;
+#else
     const uint8_t ready = (robot_state == ROBOT_READY && fault_flags == ROBOT_FAULT_NONE &&
                            rc_online != 0u && imu_valid != 0u && calib_valid != 0u &&
                            task_healthy != 0u && enable_requested != 0u &&
                            calib_requested == 0u && estop_latched == 0u) ? 1u : 0u;
+#endif
     RobotSafetyExitCritical(previous);
     return ready;
 }
@@ -302,6 +319,7 @@ uint8_t RobotSafetyGetSnapshot(RobotSafetySnapshot_t *snapshot)
     candidate.enable_requested = enable_requested;
     candidate.calib_requested = calib_requested;
     candidate.estop_latched = estop_latched;
+    candidate.remote_chassis_permit = remote_chassis_permit;
     candidate.estop_reason = estop_reason;
     RobotSafetyExitCritical(previous);
 
@@ -332,6 +350,35 @@ void RobotSafetyUpdate(void)
     const uint32_t previous = RobotSafetyEnterCritical();
     const uint32_t active_faults = fault_flags;
 
+#if defined(CHASSIS_BOARD)
+    // 底盘板不接收遥控器；运动授权来自云台板的新鲜命令并继续受本地状态约束。
+    if ((active_faults & (ROBOT_FAULT_INIT_FAILURE | ROBOT_FAULT_RESET_LOCKOUT)) != 0u)
+    {
+        calib_requested = 0u;
+        new_state = ROBOT_FAULT;
+    }
+    else if (estop_latched != 0u)
+    {
+        new_state = ROBOT_ESTOP;
+    }
+    else if (task_healthy == 0u ||
+             (active_faults & (uint32_t)~ROBOT_FAULT_RC_OFFLINE) != 0u)
+    {
+        new_state = ROBOT_FAULT;
+    }
+    else if (calib_requested != 0u)
+    {
+        new_state = ROBOT_CALIB;
+    }
+    else if (imu_valid == 0u || calib_valid == 0u || remote_chassis_permit == 0u)
+    {
+        new_state = ROBOT_SAFE;
+    }
+    else
+    {
+        new_state = ROBOT_READY;
+    }
+#else
     if ((active_faults & (ROBOT_FAULT_INIT_FAILURE | ROBOT_FAULT_RESET_LOCKOUT)) != 0u)
     {
         enable_requested = 0u;
@@ -380,6 +427,7 @@ void RobotSafetyUpdate(void)
             new_state = ROBOT_SAFE;
         }
     }
+#endif
 
     old_state = robot_state;
     robot_state = new_state;

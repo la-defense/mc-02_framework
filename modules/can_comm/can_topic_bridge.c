@@ -151,19 +151,30 @@ CanTopicBridgeStatus_t CanTopicBridgeCheckSync(CanTopicBridge_t *bridge, uint32_
 {
     if (bridge==NULL || bridge->incoming==NULL || bridge->transport==NULL) return CAN_BRIDGE_ARGUMENT;
     uint32_t mapped=0u, uncertainty=0u;
-    if (bridge->map_time!=NULL && bridge->map_time(bridge->map_context,bridge->last_remote_source_ms,
-        now_ms,&mapped,&uncertainty) && uncertainty <= (uint32_t)INT32_MAX) {
+    const uint8_t mapping_valid = (uint8_t)(bridge->map_time!=NULL &&
+        bridge->map_time(bridge->map_context,bridge->last_remote_source_ms,
+                         now_ms,&mapped,&uncertainty) && uncertainty <= (uint32_t)INT32_MAX);
+    if (mapping_valid != 0u)
+    {
         const uint32_t earliest=mapped-uncertainty;
         const uint32_t moved_earlier=bridge->last_conservative_ms-earliest;
-        // 新映射不能让已发布值的真实年龄大于原先估计，过期也要撤销。
-        if (!bridge->published_valid ||
-            ((uint32_t)(now_ms-earliest)<=bridge->incoming_desc.max_age_ms &&
-             (moved_earlier==0u || moved_earlier>=0x80000000u))) return CAN_BRIDGE_OK;
+        const uint8_t source_fresh = (uint8_t)((uint32_t)(now_ms-earliest) <=
+                                                bridge->incoming_desc.max_age_ms &&
+            (moved_earlier==0u || moved_earlier>=0x80000000u));
+        if (bridge->published_valid == 0u || source_fresh != 0u)
+            return CAN_BRIDGE_OK;
+
+        // 旧值过期只撤销旧快照；正在接收的新消息仍可完成分片。
+        if (MessagePublisherInvalidate(bridge->incoming)!=MESSAGE_OK)
+            return CAN_BRIDGE_PUBLISH;
+        bridge->published_valid=0u;
+        return CAN_BRIDGE_EXPIRED;
     }
-    // 失同步时旧值不可继续被读取，未完成分片也不能在恢复后拼到新消息。
+
+    // 时钟映射失效时旧值不可读取，未完成分片也不能跨失同步继续拼接。
     bridge->transport->receiver.active=0u;
     if (MessagePublisherInvalidate(bridge->incoming)!=MESSAGE_OK) return CAN_BRIDGE_PUBLISH;
-    // 保留上次来源时间用于拒绝旧消息；撤销后允许下一条新消息跨任务周期组装。
+    // 保留上次来源时间用于拒绝旧消息；时钟恢复后再接收新的完整消息。
     bridge->published_valid=0u;
     return CAN_BRIDGE_UNSYNCED;
 }

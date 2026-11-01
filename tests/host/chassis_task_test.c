@@ -5,6 +5,9 @@
 #include "referee_task.h"
 #include "super_cap.h"
 #include "general_def.h"
+#ifdef CHASSIS_BOARD
+#include "robot_safety.h"
+#endif
 #if defined(CHASSIS_BRIDGE_INTEGRATION)
 #include "can_topic_link.h"
 #include "chassis_topic_codec.h"
@@ -46,7 +49,7 @@ void DJIMotorStop(DJIMotorInstance *motor)
 void DJIMotorEnable(DJIMotorInstance *motor)
 { if (motor) { motor->enabled = 1; ++motor->enable_count; motor->enable_order = ++operation_order; } }
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
-{ (void)motor; memset(summary, 0, sizeof(*summary)); }
+{ if (summary) { memset(summary, 0, sizeof(*summary)); if (motor) summary->online = motor->feedback_online; } }
 SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config) { (void)config; return fail_cap ? NULL : &cap; }
 RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *config)
 { (void)handle; (void)config; return REFEREE_OK; }
@@ -77,6 +80,11 @@ static uint8_t bridge_map(void *context,uint32_t remote,uint32_t now,uint32_t *l
 
 static int test_bridge_to_chassis(void)
 {
+    RobotSafetyInit();
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    for (unsigned i=0u;i<4u;++i) motors[i].feedback_online=1u;
     MessagePublisher_t *publisher=MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
     MessageSubscriber_t *reader=MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CHASSIS);
     const CanTopicCodec_t decoder={ChassisCommandBridgeDecode,NULL,CHASSIS_COMMAND_WIRE_BYTES};
@@ -96,26 +104,37 @@ static int test_bridge_to_chassis(void)
         (void)CanTopicLinkService(&link,test_tick,&id,&sync);
     }
     ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    message.source_ms=15u;
+    CHECK(CanTopicEncode(&message,2u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    for (size_t i=0u;i<count;++i) {
+        test_tick=24u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
+        bridge_receive(&bridge_can);
+        uint32_t id=0u; CanTopicBridgeStatus_t sync;
+        (void)CanTopicLinkService(&link,test_tick,&id,&sync);
+    }
+    ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled && motors[i].ref!=0.0f);
     // 重复的完整帧组不能把原命令的来源时间变成更晚的时间。
     for (size_t i=0u;i<count;++i) {
-        test_tick=18u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        test_tick=29u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
         bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
         bridge_receive(&bridge_can);
     }
     MessageFreshness_t freshness; Chassis_Ctrl_Cmd_s output;
     CHECK(MessageReadSnapshot(reader,&output,sizeof(output),test_tick,&freshness)==MESSAGE_OK &&
-          freshness.source_time_ms==8u && freshness.received_time_ms==11u);
-    test_tick=59u;
+          freshness.source_time_ms==13u && freshness.received_time_ms==24u);
+    test_tick=64u;
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
     uint32_t id=0u; CanTopicBridgeStatus_t sync;
     (void)CanTopicLinkService(&link,test_tick,&id,&sync);
-    message.source_ms=60u;
+    message.source_ms=20u;
     CHECK(CanTopicEncode(&message,2u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     frames[count-1u].bytes[2]^=1u;
     for (size_t i=0u;i<count;++i) {
-        test_tick=60u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        test_tick=64u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
         bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
         bridge_receive(&bridge_can);
         (void)CanTopicLinkService(&link,test_tick,&id,&sync);
@@ -123,16 +142,78 @@ static int test_bridge_to_chassis(void)
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
     CHECK(MessageReadSnapshot(reader,&output,sizeof(output),test_tick,&freshness)==MESSAGE_ERR_EMPTY);
-    message.source_ms=65u;
-    CHECK(CanTopicEncode(&message,3u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    message.source_ms=30u;
+    CHECK(CanTopicEncode(&message,4u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     for (size_t i=0u;i<count;++i) {
-        test_tick=66u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        test_tick=70u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
         bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
         bridge_receive(&bridge_can);
         (void)CanTopicLinkService(&link,test_tick,&id,&sync);
     }
     CHECK(MessageReadSnapshot(reader,&output,sizeof(output),test_tick,&freshness)==MESSAGE_OK &&
-          freshness.source_time_ms==63u && freshness.received_time_ms==66u);
+          freshness.source_time_ms==28u && freshness.received_time_ms==70u);
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    message.source_ms=35u;
+    CHECK(CanTopicEncode(&message,5u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    for (size_t i=0u;i<count;++i) {
+        test_tick=76u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
+        bridge_receive(&bridge_can);
+        (void)CanTopicLinkService(&link,test_tick,&id,&sync);
+    }
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled && motors[i].ref!=0.0f);
+
+    // 本地任一轮电机离线后停止；重新在线时旧话题序号不能直接恢复运动。
+    motors[2].feedback_online=0u;
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    motors[2].feedback_online=1u;
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    message.source_ms=40u;
+    CHECK(CanTopicEncode(&message,6u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    for (size_t i=0u;i<count;++i) {
+        test_tick=81u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
+        bridge_receive(&bridge_can);
+        (void)CanTopicLinkService(&link,test_tick,&id,&sync);
+    }
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled && motors[i].ref!=0.0f);
+
+    // IMU 失效和本地急停均撤销输出；清除后等新的完整命令才重新接管。
+    RobotSafetySetImuValid(0u);
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    RobotSafetySetImuValid(1u);
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    message.source_ms=45u;
+    CHECK(CanTopicEncode(&message,7u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    for (size_t i=0u;i<count;++i) {
+        test_tick=86u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
+        bridge_receive(&bridge_can);
+        (void)CanTopicLinkService(&link,test_tick,&id,&sync);
+    }
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled && motors[i].ref!=0.0f);
+    EstopRequest(ESTOP_REASON_MANUAL);
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    CHECK(EstopClear());
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    message.source_ms=50u;
+    CHECK(CanTopicEncode(&message,8u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    for (size_t i=0u;i<count;++i) {
+        test_tick=91u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
+        bridge_receive(&bridge_can);
+        (void)CanTopicLinkService(&link,test_tick,&id,&sync);
+    }
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled && motors[i].ref!=0.0f);
     return 0;
@@ -152,12 +233,20 @@ int main(int argc, char **argv)
     return test_bridge_to_chassis();
 #endif
 #ifdef CHASSIS_BOARD
+    RobotSafetyInit();
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    for (unsigned i=0u;i<4u;++i) motors[i].feedback_online=1u;
     // 未收到映射后的远端命令时保持停止；撤销已发布数据后立即停止。
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
     MessagePublisher_t *bridge=MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
     CHECK(bridge != NULL);
     Chassis_Ctrl_Cmd_s incoming={.vx=100.0f,.chassis_mode=CHASSIS_NO_FOLLOW};
+    CHECK(MessagePublishAt(bridge,&incoming,0u,0u,0u,MESSAGE_CLOCK_LOCAL_MAPPED)==MESSAGE_OK);
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
     CHECK(MessagePublishAt(bridge,&incoming,0u,0u,0u,MESSAGE_CLOCK_LOCAL_MAPPED)==MESSAGE_OK);
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled);

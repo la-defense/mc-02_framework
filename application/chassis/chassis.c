@@ -21,6 +21,9 @@
 #include "referee_task.h"
 #include "bsp_log.h"
 #include "general_def.h"
+#ifdef CHASSIS_BOARD
+#include "robot_safety.h"
+#endif
 #include <string.h>
 
 /* 底盘应用包含的模块和信息存储,底盘是单例模式,因此不需要为底盘建立单独的结构体 */
@@ -41,6 +44,11 @@ static Referee_Interactive_info_t ui_data; // UI数据，将底盘中的数据�
 
 static SuperCapInstance *cap;                                       // 超级电容
 static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left right forward back
+#ifdef CHASSIS_BOARD
+static uint8_t chassis_command_rearm_required = 1u;
+static uint8_t chassis_rearm_sequence_valid = 0u;
+static uint32_t chassis_rearm_sequence = 0u;
+#endif
 
 uint8_t ChassisInit(void)
 {
@@ -151,6 +159,29 @@ static void ChassisStopAndClear(void)
     DJIMotorSetRef(motor_rb, 0.0f);
 }
 
+#ifdef CHASSIS_BOARD
+static uint8_t ChassisMotorFeedbackIsHealthy(void)
+{
+    DJIMotorSummary_t summaries[4] = {{0}};
+    uint8_t healthy = 1u;
+    DJIMotorGetSummary(motor_lf, &summaries[0]);
+    DJIMotorGetSummary(motor_rf, &summaries[1]);
+    DJIMotorGetSummary(motor_lb, &summaries[2]);
+    DJIMotorGetSummary(motor_rb, &summaries[3]);
+
+    for (size_t i = 0u; i < sizeof(summaries) / sizeof(summaries[0]); ++i)
+    {
+        if (summaries[i].online == 0u)
+            healthy = 0u;
+    }
+    if (healthy != 0u)
+        RobotFaultClear(ROBOT_FAULT_MOTOR_OFFLINE);
+    else
+        RobotFaultReport(ROBOT_FAULT_MOTOR_OFFLINE);
+    return healthy;
+}
+#endif
+
 // 实际速度估计尚未实现，保留入口，不把空反馈当作已经测得的车速。
 static void EstimateSpeed()
 {
@@ -164,12 +195,50 @@ void ChassisTask()
 {
     // 单板消息和双板通信都按 50 ms 检查命令，失败后清零，不沿用旧速度。
     uint8_t command_fresh = 0u;
+    MessageFreshness_t command_freshness = {0};
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     command_fresh = (uint8_t)(MessageReadSnapshot(chassis_sub, &chassis_cmd_recv,
-        sizeof(chassis_cmd_recv), HAL_GetTick(), NULL) == MESSAGE_OK);
+        sizeof(chassis_cmd_recv), HAL_GetTick(), &command_freshness) == MESSAGE_OK);
 #endif
     if (!command_fresh)
         memset(&chassis_cmd_recv, 0, sizeof(chassis_cmd_recv));
+
+#ifdef CHASSIS_BOARD
+    const uint8_t command_requests_motion = (uint8_t)(command_fresh != 0u &&
+        chassis_cmd_recv.chassis_mode != CHASSIS_ZERO_FORCE);
+    const uint8_t motor_feedback_healthy = ChassisMotorFeedbackIsHealthy();
+    RobotSafetySetRemoteChassisPermit((uint8_t)(command_requests_motion && motor_feedback_healthy));
+    RobotSafetyUpdate();
+    uint8_t local_permit = (uint8_t)(RobotSafetyIsReady() && motor_feedback_healthy);
+    if (local_permit == 0u)
+    {
+        chassis_command_rearm_required = 1u;
+        chassis_rearm_sequence_valid = 0u;
+    }
+    else if (chassis_command_rearm_required != 0u)
+    {
+        if (command_fresh == 0u || command_freshness.valid == 0u)
+        {
+            local_permit = 0u;
+            chassis_rearm_sequence_valid = 0u;
+        }
+        else if (chassis_rearm_sequence_valid == 0u)
+        {
+            // 首次观察到本地条件恢复时记下当前命令；必须再等一条新命令。
+            chassis_rearm_sequence = command_freshness.sequence;
+            chassis_rearm_sequence_valid = 1u;
+            local_permit = 0u;
+        }
+        else if (command_freshness.sequence == chassis_rearm_sequence)
+        {
+            local_permit = 0u;
+        }
+        else
+        {
+            chassis_command_rearm_required = 0u;
+        }
+    }
+#endif
 
     ChassisMotionMode_e motion_mode = CHASSIS_MOTION_MODE_INVALID;
     // 只将支持的模式交给运动计算；停机或未知模式都保持无效，随后停止四轮。
@@ -210,9 +279,20 @@ void ChassisTask()
         .max_motor_speed_deg_s = CHASSIS_MAX_MOTOR_SPEED_DEG_S,
     };
     ChassisMotionOutput_s motion_output;
-    const uint8_t command_allowed = chassis_cmd_recv.chassis_mode != CHASSIS_ZERO_FORCE &&
+    const uint8_t command_allowed = command_fresh != 0u &&
+#ifdef CHASSIS_BOARD
+                                    local_permit != 0u &&
+#endif
+                                    chassis_cmd_recv.chassis_mode != CHASSIS_ZERO_FORCE &&
                                     ChassisMotionCalculate(&motion_input, &geometry, &limits,
                                                            &motion_output);
+#ifdef CHASSIS_BOARD
+    if (command_allowed == 0u && local_permit != 0u)
+    {
+        chassis_command_rearm_required = 1u;
+        chassis_rearm_sequence_valid = 0u;
+    }
+#endif
     if (!command_allowed)
     {
         // 配置、模式或数值不允许计算时，同时停机和清掉参考值，避免重新使能后使用旧速度。

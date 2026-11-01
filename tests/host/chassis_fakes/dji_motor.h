@@ -24,9 +24,10 @@ typedef struct {
 typedef struct {
     float ref;
     uint8_t enabled;
+    uint8_t feedback_online;
     unsigned stop_count, enable_count, set_ref_order, enable_order;
 } DJIMotorInstance;
-typedef struct { uint8_t unused; } DJIMotorSummary_t;
+typedef struct { uint8_t online; } DJIMotorSummary_t;
 enum { MOTOR_FEED = 0, SPEED_LOOP = 1, CURRENT_LOOP = 2, M3508 = 1,
        MOTOR_DIRECTION_NORMAL = 0, MOTOR_DIRECTION_REVERSE = 1 };
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config);

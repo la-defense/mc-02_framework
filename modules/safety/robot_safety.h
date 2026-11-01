@@ -43,6 +43,7 @@ typedef struct
     uint8_t enable_requested;
     uint8_t calib_requested;
     uint8_t estop_latched;
+    uint8_t remote_chassis_permit;
     Estop_Reason_e estop_reason;
 } RobotSafetySnapshot_t;
 
@@ -71,6 +72,12 @@ void RobotSafetyRequestDisable(void);
 /** @brief 设置或取消标定请求。
 * @param[in] enable 非 0 请求标定并清除使能请求，为 0 只取消标定；初始化失败时拒绝新标定。 */
 void RobotSafetyRequestCalib(uint8_t enable);
+
+/** @brief 更新双板模式下由云台板授予的底盘运动许可。
+ * @param[in] permitted 非0表示本轮收到新鲜且允许运动的底盘命令；0表示禁止或命令失效。
+ * @note 仅CHASSIS_BOARD使用；本板任务、姿态、标定、故障和急停检查仍独立生效。
+ */
+void RobotSafetySetRemoteChassisPermit(uint8_t permitted);
 
 // 所有故障都阻止 READY；电机离线、CAN 异常和倾斜会保留使能请求，任务超时会清除请求。
 /** @brief 添加故障位，不立即更新运行状态。
