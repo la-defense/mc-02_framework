@@ -493,6 +493,28 @@ foreach(mode IN ITEMS legacy time-constant bypass gap missing multi-instance bou
     COMMAND motor_feedback_filter_test ${mode})
   set_tests_properties(production_dji_feedback_filter_${mode} PROPERTIES TIMEOUT 10)
 endforeach()
+add_executable(motor_chassis_safety_test motor_feedback_filter_test.c
+  ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_pid.c
+  ../../modules/motor/motor_feedback.c ../../modules/algorithm/controller.c
+  ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c
+  ../../modules/safety/robot_safety.c)
+target_include_directories(motor_chassis_safety_test BEFORE PRIVATE motor_safety_fakes motor_pid_fakes)
+target_include_directories(motor_chassis_safety_test PRIVATE ../../modules/motor
+  ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/safety
+  ../../modules/imu ../../modules/master_machine ../../application ../../bsp/usart)
+target_compile_definitions(motor_chassis_safety_test PRIVATE CHASSIS_BOARD=1)
+if(MSVC)
+  target_compile_options(motor_chassis_safety_test PRIVATE /FIstm32h7xx_hal.h)
+else()
+  target_compile_options(motor_chassis_safety_test PRIVATE -include stm32h7xx_hal.h)
+endif()
+if(UNIX)
+  target_link_libraries(motor_chassis_safety_test PRIVATE m)
+endif()
+target_link_libraries(motor_chassis_safety_test PRIVATE mc02_numeric)
+add_test(NAME production_dji_chassis_safety_output_gate
+  COMMAND motor_chassis_safety_test chassis-safety-output)
+set_tests_properties(production_dji_chassis_safety_output_gate PROPERTIES TIMEOUT 10)
 add_executable(motor_feedback_test motor_feedback_test.c ../../modules/motor/motor_feedback.c)
 target_include_directories(motor_feedback_test PRIVATE ../../modules/motor)
 target_include_directories(motor_feedback_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -10,6 +10,10 @@
 #include "dji_motor.h"
 #include "motor_feedback_test_support.h"
 #include "test_check.h"
+#if defined(CHASSIS_BOARD)
+#include "FreeRTOS.h"
+#include "robot_safety.h"
+#endif
 
 #include <math.h>
 #include <stdint.h>
@@ -26,6 +30,9 @@ static uint8_t daemon_online = 1u;
 static CANInstance can_instances[12];
 static DaemonInstance daemon;
 static uint8_t sent[8];
+#if defined(CHASSIS_BOARD)
+unsigned motor_safety_test_critical_depth;
+#endif
 
 uint64_t DWT_GetTimeline_us(void) { return now_us; }
 uint32_t HAL_GetTick(void) { return (uint32_t)(now_us / 1000u); }
@@ -58,6 +65,9 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
 {
     (void)hcan; (void)source; (void)key; (void)priority; (void)deadline_ms; (void)period_us;
     TEST_CHECK(frame != NULL && request_id != NULL && frame->length <= sizeof(sent));
+#if defined(CHASSIS_BOARD)
+    TEST_CHECK(motor_safety_test_critical_depth != 0u);
+#endif
     memset(sent, 0, sizeof(sent));
     memcpy(sent, frame->data, frame->length);
     *request_id = 1u;
@@ -120,7 +130,63 @@ static void control_at(uint64_t at_us)
 {
     now_us = at_us;
     DJIMotorControl();
+#if defined(CHASSIS_BOARD)
+    TEST_CHECK(motor_safety_test_critical_depth == 0u);
+#endif
 }
+
+#if defined(CHASSIS_BOARD)
+static int chassis_safety_output_gate(void)
+{
+    RobotSafetyInit();
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetySetRemoteChassisPermit(1u);
+    RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReady());
+
+    DJIMotorInstance *motors[4] = {0};
+    for (uint8_t i = 0u; i < 4u; ++i)
+    {
+        Motor_Init_Config_s config = motor_config((uint8_t)(i + 1u));
+        motors[i] = DJIMotorInit(&config);
+        TEST_CHECK(motors[i] != NULL);
+        receive(motors[i], 0u, 0u, 0, 0);
+        DJIMotorSetRef(motors[i], 10.0f);
+        DJIMotorEnable(motors[i]);
+    }
+
+    control_at(1000u);
+    control_at(2000u);
+    uint8_t nonzero = 0u;
+    for (size_t i = 0u; i < sizeof(sent); ++i)
+        if (sent[i] != 0u) nonzero = 1u;
+    TEST_CHECK(nonzero != 0u);
+
+    DJIMotorSummary_t motor_summary = summary(motors[2]);
+    TEST_CHECK(motor_summary.online != 0u);
+    motors[2]->speed_filter_valid = 0u;
+    control_at(3000u);
+    TEST_CHECK(!RobotSafetyIsReady());
+    for (size_t i = 0u; i < sizeof(sent); ++i)
+        TEST_CHECK(sent[i] == 0u);
+
+    motors[2]->speed_filter_valid = 1u;
+    RobotFaultClear(ROBOT_FAULT_MOTOR_OFFLINE);
+    RobotSafetyUpdate();
+    TEST_CHECK(!RobotSafetyIsReady());
+    RobotSafetySetRemoteChassisPermit(1u);
+    RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReady());
+    RobotSafetyRequestDisable();
+    TEST_CHECK(!RobotSafetyIsReady());
+    control_at(4000u);
+    for (size_t i = 0u; i < sizeof(sent); ++i)
+        TEST_CHECK(sent[i] == 0u);
+    return EXIT_SUCCESS;
+}
+#endif
 
 static int legacy_compatibility(void)
 {
@@ -368,6 +434,10 @@ static int reject_invalid_config(void)
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
+#if defined(CHASSIS_BOARD)
+    if (strcmp(argv[1], "chassis-safety-output") == 0)
+        return chassis_safety_output_gate();
+#endif
     if (strcmp(argv[1], "legacy") == 0) return legacy_compatibility();
     if (strcmp(argv[1], "time-constant") == 0) return time_constant_filter();
     if (strcmp(argv[1], "bypass") == 0) return bypass_filter();

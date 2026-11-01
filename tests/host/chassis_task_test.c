@@ -20,7 +20,19 @@
     fprintf(stderr, "FAIL:%d %s\n", __LINE__, #condition); return 1; } } while (0)
 
 static uint32_t test_tick;
-uint32_t HAL_GetTick(void) { return test_tick; }
+static uint32_t tick_read_count;
+static uint32_t advance_tick_on_read;
+static uint32_t advance_tick_by_ms;
+uint32_t HAL_GetTick(void)
+{
+    tick_read_count++;
+    if (advance_tick_on_read != 0u && tick_read_count == advance_tick_on_read)
+    {
+        test_tick += advance_tick_by_ms;
+        advance_tick_on_read = 0u;
+    }
+    return test_tick;
+}
 CAN_HandleTypeDef hcan1, hcan2;
 UART_HandleTypeDef huart1;
 static DJIMotorInstance motors[4];
@@ -50,6 +62,17 @@ void DJIMotorEnable(DJIMotorInstance *motor)
 { if (motor) { motor->enabled = 1; ++motor->enable_count; motor->enable_order = ++operation_order; } }
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
 { if (summary) { memset(summary, 0, sizeof(*summary)); if (motor) summary->online = motor->feedback_online; } }
+Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uint32_t now_ms,
+                                                     Motor_Feedback_Snapshot_s *snapshot)
+{
+    (void)now_ms;
+    if (motor == NULL || snapshot == NULL) return MOTOR_FEEDBACK_BAD_ARGUMENT;
+    snapshot->speed.valid = motor->feedback_speed_valid;
+    snapshot->current.valid = motor->feedback_current_valid;
+    if (motor->feedback_online == 0u) return MOTOR_FEEDBACK_NOT_READY;
+    if (motor->feedback_age_ms > 20u) return MOTOR_FEEDBACK_STALE;
+    return MOTOR_FEEDBACK_OK;
+}
 SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config) { (void)config; return fail_cap ? NULL : &cap; }
 RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *config)
 { (void)handle; (void)config; return REFEREE_OK; }
@@ -84,7 +107,11 @@ static int test_bridge_to_chassis(void)
     RobotSafetySetImuValid(1u);
     RobotSafetySetCalibValid(1u);
     RobotSafetySetTaskHealthy(1u);
-    for (unsigned i=0u;i<4u;++i) motors[i].feedback_online=1u;
+    for (unsigned i=0u;i<4u;++i) {
+        motors[i].feedback_online=1u;
+        motors[i].feedback_speed_valid=1u;
+        motors[i].feedback_current_valid=1u;
+    }
     MessagePublisher_t *publisher=MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
     MessageSubscriber_t *reader=MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CHASSIS);
     const CanTopicCodec_t decoder={ChassisCommandBridgeDecode,NULL,CHASSIS_COMMAND_WIRE_BYTES};
@@ -105,7 +132,7 @@ static int test_bridge_to_chassis(void)
     }
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
-    message.source_ms=15u;
+    message.source_ms=18u;
     CHECK(CanTopicEncode(&message,2u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     for (size_t i=0u;i<count;++i) {
         test_tick=24u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
@@ -124,8 +151,8 @@ static int test_bridge_to_chassis(void)
     }
     MessageFreshness_t freshness; Chassis_Ctrl_Cmd_s output;
     CHECK(MessageReadSnapshot(reader,&output,sizeof(output),test_tick,&freshness)==MESSAGE_OK &&
-          freshness.source_time_ms==13u && freshness.received_time_ms==24u);
-    test_tick=64u;
+          freshness.source_time_ms==16u && freshness.received_time_ms==24u);
+    test_tick=67u;
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
     uint32_t id=0u; CanTopicBridgeStatus_t sync;
@@ -134,7 +161,7 @@ static int test_bridge_to_chassis(void)
     CHECK(CanTopicEncode(&message,2u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     frames[count-1u].bytes[2]^=1u;
     for (size_t i=0u;i<count;++i) {
-        test_tick=64u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        test_tick=68u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
         bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
         bridge_receive(&bridge_can);
         (void)CanTopicLinkService(&link,test_tick,&id,&sync);
@@ -142,22 +169,22 @@ static int test_bridge_to_chassis(void)
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
     CHECK(MessageReadSnapshot(reader,&output,sizeof(output),test_tick,&freshness)==MESSAGE_ERR_EMPTY);
-    message.source_ms=30u;
+    message.source_ms=72u;
     CHECK(CanTopicEncode(&message,4u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     for (size_t i=0u;i<count;++i) {
-        test_tick=70u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        test_tick=73u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
         bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
         bridge_receive(&bridge_can);
         (void)CanTopicLinkService(&link,test_tick,&id,&sync);
     }
     CHECK(MessageReadSnapshot(reader,&output,sizeof(output),test_tick,&freshness)==MESSAGE_OK &&
-          freshness.source_time_ms==28u && freshness.received_time_ms==70u);
+          freshness.source_time_ms==70u && freshness.received_time_ms==73u);
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
-    message.source_ms=35u;
+    message.source_ms=84u;
     CHECK(CanTopicEncode(&message,5u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     for (size_t i=0u;i<count;++i) {
-        test_tick=76u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        test_tick=78u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
         bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
         bridge_receive(&bridge_can);
         (void)CanTopicLinkService(&link,test_tick,&id,&sync);
@@ -170,12 +197,24 @@ static int test_bridge_to_chassis(void)
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
     motors[2].feedback_online=1u;
+    test_tick=90u;
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
-    message.source_ms=40u;
+    // 故障恢复后才组装的分片仍可能来自恢复前；仅序号更新不足以重新授权。
+    message.source_ms=88u;
     CHECK(CanTopicEncode(&message,6u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     for (size_t i=0u;i<count;++i) {
-        test_tick=81u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        test_tick=91u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
+        bridge_receive(&bridge_can);
+        (void)CanTopicLinkService(&link,test_tick,&id,&sync);
+    }
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    message.source_ms=96u;
+    CHECK(CanTopicEncode(&message,7u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    for (size_t i=0u;i<count;++i) {
+        test_tick=96u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
         bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
         bridge_receive(&bridge_can);
         (void)CanTopicLinkService(&link,test_tick,&id,&sync);
@@ -183,33 +222,46 @@ static int test_bridge_to_chassis(void)
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled && motors[i].ref!=0.0f);
 
-    // IMU 失效和本地急停均撤销输出；清除后等新的完整命令才重新接管。
+    // 短暂 IMU 故障即使在两个底盘周期之间恢复，也必须等待故障后产生的新命令。
     RobotSafetySetImuValid(0u);
-    ChassisTask();
-    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
     RobotSafetySetImuValid(1u);
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
-    message.source_ms=45u;
-    CHECK(CanTopicEncode(&message,7u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    message.source_ms=104u;
+    CHECK(CanTopicEncode(&message,8u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     for (size_t i=0u;i<count;++i) {
-        test_tick=86u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        test_tick=103u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
         bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
         bridge_receive(&bridge_can);
         (void)CanTopicLinkService(&link,test_tick,&id,&sync);
     }
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled && motors[i].ref!=0.0f);
+    // 急停请求及解除都发生在任务周期之间时同样不得复用旧序号。
     EstopRequest(ESTOP_REASON_MANUAL);
-    ChassisTask();
-    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
     CHECK(EstopClear());
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
-    message.source_ms=50u;
-    CHECK(CanTopicEncode(&message,8u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    message.source_ms=113u;
+    CHECK(CanTopicEncode(&message,9u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     for (size_t i=0u;i<count;++i) {
-        test_tick=91u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        test_tick=108u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
+        bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
+        bridge_receive(&bridge_can);
+        (void)CanTopicLinkService(&link,test_tick,&id,&sync);
+    }
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled && motors[i].ref!=0.0f);
+    motors[1].feedback_age_ms=21u;
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    motors[1].feedback_age_ms=0u;
+    ChassisTask();
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    message.source_ms=118u;
+    CHECK(CanTopicEncode(&message,10u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
+    for (size_t i=0u;i<count;++i) {
+        test_tick=113u+(uint32_t)i; bridge_can.rx_timestamp_ms=test_tick;
         bridge_can.rx_len=frames[i].length; memcpy(bridge_can.rx_buff,frames[i].bytes,frames[i].length);
         bridge_receive(&bridge_can);
         (void)CanTopicLinkService(&link,test_tick,&id,&sync);
@@ -237,19 +289,33 @@ int main(int argc, char **argv)
     RobotSafetySetImuValid(1u);
     RobotSafetySetCalibValid(1u);
     RobotSafetySetTaskHealthy(1u);
-    for (unsigned i=0u;i<4u;++i) motors[i].feedback_online=1u;
+    for (unsigned i=0u;i<4u;++i) {
+        motors[i].feedback_online=1u;
+        motors[i].feedback_speed_valid=1u;
+        motors[i].feedback_current_valid=1u;
+    }
     // 未收到映射后的远端命令时保持停止；撤销已发布数据后立即停止。
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
     MessagePublisher_t *bridge=MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
     CHECK(bridge != NULL);
     Chassis_Ctrl_Cmd_s incoming={.vx=100.0f,.chassis_mode=CHASSIS_NO_FOLLOW};
-    CHECK(MessagePublishAt(bridge,&incoming,0u,0u,0u,MESSAGE_CLOCK_LOCAL_MAPPED)==MESSAGE_OK);
+    test_tick=10u;
+    CHECK(MessagePublishAt(bridge,&incoming,10u,0u,0u,MESSAGE_CLOCK_LOCAL_MAPPED)==MESSAGE_OK);
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
-    CHECK(MessagePublishAt(bridge,&incoming,0u,0u,0u,MESSAGE_CLOCK_LOCAL_MAPPED)==MESSAGE_OK);
+    test_tick=11u;
+    CHECK(MessagePublishAt(bridge,&incoming,11u,0u,0u,MESSAGE_CLOCK_LOCAL_MAPPED)==MESSAGE_OK);
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(motors[i].enabled);
+    test_tick=60u;
+    tick_read_count=0u;
+    advance_tick_on_read=3u;
+    advance_tick_by_ms=2u;
+    ChassisTask();
+    advance_tick_on_read=0u;
+    for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);
+    CHECK(!RobotSafetyIsReady());
     CHECK(MessagePublisherInvalidate(bridge)==MESSAGE_OK);
     ChassisTask();
     for (unsigned i=0u;i<4u;++i) CHECK(!motors[i].enabled && motors[i].ref==0.0f);

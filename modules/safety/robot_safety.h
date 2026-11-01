@@ -44,6 +44,7 @@ typedef struct
     uint8_t calib_requested;
     uint8_t estop_latched;
     uint8_t remote_chassis_permit;
+    uint32_t chassis_inhibit_generation;
     Estop_Reason_e estop_reason;
 } RobotSafetySnapshot_t;
 
@@ -65,9 +66,11 @@ void RobotSafetySetCalibValid(uint8_t valid);
 * @param[in] healthy 非 0 为正常；为 0 时，下次 Update 清除使能请求。 */
 void RobotSafetySetTaskHealthy(uint8_t healthy);
 
-/** @brief 保存使能请求、取消标定请求；已有初始化失败时忽略，最终状态由 Update 检查。 */
+/** @brief 保存使能请求、取消标定请求；已有初始化失败时忽略，最终状态由 Update 检查。
+* @note CHASSIS_BOARD 不使用本地使能请求；请用新鲜的云台侧运动许可。 */
 void RobotSafetyRequestEnable(void);
-/** @brief 清除使能和标定请求，运行状态在下次 Update 更新。 */
+/** @brief 清除使能和标定请求，运行状态在下次 Update 更新。
+* @note CHASSIS_BOARD 同时撤销远端底盘许可；恢复前须重新接管新命令。 */
 void RobotSafetyRequestDisable(void);
 /** @brief 设置或取消标定请求。
 * @param[in] enable 非 0 请求标定并清除使能请求，为 0 只取消标定；初始化失败时拒绝新标定。 */
@@ -78,8 +81,12 @@ void RobotSafetyRequestCalib(uint8_t enable);
  * @note 仅CHASSIS_BOARD使用；本板任务、姿态、标定、故障和急停检查仍独立生效。
  */
 void RobotSafetySetRemoteChassisPermit(uint8_t permitted);
+/** @brief 查询底盘板本地条件是否健康，不包含远端运动命令许可。
+* @return 本地核心状态健康且未急停、标定或故障时返回1，否则返回0。
+* @note 仅CHASSIS_BOARD控制任务用于恢复检查；不代表可以驱动电机。 */
+uint8_t RobotSafetyIsChassisLocalReady(void);
 
-// 所有故障都阻止 READY；电机离线、CAN 异常和倾斜会保留使能请求，任务超时会清除请求。
+// 除底盘板本地 RC_OFFLINE 外，所有已报告故障都阻止 READY。
 /** @brief 添加故障位，不立即更新运行状态。
 * @param[in] fault 可以同时包含多个 Robot_Fault_e 故障位。 */
 void RobotFaultReport(Robot_Fault_e fault);

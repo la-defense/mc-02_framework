@@ -23,12 +23,21 @@ int main(void)
     RobotSafetySetRemoteChassisPermit(1u);
     RobotSafetyUpdate();
     CHECK(RobotSafetyIsReady());
+    CHECK(RobotSafetyIsChassisLocalReady());
+    RobotSafetySnapshot_t before_inhibit = {0};
+    CHECK(RobotSafetyGetSnapshot(&before_inhibit));
     RobotFaultReport(ROBOT_FAULT_CAN_BUSOFF);
     CHECK(!RobotSafetyIsReady());
     RobotSafetyUpdate();
     CHECK(RobotSafetyGetState() == ROBOT_FAULT);
+    RobotSafetySnapshot_t after_inhibit = {0};
+    CHECK(RobotSafetyGetSnapshot(&after_inhibit));
+    CHECK(after_inhibit.chassis_inhibit_generation != before_inhibit.chassis_inhibit_generation);
 
     RobotFaultClear(ROBOT_FAULT_CAN_BUSOFF);
+    RobotSafetyUpdate();
+    CHECK(!RobotSafetyIsReady());
+    RobotSafetySetRemoteChassisPermit(1u);
     RobotSafetyUpdate();
     CHECK(RobotSafetyIsReady());
     EstopRequest(ESTOP_REASON_MANUAL);
@@ -42,6 +51,27 @@ int main(void)
     RobotSafetyUpdate();
     RobotSafetySetImuValid(0u);
     RobotSafetySetRemoteChassisPermit(1u);
+    RobotSafetyUpdate();
+    CHECK(!RobotSafetyIsReady());
+    CHECK(!RobotSafetyIsChassisLocalReady());
+
+    RobotSafetyInit();
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetRemoteChassisPermit(1u);
+    RobotSafetyUpdate();
+    CHECK(RobotSafetyIsReady());
+    RobotSafetyRequestDisable();
+    CHECK(!RobotSafetyIsReady());
+    CHECK(RobotSafetyGetSnapshot(&after_inhibit));
+    CHECK(after_inhibit.remote_chassis_permit == 0u);
+
+    RobotSafetySetRemoteChassisPermit(1u);
+    RobotSafetyUpdate();
+    CHECK(RobotSafetyIsReady());
+    RobotSafetySetImuValid(0u);
+    RobotSafetySetImuValid(1u);
+    CHECK(!RobotSafetyIsReady());
     RobotSafetyUpdate();
     CHECK(!RobotSafetyIsReady());
     return 0;

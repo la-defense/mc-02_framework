@@ -7,5 +7,6 @@
 #ifndef MC02_MOTOR_PID_TEST_HAL_H
 #define MC02_MOTOR_PID_TEST_HAL_H
 #include <stdint.h>
+typedef struct { unsigned unused; } UART_HandleTypeDef;
 uint32_t HAL_GetTick(void);
 #endif

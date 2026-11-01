@@ -1,5 +1,5 @@
 /** @file robot_safety.c
- * @brief 汇总故障与操作请求并选择机器人状态，向控制任务提供一致快照。
+ * @brief 汇总故障与操作请求并选择机器人状态，供控制任务读取同一时刻的许可信息。
  * @note 状态接口可由普通任务并发调用；日志在恢复中断后提交。
  */
 #include "robot_safety.h"
@@ -16,6 +16,7 @@ static uint8_t enable_requested = 0u;
 static uint8_t calib_requested = 0u;
 static uint8_t estop_latched = 0u;
 static uint8_t remote_chassis_permit = 0u;
+static uint32_t chassis_inhibit_generation = 0u;
 static Estop_Reason_e estop_reason = ESTOP_REASON_NONE;
 static uint8_t imu_fault_logged = 0u;
 static uint8_t task_fault_logged = 0u;
@@ -43,6 +44,15 @@ static void RobotSafetyLogStateChange(Robot_Status_e old_state,
 
 static void RobotSafetyReportFaultLocked(Robot_Fault_e fault)
 {
+#if defined(CHASSIS_BOARD)
+    const uint32_t inhibiting_faults = (uint32_t)fault & (uint32_t)~ROBOT_FAULT_RC_OFFLINE;
+    if (inhibiting_faults != 0u)
+    {
+        remote_chassis_permit = 0u;
+        if ((fault_flags & inhibiting_faults) != inhibiting_faults)
+            chassis_inhibit_generation++;
+    }
+#endif
     fault_flags |= (uint32_t)fault;
 }
 
@@ -61,6 +71,10 @@ static uint8_t RobotSafetyRequestEstopLocked(Estop_Reason_e reason)
     estop_latched = 1u;
     estop_reason = reason;
     enable_requested = 0u;
+#if defined(CHASSIS_BOARD)
+    remote_chassis_permit = 0u;
+    chassis_inhibit_generation++;
+#endif
     return 1u;
 }
 
@@ -79,6 +93,7 @@ void RobotSafetyInit(void)
     calib_requested = 0u;
     estop_latched = 0u;
     remote_chassis_permit = 0u;
+    chassis_inhibit_generation = 0u;
     estop_reason = ESTOP_REASON_NONE;
     imu_fault_logged = 0u;
     task_fault_logged = 0u;
@@ -176,6 +191,10 @@ void RobotSafetyRequestDisable(void)
     const uint32_t previous = RobotSafetyEnterCritical();
     enable_requested = 0u;
     calib_requested = 0u;
+#if defined(CHASSIS_BOARD)
+    remote_chassis_permit = 0u;
+    chassis_inhibit_generation++;
+#endif
     RobotSafetyExitCritical(previous);
 }
 
@@ -186,7 +205,13 @@ void RobotSafetyRequestCalib(uint8_t enable)
     {
         calib_requested = enable != 0u ? 1u : 0u;
         if (calib_requested != 0u)
+        {
             enable_requested = 0u;
+#if defined(CHASSIS_BOARD)
+            remote_chassis_permit = 0u;
+            chassis_inhibit_generation++;
+#endif
+        }
     }
     RobotSafetyExitCritical(previous);
 }
@@ -196,6 +221,20 @@ void RobotSafetySetRemoteChassisPermit(uint8_t permitted)
     const uint32_t previous = RobotSafetyEnterCritical();
     remote_chassis_permit = permitted != 0u ? 1u : 0u;
     RobotSafetyExitCritical(previous);
+}
+
+uint8_t RobotSafetyIsChassisLocalReady(void)
+{
+#if defined(CHASSIS_BOARD)
+    const uint32_t previous = RobotSafetyEnterCritical();
+    const uint8_t ready = ((fault_flags & (uint32_t)~ROBOT_FAULT_RC_OFFLINE) == ROBOT_FAULT_NONE &&
+                           imu_valid != 0u && calib_valid != 0u && task_healthy != 0u &&
+                           calib_requested == 0u && estop_latched == 0u) ? 1u : 0u;
+    RobotSafetyExitCritical(previous);
+    return ready;
+#else
+    return 0u;
+#endif
 }
 
 void RobotFaultReport(Robot_Fault_e fault)
@@ -320,6 +359,7 @@ uint8_t RobotSafetyGetSnapshot(RobotSafetySnapshot_t *snapshot)
     candidate.calib_requested = calib_requested;
     candidate.estop_latched = estop_latched;
     candidate.remote_chassis_permit = remote_chassis_permit;
+    candidate.chassis_inhibit_generation = chassis_inhibit_generation;
     candidate.estop_reason = estop_reason;
     RobotSafetyExitCritical(previous);
 

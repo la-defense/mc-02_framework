@@ -11,6 +11,9 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "stm32h7xx_hal.h"
+#if defined(CHASSIS_BOARD)
+#include "robot_safety.h"
+#endif
 #include <math.h>
 #include <stdlib.h>
 
@@ -787,6 +790,23 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     return MOTOR_FEEDBACK_OK;
 }
 
+#if defined(CHASSIS_BOARD)
+static uint8_t DJIMotorChassisFeedbackIsHealthy(uint32_t now_ms)
+{
+    for (size_t i = 0u; i < idx; ++i)
+    {
+        Motor_Feedback_Snapshot_s feedback = {0};
+        if (DJIMotorGetFeedbackSnapshot(dji_motor_instance[i], now_ms, &feedback) != MOTOR_FEEDBACK_OK ||
+            feedback.speed.valid == 0u || feedback.current.valid == 0u)
+        {
+            RobotFaultReport(ROBOT_FAULT_MOTOR_OFFLINE);
+            return 0u;
+        }
+    }
+    return 1u;
+}
+#endif
+
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
 {
     if (motor == NULL || summary == NULL)
@@ -1001,6 +1021,10 @@ void DJIMotorControl()
     {
         if (sender_enable_flag[i])
         {
+#if defined(CHASSIS_BOARD)
+            // 反馈异常先上报故障，再把许可检查与周期值复制放在同一临界区。
+            const uint8_t feedback_healthy = DJIMotorChassisFeedbackIsHealthy(HAL_GetTick());
+#endif
 #ifdef FDCAN
             const uint32_t identifier = sender_assignment[i].txconf.Identifier;
 #else
@@ -1013,9 +1037,18 @@ void DJIMotorControl()
                 .length = 8u,
             };
             uint32_t request_id = 0u;
+#if defined(CHASSIS_BOARD)
+            taskENTER_CRITICAL();
+            // 许可被其他任务撤销时，只把零目标交给周期队列。
+            if (feedback_healthy == 0u || RobotSafetyIsReady() == 0u)
+                memset(sender_assignment[i].tx_buff, 0, sizeof(sender_assignment[i].tx_buff));
+#endif
             (void)CANSubmitPeriodic(sender_assignment[i].can_handle,
                                     &sender_assignment[i], 0u, &frame,
                                     CAN_TX_PRIORITY_CONTROL, 4u, 1000u, &request_id);
+#if defined(CHASSIS_BOARD)
+            taskEXIT_CRITICAL();
+#endif
         }
     }
     DWT_ProbeDone(&dji_prof_send, probe_send);

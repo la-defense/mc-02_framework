@@ -47,7 +47,11 @@ static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left righ
 #ifdef CHASSIS_BOARD
 static uint8_t chassis_command_rearm_required = 1u;
 static uint8_t chassis_rearm_sequence_valid = 0u;
+static uint8_t chassis_rearm_tracking = 0u;
+static uint8_t chassis_inhibit_generation_valid = 0u;
 static uint32_t chassis_rearm_sequence = 0u;
+static uint32_t chassis_rearm_after_ms = 0u;
+static uint32_t chassis_inhibit_generation = 0u;
 #endif
 
 uint8_t ChassisInit(void)
@@ -162,16 +166,14 @@ static void ChassisStopAndClear(void)
 #ifdef CHASSIS_BOARD
 static uint8_t ChassisMotorFeedbackIsHealthy(void)
 {
-    DJIMotorSummary_t summaries[4] = {{0}};
+    const uint32_t now_ms = HAL_GetTick();
+    DJIMotorInstance *motors[4] = {motor_lf, motor_rf, motor_lb, motor_rb};
     uint8_t healthy = 1u;
-    DJIMotorGetSummary(motor_lf, &summaries[0]);
-    DJIMotorGetSummary(motor_rf, &summaries[1]);
-    DJIMotorGetSummary(motor_lb, &summaries[2]);
-    DJIMotorGetSummary(motor_rb, &summaries[3]);
-
-    for (size_t i = 0u; i < sizeof(summaries) / sizeof(summaries[0]); ++i)
+    for (size_t i = 0u; i < sizeof(motors) / sizeof(motors[0]); ++i)
     {
-        if (summaries[i].online == 0u)
+        Motor_Feedback_Snapshot_s feedback = {0};
+        if (DJIMotorGetFeedbackSnapshot(motors[i], now_ms, &feedback) != MOTOR_FEEDBACK_OK ||
+            feedback.speed.valid == 0u || feedback.current.valid == 0u)
             healthy = 0u;
     }
     if (healthy != 0u)
@@ -207,37 +209,59 @@ void ChassisTask()
     const uint8_t command_requests_motion = (uint8_t)(command_fresh != 0u &&
         chassis_cmd_recv.chassis_mode != CHASSIS_ZERO_FORCE);
     const uint8_t motor_feedback_healthy = ChassisMotorFeedbackIsHealthy();
-    RobotSafetySetRemoteChassisPermit((uint8_t)(command_requests_motion && motor_feedback_healthy));
     RobotSafetyUpdate();
-    uint8_t local_permit = (uint8_t)(RobotSafetyIsReady() && motor_feedback_healthy);
-    if (local_permit == 0u)
+    RobotSafetySnapshot_t safety_snapshot = {0};
+    const uint8_t safety_snapshot_valid = RobotSafetyGetSnapshot(&safety_snapshot);
+    if (safety_snapshot_valid == 0u)
     {
         chassis_command_rearm_required = 1u;
+        chassis_rearm_tracking = 0u;
+        chassis_rearm_sequence_valid = 0u;
+    }
+    else if (chassis_inhibit_generation_valid == 0u ||
+             safety_snapshot.chassis_inhibit_generation != chassis_inhibit_generation)
+    {
+        chassis_inhibit_generation = safety_snapshot.chassis_inhibit_generation;
+        chassis_inhibit_generation_valid = 1u;
+        chassis_command_rearm_required = 1u;
+        chassis_rearm_tracking = 0u;
+        chassis_rearm_sequence_valid = 0u;
+    }
+    const uint8_t local_ready = (uint8_t)(safety_snapshot_valid != 0u &&
+        RobotSafetyIsChassisLocalReady() != 0u && motor_feedback_healthy != 0u);
+    if (local_ready == 0u || command_requests_motion == 0u)
+    {
+        chassis_command_rearm_required = 1u;
+        chassis_rearm_tracking = 0u;
         chassis_rearm_sequence_valid = 0u;
     }
     else if (chassis_command_rearm_required != 0u)
     {
-        if (command_fresh == 0u || command_freshness.valid == 0u)
+        if (chassis_rearm_tracking == 0u)
         {
-            local_permit = 0u;
-            chassis_rearm_sequence_valid = 0u;
+            // 记录本地恢复时刻和当时已接收的序号，旧分片晚到也不能取得新许可。
+            chassis_rearm_after_ms = HAL_GetTick();
+            chassis_rearm_sequence_valid = (uint8_t)(command_fresh != 0u &&
+                                                       command_freshness.valid != 0u);
+            if (chassis_rearm_sequence_valid != 0u)
+                chassis_rearm_sequence = command_freshness.sequence;
+            chassis_rearm_tracking = 1u;
         }
-        else if (chassis_rearm_sequence_valid == 0u)
-        {
-            // 首次观察到本地条件恢复时记下当前命令；必须再等一条新命令。
-            chassis_rearm_sequence = command_freshness.sequence;
-            chassis_rearm_sequence_valid = 1u;
-            local_permit = 0u;
-        }
-        else if (command_freshness.sequence == chassis_rearm_sequence)
-        {
-            local_permit = 0u;
-        }
-        else
+        else if (command_fresh != 0u && command_freshness.valid != 0u &&
+                 (chassis_rearm_sequence_valid == 0u ||
+                  command_freshness.sequence != chassis_rearm_sequence) &&
+                 // 映射后的来源时刻晚于本地恢复点，拒绝恢复前发出、之后才拼完的命令。
+                 (int32_t)(command_freshness.source_time_ms - chassis_rearm_after_ms) > 0)
         {
             chassis_command_rearm_required = 0u;
+            chassis_rearm_tracking = 0u;
         }
     }
+    const uint8_t remote_permit = (uint8_t)(command_requests_motion != 0u && local_ready != 0u &&
+                                             chassis_command_rearm_required == 0u);
+    RobotSafetySetRemoteChassisPermit(remote_permit);
+    RobotSafetyUpdate();
+    uint8_t local_permit = (uint8_t)(RobotSafetyIsReady() != 0u && local_ready != 0u);
 #endif
 
     ChassisMotionMode_e motion_mode = CHASSIS_MOTION_MODE_INVALID;
@@ -279,7 +303,7 @@ void ChassisTask()
         .max_motor_speed_deg_s = CHASSIS_MAX_MOTOR_SPEED_DEG_S,
     };
     ChassisMotionOutput_s motion_output;
-    const uint8_t command_allowed = command_fresh != 0u &&
+    uint8_t command_allowed = command_fresh != 0u &&
 #ifdef CHASSIS_BOARD
                                     local_permit != 0u &&
 #endif
@@ -287,10 +311,35 @@ void ChassisTask()
                                     ChassisMotionCalculate(&motion_input, &geometry, &limits,
                                                            &motion_output);
 #ifdef CHASSIS_BOARD
+    if (command_allowed != 0u)
+    {
+        Chassis_Ctrl_Cmd_s latest_command = {0};
+        MessageFreshness_t latest_freshness = {0};
+        const uint8_t latest_is_same_and_fresh = (uint8_t)(
+            MessageReadSnapshot(chassis_sub, &latest_command, sizeof(latest_command),
+                                HAL_GetTick(), &latest_freshness) == MESSAGE_OK &&
+            latest_freshness.sequence == command_freshness.sequence &&
+            latest_freshness.source_time_ms == command_freshness.source_time_ms);
+        if (latest_is_same_and_fresh == 0u || RobotSafetyIsReady() == 0u ||
+            ChassisMotorFeedbackIsHealthy() == 0u)
+        {
+            command_allowed = 0u;
+            local_permit = 0u;
+            RobotSafetySetRemoteChassisPermit(0u);
+            RobotSafetyUpdate();
+        }
+    }
     if (command_allowed == 0u && local_permit != 0u)
     {
         chassis_command_rearm_required = 1u;
+        chassis_rearm_tracking = 0u;
         chassis_rearm_sequence_valid = 0u;
+        RobotSafetySetRemoteChassisPermit(0u);
+        RobotSafetyUpdate();
+    }
+    if (command_allowed == 0u)
+    {
+        chassis_command_rearm_required = 1u;
     }
 #endif
     if (!command_allowed)

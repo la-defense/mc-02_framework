@@ -164,7 +164,7 @@ CanTopicBridgeStatus_t CanTopicBridgeCheckSync(CanTopicBridge_t *bridge, uint32_
         if (bridge->published_valid == 0u || source_fresh != 0u)
             return CAN_BRIDGE_OK;
 
-        // 旧值过期只撤销旧快照；正在接收的新消息仍可完成分片。
+        // 旧值过期只撤销已发布值；正在接收的新消息仍可完成分片。
         if (MessagePublisherInvalidate(bridge->incoming)!=MESSAGE_OK)
             return CAN_BRIDGE_PUBLISH;
         bridge->published_valid=0u;
