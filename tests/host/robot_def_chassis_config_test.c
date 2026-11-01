@@ -34,7 +34,7 @@ static void set_valid_config(void)
         .rotate_wz_deg_s = 90.0f,
         .max_motor_speed_deg_s = 720.0f,
     };
-    chassis->chassis_motor_config.can_init_config.can_handle = &test_config;
+    chassis->chassis_motor_config.can_init_config.can_bus = PLATFORM_CAN_BUS_1;
     chassis->chassis_motor_config.output_axis.gear_ratio = 19.0f;
     chassis->chassis_motor_config.output_axis.direction = MOTOR_AXIS_DIRECTION_NORMAL;
     chassis->chassis_motor_config.motor_type = M3508;
@@ -54,6 +54,12 @@ int main(void)
     set_valid_config();
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK);
     TEST_CHECK(selected == &test_config);
+
+    test_config.chassis_param.chassis_motor_config.can_init_config.can_bus = PLATFORM_CAN_INVALID; // 未声明总线不可启动核心底盘。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS);
+    TEST_CHECK(selected == NULL); // 错误配置不能沿用前一次选择结果。
+
+    set_valid_config(); // 后续场景独立验证几何错误。
 
     test_config.chassis_param.omni_geometry.wheels[0].drive_x = 2.0f;
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS);

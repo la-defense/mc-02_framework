@@ -292,7 +292,7 @@ static void test_production_dji_receive_burst(void)
         Motor_Init_Config_s config = {0};
         config.motor_type = M3508;
         config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL};
-        config.can_init_config.can_handle = handles[bus];
+        config.can_init_config.can_bus = (PlatformCanBus_t)(PLATFORM_CAN_BUS_1 + bus);
         config.can_init_config.tx_id = 1u;
         config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
         motors[bus] = DJIMotorInit(&config);
@@ -355,7 +355,7 @@ static Motor_Init_Config_s config_for(uint8_t bus, uint32_t motor_id)
     Motor_Init_Config_s config = {0};
     config.motor_type = LK9025;
     config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL};
-    config.can_init_config.can_handle = bus == 0u ? &hfdcan1 : bus == 1u ? &hfdcan2 : &hfdcan3;
+    config.can_init_config.can_bus = (PlatformCanBus_t)(PLATFORM_CAN_BUS_1 + bus);
     config.can_init_config.tx_id = motor_id;
     config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
     config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;

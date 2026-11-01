@@ -28,6 +28,11 @@ set(MC02_HOST_REMOTE_SOURCES
   ../../modules/remote/remote_control.c # 遥控输入及租约处理。
   ../../bsp/os/platform_irq_stm32.c # 保存并恢复测试目标的中断状态。
   ../../bsp/os/platform_sync_freertos.c) # 使用测试目标的时钟与任务锁。
+# 电机测试按目标原有的 CAN 替身编译同一份板级绑定。
+set(MC02_HOST_DJI_SOURCES ../../modules/motor/DJImotor/dji_motor.c ../../bsp/board/board_can_stm32.c) # DJI 及逻辑 CAN 绑定。
+set(MC02_HOST_LK_SOURCES ../../modules/motor/LKmotor/LK9025.c ../../bsp/board/board_can_stm32.c) # LK 及逻辑 CAN 绑定。
+set(MC02_HOST_HT_SOURCES ../../modules/motor/HTmotor/HT04.c ../../bsp/board/board_can_stm32.c) # HT 及逻辑 CAN 绑定。
+set(MC02_HOST_DM_SOURCES ../../modules/motor/DMmotor/dmmotor.c ../../bsp/board/board_can_stm32.c) # DM 及逻辑 CAN 绑定。
 # 消息中心单独取得平台公共头，其他主机测试不继承额外路径。
 set_property(SOURCE ../../modules/message_center/message_center.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
@@ -37,9 +42,17 @@ set_property(SOURCE ../../modules/daemon/daemon.c APPEND PROPERTY
 # 遥控源码通过框架头访问时间和中断屏蔽；其硬件串口依赖仍单独处理。
 set_property(SOURCE ../../modules/remote/remote_control.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+# 电机驱动只在注册适配处引用板级头；现有 CAN 发送接口仍待迁移。
+set_property(SOURCE ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/LKmotor/LK9025.c
+  ../../modules/motor/HTmotor/HT04.c ../../modules/motor/DMmotor/dmmotor.c APPEND PROPERTY
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/board")
 add_library(mc02_daemon_portable OBJECT ../../modules/daemon/daemon.c)
 target_include_directories(mc02_daemon_portable PRIVATE ../../modules/daemon ../../bsp/os)
 target_compile_options(mc02_daemon_portable PRIVATE -Wall -Wextra -Werror)
+# 只提供电机与算法公共头，验证配置不继承 HAL 或 RTOS 头路径。
+add_library(mc02_motor_config_portable OBJECT motor_config_public_header.c)
+target_include_directories(mc02_motor_config_portable PRIVATE ../../modules/motor ../../modules/algorithm)
+target_compile_options(mc02_motor_config_portable PRIVATE -Wall -Wextra -Werror)
 # 仅提供框架头，验证消息中心本身不依赖 HAL／FreeRTOS 头路径。
 add_library(mc02_message_center_portable OBJECT ../../modules/message_center/message_center.c)
 target_include_directories(mc02_message_center_portable PRIVATE ../../modules/message_center ../../bsp/os)
@@ -377,7 +390,7 @@ foreach(caller IN ITEMS a b)
 endforeach()
 # 生产 LK、PID 和 Daemon 共同链接；仅替换 CAN 与硬件时基，检查资源回滚及三总线路由。
 add_executable(lk_motor_registration_test lk_motor_registration_test.c
-  ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_feedback.c
+  ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
   ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c ${MC02_HOST_DAEMON_SOURCES})
 target_include_directories(lk_motor_registration_test BEFORE PRIVATE lk_motor_fakes)
@@ -400,9 +413,9 @@ endforeach()
 
 # 这组回归链接生产 BSP CAN 注册与发送实现，仅替换 HAL、时间和日志。
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
-  ../../modules/motor/LKmotor/LK9025.c ../../modules/motor/motor_feedback.c
+  ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
   ../../modules/motor/motor_pid.c
-  ../../modules/motor/DJImotor/dji_motor.c
+  ${MC02_HOST_DJI_SOURCES}
   ../../modules/algorithm/controller.c ${MC02_HOST_DAEMON_SOURCES} ../../bsp/can/bsp_can.c
   ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_topic_transport.c
   ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_topic_bridge.c
@@ -448,7 +461,7 @@ foreach(can_tx_scenario IN ITEMS arguments-copy queue-batch-buses topic-group to
 endforeach()
 
 # DM 测试链接生产电机、FDCAN 注册和 Daemon；测试仅替换 HAL、RTOS、时间与日志。
-add_executable(dm_motor_test dm_motor_test.c ../../modules/motor/DMmotor/dmmotor.c
+add_executable(dm_motor_test dm_motor_test.c ${MC02_HOST_DM_SOURCES}
   ../../bsp/can/bsp_can.c ${MC02_HOST_DAEMON_SOURCES})
 target_include_directories(dm_motor_test BEFORE PRIVATE dm_motor_fakes lk_motor_can_fakes .)
 target_include_directories(dm_motor_test PRIVATE ../../modules/motor/DMmotor ../../modules/motor
@@ -527,7 +540,7 @@ foreach(scenario IN ITEMS reference failures instances response)
   set_tests_properties(production_sample_filter_${scenario} PROPERTIES TIMEOUT 15)
 endforeach()
 add_executable(motor_pid_integration_test motor_pid_integration_test.c
-  ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_feedback.c
+  ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_feedback.c
   ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c)
 target_include_directories(motor_pid_integration_test BEFORE PRIVATE motor_pid_fakes)
@@ -539,7 +552,7 @@ endif()
 target_link_libraries(motor_pid_integration_test PRIVATE mc02_numeric)
 add_test(NAME production_motor_pid_cascade_and_failure COMMAND motor_pid_integration_test)
 add_executable(motor_feedback_filter_test motor_feedback_filter_test.c
-  ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_pid.c
+  ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
   ../../modules/motor/motor_feedback.c
   ../../modules/algorithm/controller.c ../../modules/algorithm/sample_filter.c
   ../../modules/algorithm/math_utils.c)
@@ -555,7 +568,7 @@ foreach(mode IN ITEMS legacy time-constant bypass gap missing multi-instance bou
   set_tests_properties(production_dji_feedback_filter_${mode} PROPERTIES TIMEOUT 10)
 endforeach()
 add_executable(motor_chassis_safety_test motor_feedback_filter_test.c
-  ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/motor_pid.c
+  ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
   ../../modules/motor/motor_feedback.c ../../modules/algorithm/controller.c
   ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c
   ../../modules/safety/robot_safety.c)
@@ -731,7 +744,8 @@ foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
   target_include_directories(robot_can_bridge_${role_name}_test PRIVATE
     ../../application ../../application/topics ../../modules/can_comm ../../modules/message_center
     ../../modules/time_sync ../../modules/imu ../../modules/master_machine ../../modules/safety ../../bsp/board)
-  target_compile_definitions(robot_can_bridge_${role_name}_test PRIVATE ${role}=1 MC02_PROFILE_ROBOT=1)
+  target_compile_definitions(robot_can_bridge_${role_name}_test PRIVATE ${role}=1 MC02_PROFILE_ROBOT=1
+    MC02_CAN_BRIDGE_BOARD_TEST=1) # 板级绑定使用测试中的三条 CAN 句柄。
   target_link_libraries(robot_can_bridge_${role_name}_test PRIVATE mc02_software_crc)
   target_compile_options(robot_can_bridge_${role_name}_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
   add_test(NAME production_robot_can_bridge_${role_name} COMMAND robot_can_bridge_${role_name}_test)
@@ -1581,7 +1595,7 @@ foreach(scenario IN ITEMS math workspace failures instances)
 endforeach()
 
 # HT04生产接收回调保留真实平均和PID，只替换CAN、任务及计时。
-add_executable(ht_numeric_test ht_numeric_test.c ../../modules/motor/HTmotor/HT04.c
+add_executable(ht_numeric_test ht_numeric_test.c ${MC02_HOST_HT_SOURCES}
   ../../modules/motor/motor_feedback.c ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c)
 target_include_directories(ht_numeric_test BEFORE PRIVATE ht_numeric_fakes motor_pid_fakes)
@@ -1592,7 +1606,7 @@ add_test(NAME production_ht_numeric_feedback COMMAND ht_numeric_test)
 set_tests_properties(production_ht_numeric_feedback PROPERTIES TIMEOUT 10)
 
 # HT04 控制回归捕获生产任务入口，并用有限延时轮次检查反馈源和失败输出。
-add_executable(ht_control_test ht_control_test.c ../../modules/motor/HTmotor/HT04.c
+add_executable(ht_control_test ht_control_test.c ${MC02_HOST_HT_SOURCES}
   ../../modules/motor/motor_feedback.c ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c)
 target_include_directories(ht_control_test BEFORE PRIVATE ht_control_fakes ht_numeric_fakes

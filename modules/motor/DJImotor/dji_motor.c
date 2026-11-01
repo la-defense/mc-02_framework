@@ -2,6 +2,7 @@
 * @brief 解码 DJI 电调反馈，逐电机计算参考输出，并按总线与设备编号组成四电机 CAN 帧。
  */
 #include "dji_motor.h"
+#include "board_can_stm32.h"
 #include <string.h>
 #include "general_def.h"
 #include "bsp_dwt.h"
@@ -525,6 +526,8 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
     if (config == NULL || idx >= DJI_MOTOR_CNT || !FilterConfigValid(filter_config) ||
         !DjiConfigValid(config))
         return NULL;
+    CAN_Init_Config_s can_config; // 保存板级解析后的注册配置，不改写车型参数。
+    if (!BoardCanPrepareEndpoint(&config->can_init_config, &can_config)) return NULL; // 总线未绑定时不申请资源。
     DJIMotorInstance *instance = (DJIMotorInstance *)malloc(sizeof(DJIMotorInstance));
     if (instance == NULL)
         return NULL;
@@ -564,7 +567,6 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
     // 后续增加电机前馈控制器(速度和电流)
 
     // 电机分组,因为至多4个电机可以共用一帧CAN控制报文
-    CAN_Init_Config_s can_config = config->can_init_config;
     if (!MotorSenderGrouping(instance, &can_config))
     {
         free(instance);

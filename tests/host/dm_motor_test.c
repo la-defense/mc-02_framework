@@ -209,7 +209,9 @@ void osDelay(uint32_t milliseconds)
 static Motor_Init_Config_s config_for(FDCAN_HandleTypeDef *handle, uint32_t tx_id, uint32_t rx_id)
 {
     Motor_Init_Config_s config = {0};
-    config.can_init_config.can_handle = handle;
+    config.can_init_config.can_bus = handle == &hfdcan1 ? PLATFORM_CAN_BUS_1 :
+        handle == &hfdcan2 ? PLATFORM_CAN_BUS_2 :
+        handle == &hfdcan3 ? PLATFORM_CAN_BUS_3 : PLATFORM_CAN_INVALID;
     config.can_init_config.tx_id = tx_id;
     config.can_init_config.rx_id = rx_id;
     config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
@@ -279,7 +281,7 @@ static void test_config(void)
 {
     FDCAN_HandleTypeDef unknown_handle = {0};
     Motor_Init_Config_s config = config_for(&hfdcan1, 0u, 0u);
-    config.can_init_config.can_handle = NULL; TEST_CHECK(DMMotorInit(&config) == NULL);
+    config.can_init_config.can_bus = PLATFORM_CAN_INVALID; TEST_CHECK(DMMotorInit(&config) == NULL);
     config = config_for(&unknown_handle, 1u, 1u); TEST_CHECK(DMMotorInit(&config) == NULL);
     config = config_for(&hfdcan1, 0x800u, 1u); TEST_CHECK(DMMotorInit(&config) == NULL);
     config = config_for(&hfdcan1, 1u, 0x800u); TEST_CHECK(DMMotorInit(&config) == NULL);

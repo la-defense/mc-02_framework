@@ -75,13 +75,16 @@ int main(void)
     PID_Init_Config_s pid = {.Kp = 1.0f, .Ki = 1.0f, .MaxOut = 100.0f,
         .DtMin_s = MOTOR_PID_DT_MIN_S, .DtMax_s = MOTOR_PID_DT_MAX_S};
     Motor_Init_Config_s config = {
-        .can_init_config = {.can_handle = &hcan1, .tx_id = 1u},
+        .can_init_config = {.can_bus = PLATFORM_CAN_BUS_1, .tx_id = 1u},
         .motor_type = M3508,
         .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
         .controller_setting_init_config = {.outer_loop_type = ANGLE_LOOP,
             .close_loop_type = ALL_THREE_LOOP},
         .controller_param_init_config = {.angle_PID = pid, .speed_PID = pid, .current_PID = pid},
     };
+    config.can_init_config.can_bus = PLATFORM_CAN_INVALID; // 无绑定不能注册电机。
+    TEST_CHECK(DJIMotorInit(&config) == NULL && registered == 0u && submitted == 0u);
+    config.can_init_config.can_bus = PLATFORM_CAN_BUS_1; // 恢复合法总线后继续检查 PID。
     config.controller_param_init_config.speed_PID.DtMin_s = 0.0f;
     DJIMotorInstance *motor = DJIMotorInit(&config);
     TEST_CHECK(motor == NULL);

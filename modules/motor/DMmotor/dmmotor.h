@@ -88,7 +88,7 @@ typedef struct
  * @param[in] config 初始化配置；标准 CAN 收发 ID 必须在0～0x7FF，同总线发送 ID 或接收 ID 不可重复，
  *            最多注册4个实例。方向只能为正向或反向，闭环须为 OPEN_LOOP 且前馈须关闭；PID 与反馈字段不使用，可为空。
  * @return 成功返回长期有效实例；配置错误、未知 CAN、重复 ID、容量或资源失败返回 NULL，配置不会被改写。
- * @note 限调度器启动前串行调用。成功后配置可释放，CAN 句柄须长期有效。
+ * @note 限调度器启动前串行调用。成功后配置可释放，逻辑总线必须在板级绑定中存在。
  *       初始化不发送报文、不等待，也不使能电机。任务启动后禁止继续注册。
  */
 DMMotorInstance *DMMotorInit(const Motor_Init_Config_s *config);

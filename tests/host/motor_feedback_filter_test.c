@@ -93,7 +93,7 @@ static Motor_Init_Config_s motor_config(uint8_t id)
     PID_Init_Config_s pid = {.Kp = 1.0f, .MaxOut = 100.0f,
         .DtMin_s = MOTOR_PID_DT_MIN_S, .DtMax_s = MOTOR_PID_DT_MAX_S};
     Motor_Init_Config_s config = {
-        .can_init_config = {.can_handle = &hcan1, .tx_id = id},
+        .can_init_config = {.can_bus = PLATFORM_CAN_BUS_1, .tx_id = id},
         .motor_type = M3508,
         .output_axis = {1.0f, MOTOR_AXIS_DIRECTION_NORMAL},
         .controller_setting_init_config = {

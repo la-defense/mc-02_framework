@@ -20,13 +20,13 @@ static float timeline_ms;
 static Shoot_Config_s shoot_config = {
     .shoot_type = DUAL_SHOOT,
     .friction_motor_config = {
-        .can_init_config = {.can_handle = &hcan2},
+        .can_init_config = {.can_bus = PLATFORM_CAN_BUS_2},
         .controller_setting_init_config = {.motor_reverse_flag = MOTOR_DIRECTION_NORMAL},
         .output_axis = {19.0f, MOTOR_AXIS_DIRECTION_NORMAL},
         .motor_type = M3508,
     },
     .loader_motor_config = {
-        .can_init_config = {.can_handle = &hcan2, .tx_id = 3u},
+        .can_init_config = {.can_bus = PLATFORM_CAN_BUS_2, .tx_id = 3u},
         .controller_setting_init_config = {.close_loop_type = SPEED_LOOP | CURRENT_LOOP | ANGLE_LOOP},
         .output_axis = {36.0f, MOTOR_AXIS_DIRECTION_NORMAL},
         .motor_type = M2006,

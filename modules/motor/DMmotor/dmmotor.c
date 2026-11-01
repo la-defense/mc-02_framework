@@ -4,6 +4,7 @@
  * @note 注册与任务创建须在调度器启动前串行完成；不在初始化阶段驱动电机。
  */
 #include "dmmotor.h"
+#include "board_can_stm32.h"
 
 #include "bsp_can.h"
 #include "cmsis_os.h"
@@ -337,8 +338,10 @@ DMMotorInstance *DMMotorInit(const Motor_Init_Config_s *config)
         dm_instance_count >= DM_MOTOR_CNT)
         return NULL;
 
+    CAN_Init_Config_s can_config; // 保存板级解析后的注册参数。
+    if (!BoardCanPrepareEndpoint(&config->can_init_config, &can_config)) return NULL; // 未绑定时不申请资源。
     const Motor_Control_Setting_s *setting = &config->controller_setting_init_config;
-    if (!DMMotorSupportedBus(config->can_init_config.can_handle) ||
+    if (!DMMotorSupportedBus(can_config.can_handle) ||
         config->can_init_config.tx_id > 0x7ffu || config->can_init_config.rx_id > 0x7ffu ||
         (setting->close_loop_type != OPEN_LOOP) || setting->outer_loop_type != OPEN_LOOP ||
         setting->feedforward_flag != FEEDFORWARD_NONE ||
@@ -349,7 +352,7 @@ DMMotorInstance *DMMotorInit(const Motor_Init_Config_s *config)
     // 仅阻止同一总线上的发送号或接收号重复。
     for (uint8_t i = 0u; i < dm_instance_count; ++i)
     {
-        if (dm_instances[i]->can_handle == config->can_init_config.can_handle &&
+        if (dm_instances[i]->can_handle == can_config.can_handle &&
             (dm_instances[i]->tx_id == config->can_init_config.tx_id ||
              dm_instances[i]->rx_id == config->can_init_config.rx_id))
             return NULL;
@@ -360,7 +363,7 @@ DMMotorInstance *DMMotorInit(const Motor_Init_Config_s *config)
         return NULL;
     memset(motor, 0, sizeof(*motor));
     motor->setting = *setting;
-    motor->can_handle = config->can_init_config.can_handle;
+    motor->can_handle = can_config.can_handle;
     motor->tx_id = config->can_init_config.tx_id;
     motor->rx_id = config->can_init_config.rx_id;
     motor->calculation_status = DMMOTOR_CALCULATION_NO_REFERENCE;
@@ -386,7 +389,6 @@ DMMotorInstance *DMMotorInit(const Motor_Init_Config_s *config)
         return NULL;
     }
 
-    CAN_Init_Config_s can_config = config->can_init_config;
     can_config.can_module_callback = DMMotorDecode;
     can_config.id = motor;
     motor->can_instance = CANRegister(&can_config);

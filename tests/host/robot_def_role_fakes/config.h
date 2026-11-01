@@ -6,11 +6,12 @@
 #include <stdint.h>
 #include "omni.h"
 #include "../../../application/config/shoot_config_types.h"
+#include "../../../bsp/board/platform_resources.h"
 
 typedef enum { MOTOR_AXIS_DIRECTION_REVERSE = -1, MOTOR_AXIS_DIRECTION_NORMAL = 1 }
     Motor_Axis_Direction_e;
 typedef struct {
-    struct { void *can_handle; uint32_t tx_id; } can_init_config;
+    PlatformCanEndpoint_t can_init_config; // 车型测试使用与生产代码一致的逻辑端点。
     struct { float gear_ratio; Motor_Axis_Direction_e direction; } output_axis;
     int motor_type;
 } Motor_Init_Config_s;

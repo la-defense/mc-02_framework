@@ -122,8 +122,7 @@ static const RobotAlarmConfig_t sentinel_alarm_config = {
 #undef SENTINEL_SEGMENTED
 
 /*
- * 哨兵机器人配置. hcan1/hcan2 直接映射到本地 hfdcan1/hfdcan2
- * (本地 bsp_can.h 已有 #define hcan1 hfdcan1 / #define hcan2 hfdcan2).
+ * 哨兵机器人配置使用板级声明的逻辑 CAN 编号；MC-02 当前将编号 1／2 绑定 FDCAN1／2。
  * 机械参数/电机ID/PID 沿用远程 v1.0.0-autoaim-stable, 后续按实车标定.
  */
 const Robot_Config_s *SentinelConfigInit(void)
@@ -169,7 +168,7 @@ const Robot_Config_s *SentinelConfigInit(void)
             },
 
             .chassis_motor_config = {
-                .can_init_config.can_handle = &hcan1,
+                .can_init_config.can_bus = PLATFORM_CAN_BUS_1,
                 .controller_param_init_config = {
                     .speed_PID = {
                         .DtMin_s = MOTOR_PID_DT_MIN_S,
@@ -216,7 +215,7 @@ const Robot_Config_s *SentinelConfigInit(void)
 
             .yaw_motor_config = {
                 .can_init_config = {
-                    .can_handle = &hcan1,
+                    .can_bus = PLATFORM_CAN_BUS_1,
                     .tx_id = 5,
                 },
                 .controller_param_init_config = {
@@ -256,7 +255,7 @@ const Robot_Config_s *SentinelConfigInit(void)
 
             .mini_yaw_motor_config = {
                 .can_init_config = {
-                    .can_handle = &hcan2,
+                    .can_bus = PLATFORM_CAN_BUS_2,
                     .tx_id = 1,
                 },
                 .controller_param_init_config = {
@@ -297,7 +296,7 @@ const Robot_Config_s *SentinelConfigInit(void)
 
             .pitch_motor_config = {
                 .can_init_config = {
-                    .can_handle = &hcan2,
+                    .can_bus = PLATFORM_CAN_BUS_2,
                     .tx_id = 6,
                 },
                 .controller_param_init_config = {
@@ -345,7 +344,7 @@ const Robot_Config_s *SentinelConfigInit(void)
             .shoot_type = DUAL_SHOOT,
             .friction_motor_config = {
                 .can_init_config = {
-                    .can_handle = &hcan2,
+                    .can_bus = PLATFORM_CAN_BUS_2,
                 },
                 .controller_param_init_config = {
                     .speed_PID = {
@@ -382,7 +381,7 @@ const Robot_Config_s *SentinelConfigInit(void)
 
             .loader_motor_config = {
                 .can_init_config = {
-                    .can_handle = &hcan1,
+                    .can_bus = PLATFORM_CAN_BUS_1,
                     .tx_id = 7,
                 },
                 .controller_param_init_config = {

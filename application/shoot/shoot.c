@@ -53,9 +53,11 @@ uint8_t ShootInit(void)
         shoot_config->friction_default_speed_rad_s <= 0.0f ||
         !isfinite(shoot_config->loader_reverse_speed_rad_s) ||
         shoot_config->loader_reverse_speed_rad_s <= 0.0f ||
-        shoot_config->friction_motor_config.can_init_config.can_handle == NULL ||
+        shoot_config->friction_motor_config.can_init_config.can_bus < PLATFORM_CAN_BUS_1 ||
+        shoot_config->friction_motor_config.can_init_config.can_bus > PLATFORM_CAN_BUS_3 ||
         shoot_config->friction_motor_config.motor_type == MOTOR_TYPE_NONE ||
-        shoot_config->loader_motor_config.can_init_config.can_handle == NULL ||
+        shoot_config->loader_motor_config.can_init_config.can_bus < PLATFORM_CAN_BUS_1 ||
+        shoot_config->loader_motor_config.can_init_config.can_bus > PLATFORM_CAN_BUS_3 ||
         shoot_config->loader_motor_config.can_init_config.tx_id == 0u ||
         shoot_config->loader_motor_config.can_init_config.tx_id > 8u ||
         shoot_config->loader_motor_config.motor_type == MOTOR_TYPE_NONE)
@@ -68,8 +70,8 @@ uint8_t ShootInit(void)
             (shoot_config->friction_motor_reverse_flag[index] != MOTOR_DIRECTION_NORMAL &&
              shoot_config->friction_motor_reverse_flag[index] != MOTOR_DIRECTION_REVERSE))
             return 0u;
-        if (shoot_config->friction_motor_config.can_init_config.can_handle ==
-                shoot_config->loader_motor_config.can_init_config.can_handle &&
+        if (shoot_config->friction_motor_config.can_init_config.can_bus ==
+                shoot_config->loader_motor_config.can_init_config.can_bus &&
             shoot_config->friction_motor_id[index] ==
                 shoot_config->loader_motor_config.can_init_config.tx_id)
             return 0u;

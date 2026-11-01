@@ -6,6 +6,7 @@
 #include <stdint.h>
 typedef struct { unsigned unused; } FDCAN_HandleTypeDef;
 typedef FDCAN_HandleTypeDef CAN_HandleTypeDef;
+extern FDCAN_HandleTypeDef hcan1, hcan2;
 typedef struct CANInstance
 {
     CAN_HandleTypeDef *can_handle;

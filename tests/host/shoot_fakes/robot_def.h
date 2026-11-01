@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "main.h"
 #include "../../../modules/motor/motor_feedback.h"
+#include "../../../bsp/board/platform_resources.h"
 #include "../../../application/config/shoot_config_types.h"
 
 // 复用生产 PID 参数，避免新增字段时替身仍接受旧接口。
@@ -11,10 +12,7 @@
 typedef enum { MOTOR_FEED = 0 } Feedback_Source_e;
 typedef enum { SPEED_LOOP = 2, CURRENT_LOOP = 1, ANGLE_LOOP = 4 } Closeloop_Type_e;
 typedef enum { MOTOR_DIRECTION_NORMAL = 0, MOTOR_DIRECTION_REVERSE = 1 } Motor_Reverse_Flag_e;
-typedef struct {
-    CAN_HandleTypeDef *can_handle;
-    uint8_t tx_id;
-} Shoot_CAN_Init_s;
+typedef PlatformCanEndpoint_t Shoot_CAN_Init_s; // 测试配置使用生产逻辑总线类型。
 typedef struct {
     PID_Init_Config_s speed_PID, current_PID, angle_PID;
 } Shoot_Controller_Init_s;

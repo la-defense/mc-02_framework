@@ -9,6 +9,7 @@
 #include <math.h>
 #include <string.h>
 
+FDCAN_HandleTypeDef hcan1, hcan2; // 为生产板级映射提供测试句柄。
 static CANInstance instances[2];
 static void (*callbacks[2])(CANInstance *);
 static DaemonInstance daemons[2];
@@ -71,6 +72,7 @@ int main(void)
 {
     Motor_Init_Config_s config={0};
     config.motor_type=HT04;
+    config.can_init_config.can_bus=PLATFORM_CAN_BUS_1; // 两个测试实例使用第一条总线。
     config.output_axis=(Motor_Output_Axis_Config_s){1.0f,MOTOR_AXIS_DIRECTION_NORMAL};
     HTMotorInstance *a=HTMotorInit(&config),*b=HTMotorInit(&config);
     TEST_CHECK(a!=NULL && b!=NULL);

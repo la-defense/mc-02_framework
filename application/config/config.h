@@ -6,7 +6,6 @@
 
 #include "build_selection.h"
 #include "chassis_motion.h"
-#include "bsp_can.h"
 #include "controller.h"
 #include "motor_def.h"
 #include "robot_alarm.h"

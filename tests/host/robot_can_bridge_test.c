@@ -115,6 +115,10 @@ int main(void)
     TEST_CHECK(BoardCanResolve(PLATFORM_CAN_BUS_1) == &hcan1); // 第一条逻辑总线绑定本板 CAN1。
     TEST_CHECK(BoardCanResolve(PLATFORM_CAN_BUS_2) == &hcan2); // 第二条逻辑总线绑定本板 CAN2。
     TEST_CHECK(BoardCanResolve(PLATFORM_CAN_BUS_3) == &hcan3); // 第三条逻辑总线绑定本板 CAN3。
+    const PlatformCanEndpoint_t endpoint = {PLATFORM_CAN_INVALID, 0x123u, 0x321u}; // 无效端点用于检查失败结果。
+    CAN_Init_Config_s converted = {.can_handle = &hcan1, .tx_id = 7u, .rx_id = 8u}; // 已有输出应在失败时保留。
+    TEST_CHECK(!BoardCanPrepareEndpoint(&endpoint, &converted)); // 未绑定编号不能形成注册配置。
+    TEST_CHECK(converted.can_handle == &hcan1 && converted.tx_id == 7u && converted.rx_id == 8u);
     RobotCanBridgeConfig_t missing = config; // 保留其余合法配置，只改变资源编号。
     missing.can_bus = PLATFORM_CAN_INVALID; // 未配置总线不能启动桥接。
     TEST_CHECK(!RobotCanBridgeInit(&missing) && receive_callback==NULL); // 失败前不注册设备。

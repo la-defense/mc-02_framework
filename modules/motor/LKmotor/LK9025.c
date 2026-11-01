@@ -4,6 +4,7 @@
  * 实例只在启动阶段登记，资源在运行期间长期保留。
  */
 #include "LK9025.h"
+#include "board_can_stm32.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
@@ -167,7 +168,9 @@ LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
     if (config == NULL || config->motor_type != LK9025)
         return NULL;
 
-    int8_t bus_index = LKBusIndexFromHandle(config->can_init_config.can_handle);
+    CAN_Init_Config_s can_config; // 暂存当前板级映射，不修改调用方配置。
+    if (!BoardCanPrepareEndpoint(&config->can_init_config, &can_config)) return NULL; // 未绑定总线不注册。
+    int8_t bus_index = LKBusIndexFromHandle(can_config.can_handle); // 以实际总线选择独立发送组。
     uint32_t motor_id = config->can_init_config.tx_id;
     if (bus_index < 0 || motor_id < 1u || motor_id > LK_MOTOR_PER_BUS_CNT)
         return NULL;
@@ -239,7 +242,6 @@ LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
         return NULL;
     }
 
-    CAN_Init_Config_s can_config = config->can_init_config;
     can_config.id = motor;
     can_config.can_module_callback = LKMotorDecode;
     can_config.rx_id = 0x140u + motor_id;

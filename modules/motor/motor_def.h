@@ -14,7 +14,7 @@
 
 #include "controller.h"
 #include "motor_pid.h"
-#include "bsp_can.h"
+#include "../../bsp/board/platform_resources.h"
 #include "motor_feedback.h"
 #include "stdint.h"
 
@@ -141,7 +141,7 @@ typedef struct
     Motor_Control_Setting_s controller_setting_init_config;
     Motor_Output_Axis_Config_s output_axis; // 减速比为转子／输出轴，角度／速度闭环映射到输出轴坐标。
     Motor_Type_e motor_type;
-    CAN_Init_Config_s can_init_config;
+    PlatformCanEndpoint_t can_init_config; // 逻辑总线及协议 ID，硬件句柄由板级适配绑定。
 } Motor_Init_Config_s;
 
 #endif // !MOTOR_DEF_H

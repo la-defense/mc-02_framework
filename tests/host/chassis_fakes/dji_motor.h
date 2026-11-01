@@ -5,6 +5,7 @@
 #include "main.h"
 // PID 参数复用生产声明，替身只记录电机调用。
 #include "../../../modules/motor/motor_pid.h"
+#include "../../../bsp/board/platform_resources.h"
 typedef PID_Init_Config_s ChassisPidConfig_s;
 typedef struct { ChassisPidConfig_s speed_PID, current_PID; } ChassisControllerParam_s;
 typedef struct {
@@ -13,7 +14,7 @@ typedef struct {
 } ChassisControllerSetting_s;
 typedef enum { MOTOR_AXIS_DIRECTION_REVERSE = -1, MOTOR_AXIS_DIRECTION_NORMAL = 1 } Motor_Axis_Direction_e;
 typedef struct { float gear_ratio; Motor_Axis_Direction_e direction; } Motor_Output_Axis_Config_s;
-typedef struct { CAN_HandleTypeDef *can_handle; uint32_t tx_id; } ChassisCanConfig_s;
+typedef PlatformCanEndpoint_t ChassisCanConfig_s; // 与生产车型配置使用相同逻辑总线类型。
 typedef struct {
     ChassisCanConfig_s can_init_config;
     ChassisControllerParam_s controller_param_init_config;

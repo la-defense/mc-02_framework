@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+FDCAN_HandleTypeDef hcan1, hcan2; // 为生产板级映射提供两条测试 CAN 总线。
 static CANInstance can_instances[2];
 static void (*callbacks[2])(CANInstance *);
 static DaemonInstance daemons[2];
@@ -120,6 +121,7 @@ static Motor_Init_Config_s config_for(float *external_angle, float *external_spe
     Motor_Control_Setting_s *setting = &config.controller_setting_init_config;
     Motor_Controller_Init_s *controller = &config.controller_param_init_config;
     config.motor_type = HT04;
+    config.can_init_config.can_bus = PLATFORM_CAN_BUS_1; // 本场景的测试电机使用第一条总线。
     config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL};
     setting->outer_loop_type = ANGLE_LOOP;
     setting->close_loop_type = ALL_THREE_LOOP;
@@ -281,6 +283,9 @@ static void test_open_loop_keeps_motor_direction(void)
 static void test_invalid_direction_flags_rejected(void)
 {
     Motor_Init_Config_s config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
+    config.can_init_config.can_bus = PLATFORM_CAN_INVALID; // 无绑定时不得登记来源或发送配置。
+    TEST_CHECK(HTMotorInit(&config) == NULL);
+    config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
     config.output_axis.direction = (Motor_Axis_Direction_e)2;
     TEST_CHECK(HTMotorInit(&config) == NULL);
     config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);

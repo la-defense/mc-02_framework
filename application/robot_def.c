@@ -23,7 +23,8 @@ static const Robot_Config_s *robot_instance;
 // 校验配置中的 DJI 电机类型、安装方向和本场景要求的发送 ID。
 static uint8_t IsSupportedDJIMotor(const Motor_Init_Config_s *motor, uint8_t require_id)
 {
-    if (motor == NULL || motor->can_init_config.can_handle == NULL ||
+    if (motor == NULL || motor->can_init_config.can_bus < PLATFORM_CAN_BUS_1 ||
+        motor->can_init_config.can_bus > PLATFORM_CAN_BUS_3 ||
         !isfinite(motor->output_axis.gear_ratio) || motor->output_axis.gear_ratio <= 0.0f ||
         (motor->output_axis.direction != MOTOR_AXIS_DIRECTION_NORMAL &&
          motor->output_axis.direction != MOTOR_AXIS_DIRECTION_REVERSE) ||
@@ -109,8 +110,8 @@ static uint8_t GimbalConfigIsValid(const Gimbal_Config_s *gimbal)
         !IsSupportedDJIMotor(&gimbal->yaw_motor_config, 1u) ||
         !IsSupportedDJIMotor(&gimbal->pitch_motor_config, 1u))
         return 0u;
-    if (gimbal->yaw_motor_config.can_init_config.can_handle ==
-            gimbal->pitch_motor_config.can_init_config.can_handle &&
+    if (gimbal->yaw_motor_config.can_init_config.can_bus ==
+            gimbal->pitch_motor_config.can_init_config.can_bus &&
         gimbal->yaw_motor_config.can_init_config.tx_id ==
             gimbal->pitch_motor_config.can_init_config.tx_id)
         return 0u;
@@ -140,8 +141,8 @@ static uint8_t ShootConfigIsValid(const Shoot_Config_s *shoot)
             (shoot->friction_motor_reverse_flag[index] != MOTOR_DIRECTION_NORMAL &&
              shoot->friction_motor_reverse_flag[index] != MOTOR_DIRECTION_REVERSE))
             return 0u;
-        if (shoot->friction_motor_config.can_init_config.can_handle ==
-                shoot->loader_motor_config.can_init_config.can_handle &&
+        if (shoot->friction_motor_config.can_init_config.can_bus ==
+                shoot->loader_motor_config.can_init_config.can_bus &&
             shoot->friction_motor_id[index] ==
                 shoot->loader_motor_config.can_init_config.tx_id)
             return 0u;

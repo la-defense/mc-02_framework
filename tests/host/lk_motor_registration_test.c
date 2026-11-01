@@ -125,22 +125,12 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
     return submission->accepted != 0u ? CAN_TX_SUBMIT_ACCEPTED : CAN_TX_SUBMIT_FULL;
 }
 
-static FDCAN_HandleTypeDef *handle_for_bus(uint8_t bus)
-{
-    switch (bus)
-    {
-    case 0u: return &hfdcan1;
-    case 1u: return &hfdcan2;
-    default: return &hfdcan3;
-    }
-}
-
 static Motor_Init_Config_s config_for(uint8_t bus, uint32_t motor_id)
 {
     Motor_Init_Config_s config = {0};
     config.motor_type = LK9025;
     config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL};
-    config.can_init_config.can_handle = handle_for_bus(bus);
+    config.can_init_config.can_bus = (PlatformCanBus_t)(PLATFORM_CAN_BUS_1 + bus);
     config.can_init_config.tx_id = motor_id;
     config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
     config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
@@ -162,8 +152,7 @@ static void test_registration(void)
     unsigned alloc_before = malloc_calls;
     unsigned free_before = free_calls;
 #endif
-    FDCAN_HandleTypeDef unknown_bus = {0};
-    config.can_init_config.can_handle = &unknown_bus;
+    config.can_init_config.can_bus = PLATFORM_CAN_INVALID;
     TEST_CHECK(LKMotorInit(&config) == NULL);
     config = config_for(0u, 0u);
     TEST_CHECK(LKMotorInit(&config) == NULL);

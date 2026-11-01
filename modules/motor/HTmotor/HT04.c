@@ -2,6 +2,7 @@
 * @brief 解码 HT04 协议，并用每电机独立任务计算所选控制环及发送力矩字段。
  */
 #include "HT04.h"
+#include "board_can_stm32.h"
 #include <string.h>
 #include "bsp_dwt.h"
 #include <math.h>
@@ -215,6 +216,8 @@ HTMotorInstance *HTMotorInit(const Motor_Init_Config_s *config)
 {
     if (config == NULL || !HTControlConfigValid(config))
         return NULL;
+    CAN_Init_Config_s can_config; // 保存板级解析结果，不修改车型配置。
+    if (!BoardCanPrepareEndpoint(&config->can_init_config, &can_config)) return NULL; // 总线未绑定时不分配或注册。
 
     const Motor_Control_Setting_s *setting = &config->controller_setting_init_config;
     uint8_t angle_active = (uint8_t)((setting->close_loop_type & ANGLE_LOOP) != 0u &&
@@ -270,7 +273,6 @@ HTMotorInstance *HTMotorInit(const Motor_Init_Config_s *config)
         return NULL;
     }
 
-    CAN_Init_Config_s can_config = config->can_init_config;
     can_config.can_module_callback = HTMotorDecode;
     can_config.id = motor;
     motor->motor_can_instace = CANRegister(&can_config);

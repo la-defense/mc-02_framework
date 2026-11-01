@@ -70,7 +70,7 @@ typedef struct
 
 /**
  * @brief 登记一个 LK 电机并准备它的 PID、离线计数和 CAN 接收。
- * @param[in] config 有效初始化配置；motor_type 须为 LK9025，can_handle 为已支持的总线句柄，tx_id 填1～4的电机编号。
+ * @param[in] config 有效初始化配置；motor_type 须为 LK9025，can_bus 为板级已绑定的逻辑总线，tx_id 填1～4的电机编号。
  * @return 长期有效实例；空参数、未知总线、编号错误、同总线编号重复、活动反馈／前馈缺失、PID 或资源初始化失败返回 NULL。
  * @note 每条总线最多4个，允许编号稀疏及乱序。CAN接收ID设为0x140+编号，发送ID固定为0x280。
  *       output_axis 必须提供有限正减速比和合法方向；输出轴目标、测量及 PID 使用 rad、rad/s。

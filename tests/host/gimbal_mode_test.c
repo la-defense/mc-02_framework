@@ -50,7 +50,7 @@ CAN_HandleTypeDef hcan3 = {3u};
 static Gimbal_Config_s gimbal_configuration = {
     .gimbal_type = SINGLE_GIMBAL,
     .yaw_motor_config = {
-        .can_init_config = {.can_handle = &hcan3, .tx_id = 1u},
+        .can_init_config = {.can_bus = PLATFORM_CAN_BUS_3, .tx_id = 1u},
         .controller_param_init_config = {
             .angle_PID = {.Kp = 3.25f}, .speed_PID = {.Kp = 4.5f},
         },
@@ -65,7 +65,7 @@ static Gimbal_Config_s gimbal_configuration = {
         .motor_type = GM6020,
     },
     .pitch_motor_config = {
-        .can_init_config = {.can_handle = &hcan3, .tx_id = 2u},
+        .can_init_config = {.can_bus = PLATFORM_CAN_BUS_3, .tx_id = 2u},
         .controller_param_init_config = {
             .angle_PID = {.Kp = 6.25f}, .speed_PID = {.Kp = 7.5f},
         },
@@ -145,7 +145,7 @@ DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {
     TEST_CHECK(config != NULL);
     TEST_CHECK(motor_init_count < 2u);
-    TEST_CHECK(config->can_init_config.can_handle == &hcan3);
+    TEST_CHECK(config->can_init_config.can_bus == PLATFORM_CAN_BUS_3);
     TEST_CHECK(config->can_init_config.tx_id == motor_init_count + 1u);
     motor_configs[motor_init_count] = *config;
     motors[motor_init_count].measure.angle_single_round =

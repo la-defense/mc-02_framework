@@ -51,7 +51,7 @@ static const Chassis_Config_s chassis_configuration = {
 #endif
     },
     .chassis_motor_config = {
-        .can_init_config = {.can_handle = &hcan1},
+        .can_init_config = {.can_bus = PLATFORM_CAN_BUS_1},
         .controller_param_init_config = {.speed_PID = {.Kp = 12.0f}},
         .output_axis = {REDUCTION_RATIO_WHEEL, MOTOR_AXIS_DIRECTION_REVERSE},
         .motor_type = M3508,

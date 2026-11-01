@@ -7,9 +7,13 @@
 #include <stdint.h>
 
 #define DEVICE_CAN_CNT 3u
+#define FDCAN 1
 #define CAN_MX_REGISTER_CNT 16u
 typedef struct { uint8_t bus_index; } FDCAN_HandleTypeDef;
 extern FDCAN_HandleTypeDef hfdcan1, hfdcan2, hfdcan3;
+#define hcan1 hfdcan1
+#define hcan2 hfdcan2
+#define hcan3 hfdcan3
 
 typedef struct
 {
