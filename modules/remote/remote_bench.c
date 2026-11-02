@@ -4,16 +4,17 @@
 #include "remote_bench.h"
 #include "remote_safety.h"
 #include "robot_safety.h"
+#include "platform_sync.h"
 #if MC02_BENCH_RC_DIAGNOSTICS && !defined(MC02_PROFILE_BENCH_SAFE)
 #error "Remote diagnostics require bench_safe"
 #endif
 #if MC02_BENCH_RC_DIAGNOSTICS
 static RemoteControlSnapshot_s snapshot;
 static RemoteSafetyGestures_s gestures;
-uint8_t RemoteBenchInit(UART_HandleTypeDef *uart)
+uint8_t RemoteBenchInit(PlatformUartPort_t port)
 {
     RemoteSafetyGesturesInit(&gestures);
-    return (uint8_t)(RemoteControlInit(uart) != NULL);
+    return (uint8_t)(RemoteControlInit(port) != NULL);
 }
 void RemoteBenchTask(void)
 {
@@ -22,7 +23,7 @@ void RemoteBenchTask(void)
     RobotSafetySetRcOnline(online);
     // allow_enable 固定为 0，保留手势诊断过程，同时撤销使能请求。
     RemoteSafetyGesturesUpdate(&gestures, &snapshot.input,
-                               online, HAL_GetTick(), 0u);
+                               online, PlatformTimeNowMs(), 0u);
     // 更新状态前再次明确失能，避免其他来源留下的请求影响诊断。
     RobotSafetyRequestDisable();
     RobotSafetyUpdate();

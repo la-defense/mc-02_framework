@@ -157,7 +157,7 @@ uint8_t RobotCMDInit(void)
     if (!remote_initialized || !RobotBuildModuleStarted(ROBOT_MODULE_VISION))
         return 0u;
 #else
-    remote_initialized = (uint8_t)(RemoteControlInit(&huart5) != NULL);
+    remote_initialized = (uint8_t)(RemoteControlInit(PLATFORM_UART_5) != NULL);
     if (!remote_initialized || VisionInit(&huart9) == NULL)
         return 0u;
 #endif

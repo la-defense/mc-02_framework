@@ -13,6 +13,19 @@ typedef enum {
     PLATFORM_CAN_BUS_3        /**< 板级声明的第三条 CAN 总线。 */
 } PlatformCanBus_t;
 
+/** @brief 车型声明的逻辑 UART 编号，实际端口由板级适配绑定。 */
+typedef enum {
+    PLATFORM_UART_INVALID = 0, /**< 未指定串口。 */
+    PLATFORM_UART_1 = 1,       /**< 板级声明的串口 1。 */
+    PLATFORM_UART_2 = 2,       /**< 板级声明的串口 2。 */
+    PLATFORM_UART_3 = 3,       /**< 板级声明的串口 3。 */
+    PLATFORM_UART_5 = 5,       /**< 板级声明的串口 5。 */
+    PLATFORM_UART_7 = 7,       /**< 板级声明的串口 7。 */
+    PLATFORM_UART_8 = 8,       /**< 板级声明的串口 8。 */
+    PLATFORM_UART_9 = 9,       /**< 板级声明的串口 9。 */
+    PLATFORM_UART_10 = 10      /**< 板级声明的串口 10。 */
+} PlatformUartPort_t;
+
 /** @brief 业务声明的经典 CAN 端点，不包含芯片句柄和回调指针。 */
 typedef struct {
     PlatformCanBus_t can_bus; /**< 本板逻辑总线编号。 */

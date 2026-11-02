@@ -18,7 +18,7 @@ static Vision_Recv_s wire;
 static Vision_Status_t status;
 static unsigned snapshots;
 uint32_t HAL_GetTick(void) { return tick; }
-const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *h) { (void)h; return remote; }
+const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port) { (void)port; return remote; }
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
 { snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; }

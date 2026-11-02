@@ -130,6 +130,7 @@ const Robot_Config_s *SentinelConfigInit(void)
     static const Robot_Config_s sentinel_config = {
         .alarm_config = &sentinel_alarm_config,
         .referee_ui_config = &sentinel_referee_ui_config,
+        .remote_uart = PLATFORM_UART_5, // 当前遥控器接在板级声明的串口 5。
 #if defined(CHASSIS_BOARD)
         .can_bridge = {
             .can_bus = PLATFORM_CAN_BUS_2, // 底盘板使用板级声明的第二条 CAN 总线。

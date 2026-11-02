@@ -14,8 +14,7 @@
 #define REMOTE_CONTROL_H
 
 #include <stdint.h>
-#include "main.h"
-#include "usart.h"
+#include "../../bsp/board/platform_resources.h"
 
 // 用于遥控器数据读取,遥控器数据是一个大小为2的数组
 #define LAST 1
@@ -117,11 +116,11 @@ typedef struct
 /* ------------------------- Internal Data ----------------------------------- */
 
 /** @brief 注册遥控 UART 和离线计时，清空旧输入。
-* @param[in] rc_usart_handle 已配置好的遥控 UART 句柄，不能为 NULL。
+* @param[in] port 车型选择的逻辑 UART 编号，必须在板级绑定中存在。
 * @return 成功返回只读初始化标识地址；失败返回 NULL。
 * @note 只初始化一次；不要解引用返回地址读取运行数据，统一使用 RemoteControlGetSnapshot()。
  */
-const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *rc_usart_handle);
+const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port);
 
 /**
  * @brief 检查合法18字节块的来源年龄及看门狗，未初始化为离线。

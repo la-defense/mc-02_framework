@@ -4,7 +4,7 @@
 typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
 typedef struct { int unused; } DMA_HandleTypeDef;
 typedef struct { uint32_t gState; DMA_HandleTypeDef *hdmarx; } UART_HandleTypeDef;
-extern UART_HandleTypeDef huart5, huart9;
+extern UART_HandleTypeDef huart1, huart2, huart3, huart5, huart7, huart8, huart9, huart10;
 #define HAL_UART_STATE_READY 0x20u
 #define DMA_IT_HT 1u
 #define __HAL_DMA_DISABLE_IT(h, flags) ((void)(h), (void)(flags))

@@ -15,6 +15,7 @@
 #include "robot_safety.h"
 #include "bsp_usart.h"
 #include "remote_safety.h"
+#include "../../bsp/board/board_uart_stm32.h"
 #if MC02_BENCH_RC_DIAGNOSTICS
 #include "remote_bench.h"
 #endif
@@ -154,12 +155,23 @@ int main(int argc, char **argv)
 {
     huart5.hdmarx = &huart5_dma;
     huart9.hdmarx = &huart9_dma;
+    CHECK(BoardUartResolve(PLATFORM_UART_1) == &huart1); // 逻辑 1 对应 USART1。
+    CHECK(BoardUartResolve(PLATFORM_UART_2) == &huart2); // 逻辑 2 对应 USART2。
+    CHECK(BoardUartResolve(PLATFORM_UART_3) == &huart3); // 逻辑 3 对应 USART3。
+    CHECK(BoardUartResolve(PLATFORM_UART_5) == &huart5); // 板级映射保留当前遥控接线。
+    CHECK(BoardUartResolve(PLATFORM_UART_7) == &huart7); // 逻辑 7 对应 UART7。
+    CHECK(BoardUartResolve(PLATFORM_UART_8) == &huart8); // 逻辑 8 对应 UART8。
+    CHECK(BoardUartResolve(PLATFORM_UART_9) == &huart9); // 上位机串口仍映射到 UART9。
+    CHECK(BoardUartResolve(PLATFORM_UART_10) == &huart10); // 逻辑 10 对应 USART10。
+    CHECK(BoardUartResolve(PLATFORM_UART_INVALID) == NULL); // 未声明编号不能回退到现有串口。
+    CHECK(BoardUartResolve((PlatformUartPort_t)4) == NULL); // 没有声明 UART4，不能映射到其他外设。
+    CHECK(RemoteControlInit(PLATFORM_UART_INVALID) == NULL && dma_buffer == NULL); // 失败不启动 DMA。
     if (argc > 1 && (!strcmp(argv[1], "source-time-wrap") ||
                      !strcmp(argv[1], "pc-age-wrap")))
         now = UINT32_MAX - 50u;
     RobotSafetyInit();
 #if MC02_BENCH_RC_DIAGNOSTICS
-    RemoteBenchInit(&huart5);
+    RemoteBenchInit(PLATFORM_UART_5);
     RemoteBenchTask(); CHECK(!RemoteControlIsOnline() && EstopIsLatched());
     RobotSafetySetImuValid(1); RobotSafetySetCalibValid(1);
     uint8_t frame[18]; const uint16_t center[5]={1024,1024,1024,1024,1024};
@@ -185,7 +197,7 @@ int main(int argc, char **argv)
     CHECK(!RobotSafetyIsReady());
     return 0;
 #endif
-    const RC_ctrl_t *rc = RemoteControlInit(&huart5);
+    const RC_ctrl_t *rc = RemoteControlInit(PLATFORM_UART_5);
     CHECK(rc != NULL && dma_buffer != NULL);
     CHECK(!RemoteControlIsOnline());
 #ifdef MC02_REMOTE_THREAD_TEST

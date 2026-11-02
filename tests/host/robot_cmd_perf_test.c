@@ -45,7 +45,7 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     snapshot->pc_valid = 1u;
 }
 
-const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
+const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t handle)
 {
     (void)handle;
     return &remote_input;

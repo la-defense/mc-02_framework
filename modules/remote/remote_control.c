@@ -10,6 +10,7 @@
 #include "robot_safety.h"
 #include "platform_irq.h"
 #include "platform_sync.h"
+#include "board_uart_stm32.h"
 
 #define REMOTE_CONTROL_FRAME_SIZE 18u
 static RC_ctrl_t rc_ctrl[2];
@@ -219,10 +220,11 @@ static void RCLostCallback(const DaemonEvent_t *event, void *id)
     BSP_LOG_EVENT_0(EV_MODULES_REMOTE_REMOTE_CONTROL_C_01);
 }
 
-const RC_ctrl_t *RemoteControlInit(UART_HandleTypeDef *handle)
+const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port)
 {
+    UART_HandleTypeDef *handle = BoardUartResolve(port); // 将车型逻辑编号绑定到板级串口。
     if (handle == NULL)
-        return NULL;
+        return NULL; // 未绑定时不注册来源或启动 DMA。
     USART_Init_Config_s conf = {
         .module_callback = RemoteControlRxCallback,
         .context = rc_ctrl,

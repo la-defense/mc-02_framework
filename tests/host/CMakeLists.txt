@@ -27,7 +27,9 @@ set(MC02_HOST_DAEMON_SOURCES
 set(MC02_HOST_REMOTE_SOURCES
   ../../modules/remote/remote_control.c # 遥控输入及租约处理。
   ../../bsp/os/platform_irq_stm32.c # 保存并恢复测试目标的中断状态。
-  ../../bsp/os/platform_sync_freertos.c) # 使用测试目标的时钟与任务锁。
+  ../../bsp/os/platform_sync_freertos.c # 使用测试目标的时钟与任务锁。
+  ../../bsp/board/board_uart_stm32.c # 生产 UART 绑定使用该目标的测试句柄。
+  remote_uart_handles.c) # 提供遥控测试未单独声明的其余 UART 句柄。
 # 电机测试按目标原有的 CAN 替身编译同一份板级绑定。
 set(MC02_HOST_DJI_SOURCES ../../modules/motor/DJImotor/dji_motor.c ../../bsp/board/board_can_stm32.c) # DJI 及逻辑 CAN 绑定。
 set(MC02_HOST_LK_SOURCES ../../modules/motor/LKmotor/LK9025.c ../../bsp/board/board_can_stm32.c) # LK 及逻辑 CAN 绑定。
@@ -41,7 +43,9 @@ set_property(SOURCE ../../modules/daemon/daemon.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
 # 遥控源码通过框架头访问时间和中断屏蔽；其硬件串口依赖仍单独处理。
 set_property(SOURCE ../../modules/remote/remote_control.c APPEND PROPERTY
-  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os;${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/board")
+set_property(SOURCE ../../modules/remote/remote_bench.c APPEND PROPERTY
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os") # 诊断任务复用框架时钟。
 # 电机驱动只在注册适配处引用板级头；现有 CAN 发送接口仍待迁移。
 set_property(SOURCE ../../modules/motor/DJImotor/dji_motor.c ../../modules/motor/LKmotor/LK9025.c
   ../../modules/motor/HTmotor/HT04.c ../../modules/motor/DMmotor/dmmotor.c APPEND PROPERTY
@@ -53,6 +57,10 @@ target_compile_options(mc02_daemon_portable PRIVATE -Wall -Wextra -Werror)
 add_library(mc02_motor_config_portable OBJECT motor_config_public_header.c)
 target_include_directories(mc02_motor_config_portable PRIVATE ../../modules/motor ../../modules/algorithm)
 target_compile_options(mc02_motor_config_portable PRIVATE -Wall -Wextra -Werror)
+# 遥控公开头不需要 HAL 或 RTOS 头。
+add_library(mc02_remote_header_portable OBJECT remote_public_header.c)
+target_include_directories(mc02_remote_header_portable PRIVATE ../../modules/remote)
+target_compile_options(mc02_remote_header_portable PRIVATE -Wall -Wextra -Werror)
 # 仅提供框架头，验证消息中心本身不依赖 HAL／FreeRTOS 头路径。
 add_library(mc02_message_center_portable OBJECT ../../modules/message_center/message_center.c)
 target_include_directories(mc02_message_center_portable PRIVATE ../../modules/message_center ../../bsp/os)

@@ -196,9 +196,9 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
     case ROBOT_MODULE_REMOTE:
 #if MC02_FEATURE_REMOTE
 #if MC02_BENCH_RC_DIAGNOSTICS
-        return RemoteBenchInit(&huart5);
+        return RemoteBenchInit(config->remote_uart);
 #else
-        return (uint8_t)(RemoteControlInit(&huart5) != NULL);
+        return (uint8_t)(RemoteControlInit(config->remote_uart) != NULL);
 #endif
 #else
         return 0u;
@@ -328,7 +328,7 @@ uint8_t RobotInit(void)
                      INIT_FAILURE_DEPENDENCY, 0u);
 #endif
 #if MC02_BENCH_RC_DIAGNOSTICS
-    ROBOT_INIT_CHECK(RemoteBenchInit(&huart5), INIT_STAGE_APPLICATION, INIT_MODULE_REMOTE,
+    ROBOT_INIT_CHECK(RemoteBenchInit(robot_config->remote_uart), INIT_STAGE_APPLICATION, INIT_MODULE_REMOTE,
                      INIT_FAILURE_DEPENDENCY, 0u);
 #endif
 #endif
