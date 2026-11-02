@@ -3,7 +3,8 @@
  * @note 状态接口可由普通任务并发调用；日志在恢复中断后提交。
  */
 #include "robot_safety.h"
-#include "main.h"
+#include "platform_irq.h"
+#include "platform_sync.h"
 #include "bsp_log.h"
 #include <limits.h>
 
@@ -26,14 +27,13 @@ static uint8_t task_fault_logged = 0u;
 
 static uint32_t RobotSafetyEnterCritical(void)
 {
-    const uint32_t previous = __get_PRIMASK();
-    __disable_irq();
-    return previous;
+    // 返回进入前的屏蔽状态，退出时须原样恢复。
+    return PlatformIrqSaveAndDisable();
 }
 
 static void RobotSafetyExitCritical(uint32_t previous)
 {
-    __set_PRIMASK(previous);
+    PlatformIrqRestore(previous); // 保留调用前已经屏蔽中断的状态。
 }
 
 #if defined(CHASSIS_BOARD)
@@ -378,7 +378,7 @@ Robot_Status_e RobotSafetyGetState(void)
 uint8_t RobotSafetyIsReady(void)
 {
 #if defined(CHASSIS_BOARD)
-    return RobotSafetyIsReadyAt(HAL_GetTick());
+    return RobotSafetyIsReadyAt(PlatformTimeNowMs());
 #else
     return RobotSafetyIsReadyAt(0u);
 #endif
@@ -460,7 +460,7 @@ void RobotSafetyUpdate(void)
 
 #if defined(CHASSIS_BOARD)
     // 任务周期之外也以租约期限判定；到期立刻撤销旧远端命令并要求新序号重接管。
-    if (remote_chassis_permit != 0u && RobotSafetyRemoteLeaseFreshLocked(HAL_GetTick()) == 0u)
+    if (remote_chassis_permit != 0u && RobotSafetyRemoteLeaseFreshLocked(PlatformTimeNowMs()) == 0u)
         RobotSafetyClearRemoteChassisPermitLocked(1u);
     // 底盘板不接收遥控器；运动授权来自云台板的新鲜命令并继续受本地状态约束。
     if ((active_faults & (ROBOT_FAULT_INIT_FAILURE | ROBOT_FAULT_RESET_LOCKOUT)) != 0u)

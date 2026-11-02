@@ -3,6 +3,7 @@
 #include <string.h>
 #include "remote_control.h"
 #include "bsp_usart.h"
+#include "robot_def.h"
 #include "daemon.h"
 #include "robot_cmd.h"
 #include "robot_safety.h"

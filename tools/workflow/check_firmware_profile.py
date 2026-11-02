@@ -58,6 +58,7 @@ PORTABLE_FRAMEWORK_SOURCES = {
     "modules/daemon/daemon.c",  # 来源状态和事件队列。
     "modules/daemon/daemon_event_task.c",  # 来源事件任务入口。
     "modules/message_center/message_center.c",  # 消息目录和有界队列。
+    "modules/safety/robot_safety.c",  # 整车许可与故障管理。
 }
 ASSEMBLY_SOURCES = {
     "startup_stm32h723xx.s",
@@ -209,7 +210,7 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
 
 def check_portable_includes(entry: dict, source_root: Path, source: str) -> None:
     """只允许框架公开头和日志格式检查头进入可移植源文件的编译路径。"""
-    allowed = {source_root / "modules/daemon", source_root / "modules/message_center",
+    allowed = {source_root / "modules/daemon", source_root / "modules/message_center", source_root / "modules/safety",
                source_root / "bsp/os", source_root / "bsp/log"}
     arguments = entry.get("arguments") or shlex.split(entry.get("command", ""))
     for index, argument in enumerate(arguments):
@@ -251,7 +252,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
     lines = deps.splitlines()
     if not lines or "#deps" not in lines[0] or "(VALID)" not in lines[0]:
         raise SystemExit(f"portable framework source {source} has no valid Ninja dependencies")
-    allowed = (source_root / "modules/daemon", source_root / "modules/message_center",
+    allowed = (source_root / "modules/daemon", source_root / "modules/message_center", source_root / "modules/safety",
                source_root / "bsp/os", source_root / "bsp/log")
     for line in lines[1:]:
         # 依赖可能为相对构建目录的路径，也可能为绝对路径。

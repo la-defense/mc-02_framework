@@ -6,7 +6,7 @@
 #define ROBOT_SAFETY_H
 
 #include <stdint.h>
-#include "robot_def.h"
+#include "robot_state.h"
 
 /* 机器人故障位, 可同时置位多个 */
 typedef enum

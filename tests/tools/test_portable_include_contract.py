@@ -21,6 +21,9 @@ class PortableIncludeContractTest(unittest.TestCase):
         # 分离和拼接两种写法都应识别为已允许的框架目录。
         entry = self.entry("-Imodules/daemon", "-I", "bsp/os", "-isystem", "bsp/log")
         check_portable_includes(entry, ROOT, "modules/daemon/daemon.c")
+        # 安全模块的公开状态定义也可进入框架目标。
+        check_portable_includes(self.entry("-Imodules/safety", "-Ibsp/os", "-Ibsp/log"),
+                                ROOT, "modules/safety/robot_safety.c")
 
     def test_vendor_and_rtos_paths_are_rejected(self):
         # 同时覆盖拼接、分离和系统头参数，防止替换选项形式后漏检。

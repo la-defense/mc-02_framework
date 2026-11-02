@@ -270,17 +270,20 @@ set(MC02_ASM_SOURCES
     Middlewares/Third_Party/SEGGER/RTT/SEGGER_RTT_ASM_ARMv7M.s)
 set_source_files_properties(${MC02_ASM_SOURCES} PROPERTIES COMPILE_FLAGS "-x assembler-with-cpp")
 
-# 这三个框架文件只依赖自有接口和标准 C；单独编译以阻止继承芯片或 RTOS 头路径。
+# 这些框架文件只依赖自有接口和标准 C；单独编译以阻止继承芯片或 RTOS 头路径。
 set(MC02_PORTABLE_FRAMEWORK_SOURCES
     modules/daemon/daemon.c # 来源期限、状态和事件队列。
     modules/daemon/daemon_event_task.c # 来源事件处理任务的框架入口。
-    modules/message_center/message_center.c) # 有界消息与话题目录。
+    modules/message_center/message_center.c # 有界消息与话题目录。
+    modules/safety/robot_safety.c) # 整车许可、故障与急停状态。
 set(MC02_EXECUTABLE_SOURCES ${MC02_SELECTED_SOURCES})
 list(REMOVE_ITEM MC02_EXECUTABLE_SOURCES ${MC02_PORTABLE_FRAMEWORK_SOURCES})
 add_library(mc02_portable_framework OBJECT ${MC02_PORTABLE_FRAMEWORK_SOURCES})
 target_include_directories(mc02_portable_framework PRIVATE
     modules/daemon # 来源监控的公开类型。
     modules/message_center # 消息目录和新鲜度类型。
+    modules/safety # 整车状态和安全管理的公开类型。
+    bsp/log # 安全状态变化使用的有界事件接口。
     bsp/os) # 不暴露厂商类型的任务、时间和同步接口。
 mc02_apply_format_diagnostics(mc02_portable_framework)
 

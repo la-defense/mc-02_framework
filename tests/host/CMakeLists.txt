@@ -44,6 +44,17 @@ set_property(SOURCE ../../modules/daemon/daemon.c APPEND PROPERTY
 # 裁判 UI 使用框架中断和时间接口，不再从串口头间接获取芯片声明。
 set_property(SOURCE ../../modules/referee/referee_task.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+# 安全管理只调用框架同步接口，由每个测试目标提供对应的时钟和中断模型。
+set_property(SOURCE ../../modules/safety/robot_safety.c APPEND PROPERTY
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+add_library(mc02_robot_safety_portable OBJECT ../../modules/safety/robot_safety.c)
+target_include_directories(mc02_robot_safety_portable PRIVATE ../../modules/safety ../../bsp/os ../../bsp/log)
+target_compile_options(mc02_robot_safety_portable PRIVATE -Wall -Wextra -Werror)
+# 双板底盘路径也不得依赖厂商头或 RTOS 头。
+add_library(mc02_robot_safety_chassis_portable OBJECT ../../modules/safety/robot_safety.c)
+target_include_directories(mc02_robot_safety_chassis_portable PRIVATE ../../modules/safety ../../bsp/os ../../bsp/log)
+target_compile_definitions(mc02_robot_safety_chassis_portable PRIVATE CHASSIS_BOARD=1)
+target_compile_options(mc02_robot_safety_chassis_portable PRIVATE -Wall -Wextra -Werror)
 add_library(mc02_referee_ui_portable OBJECT ../../modules/referee/referee_task.c)
 target_include_directories(mc02_referee_ui_portable PRIVATE ../../modules/referee ../../bsp/usart ../../bsp/os)
 target_compile_options(mc02_referee_ui_portable PRIVATE -Wall -Wextra -Werror)
@@ -900,6 +911,7 @@ if(UNIX AND NOT APPLE)
   target_compile_definitions(robot_safety_thread_test PRIVATE MC02_THREAD_CRITICAL=1 MC02_THREAD_TEST=1)
   target_link_libraries(robot_safety_thread_test PRIVATE Threads::Threads)
   add_test(NAME production_safety_concurrent_snapshot COMMAND robot_safety_thread_test threads)
+  add_test(NAME production_safety_irq_restore COMMAND robot_safety_thread_test irq-restore)
   set_tests_properties(production_safety_concurrent_snapshot PROPERTIES TIMEOUT 10)
 endif()
 add_executable(remote_control_test remote_control_test.c ../../bsp/usart/bsp_usart.c
@@ -1958,6 +1970,16 @@ endforeach()
 get_property(host_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS host_targets)
   get_target_property(type ${target} TYPE)
+  get_target_property(target_sources ${target} SOURCES)
+  if(type STREQUAL "EXECUTABLE" AND "${target_sources}" MATCHES "robot_safety[.]c")
+    # 编译生产平台适配器，继续使用每个目标自己的中断和时钟替身。
+    if(NOT "${target_sources}" MATCHES "platform_irq_stm32[.]c")
+      target_sources(${target} PRIVATE ../../bsp/os/platform_irq_stm32.c)
+    endif()
+    if(NOT "${target_sources}" MATCHES "platform_sync_freertos[.]c")
+      target_sources(${target} PRIVATE ../../bsp/os/platform_sync_freertos.c)
+    endif()
+  endif()
   # 独立头文件和可移植性编译目标同样需要仓库的格式诊断。
   if(type STREQUAL "EXECUTABLE" OR type STREQUAL "STATIC_LIBRARY" OR type STREQUAL "OBJECT_LIBRARY")
     mc02_apply_format_diagnostics(${target})

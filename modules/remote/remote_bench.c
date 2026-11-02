@@ -2,6 +2,7 @@
 * @brief 裸板观察遥控及手势，持续请求失能；不用于驱动实车执行器。
 */
 #include "remote_bench.h"
+#include <stddef.h> // NULL 用于检查遥控初始化结果。
 #include "remote_safety.h"
 #include "robot_safety.h"
 #include "platform_sync.h"

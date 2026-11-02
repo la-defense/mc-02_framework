@@ -17,6 +17,7 @@
 
 #include "ins_task.h"
 #include "master_process.h"
+#include "../modules/safety/robot_state.h"
 #include "stdint.h"
 
 /* 开发板类型定义,烧录时注意不要弄错对应功能;修改定义后需要重新编译,只能存在一个定义! */
@@ -99,18 +100,6 @@
  * @brief 这些枚举类型和结构体会作为CMD控制数据和各应用的反馈数据的一部分
  *
  */
-// 机器人状态
-typedef enum
-{
-    ROBOT_STOP = 0, // 兼容旧代码: 停止输出
-    ROBOT_READY,    // 兼容旧代码: 正常运行
-    ROBOT_INIT,     // 上电初始化
-    ROBOT_SAFE,     // 已初始化但未使能
-    ROBOT_CALIB,    // 标定模式
-    ROBOT_FAULT,    // 故障降级
-    ROBOT_ESTOP,    // 急停锁存
-} Robot_Status_e;
-
 // 应用状态
 typedef enum
 {

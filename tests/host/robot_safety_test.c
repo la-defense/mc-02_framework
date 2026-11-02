@@ -2,12 +2,16 @@
 #include <string.h>
 #include "robot_safety.h"
 #ifdef MC02_THREAD_TEST
+#include "main.h" // 使用可观察嵌套状态的主机中断模型。
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #endif
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL:%d %s\n", __LINE__, #c); return 1; } } while (0)
+
+// 单板安全测试不依赖时间推进；适配器仍需要可链接的时钟来源。
+uint32_t HAL_GetTick(void) { return 0u; }
 
 static void HealthyInputs(void)
 {
@@ -225,6 +229,15 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "immediate")) return ImmediateInhibit();
 #ifdef MC02_THREAD_TEST
     if (argc > 1 && !strcmp(argv[1], "threads")) return ConcurrentSafetySnapshots();
+    if (argc > 1 && !strcmp(argv[1], "irq-restore")) {
+        // 在外层已屏蔽时读取整车状态，内层退出必须保留外层状态。
+        HostDisableIrq();
+        (void)RobotSafetyGetState();
+        CHECK(HostGetPrimask() == 1u);
+        HostSetPrimask(0u);
+        CHECK(HostGetPrimask() == 0u);
+        return 0;
+    }
 #endif
     if (argc > 1 && !strcmp(argv[1], "recovery")) return RecoveryAndPriority();
     if (argc > 1 && !strcmp(argv[1], "init-failure")) return InitializationFailureIsSticky();
