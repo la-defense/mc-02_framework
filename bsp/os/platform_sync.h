@@ -21,4 +21,10 @@ void PlatformTaskCriticalExit(void);
  * @note 当前 H723 后端返回 HAL_GetTick；不改变现有时间基准或提供跨板同步。
  */
 uint32_t PlatformTimeNowMs(void);
+
+/** @brief 读取平台已有的 64 位微秒运行时间。
+ * @return 自既有时基初始化后累计的微秒值。
+ * @note H723 后端沿用 DWT_GetTimeline_us 的计数与同步规则；不提供跨设备对时。
+ */
+uint64_t PlatformTimeNowUs(void);
 #endif

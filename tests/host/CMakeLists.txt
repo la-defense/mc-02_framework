@@ -47,7 +47,8 @@ set(MC02_HOST_DJI_SOURCES
   ../../modules/motor/DJImotor/dji_motor.c # 生产电机驱动。
   ../../bsp/board/board_can_stm32.c # 逻辑 CAN 到测试总线的绑定。
   ../../bsp/board/platform_can_rx_stm32.c # 真实逻辑 CAN 接收适配。
-  ../../bsp/board/platform_probe_stm32.c) # 周期计数到秒的换算适配。
+  ../../bsp/board/platform_probe_stm32.c # 周期计数到秒的换算适配。
+  ../../bsp/board/platform_time_us_stm32.c) # 沿用测试的微秒时间来源。
 set(MC02_HOST_LK_SOURCES ../../modules/motor/LKmotor/LK9025.c ../../bsp/board/board_can_stm32.c) # LK 及逻辑 CAN 绑定。
 set(MC02_HOST_HT_SOURCES ../../modules/motor/HTmotor/HT04.c ../../bsp/board/board_can_stm32.c) # HT 及逻辑 CAN 绑定。
 set(MC02_HOST_DM_SOURCES ../../modules/motor/DMmotor/dmmotor.c ../../bsp/board/board_can_stm32.c) # DM 及逻辑 CAN 绑定。
@@ -639,6 +640,7 @@ foreach(scenario IN ITEMS reference failures instances response)
 endforeach()
 add_executable(motor_pid_integration_test motor_pid_integration_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_feedback.c
+  ../../bsp/os/platform_sync_freertos.c # 映射到此目标的临界区和毫秒时钟替身。
   ../../bsp/board/platform_can_periodic_stm32.c # 周期发送适配到测试队列。
   dji_can_unregister_fake.c # 此目标使用静态 CAN 测试实例。
   ../../modules/motor/motor_pid.c
@@ -651,8 +653,23 @@ if(UNIX)
 endif()
 target_link_libraries(motor_pid_integration_test PRIVATE mc02_numeric)
 add_test(NAME production_motor_pid_cascade_and_failure COMMAND motor_pid_integration_test)
+# 使用公开头编译生产 DJI 普通控制路径，禁止继承芯片和 RTOS 头目录。
+add_library(dji_portable_compile OBJECT ../../modules/motor/DJImotor/dji_motor.c)
+target_include_directories(dji_portable_compile PRIVATE
+  ../../modules # 通用单位换算定义。
+  ../../modules/motor # 电机公共定义与 PID 接口。
+  ../../modules/motor/DJImotor # DJI 公共接口。
+  ../../modules/algorithm # PID 和滤波接口。
+  ../../modules/daemon # 来源监控接口。
+  ../../modules/safety # 底盘许可接口。
+  ../../bsp/log # 固定事件日志接口。
+  ../../bsp/os # 平台时间与临界区接口。
+  ../../bsp/can) # 逻辑 CAN 接口。
+target_compile_definitions(dji_portable_compile PRIVATE CHASSIS_BOARD=1) # 同时编译底盘许可路径。
+target_compile_options(dji_portable_compile PRIVATE -Wall -Wextra -Werror) # 把接口遗漏作为构建失败。
 add_executable(motor_feedback_filter_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
+  ../../bsp/os/platform_sync_freertos.c # 映射到此目标的临界区和毫秒时钟替身。
   ../../bsp/board/platform_can_periodic_stm32.c # 周期发送适配到测试队列。
   dji_can_unregister_fake.c # 此目标使用静态 CAN 测试实例。
   ../../modules/motor/motor_feedback.c

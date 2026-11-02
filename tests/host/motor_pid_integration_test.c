@@ -124,5 +124,9 @@ int main(void)
     TEST_CHECK(sent[1] == 2u);
     tick(101000u);
     TEST_CHECK(sent[0] == 0u && sent[1] == 0u);
+    tick(UINT64_C(0x100000000)); // 微秒时间超过 32 位范围时先拒绝过长的控制间隔。
+    TEST_CHECK(sent[0] == 0u && sent[1] == 0u); // 失效间隔不能继续输出旧值。
+    tick(UINT64_C(0x100000000) + 1000u); // 下一次间隔为正常的 1 ms。
+    TEST_CHECK(sent[1] == 2u); // 64 位时间仍能恢复原来的控制结果。
     return EXIT_SUCCESS;
 }

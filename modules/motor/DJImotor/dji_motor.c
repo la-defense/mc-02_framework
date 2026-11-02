@@ -2,17 +2,17 @@
 * @brief 解码 DJI 电调反馈，逐电机计算参考输出，并按总线与设备编号组成四电机 CAN 帧。
  */
 #include "dji_motor.h"
-#include "board_can_stm32.h"
 #include <string.h>
 #include "general_def.h"
-#include "bsp_dwt.h"
 #include "../../../bsp/dwt/platform_probe.h"
+#include "../../../bsp/os/platform_sync.h"
 #include "bsp_log.h"
-#include "bsp_can.h"
 #include "motor_pid.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include "stm32h7xx_hal.h"
+#if CAN_DJI_INJECT_TEST >= 1
+#include "board_can_stm32.h" // 内部回环诊断仍需直接操作板级控制器。
+#include "bsp_can.h" // 仅供诊断模式切换及队列派发。
+#include "bsp_dwt.h" // 仅供诊断的有界忙等计时。
+#endif
 #if defined(CHASSIS_BOARD)
 #include "robot_safety.h"
 #endif
@@ -25,9 +25,9 @@ static uint8_t idx = 0; // register idx,是该文件的全局电机索引,在注
    dji_prof_all : 单次 DJIMotorControl 总耗时
    dji_prof_pid : 串级 PID 计算 + 组帧(不含 CAN 发送)
    dji_prof_send: CAN 提交耗时；bsp_can 当前发送空间满即返回，不等待。 */
-volatile DWT_Probe_t dji_prof_all = {0};
-volatile DWT_Probe_t dji_prof_pid = {0};
-volatile DWT_Probe_t dji_prof_send = {0};
+volatile PlatformProbe_t dji_prof_all = {0};
+volatile PlatformProbe_t dji_prof_pid = {0};
+volatile PlatformProbe_t dji_prof_send = {0};
 volatile uint32_t dji_current_sat_count = 0; /* 电流指令被饱和的次数(MOTOR-09 观测) */
 /* DJI电机的实例,此处仅保存指针,内存的分配将通过电机实例初始化时通过malloc()进行 */
 static DJIMotorInstance *dji_motor_instance[DJI_MOTOR_CNT] = {NULL}; // 会在control任务中遍历该指针数组进行pid计算
@@ -585,40 +585,40 @@ void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback
 {
     if (motor == NULL || (type != MOTOR_FEED && type != OTHER_FEED))
         return;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (loop == ANGLE_LOOP)
         motor->motor_settings.angle_feedback_source = type;
     else if (loop == SPEED_LOOP)
         motor->motor_settings.speed_feedback_source = type;
     else
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_04); // 检查是否传入了正确的LOOP类型,或发生了指针越界
         return;
     }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 void DJIMotorStop(DJIMotorInstance *motor)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->stop_flag = MOTOR_STOP;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 void DJIMotorEnable(DJIMotorInstance *motor)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->stop_flag = MOTOR_ENALBED;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 /* 修改电机的实际闭环对象 */
 void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->motor_settings.outer_loop_type = outer_loop;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 /**
@@ -641,9 +641,9 @@ void DJIMotorIsOnline(DJIMotorInstance *motor)
  */
 void DJIMotorCloseLoop(DJIMotorInstance *motor, Closeloop_Type_e outer_loop)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->motor_settings.close_loop_type = outer_loop;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 static void StoreSignal(Motor_Signal_Snapshot_s *signal, float value, Motor_Unit_e unit,
@@ -686,21 +686,21 @@ Motor_Feedback_Status_e DJIMotorRebaseReference(DJIMotorInstance *motor, uint32_
 
     uint32_t timestamp_ms;
     uint8_t has_sample;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     timestamp_ms = motor->last_feedback_timestamp_ms;
     has_sample = motor->has_feedback_timestamp;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     if (has_sample == 0u || DaemonIsOnline(motor->daemon) == 0u ||
         (uint32_t)(now_ms - timestamp_ms) > DJI_MULTITURN_MAX_GAP_MS)
         return MOTOR_FEEDBACK_NOT_READY;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->measure.last_ecd = motor->measure.ecd;
     motor->measure.total_round = 0;
     motor->measure.total_angle = 0.0f;
     motor->encoder_baseline_valid = 1u;
     motor->output_position_trusted = 1u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return MOTOR_FEEDBACK_OK;
 }
 
@@ -720,7 +720,7 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     uint8_t position_trusted;
     uint8_t speed_valid;
     uint8_t current_valid;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     measure = motor->measure;
     output_axis = motor->output_axis;
     timestamp_ms = motor->last_feedback_timestamp_ms;
@@ -729,8 +729,8 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     position_trusted = motor->encoder_baseline_valid && motor->output_position_trusted;
     speed_valid = motor->speed_filter_valid;
     current_valid = motor->current_filter_valid;
-    feedback_read_time_ms = HAL_GetTick();
-    taskEXIT_CRITICAL();
+    feedback_read_time_ms = PlatformTimeNowMs();
+    PlatformTaskCriticalExit();
     if (has_sample == 0u)
         return MOTOR_FEEDBACK_NOT_READY;
 
@@ -822,15 +822,15 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 {
     if (motor == NULL)
         return;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->motor_controller.pid_ref = ref;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 // 为所有电机实例计算三环PID,发送控制报文
 void DJIMotorControl()
 {
-    uint32_t probe_all = DWT_ProbeStart();
+    uint32_t probe_all = PlatformProbeStart();
     // 直接保存一次指针引用从而减小访存的开销,同样可以提高可读性
     uint8_t group, num; // 电机组号和组内编号
     int16_t set;        // 电机控制CAN发送设定值
@@ -851,7 +851,7 @@ void DJIMotorControl()
         uint8_t speed_filter_valid;
         uint8_t current_filter_valid;
         uint8_t position_trusted;
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         setting_snapshot = motor->motor_settings;
         measure_snapshot = motor->measure;
         output_axis = motor->output_axis;
@@ -859,13 +859,13 @@ void DJIMotorControl()
         speed_filter_valid = motor->speed_filter_valid;
         current_filter_valid = motor->current_filter_valid;
         position_trusted = (uint8_t)(motor->encoder_baseline_valid && motor->output_position_trusted);
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         const Motor_Control_Setting_s *motor_setting = &setting_snapshot;
         DJI_Motor_Measure_s *measure = &measure_snapshot;
-        const uint32_t now_ms = HAL_GetTick();
+        const uint32_t now_ms = PlatformTimeNowMs();
         // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
         float control_dt = 0.0f;
-        PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
+        PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, PlatformTimeNowUs(), &control_dt);
         const uint8_t axis_closed_loop = (uint8_t)(
             (motor_setting->outer_loop_type == ANGLE_LOOP &&
              (motor_setting->close_loop_type & ANGLE_LOOP) != 0u) ||
@@ -998,8 +998,8 @@ void DJIMotorControl()
     }
 
     // 遍历flag,检查是否要发送这一帧报文
-    DWT_ProbeDone(&dji_prof_pid, probe_all);
-    uint32_t probe_send = DWT_ProbeStart();
+    PlatformProbeDone(&dji_prof_pid, probe_all);
+    uint32_t probe_send = PlatformProbeStart();
     // 遍历全部组，未注册电机的组不发送。
     for (size_t i = 0; i < sizeof(sender_assignment) / sizeof(sender_assignment[0]); ++i)
     {
@@ -1007,7 +1007,7 @@ void DJIMotorControl()
         {
 #if defined(CHASSIS_BOARD)
             // 反馈异常先上报故障，再把许可检查与周期值复制放在同一临界区。
-            const uint8_t feedback_healthy = DJIMotorChassisFeedbackIsHealthy(HAL_GetTick());
+            const uint8_t feedback_healthy = DJIMotorChassisFeedbackIsHealthy(PlatformTimeNowMs());
 #endif
             const CAN_TxFrame_t frame = {
                 .identifier = sender_assignment[i].identifier,
@@ -1017,9 +1017,9 @@ void DJIMotorControl()
             };
             uint32_t request_id = 0u;
 #if defined(CHASSIS_BOARD)
-            taskENTER_CRITICAL();
+            PlatformTaskCriticalEnter();
             // 许可被其他任务撤销时，只把零目标交给周期队列。
-            if (feedback_healthy == 0u || RobotSafetyIsReadyAt(HAL_GetTick()) == 0u)
+            if (feedback_healthy == 0u || RobotSafetyIsReadyAt(PlatformTimeNowMs()) == 0u)
                 memset(sender_assignment[i].tx_buff, 0, sizeof(sender_assignment[i].tx_buff));
 #endif
 #if defined(CHASSIS_BOARD)
@@ -1033,12 +1033,12 @@ void DJIMotorControl()
                                     CAN_TX_PRIORITY_CONTROL, 4u, 1000u, NULL, &request_id);
 #endif
 #if defined(CHASSIS_BOARD)
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
 #endif
         }
     }
-    DWT_ProbeDone(&dji_prof_send, probe_send);
-    DWT_ProbeDone(&dji_prof_all, probe_all);
+    PlatformProbeDone(&dji_prof_send, probe_send);
+    PlatformProbeDone(&dji_prof_all, probe_all);
 }
 
 /* ============================================================================
@@ -1086,7 +1086,7 @@ static void DJIInjectSend(uint16_t ecd, int16_t speed_rpm, int16_t current_raw, 
 /* 边消费接收队列边等, 直到目标电机的 ecd 变成期望值; 返回 1=等到 */
 static uint8_t DJIInjectWaitEcd(uint16_t expect, uint32_t timeout_us)
 {
-    uint32_t t0 = DWT_ProbeStart();
+    uint32_t t0 = PlatformProbeStart();
     while (DWT_ProbeElapsedUs(t0) < timeout_us)
     {
         CANProcessRx();
