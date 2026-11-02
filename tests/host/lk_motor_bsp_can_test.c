@@ -1746,6 +1746,88 @@ static void test_can_tx_retry_yields_for_priority(void)
     TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE);
 }
 
+typedef struct {
+    unsigned calls;
+    PlatformCanRxFrame_t last;
+    uint8_t first_bytes[4];
+} PlatformCanRxTestState;
+
+static void platform_can_test_receive(void *context, const PlatformCanRxFrame_t *frame)
+{
+    PlatformCanRxTestState *state = context;
+    if (state->calls < sizeof(state->first_bytes))
+        state->first_bytes[state->calls] = frame->data[0]; // 保存前几帧用于核对顺序。
+    ++state->calls; // 记录生产接收派发实际调用的次数。
+    state->last = *frame; // 复制回调期间有效的帧，便于随后检查。
+}
+
+// 接收注册和回退连接生产 CAN 实现，硬件中断由主机模型提供。
+static void test_platform_can_receive(void)
+{
+    PlatformCanRxPort_t port = {0}, duplicate = {0};
+    PlatformCanRxTestState state = {0};
+    PlatformCanEndpoint_t endpoint = {.can_bus=PLATFORM_CAN_BUS_1, .tx_id=0x321u, .rx_id=0x500u};
+    TEST_CHECK(PlatformCanBusIsBound(PLATFORM_CAN_BUS_1));
+    TEST_CHECK(!PlatformCanBusIsBound(PLATFORM_CAN_INVALID));
+    endpoint.can_bus = PLATFORM_CAN_INVALID; // 未绑定总线不能触发底层注册。
+    TEST_CHECK(!PlatformCanRxRegister(&port, &endpoint, platform_can_test_receive, &state));
+    TEST_CHECK(port.backend == NULL && port.callback == NULL);
+    endpoint.can_bus = PLATFORM_CAN_BUS_1;
+    endpoint.tx_id = 0x800u; // 非法标准帧 ID 也必须保持端点为空。
+    TEST_CHECK(!PlatformCanRxRegister(&port, &endpoint, platform_can_test_receive, &state));
+    TEST_CHECK(port.backend == NULL);
+    endpoint.tx_id = 0x321u;
+    filter_fail_once = 1u; // 过滤器失败后不得留下部分注册。
+    TEST_CHECK(!PlatformCanRxRegister(&port, &endpoint, platform_can_test_receive, &state));
+    TEST_CHECK(port.backend == NULL && port.callback == NULL);
+    TEST_CHECK(PlatformCanRxRegister(&port, &endpoint, platform_can_test_receive, &state));
+    TEST_CHECK(!PlatformCanRxRegister(&port, &endpoint, platform_can_test_receive, &state));
+    TEST_CHECK(!PlatformCanRxRegister(&duplicate, &endpoint, platform_can_test_receive, &state));
+    TEST_CHECK(duplicate.backend == NULL); // 同一总线与接收 ID 不能重复注册。
+    TestRxFrame_t *item = &rx_frames[0][0];
+    memset(item, 0, sizeof(*item));
+    item->header.Identifier = endpoint.rx_id;
+    item->header.DataLength = 4u << 16u;
+    item->header.RxFrameType = FDCAN_DATA_FRAME;
+    item->header.IdType = FDCAN_STANDARD_ID;
+    item->data[0] = 0x12u;
+    item->data[3] = 0x34u;
+    rx_frame_count[0] = 1u;
+    rx_frame_read[0] = 0u;
+    now_us = 123000u; // 中断入队时间独立于后续任务派发时间。
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    TEST_CHECK(state.calls == 0u); // 回调必须留在接收任务执行。
+    now_us = 125000u;
+    CANProcessRx();
+    TEST_CHECK(state.calls == 1u && state.last.length == 4u && state.last.received_ms == 123u);
+    TEST_CHECK(state.last.data[0] == 0x12u && state.last.data[3] == 0x34u);
+    PlatformCanRxTestState other_state = {0};
+    PlatformCanEndpoint_t other_endpoint = endpoint;
+    other_endpoint.rx_id = 0x501u;
+    TEST_CHECK(PlatformCanRxRegister(&duplicate, &other_endpoint, platform_can_test_receive, &other_state));
+    // 在任务派发前排入两个端点的帧，再回退第一个端点。
+    rx_frames[0][1] = rx_frames[0][0];
+    rx_frames[0][1].header.Identifier = other_endpoint.rx_id;
+    rx_frames[0][1].data[0] = 0xa0u;
+    rx_frames[0][2] = rx_frames[0][1];
+    rx_frames[0][2].data[0] = 0xa1u;
+    rx_frame_count[0] = 3u;
+    rx_frame_read[0] = 0u;
+    now_us = 126000u;
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    PlatformCanRxRollback(&port); // 旧端点的排队帧必须被撤销。
+    TEST_CHECK(port.backend == NULL && port.callback == NULL && port.context == NULL);
+    TEST_CHECK(PlatformCanRxRegister(&port, &endpoint, platform_can_test_receive, &state));
+    now_us = 127000u;
+    CANProcessRx();
+    TEST_CHECK(state.calls == 1u); // 旧帧不能交给新注册的同 ID 端点。
+    TEST_CHECK(other_state.calls == 2u && other_state.last.received_ms == 126u);
+    TEST_CHECK(other_state.first_bytes[0] == 0xa0u && other_state.first_bytes[1] == 0xa1u);
+    PlatformCanRxRollback(&port);
+    PlatformCanRxRollback(&duplicate);
+    PlatformCanRxRollback(&port); // 重复回退保持无操作。
+}
+
 // 直接连接生产 CAN 队列，检查逻辑总线适配不会改变期限和结果。
 static void test_platform_can_queue(void)
 {
@@ -1781,7 +1863,9 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
     CANInitWorkspace();
-    if (strcmp(argv[1], "platform-can") == 0)
+    if (strcmp(argv[1], "platform-can-rx") == 0)
+        test_platform_can_receive();
+    else if (strcmp(argv[1], "platform-can") == 0)
         test_platform_can_queue();
     else if (strcmp(argv[1], "rollback") == 0)
         test_production_registration_rollback();

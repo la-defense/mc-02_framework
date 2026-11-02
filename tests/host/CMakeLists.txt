@@ -475,6 +475,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
 endif()
 add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test rollback)
 add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platform-can)
+add_test(NAME production_platform_can_receive COMMAND lk_motor_bsp_can_test platform-can-rx)
 add_test(NAME production_lk_motor_bsp_can_routing COMMAND lk_motor_bsp_can_test routing)
 add_test(NAME production_lk_motor_bsp_can_closed_loops COMMAND lk_motor_bsp_can_test closed_loops)
 add_test(NAME production_lk_motor_bsp_can_feedforward COMMAND lk_motor_bsp_can_test feedforward)

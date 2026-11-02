@@ -7,6 +7,47 @@
 #include "can_tx.h"
 #include "../board/platform_resources.h"
 
+/** @brief 一帧经典 CAN 接收结果；时间是进入接收队列时的本机毫秒计数。 */
+typedef struct {
+    uint8_t data[8]; /**< 接收字节，只有 length 范围内有效。 */
+    uint8_t length; /**< 实际接收长度，范围 0～8。 */
+    uint32_t received_ms; /**< 接收队列记录的原始本机时间，允许回绕。 */
+} PlatformCanRxFrame_t;
+
+/** @brief 普通接收派发任务中的回调；帧只在本次调用期间有效。 */
+typedef void (*PlatformCanRxCallback_t)(void *context, const PlatformCanRxFrame_t *frame);
+
+/** @brief 调用者长期保存的接收端点；初始化前清零，注册后不可复制或改写。 */
+typedef struct {
+    void *backend; /**< 平台私有对象；业务不得读取或修改。 */
+    PlatformCanRxCallback_t callback; /**< 平台派发时调用的处理函数。 */
+    void *context; /**< 原样交给处理函数的长期上下文。 */
+} PlatformCanRxPort_t;
+
+/** @brief 查询板级表是否声明了逻辑 CAN 总线。
+ * @param[in] bus 车型使用的逻辑总线编号。
+ * @return 1 为有板级绑定，0 为未绑定；不代表外设已初始化或设备在线。
+ */
+uint8_t PlatformCanBusIsBound(PlatformCanBus_t bus);
+
+/** @brief 注册一个标准 ID 接收端点。
+ * @param[in,out] port 调用前清零，成功后长期保存在原地址；失败不修改。
+ * @param[in] endpoint 本板逻辑总线和收发 ID，调用期间可读。
+ * @param[in] callback 非空处理函数，由接收派发任务调用。
+ * @param[in] context 交给回调的上下文，可为 NULL；非空时须长期有效。
+ * @return 1 为注册成功，0 为配置、绑定或底层资源错误。
+ * @note 仅在调度器启动前串行注册，注册期间不能并发派发接收。
+ */
+uint8_t PlatformCanRxRegister(PlatformCanRxPort_t *port, const PlatformCanEndpoint_t *endpoint,
+                              PlatformCanRxCallback_t callback, void *context);
+
+/** @brief 撤销启动期间尚未投入运行的接收注册。
+ * @param[in,out] port 已注册端点；NULL 或未注册时不做处理。
+ * @note 仅供启动失败回退；不得与接收派发、发送请求或运行中的回调并发。
+ * 已排队的本端点帧会被丢弃，其他端点的帧保持原有顺序。
+ */
+void PlatformCanRxRollback(PlatformCanRxPort_t *port);
+
 /** @brief 提交可被高优先级请求中断的帧组。
  * @param[in] bus 板级声明的逻辑总线。
  * @param[in] source 长期有效的请求来源标识，完成前不能复用其地址。

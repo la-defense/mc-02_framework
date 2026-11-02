@@ -390,9 +390,9 @@ uint8_t CANForceMode(FDCAN_HandleTypeDef *h, uint32_t mode, uint8_t accept_all);
 /** @brief 按当前注册表重装过滤规则；仅供切换模式后使用，不报告单项失败。 */
 void CANReapplyFilters(void);
 
-/** @brief 移出注册表及接收查找表并释放实例，仅供自测收尾。
+/** @brief 移出注册表、接收查找表及排队帧对实例的引用并释放实例。
 * @param[in] ins 待释放实例；NULL 或不在表中时不处理，成功后不可再使用。
-* @note 须先确保接收队列及回调不再引用它，函数不处理已经排队的旧指针。
+* @note 仅在接收派发和回调不并发的启动回退或自测收尾调用；已排队的其他实例帧保留。
  */
 void CANUnregisterInstance(CANInstance *ins);
 

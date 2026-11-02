@@ -1389,7 +1389,7 @@ static void CANSelfTestRxCallback(CANInstance *ins)
     selftest_rx_seen = 1;
 }
 
-/* 注销一个实例: 从 can_instance[] 与 rx_lookup 里摘掉并释放内存 */
+/* 仅在接收任务不并发时注销；清除中断已排队的旧指针后再释放。 */
 void CANUnregisterInstance(CANInstance *ins)
 {
     uint8_t i;
@@ -1403,17 +1403,27 @@ void CANUnregisterInstance(CANInstance *ins)
     if (i >= idx)
         return;
 
-    uint8_t bus_idx = CANBusIndexFromHandle(ins->can_handle);
+    const uint32_t previous_mask = __get_PRIMASK(); // 保存调用前中断屏蔽状态。
+    __disable_irq(); // 防止摘除查找表时接收中断继续写入旧实例。
+    uint8_t bus_idx = CANBusIndexFromHandle(ins->can_handle); // 定位实例所属总线。
     if (bus_idx != 0xFFu)
     {
-        uint16_t slot = (uint16_t)(ins->rx_id & (CAN_RX_LOOKUP_SIZE - 1u));
+        uint16_t slot = (uint16_t)(ins->rx_id & (CAN_RX_LOOKUP_SIZE - 1u)); // 找到接收查找项。
         if (rx_lookup[bus_idx][slot] == ins)
-            rx_lookup[bus_idx][slot] = NULL;
+            rx_lookup[bus_idx][slot] = NULL; // 先阻止中断再次取得旧实例。
+        CANBusState_t *bus = &can_bus[bus_idx]; // 检查该总线已排队但尚未派发的帧。
+        for (uint16_t pending = bus->rxq_tail; pending != bus->rxq_head;
+             pending = (uint16_t)((pending + 1u) % CAN_RXQ_DEPTH))
+        {
+            if (bus->rxq[pending].instance == ins)
+                bus->rxq[pending].instance = NULL; // 保留队列顺序，仅撤销旧实例引用。
+        }
     }
-    free(ins);
     for (; i + 1u < idx; ++i)
-        can_instance[i] = can_instance[i + 1u];
-    can_instance[--idx] = NULL;
+        can_instance[i] = can_instance[i + 1u]; // 压紧注册表，不改变其他实例。
+    can_instance[--idx] = NULL; // 清除末尾的重复位置。
+    __set_PRIMASK(previous_mask); // 恢复原来的屏蔽状态后再释放内存。
+    free(ins); // 接收查找表和队列均已不再引用此实例。
 }
 
 /* 重装所有已注册实例的滤镜(重新 Init 之后必须调用) */
