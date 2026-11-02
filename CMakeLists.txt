@@ -270,7 +270,22 @@ set(MC02_ASM_SOURCES
     Middlewares/Third_Party/SEGGER/RTT/SEGGER_RTT_ASM_ARMv7M.s)
 set_source_files_properties(${MC02_ASM_SOURCES} PROPERTIES COMPILE_FLAGS "-x assembler-with-cpp")
 
-add_executable(${MC02_OUTPUT_BASENAME}.elf ${MC02_SELECTED_SOURCES} ${MC02_ASM_SOURCES} ${LINKER_SCRIPT})
+# 这三个框架文件只依赖自有接口和标准 C；单独编译以阻止继承芯片或 RTOS 头路径。
+set(MC02_PORTABLE_FRAMEWORK_SOURCES
+    modules/daemon/daemon.c # 来源期限、状态和事件队列。
+    modules/daemon/daemon_event_task.c # 来源事件处理任务的框架入口。
+    modules/message_center/message_center.c) # 有界消息与话题目录。
+set(MC02_EXECUTABLE_SOURCES ${MC02_SELECTED_SOURCES})
+list(REMOVE_ITEM MC02_EXECUTABLE_SOURCES ${MC02_PORTABLE_FRAMEWORK_SOURCES})
+add_library(mc02_portable_framework OBJECT ${MC02_PORTABLE_FRAMEWORK_SOURCES})
+target_include_directories(mc02_portable_framework PRIVATE
+    modules/daemon # 来源监控的公开类型。
+    modules/message_center # 消息目录和新鲜度类型。
+    bsp/os) # 不暴露厂商类型的任务、时间和同步接口。
+mc02_apply_format_diagnostics(mc02_portable_framework)
+
+add_executable(${MC02_OUTPUT_BASENAME}.elf ${MC02_EXECUTABLE_SOURCES}
+    $<TARGET_OBJECTS:mc02_portable_framework> ${MC02_ASM_SOURCES} ${LINKER_SCRIPT})
 # 保留USB任务和恢复后端的静态栈使用报告，配合裸板历史最小余量核对。
 set_source_files_properties(Core/Src/freertos.c bsp/usb/usb_transport.c
     bsp/usb/usb_transport_port_stm32.c USB_DEVICE/Target/usbd_conf.c

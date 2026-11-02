@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import shlex
 import subprocess
 
 ACTUATORS = {
@@ -51,6 +52,12 @@ DSP_SOURCES = {
 NUMERIC_ADAPTER_SOURCES = {
     "modules/algorithm/fast_trig_cmsis.c",  # 快速三角函数的CMSIS-DSP后端。
     "modules/algorithm/dsp_matrix.c",  # 矩阵接口的CMSIS-DSP后端。
+}
+# 这些源文件编入无芯片／RTOS 头路径的框架对象目标，仍属于车型源码清单。
+PORTABLE_FRAMEWORK_SOURCES = {
+    "modules/daemon/daemon.c",  # 来源状态和事件队列。
+    "modules/daemon/daemon_event_task.c",  # 来源事件任务入口。
+    "modules/message_center/message_center.c",  # 消息目录和有界队列。
 }
 ASSEMBLY_SOURCES = {
     "startup_stm32h723xx.s",
@@ -131,16 +138,23 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
             or f"vision={vision_transport}" not in lines):
         raise SystemExit("selected-source report does not match the requested profile and role")
     selected = {line for line in lines if line.endswith(".c")}
+    if not PORTABLE_FRAMEWORK_SOURCES <= selected:
+        raise SystemExit("selected-source report is missing a portable framework source")
     source_root = Path.cwd().resolve()
     compiled: set[str] = set()
     compiler_commands: list[str] = []
+    portable_counts: dict[str, int] = {}  # 每个框架源文件必须恰好编译一次。
     for entry in json.loads(database.read_text(encoding="utf-8")):
         source = Path(entry["file"]).resolve()
         try:
-            compiled.add(source.relative_to(source_root).as_posix())
+            relative = source.relative_to(source_root).as_posix()
         except ValueError:
             continue
+        compiled.add(relative)
         compiler_commands.append(entry.get("command", ""))
+        if relative in PORTABLE_FRAMEWORK_SOURCES:
+            portable_counts[relative] = portable_counts.get(relative, 0) + 1
+            check_portable_includes(entry, source_root, relative)
     expected_compiled = selected | DSP_SOURCES | NUMERIC_ADAPTER_SOURCES | ASSEMBLY_SOURCES
     missing = expected_compiled - compiled
     unexpected_compiled = compiled - expected_compiled
@@ -169,6 +183,8 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         raise SystemExit(f"source selection failed: missing={sorted(missing)}, "
                          f"unexpected_optional={sorted(unexpected)}, "
                          f"unregistered={sorted(unexpected_compiled)}")
+    if any(portable_counts.get(source, 0) != 1 for source in PORTABLE_FRAMEWORK_SOURCES):
+        raise SystemExit(f"portable framework sources must compile exactly once: {portable_counts}")
 
     target_line = next((line for line in lines if line.startswith("target=")), None)
     if target_line is None:
@@ -176,10 +192,75 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
     target = target_line.removeprefix("target=")
     commands = subprocess.run(["ninja", "-C", str(build_dir), "-t", "commands", target],
                               capture_output=True, text=True, check=True, timeout=15).stdout
+    link_command = find_link_command(commands, target)
     for source in selected:
-        object_path = f"{target}.dir/{source}.obj"
-        if object_path not in commands:
+        # 框架源码由独立对象目标编译，其余源码仍由固件目标编译。
+        owner = "mc02_portable_framework" if source in PORTABLE_FRAMEWORK_SOURCES else target
+        object_path = f"{owner}.dir/{source}.obj"
+        if object_path not in link_command:
             raise SystemExit(f"registered source is absent from the Ninja link command: {source}")
+    for source in PORTABLE_FRAMEWORK_SOURCES:
+        # 检查实际预处理依赖，避免相对路径或绝对路径包含绕过编译选项检查。
+        object_path = f"CMakeFiles/mc02_portable_framework.dir/{source}.obj"
+        deps = subprocess.run(["ninja", "-C", str(build_dir), "-t", "deps", object_path],
+                              capture_output=True, text=True, check=True, timeout=15).stdout
+        check_portable_dependencies(deps, source_root, build_dir, source)
+
+
+def check_portable_includes(entry: dict, source_root: Path, source: str) -> None:
+    """只允许框架公开头和日志格式检查头进入可移植源文件的编译路径。"""
+    allowed = {source_root / "modules/daemon", source_root / "modules/message_center",
+               source_root / "bsp/os", source_root / "bsp/log"}
+    arguments = entry.get("arguments") or shlex.split(entry.get("command", ""))
+    for index, argument in enumerate(arguments):
+        # 同时处理 -Ipath、-I path 和 -isystem path，防止换一种写法绕过检查。
+        if argument.startswith(("-include", "-imacros", "-iquote", "-idirafter")):
+            raise SystemExit(f"portable framework source {source} uses unsupported include option: {argument}")
+        if argument in ("-I", "-isystem"):
+            if index + 1 >= len(arguments):
+                raise SystemExit(f"missing include path for {source}")
+            directory = arguments[index + 1]
+        elif argument.startswith("-I") and len(argument) > 2:
+            directory = argument[2:]
+        elif argument.startswith("-isystem") and len(argument) > len("-isystem"):
+            directory = argument[len("-isystem"):]
+        else:
+            continue
+        resolved = (Path(entry["directory"]) / directory).resolve()
+        if resolved not in allowed:
+            raise SystemExit(f"portable framework source {source} inherits unsupported include: {resolved}")
+
+
+def find_link_command(commands: str, target: str) -> str:
+    """从 Ninja 命令中找出生成指定 ELF 的唯一链接命令。"""
+    matches = []
+    for line in commands.splitlines():
+        arguments = shlex.split(line)
+        # 编译命令的输出是 .obj，只有最终链接命令输出目标 ELF。
+        if any(argument == "-o" and index + 1 < len(arguments) and
+               Path(arguments[index + 1]).name == target
+               for index, argument in enumerate(arguments)):
+            matches.append(line)
+    if len(matches) != 1:
+        raise SystemExit(f"expected one link command for {target}, got {len(matches)}")
+    return matches[0]
+
+
+def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, source: str) -> None:
+    """检查 Ninja 记录的实际头依赖；标准库可以来自工程目录之外。"""
+    lines = deps.splitlines()
+    if not lines or "#deps" not in lines[0] or "(VALID)" not in lines[0]:
+        raise SystemExit(f"portable framework source {source} has no valid Ninja dependencies")
+    allowed = (source_root / "modules/daemon", source_root / "modules/message_center",
+               source_root / "bsp/os", source_root / "bsp/log")
+    for line in lines[1:]:
+        # 依赖可能为相对构建目录的路径，也可能为绝对路径。
+        if not line.strip():
+            continue
+        dependency = (build_dir / line.strip()).resolve()
+        if dependency.is_relative_to(source_root) and not any(
+                dependency.is_relative_to(directory) for directory in allowed):
+            raise SystemExit(f"portable framework source {source} uses unsupported project header: {dependency}")
 
 if __name__ == "__main__":
     main()

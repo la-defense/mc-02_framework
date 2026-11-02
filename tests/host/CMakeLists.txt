@@ -1887,6 +1887,9 @@ endforeach()
 add_test(NAME referee_budget_capture_tools COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_referee_budget_capture.py)
 set_tests_properties(referee_budget_capture_tools PROPERTIES TIMEOUT 10)
 add_test(NAME usb_lifecycle_capture_tools COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_usb_lifecycle_capture.py)
+# 检查框架目标的头路径允许列表，同时验证厂商路径和强制包含不能绕过。
+add_test(NAME production_portable_include_contract COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_portable_include_contract.py)
 set_tests_properties(usb_lifecycle_capture_tools PROPERTIES TIMEOUT 10)
 add_test(NAME read_only_live_observation_tool COMMAND ${Python3_EXECUTABLE}
   ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_probe_snapshot_live.py)
