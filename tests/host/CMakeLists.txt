@@ -42,7 +42,7 @@ set_property(SOURCE ../../modules/message_center/message_center.c APPEND PROPERT
 set_property(SOURCE ../../modules/daemon/daemon.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
 # 裁判 UI 使用框架中断和时间接口，不再从串口头间接获取芯片声明。
-set_property(SOURCE ../../modules/referee/referee_task.c ../../modules/referee/referee_UI.c APPEND PROPERTY
+set_property(SOURCE ../../modules/referee/referee_task.c ../../modules/referee/referee_UI.c ../../modules/referee/rm_referee.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
 # 安全管理只调用框架同步接口，由每个测试目标提供对应的时钟和中断模型。
 set_property(SOURCE ../../modules/safety/robot_safety.c APPEND PROPERTY
@@ -1734,7 +1734,8 @@ set_tests_properties(production_uart_stream_protocols production_uart_pool_limit
 
 # 裁判生产解析器和UART块队列一起运行；Linux线程共享真实互斥临界区模型。
 add_executable(referee_snapshot_test referee_snapshot_test.c ../../bsp/usart/bsp_usart.c
-  ../../modules/referee/rm_referee.c)
+  ../../modules/referee/rm_referee.c ../../bsp/os/platform_sync_freertos.c) # 沿用测试的互斥锁与时钟。
+target_include_directories(referee_snapshot_test PRIVATE ../../bsp/os)
 target_include_directories(referee_snapshot_test BEFORE PRIVATE referee_snapshot_fakes remote_fakes
   ../../bsp/usart crc_protocol_fakes)
 target_include_directories(referee_snapshot_test PRIVATE ../../modules/referee ../../modules/master_machine

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file rm_referee.c
  * @brief 校验裁判帧、按官方字段解码，并发布带独立期限的命令数据。
  * RefereeInit只注册接收；读取者通过RefereeGetSnapshot取得一致副本。
@@ -17,8 +17,7 @@
 #include "crc.h"
 #include "bsp_usart.h"
 #include "../../bsp/board/board_uart_stm32.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "platform_sync.h"
 #include "daemon.h"
 #include "bsp_log.h"
 #include "referee_tx_private.h"
@@ -39,6 +38,9 @@ static uint8_t referee_initialized;
 static uint8_t referee_has_valid_frame;
 static uint8_t referee_link_active;
 static uint32_t referee_last_valid_rx_ms;
+
+// 接收、离线和发送回调均由任务派发；共享状态使用可嵌套的任务临界区保护。
+// 此处不从中断调用平台任务锁，也不改变原来的毫秒时基和无符号回绕计算。
 
 typedef struct {
     uint8_t bytes[REFEREE_CANDIDATE_SIZE];
@@ -250,12 +252,12 @@ static uint8_t RefereeDecode(int index, const uint8_t *p, size_t length,
             !RefereeIsLegalRobotId(candidate.interactive.receiver_id) ||
             !RefereeSameTeam(candidate.interactive.sender_id, candidate.interactive.receiver_id)) return 0u;
         uint16_t own_id = 0u;
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         const RefereeCommandSnapshot_t *robot = &referee_published.command[REF_CMD_ROBOT_STATE];
         if (robot->receive_count != 0u &&
             (uint32_t)(now_ms-robot->source_rx_ms) <= referee_config.timeout_10hz_ms)
             own_id = robot->data.robot_state.robot_id;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         if (own_id == 0u || candidate.interactive.receiver_id != own_id ||
             !RefereePolicyAllows(own_id, candidate.interactive.sender_id, 0u)) return 0u;
         break;
@@ -305,9 +307,9 @@ static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8
                               const uint8_t *payload, size_t payload_length)
 {
     if (data == NULL || index < 0 || index >= REFEREE_COMMAND_COUNT) return 0u;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (referee_stream.reset_requested || (uint32_t)(now_ms-source_rx_ms) > REFEREE_ASSEMBLY_TIMEOUT_MS) {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return 0u;
     }
     if (index == REF_CMD_INTERACTIVE) {
@@ -317,7 +319,7 @@ static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8
             (uint32_t)(now_ms-robot->source_rx_ms) > referee_config.timeout_10hz_ms ||
             robot->data.robot_state.robot_id != data->interactive.receiver_id ||
             !RefereePolicyAllows(data->interactive.receiver_id, data->interactive.sender_id, 0u)) {
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return 0u;
         }
         referee_interaction.content_id = data->interactive.content_id;
@@ -341,7 +343,7 @@ static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8
     referee_link_active = 1u;
     (void)DaemonReportAt(referee_daemon, source_rx_ms,
         DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return 1u;
 }
 
@@ -352,7 +354,7 @@ static uint8_t RefereeAccept(const uint8_t *frame, size_t frame_length, uint32_t
     if (index < 0 || frame_length < REFEREE_FRAME_OVERHEAD) return 0u;
     size_t payload_length = frame_length-REFEREE_FRAME_OVERHEAD;
     RefereeCommandData_t candidate;
-    uint32_t now_ms = HAL_GetTick();
+    uint32_t now_ms = PlatformTimeNowMs();
     if (!RefereeDecode(index, frame+DATA_Offset, payload_length, &candidate, now_ms)) return 0u;
     return RefereePublish(index, &candidate, frame[3], source_rx_ms, now_ms,
                           frame+DATA_Offset, payload_length);
@@ -361,14 +363,14 @@ static uint8_t RefereeAccept(const uint8_t *frame, size_t frame_length, uint32_t
 RefereeStatus_t RefereeGetInteraction(RefereeInteractionRecord_t *output)
 {
     if (output == NULL) return REFEREE_ERROR_ARGUMENT;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (!referee_initialized) {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         memset(output, 0, sizeof(*output));
         return REFEREE_ERROR_NOT_INITIALIZED;
     }
     *output = referee_interaction;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return REFEREE_OK;
 }
 
@@ -377,13 +379,13 @@ static void RefereeRxCallback(void *context, const USART_RxBlock_t *block)
 {
     RefereeStream *stream = context;
     if (stream == NULL || block == NULL) return;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (stream->reset_requested) {
         stream->used = stream->expected = 0u;
         stream->reset_requested = 0u;
     }
-    taskEXIT_CRITICAL();
-    uint32_t now = HAL_GetTick();
+    PlatformTaskCriticalExit();
+    uint32_t now = PlatformTimeNowMs();
     if (block->data == NULL || block->length == 0u || block->length > RE_RX_BUFFER_SIZE) {
         stream->used = stream->expected = 0u;
         return;
@@ -432,10 +434,10 @@ static void RefereeLostCallback(const DaemonEvent_t *event, void *arg)
     (void)arg;
     if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
         return;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     referee_stream.reset_requested = 1u;
     referee_link_active = 0u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     // 只撤销链路在线标记；各命令旧值及来源时间保留供诊断。
     USARTServiceInit(referee_usart_instance);
     BSP_LOG_EVENT_0(EV_MODULES_REFEREE_RM_REFEREE_C_01);
@@ -470,18 +472,18 @@ static USARTTxGateResult_t RefereeTxGate(void *context, uint32_t id, const uint8
 {
     (void)context;
     if (length < 15u || length > REFEREE_TX_FRAME_MAX) return USART_TX_REJECT;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     USARTTxGateResult_t result = RefereeBudgetGate(&referee_tx_budget, id,
-        ReadU16LE(frame + 11u), (uint16_t)length, HAL_GetTick());
-    taskEXIT_CRITICAL();
+        ReadU16LE(frame + 11u), (uint16_t)length, PlatformTimeNowMs());
+    PlatformTaskCriticalExit();
     return result;
 }
 static void RefereeTxObserve(void *context, const USARTTxEvent_t *event)
 {
     (void)context;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     RefereeBudgetObserve(&referee_tx_budget, event);
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *config)
 {
@@ -511,7 +513,7 @@ RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *conf
     DaemonInstance *daemon = DaemonRegister(&daemon_conf);
     if (daemon == NULL) return REFEREE_ERROR_RESOURCE;
     // UART注册会立即启动DMA；先准备解析配置和daemon，避免首个块抢在初始化返回前到达。
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     referee_config = *selected;
     memset(&referee_published, 0, sizeof(referee_published));
     memset(&referee_interaction, 0, sizeof(referee_interaction));
@@ -520,7 +522,7 @@ RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *conf
     referee_has_valid_frame = 0u;
     referee_link_active = 0u;
     referee_daemon = daemon;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     USART_Init_Config_s uart_conf = {0};
     uart_conf.module_callback = RefereeRxCallback;
     uart_conf.context = &referee_stream;
@@ -531,7 +533,7 @@ RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *conf
     uart_conf.tx_observer = RefereeTxObserve;
     USARTInstance *instance = USARTRegister(&uart_conf);
     if (instance == NULL) {
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         referee_daemon = NULL;
         memset(&referee_published, 0, sizeof(referee_published));
         memset(&referee_interaction, 0, sizeof(referee_interaction));
@@ -539,33 +541,33 @@ RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *conf
         referee_last_valid_rx_ms = 0u;
         referee_has_valid_frame = 0u;
         referee_link_active = 0u;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         (void)DaemonUnregister(daemon);
         return REFEREE_ERROR_RESOURCE;
     }
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     referee_usart_instance = instance;
     referee_initialized = 1u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return REFEREE_OK;
 }
 
 RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output)
 {
     if (output == NULL) return REFEREE_ERROR_ARGUMENT;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (!referee_initialized) {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         memset(output, 0, sizeof(*output));
         return REFEREE_ERROR_NOT_INITIALIZED;
     }
     *output = referee_published;
-    uint32_t now_ms = HAL_GetTick();
+    uint32_t now_ms = PlatformTimeNowMs();
     uint32_t link_rx_ms = referee_last_valid_rx_ms;
     uint8_t link_has_valid = referee_has_valid_frame;
     uint8_t link_active = referee_link_active;
     uint8_t daemon_online = (uint8_t)(referee_daemon != NULL && DaemonIsOnline(referee_daemon));
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 
     output->has_valid_frame = link_has_valid;
     output->link_source_rx_ms = link_rx_ms;
@@ -618,22 +620,22 @@ RefereeSendStatus_t RefereeSubmit(const RefereeTxRequest_t *request, uint32_t *i
         (request->content == NULL && request->length != 0u) || request->timeout_ms == 0u ||
         request->timeout_ms > INT32_MAX || !RefereeContentLength(request->content_id, request->length))
     {
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         ++referee_tx_budget.state.validation_rejected;
         ++referee_tx_budget.state.rejected;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return REFEREE_SEND_BAD_ARGUMENT;
     }
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (!referee_initialized)
     {
         ++referee_tx_budget.state.rejected;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return REFEREE_SEND_NOT_INITIALIZED;
     }
     const RefereeCommandSnapshot_t *robot = &referee_published.command[REF_CMD_ROBOT_STATE];
     uint16_t sender = robot->data.robot_state.robot_id;
-    uint8_t fresh = robot->receive_count != 0u && (uint32_t)(HAL_GetTick() - robot->source_rx_ms) <=
+    uint8_t fresh = robot->receive_count != 0u && (uint32_t)(PlatformTimeNowMs() - robot->source_rx_ms) <=
                                                       RefereeTimeoutForIndex(REF_CMD_ROBOT_STATE);
     uint16_t receiver = request->receiver_id;
     uint8_t destination;
@@ -651,19 +653,19 @@ RefereeSendStatus_t RefereeSubmit(const RefereeTxRequest_t *request, uint32_t *i
     {
         ++referee_tx_budget.state.validation_rejected;
         ++referee_tx_budget.state.rejected;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return REFEREE_SEND_IDENTITY;
     }
     // 不在临界区内组帧或调用UART；并发提交争用立即拒绝，成功后才消耗序号。
     if (referee_submit_busy)
     {
         ++referee_tx_budget.state.rejected;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return REFEREE_SEND_BUSY;
     }
     referee_submit_busy = 1u;
     uint8_t sequence = referee_tx_budget.state.next_sequence;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     uint8_t frame[REFEREE_TX_FRAME_MAX] = {0};
     size_t total = 15u + request->length;
     frame[0] = REFEREE_SOF;
@@ -706,13 +708,13 @@ RefereeSendStatus_t RefereeSubmit(const RefereeTxRequest_t *request, uint32_t *i
             }
         }
     }
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (result == REFEREE_SEND_ACCEPTED)
         ++referee_tx_budget.state.next_sequence;
     else
         ++referee_tx_budget.state.rejected;
     referee_submit_busy = 0u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return result;
 }
 USARTSendStatus_t RefereeCancelSend(uint32_t id)
@@ -729,21 +731,21 @@ USARTSendStatus_t RefereeGetTxState(RefereeTxState_t *output)
     USARTSendStatus_t result = USARTGetTxState(referee_usart_instance, &uart);
     if (result != USART_SEND_ACCEPTED)
         return result;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     *output = referee_tx_budget.state;
     output->uart = uart;
     if (uart.used == 0u)
         output->wait_reason = REFEREE_TX_WAIT_NONE;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return USART_SEND_ACCEPTED;
 }
 
 uint8_t RefereeIdentityMatches(uint16_t robot_id)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     const RefereeCommandSnapshot_t *entry=&referee_published.command[REF_CMD_ROBOT_STATE];
     uint8_t matches=(uint8_t)(referee_usart_instance!=NULL && entry->receive_count!=0u &&
-        (uint32_t)(HAL_GetTick()-entry->source_rx_ms)<=RefereeTimeoutForIndex(REF_CMD_ROBOT_STATE) &&
+        (uint32_t)(PlatformTimeNowMs()-entry->source_rx_ms)<=RefereeTimeoutForIndex(REF_CMD_ROBOT_STATE) &&
         entry->data.robot_state.robot_id==robot_id);
-    taskEXIT_CRITICAL();return matches;
+    PlatformTaskCriticalExit();return matches;
 }
