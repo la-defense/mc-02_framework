@@ -20,6 +20,7 @@
 #include "stdint.h"
 #include "daemon.h"
 #include "sample_filter.h"
+#include "dji_motor_task.h"
 
 #define DJI_MOTOR_CNT 12
 
@@ -175,8 +176,6 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
  */
 void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback_Source_e type);
 
-/** @brief 逐电机计算已选 PID 环，再按四电机一组提交 CAN；由 MotorControlTask() 周期调用。 */
-void DJIMotorControl();
 
 /** @brief 设置停止标记，下一轮控制将该电机对应的发送字节清零，保留原目标值。
 * @param[in,out] motor 有效实例，不能为 NULL；需要清目标时另调用 DJIMotorSetRef()。

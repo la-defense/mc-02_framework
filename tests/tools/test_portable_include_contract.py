@@ -63,6 +63,8 @@ class PortableIncludeContractTest(unittest.TestCase):
         # 上位机 V2 只引用整车话题编号声明，不放行整个 application 目录。
         check_portable_dependencies(valid + f"    {ROOT / 'application/topics/robot_topics.h'}\n",
                                     ROOT, ROOT / "build", source)
+        check_portable_dependencies(valid + f"    {ROOT / 'application/topics/robot_can_bridge_task.h'}\n",
+                                    ROOT, ROOT / "build", source)  # 电机任务仅需桥接服务入口。
         with self.assertRaises(SystemExit):
             check_portable_dependencies(valid + f"    {ROOT / 'application/robot_def.h'}\n",
                                         ROOT, ROOT / "build", source)

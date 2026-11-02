@@ -2,29 +2,25 @@
 * @brief 统一接收派发顺序和电机周期计算，提供各段耗时记录。
 */
 #include "motor_task.h"
-#include "bsp_dwt.h"
+#include "../../bsp/dwt/platform_probe.h"
+#include "../../bsp/os/platform_dispatch.h"
 #include "../../application/config/build_selection.h"
 #if MC02_SELECTED_DRIVER_LK
-#include "LK9025.h"
-#endif
-#if MC02_SELECTED_DRIVER_HT
-#include "HT04.h"
+#include "LKmotor/lk_motor_task.h"
 #endif
 #if MC02_SELECTED_DRIVER_DJI
-#include "dji_motor.h"
+#include "DJImotor/dji_motor_task.h"
 #endif
-#include "bsp_can.h"
-#include "bsp_usart.h"
 #include "usb_transport.h"
 #include "daemon.h"
 
 /* ---------------- 性能探针(2026-09, CPU 占用排查) ---------------- */
-volatile DWT_Probe_t motor_prof_all = {0};
-volatile DWT_Probe_t motor_prof_dji = {0};
-volatile DWT_Probe_t motor_prof_lk = {0};
+volatile PlatformProbe_t motor_prof_all = {0};
+volatile PlatformProbe_t motor_prof_dji = {0};
+volatile PlatformProbe_t motor_prof_lk = {0};
 
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
-#include "robot_can_bridge.h"
+#include "../../application/topics/robot_can_bridge_task.h"
 #endif
 
 void MotorControlTask()
@@ -32,35 +28,35 @@ void MotorControlTask()
     // static uint8_t cnt = 0; 设定不同电机的任务频率
     // if(cnt%5==0) //200hz
     // if(cnt%10==0) //100hz
-    uint32_t probe_all = DWT_ProbeStart();
+    uint32_t probe_all = PlatformProbeStart();
     uint32_t probe_seg;
 
     // 先按顺序解码已排队的反馈，再使用这些测量值计算；不要另建并发派发调用者。
-    CANProcessRx();
+    PlatformDispatchCanRx();
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
     // 收发和同步检查由同一任务串行执行，避免接收状态被并发改写。
     RobotCanBridgeService();
 #endif
     // UART 和 USB 也在这里运行模块解析，避免将协议计算放在中断里；排队过时的数据由 BSP 跳过。
-    USARTProcessRx();
+    PlatformDispatchUartRx();
     (void)USBTransportProcessRx();
 
     // 裁判 UART 已完成本轮解析后，再由电机任务处理有界离线恢复事件。
     (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_MOTOR_TASK, DAEMON_EVENT_MAX_DEPTH, NULL);
 
-    probe_seg = DWT_ProbeStart();
+    probe_seg = PlatformProbeStart();
 #if !defined(MC02_PROFILE_BENCH_SAFE)
 #if MC02_SELECTED_DRIVER_DJI
     DJIMotorControl();
 #endif
-    DWT_ProbeDone(&motor_prof_dji, probe_seg);
+    PlatformProbeDone(&motor_prof_dji, probe_seg);
 
     // 当前 LKMotorControl() 已启用；无注册对象时它不会提交发送。
-    probe_seg = DWT_ProbeStart();
+    probe_seg = PlatformProbeStart();
 #if MC02_SELECTED_DRIVER_LK
     LKMotorControl();
 #endif
-    DWT_ProbeDone(&motor_prof_lk, probe_seg);
+    PlatformProbeDone(&motor_prof_lk, probe_seg);
 // 裸板配置仅做通信派发，跳过电机控制和指令发送。
 #else
     (void)probe_seg;
@@ -77,10 +73,10 @@ void MotorControlTask()
     // StepMotorControl();
     // 控制模块只提交复制后的候选帧；唯一发送推进点统一仲裁并写入各总线 FIFO。
 #if MC02_FEATURE_MOTOR_CONTROL
-    CANProcessTx();
+    PlatformDispatchCanTx();
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
     RobotCanBridgeServiceTx();
 #endif
 #endif
-    DWT_ProbeDone(&motor_prof_all, probe_all);
+    PlatformProbeDone(&motor_prof_all, probe_all);
 }

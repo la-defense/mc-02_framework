@@ -7,15 +7,12 @@
 #include <stdint.h>
 #include "robot_can_bridge_config.h"
 #include "time_mapping.h"
+#include "robot_can_bridge_task.h"
 /** @brief 注册本板的CAN和话题端点。
  * @param[in] config 车型提供的板间总线、ID和话题声明；调用时复制必要信息。
  * @return 1为成功，0为资源或配置错误；调度器启动前串行调用一次。
  */
 uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config);
-/** @brief 在CAN接收派发任务中推进发送与同步检查。
- * @note 每次最多提交一个当前话题；对时未有效时接收侧保持失效。
- */
-void RobotCanBridgeService(void);
 /** @brief 复制最近一次板间对时状态，供其他普通任务查询。
  * @param[out] output 偏差、样本数及同步标记；失败保持原值。
  * @param[out] updated_ms 此副本的本机更新时间；失败保持原值。
@@ -23,6 +20,4 @@ void RobotCanBridgeService(void);
  * @note 超过5ms未更新或样本超过500ms时，同步标记返回0；不可在中断中调用。
  */
 uint8_t RobotCanBridgeGetTimeSyncState(TimeMappingState_t *output, uint32_t *updated_ms);
-/** @brief 对本板专用桥接总线额外推进至多一帧；由电机任务串行调用。 */
-void RobotCanBridgeServiceTx(void);
 #endif

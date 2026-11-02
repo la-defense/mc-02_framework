@@ -291,6 +291,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/imu/ins_task.c # 姿态采样、解算和安全状态。
     modules/imu/imu_heater.c # 温控策略使用逻辑 PWM 与模拟输入。
     modules/motor/DJImotor/dji_motor.c # DJI 普通控制及逻辑 CAN 接口。
+    modules/motor/motor_task.c # 单一通信派发和电机周期任务。
     application/robot_task_create.c) # 已选任务的创建与失败处理。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
     if(source IN_LIST MC02_SELECTED_SOURCES)

@@ -75,6 +75,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/imu/ins_task.c",  # IMU 采样与姿态业务。
     "modules/imu/imu_heater.c",  # 温控策略及逻辑模拟资源。
     "modules/motor/DJImotor/dji_motor.c",  # DJI 逻辑端点、控制和反馈。
+    "modules/motor/motor_task.c",  # 通信派发顺序及电机周期调用。
     "application/robot_task_create.c",  # 按车型配置创建任务。
 }
 ASSEMBLY_SOURCES = {
@@ -295,6 +296,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
         public_files = {source_root / "bsp/board/platform_resources.h",
                         source_root / "bsp/board/platform_analog.h",
                         source_root / "application/topics/robot_topics.h",
+                        source_root / "application/topics/robot_can_bridge_task.h",
                         source_root / "application/config/build_selection.h",
                         source_root / "application/config/vehicle_selection.h",
                         source_root / "application/config/module_plan.h",

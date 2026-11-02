@@ -11,6 +11,7 @@
 #include "controller.h"
 #include "motor_def.h"
 #include "daemon.h"
+#include "lk_motor_task.h"
 
 #define LK_MOTOR_PER_BUS_CNT 4u /**< 每条 CAN 总线最多登记的 LK 电机数。 */
 #define LK_MOTOR_MX_CNT (DEVICE_CAN_CNT * LK_MOTOR_PER_BUS_CNT) /**< H723 三条总线共最多12个。 */
@@ -93,15 +94,6 @@ Motor_Feedback_Status_e LKMotorGetFeedbackSnapshot(const LKMotorInstance *motor,
  * @note 外部角度及速度分别由 angle_feedback_source、speed_feedback_source 选择；三环各自保存 PID 历史。
  */
 void LKMotorSetRef(LKMotorInstance *motor, float ref);
-
-/**
- * @brief 分别计算各已登记电机，并为每条非空总线提交一帧八字节0x280命令。
- * @return 无返回值；CAN 本机提交结果由现有 CAN 发送统计记录，不代表对端已收到。
- * @note 由电机控制任务顺序调用。编号1～4对应帧内四个两字节位置；空槽和停止电机写零，
- *       非有限输入、非法反馈来源、PID失败、前馈缺失或计算溢出时只清本实例槽位并清除三环历史；
- *       发送失败的帧不缓存，下一周期重新计算。
- */
-void LKMotorControl(void);
 
 /**
  * @brief 设置停止标记，下一次控制将对应两字节输出清零；保留目标值。

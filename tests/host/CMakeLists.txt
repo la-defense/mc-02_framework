@@ -1328,19 +1328,30 @@ target_include_directories(shoot_freshness_test PRIVATE ../../application ../../
   ../../Drivers/CMSIS/Device/ST/STM32H7xx/Include ../../bsp/usart)
 add_test(NAME production_shoot_init_and_expired_command_rearm COMMAND shoot_freshness_test)
 if(UNIX AND NOT APPLE)
-  foreach(profile IN ITEMS bench_safe robot)
+  foreach(profile IN ITEMS bench_safe robot robot_chassis)
     set(target motor_profile_${profile})
-    add_executable(${target} motor_profile_test.c ../../modules/motor/motor_task.c)
+    add_executable(${target} motor_profile_test.c ../../modules/motor/motor_task.c
+      ../../bsp/board/platform_dispatch_stm32.c) # 使用真实派发适配器及测试队列。
     target_include_directories(${target} BEFORE PRIVATE motor_profile_fakes)
     target_include_directories(${target} PRIVATE ../../modules/motor ../../modules/daemon ../../bsp/usb)
     if(profile STREQUAL "bench_safe")
       target_compile_definitions(${target} PRIVATE MC02_PROFILE_BENCH_SAFE=1)
     else()
       target_compile_definitions(${target} PRIVATE MC02_PROFILE_ROBOT=1)
+      if(profile STREQUAL "robot_chassis")
+        target_compile_definitions(${target} PRIVATE CHASSIS_BOARD=1) # 检查桥接服务的插入位置。
+      endif()
     endif()
     add_test(NAME production_motor_task_profile_${profile} COMMAND ${target})
   endforeach()
 endif()
+add_library(motor_task_portable_compile OBJECT ../../modules/motor/motor_task.c)
+target_include_directories(motor_task_portable_compile PRIVATE
+  ../../modules/motor # 轻量电机周期入口。
+  ../../modules/daemon # 离线事件处理接口。
+  ../../bsp/usb) # USB 任务派发接口。
+target_compile_definitions(motor_task_portable_compile PRIVATE MC02_PROFILE_ROBOT=1 CHASSIS_BOARD=1) # 同时检查双板桥接路径。
+target_compile_options(motor_task_portable_compile PRIVATE -Wall -Wextra -Werror) # 不依赖厂商头路径。
 if(UNIX AND NOT APPLE)
   foreach(profile IN ITEMS bench_safe robot_disabled robot_enabled)
     add_test(NAME production_tim_pin_profile_${profile} COMMAND tim_profile_${profile})
