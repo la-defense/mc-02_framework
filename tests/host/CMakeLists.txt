@@ -65,6 +65,11 @@ target_compile_options(mc02_referee_ui_portable PRIVATE -Wall -Wextra -Werror)
 add_library(mc02_referee_graphics_portable OBJECT ../../modules/referee/referee_UI.c)
 target_include_directories(mc02_referee_graphics_portable PRIVATE ../../modules/referee ../../bsp/usart ../../bsp/os)
 target_compile_options(mc02_referee_graphics_portable PRIVATE -Wall -Wextra -Werror)
+# 裁判解析器只持有逻辑 UART 和框架同步类型。
+add_library(mc02_referee_parser_portable OBJECT ../../modules/referee/rm_referee.c)
+target_include_directories(mc02_referee_parser_portable PRIVATE ../../modules/referee ../../modules/daemon
+  ../../modules/algorithm ../../bsp/usart ../../bsp/os ../../bsp/log)
+target_compile_options(mc02_referee_parser_portable PRIVATE -Wall -Wextra -Werror)
 # 遥控源码通过框架头访问时间和中断屏蔽；其硬件串口依赖仍单独处理。
 set_property(SOURCE ../../modules/remote/remote_control.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os;${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/board")
@@ -2083,4 +2088,8 @@ foreach(target IN ITEMS crc_protocol_test referee_ui_test referee_snapshot_test 
   target_sources(${target} PRIVATE protocol_uart_binding_fake.c)
   # 新增的测试源位于第一次收集之后，需要补充同样的编译诊断。
   mc02_apply_format_diagnostics(${target})
+endforeach()
+# 裁判测试使用真实平台转接层，底层 UART 与板级绑定仍由各测试控制。
+foreach(target IN ITEMS crc_protocol_test referee_ui_test referee_snapshot_test referee_budget_test uart_ui_integration_test)
+  target_sources(${target} PRIVATE ../../bsp/board/platform_uart_stm32.c)
 endforeach()

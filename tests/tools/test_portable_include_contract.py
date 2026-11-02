@@ -49,6 +49,12 @@ class PortableIncludeContractTest(unittest.TestCase):
         source = "modules/daemon/daemon.c"
         valid = f"object: #deps 2, deps mtime 1 (VALID)\n    {ROOT / source}\n    /usr/include/stdint.h\n"
         check_portable_dependencies(valid, ROOT, ROOT / "build", source)
+        # 框架的逻辑资源编号可从板级目录单独引用，不能因此放行板级适配头。
+        check_portable_dependencies(valid + f"    {ROOT / 'bsp/board/platform_resources.h'}\n",
+                                    ROOT, ROOT / "build", source)
+        with self.assertRaises(SystemExit):
+            check_portable_dependencies(valid + f"    {ROOT / 'bsp/board/board_uart_stm32.h'}\n",
+                                        ROOT, ROOT / "build", source)
         with self.assertRaises(SystemExit):
             check_portable_dependencies(valid + f"    {ROOT / 'Core/Inc/main.h'}\n",
                                         ROOT, ROOT / "build", source)

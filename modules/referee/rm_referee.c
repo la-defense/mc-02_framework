@@ -15,8 +15,7 @@
 #include <string.h>
 #include "referee_protocol.h"
 #include "crc.h"
-#include "bsp_usart.h"
-#include "../../bsp/board/board_uart_stm32.h"
+#include "platform_uart.h"
 #include "platform_sync.h"
 #include "daemon.h"
 #include "bsp_log.h"
@@ -29,7 +28,7 @@
 
 static RefereeTxBudget referee_tx_budget;
 static uint8_t referee_submit_busy;
-static USARTInstance *referee_usart_instance;
+static PlatformUartInstance *referee_usart_instance;
 static DaemonInstance *referee_daemon;
 static RefereeConfig_t referee_config;
 static RefereeSnapshot_t referee_published;
@@ -439,7 +438,7 @@ static void RefereeLostCallback(const DaemonEvent_t *event, void *arg)
     referee_link_active = 0u;
     PlatformTaskCriticalExit();
     // 只撤销链路在线标记；各命令旧值及来源时间保留供诊断。
-    USARTServiceInit(referee_usart_instance);
+    PlatformUartRestartReceive(referee_usart_instance);
     BSP_LOG_EVENT_0(EV_MODULES_REFEREE_RM_REFEREE_C_01);
 }
 
@@ -488,8 +487,7 @@ static void RefereeTxObserve(void *context, const USARTTxEvent_t *event)
 RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *config)
 {
     // 未绑定串口时不能注册守护实例或启动 DMA。
-    UART_HandleTypeDef *handle = BoardUartResolve(port);
-    if (handle == NULL) return REFEREE_ERROR_ARGUMENT;
+    if (!PlatformUartIsBound(port)) return REFEREE_ERROR_ARGUMENT;
     if (referee_initialized || referee_usart_instance != NULL || referee_daemon != NULL)
         return REFEREE_ERROR_ALREADY_INITIALIZED;
     const RefereeConfig_t defaults = {.timeout_10hz_ms=300u, .timeout_3hz_ms=1000u,
@@ -523,15 +521,14 @@ RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *conf
     referee_link_active = 0u;
     referee_daemon = daemon;
     PlatformTaskCriticalExit();
-    USART_Init_Config_s uart_conf = {0};
-    uart_conf.module_callback = RefereeRxCallback;
-    uart_conf.context = &referee_stream;
-    uart_conf.usart_handle = handle;
-    uart_conf.recv_buff_size = RE_RX_BUFFER_SIZE;
-    uart_conf.tx_guard = RefereeFrameCanStart;
-    uart_conf.tx_gate = RefereeTxGate;
-    uart_conf.tx_observer = RefereeTxObserve;
-    USARTInstance *instance = USARTRegister(&uart_conf);
+    PlatformUartConfig uart_conf = {0}; // 未启用的可选回调保持空值。
+    uart_conf.receive = RefereeRxCallback; // 接收块仍由原解析器按时间拼帧。
+    uart_conf.context = &referee_stream; // 串口回调借用长期存在的解析状态。
+    uart_conf.receive_capacity = RE_RX_BUFFER_SIZE; // 保持原 DMA 接收容量。
+    uart_conf.tx_guard = RefereeFrameCanStart; // 发送前校验当前身份。
+    uart_conf.tx_gate = RefereeTxGate; // 使用原有裁判发送额度。
+    uart_conf.tx_observer = RefereeTxObserve; // 终态仍用于更新发送额度。
+    PlatformUartInstance *instance = PlatformUartRegister(port, &uart_conf); // 平台解析板级串口并注册。
     if (instance == NULL) {
         PlatformTaskCriticalEnter();
         referee_daemon = NULL;
@@ -688,7 +685,7 @@ RefereeSendStatus_t RefereeSubmit(const RefereeTxRequest_t *request, uint32_t *i
             USARTTxRequest_t uart_request = {
                 frame,          total,           USART_TRANSFER_DMA, request->timeout_ms, request->complete,
                 request->guard, request->context};
-            switch (USARTSubmitTx(referee_usart_instance, &uart_request, id))
+            switch (PlatformUartSubmit(referee_usart_instance, &uart_request, id))
             {
             case USART_SEND_ACCEPTED:
                 result = REFEREE_SEND_ACCEPTED;
@@ -719,7 +716,7 @@ RefereeSendStatus_t RefereeSubmit(const RefereeTxRequest_t *request, uint32_t *i
 }
 USARTSendStatus_t RefereeCancelSend(uint32_t id)
 {
-    return USARTCancelTx(referee_usart_instance, id);
+    return PlatformUartCancel(referee_usart_instance, id);
 }
 USARTSendStatus_t RefereeGetTxState(RefereeTxState_t *output)
 {
@@ -728,7 +725,7 @@ USARTSendStatus_t RefereeGetTxState(RefereeTxState_t *output)
     if (referee_usart_instance == NULL)
         return USART_SEND_NOT_READY;
     USARTTxState_t uart;
-    USARTSendStatus_t result = USARTGetTxState(referee_usart_instance, &uart);
+    USARTSendStatus_t result = PlatformUartGetTxState(referee_usart_instance, &uart);
     if (result != USART_SEND_ACCEPTED)
         return result;
     PlatformTaskCriticalEnter();

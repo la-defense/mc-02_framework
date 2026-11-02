@@ -69,6 +69,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/can_comm/can_time_sync.c",  # 板间对时。
     "modules/time_sync/time_mapping.c",  # 跨设备时钟映射。
     "modules/referee/referee_UI.c",  # 裁判图形编码及发送状态。
+    "modules/referee/rm_referee.c",  # 裁判协议解析及逻辑串口接入。
 }
 ASSEMBLY_SOURCES = {
     "startup_stm32h723xx.s",
@@ -276,7 +277,9 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
         if not line.strip():
             continue
         dependency = (build_dir / line.strip()).resolve()
-        if dependency.is_relative_to(source_root) and not any(
+        # 资源编号是唯一允许从板级目录引用的公共头；其他板级实现仍须拒绝。
+        is_resource_ids = dependency == source_root / "bsp/board/platform_resources.h"
+        if dependency.is_relative_to(source_root) and not is_resource_ids and not any(
                 dependency.is_relative_to(directory) for directory in allowed):
             raise SystemExit(f"portable framework source {source} uses unsupported project header: {dependency}")
 

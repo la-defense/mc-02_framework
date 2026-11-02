@@ -284,7 +284,8 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/can_comm/can_topic_link.c # 逻辑 CAN 端点和桥接。
     modules/can_comm/can_time_sync.c # 板间时间同步交互。
     modules/time_sync/time_mapping.c # 不同时钟之间的时间换算。
-    modules/referee/referee_UI.c) # 裁判图形编码和发送状态。
+    modules/referee/referee_UI.c # 裁判图形编码和发送状态。
+    modules/referee/rm_referee.c) # 裁判协议解析和逻辑串口接入。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
     if(source IN_LIST MC02_SELECTED_SOURCES)
         list(APPEND MC02_PORTABLE_FRAMEWORK_SOURCES "${source}")
