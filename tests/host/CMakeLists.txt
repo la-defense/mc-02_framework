@@ -47,6 +47,9 @@ set_property(SOURCE ../../modules/referee/referee_task.c APPEND PROPERTY
 # 安全管理只调用框架同步接口，由每个测试目标提供对应的时钟和中断模型。
 set_property(SOURCE ../../modules/safety/robot_safety.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+# 板间接收及对时服务只通过框架接口获取时间与任务临界区。
+set_property(SOURCE ../../modules/can_comm/can_topic_link.c ../../application/topics/robot_can_bridge.c APPEND PROPERTY
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
 add_library(mc02_robot_safety_portable OBJECT ../../modules/safety/robot_safety.c)
 target_include_directories(mc02_robot_safety_portable PRIVATE ../../modules/safety ../../bsp/os ../../bsp/log)
 target_compile_options(mc02_robot_safety_portable PRIVATE -Wall -Wextra -Werror)

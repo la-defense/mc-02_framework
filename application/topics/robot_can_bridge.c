@@ -6,10 +6,7 @@
 #include "chassis_topic_codec.h"
 #include "can_topic_link.h"
 #include "board_can_stm32.h"
-#include "main.h"
-#include "fdcan.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "platform_sync.h"
 #include <string.h>
 #include <limits.h>
 #if defined(CHASSIS_BOARD)
@@ -98,30 +95,30 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
 
 void RobotCanBridgeService(void)
 {
-    const uint32_t now=HAL_GetTick();
+    const uint32_t now=PlatformTimeNowMs(); // 使用平台原有毫秒计数，不改变来源期限。
     uint32_t request_id=0u; CanTopicBridgeStatus_t sync_status;
     (void)CanTopicLinkService(&robot_link,now,&request_id,&sync_status);
     TimeMappingState_t candidate;
     if (CanTimeSyncGetState(&robot_time_sync,now,&candidate)==TIME_MAPPING_OK) {
         // 先在唯一处理任务中取完整状态，再短暂保护副本供其他任务读取。
-        taskENTER_CRITICAL();
-        published_sync=candidate;
-        published_sync_ms=now;
-        published_sync_ready=1u;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalEnter(); // 保护三个字段作为同一次结果交给读取任务。
+        published_sync=candidate; // 保存完整对时结果。
+        published_sync_ms=now; // 记录本次获取结果的本机时间。
+        published_sync_ready=1u; // 前两个字段写好后才标记可读取。
+        PlatformTaskCriticalExit(); // 允许读取任务取得完整结果。
     }
 }
 
 uint8_t RobotCanBridgeGetTimeSyncState(TimeMappingState_t *output, uint32_t *updated_ms)
 {
     if (output==NULL || updated_ms==NULL) return 0u;
-    taskENTER_CRITICAL();
-    const uint8_t ready=published_sync_ready;
-    TimeMappingState_t candidate=published_sync;
-    const uint32_t captured_ms=published_sync_ms;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalEnter(); // 与发布任务配对，避免混用两次结果。
+    const uint8_t ready=published_sync_ready; // 判断是否已有完整结果。
+    TimeMappingState_t candidate=published_sync; // 复制结果供后续检查。
+    const uint32_t captured_ms=published_sync_ms; // 复制同一次结果的本机时间。
+    PlatformTaskCriticalExit(); // 后续计算只使用本地副本。
     if (!ready) return 0u;
-    const uint32_t now=HAL_GetTick();
+    const uint32_t now=PlatformTimeNowMs(); // 与发布时使用同一毫秒时基。
     const uint32_t copy_age=now-captured_ms;
     if (copy_age>5u) candidate.synchronized=0u;
     if (candidate.has_sample) {

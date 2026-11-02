@@ -2,7 +2,7 @@
  * @brief 绑定CAN接收回调、候选桥接及周期同步检查。
  */
 #include "can_topic_link.h"
-#include "main.h"
+#include "platform_sync.h"
 #include <limits.h>
 
 // CANProcessRx在普通任务中派发；消息组装及话题复制不在中断执行。
@@ -13,7 +13,7 @@ static void CanTopicLinkReceive(CANInstance *instance)
     // 对时帧与话题帧共用 CAN ID，但各自检查帧类型和内容。
     if (instance->rx_len>0u && (instance->rx_buff[0]&0xf0u)==0xc0u) {
         if (link->time_sync!=NULL) {
-            const uint32_t now=HAL_GetTick();
+            const uint32_t now=PlatformTimeNowMs(); // 使用与桥接服务相同的本机时钟。
             const CanTimeSyncStatus_t status=CanTimeSyncReceive(link->time_sync,instance->rx_buff,
                 instance->rx_len,instance->rx_timestamp_ms,now);
             if (status==CAN_TIME_SYNC_PEER_RESET)
@@ -24,7 +24,7 @@ static void CanTopicLinkReceive(CANInstance *instance)
         }
         return;
     }
-    link->last_receive=CanTopicBridgeReceive(&link->bridge,HAL_GetTick(),link->assembly_timeout_ms);
+    link->last_receive=CanTopicBridgeReceive(&link->bridge,PlatformTimeNowMs(),link->assembly_timeout_ms);
 }
 
 uint8_t CanTopicLinkInit(CanTopicLink_t *link, const CAN_Init_Config_s *can_config,
