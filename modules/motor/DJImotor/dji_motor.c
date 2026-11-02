@@ -6,6 +6,7 @@
 #include <string.h>
 #include "general_def.h"
 #include "bsp_dwt.h"
+#include "../../../bsp/dwt/platform_probe.h"
 #include "bsp_log.h"
 #include "bsp_can.h"
 #include "motor_pid.h"
@@ -159,17 +160,17 @@ static uint8_t DjiConfigValid(const Motor_Init_Config_s *config)
     return 1u;
 }
 
-static float FeedbackIntervalSeconds(const CANInstance *instance, const DJIMotorInstance *motor)
+static float FeedbackIntervalSeconds(const PlatformCanRxFrame_t *frame, const DJIMotorInstance *motor)
 {
-    const uint32_t elapsed_cycles = (uint32_t)(instance->rx_timestamp_cycles - motor->last_feedback_cycles);
-    const uint32_t elapsed_ms = (uint32_t)(instance->rx_timestamp_ms - motor->last_feedback_timestamp_ms);
-    const uint32_t frequency_mhz = dwt_cpu_freq_mhz;
+    const uint32_t elapsed_ms = (uint32_t)(frame->received_ms - motor->last_feedback_timestamp_ms);
     const float max_interval_ms = motor->filter_config.dt_max_s * 1000.0f;
+    float seconds;
 
     // 毫秒时间戳用于识别超过DWT单圈周期的长停顿；精确间隔仍使用帧入队时的周期差。
-    if (frequency_mhz == 0u || (float)elapsed_ms > max_interval_ms + 1.0f)
+    if ((float)elapsed_ms > max_interval_ms + 1.0f ||
+        !PlatformProbeElapsedSeconds(motor->last_feedback_cycles, frame->received_ticks, &seconds))
         return INFINITY;
-    return (float)elapsed_cycles / ((float)frequency_mhz * 1000000.0f);
+    return seconds;
 }
 
 static void UpdateFeedbackFilter(DJIMotorInstance *motor, uint8_t is_speed, float raw,
@@ -347,7 +348,8 @@ static uint8_t MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *c
         // 检查是否发生id冲突
         for (size_t i = 0; i < idx; ++i)
         {
-            if (dji_motor_instance[i]->motor_can_instance->can_handle == config->can_handle && dji_motor_instance[i]->motor_can_instance->rx_id == config->rx_id)
+            if (dji_motor_instance[i]->motor_can_endpoint.can_bus == motor->motor_can_endpoint.can_bus &&
+                dji_motor_instance[i]->motor_can_endpoint.rx_id == config->rx_id)
             {
                 BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_01);
                 return 0u;
@@ -373,7 +375,8 @@ static uint8_t MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *c
 
         for (size_t i = 0; i < idx; ++i)
         {
-            if (dji_motor_instance[i]->motor_can_instance->can_handle == config->can_handle && dji_motor_instance[i]->motor_can_instance->rx_id == config->rx_id)
+            if (dji_motor_instance[i]->motor_can_endpoint.can_bus == motor->motor_can_endpoint.can_bus &&
+                dji_motor_instance[i]->motor_can_endpoint.rx_id == config->rx_id)
             {
                 BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_02);
                 return 0u;
@@ -391,21 +394,22 @@ static uint8_t MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *c
 
 /**
  * @todo  是否可以简化多圈角度的计算？
- * @brief 根据返回的can_instance对反馈报文进行解析
+ * @brief 解析逻辑 CAN 端点交付的电机反馈报文
  *
- * @param _instance 收到数据的instance,通过遍历与所有电机进行对比以选择正确的实例
+ * @param context 注册端点时绑定的电机实例
+ * @param frame 任务派发时提供的只读接收帧，回调结束后不能保留
  */
-static void DecodeDJIMotor(CANInstance *_instance)
+static void DecodeDJIMotor(void *context, const PlatformCanRxFrame_t *frame)
 {
-    if (_instance == NULL || _instance->id == NULL || _instance->rx_len != 8u)
-        return;
-    uint8_t *rxbuff = _instance->rx_buff;
-    DJIMotorInstance *motor = (DJIMotorInstance *)_instance->id;
+    if (context == NULL || frame == NULL || frame->length != 8u)
+        return; // 无所有者或长度不完整时不能更新反馈。
+    const uint8_t *rxbuff = frame->data; // 接收帧只在回调期间可读。
+    DJIMotorInstance *motor = (DJIMotorInstance *)context; // 注册时绑定的电机实例长期有效。
     DJI_Motor_Measure_s *measure = &motor->measure;
     const uint8_t first_feedback = motor->has_feedback_timestamp == 0u;
     const uint32_t elapsed_ms = first_feedback ? 0u :
-        (uint32_t)(_instance->rx_timestamp_ms - motor->last_feedback_timestamp_ms);
-    const float dt_s = first_feedback ? 0.0f : FeedbackIntervalSeconds(_instance, motor);
+        (uint32_t)(frame->received_ms - motor->last_feedback_timestamp_ms);
+    const float dt_s = first_feedback ? 0.0f : FeedbackIntervalSeconds(frame, motor);
     const int16_t raw_rpm = (int16_t)(((uint16_t)rxbuff[2] << 8u) | rxbuff[3]);
     const int16_t raw_current = (int16_t)(((uint16_t)rxbuff[4] << 8u) | rxbuff[5]);
     const float raw_speed_aps = RPM_2_ANGLE_PER_SEC * (float)raw_rpm;
@@ -444,8 +448,8 @@ static void DecodeDJIMotor(CANInstance *_instance)
     measure->temperature = rxbuff[6];
 
     motor->feedback_dt_s = dt_s;
-    motor->last_feedback_cycles = _instance->rx_timestamp_cycles;
-    motor->last_feedback_timestamp_ms = _instance->rx_timestamp_ms;
+    motor->last_feedback_cycles = frame->received_ticks;
+    motor->last_feedback_timestamp_ms = frame->received_ms;
     motor->has_feedback_timestamp = 1u;
     if (motor->feedback_sample_count < UINT32_MAX)
         motor->feedback_sample_count++;
@@ -490,7 +494,7 @@ static void DecodeDJIMotor(CANInstance *_instance)
     }
     const uint8_t data_valid = (uint8_t)(motor->speed_filter_valid != 0u &&
                                           motor->current_filter_valid != 0u);
-    (void)DaemonReportAt(motor->daemon, _instance->rx_timestamp_ms,
+    (void)DaemonReportAt(motor->daemon, frame->received_ms,
         DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT |
         (data_valid != 0u ? DAEMON_REPORT_DATA_VALID : 0u));
 }
@@ -500,10 +504,10 @@ static void DJIMotorLostCallback(const DaemonEvent_t *event, void *motor_ptr)
     if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
         return;
     DJIMotorInstance *motor = (DJIMotorInstance *)motor_ptr;
-    uint16_t can_bus = motor->motor_can_instance->can_handle == &hcan1 ? 1 : 2;
+    uint16_t can_bus = (uint16_t)motor->motor_can_endpoint.can_bus;
     BSP_LOG_EVENT_2(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_03,
                     BSP_LOG_FIELD_I32((int)can_bus),
-                    BSP_LOG_FIELD_I32((int)motor->motor_can_instance->tx_id));
+                    BSP_LOG_FIELD_I32((int)motor->motor_can_endpoint.tx_id));
 }
 
 // 电机初始化,返回一个电机实例
@@ -545,6 +549,7 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
 
     // motor basic setting 电机基本设置
     instance->motor_type = config->motor_type;                         // 6020 or 2006 or 3508
+    instance->motor_can_endpoint = config->can_init_config; // 保存车型逻辑总线和电机编号。
     instance->output_axis = config->output_axis;
     instance->motor_settings = config->controller_setting_init_config; // 正反转,闭环类型等
 
@@ -572,6 +577,7 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
         free(instance);
         return NULL;
     }
+    instance->motor_can_endpoint.rx_id = can_config.rx_id; // 分组后保存实际反馈 ID。
 
     // 注册守护线程
     Daemon_Init_Config_s daemon_config = {
@@ -595,10 +601,8 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
     }
 
     // 最后注册 CAN；失败时撤销先前离线计数并释放电机，避免残留回调。
-    can_config.can_module_callback = DecodeDJIMotor;
-    can_config.id = instance;
-    instance->motor_can_instance = CANRegister(&can_config);
-    if (instance->motor_can_instance == NULL)
+    if (!PlatformCanRxRegister(&instance->motor_can_port, &instance->motor_can_endpoint,
+                               DecodeDJIMotor, instance))
     {
         (void)DaemonUnregister(instance->daemon);
         free(instance);
@@ -1113,7 +1117,7 @@ static void DJIInjectSend(uint16_t ecd, int16_t speed_rpm, int16_t current_raw, 
     s_inject_frame[7] = 0u;
     can_dji_inject_frame_cnt++;
     const CAN_TxFrame_t frame = {
-        .identifier = s_inject_target->motor_can_instance->rx_id,
+        .identifier = s_inject_target->motor_can_endpoint.rx_id,
         .identifier_type = CAN_TX_ID_STANDARD,
         .data = s_inject_frame,
         .length = 8u,
@@ -1152,8 +1156,8 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
     }
 
     s_inject_target = dji_motor_instance[0];
-    s_inject_h = s_inject_target->motor_can_instance->can_handle;
-    uint32_t target_rx_id = s_inject_target->motor_can_instance->rx_id;
+    s_inject_h = BoardCanResolve(s_inject_target->motor_can_endpoint.can_bus);
+    uint32_t target_rx_id = s_inject_target->motor_can_endpoint.rx_id;
     s_inject_backup = s_inject_target->measure;
 
     /* 1. 切内部回环: 帧不会真的上线, 但自己发自己收, 不会干扰总线上的其它设备 */

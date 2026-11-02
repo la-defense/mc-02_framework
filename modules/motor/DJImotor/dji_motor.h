@@ -15,6 +15,7 @@
 #define DJI_MOTOR_H
 
 #include "bsp_can.h"
+#include "../../../bsp/can/platform_can.h"
 #include "controller.h"
 #include "motor_def.h"
 #include "stdint.h"
@@ -87,7 +88,8 @@ typedef struct
     MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
     Motor_Controller_s motor_controller;    // 电机控制器
 
-    CANInstance *motor_can_instance; // 电机CAN实例
+    PlatformCanRxPort_t motor_can_port; // 长期保存的逻辑 CAN 接收端点。
+    PlatformCanEndpoint_t motor_can_endpoint; // 当前电机使用的逻辑总线及收发 ID。
     // 分组发送设置
     uint8_t sender_group;
     uint8_t message_num;

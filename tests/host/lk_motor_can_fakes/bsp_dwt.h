@@ -7,14 +7,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "../../../bsp/dwt/platform_probe.h"
 
-typedef struct
-{
-    volatile uint32_t last_us;
-    volatile uint32_t max_us;
-    volatile uint32_t total_us;
-    volatile uint32_t calls;
-} DWT_Probe_t;
+typedef PlatformProbe_t DWT_Probe_t;
 
 extern volatile uint32_t dwt_cpu_freq_mhz;
 extern volatile uint32_t test_dwt_cycles;

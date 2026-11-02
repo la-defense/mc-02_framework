@@ -43,7 +43,11 @@ set(MC02_HOST_REMOTE_SOURCES
   ../../bsp/board/platform_uart_stm32.c # 逻辑 UART 接收适配复用测试设备。
   remote_uart_handles.c) # 提供遥控测试未单独声明的其余 UART 句柄。
 # 电机测试按目标原有的 CAN 替身编译同一份板级绑定。
-set(MC02_HOST_DJI_SOURCES ../../modules/motor/DJImotor/dji_motor.c ../../bsp/board/board_can_stm32.c) # DJI 及逻辑 CAN 绑定。
+set(MC02_HOST_DJI_SOURCES
+  ../../modules/motor/DJImotor/dji_motor.c # 生产电机驱动。
+  ../../bsp/board/board_can_stm32.c # 逻辑 CAN 到测试总线的绑定。
+  ../../bsp/board/platform_can_rx_stm32.c # 真实逻辑 CAN 接收适配。
+  ../../bsp/board/platform_probe_stm32.c) # 周期计数到秒的换算适配。
 set(MC02_HOST_LK_SOURCES ../../modules/motor/LKmotor/LK9025.c ../../bsp/board/board_can_stm32.c) # LK 及逻辑 CAN 绑定。
 set(MC02_HOST_HT_SOURCES ../../modules/motor/HTmotor/HT04.c ../../bsp/board/board_can_stm32.c) # HT 及逻辑 CAN 绑定。
 set(MC02_HOST_DM_SOURCES ../../modules/motor/DMmotor/dmmotor.c ../../bsp/board/board_can_stm32.c) # DM 及逻辑 CAN 绑定。
@@ -525,6 +529,7 @@ endif()
 add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test rollback)
 add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platform-can)
 add_test(NAME production_platform_can_receive COMMAND lk_motor_bsp_can_test platform-can-rx)
+add_test(NAME production_dji_receive_registration_rollback COMMAND lk_motor_bsp_can_test dji-rx-rollback)
 add_test(NAME production_lk_motor_bsp_can_routing COMMAND lk_motor_bsp_can_test routing)
 add_test(NAME production_lk_motor_bsp_can_closed_loops COMMAND lk_motor_bsp_can_test closed_loops)
 add_test(NAME production_lk_motor_bsp_can_feedforward COMMAND lk_motor_bsp_can_test feedforward)
@@ -632,6 +637,7 @@ foreach(scenario IN ITEMS reference failures instances response)
 endforeach()
 add_executable(motor_pid_integration_test motor_pid_integration_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_feedback.c
+  dji_can_unregister_fake.c # 此目标使用静态 CAN 测试实例。
   ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c)
 target_include_directories(motor_pid_integration_test BEFORE PRIVATE motor_pid_fakes)
@@ -644,6 +650,7 @@ target_link_libraries(motor_pid_integration_test PRIVATE mc02_numeric)
 add_test(NAME production_motor_pid_cascade_and_failure COMMAND motor_pid_integration_test)
 add_executable(motor_feedback_filter_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
+  dji_can_unregister_fake.c # 此目标使用静态 CAN 测试实例。
   ../../modules/motor/motor_feedback.c
   ../../modules/algorithm/controller.c ../../modules/algorithm/sample_filter.c
   ../../modules/algorithm/math_utils.c)
@@ -660,6 +667,7 @@ foreach(mode IN ITEMS legacy time-constant bypass gap missing multi-instance bou
 endforeach()
 add_executable(motor_chassis_safety_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
+  dji_can_unregister_fake.c # 此目标使用静态 CAN 测试实例。
   ../../modules/motor/motor_feedback.c ../../modules/algorithm/controller.c
   ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c
   ../../modules/safety/robot_safety.c)

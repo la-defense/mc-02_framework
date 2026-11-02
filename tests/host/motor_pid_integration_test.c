@@ -61,7 +61,7 @@ static void tick(uint64_t at)
 
 static void feed_zero_feedback(DJIMotorInstance *motor)
 {
-    CANInstance *can = motor->motor_can_instance;
+    CANInstance *can = (CANInstance *)motor->motor_can_port.backend; // 测试模型直接注入底层接收帧。
     memset(can->rx_buff, 0, sizeof(can->rx_buff));
     can->rx_len = 8u;
     can->rx_timestamp_cycles = 480000u;

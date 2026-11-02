@@ -31,6 +31,7 @@ typedef struct
  * @return 已登记的测试对象。
  */
 CANInstance *CANRegister(CAN_Init_Config_s *config);
+void CANUnregisterInstance(CANInstance *instance);
 #include "../can_tx_fake_api.h"
 CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
                                        uint32_t key, const CAN_TxFrame_t *frame,

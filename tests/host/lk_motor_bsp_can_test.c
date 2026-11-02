@@ -298,14 +298,14 @@ static void test_production_dji_receive_burst(void)
         config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
         motors[bus] = DJIMotorInit(&config);
         TEST_CHECK(motors[bus] != NULL);
-        TEST_CHECK(motors[bus]->motor_can_instance->rx_id == 0x201u);
+        TEST_CHECK(motors[bus]->motor_can_endpoint.rx_id == 0x201u);
     }
 
     for (uint8_t batch = 0u; batch < 24u; ++batch)
     {
         for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
         {
-            CANInstance *can = motors[bus]->motor_can_instance;
+            CANInstance *can = (CANInstance *)motors[bus]->motor_can_port.backend; // 测试底层实例读取接收状态。
             rx_frame_count[bus] = 32u;
             rx_frame_read[bus] = 0u;
             for (uint8_t frame = 0u; frame < rx_frame_count[bus]; ++frame)
@@ -371,6 +371,32 @@ static PID_Init_Config_s pid_config(float kp, float max_out)
     config.DtMin_s = MOTOR_PID_DT_MIN_S;
     config.DtMax_s = MOTOR_PID_DT_MAX_S;
     return config;
+}
+
+// 真实 CAN 注册失败后，DJI 不得留下守护对象或占用反馈 ID。
+static void test_dji_receive_registration_rollback(void)
+{
+    Motor_Init_Config_s config = {0};
+    config.motor_type = M3508;
+    config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL};
+    config.can_init_config.can_bus = PLATFORM_CAN_BUS_1;
+    config.can_init_config.tx_id = 1u;
+    config.controller_setting_init_config.close_loop_type = OPEN_LOOP;
+#if defined(LK_TEST_ALLOC_WRAP)
+    const unsigned alloc_before = malloc_calls, free_before = free_calls;
+#endif
+    filter_fail_once = 1u; // 注入底层过滤器配置失败。
+    TEST_CHECK(DJIMotorInit(&config) == NULL);
+#if defined(LK_TEST_ALLOC_WRAP)
+    TEST_CHECK(malloc_calls - alloc_before == free_calls - free_before); // 本次分配均已回收。
+#endif
+    TEST_CHECK(filter_count[0] == 0u);
+    DJIMotorInstance *motor = DJIMotorInit(&config); // 同一端点可在失败后重新注册。
+    TEST_CHECK(motor != NULL && motor->motor_can_endpoint.rx_id == 0x201u);
+    TEST_CHECK(PlatformCanRxIsRegistered(&motor->motor_can_port));
+    TEST_CHECK(DJIMotorInit(&config) == NULL); // 同总线同反馈 ID 必须拒绝重复。
+    config.can_init_config.can_bus = PLATFORM_CAN_BUS_2;
+    TEST_CHECK(DJIMotorInit(&config) != NULL); // 不同总线允许同一反馈 ID。
 }
 
 static void test_production_registration_rollback(void)
@@ -1869,6 +1895,8 @@ int main(int argc, char **argv)
     CANInitWorkspace();
     if (strcmp(argv[1], "platform-can-rx") == 0)
         test_platform_can_receive();
+    else if (strcmp(argv[1], "dji-rx-rollback") == 0)
+        test_dji_receive_registration_rollback();
     else if (strcmp(argv[1], "platform-can") == 0)
         test_platform_can_queue();
     else if (strcmp(argv[1], "rollback") == 0)

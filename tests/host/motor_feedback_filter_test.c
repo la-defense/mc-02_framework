@@ -120,7 +120,7 @@ static DJI_Motor_Filter_Config_s filter_config(DJI_Motor_Filter_Mode_e mode)
 static void receive(DJIMotorInstance *motor, uint32_t cycles, uint32_t tick_ms,
                     int16_t rpm, int16_t current)
 {
-    CANInstance *can = motor->motor_can_instance;
+    CANInstance *can = (CANInstance *)motor->motor_can_port.backend; // 从测试端点注入底层帧。
     memset(can->rx_buff, 0, sizeof(can->rx_buff));
     can->rx_buff[2] = (uint8_t)((uint16_t)rpm >> 8u);
     can->rx_buff[3] = (uint8_t)rpm;
@@ -227,8 +227,9 @@ static int legacy_compatibility(void)
     Motor_Init_Config_s config = motor_config(1u);
     DJIMotorInstance *motor = DJIMotorInit(&config);
     TEST_CHECK(motor != NULL);
-    motor->motor_can_instance->rx_len = 7u;
-    motor->motor_can_instance->can_module_callback(motor->motor_can_instance);
+    CANInstance *can = (CANInstance *)motor->motor_can_port.backend;
+    can->rx_len = 7u;
+    can->can_module_callback(can);
     TEST_CHECK(daemon_reloads == 0u && motor->feedback_sample_count == 0u);
     receive(motor, 100u, 0u, 10, 100);
     DJIMotorSummary_t first = summary(motor);
