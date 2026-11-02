@@ -1,11 +1,11 @@
 /** @file can_time_sync.h
  * @brief 通过经典 CAN 交换双板时刻，为远端消息提供本地时间。
- * @note 对象和 CAN 实例长期保存；所有入口由同一任务串行调用。
+ * @note 对象和端点标识长期保存；所有入口由同一任务串行调用。
  */
 #ifndef CAN_TIME_SYNC_H
 #define CAN_TIME_SYNC_H
 
-#include "bsp_can.h"
+#include "../../bsp/can/platform_can.h"
 #include "time_mapping.h"
 #include <stdint.h>
 
@@ -26,7 +26,9 @@ typedef enum
 typedef struct
 {
     TimeMapping_t mapping;
-    CANInstance *can;
+    PlatformCanBus_t bus; /**< 本板发送使用的逻辑总线。 */
+    uint32_t tx_id; /**< 对时帧使用的标准 CAN 发送 ID。 */
+    const void *endpoint_identity; /**< 调用方持有的长期端点标识，用于绑定同一接收链路。 */
     uint32_t probe_t1_ms;
     uint32_t previous_probe_ms;
     uint32_t peer_t2_ms;
@@ -45,10 +47,14 @@ typedef struct
 
 /** @brief 初始化一个双向对时实例，不注册额外 CAN 接收端点。
  * @param[out] sync 调用前清零；成功后长期保存，失败不改原值。
- * @param[in] can 已注册的经典 CAN 实例，须长期有效。
+ * @param[in] bus 本板逻辑 CAN 总线；实际绑定在发送时由平台确认。
+ * @param[in] tx_id 发送使用的标准 CAN ID，范围 0～0x7FF。
+ * @param[in] endpoint_identity 已注册端点的长期标识，不由对时模块解引用。
  * @return 1为成功，0为参数错误。
+ * @note bus 和 tx_id 须来自该端点的配置；绑定链路时再次检查是否匹配。
  */
-uint8_t CanTimeSyncInit(CanTimeSync_t *sync, CANInstance *can);
+uint8_t CanTimeSyncInit(CanTimeSync_t *sync, PlatformCanBus_t bus, uint32_t tx_id,
+                        const void *endpoint_identity);
 
 /** @brief 按本机时间检查上次请求，并在需要时提交新的探测帧。
  * @param[in,out] sync 已初始化的实例。

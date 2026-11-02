@@ -33,7 +33,7 @@ uint8_t CanTopicLinkInit(CanTopicLink_t *link, const CAN_Init_Config_s *can_conf
 
 /** @brief 将本链路接入双板对时，并撤销先前收到的消息。
  * @param[in,out] link 已初始化且带接收端点的链路，调度器启动前调用。
- * @param[in,out] sync 已初始化且绑定该链路CAN实例的对时对象，须长期有效。
+ * @param[in,out] sync 已初始化且端点标识与发送 ID 匹配该链路的对时对象，须长期有效。
  * @return 1为成功；参数、实例不匹配或撤销失败时返回0。
  */
 uint8_t CanTopicLinkAttachTimeSync(CanTopicLink_t *link, CanTimeSync_t *sync);

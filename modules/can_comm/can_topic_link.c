@@ -3,6 +3,7 @@
  */
 #include "can_topic_link.h"
 #include "platform_sync.h"
+#include "../../bsp/board/board_can_stm32.h"
 #include <limits.h>
 
 // CANProcessRx在普通任务中派发；消息组装及话题复制不在中断执行。
@@ -55,8 +56,10 @@ uint8_t CanTopicLinkInit(CanTopicLink_t *link, const CAN_Init_Config_s *can_conf
 
 uint8_t CanTopicLinkAttachTimeSync(CanTopicLink_t *link, CanTimeSync_t *sync)
 {
-    if (link==NULL || !link->ready || link->time_sync!=NULL || link->bridge.incoming==NULL ||
-        sync==NULL || !sync->initialized || sync->can!=link->transport.can)
+    if (link==NULL || !link->ready || link->transport.can==NULL || link->time_sync!=NULL || link->bridge.incoming==NULL ||
+        sync==NULL || !sync->initialized || sync->endpoint_identity!=link->transport.can ||
+        sync->tx_id!=link->transport.can->tx_id ||
+        BoardCanResolve(sync->bus)!=link->transport.can->can_handle)
         return 0u;
     if (CanTopicBridgeResetPeer(&link->bridge)!=CAN_BRIDGE_OK)
         return 0u;

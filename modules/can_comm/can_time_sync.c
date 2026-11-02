@@ -3,6 +3,7 @@
  */
 #include "can_time_sync.h"
 #include "crc.h"
+#include "../../bsp/can/platform_can.h"
 
 #include <limits.h>
 #include <stddef.h>
@@ -41,7 +42,7 @@ static uint8_t RequestFinished(uint32_t *request_id)
     if (*request_id == 0u)
         return 1u;
     CAN_TxResult_t result;
-    if (!CANGetTxRequestState(*request_id, &result) ||
+    if (!PlatformCanGetRequest(*request_id, &result) ||
         (result.pending_frames == 0u &&
          (result.state == CAN_TX_RESULT_COMPLETE || result.state == CAN_TX_RESULT_FAILED ||
           result.state == CAN_TX_RESULT_EXPIRED || result.state == CAN_TX_RESULT_CANCELLED ||
@@ -58,26 +59,30 @@ static uint8_t Submit(CanTimeSync_t *sync, uint8_t data[][8], size_t count, uint
     CAN_TxFrame_t frames[2];
     for (size_t i = 0u; i < count; ++i)
     {
-        frames[i].identifier = sync->can->tx_id;
+        frames[i].identifier = sync->tx_id; // 每帧使用初始化时确定的发送 ID。
         frames[i].identifier_type = CAN_TX_ID_STANDARD;
         frames[i].data = data[i];
         frames[i].length = 8u;
     }
-    return (uint8_t)(CANSubmitInterruptibleBatch(sync->can->can_handle, sync, frames, count,
+    return (uint8_t)(PlatformCanSubmitBatch(sync->bus, sync, frames, count,
                       CAN_TX_PRIORITY_NORMAL, CAN_TIME_EXCHANGE_MS, request_id) ==
                       CAN_TX_SUBMIT_ACCEPTED);
 }
 
-uint8_t CanTimeSyncInit(CanTimeSync_t *sync, CANInstance *can)
+uint8_t CanTimeSyncInit(CanTimeSync_t *sync, PlatformCanBus_t bus, uint32_t tx_id,
+                        const void *endpoint_identity)
 {
-    if (sync == NULL || can == NULL || can->can_handle == NULL || can->tx_id > 0x7ffu)
+    if (sync == NULL || endpoint_identity == NULL || tx_id > 0x7ffu ||
+        (bus != PLATFORM_CAN_BUS_1 && bus != PLATFORM_CAN_BUS_2 && bus != PLATFORM_CAN_BUS_3))
         return 0u;
     CanTimeSync_t candidate = {0};
     const TimeMappingConfig_t config = {CAN_TIME_MAX_RTT_MS, CAN_TIME_EXCHANGE_MS,
                                         CAN_TIME_SYNC_VALID_MS, CAN_TIME_MAX_JUMP_MS};
     if (TimeMappingInit(&candidate.mapping, &config) != TIME_MAPPING_OK)
         return 0u;
-    candidate.can = can;
+    candidate.bus = bus; // 保存调用方声明的逻辑总线。
+    candidate.tx_id = tx_id; // 后续发送使用同一个标准 ID。
+    candidate.endpoint_identity = endpoint_identity; // 接入链路时核对接收端点身份。
     candidate.initialized = 1u;
     *sync = candidate;
     return 1u;
@@ -85,14 +90,14 @@ uint8_t CanTimeSyncInit(CanTimeSync_t *sync, CANInstance *can)
 
 CanTimeSyncStatus_t CanTimeSyncService(CanTimeSync_t *sync, uint32_t now_ms)
 {
-    if (sync == NULL || !sync->initialized || sync->can == NULL)
+    if (sync == NULL || !sync->initialized || sync->endpoint_identity == NULL)
         return CAN_TIME_SYNC_ARGUMENT;
     if (sync->waiting)
     {
         if ((uint32_t)(now_ms - sync->probe_t1_ms) <= CAN_TIME_EXCHANGE_MS)
             return CAN_TIME_SYNC_WAITING;
         // 超期后取消未发送部分；硬件中仍有帧时不能开始下一次交换。
-        (void)CANCancelTxRequest(sync->probe_request_id);
+        (void)PlatformCanCancelRequest(sync->probe_request_id);
         sync->waiting = 0u;
         sync->has_t2 = 0u;
     }
@@ -120,7 +125,7 @@ CanTimeSyncStatus_t CanTimeSyncService(CanTimeSync_t *sync, uint32_t now_ms)
 CanTimeSyncStatus_t CanTimeSyncReceive(CanTimeSync_t *sync, const uint8_t *data,
                                        uint8_t length, uint32_t received_ms, uint32_t now_ms)
 {
-    if (sync == NULL || !sync->initialized || sync->can == NULL || data == NULL)
+    if (sync == NULL || !sync->initialized || sync->endpoint_identity == NULL || data == NULL)
         return CAN_TIME_SYNC_ARGUMENT;
     uint32_t crc = 0u;
     if (length != 8u || (uint32_t)(now_ms - received_ms) > CAN_TIME_EXCHANGE_MS ||
@@ -136,7 +141,7 @@ CanTimeSyncStatus_t CanTimeSyncReceive(CanTimeSync_t *sync, const uint8_t *data,
         {
             // 对端主动探测暴露了回退的时钟；立即废弃旧映射和本次未完成请求。
             (void)TimeMappingReset(&sync->mapping);
-            (void)CANCancelTxRequest(sync->probe_request_id);
+            (void)PlatformCanCancelRequest(sync->probe_request_id);
             sync->waiting = 0u;
             sync->has_t2 = 0u;
             sync->has_peer_time = 0u;

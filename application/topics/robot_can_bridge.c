@@ -85,7 +85,7 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
     }
 #endif
     // 对时使用同一个接收端点；失败时释放本次注册，不能启动无映射的双板控制。
-    if (!CanTimeSyncInit(&robot_time_sync,robot_link.transport.can) ||
+    if (!CanTimeSyncInit(&robot_time_sync,config->can_bus,config->tx_id,robot_link.transport.can) ||
         !CanTopicLinkAttachTimeSync(&robot_link,&robot_time_sync)) {
         CANUnregisterInstance(robot_link.transport.can);
         memset(&robot_link,0,sizeof(robot_link));

@@ -140,7 +140,7 @@ int main(void)
 
     CANInstance peer_can = {.can_handle = &hcan1, .tx_id = 0x311u};
     CanTimeSync_t peer = {0};
-    TEST_CHECK(CanTimeSyncInit(&peer, &peer_can));
+    TEST_CHECK(CanTimeSyncInit(&peer, PLATFORM_CAN_BUS_1, peer_can.tx_id, &peer_can));
     for (uint32_t i = 0u; i < 3u; ++i)
     {
         const uint32_t local = 1000u + i * 200u;

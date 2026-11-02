@@ -5,11 +5,16 @@
 #include "can_time_sync.h"
 #include "chassis_topic_codec.h"
 #include "test_check.h"
+#include "../../bsp/board/board_can_stm32.h"
 #include <string.h>
 
 static uint32_t fake_now_ms;
 uint32_t HAL_GetTick(void) { return fake_now_ms; }
 static CANInstance registered_can;
+FDCAN_HandleTypeDef *BoardCanResolve(PlatformCanBus_t bus)
+{
+    return bus == PLATFORM_CAN_BUS_1 ? registered_can.can_handle : NULL;
+}
 static void (*registered_callback)(CANInstance *);
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
@@ -266,14 +271,24 @@ int main(void)
     CanTimeSync_t local_sync={0}, peer_sync={0};
     FDCAN_HandleTypeDef peer_handle={0};
     CANInstance peer_can={.can_handle=&peer_handle,.tx_id=0x123u};
-    TEST_CHECK(CanTimeSyncInit(&local_sync,timed_link.transport.can));
-    TEST_CHECK(CanTimeSyncInit(&peer_sync,&peer_can));
+    CanTimeSync_t wrong_sync={0};
+    // 同一对象若配置了其他总线或发送 ID，不能接入当前链路。
+    TEST_CHECK(CanTimeSyncInit(&wrong_sync,PLATFORM_CAN_BUS_2,timed_link.transport.can->tx_id,timed_link.transport.can));
+    TEST_CHECK(!CanTopicLinkAttachTimeSync(&timed_link,&wrong_sync));
+    TEST_CHECK(CanTimeSyncInit(&wrong_sync,PLATFORM_CAN_BUS_1,0x7ffu,timed_link.transport.can));
+    TEST_CHECK(!CanTopicLinkAttachTimeSync(&timed_link,&wrong_sync));
+    TEST_CHECK(CanTimeSyncInit(&local_sync,PLATFORM_CAN_BUS_1,timed_link.transport.can->tx_id,timed_link.transport.can));
+    TEST_CHECK(CanTimeSyncInit(&peer_sync,PLATFORM_CAN_BUS_1,peer_can.tx_id,&peer_can));
+    CanTopicLink_t missing_endpoint={0};
+    missing_endpoint.ready=1u;
+    missing_endpoint.bridge.incoming=remote;
+    TEST_CHECK(!CanTopicLinkAttachTimeSync(&missing_endpoint,&local_sync));
     TEST_CHECK(CanTopicLinkAttachTimeSync(&timed_link,&local_sync));
     for (uint32_t phase=0u;phase<2u;++phase) {
         if (phase==1u) {
             // 对端复位后从新时钟起点开始；本板的计时不回退。
             memset(&peer_sync,0,sizeof(peer_sync));
-            TEST_CHECK(CanTimeSyncInit(&peer_sync,&peer_can));
+            TEST_CHECK(CanTimeSyncInit(&peer_sync,PLATFORM_CAN_BUS_1,peer_can.tx_id,&peer_can));
         }
         for (uint32_t i=0u;i<3u;++i) {
             const uint32_t local_send=1000u+phase*800u+i*200u;
@@ -333,7 +348,7 @@ int main(void)
     // 对端重启后主动发送探测，本板无需等待自己的下一次探测就撤销旧消息。
     TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),2210u,NULL)==MESSAGE_OK);
     memset(&peer_sync,0,sizeof(peer_sync));
-    TEST_CHECK(CanTimeSyncInit(&peer_sync,&peer_can));
+    TEST_CHECK(CanTimeSyncInit(&peer_sync,PLATFORM_CAN_BUS_1,peer_can.tx_id,&peer_can));
     TEST_CHECK(CanTimeSyncService(&peer_sync,0u)==CAN_TIME_SYNC_OK);
     memcpy(registered_can.rx_buff,captured_sync_frames[0],8u);
     registered_can.rx_len=8u; registered_can.rx_timestamp_ms=2210u;

@@ -106,6 +106,8 @@ void MC02ChassisTestLogError(void) {}
 static FDCAN_HandleTypeDef bridge_can_handle;
 static CANInstance bridge_can;
 static void (*bridge_receive)(CANInstance *);
+FDCAN_HandleTypeDef *BoardCanResolve(PlatformCanBus_t bus)
+{ return bus == PLATFORM_CAN_BUS_1 ? &bridge_can_handle : NULL; }
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
     bridge_can.can_handle=config->can_handle;

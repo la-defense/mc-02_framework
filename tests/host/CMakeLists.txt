@@ -80,6 +80,10 @@ target_compile_options(mc02_motor_config_portable PRIVATE -Wall -Wextra -Werror)
 # CAN 帧和队列状态不需要芯片句柄或调度器头。
 add_library(mc02_can_tx_header_portable OBJECT can_tx_public_header.c)
 target_compile_options(mc02_can_tx_header_portable PRIVATE -Wall -Wextra -Werror)
+# 板间对时计算只使用逻辑 CAN、时间映射和软件 CRC 的公共头。
+add_library(mc02_can_time_sync_portable OBJECT ../../modules/can_comm/can_time_sync.c)
+target_include_directories(mc02_can_time_sync_portable PRIVATE ../../modules/can_comm ../../modules/time_sync ../../modules/algorithm)
+target_compile_options(mc02_can_time_sync_portable PRIVATE -Wall -Wextra -Werror)
 # 遥控公开头不需要 HAL 或 RTOS 头。
 add_library(mc02_remote_header_portable OBJECT remote_public_header.c)
 target_include_directories(mc02_remote_header_portable PRIVATE ../../modules/remote)
@@ -734,7 +738,7 @@ target_compile_options(can_topic_wire_test PRIVATE -Wall -Wextra -Werror -fno-fa
 add_test(NAME production_can_topic_wire COMMAND can_topic_wire_test)
 set_tests_properties(production_can_topic_wire PROPERTIES TIMEOUT 10)
 add_executable(can_time_sync_test can_time_sync_test.c
-  ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c)
+  ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c platform_can_request_fake.c)
 target_include_directories(can_time_sync_test BEFORE PRIVATE can_comm_fakes)
 target_include_directories(can_time_sync_test PRIVATE ../../modules/can_comm ../../modules/time_sync)
 target_link_libraries(can_time_sync_test PRIVATE mc02_software_crc)
@@ -752,7 +756,7 @@ set_tests_properties(production_can_topic_transport PROPERTIES TIMEOUT 10)
 add_executable(can_topic_bridge_test can_topic_bridge_test.c ../../modules/can_comm/can_topic_bridge.c
   ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c
   ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c
-  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../application/topics/chassis_topic_codec.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../application/topics/chassis_topic_codec.c platform_can_request_fake.c)
 target_include_directories(can_topic_bridge_test BEFORE PRIVATE can_comm_fakes init_resource_fakes chassis_fakes)
 target_include_directories(can_topic_bridge_test PRIVATE ../../modules/can_comm ../../modules/message_center ../../modules/time_sync ../../application ../../application/topics)
 target_link_libraries(can_topic_bridge_test PRIVATE mc02_software_crc)
@@ -1068,7 +1072,7 @@ add_executable(chassis_bridge_integration_test chassis_task_test.c
   ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/can_comm/can_topic_link.c
   ../../modules/can_comm/can_topic_bridge.c ../../modules/can_comm/can_topic_transport.c
   ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_time_sync.c
-  ../../modules/time_sync/time_mapping.c ../../modules/safety/robot_safety.c)
+  ../../modules/time_sync/time_mapping.c ../../modules/safety/robot_safety.c platform_can_request_fake.c)
 target_include_directories(chassis_bridge_integration_test BEFORE PRIVATE chassis_fakes can_comm_fakes)
 target_include_directories(chassis_bridge_integration_test PRIVATE ../../application ../../application/chassis
   ../../application/topics ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine

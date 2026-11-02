@@ -1378,7 +1378,7 @@ static void test_can_tx_topic_sync_budget(void)
     config.can_module_callback=scheduler_rx_callback;
     CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
     CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
-    CanTimeSync_t sync={0}; TEST_CHECK(CanTimeSyncInit(&sync,can));
+    CanTimeSync_t sync={0}; TEST_CHECK(CanTimeSyncInit(&sync,PLATFORM_CAN_BUS_1,can->tx_id,can));
     CanTopicMessage_t message={.topic_id=7u,.length=21u};
     uint32_t ids[6]={0u};
     uint8_t cap_data[8]={0u};
