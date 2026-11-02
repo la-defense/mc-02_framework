@@ -4,6 +4,10 @@
  * @note HAL、毫秒时钟和 DWT 由本测试替代；不证明实际屏幕显示或 SPI 电气波形。
  */
 #include "lcd_buf.h"
+#include "main.h" // 该测试直接构造板级 GPIO 替身。
+#include "spi.h" // 该测试直接构造 SPI 句柄替身。
+#include "../../bsp/dwt/platform_probe.h" // 显式声明测试使用的框架探针入口。
+#include "../../bsp/os/platform_sync.h" // 测试时钟也为界面提供毫秒计数。
 #include "lcd_internal.h"
 #include "lcd_ui.h"
 #include "lcd_ui_test_types.h"
@@ -64,9 +68,11 @@ static attitude_t test_attitude = {1.0f, 2.0f, 3.0f};
 } while (0)
 
 uint32_t HAL_GetTick(void) { return fake_tick; }
+uint32_t PlatformTimeNowMs(void) { return HAL_GetTick(); } // 保持界面与底层使用同一时钟。
 uint32_t __get_IPSR(void) { return fake_ipsr; }
 uint32_t DWT_ProbeStart(void) { return fake_probe_us; }
 uint32_t DWT_ProbeElapsedUs(uint32_t start) { return fake_probe_us - start; }
+uint32_t PlatformProbeStart(void) { return DWT_ProbeStart(); } // 测试时钟替代硬件周期计数。
 void HAL_Delay(uint32_t ms) { fake_tick += ms; fake_probe_us += ms * 1000u; }
 void Error_Handler(void) { abort(); }
 void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32_t pin, uint32_t value)

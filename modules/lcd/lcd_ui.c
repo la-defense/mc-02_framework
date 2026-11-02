@@ -21,6 +21,7 @@
 #include "rm_referee.h"
 #include "lcd_referee_rows.h"
 #include "lcd_internal.h"
+#include "../../bsp/os/platform_sync.h" // 读取既有毫秒时钟显示来源数据年龄。
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
 #include "chassis.h"
 #endif
@@ -533,7 +534,7 @@ static void draw_page0_values(void)
     Vision_Status_t vs;
     VisionGetStatus(&vs);
     snprintf(buf, sizeof(buf), "%s M:%u A:%lums", vs.online ? "ON" : "OFF",
-             (unsigned)vs.mode, (unsigned long)(vs.online ? (HAL_GetTick() - vs.last_rx_ms) : 0u));
+             (unsigned)vs.mode, (unsigned long)(vs.online ? (PlatformTimeNowMs() - vs.last_rx_ms) : 0u));
     draw_value_ascii(6, buf);
 
     snprintf(buf, sizeof(buf), "RUN:%s RST:%s", BSP_WatchdogIsRunning() ? "Y" : "N",

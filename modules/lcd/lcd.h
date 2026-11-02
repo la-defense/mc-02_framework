@@ -2,16 +2,14 @@
  * @file lcd.h
  * @brief LCD 面板初始化、状态查询和绘图结果类型。
  *
- * 先配置 GPIO、SPI1 和 HAL 毫秒时基，再由单个普通任务调用 LCD 接口。
+ * 先完成平台显示设备及毫秒时基配置，再由单个普通任务调用 LCD 接口。
  * 坐标使用绘图区像素，原点在左上角；颜色使用 RGB565。发送成功表示
- * SPI1 阻塞传输完成，不表示面板已确认或实际显示。
+ * 平台传输完成，不表示面板已确认或实际显示。
  */
 #ifndef MC02_LCD_H
 #define MC02_LCD_H
 
 #include <stdint.h>
-#include "main.h"
-#include "spi.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -78,7 +76,7 @@ typedef struct
 /**
  * @brief 初始化面板控制器并设置方向和 RGB565 格式。
  * @return LCD_OK 或具体失败状态；失败后面板保持关闭，需经 UI 恢复流程重试。
- * @note 外设与 HAL 毫秒时基须已配置；阻塞等待计入 1000ms 顶层期限。
+ * @note 平台显示设备与毫秒时基须已配置；阻塞等待计入 1000ms 顶层期限。
  *       单独调用不会打开背光，完整界面绘制成功后才会点亮。
  */
 LCDStatus_t LCD_Init(void);
@@ -93,16 +91,6 @@ LCDStatus_t LCDGetState(LCDState_t *output);
 #ifdef __cplusplus
 }
 #endif
-
-/* LCD 引脚电平宏供本模块和板级初始化使用。 */
-#define LCD_RES_Clr() HAL_GPIO_WritePin(LCD_RES_GPIO_Port, LCD_RES_Pin, GPIO_PIN_RESET)
-#define LCD_RES_Set() HAL_GPIO_WritePin(LCD_RES_GPIO_Port, LCD_RES_Pin, GPIO_PIN_SET)
-#define LCD_DC_Clr() HAL_GPIO_WritePin(LCD_DC_GPIO_Port, LCD_DC_Pin, GPIO_PIN_RESET)
-#define LCD_DC_Set() HAL_GPIO_WritePin(LCD_DC_GPIO_Port, LCD_DC_Pin, GPIO_PIN_SET)
-#define LCD_CS_Clr() HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_RESET)
-#define LCD_CS_Set() HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_SET)
-#define LCD_BLK_Clr(unused) do { (void)(unused); HAL_GPIO_WritePin(LCD_BLK_GPIO_Port, LCD_BLK_Pin, GPIO_PIN_RESET); } while (0)
-#define LCD_BLK_Set(unused) do { (void)(unused); HAL_GPIO_WritePin(LCD_BLK_GPIO_Port, LCD_BLK_Pin, GPIO_PIN_SET); } while (0)
 
 #define WHITE     0xFFFFu
 #define BLACK     0x0000u

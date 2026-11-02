@@ -77,6 +77,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/motor/DJImotor/dji_motor.c",  # DJI 逻辑端点、控制和反馈。
     "modules/motor/motor_task.c",  # 通信派发顺序及电机周期调用。
     "modules/task_monitor/task_monitor.c",  # 任务期限和故障处理策略。
+    "modules/lcd/lcd_buf.c",  # LCD 有界绘图及像素缓冲。
     "application/robot_task_create.c",  # 按车型配置创建任务。
 }
 ASSEMBLY_SOURCES = {
@@ -234,7 +235,7 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "bsp/os", source_root / "bsp/log", source_root / "bsp/can",
                source_root / "modules/can_comm", source_root / "modules/time_sync",
                source_root / "modules/algorithm", source_root / "modules/referee",
-               source_root / "modules", source_root / "modules/motor",
+               source_root / "modules", source_root / "modules/motor", source_root / "modules/lcd",
                source_root / "bsp/usart", source_root / "modules/remote",
                source_root / "modules/master_machine", source_root / "bsp/usb",
                source_root / "modules/imu", source_root / "modules/BMI088",
@@ -284,7 +285,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                source_root / "bsp/os", source_root / "bsp/log", source_root / "bsp/can",
                source_root / "modules/can_comm", source_root / "modules/time_sync",
                source_root / "modules/algorithm", source_root / "modules/referee",
-               source_root / "modules/motor",
+               source_root / "modules/motor", source_root / "modules/lcd",
                source_root / "bsp/usart", source_root / "modules/remote",
                source_root / "modules/master_machine", source_root / "bsp/usb",
                source_root / "modules/imu", source_root / "modules/task_monitor")

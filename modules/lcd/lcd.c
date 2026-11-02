@@ -5,6 +5,8 @@
  */
 #include "lcd_internal.h"
 
+#include "main.h" // 仅面板硬件实现使用板级 GPIO 定义。
+#include "spi.h" // 仅面板硬件实现使用 STM32 SPI 句柄。
 #include "bsp_hal_tick.h"
 
 #include <limits.h>
@@ -14,6 +16,15 @@ volatile uint32_t lcd_spi_errors = 0u;
 
 #define LCD_HAL_SEND_TIMEOUT_MS 2u
 #define LCD_INIT_BUDGET_MS 1000u
+
+#define LCD_RES_Clr() HAL_GPIO_WritePin(LCD_RES_GPIO_Port, LCD_RES_Pin, GPIO_PIN_RESET) // 拉低复位。
+#define LCD_RES_Set() HAL_GPIO_WritePin(LCD_RES_GPIO_Port, LCD_RES_Pin, GPIO_PIN_SET) // 释放复位。
+#define LCD_DC_Clr() HAL_GPIO_WritePin(LCD_DC_GPIO_Port, LCD_DC_Pin, GPIO_PIN_RESET) // 选择命令。
+#define LCD_DC_Set() HAL_GPIO_WritePin(LCD_DC_GPIO_Port, LCD_DC_Pin, GPIO_PIN_SET) // 选择数据。
+#define LCD_CS_Clr() HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_RESET) // 选中面板。
+#define LCD_CS_Set() HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_SET) // 释放面板。
+#define LCD_BLK_Clr(unused) do { (void)(unused); HAL_GPIO_WritePin(LCD_BLK_GPIO_Port, LCD_BLK_Pin, GPIO_PIN_RESET); } while (0) // 关闭背光。
+#define LCD_BLK_Set(unused) do { (void)(unused); HAL_GPIO_WritePin(LCD_BLK_GPIO_Port, LCD_BLK_Pin, GPIO_PIN_SET); } while (0) // 打开背光。
 
 static LCDState_t lcd_state;
 static uint8_t operation_depth;

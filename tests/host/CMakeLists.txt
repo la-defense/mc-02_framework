@@ -296,8 +296,12 @@ if(UNIX AND NOT APPLE)
   target_link_options(lcd_spi_timing_test PRIVATE -Wl,--gc-sections)
   add_test(NAME production_lcd_rising_edge_timing COMMAND lcd_spi_timing_test)
   add_test(NAME production_lcd_select_clock_boundary COMMAND lcd_spi_timing_test --select-boundary)
+  add_library(lcd_buf_portable_compile OBJECT ../../modules/lcd/lcd_buf.c)
+  target_include_directories(lcd_buf_portable_compile PRIVATE ../../modules/lcd) # 仅使用面板公开头。
+  target_compile_options(lcd_buf_portable_compile PRIVATE -Wall -Wextra -Werror -fno-fast-math)
   add_executable(lcd_bounds_test lcd_bounds_test.c ../../modules/lcd/lcd.c
     ../../modules/lcd/lcd_buf.c ../../modules/lcd/lcd_font_cn.c ../../modules/lcd/lcd_ui.c
+    ../../bsp/board/platform_probe_elapsed_stm32.c # 使用生产耗时适配，时钟由测试提供。
     ../../modules/lcd/lcd_referee_rows.c)
   target_include_directories(lcd_bounds_test BEFORE PRIVATE lcd_spi_fakes)
   target_include_directories(lcd_bounds_test BEFORE PRIVATE lcd_ui_fakes)

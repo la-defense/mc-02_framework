@@ -7,7 +7,7 @@
 
 #include "lcd_internal.h"
 #include "lcdfont.h"
-#include "bsp_dwt.h"
+#include "../../bsp/dwt/platform_probe.h"
 
 #include <limits.h>
 #include <math.h>
@@ -36,7 +36,7 @@ static uint32_t lcd_sat_add(uint32_t value, uint32_t amount)
 
 static void lcd_profile_row(uint32_t started, uint16_t bytes, LCDStatus_t status)
 {
-    uint32_t elapsed = DWT_ProbeElapsedUs(started);
+    uint32_t elapsed = PlatformProbeElapsedUs(started);
     lcd_prof_row_us = elapsed;
     lcd_prof_row_bytes = bytes;
     lcd_prof_spi_us = lcd_sat_add(lcd_prof_spi_us, elapsed);
@@ -63,7 +63,7 @@ static LCDStatus_t lcd_set_panel_address(void)
 
 LCDStatus_t LCD_BufClearPanel(void)
 {
-    uint32_t started = DWT_ProbeStart();
+    uint32_t started = PlatformProbeStart();
     LCDStatus_t status = LCD_InternalBegin(LCD_DRAW_BUDGET_MS, 0u);
     if (status != LCD_OK)
         return status;
@@ -87,12 +87,12 @@ LCDStatus_t LCD_BufClearPanel(void)
     // 任一行发送失败就停止，后面的像素不能在错误状态下继续写。
     for (uint16_t row = 0u; status == LCD_OK && row < LCD_PANEL_H; ++row)
     {
-        uint32_t row_started = DWT_ProbeStart();
+        uint32_t row_started = PlatformProbeStart();
         status = LCD_InternalWritePixelData((const uint8_t *)lcd_line_buf, row_bytes);
         lcd_profile_row(row_started, row_bytes, status);
     }
     LCD_InternalEndPixelData();
-    lcd_prof_clear_us = DWT_ProbeElapsedUs(started);
+    lcd_prof_clear_us = PlatformProbeElapsedUs(started);
     return LCD_InternalEnd(status);
 }
 
@@ -109,7 +109,7 @@ static LCDStatus_t lcd_fill(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, 
         status = LCD_InternalBeginPixelData();
     for (uint16_t row = y1; status == LCD_OK && row <= y2; ++row)
     {
-        uint32_t row_started = DWT_ProbeStart();
+        uint32_t row_started = PlatformProbeStart();
         status = LCD_InternalWritePixelData((const uint8_t *)lcd_line_buf, row_bytes);
         lcd_profile_row(row_started, row_bytes, status);
     }
@@ -200,7 +200,7 @@ LCDStatus_t LCD_BufShowAscii(uint16_t x, uint16_t y, const char *str, size_t len
                 lcd_line_buf[ci * char_width + col] = (glyph[byte_index] & mask) ? fc : bc;
             }
         }
-        uint32_t row_started = DWT_ProbeStart();
+        uint32_t row_started = PlatformProbeStart();
         uint16_t row_bytes = (uint16_t)(width * sizeof(lcd_line_buf[0]));
         status = LCD_InternalWritePixelData((const uint8_t *)lcd_line_buf, row_bytes);
         lcd_profile_row(row_started, row_bytes, status);
@@ -252,7 +252,7 @@ LCDStatus_t LCD_BufShowCnString(uint16_t x, uint16_t y, const Lcd_CnChar_e *glyp
                 lcd_line_buf[gi * 16u + col] = (glyph[byte_index] & mask) ? fc : bc;
             }
         }
-        uint32_t row_started = DWT_ProbeStart();
+        uint32_t row_started = PlatformProbeStart();
         uint16_t row_bytes = (uint16_t)(width * sizeof(lcd_line_buf[0]));
         status = LCD_InternalWritePixelData((const uint8_t *)lcd_line_buf, row_bytes);
         lcd_profile_row(row_started, row_bytes, status);

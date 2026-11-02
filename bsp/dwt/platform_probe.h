@@ -18,6 +18,13 @@ typedef struct {
  */
 uint32_t PlatformProbeStart(void);
 
+/** @brief 将一次短时测量的周期差换算为微秒。
+ * @param[in] start PlatformProbeStart 返回的起点。
+ * @return 沿用平台原有的 32 位微秒耗时结果。
+ * @note 测量间隔不能跨越完整的周期计数回绕；时钟须先完成初始化。
+ */
+uint32_t PlatformProbeElapsedUs(uint32_t start);
+
 /** @brief 更新一次短时耗时记录。
  * @param[in,out] probe 非空、初始化为零且不并发更新的统计对象。
  * @param[in] start 本次开始时的周期计数。

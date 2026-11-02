@@ -31,6 +31,8 @@ class PortableIncludeContractTest(unittest.TestCase):
         # DJI 控制只能访问自有电机接口与公共单位定义。
         check_portable_includes(self.entry("-Imodules", "-Imodules/motor", "-Ibsp/can"),
                                 ROOT, "modules/motor/DJImotor/dji_motor.c")
+        check_portable_includes(self.entry("-Imodules/lcd", "-Ibsp/os"),
+                                ROOT, "modules/lcd/lcd_buf.c")  # 绘图使用显示公开头。
 
     def test_vendor_and_rtos_paths_are_rejected(self):
         # 同时覆盖拼接、分离和系统头参数，防止替换选项形式后漏检。

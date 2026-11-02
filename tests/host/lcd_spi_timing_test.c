@@ -3,6 +3,8 @@
  * This detects a zero setup window, not measured pin timing or rendered pixels.
  */
 #include "lcd.h"
+#include "main.h" // 测试直接构造板级 GPIO 替身。
+#include "spi.h" // 测试直接构造 SPI 句柄替身。
 #include <stdio.h>
 #include <stdlib.h>
 

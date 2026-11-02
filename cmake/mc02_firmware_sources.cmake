@@ -82,6 +82,7 @@ set(MC02_BSP_C_SOURCES
     bsp/board/board_numeric_caps_mc02.c # MC-02 数值硬件和当前编译能力声明。
     bsp/board/ins_sensor_mc02.c # INS 与板载 BMI088 的 SPI 绑定。
     bsp/board/platform_probe_stm32.c # 原有 DWT 周期计数与短时探针适配。
+    bsp/board/platform_probe_elapsed_stm32.c # 原有短时探针的微秒耗时查询。
     bsp/board/platform_time_us_stm32.c # 保留现有微秒运行时间的框架入口。
     bsp/board/platform_dispatch_stm32.c # 任务派发绑定到现有 CAN 和串口队列。
     bsp/board/platform_context_stm32.c # 查询当前线程或异常处理上下文。
