@@ -73,6 +73,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/remote/remote_control.c",  # 遥控输入解析及逻辑串口接入。
     "modules/master_machine/master_process.c",  # 上位机业务协议及传输状态。
     "modules/imu/ins_task.c",  # IMU 采样与姿态业务。
+    "modules/imu/imu_heater.c",  # 温控策略及逻辑模拟资源。
     "application/robot_task_create.c",  # 按车型配置创建任务。
 }
 ASSEMBLY_SOURCES = {
@@ -289,6 +290,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
         dependency = (build_dir / line.strip()).resolve()
         # 限定公开声明文件，禁止借用同目录下的硬件实现头。
         public_files = {source_root / "bsp/board/platform_resources.h",
+                        source_root / "bsp/board/platform_analog.h",
                         source_root / "application/topics/robot_topics.h",
                         source_root / "application/config/build_selection.h",
                         source_root / "application/config/vehicle_selection.h",

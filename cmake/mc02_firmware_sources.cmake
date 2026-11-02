@@ -74,6 +74,8 @@ set(MC02_BSP_C_SOURCES
     bsp/board/board_can_stm32.c # MC-02 逻辑 CAN 编号和 FDCAN 控制器的板级绑定。
     bsp/board/board_spi_stm32.c # MC-02 逻辑 SPI 编号与控制器绑定。
     bsp/board/board_gpio_stm32.c # MC-02 逻辑 GPIO 与板载片选绑定。
+    bsp/board/platform_pwm_stm32.c # 板载加热 PWM 的逻辑通道适配。
+    bsp/board/platform_adc_stm32.c # 电源电压逻辑模拟输入适配。
     bsp/board/platform_can_stm32.c # 逻辑 CAN 总线的发送队列适配。
     bsp/board/platform_can_rx_stm32.c # 逻辑 CAN 接收端点适配。
     bsp/board/board_numeric_caps_mc02.c # MC-02 数值硬件和当前编译能力声明。

@@ -46,6 +46,18 @@ typedef enum {
     PLATFORM_GPIO_IMU_ACCEL_CS /**< 板载 IMU 加速度计片选。 */
 } PlatformGpioPin_t;
 
+/** @brief 业务使用的逻辑 PWM 通道。 */
+typedef enum {
+    PLATFORM_PWM_INVALID = 0, /**< 未选择通道。 */
+    PLATFORM_PWM_IMU_HEATER  /**< 本板 IMU 加热输出。 */
+} PlatformPwmChannel_t;
+
+/** @brief 业务使用的逻辑模拟输入。 */
+typedef enum {
+    PLATFORM_ADC_INVALID = 0, /**< 未选择通道。 */
+    PLATFORM_ADC_VCC_IN       /**< 本板电源输入电压。 */
+} PlatformAdcChannel_t;
+
 /** @brief 业务声明的经典 CAN 端点，不包含芯片句柄和回调指针。 */
 typedef struct {
     PlatformCanBus_t can_bus; /**< 本板逻辑总线编号。 */

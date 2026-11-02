@@ -6,6 +6,7 @@
 #include "main.h"
 #include "tim.h"
 #include "bsp_adc.h"
+#include "platform_analog.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -19,6 +20,7 @@ static uint32_t now_ms;
 static uint32_t primask;
 static BSP_ADC_Sample_t adc_sample;
 static BSP_ADC_Status_e adc_status;
+static unsigned pwm_starts;
 TIM_HandleTypeDef htim3;
 
 uint32_t HAL_GetTick(void) { return now_ms; }
@@ -47,7 +49,38 @@ int HAL_TIM_PWM_Start(TIM_HandleTypeDef *timer, uint32_t channel)
 {
     (void)timer;
     (void)channel;
+    ++pwm_starts;
     return 0;
+}
+
+static int test_analog_resources(void)
+{
+    htim3.compare = 123u;
+    ASSERT_TRUE(!PlatformPwmSetCompare(PLATFORM_PWM_INVALID, 77u), "invalid PWM must be rejected");
+    ASSERT_TRUE(htim3.compare == 123u, "invalid PWM must not modify the timer");
+    ASSERT_TRUE(!PlatformPwmStart(PLATFORM_PWM_INVALID) && pwm_starts == 0u, "invalid PWM must not start");
+    ASSERT_TRUE(PlatformPwmSetCompare(PLATFORM_PWM_IMU_HEATER, 42u) && htim3.compare == 42u,
+                "heater PWM must map to TIM3 channel 4");
+    float voltage = 99.0f;
+    ASSERT_TRUE(!PlatformAdcReadVolts(PLATFORM_ADC_INVALID, &voltage) && voltage == 99.0f,
+                "invalid ADC must preserve the old value");
+    ASSERT_TRUE(!PlatformAdcReadVolts(PLATFORM_ADC_VCC_IN, NULL), "null ADC output must fail");
+    adc_status = BSP_ADC_STATUS_VALID;
+    adc_sample.voltage_config_valid = 1u;
+    adc_sample.vcc_in_volts = 24.0f;
+    ASSERT_TRUE(PlatformAdcReadVolts(PLATFORM_ADC_VCC_IN, &voltage) && voltage == 24.0f,
+                "valid input must return the measured voltage");
+    adc_sample.vcc_in_volts = NAN;
+    ASSERT_TRUE(!PlatformAdcReadVolts(PLATFORM_ADC_VCC_IN, &voltage) && voltage == 24.0f,
+                "nonfinite voltage must be rejected without modifying output");
+    adc_status = BSP_ADC_STATUS_ERROR;
+    ASSERT_TRUE(!PlatformAdcReadVolts(PLATFORM_ADC_VCC_IN, &voltage) && voltage == 24.0f,
+                "failed ADC must preserve the previous output");
+    IMUHeaterStatus_t status;
+    primask = 1u; // 调用前已经屏蔽时，查询后必须保持屏蔽。
+    IMUHeaterGetStatus(&status);
+    ASSERT_TRUE(primask == 1u, "status query must restore previous interrupt mask");
+    return EXIT_SUCCESS;
 }
 
 static void setup(uint32_t start_ms)
@@ -451,6 +484,7 @@ static int test_clear_requires_initialized_fresh_state(void)
 
 static int run(const char *name)
 {
+    if (strcmp(name, "analog-resources") == 0) return test_analog_resources();
     if (strcmp(name, "pid-timing") == 0) return test_pid_timing();
     if (strcmp(name, "recovery") == 0) return test_overtemp_and_manual_recovery();
     if (strcmp(name, "invalid-temperature") == 0) return test_clear_rejects_invalid_temperature();

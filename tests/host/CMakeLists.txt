@@ -903,6 +903,14 @@ add_library(mc02_ins_portable OBJECT ../../modules/imu/ins_task.c)
 target_include_directories(mc02_ins_portable PRIVATE ../../modules/imu ../../modules/BMI088 ../../modules/algorithm
   ../../modules/task_monitor ../../modules/safety ../../modules/master_machine ../../bsp/usart ../../bsp/os ../../bsp/dwt ../../bsp/log)
 target_compile_options(mc02_ins_portable PRIVATE -Wall -Wextra -Werror)
+# 两种温控编译配置都只提供框架和算法头，不提供芯片或 RTOS 头。
+foreach(heater_enabled IN ITEMS 0 1)
+  add_library(mc02_heater_portable_${heater_enabled} OBJECT ../../modules/imu/imu_heater.c)
+  target_include_directories(mc02_heater_portable_${heater_enabled} PRIVATE ../../modules/imu ../../modules/BMI088
+    ../../modules/algorithm ../../bsp/os ../../bsp/log)
+  target_compile_definitions(mc02_heater_portable_${heater_enabled} PRIVATE MC02_HEATER_ENABLED=${heater_enabled})
+  target_compile_options(mc02_heater_portable_${heater_enabled} PRIVATE -Wall -Wextra -Werror)
+endforeach()
 add_executable(ins_filter_test ins_filter_test.c ../../modules/imu/ins_task.c
   ../../bsp/os/platform_sync_freertos.c # 使用测试的任务锁和模拟毫秒时钟。
   ../../bsp/board/ins_sensor_mc02.c # 用板级适配器连接传感器替身。
@@ -1477,7 +1485,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
     endif()
     target_link_libraries(${heater_recovery_target} PRIVATE m)
     foreach(recovery_scenario IN ITEMS
-        pid-timing recovery invalid-temperature imu-age-5 imu-age-6 sequence adc-invalid adc-age-21
+        analog-resources pid-timing recovery invalid-temperature imu-age-5 imu-age-6 sequence adc-invalid adc-age-21
         sensor-timeout sensor-timeout-wrap heat-timeout heat-timeout-wrap heat-timeout-at-target
         heat-timeout-restarts-after-zero force-off-reinit long-operation post-operation-sample
         initialized-state)
@@ -1497,6 +1505,14 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   target_link_libraries(imu_heater_pid_init_failure_test PRIVATE m)
   target_link_options(imu_heater_pid_init_failure_test PRIVATE -Wl,--wrap=PIDInit)
   add_test(NAME production_heater_pid_init_failure COMMAND imu_heater_pid_init_failure_test)
+
+  # 温控回归使用实际板级 PWM／ADC、时钟和中断适配；硬件仍由各自测试替身提供。
+  foreach(target IN ITEMS imu_heater_sample_test imu_heater_fault_recovery_enabled
+      imu_heater_fault_recovery_disabled imu_heater_pid_init_failure_test)
+    target_sources(${target} PRIVATE ../../bsp/board/platform_pwm_stm32.c ../../bsp/board/platform_adc_stm32.c
+      ../../bsp/os/platform_irq_stm32.c ../../bsp/os/platform_sync_freertos.c)
+    target_include_directories(${target} PRIVATE imu_heater_os_fakes ../../bsp/board ../../bsp/os)
+  endforeach()
 
   add_executable(
     param_operation_test

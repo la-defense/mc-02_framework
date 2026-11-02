@@ -9,10 +9,10 @@
  */
 #include "imu_heater.h"
 #include "controller.h"
-#include "tim.h"
-#include "main.h"
+#include "../../bsp/board/platform_analog.h"
+#include "platform_irq.h"
+#include "platform_sync.h"
 #include "bsp_log.h"
-#include "bsp_adc.h"
 #include <math.h>
 #include <stddef.h>
 
@@ -122,7 +122,7 @@ static void IMUHeaterApplyDuty(uint16_t duty)
     heater_duty = duty;
     imu_heater_duty_diag = duty;
     if (heater_initialized)
-        __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, heater_duty);
+        (void)PlatformPwmSetCompare(PLATFORM_PWM_IMU_HEATER, heater_duty);
 }
 
 /* 读取 ADC 层确认有效且未超过20ms的电压；失败时将非空输出置0，单位 V。 */
@@ -131,16 +131,15 @@ static uint8_t IMUHeaterReadFreshSupply(float *vcc_in)
     if (vcc_in == NULL)
         return 0u;
 
-    BSP_ADC_Sample_t sample;
-    if (BSP_ADCGetSample(&sample) != BSP_ADC_STATUS_VALID ||
-        !sample.voltage_config_valid || !isfinite(sample.vcc_in_volts))
+    float voltage;
+    if (!PlatformAdcReadVolts(PLATFORM_ADC_VCC_IN, &voltage) || !isfinite(voltage))
     {
         // 采样失败、换算设置不可用或出现 NaN/Inf 时，不能沿用旧电压计算允许功率。
         *vcc_in = 0.0f;
         return 0u;
     }
 
-    *vcc_in = sample.vcc_in_volts;
+    *vcc_in = voltage;
     return 1u;
 }
 
@@ -172,7 +171,7 @@ void IMUHeaterInit(void)
     heater_fault = 0u;
     heater_overtemp = 0u;
     heater_timeout_fault = 0u;
-    last_valid_sample_ms = HAL_GetTick();
+    last_valid_sample_ms = PlatformTimeNowMs();
     last_seen_sample_sequence = 0u;
     last_valid_sample = (BMI088_Data_t){0};
     heater_has_valid_sample = 0u;
@@ -197,7 +196,7 @@ void IMUHeaterInit(void)
     if (pid_status != PID_OK)
     {
         // PID 参数被拒绝时保持故障和零输出，不启动加热 PWM。
-        (void)IMUHeaterLatchFault(HAL_GetTick());
+        (void)IMUHeaterLatchFault(PlatformTimeNowMs());
         IMUHeaterApplyDuty(0u);
         return;
     }
@@ -210,9 +209,9 @@ void IMUHeaterInit(void)
     }
 
     // 先写0，启热构建才启动 PWM，避免启动时沿用旧比较值。
-    __HAL_TIM_SetCompare(&htim3, TIM_CHANNEL_4, 0u);
+    (void)PlatformPwmSetCompare(PLATFORM_PWM_IMU_HEATER, 0u);
 #if MC02_HEATER_ENABLED
-    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+    (void)PlatformPwmStart(PLATFORM_PWM_IMU_HEATER);
 #endif
 
     BSP_LOG_EVENT_4(EV_MODULES_IMU_IMU_HEATER_C_02,
@@ -260,14 +259,14 @@ void IMUHeaterEndLongOperation(IMUHeater_LongOperation_e operation, uint8_t succ
     {
         // 保留这一类的失败记录；普通清故障和再次开始都不能解除它。
         heater_long_operation_failed_mask |= mask;
-        (void)IMUHeaterLatchFault(HAL_GetTick());
+        (void)IMUHeaterLatchFault(PlatformTimeNowMs());
         IMUHeaterForceOff();
         return;
     }
 
     // 成功结束也要等到序号更新、采样时间不早于此刻的数据，避免使用操作前的旧数据。
     heater_rearm_sample_sequence = last_seen_sample_sequence;
-    heater_rearm_timestamp_ms = HAL_GetTick();
+    heater_rearm_timestamp_ms = PlatformTimeNowMs();
     heater_require_new_sample = 1u;
 }
 
@@ -284,7 +283,7 @@ uint8_t IMUHeaterClearFault(void)
         heater_require_new_sample || !heater_has_valid_sample || !last_sensor_valid)
         return 0u;
 
-    uint32_t now = HAL_GetTick();
+    uint32_t now = PlatformTimeNowMs();
     // 清除要求数据仍在5ms内，温度至少-20°C且严格低于42°C；等于42°C也拒绝。
     if (!BMI088SampleIsFresh(&last_valid_sample, now) ||
         !isfinite(last_valid_sample.temperature) ||
@@ -330,7 +329,7 @@ void IMUHeaterSetTarget(float target_temp)
 /* 最多每1000ms记录一次状态，避免按温控更新频率刷满日志。 */
 static void IMUHeaterLogStatus(float temperature, uint8_t sensor_valid)
 {
-    uint32_t now = HAL_GetTick();
+    uint32_t now = PlatformTimeNowMs();
     if ((uint32_t)(now - last_log_ms) >= IMU_HEATER_LOG_PERIOD_MS)
     {
         last_log_ms = now;
@@ -360,7 +359,7 @@ void IMUHeaterUpdate(const BMI088_Data_t *sample, uint8_t force_off)
         return;
     }
 
-    uint32_t now = HAL_GetTick();
+    uint32_t now = PlatformTimeNowMs();
     uint8_t incoming_fresh = BMI088SampleIsFresh(sample, now);
     uint8_t sample_fresh = 0u;
     const BMI088_Data_t *accepted_sample = NULL;
@@ -563,8 +562,7 @@ void IMUHeaterGetStatus(IMUHeaterStatus_t *status)
         return;
 
     // 温控由任务更新；短临界区阻止读到新旧两轮字段混合。
-    const uint32_t previous = __get_PRIMASK();
-    __disable_irq();
+    const PlatformIrqState_t previous = PlatformIrqSaveAndDisable();
     status->target_temp = heater_target;
     status->temperature = last_temperature;
     status->duty = heater_duty;
@@ -575,5 +573,5 @@ void IMUHeaterGetStatus(IMUHeaterStatus_t *status)
     status->heating = (heater_duty > 0) ? 1 : 0;
     status->initialized = heater_initialized;
     status->enabled = (MC02_HEATER_ENABLED != 0) ? 1u : 0u;
-    __set_PRIMASK(previous);
+    PlatformIrqRestore(previous);
 }

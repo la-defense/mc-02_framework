@@ -52,6 +52,8 @@ class PortableIncludeContractTest(unittest.TestCase):
         # 框架的逻辑资源编号可从板级目录单独引用，不能因此放行板级适配头。
         check_portable_dependencies(valid + f"    {ROOT / 'bsp/board/platform_resources.h'}\n",
                                     ROOT, ROOT / "build", source)
+        check_portable_dependencies(valid + f"    {ROOT / 'bsp/board/platform_analog.h'}\n",
+                                    ROOT, ROOT / "build", source)
         # 上位机 V2 只引用整车话题编号声明，不放行整个 application 目录。
         check_portable_dependencies(valid + f"    {ROOT / 'application/topics/robot_topics.h'}\n",
                                     ROOT, ROOT / "build", source)
