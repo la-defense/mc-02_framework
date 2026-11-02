@@ -9,13 +9,13 @@
 #include "message_freshness.h"
 #include "daemon.h"
 #include "bsp_log.h"
-#include "robot_def.h"
+#include "vision_transport_select.h"
 #include "string.h"
 #include "platform_sync.h"
 #include <math.h>
 
 #if defined(MC02_VISION_PROTOCOL_V2)
-#include "topics/robot_topics.h"
+#include "../../application/topics/robot_topics.h"
 #include "message_center.h"
 #include "time_mapping.h"
 #include "referee_snapshot.h"

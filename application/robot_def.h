@@ -17,6 +17,7 @@
 
 #include "ins_task.h"
 #include "master_process.h"
+#include "../modules/master_machine/vision_transport_select.h"
 #include "../modules/safety/robot_state.h"
 #include "stdint.h"
 
@@ -25,12 +26,6 @@
 #define ONE_BOARD
 #endif
 
-#if defined(VISION_USE_VCP) && defined(VISION_USE_UART)
-#error "Select only one vision transport"
-#endif
-#if !defined(VISION_USE_VCP) && !defined(VISION_USE_UART)
-#define VISION_USE_VCP // 正式链路: 板载 USB CDC 虚拟串口(USB-A2C)与上位机通信
-#endif
 // #define VISION_USE_UART // 备用: 使用物理串口发送视觉数据(如换用 UART9 外接视觉板时启用)
 
 /* 机器人重要参数定义,注意根据不同机器人进行修改,浮点数需要以.0或f结尾,无符号以u结尾 */

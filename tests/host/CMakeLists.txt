@@ -110,6 +110,25 @@ add_library(mc02_remote_control_portable OBJECT ../../modules/remote/remote_cont
 target_include_directories(mc02_remote_control_portable PRIVATE ../../modules/remote ../../modules/daemon
   ../../modules/safety ../../bsp/usart ../../bsp/os ../../bsp/log)
 target_compile_options(mc02_remote_control_portable PRIVATE -Wall -Wextra -Werror)
+# SP／V2 与 USB／UART 的四种组合均只提供框架头路径。
+foreach(protocol IN ITEMS sp v2)
+  foreach(transport IN ITEMS usb uart)
+    set(target "mc02_vision_${protocol}_${transport}_portable")
+    add_library(${target} OBJECT ../../modules/master_machine/master_process.c)
+    target_include_directories(${target} PRIVATE ../../modules/master_machine ../../modules/daemon
+      ../../modules/algorithm ../../modules/message_center ../../modules/referee ../../modules/time_sync
+      ../../bsp/usart ../../bsp/usb ../../bsp/os ../../bsp/log)
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+    if(protocol STREQUAL "v2")
+      target_compile_definitions(${target} PRIVATE MC02_VISION_PROTOCOL_V2=1)
+    endif()
+    if(transport STREQUAL "uart")
+      target_compile_definitions(${target} PRIVATE VISION_USE_UART=1)
+    else()
+      target_compile_definitions(${target} PRIVATE VISION_USE_VCP=1)
+    endif()
+  endforeach()
+endforeach()
 # 仅提供框架头，验证消息中心本身不依赖 HAL／FreeRTOS 头路径。
 add_library(mc02_message_center_portable OBJECT ../../modules/message_center/message_center.c)
 target_include_directories(mc02_message_center_portable PRIVATE ../../modules/message_center ../../bsp/os)
@@ -2101,10 +2120,12 @@ endforeach()
 # 裁判测试使用真实平台转接层，底层 UART 与板级绑定仍由各测试控制。
 foreach(target IN ITEMS crc_protocol_test referee_ui_test referee_snapshot_test referee_budget_test uart_ui_integration_test)
   target_sources(${target} PRIVATE ../../bsp/board/platform_uart_stm32.c ../../bsp/board/platform_uart_tx_stm32.c)
+  mc02_apply_format_diagnostics(${target}) # 后追加的适配源码也执行格式检查。
 endforeach()
 # UART 视觉测试也复用生产逻辑端口转接层。
 foreach(target IN ITEMS uart_stream_test uart_tx_callers_test)
   target_sources(${target} PRIVATE ../../bsp/board/platform_uart_stm32.c ../../bsp/board/platform_uart_tx_stm32.c
     ../../bsp/os/platform_sync_freertos.c)
   target_include_directories(${target} PRIVATE ../../bsp/os)
+  mc02_apply_format_diagnostics(${target}) # 后追加的适配源码也执行格式检查。
 endforeach()

@@ -286,7 +286,8 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/time_sync/time_mapping.c # 不同时钟之间的时间换算。
     modules/referee/referee_UI.c # 裁判图形编码和发送状态。
     modules/referee/rm_referee.c # 裁判协议解析和逻辑串口接入。
-    modules/remote/remote_control.c) # 遥控解析与逻辑串口接入。
+    modules/remote/remote_control.c # 遥控解析与逻辑串口接入。
+    modules/master_machine/master_process.c) # 上位机协议和传输状态处理。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
     if(source IN_LIST MC02_SELECTED_SOURCES)
         list(APPEND MC02_PORTABLE_FRAMEWORK_SOURCES "${source}")
@@ -309,6 +310,8 @@ target_include_directories(mc02_portable_framework PRIVATE
     modules/algorithm # 帧校验使用的软件 CRC 接口。
     modules/referee # 裁判协议与图形接口。
     modules/remote # 遥控输入公开接口。
+    modules/master_machine # 上位机协议和传输选择接口。
+    bsp/usb # 不含芯片类型的 USB 传输接口。
     bsp/usart) # 串口发送结果的框架类型。
 
 add_executable(${MC02_OUTPUT_BASENAME}.elf ${MC02_EXECUTABLE_SOURCES}
