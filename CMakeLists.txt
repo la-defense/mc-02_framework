@@ -283,7 +283,8 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/can_comm/can_topic_bridge.c # 话题与板间传输转换。
     modules/can_comm/can_topic_link.c # 逻辑 CAN 端点和桥接。
     modules/can_comm/can_time_sync.c # 板间时间同步交互。
-    modules/time_sync/time_mapping.c) # 不同时钟之间的时间换算。
+    modules/time_sync/time_mapping.c # 不同时钟之间的时间换算。
+    modules/referee/referee_UI.c) # 裁判图形编码和发送状态。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
     if(source IN_LIST MC02_SELECTED_SOURCES)
         list(APPEND MC02_PORTABLE_FRAMEWORK_SOURCES "${source}")
@@ -303,7 +304,9 @@ target_include_directories(mc02_portable_framework PRIVATE
     bsp/can # 逻辑 CAN 端点和帧接口。
     modules/can_comm # 板间话题和同步接口。
     modules/time_sync # 时钟映射接口。
-    modules/algorithm) # 帧校验使用的软件 CRC 接口。
+    modules/algorithm # 帧校验使用的软件 CRC 接口。
+    modules/referee # 裁判协议与图形接口。
+    bsp/usart) # 串口发送结果的框架类型。
 
 add_executable(${MC02_OUTPUT_BASENAME}.elf ${MC02_EXECUTABLE_SOURCES}
     $<TARGET_OBJECTS:mc02_portable_framework> ${MC02_ASM_SOURCES} ${LINKER_SCRIPT})

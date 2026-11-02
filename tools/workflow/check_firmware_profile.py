@@ -68,6 +68,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/can_comm/can_topic_link.c",  # 逻辑 CAN 端点绑定。
     "modules/can_comm/can_time_sync.c",  # 板间对时。
     "modules/time_sync/time_mapping.c",  # 跨设备时钟映射。
+    "modules/referee/referee_UI.c",  # 裁判图形编码及发送状态。
 }
 ASSEMBLY_SOURCES = {
     "startup_stm32h723xx.s",
@@ -223,7 +224,8 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
     allowed = {source_root / "modules/daemon", source_root / "modules/message_center", source_root / "modules/safety",
                source_root / "bsp/os", source_root / "bsp/log", source_root / "bsp/can",
                source_root / "modules/can_comm", source_root / "modules/time_sync",
-               source_root / "modules/algorithm"}
+               source_root / "modules/algorithm", source_root / "modules/referee",
+               source_root / "bsp/usart"}
     arguments = entry.get("arguments") or shlex.split(entry.get("command", ""))
     for index, argument in enumerate(arguments):
         # 同时处理 -Ipath、-I path 和 -isystem path，防止换一种写法绕过检查。
@@ -267,7 +269,8 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
     allowed = (source_root / "modules/daemon", source_root / "modules/message_center", source_root / "modules/safety",
                source_root / "bsp/os", source_root / "bsp/log", source_root / "bsp/can",
                source_root / "modules/can_comm", source_root / "modules/time_sync",
-               source_root / "modules/algorithm")
+               source_root / "modules/algorithm", source_root / "modules/referee",
+               source_root / "bsp/usart")
     for line in lines[1:]:
         # 依赖可能为相对构建目录的路径，也可能为绝对路径。
         if not line.strip():

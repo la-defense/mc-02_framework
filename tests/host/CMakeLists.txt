@@ -42,7 +42,7 @@ set_property(SOURCE ../../modules/message_center/message_center.c APPEND PROPERT
 set_property(SOURCE ../../modules/daemon/daemon.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
 # 裁判 UI 使用框架中断和时间接口，不再从串口头间接获取芯片声明。
-set_property(SOURCE ../../modules/referee/referee_task.c APPEND PROPERTY
+set_property(SOURCE ../../modules/referee/referee_task.c ../../modules/referee/referee_UI.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
 # 安全管理只调用框架同步接口，由每个测试目标提供对应的时钟和中断模型。
 set_property(SOURCE ../../modules/safety/robot_safety.c APPEND PROPERTY
@@ -61,6 +61,10 @@ target_compile_options(mc02_robot_safety_chassis_portable PRIVATE -Wall -Wextra 
 add_library(mc02_referee_ui_portable OBJECT ../../modules/referee/referee_task.c)
 target_include_directories(mc02_referee_ui_portable PRIVATE ../../modules/referee ../../bsp/usart ../../bsp/os)
 target_compile_options(mc02_referee_ui_portable PRIVATE -Wall -Wextra -Werror)
+# 裁判图形编码与发送事件不依赖厂商或调度器头。
+add_library(mc02_referee_graphics_portable OBJECT ../../modules/referee/referee_UI.c)
+target_include_directories(mc02_referee_graphics_portable PRIVATE ../../modules/referee ../../bsp/usart ../../bsp/os)
+target_compile_options(mc02_referee_graphics_portable PRIVATE -Wall -Wextra -Werror)
 # 遥控源码通过框架头访问时间和中断屏蔽；其硬件串口依赖仍单独处理。
 set_property(SOURCE ../../modules/remote/remote_control.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os;${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/board")
@@ -1571,7 +1575,9 @@ set_tests_properties(historical_crc_a5_compatibility PROPERTIES TIMEOUT 10 LABEL
 add_executable(crc_protocol_test crc_protocol_test.c
   ../../bsp/usb/usb_transport.c
   ../../modules/master_machine/master_process.c ../../modules/master_machine/vision_protocol.c
-  ../../modules/referee/rm_referee.c ../../modules/referee/referee_UI.c)
+  ../../modules/referee/rm_referee.c ../../modules/referee/referee_UI.c
+  ../../bsp/os/platform_sync_freertos.c) # 复用当前测试的任务锁与时钟。
+target_include_directories(crc_protocol_test PRIVATE ../../bsp/os)
 target_include_directories(crc_protocol_test BEFORE PRIVATE crc_protocol_fakes can_comm_fakes)
 target_include_directories(crc_protocol_test PRIVATE ../../modules/master_machine ../../modules/referee
   ../../modules/message_center ../../bsp/usb)

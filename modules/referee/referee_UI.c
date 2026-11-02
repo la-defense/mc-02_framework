@@ -7,8 +7,7 @@
  * @copyright Copyright (c) 2022
  */
 #include "referee_UI.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "platform_sync.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -221,12 +220,18 @@ static UIStatus_t validate_current_id(const referee_id_t *id)
 static USARTTxEvent_t ui_last_default_event;
 static void UICompleteDefault(void *context, const USARTTxEvent_t *event)
 {
-    (void)context;taskENTER_CRITICAL();ui_last_default_event=*event;taskEXIT_CRITICAL();
+    (void)context;
+    PlatformTaskCriticalEnter();
+    ui_last_default_event = *event;
+    PlatformTaskCriticalExit();
 }
 UIStatus_t UIGetLastTxEvent(USARTTxEvent_t *output)
 {
-    if(output==NULL)return UI_ERROR_ARGUMENT;
-    taskENTER_CRITICAL();*output=ui_last_default_event;taskEXIT_CRITICAL();return UI_OK;
+    if (output == NULL) return UI_ERROR_ARGUMENT;
+    PlatformTaskCriticalEnter();
+    *output = ui_last_default_event;
+    PlatformTaskCriticalExit();
+    return UI_OK;
 }
 
 static UIStatus_t send_frame(const referee_id_t *id, uint16_t command, const uint8_t *content, size_t length, const UITxOptions_t *options)

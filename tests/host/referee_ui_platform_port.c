@@ -4,6 +4,18 @@
 #include "bsp_usart.h"
 #include "../../bsp/os/platform_irq.h"
 #include "../../bsp/os/platform_sync.h"
+#include "FreeRTOS.h"
+#include "task.h"
+
+void PlatformTaskCriticalEnter(void)
+{
+    taskENTER_CRITICAL(); // 沿用当前测试提供的任务锁模型。
+}
+
+void PlatformTaskCriticalExit(void)
+{
+    taskEXIT_CRITICAL(); // 与进入时选择的测试锁配对。
+}
 
 PlatformIrqState_t PlatformIrqSaveAndDisable(void)
 {
