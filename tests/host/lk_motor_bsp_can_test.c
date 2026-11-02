@@ -919,7 +919,12 @@ static void test_can_tx_periodic_guard_after_rejected_replacement(void)
                                     100u, &request_id) == CAN_TX_SUBMIT_ACCEPTED);
     }
 
-    TEST_CHECK(CANSubmitPeriodicPrepared(&hfdcan1, &allow_nonzero, 1u, &frame,
+    request_id = 0xA5A5A5A5u; // 之前的填充请求已使用此变量，重新设置以检查失败不改写。
+    TEST_CHECK(PlatformCanSubmitPeriodic(PLATFORM_CAN_INVALID, &allow_nonzero, 1u, &frame,
+        CAN_TX_PRIORITY_CONTROL, 100u, 1000u, scheduler_periodic_guard,
+        &request_id) == CAN_TX_SUBMIT_NOT_READY);
+    TEST_CHECK(request_id == 0xA5A5A5A5u); // 无绑定时不能改写请求编号。
+    TEST_CHECK(PlatformCanSubmitPeriodic(PLATFORM_CAN_BUS_1, &allow_nonzero, 1u, &frame,
         CAN_TX_PRIORITY_CONTROL, 100u, 1000u, scheduler_periodic_guard,
         &request_id) == CAN_TX_SUBMIT_ACCEPTED);
     const uint32_t guarded_request_id = request_id;
@@ -927,7 +932,7 @@ static void test_can_tx_periodic_guard_after_rejected_replacement(void)
     // 结果记录已满时，新零值提交失败，旧非零周期项仍留在队列中。
     frame.data = &payload_zero;
     uint32_t rejected_id = 0xA5A5A5A5u;
-    TEST_CHECK(CANSubmitPeriodicPrepared(&hfdcan1, &allow_nonzero, 1u, &frame,
+    TEST_CHECK(PlatformCanSubmitPeriodic(PLATFORM_CAN_BUS_1, &allow_nonzero, 1u, &frame,
         CAN_TX_PRIORITY_CONTROL, 100u, 1000u, scheduler_periodic_guard,
         &rejected_id) == CAN_TX_SUBMIT_FULL);
     TEST_CHECK(rejected_id == 0xA5A5A5A5u);

@@ -506,6 +506,7 @@ endforeach()
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
   ../../bsp/board/platform_can_stm32.c # 通过生产适配复用真实 CAN 队列。
+  ../../bsp/board/platform_can_periodic_stm32.c # 周期发送使用生产平台适配。
   ../../bsp/board/platform_can_rx_stm32.c # 通过生产适配注册与派发接收端点。
   ../../modules/motor/motor_pid.c
   ${MC02_HOST_DJI_SOURCES}

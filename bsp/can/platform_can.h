@@ -55,6 +55,26 @@ uint8_t PlatformCanRxIsRegistered(const PlatformCanRxPort_t *port);
  */
 void PlatformCanRxRollback(PlatformCanRxPort_t *port);
 
+/** @brief 登记周期帧，必要时在交给硬件前重新检查并修改队列副本。
+ * @param[in] bus 板级声明的逻辑总线。
+ * @param[in] source 长期有效的来源标识，也会传给 prepare。
+ * @param[in] key 同一来源内的流编号。
+ * @param[in] frame 待复制的经典 CAN 帧；提交后数据可复用。
+ * @param[in] priority 调度优先级，数值越小越优先。
+ * @param[in] deadline_ms 从提交开始的期限，单位 ms，范围 1～INT32_MAX。
+ * @param[in] period_us 周期流预算间隔，单位 us，必须大于零。
+ * @param[in] prepare 可为空；非空时在硬件接收前修改队列中的帧副本。
+ * @param[out] request_id 接受或合并时写入；失败保持原值。
+ * @return 提交结果；未绑定的总线返回 NOT_READY。
+ * @note 限普通任务调用；同一来源和键的旧目标可被替换。prepare 在短临界区运行，
+ * 不得阻塞、分配内存或再次提交 CAN；source 在排队期间必须保持有效。
+ * 提交失败时保留旧帧及其回调，硬件已接收的帧无法撤回。
+ */
+CAN_TxSubmitStatus_t PlatformCanSubmitPeriodic(PlatformCanBus_t bus, const void *source,
+    uint32_t key, const CAN_TxFrame_t *frame, CAN_TxPriority_t priority,
+    uint32_t deadline_ms, uint32_t period_us, CAN_TxPeriodicPrepareFn_t prepare,
+    uint32_t *request_id);
+
 /** @brief 提交可被高优先级请求中断的帧组。
  * @param[in] bus 板级声明的逻辑总线。
  * @param[in] source 长期有效的请求来源标识，完成前不能复用其地址。
