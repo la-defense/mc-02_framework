@@ -14,7 +14,6 @@
 #ifndef DJI_MOTOR_H
 #define DJI_MOTOR_H
 
-#include "bsp_can.h"
 #include "../../../bsp/can/platform_can.h"
 #include "controller.h"
 #include "motor_def.h"

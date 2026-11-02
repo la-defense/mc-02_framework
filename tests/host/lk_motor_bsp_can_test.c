@@ -385,6 +385,12 @@ static void test_dji_receive_registration_rollback(void)
 #if defined(LK_TEST_ALLOC_WRAP)
     const unsigned alloc_before = malloc_calls, free_before = free_calls;
 #endif
+    config.can_init_config.can_bus = PLATFORM_CAN_INVALID; // 未声明的逻辑总线不得申请电机资源。
+    TEST_CHECK(DJIMotorInit(&config) == NULL); // 缺少板级绑定时拒绝注册。
+#if defined(LK_TEST_ALLOC_WRAP)
+    TEST_CHECK(malloc_calls == alloc_before); // 绑定检查发生在首次分配之前。
+#endif
+    config.can_init_config.can_bus = PLATFORM_CAN_BUS_1; // 恢复可用总线再注入注册错误。
     filter_fail_once = 1u; // 注入底层过滤器配置失败。
     TEST_CHECK(DJIMotorInit(&config) == NULL);
 #if defined(LK_TEST_ALLOC_WRAP)

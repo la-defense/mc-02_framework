@@ -268,9 +268,9 @@ static void InvalidateFeedbackForMissingSample(DJIMotorInstance *motor)
  * @brief 根据电调/拨码开关上的ID,根据说明书的默认id分配方式计算发送ID和接收ID,
  *        并对电机进行分组以便处理多电机控制命令
  */
-static uint8_t MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *config)
+static uint8_t MotorSenderGrouping(DJIMotorInstance *motor, PlatformCanEndpoint_t *config)
 {
-    if (motor == NULL || config == NULL || config->can_handle == NULL ||
+    if (motor == NULL || config == NULL ||
         config->tx_id == 0u || config->tx_id > 8u)
         return 0u;
     uint8_t motor_id = config->tx_id - 1; // 下标从零开始,先减一方便赋值
@@ -278,29 +278,13 @@ static uint8_t MotorSenderGrouping(DJIMotorInstance *motor, CAN_Init_Config_s *c
     uint8_t motor_grouping;
 
     uint8_t grouping_offset;
-    //通过CAN计算分组偏移量
-    if(config->can_handle == &hcan1)
+    // 逻辑编号决定分组偏移；资源绑定在申请电机之前单独检查。
+    switch (config->can_bus)
     {
-        grouping_offset=0;
-    }
-    else if(config->can_handle == &hcan2)
-    {
-        grouping_offset=3;
-    }
-    else
-    {
-#ifdef FDCAN
-        if (config->can_handle == &hfdcan1)
-            grouping_offset = 0u;
-        else if (config->can_handle == &hfdcan2)
-            grouping_offset = 3u;
-        else if (config->can_handle == &hfdcan3)
-            grouping_offset = 6u;
-        else
-            return 0u;
-#else
-        return 0u;
-#endif
+    case PLATFORM_CAN_BUS_1: grouping_offset = 0u; break; // 总线 1 使用第 0～2 组。
+    case PLATFORM_CAN_BUS_2: grouping_offset = 3u; break; // 总线 2 使用第 3～5 组。
+    case PLATFORM_CAN_BUS_3: grouping_offset = 6u; break; // 总线 3 使用第 6～8 组。
+    default: return 0u; // 其他编号没有发送组。
     }
 
     switch (motor->motor_type)
@@ -509,8 +493,8 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
     if (config == NULL || idx >= DJI_MOTOR_CNT || !FilterConfigValid(filter_config) ||
         !DjiConfigValid(config))
         return NULL;
-    CAN_Init_Config_s can_config; // 保存板级解析后的注册配置，不改写车型参数。
-    if (!BoardCanPrepareEndpoint(&config->can_init_config, &can_config)) return NULL; // 总线未绑定时不申请资源。
+    PlatformCanEndpoint_t can_config = config->can_init_config; // 复制配置，分组不改写车型参数。
+    if (!PlatformCanBusIsBound(can_config.can_bus)) return NULL; // 总线未绑定时不申请资源。
     DJIMotorInstance *instance = (DJIMotorInstance *)malloc(sizeof(DJIMotorInstance));
     if (instance == NULL)
         return NULL;

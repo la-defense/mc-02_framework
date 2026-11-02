@@ -8,6 +8,7 @@
  */
 #include "bsp_dwt.h"
 #include "dji_motor.h"
+#include "bsp_can.h" // 测试替身直接构造底层 CAN 接收实例。
 #include "motor_feedback_test_support.h"
 #include "test_check.h"
 #if defined(CHASSIS_BOARD)

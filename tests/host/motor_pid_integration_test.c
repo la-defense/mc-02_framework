@@ -3,6 +3,7 @@
  * CAN 和时间由替身提供；没有连接或驱动真实电机。
  */
 #include "dji_motor.h"
+#include "bsp_can.h" // 测试替身直接构造底层 CAN 接收实例。
 #include "bsp_dwt.h"
 #include "test_check.h"
 #include <math.h>
