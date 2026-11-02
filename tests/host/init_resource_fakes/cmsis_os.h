@@ -18,6 +18,7 @@ typedef struct
     uint32_t stack_size;
 } osThreadDef_t;
 #define osPriorityBelowNormal 1u
+#define osPriorityLow 0u
 #define osThreadDef(name, thread, priority, instances, stacksz) \
     const osThreadDef_t os_thread_def_##name = {#name, thread, priority, instances, stacksz}
 #define osThread(name) (&os_thread_def_##name)

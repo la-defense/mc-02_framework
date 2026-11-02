@@ -58,6 +58,11 @@ class PortableIncludeContractTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             check_portable_dependencies(valid + f"    {ROOT / 'application/robot_def.h'}\n",
                                         ROOT, ROOT / "build", source)
+        # 任务创建只允许依赖模块选择和初始化诊断的公开声明。
+        check_portable_dependencies(valid + f"    {ROOT / 'application/config/vehicle_selection.h'}\n"
+                                    f"    {ROOT / 'application/config/module_plan.h'}\n"
+                                    f"    {ROOT / 'application/init_diagnostic.h'}\n",
+                                    ROOT, ROOT / "build", source)
         # 姿态任务可使用样本类型及短时探针声明，寄存器头仍不可带入。
         check_portable_dependencies(valid + f"    {ROOT / 'modules/BMI088/bmi088_data.h'}\n"
                                     f"    {ROOT / 'bsp/dwt/platform_probe.h'}\n"

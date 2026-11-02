@@ -40,6 +40,12 @@ PlatformUartInstance *PlatformUartRegister(PlatformUartPort_t port, const Platfo
  */
 uint8_t PlatformUartRestartReceive(PlatformUartInstance *instance);
 
+/** @brief 启动阶段创建 UART 发送服务任务。
+ * @return 1 表示已创建或之前已创建，0 表示创建失败。
+ * @note 与原有发送服务共用实例，不能在中断中调用。
+ */
+uint8_t PlatformUartStartTxTask(void);
+
 /** @brief 复制提交有界发送请求。
  * @param[in] instance 已注册实例。
  * @param[in] request 发送请求，成功提交后源数据可复用。

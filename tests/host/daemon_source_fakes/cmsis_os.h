@@ -12,6 +12,7 @@ typedef void *osThreadId;
 typedef int osPriority;
 typedef struct {char *name; os_pthread pthread; osPriority tpriority; uint32_t instances; uint32_t stacksize;} osThreadDef_t;
 #define osPriorityBelowNormal 1u
+#define osPriorityLow 0u
 #define osPriorityNormal 2u
 #define osPriorityAboveNormal 3u
 #define osThreadDef(name, thread, priority, instances, stacksz) \

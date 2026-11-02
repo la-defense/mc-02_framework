@@ -288,7 +288,8 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/referee/rm_referee.c # 裁判协议解析和逻辑串口接入。
     modules/remote/remote_control.c # 遥控解析与逻辑串口接入。
     modules/master_machine/master_process.c # 上位机协议和传输状态处理。
-    modules/imu/ins_task.c) # 姿态采样、解算和安全状态。
+    modules/imu/ins_task.c # 姿态采样、解算和安全状态。
+    application/robot_task_create.c) # 已选任务的创建与失败处理。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
     if(source IN_LIST MC02_SELECTED_SOURCES)
         list(APPEND MC02_PORTABLE_FRAMEWORK_SOURCES "${source}")

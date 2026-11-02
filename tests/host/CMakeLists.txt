@@ -15,6 +15,17 @@ if(UNIX)
 endif()
 include(../../cmake/mc02_dsp.cmake)
 mc02_add_dsp(mc02_dsp_host TRUE)
+# 使用可控的任务后端验证真实启动计划，失败不启动真实线程。
+add_executable(robot_task_create_test robot_task_create_test.c ../../application/robot_task_create.c)
+target_include_directories(robot_task_create_test PRIVATE task_creation_fakes . ../../application
+  ../../modules/daemon ../../bsp/os ../../bsp/usart ../../bsp/log)
+target_compile_definitions(robot_task_create_test PRIVATE MC02_CONFIG_GENERATED=1 MC02_PROFILE_BENCH_SAFE=1)
+target_compile_options(robot_task_create_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario IN ITEMS normal core-ins core-motor core-daemon core-robot aux-ui core-ui disabled-ui
+    disabled-lcd aux-lcd core-lcd uart event no-event log core-log)
+  add_test(NAME production_task_creation_${scenario} COMMAND robot_task_create_test ${scenario})
+  set_tests_properties(production_task_creation_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
 # 每个消息中心测试都编译自己的平台适配器，使其使用该测试配置的锁和时钟替身。
 set(MC02_HOST_MESSAGE_CENTER_SOURCES
   ../../modules/message_center/message_center.c # 实际话题实现。

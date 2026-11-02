@@ -10,6 +10,7 @@
 #include "controller.h"
 #include "motor_def.h"
 #include "daemon.h"
+#include "ht_motor_task.h"
 
 #define HT_MOTOR_CNT 4
 #define CURRENT_SMOOTH_COEF 0.9f
@@ -99,11 +100,6 @@ Motor_Feedback_Status_e HTMotorGetFeedbackSnapshot(const HTMotorInstance *motor,
 * @note 数值须有限；否则控制任务本周期发送零力矩并清除 PID 历史。real_current 由协议力矩区间还原，不能按变量名直接当作 A。
  */
 void HTMotorSetRef(HTMotorInstance *motor, float ref);
-
-/** @brief 为每个已注册 HT 电机创建约每 1 ms 运行的任务，无电机时返回。
-* @note 注册完成后只调用一次；不检查任务创建失败，重复调用会新增任务。
- */
-void HTMotorControlInit();
 
 /** @brief 只设置停止标记，任务下一轮发送零力矩，并继续保持通信。
 * @param[in,out] motor 有效实例，不能为 NULL。

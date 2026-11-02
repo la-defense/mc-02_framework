@@ -73,6 +73,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/remote/remote_control.c",  # 遥控输入解析及逻辑串口接入。
     "modules/master_machine/master_process.c",  # 上位机业务协议及传输状态。
     "modules/imu/ins_task.c",  # IMU 采样与姿态业务。
+    "application/robot_task_create.c",  # 按车型配置创建任务。
 }
 ASSEMBLY_SOURCES = {
     "startup_stm32h723xx.s",
@@ -290,6 +291,12 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
         public_files = {source_root / "bsp/board/platform_resources.h",
                         source_root / "application/topics/robot_topics.h",
                         source_root / "application/config/build_selection.h",
+                        source_root / "application/config/vehicle_selection.h",
+                        source_root / "application/config/module_plan.h",
+                        source_root / "application/robot_task_create.h",
+                        source_root / "application/init_diagnostic.h",
+                        source_root / "modules/motor/HTmotor/ht_motor_task.h",
+                        source_root / source,
                         source_root / "modules/general_def.h",
                         source_root / "modules/BMI088/bmi088_data.h",
                         source_root / "bsp/dwt/platform_probe.h",

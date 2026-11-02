@@ -80,6 +80,7 @@ set(MC02_BSP_C_SOURCES
     bsp/board/board_uart_stm32.c # MC-02 逻辑 UART 与物理串口绑定。
     bsp/board/platform_uart_stm32.c # 逻辑 UART 接收注册与重启适配。
     bsp/board/platform_uart_tx_stm32.c # 逻辑 UART 发送队列适配。
+    bsp/board/platform_uart_task_stm32.c # UART 发送服务任务创建适配。
     bsp/observation/bsp_observation.c
     bsp/bsp_init.c
     bsp/bsp_tools.c
@@ -159,6 +160,7 @@ if(MC02_IMU_BACKEND STREQUAL "fusion")
 endif()
 
 set(MC02_APPLICATION_COMMON_C_SOURCES
+    application/robot_task_create.c # 使用框架接口创建现有整车任务。
     application/init_diagnostic.c
     application/vehicle_health.c
     application/vehicle_health_diag.c

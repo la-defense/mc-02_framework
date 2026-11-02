@@ -1,15 +1,14 @@
-﻿/** @file robot_task.h
+/** @file robot_task.h
 * @brief 任务创建及常驻任务实现，仅由 robot.c 包含；重复包含到其他编译单元会重复定义。
  */
 /* 注意该文件应只用于任务初始化,只能被robot.c包含*/
 #pragma once
 
-#include "FreeRTOS.h"
-#include "task.h"
 #include "main.h"
-#include "cmsis_os.h"
+#include "platform_os.h"
 
 #include "robot.h"
+#include "robot_task_create.h"
 #include "config/build_selection.h"
 #if defined(MC02_CONFIG_GENERATED)
 #include "config/vehicle_selection.h"
@@ -56,12 +55,6 @@ volatile DWT_Probe_t r25_task_daemon = {0};
 volatile DWT_Probe_t r25_task_robot = {0};
 #endif
 
-osThreadId insTaskHandle;
-osThreadId robotTaskHandle;
-osThreadId motorTaskHandle;
-osThreadId daemonTaskHandle;
-osThreadId uiTaskHandle;
-osThreadId lcdTaskHandle;
 
 /** @brief 初始化 INS 后约每 1 ms 处理采样和姿态；失败时只维持诊断循环。
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
@@ -85,176 +78,6 @@ void StartROBOTTASK(void const *argument);
  */
 void StartUITASK(void const *argument);
 #endif
-
-/** @brief 创建INS、通信派发、电机、UART发送、Daemon、整车、LCD及当前配置所需UI任务。
-* @return 1 表示核心任务创建成功；辅助任务失败已记录降级，核心任务失败返回0；不删除已创建任务。
-* @note 由 RobotInit() 在调度器启动前调用一次。
- */
-uint8_t OSTaskInit(void)
-{
-    osThreadDef(instask, StartINSTASK, osPriorityAboveNormal, 0, 1024);
-    insTaskHandle = osThreadCreate(osThread(instask), NULL); // 由于是阻塞读取传感器,为姿态解算设置较高优先级,确保以1khz的频率执行
-    // // 后续修改为读取传感器数据准备好的中断处理,
-
-    // 裸板也要消费视觉等通信输入；只在机器人配置中运行电机控制。
-#if MC02_FEATURE_COMM_DISPATCH
-    osThreadDef(motortask, StartMOTORTASK, osPriorityNormal, 0, 512);
-    motorTaskHandle = osThreadCreate(osThread(motortask), NULL);
-#endif
-
-    uint8_t uart_tx_created = USARTTxTaskInit();
-    uint8_t all_created = 1u;
-
-    /* 日志配置为辅助时降级继续；若车型核心依赖日志，失败必须锁存启动失败。 */
-    const BSPLogStatus_t log_status = BSPLogTaskInit();
-#if defined(MC02_CONFIG_GENERATED)
-    if (log_status != BSP_LOG_STATUS_OK && log_status != BSP_LOG_STATUS_QUEUED)
-    {
-        if (RobotBuildMarkFailure(ROBOT_MODULE_LOG) != 0u)
-        {
-            InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                        INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LOG);
-            all_created = 0u;
-        }
-        else
-            InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                         INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LOG);
-    }
-#else
-    (void)log_status;
-#endif
-
-    // 只有登记了独立事件来源时才创建工作线程；来源事件不能在监控任务里直接恢复模块。
-    const DaemonStatus_t event_task_status = DaemonEventTaskInit();
-    const uint8_t event_task_created = (uint8_t)(event_task_status == DAEMON_OK ||
-                                                   event_task_status == DAEMON_NO_TASK_REQUIRED);
-
-    // Daemon 内有状态检查与日志，需同时容纳日志行数组和各层调用。
-    osThreadDef(daemontask, StartDAEMONTASK, osPriorityNormal, 0, 512);
-    daemonTaskHandle = osThreadCreate(osThread(daemontask), NULL);
-
-    osThreadDef(robottask, StartROBOTTASK, osPriorityNormal, 0, 1024);
-    robotTaskHandle = osThreadCreate(osThread(robottask), NULL);
-
-#if MC02_FEATURE_UI
-#if defined(MC02_CONFIG_GENERATED)
-    // 依赖校验可能跳过未满足前置条件的辅助UI模块，此时不创建对应任务。
-    if (RobotBuildModuleStarted(ROBOT_MODULE_UI))
-    {
-#endif
-    osThreadDef(uitask, StartUITASK, osPriorityNormal, 0, 512);
-    uiTaskHandle = osThreadCreate(osThread(uitask), NULL);
-#if defined(MC02_CONFIG_GENERATED)
-    }
-#endif
-#endif
-
-#if MC02_FEATURE_LCD
-#if defined(MC02_CONFIG_GENERATED)
-    // 依赖校验跳过的可选LCD模块不创建任务。
-    if (RobotBuildModuleStarted(ROBOT_MODULE_LCD))
-    {
-#endif
-    osThreadDef(lcdtask, StartLCDTASK, osPriorityLow, 0, 1024);
-    lcdTaskHandle = osThreadCreate(osThread(lcdtask), NULL);
-#if defined(MC02_CONFIG_GENERATED)
-    }
-#endif
-#endif
-    if (!event_task_created)
-    {
-        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_DAEMON);
-        all_created = 0u;
-    }
-    if (!uart_tx_created) {
-        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-            INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UART_TX);
-        all_created = 0u;
-    }
-    if (insTaskHandle == NULL)
-    {
-        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_INS);
-        all_created = 0u;
-    }
-#if MC02_FEATURE_COMM_DISPATCH
-    if (motorTaskHandle == NULL)
-    {
-        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_MOTOR);
-        all_created = 0u;
-    }
-#endif
-    if (daemonTaskHandle == NULL)
-    {
-        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_DAEMON);
-        all_created = 0u;
-    }
-    if (robotTaskHandle == NULL)
-    {
-        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_ROBOT);
-        all_created = 0u;
-    }
-#if MC02_FEATURE_UI
-#if defined(MC02_CONFIG_GENERATED)
-    if (RobotBuildModuleStarted(ROBOT_MODULE_UI) && uiTaskHandle == NULL)
-#else
-    if (uiTaskHandle == NULL)
-#endif
-    {
-#if defined(MC02_CONFIG_GENERATED)
-        if (RobotBuildMarkFailure(ROBOT_MODULE_UI) != 0u)
-        {
-            InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                        INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
-            all_created = 0u;
-        }
-        else
-            InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                         INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
-#else
-        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                    INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
-        all_created = 0u;
-#endif
-    }
-#endif
-#if MC02_FEATURE_LCD
-#if defined(MC02_CONFIG_GENERATED)
-    if (RobotBuildModuleStarted(ROBOT_MODULE_LCD) && lcdTaskHandle == NULL)
-#else
-    if (lcdTaskHandle == NULL)
-#endif
-    {
-#if defined(MC02_CONFIG_GENERATED)
-        if (RobotBuildMarkFailure(ROBOT_MODULE_LCD) != 0u)
-        {
-            InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                        INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
-            all_created = 0u;
-        }
-        else
-            InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                                         INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
-#else
-        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-            INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
-        all_created = 0u;
-#endif
-    }
-#endif
-
-    if (all_created)
-    {
-#if !defined(MC02_PROFILE_BENCH_SAFE) && MC02_SELECTED_DRIVER_HT
-        HTMotorControlInit(); // 没有注册HT电机则不会执行
-#endif
-    }
-    return all_created;
-}
 
 __attribute__((noreturn)) void StartINSTASK(void const *argument)
 {
@@ -290,7 +113,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         {
             InitDiagnosticHeartbeat();
             TaskMonitorFeed(TASK_MONITOR_INS);
-            osDelay(100u);
+            PlatformTaskDelayMs(100u);
         }
     }
     InitDiagnosticMarkReady();
@@ -300,7 +123,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         // 1kHz
         if (TaskMonitorBeginWork(TASK_MONITOR_INS) != TASK_MONITOR_RESULT_OK)
         {
-            osDelay(1u);
+            PlatformTaskDelayMs(1u);
             continue;
         }
         /* 用轻量周期计数代替 DWT_GetTimeline_ms(): 后者内部有 64bit 除法, 1kHz 下也不便宜 */
@@ -318,7 +141,7 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         // 视觉上行数据由 INS_Task 内的 VisionUpdateTx() 填充,
         // VisionSend() 统一在 RobotCMDTask(200Hz) 中调用, 避免多任务并发 DMA 发送
         (void)TaskMonitorSetWaiting(TASK_MONITOR_INS, TASK_MONITOR_WAIT_PERIOD);
-        osDelay(1);
+        PlatformTaskDelayMs(1);
     }
 }
 
@@ -330,7 +153,7 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
     {
         if (TaskMonitorBeginWork(TASK_MONITOR_MOTOR) != TASK_MONITOR_RESULT_OK)
         {
-            osDelay(1u);
+            PlatformTaskDelayMs(1u);
             continue;
         }
         uint32_t motor_probe = DWT_ProbeStart();
@@ -343,7 +166,7 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
         }
         (void)TaskMonitorCompleteWork(TASK_MONITOR_MOTOR);
         (void)TaskMonitorSetWaiting(TASK_MONITOR_MOTOR, TASK_MONITOR_WAIT_PERIOD);
-        osDelay(1);
+        PlatformTaskDelayMs(1);
     }
 }
 #endif
@@ -373,7 +196,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         // 100Hz
         if (TaskMonitorBeginWork(TASK_MONITOR_DAEMON) != TASK_MONITOR_RESULT_OK)
         {
-            osDelay(10u);
+            PlatformTaskDelayMs(10u);
             continue;
         }
         uint32_t daemon_probe = DWT_ProbeStart();
@@ -417,7 +240,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         }
         (void)TaskMonitorCompleteWork(TASK_MONITOR_DAEMON);
         (void)TaskMonitorSetWaiting(TASK_MONITOR_DAEMON, TASK_MONITOR_WAIT_PERIOD);
-        osDelay(10);
+        PlatformTaskDelayMs(10);
     }
 }
 
@@ -429,7 +252,7 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
     {
         if (TaskMonitorBeginWork(TASK_MONITOR_ROBOT) != TASK_MONITOR_RESULT_OK)
         {
-            osDelay(5u);
+            PlatformTaskDelayMs(5u);
             continue;
         }
         uint32_t robot_probe = DWT_ProbeStart();
@@ -442,7 +265,7 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
         }
         (void)TaskMonitorCompleteWork(TASK_MONITOR_ROBOT);
         (void)TaskMonitorSetWaiting(TASK_MONITOR_ROBOT, TASK_MONITOR_WAIT_PERIOD);
-        osDelay(5);
+        PlatformTaskDelayMs(5);
     }
 }
 
@@ -455,7 +278,7 @@ __attribute__((noreturn)) void StartUITASK(void const *argument)
     for (;;)
     {
         (void)UITask();
-        osDelay(1u);
+        PlatformTaskDelayMs(1u);
     }
 }
 #endif

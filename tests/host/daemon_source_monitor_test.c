@@ -53,6 +53,14 @@ static void ScenarioPlatformTaskValidation(void)
     TEST_CHECK(last_task_definition.tpriority == osPriorityNormal && last_task_definition.stacksize == 128u);
     config.priority = PLATFORM_TASK_ABOVE_NORMAL; // 检查较高优先级不会被当作普通任务。
     TEST_CHECK(PlatformTaskCreate(&config) == 1u && last_task_definition.tpriority == osPriorityAboveNormal);
+    config.priority = PLATFORM_TASK_LOW; // LCD 优先级应保持低于普通任务。
+    PlatformTaskHandle_t handle = NULL;
+    TEST_CHECK(PlatformTaskCreateTracked(&config, &handle) == 1u && handle != NULL);
+    TEST_CHECK(last_task_definition.tpriority == osPriorityLow);
+    PlatformTaskHandle_t previous = handle;
+    task_create_failures = 1u; // 模拟后端拒绝，不能覆盖之前保存的句柄。
+    TEST_CHECK(PlatformTaskCreateTracked(&config, &handle) == 0u && handle == previous);
+    TEST_CHECK(PlatformTaskCreateTracked(&config, NULL) == 0u);
     PlatformTaskDelayMs(7u); // 等待值原样传给后端，避免默默改变单位。
     TEST_CHECK(atomic_load_explicit(&test_tick, memory_order_relaxed) == 7u);
 }
