@@ -6,9 +6,14 @@
 #include <math.h>
 #include <stddef.h>
 
+uint8_t PlatformAdcIsBound(PlatformAdcChannel_t channel)
+{
+    return (uint8_t)(channel == PLATFORM_ADC_VCC_IN);
+}
+
 uint8_t PlatformAdcReadVolts(PlatformAdcChannel_t channel, float *volts)
 {
-    if (channel != PLATFORM_ADC_VCC_IN || volts == NULL) return 0u; // 非法参数不能改写输出。
+    if (!PlatformAdcIsBound(channel) || volts == NULL) return 0u; // 非法参数不能改写输出。
     BSP_ADC_Sample_t sample;
     if (BSP_ADCGetSample(&sample) != BSP_ADC_STATUS_VALID || !sample.voltage_config_valid ||
         !isfinite(sample.vcc_in_volts))

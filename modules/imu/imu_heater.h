@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include "bmi088_data.h"
+#include "../../bsp/board/platform_resources.h"
 
 #ifndef MC02_HEATER_ENABLED
 // 构建未设置时保持禁热；非0才允许启动 PWM 并输出加热比较值。
@@ -39,9 +40,18 @@ typedef enum
     IMU_HEATER_LONG_OPERATION_COUNT            /* 类型个数，不能作为操作类型传入 */
 } IMUHeater_LongOperation_e;
 
+/** @brief 启动阶段选择温控使用的 PWM 和供电电压输入。
+ * @param[in] pwm 车型指定的逻辑 PWM。
+ * @param[in] supply 车型指定的逻辑 ADC 电压输入。
+ * @return 1 表示两项均已绑定，0 表示未绑定或温控已初始化。
+ * @note 只保存编号，不操作硬件；失败保留此前选择。
+ */
+uint8_t IMUHeaterConfigure(PlatformPwmChannel_t pwm, PlatformAdcChannel_t supply);
+
 /**
  * @brief 首次初始化温控，目标设为40°C，输出置0；需先配置 TIM3。
- * @note PID 参数失败时记录故障且不启动 PWM；禁热也不启动 PWM。
+ * @note 须先调用 IMUHeaterConfigure；未配置或 PID 参数失败时记录故障且不启动 PWM。
+ *       禁热也不启动 PWM。
  *       启热且 PID 初始化成功时调用 HAL 启动 CH4，本接口不报告 HAL 启动结果。
  *       重复调用只执行 ForceOff，不重设目标、不清除故障或耗时操作记录。
  */

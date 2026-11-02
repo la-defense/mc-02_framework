@@ -131,6 +131,8 @@ const Robot_Config_s *SentinelConfigInit(void)
         .alarm_config = &sentinel_alarm_config,
         .referee_ui_config = &sentinel_referee_ui_config,
         .imu_sensor = PLATFORM_IMU_BOARD_1, // 当前使用 MC-02 板载 IMU。
+        .imu_heater_pwm = PLATFORM_PWM_IMU_HEATER, // 使用板载 IMU 加热输出。
+        .imu_heater_supply = PLATFORM_ADC_VCC_IN, // 用输入电压限制加热功率。
         .referee_uart = PLATFORM_UART_1, // 当前裁判系统接在板级声明的串口 1。
         .vision_uart = PLATFORM_UART_9, // 使用 UART 通信时沿用板级声明的串口 9。
         .remote_uart = PLATFORM_UART_5, // 当前遥控器接在板级声明的串口 5。

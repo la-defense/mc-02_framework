@@ -51,6 +51,7 @@ int HAL_TIM_PWM_Start(TIM_HandleTypeDef *timer, uint32_t channel)
 int main(void)
 {
     now_ms = 100u;
+    if (!IMUHeaterConfigure(PLATFORM_PWM_IMU_HEATER, PLATFORM_ADC_VCC_IN)) fail("heater resource binding failed");
     IMUHeaterInit();
     BMI088_Data_t sample = {
         .temperature = 20.0f,

@@ -6,6 +6,18 @@
 #include "platform_resources.h"
 #include <stdint.h>
 
+/** @brief 查询逻辑 PWM 是否存在板级绑定。
+ * @param[in] channel 逻辑通道。
+ * @return 1 表示已绑定，0 表示未绑定；不启动输出。
+ */
+uint8_t PlatformPwmIsBound(PlatformPwmChannel_t channel);
+
+/** @brief 查询逻辑模拟输入是否存在板级绑定。
+ * @param[in] channel 逻辑模拟输入。
+ * @return 1 表示已绑定，0 表示未绑定；不表示采样有效。
+ */
+uint8_t PlatformAdcIsBound(PlatformAdcChannel_t channel);
+
 /** @brief 设置已绑定 PWM 通道的原始比较值。
  * @param[in] channel 逻辑通道。
  * @param[in] compare 计数器比较值；有效范围由使用模块和板级周期共同确定。

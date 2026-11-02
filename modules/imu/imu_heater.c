@@ -45,6 +45,9 @@ static float heater_target = IMU_HEATER_TARGET_DEFAULT;
 static uint16_t heater_duty = 0;
 volatile uint32_t imu_heater_duty_diag = 0u;
 static uint8_t heater_initialized = 0;
+static uint8_t heater_configured = 0u;
+static PlatformPwmChannel_t heater_pwm = PLATFORM_PWM_INVALID; // 启动时由车型选择。
+static PlatformAdcChannel_t heater_supply = PLATFORM_ADC_INVALID; // 启动时由车型选择。
 static uint8_t heater_fault = 0;
 static uint8_t heater_overtemp = 0;
 static uint8_t heater_timeout_fault = 0;
@@ -71,6 +74,16 @@ static uint8_t heater_last_force_off_request = 0u;
 static uint8_t heater_fault_epoch_valid = 0u;
 static uint32_t heater_fault_sample_sequence = 0u;
 static uint32_t heater_fault_timestamp_ms = 0u;
+
+uint8_t IMUHeaterConfigure(PlatformPwmChannel_t pwm, PlatformAdcChannel_t supply)
+{
+    if (heater_initialized || !PlatformPwmIsBound(pwm) || !PlatformAdcIsBound(supply))
+        return 0u; // 已初始化或资源未绑定时保留旧选择。
+    heater_pwm = pwm; // 两项都通过后才更新逻辑 PWM。
+    heater_supply = supply; // 同步保存对应电压输入。
+    heater_configured = 1u; // 允许后续初始化温控。
+    return 1u;
+}
 
 /* 候选序号非0，且差值在1～0x7FFFFFFF时视为更新，可处理序号超过最大值后从1继续。 */
 static uint8_t IMUHeaterSequenceIsNewer(uint32_t candidate, uint32_t previous)
@@ -122,7 +135,7 @@ static void IMUHeaterApplyDuty(uint16_t duty)
     heater_duty = duty;
     imu_heater_duty_diag = duty;
     if (heater_initialized)
-        (void)PlatformPwmSetCompare(PLATFORM_PWM_IMU_HEATER, heater_duty);
+        (void)PlatformPwmSetCompare(heater_pwm, heater_duty);
 }
 
 /* 读取 ADC 层确认有效且未超过20ms的电压；失败时将非空输出置0，单位 V。 */
@@ -132,7 +145,7 @@ static uint8_t IMUHeaterReadFreshSupply(float *vcc_in)
         return 0u;
 
     float voltage;
-    if (!PlatformAdcReadVolts(PLATFORM_ADC_VCC_IN, &voltage) || !isfinite(voltage))
+    if (!PlatformAdcReadVolts(heater_supply, &voltage) || !isfinite(voltage))
     {
         // 采样失败、换算设置不可用或出现 NaN/Inf 时，不能沿用旧电压计算允许功率。
         *vcc_in = 0.0f;
@@ -149,6 +162,13 @@ void IMUHeaterInit(void)
     {
         // 重复初始化保留已有故障和操作记录，只关闭当前输出。
         IMUHeaterForceOff();
+        return;
+    }
+    if (!heater_configured)
+    {
+        heater_duty = 0u; // 缺少资源选择时保持软件输出为零。
+        imu_heater_duty_diag = 0u; // 诊断同步显示关闭。
+        heater_fault = 1u; // 显示初始化失败，不触碰未绑定通道。
         return;
     }
 
@@ -209,9 +229,9 @@ void IMUHeaterInit(void)
     }
 
     // 先写0，启热构建才启动 PWM，避免启动时沿用旧比较值。
-    (void)PlatformPwmSetCompare(PLATFORM_PWM_IMU_HEATER, 0u);
+    (void)PlatformPwmSetCompare(heater_pwm, 0u);
 #if MC02_HEATER_ENABLED
-    (void)PlatformPwmStart(PLATFORM_PWM_IMU_HEATER);
+    (void)PlatformPwmStart(heater_pwm);
 #endif
 
     BSP_LOG_EVENT_4(EV_MODULES_IMU_IMU_HEATER_C_02,

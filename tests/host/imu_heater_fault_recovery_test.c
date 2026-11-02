@@ -83,6 +83,25 @@ static int test_analog_resources(void)
     return EXIT_SUCCESS;
 }
 
+static int test_unconfigured_and_invalid(void)
+{
+    ASSERT_TRUE(!IMUHeaterConfigure(PLATFORM_PWM_INVALID, PLATFORM_ADC_VCC_IN), "missing PWM must fail");
+    ASSERT_TRUE(!IMUHeaterConfigure(PLATFORM_PWM_IMU_HEATER, PLATFORM_ADC_INVALID), "missing ADC must fail");
+    IMUHeaterInit(); // 未选择资源时不允许启动 PWM。
+    IMUHeaterStatus_t status;
+    IMUHeaterGetStatus(&status);
+    ASSERT_TRUE(status.fault && !status.initialized && status.duty == 0u && pwm_starts == 0u,
+                "unconfigured heater must stay off and report failure");
+    ASSERT_TRUE(IMUHeaterConfigure(PLATFORM_PWM_IMU_HEATER, PLATFORM_ADC_VCC_IN), "valid resources must bind");
+    ASSERT_TRUE(!IMUHeaterConfigure(PLATFORM_PWM_INVALID, PLATFORM_ADC_VCC_IN), "invalid replacement must fail");
+    IMUHeaterInit(); // 失败的替换不能破坏已经接受的资源配置。
+    IMUHeaterGetStatus(&status);
+    ASSERT_TRUE(status.initialized && !status.fault && status.duty == 0u, "valid binding must initialize safely");
+    ASSERT_TRUE(!IMUHeaterConfigure(PLATFORM_PWM_IMU_HEATER, PLATFORM_ADC_VCC_IN),
+                "initialized heater must reject reconfiguration");
+    return EXIT_SUCCESS;
+}
+
 static void setup(uint32_t start_ms)
 {
     now_ms = start_ms;
@@ -94,6 +113,7 @@ static void setup(uint32_t start_ms)
         .voltage_config_valid = 1u,
     };
     adc_status = BSP_ADC_STATUS_VALID;
+    if (!IMUHeaterConfigure(PLATFORM_PWM_IMU_HEATER, PLATFORM_ADC_VCC_IN)) abort();
     IMUHeaterInit();
 }
 
@@ -485,6 +505,7 @@ static int test_clear_requires_initialized_fresh_state(void)
 static int run(const char *name)
 {
     if (strcmp(name, "analog-resources") == 0) return test_analog_resources();
+    if (strcmp(name, "unconfigured") == 0) return test_unconfigured_and_invalid();
     if (strcmp(name, "pid-timing") == 0) return test_pid_timing();
     if (strcmp(name, "recovery") == 0) return test_overtemp_and_manual_recovery();
     if (strcmp(name, "invalid-temperature") == 0) return test_clear_rejects_invalid_temperature();

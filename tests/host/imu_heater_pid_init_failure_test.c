@@ -32,6 +32,7 @@ PID_Status_e __wrap_PIDInit(PIDInstance *pid, const PID_Init_Config_s *config)
 /** @brief 初始化失败后，正常温度也不能产生加热输出。 */
 int main(void)
 {
+    TEST_CHECK(IMUHeaterConfigure(PLATFORM_PWM_IMU_HEATER, PLATFORM_ADC_VCC_IN));
     IMUHeaterInit();
     BMI088_Data_t sample = {.sequence = 1u, .timestamp_ms = 100u, .valid = 1u, .temperature = 20.0f};
     IMUHeaterUpdate(&sample, 0u);

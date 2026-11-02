@@ -1485,7 +1485,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
     endif()
     target_link_libraries(${heater_recovery_target} PRIVATE m)
     foreach(recovery_scenario IN ITEMS
-        analog-resources pid-timing recovery invalid-temperature imu-age-5 imu-age-6 sequence adc-invalid adc-age-21
+        analog-resources unconfigured pid-timing recovery invalid-temperature imu-age-5 imu-age-6 sequence adc-invalid adc-age-21
         sensor-timeout sensor-timeout-wrap heat-timeout heat-timeout-wrap heat-timeout-at-target
         heat-timeout-restarts-after-zero force-off-reinit long-operation post-operation-sample
         initialized-state)
