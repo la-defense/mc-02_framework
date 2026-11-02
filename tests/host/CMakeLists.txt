@@ -906,12 +906,13 @@ target_compile_options(mc02_ins_portable PRIVATE -Wall -Wextra -Werror)
 add_executable(ins_filter_test ins_filter_test.c ../../modules/imu/ins_task.c
   ../../bsp/os/platform_sync_freertos.c # 使用测试的任务锁和模拟毫秒时钟。
   ../../bsp/board/ins_sensor_mc02.c # 用板级适配器连接传感器替身。
+  ../../bsp/board/board_spi_stm32.c ../../bsp/board/board_gpio_stm32.c # 使用真实资源映射。
   ../../bsp/board/platform_probe_stm32.c # 用同一短时探针后端连接测试时钟。
   ../../modules/algorithm/attitude_filter.c ../../modules/algorithm/QuaternionEKF.c
   ../../Middlewares/Third_Party/Fusion/FusionAhrs.c)
 target_include_directories(ins_filter_test BEFORE PRIVATE ins_filter_fakes)
 target_include_directories(ins_filter_test PRIVATE ../../application ../../modules/imu ../../modules/BMI088
-  ../../Middlewares/Third_Party/Fusion ../../bsp/os ../../bsp/dwt)
+  ../../Middlewares/Third_Party/Fusion ../../bsp/os ../../bsp/dwt ../../bsp/board)
 target_compile_definitions(ins_filter_test PRIVATE MC02_VISION_PROTOCOL_V2=1
   MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=0)
 target_link_libraries(ins_filter_test PRIVATE mc02_kf mc02_numeric)
@@ -927,12 +928,13 @@ set_tests_properties(production_ins_numeric_init_failure PROPERTIES TIMEOUT 10)
 add_executable(ins_filter_fusion_test ins_filter_test.c ../../modules/imu/ins_task.c
   ../../bsp/os/platform_sync_freertos.c # 与 EKF 测试使用相同的平台同步入口。
   ../../bsp/board/ins_sensor_mc02.c # 同时验证板级传感器适配。
+  ../../bsp/board/board_spi_stm32.c ../../bsp/board/board_gpio_stm32.c # 验证相同板级绑定。
   ../../bsp/board/platform_probe_stm32.c # 保留测试原有的耗时探针替身。
   ../../modules/algorithm/attitude_filter.c ../../modules/algorithm/QuaternionEKF.c
   ../../Middlewares/Third_Party/Fusion/FusionAhrs.c)
 target_include_directories(ins_filter_fusion_test BEFORE PRIVATE ins_filter_fakes)
 target_include_directories(ins_filter_fusion_test PRIVATE ../../application ../../modules/imu ../../modules/BMI088
-  ../../Middlewares/Third_Party/Fusion ../../bsp/os ../../bsp/dwt)
+  ../../Middlewares/Third_Party/Fusion ../../bsp/os ../../bsp/dwt ../../bsp/board)
 target_compile_definitions(ins_filter_fusion_test PRIVATE MC02_VISION_PROTOCOL_V2=1
   MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=1)
 target_link_libraries(ins_filter_fusion_test PRIVATE mc02_kf mc02_numeric)
@@ -949,8 +951,13 @@ set_tests_properties(production_ins_fusion_backend_validity_and_recovery
   production_ins_fusion_backend_numeric_init_failure PROPERTIES TIMEOUT 10)
 if(UNIX AND NOT APPLE)
   find_package(Threads REQUIRED)
-  target_compile_definitions(ins_filter_test PRIVATE INS_TEST_INIT_WRAP=1)
-  target_link_options(ins_filter_test PRIVATE -Wl,--wrap=AttitudeFilterInit)
+  target_compile_definitions(ins_filter_test PRIVATE INS_TEST_INIT_WRAP=1 INS_TEST_RESOURCE_WRAP=1)
+  target_link_options(ins_filter_test PRIVATE -Wl,--wrap=AttitudeFilterInit
+    -Wl,--wrap=BoardSpiResolve -Wl,--wrap=BoardGpioResolve)
+  foreach(resource IN ITEMS spi gyro accel)
+    add_test(NAME production_ins_missing_${resource} COMMAND ins_filter_test --missing-${resource})
+    set_tests_properties(production_ins_missing_${resource} PROPERTIES TIMEOUT 10)
+  endforeach()
   add_test(NAME production_ins_filter_init_failure COMMAND ins_filter_test --init-failure)
   target_compile_definitions(ins_filter_fusion_test PRIVATE INS_TEST_INIT_WRAP=1)
   target_link_options(ins_filter_fusion_test PRIVATE -Wl,--wrap=AttitudeFilterInit)

@@ -32,6 +32,20 @@ typedef enum {
     PLATFORM_IMU_BOARD_1      /**< 本板声明的第一个板载 IMU。 */
 } PlatformImuPort_t;
 
+/** @brief 车型或设备使用的逻辑 SPI 总线编号。 */
+typedef enum {
+    PLATFORM_SPI_INVALID = 0, /**< 未选择总线。 */
+    PLATFORM_SPI_BUS_1,       /**< 板级声明的 SPI 总线 1。 */
+    PLATFORM_SPI_BUS_2        /**< 板级声明的 SPI 总线 2。 */
+} PlatformSpiBus_t;
+
+/** @brief 设备使用的逻辑 GPIO 引脚编号。 */
+typedef enum {
+    PLATFORM_GPIO_INVALID = 0, /**< 未选择引脚。 */
+    PLATFORM_GPIO_IMU_GYRO_CS, /**< 板载 IMU 陀螺片选。 */
+    PLATFORM_GPIO_IMU_ACCEL_CS /**< 板载 IMU 加速度计片选。 */
+} PlatformGpioPin_t;
+
 /** @brief 业务声明的经典 CAN 端点，不包含芯片句柄和回调指针。 */
 typedef struct {
     PlatformCanBus_t can_bus; /**< 本板逻辑总线编号。 */

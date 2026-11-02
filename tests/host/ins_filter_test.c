@@ -4,6 +4,8 @@
 #include "test_check.h"
 #include "ins_task.h"
 #include "ins_sensor_port.h"
+#include "board_spi_stm32.h"
+#include "board_gpio_stm32.h"
 #include "attitude_filter.h"
 #include "master_process.h"
 #include "ins_hardware.h"
@@ -15,6 +17,21 @@ static uint32_t now,seq;
 static int scenario,valid,mode,force_off,calib_valid=1;
 static int fail_bmi_registration;
 static unsigned bmi_registration_calls;
+#ifdef INS_TEST_RESOURCE_WRAP
+static int missing_resource;
+SPI_HandleTypeDef *__real_BoardSpiResolve(PlatformSpiBus_t bus);
+uint8_t __real_BoardGpioResolve(PlatformGpioPin_t id, BoardGpioBinding_t *output);
+SPI_HandleTypeDef *__wrap_BoardSpiResolve(PlatformSpiBus_t bus)
+{
+    return missing_resource == 1 ? NULL : __real_BoardSpiResolve(bus); // 可模拟 SPI 未绑定。
+}
+uint8_t __wrap_BoardGpioResolve(PlatformGpioPin_t id, BoardGpioBinding_t *output)
+{
+    if ((missing_resource == 2 && id == PLATFORM_GPIO_IMU_GYRO_CS) ||
+        (missing_resource == 3 && id == PLATFORM_GPIO_IMU_ACCEL_CS)) return 0u; // 可单独模拟两个片选缺失。
+    return __real_BoardGpioResolve(id, output);
+}
+#endif
 static float frame[4];
 static VisionIMUSample_t vision_imu_sample;
 static uint32_t imu_sample_updates;
@@ -29,7 +46,8 @@ KFStatus_t __wrap_AttitudeFilterInit(AttitudeFilter_t *filter,const AttitudeFilt
 extern volatile uint32_t imu_filter_mode_diag;
 extern volatile uint32_t imu_filter_age_ms_diag;
 extern volatile int32_t imu_filter_cause_diag;
-int hspi2;
+SPI_HandleTypeDef hspi1, hspi2;
+GPIO_TypeDef test_gyro_port, test_accel_port;
 volatile uint32_t bmi088_init_error,bmi088_init_retry_count;
 float DWT_GetDeltaT(uint32_t *p){ *p=now;return period_s; }
 uint32_t DWT_ProbeStart(void){ return 0; }
@@ -77,7 +95,24 @@ static void tick(void){now+=(uint32_t)lroundf(period_s*1000);INS_Task();}
 static void invalid(void){TEST_CHECK(!valid && mode==0);for(int i=0;i<4;i++)TEST_CHECK(frame[i]==0);}
 int main(int argc,char **argv)
 {
+#ifdef INS_TEST_RESOURCE_WRAP
+    if (argc > 1 && strncmp(argv[1], "--missing-", 10) == 0)
+    {
+        if (strcmp(argv[1], "--missing-spi") == 0) missing_resource = 1;
+        else if (strcmp(argv[1], "--missing-gyro") == 0) missing_resource = 2;
+        else {TEST_CHECK(strcmp(argv[1], "--missing-accel") == 0); missing_resource = 3;}
+        TEST_CHECK(!INS_ConfigureSensor(PLATFORM_IMU_BOARD_1)); // 启动前必须发现资源缺失。
+        TEST_CHECK(InsSensorRegister(PLATFORM_IMU_BOARD_1) == NULL && bmi_registration_calls == 0u);
+        return 0;
+    }
+#endif
     TEST_CHECK(!INS_ConfigureSensor(PLATFORM_IMU_INVALID)); // 未绑定时不能选择或启动传感器。
+    TEST_CHECK(BoardSpiResolve(PLATFORM_SPI_BUS_1) == &hspi1 && BoardSpiResolve(PLATFORM_SPI_BUS_2) == &hspi2);
+    TEST_CHECK(BoardSpiResolve(PLATFORM_SPI_INVALID) == NULL);
+    BoardGpioBinding_t binding = {&test_gyro_port, CS2_GYRO_Pin};
+    TEST_CHECK(!BoardGpioResolve(PLATFORM_GPIO_INVALID, &binding));
+    TEST_CHECK(binding.port == &test_gyro_port && binding.pin == CS2_GYRO_Pin); // 无效查询不覆盖旧结果。
+    TEST_CHECK(!BoardGpioResolve(PLATFORM_GPIO_IMU_GYRO_CS, NULL));
     TEST_CHECK(InsSensorRegister(PLATFORM_IMU_INVALID) == NULL && bmi_registration_calls == 0u);
     if (argc > 1 && strcmp(argv[1], "--unconfigured") == 0)
     {

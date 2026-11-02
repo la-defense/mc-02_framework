@@ -12,18 +12,21 @@ uint32_t DWT_ProbeStart(void);
 void DWT_ProbeDone(volatile DWT_Probe_t *p,uint32_t start);
 uint32_t HAL_GetTick(void);
 #define LOGERROR(...) ((void)0)
-#define CS2_GYRO_GPIO_Port 3
+typedef int SPI_HandleTypeDef;
+typedef int GPIO_TypeDef;
+extern GPIO_TypeDef test_gyro_port, test_accel_port;
+#define CS2_GYRO_GPIO_Port (&test_gyro_port)
 #define CS2_GYRO_Pin 11
-#define CS2_ACCEL_GPIO_Port 4
+#define CS2_ACCEL_GPIO_Port (&test_accel_port)
 #define CS2_ACCEL_Pin 12
 #define SPI_BLOCK_MODE 0
 #define BMI088_BLOCK_PERIODIC_MODE 0
 #define BMI088_CALIBRATE_ONLINE_MODE 0
 #define BMI088_ACQUIRE_OK 1
 typedef struct { int unused; } BMI088Instance;
-typedef struct { void *spi_handle; int GPIOx,cs_pin,spi_work_mode; } FakeSPIConfig;
+typedef struct { SPI_HandleTypeDef *spi_handle; GPIO_TypeDef *GPIOx; int cs_pin,spi_work_mode; } FakeSPIConfig;
 typedef struct { int work_mode,cali_mode; FakeSPIConfig spi_gyro_config,spi_acc_config; } BMI088_Init_Config_s;
-extern int hspi2;
+extern SPI_HandleTypeDef hspi1, hspi2;
 extern volatile uint32_t bmi088_init_error,bmi088_init_retry_count;
 BMI088Instance *BMI088Register(const BMI088_Init_Config_s *c);
 uint8_t BMI088Acquire(BMI088Instance *i,BMI088_Data_t *data);

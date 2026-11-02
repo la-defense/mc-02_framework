@@ -3,30 +3,53 @@
  */
 #include "../../modules/imu/ins_sensor_port.h"
 #include "bmi088.h"
-#include "spi.h"
+#include "board_spi_stm32.h"
+#include "board_gpio_stm32.h"
 #include <stddef.h>
+
+typedef struct {
+    SPI_HandleTypeDef *bus; // 两个传感器芯片共享的 SPI 控制器。
+    BoardGpioBinding_t gyro_cs; // 陀螺片选。
+    BoardGpioBinding_t accel_cs; // 加速度计片选。
+} InsBoardBinding;
+
+// 将设备编号对应的逻辑总线和片选转换为本板资源，不操作硬件。
+static uint8_t ResolveInsBinding(PlatformImuPort_t port, InsBoardBinding *output)
+{
+    if (port != PLATFORM_IMU_BOARD_1 || output == NULL) return 0u; // 未声明的设备不启动。
+    InsBoardBinding candidate = {0}; // 仅在全部资源存在时公布结果。
+    candidate.bus = BoardSpiResolve(PLATFORM_SPI_BUS_2); // 板载 IMU 使用逻辑 SPI2。
+    if (candidate.bus == NULL ||
+        !BoardGpioResolve(PLATFORM_GPIO_IMU_GYRO_CS, &candidate.gyro_cs) ||
+        !BoardGpioResolve(PLATFORM_GPIO_IMU_ACCEL_CS, &candidate.accel_cs))
+        return 0u; // 缺少任一资源时不进入驱动注册。
+    *output = candidate; // 资源完整后一次交付。
+    return 1u;
+}
 
 uint8_t InsSensorIsBound(PlatformImuPort_t port)
 {
-    return (uint8_t)(port == PLATFORM_IMU_BOARD_1); // 当前板卡只声明板载 BMI088。
+    InsBoardBinding binding;
+    return ResolveInsBinding(port, &binding);
 }
 
 InsSensor *InsSensorRegister(PlatformImuPort_t port)
 {
-    if (!InsSensorIsBound(port)) return NULL; // 未绑定时不申请 SPI 资源或启动标定。
+    InsBoardBinding binding;
+    if (!ResolveInsBinding(port, &binding)) return NULL; // 未绑定时不申请 SPI 资源或启动标定。
     BMI088_Init_Config_s config = {
         .work_mode = BMI088_BLOCK_PERIODIC_MODE, // 沿用任务周期内阻塞采样。
         .cali_mode = BMI088_CALIBRATE_ONLINE_MODE, // 启动时沿用在线标定。
         .spi_gyro_config = {
-            .spi_handle = &hspi2, // 陀螺使用板载 SPI2。
-            .GPIOx = CS2_GYRO_GPIO_Port, // 陀螺片选所在端口。
-            .cs_pin = CS2_GYRO_Pin, // 陀螺片选引脚。
+            .spi_handle = binding.bus, // 陀螺使用绑定的 SPI 控制器。
+            .GPIOx = binding.gyro_cs.port, // 陀螺片选所在端口。
+            .cs_pin = binding.gyro_cs.pin, // 陀螺片选引脚。
             .spi_work_mode = SPI_BLOCK_MODE, // 采样沿用阻塞传输。
         },
         .spi_acc_config = {
-            .spi_handle = &hspi2, // 加速度计与陀螺共享 SPI2。
-            .GPIOx = CS2_ACCEL_GPIO_Port, // 加速度计片选所在端口。
-            .cs_pin = CS2_ACCEL_Pin, // 加速度计片选引脚。
+            .spi_handle = binding.bus, // 加速度计与陀螺共享 SPI 控制器。
+            .GPIOx = binding.accel_cs.port, // 加速度计片选所在端口。
+            .cs_pin = binding.accel_cs.pin, // 加速度计片选引脚。
             .spi_work_mode = SPI_BLOCK_MODE, // 采样沿用阻塞传输。
         },
         // 加热 PWM 仍由温控模块单独管理，注册时不配置。
