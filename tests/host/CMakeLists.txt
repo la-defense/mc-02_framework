@@ -2012,3 +2012,14 @@ if(Python3_EXECUTABLE)
   add_test(NAME production_vehicle_build_selection
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_vehicle_selection.py)
 endif()
+
+# 裁判协议测试使用可控句柄；板级映射由遥控测试单独验证。
+add_library(mc02_referee_header_portable OBJECT referee_public_header.c)
+# 只提供通用发送类型所在目录，不提供芯片或 RTOS 头目录。
+target_include_directories(mc02_referee_header_portable PRIVATE ../../bsp/usart)
+mc02_apply_format_diagnostics(mc02_referee_header_portable)
+foreach(target IN ITEMS crc_protocol_test referee_ui_test referee_snapshot_test referee_budget_test uart_ui_integration_test)
+  target_sources(${target} PRIVATE protocol_uart_binding_fake.c)
+  # 新增的测试源位于第一次收集之后，需要补充同样的编译诊断。
+  mc02_apply_format_diagnostics(${target})
+endforeach()

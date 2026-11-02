@@ -2,6 +2,7 @@
  * @brief 通过生产构图、发送和任务入口验证边界、协议字节、失败及在途缓冲寿命。
  * @note CTest选择场景；本目标使用发送模型及选定格式化/CRC失败，真实队列另由UI联测覆盖。
  */
+#include "protocol_uart_binding_fake.h"
 #include "referee_UI.h"
 #include "referee_task.h"
 #include "test_check.h"
@@ -263,7 +264,7 @@ static void frames(void)
     Graph_Data_t graphs[7];
     for(size_t i=0;i<7;++i) TEST_CHECK(UILineDraw(&graphs[i],"abc",1,2,8,3,100,200,300,400)==UI_OK);
     TEST_CHECK(UIGraphRefresh(&id,graphs,7,1,NULL)==UI_NOT_INITIALIZED && sends==0);
-    UART_HandleTypeDef handle={0};TEST_CHECK(RefereeInit(&handle,NULL)==REFEREE_OK);
+    UART_HandleTypeDef handle={0};TestRefereeUartBind(&handle);TEST_CHECK(RefereeInit(PLATFORM_UART_1,NULL)==REFEREE_OK);
     now_ms=10u;publish_robot_state(1u);
 
     TEST_CHECK(UIGraphRefresh(&id,graphs,7,1,NULL)==UI_SUBMITTED);
@@ -331,7 +332,7 @@ static void transport(void)
     // 掩码仅用于测试发送流程，不作为比赛规则。
     RefereeConfig_t config={.timeout_10hz_ms=300u,.timeout_3hz_ms=1000u,.timeout_1hz_ms=3000u,.timeout_map_ms=3000u,
         .interaction={REFEREE_COMPETITION_RMUC_2026,REFEREE_PROTOCOL_2026_V2,1u,0x01ffu,0x01ffu}};
-    UART_HandleTypeDef h={0};TEST_CHECK(RefereeInit(&h,&config)==REFEREE_OK);
+    UART_HandleTypeDef h={0};TestRefereeUartBind(&h);TEST_CHECK(RefereeInit(PLATFORM_UART_1,&config)==REFEREE_OK);
     now_ms=10u;publish_robot_state(1u);
     USARTSendStatus_t statuses[]={USART_SEND_BUSY,USART_SEND_ERROR,USART_SEND_NOT_READY,USART_SEND_BAD_ARGUMENT};
     UIStatus_t expected[]={UI_SEND_BUSY,UI_SEND_ERROR,UI_NOT_INITIALIZED,UI_SEND_ERROR};
@@ -379,7 +380,7 @@ static void initialize_ui(void)
 }
 static void task_tests(void)
 {
-    UART_HandleTypeDef h={0};
+    UART_HandleTypeDef h={0};TestRefereeUartBind(&h);
     TEST_CHECK(UITask()==UI_NOT_INITIALIZED && MyUIInit()==UI_NOT_INITIALIZED);
     TEST_CHECK(UITaskInit(NULL)==UI_ERROR_ARGUMENT);
     RefereeUIFieldConfig_t invalid_fields[2]={test_ui_fields[0],test_ui_fields[1]};
@@ -393,7 +394,7 @@ static void task_tests(void)
     invalid_config=test_ui_config;invalid_fields[0]=test_ui_fields[0];invalid_fields[0].x=1921u;
     invalid_config.fields=invalid_fields;TEST_CHECK(!RefereeUIConfigIsValid(&invalid_config));
     TEST_CHECK(RefereeUIConfigIsValid(&test_ui_config));
-    TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_OK && UITaskInit(&test_ui_config)==UI_OK);
+    TEST_CHECK(RefereeInit(PLATFORM_UART_1,NULL)==REFEREE_OK && UITaskInit(&test_ui_config)==UI_OK);
     TEST_CHECK(MyUIInit()==UI_SUBMITTED && UIRefresh()==UI_OK && sends==0u);
     TEST_CHECK(ui_state().phase==UI_PHASE_WAIT_ID);
     now_ms=10u;publish_robot_state(1u);publish_game_state(3u,120u);start_status=USART_SEND_ERROR;
@@ -433,12 +434,12 @@ static void task_tests(void)
 }
 static void initialization_failure(void)
 {
-    UART_HandleTypeDef h={0};registration_fail=1;
-    TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_ERROR_RESOURCE && unregisters==1u);
+    UART_HandleTypeDef h={0};TestRefereeUartBind(&h);registration_fail=1;
+    TEST_CHECK(RefereeInit(PLATFORM_UART_1,NULL)==REFEREE_ERROR_RESOURCE && unregisters==1u);
     TEST_CHECK(UITaskInit(&test_ui_config)==UI_OK && MyUIInit()==UI_SUBMITTED);
     TEST_CHECK(UIRefresh()==UI_NOT_INITIALIZED && ui_state().phase==UI_PHASE_WAIT_ID && sends==0u);
-    registration_fail=0;TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_OK);
-    initialize_ui();TEST_CHECK(RefereeInit(&h,NULL)==REFEREE_ERROR_ALREADY_INITIALIZED);
+    registration_fail=0;TEST_CHECK(RefereeInit(PLATFORM_UART_1,NULL)==REFEREE_OK);
+    initialize_ui();TEST_CHECK(RefereeInit(PLATFORM_UART_1,NULL)==REFEREE_ERROR_ALREADY_INITIALIZED);
 }
 
 int main(int argc,char **argv)

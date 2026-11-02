@@ -98,8 +98,8 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uin
     return MOTOR_FEEDBACK_OK;
 }
 SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config) { (void)config; return fail_cap ? NULL : &cap; }
-RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *config)
-{ (void)handle; (void)config; return REFEREE_OK; }
+RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *config)
+{ (void)port; (void)config; return REFEREE_OK; }
 void MC02ChassisTestLogError(void) {}
 
 #if defined(CHASSIS_BRIDGE_INTEGRATION)

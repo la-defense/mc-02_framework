@@ -130,6 +130,7 @@ const Robot_Config_s *SentinelConfigInit(void)
     static const Robot_Config_s sentinel_config = {
         .alarm_config = &sentinel_alarm_config,
         .referee_ui_config = &sentinel_referee_ui_config,
+        .referee_uart = PLATFORM_UART_1, // 当前裁判系统接在板级声明的串口 1。
         .remote_uart = PLATFORM_UART_5, // 当前遥控器接在板级声明的串口 5。
 #if defined(CHASSIS_BOARD)
         .can_bridge = {

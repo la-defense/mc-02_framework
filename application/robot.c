@@ -180,9 +180,9 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
     case ROBOT_MODULE_REFEREE:
 #if MC02_FEATURE_REFEREE
 #if MC02_BENCH_REFEREE_DIAGNOSTICS
-        return RefereeBenchInit(&huart1);
+        return RefereeBenchInit(config->referee_uart);
 #else
-        return (uint8_t)(RefereeInit(&huart1, NULL) == REFEREE_OK);
+        return (uint8_t)(RefereeInit(config->referee_uart, NULL) == REFEREE_OK);
 #endif
 #else
         return 0u;
@@ -324,7 +324,7 @@ uint8_t RobotInit(void)
                      INIT_FAILURE_DEPENDENCY, 0u);
 #endif
 #if MC02_BENCH_REFEREE_DIAGNOSTICS
-    ROBOT_INIT_CHECK(RefereeBenchInit(&huart1), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+    ROBOT_INIT_CHECK(RefereeBenchInit(robot_config->referee_uart), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
                      INIT_FAILURE_DEPENDENCY, 0u);
 #endif
 #if MC02_BENCH_RC_DIAGNOSTICS

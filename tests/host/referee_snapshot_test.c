@@ -5,6 +5,7 @@
  * @author kidneygood (you@domain.com)
  * @copyright Copyright (c) HNU YueLu EC 2022 all rights reserved
  */
+#include "protocol_uart_binding_fake.h"
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -612,18 +613,20 @@ int main(void)
     TEST_CHECK(memcmp(&interaction,&(RefereeInteractionRecord_t){0},sizeof(interaction))==0);
     TEST_CHECK(RefereeGetSnapshot(&snapshot)==REFEREE_ERROR_NOT_INITIALIZED);
     TEST_CHECK(memcmp(&snapshot,&(RefereeSnapshot_t){0},sizeof(snapshot))==0);
-    UART_HandleTypeDef *handle_pointer=&handle;
+    // 未绑定时必须先失败，随后仍能以有效串口完成初始化。
+    TEST_CHECK(RefereeInit(PLATFORM_UART_INVALID,NULL)==REFEREE_ERROR_ARGUMENT);
+    TestRefereeUartBind(&handle);
     RefereeConfig_t invalid={.timeout_3hz_ms=1000u,.timeout_1hz_ms=3000u,.timeout_map_ms=3000u};
-    TEST_CHECK(RefereeInit(handle_pointer,&invalid)==REFEREE_ERROR_CONFIG);
+    TEST_CHECK(RefereeInit(PLATFORM_UART_1,&invalid)==REFEREE_ERROR_CONFIG);
     invalid=(RefereeConfig_t){.timeout_10hz_ms=UINT32_MAX,.timeout_3hz_ms=1000u,.timeout_1hz_ms=3000u,.timeout_map_ms=3000u};
-    TEST_CHECK(RefereeInit(handle_pointer,&invalid)==REFEREE_ERROR_CONFIG);
+    TEST_CHECK(RefereeInit(PLATFORM_UART_1,&invalid)==REFEREE_ERROR_CONFIG);
     // 测试对象掩码不是任何比赛的官方许可表。
     RefereeConfig_t config={.timeout_10hz_ms=300u,.timeout_3hz_ms=1000u,.timeout_1hz_ms=3000u,.timeout_map_ms=3000u,
         .interaction={REFEREE_COMPETITION_RMUC_2026,REFEREE_PROTOCOL_2026_V2,1u,0x01ffu,1u << 2u}};
-    TEST_CHECK(RefereeInit(handle_pointer,&config)==REFEREE_OK);
+    TEST_CHECK(RefereeInit(PLATFORM_UART_1,&config)==REFEREE_OK);
     config.timeout_10hz_ms=1u; // 初始化后修改源对象不能改变模块保存的期限。
     TEST_CHECK(dma_bytes!=NULL && dma_capacity==255u);
-    TEST_CHECK(RefereeInit(handle_pointer,NULL)==REFEREE_ERROR_ALREADY_INITIALIZED);
+    TEST_CHECK(RefereeInit(PLATFORM_UART_1,NULL)==REFEREE_ERROR_ALREADY_INITIALIZED);
     check_protocol_and_lengths();
     check_fixed_field_decoding();
     check_failures_and_stream();

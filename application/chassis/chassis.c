@@ -83,7 +83,7 @@ uint8_t ChassisInit(void)
 #if defined(MC02_CONFIG_GENERATED)
     RefereeStatus_t referee_status = REFEREE_OK;
 #else
-    RefereeStatus_t referee_status = RefereeInit(&huart1, NULL);
+    RefereeStatus_t referee_status = RefereeInit(PLATFORM_UART_1, NULL);
 #if MC02_ENABLE_REFEREE_UI
     // UI只读取车型布局和裁判快照；绑定失败只停用显示，不撤销裁判接收。
     UIStatus_t ui_status = UITaskInit(RefereeUIConfigFeed());

@@ -2,6 +2,7 @@
  * @brief 经生产接收回调和发送入口检查 SP、裁判及 UI 的 CRC 兼容和失败处理。
  * @note 替身只模拟传输与时间；字节校验和解析运行生产代码。
  */
+#include "protocol_uart_binding_fake.h"
 #include "crc.h"
 #include "crc_injection.h"
 #include "test_check.h"
@@ -157,8 +158,8 @@ int main(void)
     now_ms=16u; deliver_usb(2u*sizeof(command));
     VisionGetStatus(&status); TEST_CHECK(status.last_rx_ms==16u && status.rx_count==5u);
 
-    UART_HandleTypeDef handle = {0};
-    TEST_CHECK(RefereeInit(&handle, NULL) == REFEREE_OK);
+    UART_HandleTypeDef handle = {0}; TestRefereeUartBind(&handle);
+    TEST_CHECK(RefereeInit(PLATFORM_UART_1, NULL) == REFEREE_OK);
     uint8_t payload[17]={1u};
     uint8_t frame[64];
     size_t frame_len=referee_frame(frame,ID_game_robot_state,payload,sizeof(payload));

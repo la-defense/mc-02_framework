@@ -11,7 +11,7 @@
 #define RM_REFEREE_H
 
 #include <stdint.h>
-#include "usart.h"
+#include "../../bsp/board/platform_resources.h"
 #include "referee_snapshot.h"
 #include "referee_tx.h"
 
@@ -60,7 +60,7 @@ typedef enum {
 
 /**
  * @brief 注册唯一裁判UART并启动跨块帧解析。
- * @param[in] referee_usart_handle 已初始化且长期有效的UART句柄，不能为NULL。
+ * @param[in] port 车型指定的逻辑串口；未绑定的编号返回参数错误。
  * @param[in] config 可为NULL；非NULL时完整复制，四个期限必须在1～INT32_MAX ms。
  * @return REFEREE_OK或具体参数、配置、重复初始化及资源错误；失败不覆盖已运行实例。
  * @note 默认期限为10Hz组300ms、3Hz组1000ms、1Hz组及0x0303为3000ms。UI可在接收成功后单独绑定。
@@ -68,7 +68,7 @@ typedef enum {
  *       默认关闭机器人交互；启用时填写赛项、本机编号和收发掩码，调用者负责按具体比赛阶段核验。
  *       配置固定至重启，合法机器人状态须与本机编号相符；UI不受此配置影响。
  */
-RefereeStatus_t RefereeInit(UART_HandleTypeDef *referee_usart_handle, const RefereeConfig_t *config);
+RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *config);
 
 /**
  * @brief 一次复制全部命令数据、各自期限状态和链路诊断。

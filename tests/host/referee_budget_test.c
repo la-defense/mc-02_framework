@@ -2,6 +2,7 @@
  * @brief 经生产裁判、CRC、队列和H723后端验证共享额度；HAL与时间使用主机模型。
  * @note CTest每场景独立进程；不连接硬件，Release检查仍执行。
  */
+#include "protocol_uart_binding_fake.h"
 #include "referee_task.h"
 #include "referee_tx_private.h"
 #include "uart_tx_hal_model.h"
@@ -117,6 +118,7 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
     UARTModelInit();
+    TestRefereeUartBind(&uart_handles[0]);
     USARTTxSetServiceReady(1u);
     // 测试用掩码只用于检查配置机制，不代表任一赛项官方允许表。
     RefereeConfig_t config = { .timeout_10hz_ms=300u, .timeout_3hz_ms=1000u,
@@ -126,19 +128,19 @@ int main(int argc, char **argv)
     {
         RefereeConfig_t bad = config;
         bad.interaction.competition = (RefereeCompetition_t)99;
-        TEST_CHECK(RefereeInit(&uart_handles[0], &bad) == REFEREE_ERROR_CONFIG);
+        TEST_CHECK(RefereeInit(PLATFORM_UART_1, &bad) == REFEREE_ERROR_CONFIG);
         bad = config; bad.interaction.local_role = 0u;
-        TEST_CHECK(RefereeInit(&uart_handles[0], &bad) == REFEREE_ERROR_CONFIG);
+        TEST_CHECK(RefereeInit(PLATFORM_UART_1, &bad) == REFEREE_ERROR_CONFIG);
         bad = config; bad.interaction.protocol = (RefereeInteractionProtocol_t)99;
-        TEST_CHECK(RefereeInit(&uart_handles[0], &bad) == REFEREE_ERROR_CONFIG);
+        TEST_CHECK(RefereeInit(PLATFORM_UART_1, &bad) == REFEREE_ERROR_CONFIG);
         bad = config; bad.interaction.tx_roles = 0x0200u;
-        TEST_CHECK(RefereeInit(&uart_handles[0], &bad) == REFEREE_ERROR_CONFIG);
+        TEST_CHECK(RefereeInit(PLATFORM_UART_1, &bad) == REFEREE_ERROR_CONFIG);
         bad = config; bad.interaction.competition = REFEREE_COMPETITION_NONE;
-        TEST_CHECK(RefereeInit(&uart_handles[0], &bad) == REFEREE_ERROR_CONFIG);
+        TEST_CHECK(RefereeInit(PLATFORM_UART_1, &bad) == REFEREE_ERROR_CONFIG);
         config.interaction.competition = REFEREE_COMPETITION_RMUL_2026;
         config.interaction.tx_roles = 1u << 3u;
     }
-    TEST_CHECK(RefereeInit(&uart_handles[0], strcmp(argv[1], "no-policy") == 0 ? NULL : &config) == REFEREE_OK);
+    TEST_CHECK(RefereeInit(PLATFORM_UART_1, strcmp(argv[1], "no-policy") == 0 ? NULL : &config) == REFEREE_OK);
     identity(3u);
     if (strcmp(argv[1], "policy") == 0)
     {

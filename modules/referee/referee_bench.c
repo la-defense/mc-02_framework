@@ -7,6 +7,7 @@
 #error "Referee diagnostics require bench_safe"
 #endif
 #include "referee_bench.h"
+#include "bsp_usart.h"
 #include "rm_referee.h"
 #include "cmsis_os.h"
 #include <string.h>
@@ -59,7 +60,7 @@ static void BenchComplete(void *context, const USARTTxEvent_t *event)
     referee_bench_diag.write_count = count * 2u + 2u;
     taskEXIT_CRITICAL();
 }
-uint8_t RefereeBenchInit(UART_HandleTypeDef *handle)
+uint8_t RefereeBenchInit(PlatformUartPort_t port)
 {
     memset((void *)&referee_bench_diag, 0, sizeof(referee_bench_diag));
     referee_bench_diag.magic = 0x52454633u;
@@ -70,7 +71,7 @@ uint8_t RefereeBenchInit(UART_HandleTypeDef *handle)
     const RefereeConfig_t config = {.timeout_10hz_ms = 300u, .timeout_3hz_ms = 1000u,
         .timeout_1hz_ms = 3000u, .timeout_map_ms = 3000u,
         .interaction = {REFEREE_COMPETITION_RMUC_2026, REFEREE_PROTOCOL_2026_V2, 3u, 1u << 3u, 0u}};
-    return (uint8_t)(RefereeInit(handle, &config) == REFEREE_OK);
+    return (uint8_t)(RefereeInit(port, &config) == REFEREE_OK);
 }
 void RefereeBenchTask(void)
 {

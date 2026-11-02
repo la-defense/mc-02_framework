@@ -2,6 +2,7 @@
  * @brief 生产UI、CRC、裁判解析、UART注册/队列/H723后端的完整联测。
  * @note 仅HAL、RTOS、时间与daemon为模型；不连接硬件，不等待115ms。
  */
+#include "protocol_uart_binding_fake.h"
 #include "referee_task.h"
 #include "uart_tx_hal_model.h"
 #include "test_check.h"
@@ -119,7 +120,8 @@ int main(int argc, char **argv)
     TEST_CHECK(argc == 2);
     UARTModelInit();
     USARTTxSetServiceReady(1u);
-    TEST_CHECK(RefereeInit(&uart_handles[0], NULL) == REFEREE_OK && UITaskInit(&test_ui_config) == UI_OK);
+    TestRefereeUartBind(&uart_handles[0]);
+    TEST_CHECK(RefereeInit(PLATFORM_UART_1, NULL) == REFEREE_OK && UITaskInit(&test_ui_config) == UI_OK);
     identity(1u);
     UARTModelCheckRuntimeAllocation();
     if (strcmp(argv[1], "identity-before-start") == 0)

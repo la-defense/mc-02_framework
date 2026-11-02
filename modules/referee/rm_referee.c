@@ -16,6 +16,7 @@
 #include "referee_protocol.h"
 #include "crc.h"
 #include "bsp_usart.h"
+#include "../../bsp/board/board_uart_stm32.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "daemon.h"
@@ -482,8 +483,10 @@ static void RefereeTxObserve(void *context, const USARTTxEvent_t *event)
     RefereeBudgetObserve(&referee_tx_budget, event);
     taskEXIT_CRITICAL();
 }
-RefereeStatus_t RefereeInit(UART_HandleTypeDef *handle, const RefereeConfig_t *config)
+RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *config)
 {
+    // 未绑定串口时不能注册守护实例或启动 DMA。
+    UART_HandleTypeDef *handle = BoardUartResolve(port);
     if (handle == NULL) return REFEREE_ERROR_ARGUMENT;
     if (referee_initialized || referee_usart_instance != NULL || referee_daemon != NULL)
         return REFEREE_ERROR_ALREADY_INITIALIZED;
