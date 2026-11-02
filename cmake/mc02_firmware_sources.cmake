@@ -142,6 +142,7 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/lcd/lcd_ui.c
     modules/message_center/message_center.c
     modules/motor/DJImotor/dji_motor.c
+    bsp/board/dji_can_diagnostic_stm32.c # 已选 DJI 驱动的板级回环诊断，默认不启用。
     modules/motor/HTmotor/HT04.c
     modules/motor/LKmotor/LK9025.c
     modules/motor/motor_feedback.c
@@ -245,6 +246,9 @@ foreach(pair IN ITEMS "DJI;DJImotor/dji_motor.c" "LK;LKmotor/LK9025.c" "HT;HTmot
         list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES "modules/motor/${implementation}")
     endif()
 endforeach()
+if(NOT MC02_SELECTED_DRIVER_DJI)
+    list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES bsp/board/dji_can_diagnostic_stm32.c) # 无 DJI 电机时不编入诊断。
+endif()
 if(NOT MC02_FEATURE_SUPERCAP)
     list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES modules/super_cap/super_cap.c)
 endif()

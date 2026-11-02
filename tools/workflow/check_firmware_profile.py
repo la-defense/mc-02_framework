@@ -74,6 +74,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/master_machine/master_process.c",  # 上位机业务协议及传输状态。
     "modules/imu/ins_task.c",  # IMU 采样与姿态业务。
     "modules/imu/imu_heater.c",  # 温控策略及逻辑模拟资源。
+    "modules/motor/DJImotor/dji_motor.c",  # DJI 逻辑端点、控制和反馈。
     "application/robot_task_create.c",  # 按车型配置创建任务。
 }
 ASSEMBLY_SOURCES = {
@@ -231,6 +232,7 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "bsp/os", source_root / "bsp/log", source_root / "bsp/can",
                source_root / "modules/can_comm", source_root / "modules/time_sync",
                source_root / "modules/algorithm", source_root / "modules/referee",
+               source_root / "modules", source_root / "modules/motor",
                source_root / "bsp/usart", source_root / "modules/remote",
                source_root / "modules/master_machine", source_root / "bsp/usb",
                source_root / "modules/imu", source_root / "modules/BMI088",
@@ -280,6 +282,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                source_root / "bsp/os", source_root / "bsp/log", source_root / "bsp/can",
                source_root / "modules/can_comm", source_root / "modules/time_sync",
                source_root / "modules/algorithm", source_root / "modules/referee",
+               source_root / "modules/motor",
                source_root / "bsp/usart", source_root / "modules/remote",
                source_root / "modules/master_machine", source_root / "bsp/usb",
                source_root / "modules/imu", source_root / "modules/task_monitor")

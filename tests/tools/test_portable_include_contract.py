@@ -28,6 +28,9 @@ class PortableIncludeContractTest(unittest.TestCase):
         check_portable_includes(self.entry("-Ibsp/can", "-Imodules/can_comm",
                                            "-Imodules/time_sync", "-Imodules/algorithm"),
                                 ROOT, "modules/can_comm/can_topic_link.c")
+        # DJI 控制只能访问自有电机接口与公共单位定义。
+        check_portable_includes(self.entry("-Imodules", "-Imodules/motor", "-Ibsp/can"),
+                                ROOT, "modules/motor/DJImotor/dji_motor.c")
 
     def test_vendor_and_rtos_paths_are_rejected(self):
         # 同时覆盖拼接、分离和系统头参数，防止替换选项形式后漏检。
@@ -53,6 +56,9 @@ class PortableIncludeContractTest(unittest.TestCase):
         check_portable_dependencies(valid + f"    {ROOT / 'bsp/board/platform_resources.h'}\n",
                                     ROOT, ROOT / "build", source)
         check_portable_dependencies(valid + f"    {ROOT / 'bsp/board/platform_analog.h'}\n",
+                                    ROOT, ROOT / "build", source)
+        # 电机公开类型可以使用，但依赖链仍不放行外设实现头。
+        check_portable_dependencies(valid + f"    {ROOT / 'modules/motor/motor_def.h'}\n",
                                     ROOT, ROOT / "build", source)
         # 上位机 V2 只引用整车话题编号声明，不放行整个 application 目录。
         check_portable_dependencies(valid + f"    {ROOT / 'application/topics/robot_topics.h'}\n",

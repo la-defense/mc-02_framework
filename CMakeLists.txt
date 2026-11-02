@@ -290,6 +290,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/master_machine/master_process.c # 上位机协议和传输状态处理。
     modules/imu/ins_task.c # 姿态采样、解算和安全状态。
     modules/imu/imu_heater.c # 温控策略使用逻辑 PWM 与模拟输入。
+    modules/motor/DJImotor/dji_motor.c # DJI 普通控制及逻辑 CAN 接口。
     application/robot_task_create.c) # 已选任务的创建与失败处理。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
     if(source IN_LIST MC02_SELECTED_SOURCES)
@@ -311,6 +312,8 @@ target_include_directories(mc02_portable_framework PRIVATE
     modules/can_comm # 板间话题和同步接口。
     modules/time_sync # 时钟映射接口。
     modules/algorithm # 帧校验使用的软件 CRC 接口。
+    modules # 电机控制使用的公共单位定义。
+    modules/motor # 电机能力、反馈及 PID 接口。
     modules/referee # 裁判协议与图形接口。
     modules/remote # 遥控输入公开接口。
     modules/master_machine # 上位机协议和传输选择接口。
