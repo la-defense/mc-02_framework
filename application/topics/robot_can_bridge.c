@@ -6,6 +6,7 @@
 #include "chassis_topic_codec.h"
 #include "can_topic_link.h"
 #include "board_can_stm32.h"
+#include "../../bsp/can/platform_can.h"
 #include "platform_sync.h"
 #include <string.h>
 #include <limits.h>
@@ -18,6 +19,7 @@ static CanTimeSync_t robot_time_sync;
 static TimeMappingState_t published_sync;
 static uint32_t published_sync_ms;
 static uint8_t published_sync_ready;
+static PlatformCanBus_t robot_bridge_bus; // 初始化成功后固定，供发送任务选择本板总线。
 
 #if defined(CHASSIS_BOARD)
 static void RobotCanBridgeCommandInvalidated(void *context)
@@ -90,6 +92,7 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
         memset(&robot_time_sync,0,sizeof(robot_time_sync));
         return 0u;
     }
+    robot_bridge_bus=config->can_bus; // 注册及对时都成功后才开放总线服务。
     return 1u;
 }
 
@@ -135,5 +138,5 @@ void RobotCanBridgeServiceTx(void)
 {
     // 额外机会只作用于当前桥接总线，避免改变其他总线每轮的提交次数。
     if (robot_link.ready && robot_link.transport.can!=NULL)
-        CANProcessTxBus(robot_link.transport.can->can_handle);
+        (void)PlatformCanProcessTxBus(robot_bridge_bus);
 }

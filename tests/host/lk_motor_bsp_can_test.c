@@ -6,6 +6,7 @@
 #include "LK9025.h"
 #include "dji_motor.h"
 #include "bsp_can.h"
+#include "../../bsp/can/platform_can.h"
 #include "can_topic_transport.h"
 #include "can_topic_link.h"
 #include "bsp_dwt.h"
@@ -1745,11 +1746,44 @@ static void test_can_tx_retry_yields_for_priority(void)
     TEST_CHECK(result.state == CAN_TX_RESULT_COMPLETE);
 }
 
+// 直接连接生产 CAN 队列，检查逻辑总线适配不会改变期限和结果。
+static void test_platform_can_queue(void)
+{
+    CAN_Init_Config_s config = {0};
+    config.can_handle = &hfdcan1; // 为测试总线启动生产 CAN 服务。
+    config.tx_id = 0x321u;
+    config.rx_id = 0x500u;
+    config.can_module_callback = scheduler_rx_callback;
+    TEST_CHECK(CANRegister(&config) != NULL);
+    const uint8_t data = 0x11u;
+    const CAN_TxFrame_t frame = scheduler_frame(0x321u, CAN_TX_ID_STANDARD, &data, 1u);
+    uint32_t id = 99u;
+    // 未绑定总线不能提交，也不能改写调用者保留的请求编号。
+    TEST_CHECK(PlatformCanSubmitBatch(PLATFORM_CAN_INVALID, &data, &frame, 1u,
+        CAN_TX_PRIORITY_NORMAL, 50u, &id) == CAN_TX_SUBMIT_NOT_READY && id == 99u);
+    TEST_CHECK(PlatformCanProcessTxBus(PLATFORM_CAN_INVALID) == 0u);
+    now_us = 115000u;
+    TEST_CHECK(PlatformCanSubmitBatchUntil(PLATFORM_CAN_BUS_1, &data, &frame, 1u,
+        CAN_TX_PRIORITY_NORMAL, 150u, &id) == CAN_TX_SUBMIT_ACCEPTED);
+    now_us = 150000u; // 到达原始截止时刻后，队列必须过期而不能发送。
+    TEST_CHECK(PlatformCanProcessTxBus(PLATFORM_CAN_BUS_1) == 1u);
+    CAN_TxResult_t result;
+    TEST_CHECK(PlatformCanGetRequest(id, &result) && result.state == CAN_TX_RESULT_EXPIRED);
+    TEST_CHECK(tx_accept_count[0] == 0u);
+    id = 0u;
+    TEST_CHECK(PlatformCanSubmitBatch(PLATFORM_CAN_BUS_1, &data, &frame, 1u,
+        CAN_TX_PRIORITY_NORMAL, 50u, &id) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(PlatformCanCancelRequest(id) == 1u);
+    TEST_CHECK(PlatformCanGetRequest(id, &result) && result.state == CAN_TX_RESULT_CANCELLED);
+}
+
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
     CANInitWorkspace();
-    if (strcmp(argv[1], "rollback") == 0)
+    if (strcmp(argv[1], "platform-can") == 0)
+        test_platform_can_queue();
+    else if (strcmp(argv[1], "rollback") == 0)
         test_production_registration_rollback();
     else if (strcmp(argv[1], "routing") == 0)
         test_production_can_routing();

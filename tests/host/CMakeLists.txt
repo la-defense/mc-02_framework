@@ -77,6 +77,9 @@ target_compile_options(mc02_daemon_portable PRIVATE -Wall -Wextra -Werror)
 add_library(mc02_motor_config_portable OBJECT motor_config_public_header.c)
 target_include_directories(mc02_motor_config_portable PRIVATE ../../modules/motor ../../modules/algorithm)
 target_compile_options(mc02_motor_config_portable PRIVATE -Wall -Wextra -Werror)
+# CAN 帧和队列状态不需要芯片句柄或调度器头。
+add_library(mc02_can_tx_header_portable OBJECT can_tx_public_header.c)
+target_compile_options(mc02_can_tx_header_portable PRIVATE -Wall -Wextra -Werror)
 # 遥控公开头不需要 HAL 或 RTOS 头。
 add_library(mc02_remote_header_portable OBJECT remote_public_header.c)
 target_include_directories(mc02_remote_header_portable PRIVATE ../../modules/remote)
@@ -442,6 +445,7 @@ endforeach()
 # 这组回归链接生产 BSP CAN 注册与发送实现，仅替换 HAL、时间和日志。
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
+  ../../bsp/board/platform_can_stm32.c # 通过生产适配复用真实 CAN 队列。
   ../../modules/motor/motor_pid.c
   ${MC02_HOST_DJI_SOURCES}
   ../../modules/algorithm/controller.c ${MC02_HOST_DAEMON_SOURCES} ../../bsp/can/bsp_can.c
@@ -462,6 +466,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
     -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free -Wl,--gc-sections)
 endif()
 add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test rollback)
+add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platform-can)
 add_test(NAME production_lk_motor_bsp_can_routing COMMAND lk_motor_bsp_can_test routing)
 add_test(NAME production_lk_motor_bsp_can_closed_loops COMMAND lk_motor_bsp_can_test closed_loops)
 add_test(NAME production_lk_motor_bsp_can_feedforward COMMAND lk_motor_bsp_can_test feedforward)
@@ -759,6 +764,7 @@ foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
   set(robot_can_bridge_test_sources robot_can_bridge_test.c
     ../../application/topics/robot_can_bridge.c ../../application/topics/robot_topics.c
     ../../bsp/board/board_can_stm32.c # 用生产板级绑定验证逻辑总线到测试句柄。
+    ../../bsp/board/platform_can_stm32.c # 使用生产逻辑总线发送适配。
     ../../application/topics/chassis_topic_codec.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
     ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_topic_bridge.c
     ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c
