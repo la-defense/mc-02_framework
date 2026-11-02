@@ -14,6 +14,16 @@ CAN_TxSubmitStatus_t PlatformCanSubmitBatch(PlatformCanBus_t bus, const void *so
     return CANSubmitInterruptibleBatch(&test_handle, source, frames, count, priority, deadline_ms, request_id);
 }
 
+CAN_TxSubmitStatus_t PlatformCanSubmitBatchUntil(PlatformCanBus_t bus, const void *source,
+    const CAN_TxFrame_t *frames, size_t count, CAN_TxPriority_t priority,
+    uint32_t expiry_ms, uint32_t *request_id)
+{
+    static FDCAN_HandleTypeDef test_handle; // 调用测试的绝对截止时间队列模型。
+    if (bus != PLATFORM_CAN_BUS_1 && bus != PLATFORM_CAN_BUS_2 && bus != PLATFORM_CAN_BUS_3)
+        return CAN_TX_SUBMIT_NOT_READY;
+    return CANSubmitInterruptibleBatchUntil(&test_handle, source, frames, count, priority, expiry_ms, request_id);
+}
+
 uint8_t PlatformCanGetRequest(uint32_t request_id, CAN_TxResult_t *result)
 {
     return CANGetTxRequestState(request_id, result); // 沿用测试进程控制的请求状态。

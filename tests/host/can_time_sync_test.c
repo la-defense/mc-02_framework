@@ -42,6 +42,14 @@ uint8_t CANGetTxRequestState(uint32_t request_id, CAN_TxResult_t *result)
     return 1u;
 }
 
+CAN_TxSubmitStatus_t CANSubmitInterruptibleBatchUntil(FDCAN_HandleTypeDef *handle, const void *source,
+    const CAN_TxFrame_t *frames, size_t count, CAN_TxPriority_t priority,
+    uint32_t expiry_ms, uint32_t *request_id)
+{
+    // 对时测试不调用绝对期限提交；保留接口供共享平台替身链接。
+    return CANSubmitInterruptibleBatch(handle, source, frames, count, priority, expiry_ms, request_id);
+}
+
 uint8_t CANCancelTxRequest(uint32_t request_id)
 {
     return request_id != 0u;

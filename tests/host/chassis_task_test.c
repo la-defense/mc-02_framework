@@ -143,7 +143,7 @@ static int test_bridge_to_chassis(void)
     const CanTopicCodec_t decoder={ChassisCommandBridgeDecode,NULL,CHASSIS_COMMAND_WIRE_BYTES};
     const CAN_Init_Config_s config={.can_handle=&bridge_can_handle,.tx_id=0x311u,.rx_id=0x312u};
     CanTopicLink_t link={0};
-    CHECK(publisher && reader && CanTopicLinkInit(&link,&config,NULL,publisher,NULL,&decoder,bridge_map,NULL,50u));
+    CHECK(publisher && reader && CanTopicLinkInit(&link,PLATFORM_CAN_BUS_1,&config,NULL,publisher,NULL,&decoder,bridge_map,NULL,50u));
     Chassis_Ctrl_Cmd_s command={.vx=100.0f,.chassis_mode=CHASSIS_NO_FOLLOW};
     CanTopicMessage_t message={.topic_id=ROBOT_TOPIC_CHASSIS_COMMAND,.length=CHASSIS_COMMAND_WIRE_BYTES,.source_ms=10u};
     CHECK(ChassisCommandEncode(&command,message.payload,sizeof(message.payload))==CHASSIS_CODEC_OK);

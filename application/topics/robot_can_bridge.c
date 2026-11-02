@@ -71,7 +71,7 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
 #endif
     if (outgoing==NULL || incoming==NULL) return 0u;
     const CAN_Init_Config_s can_config={.can_handle=can_handle,.tx_id=config->tx_id,.rx_id=config->rx_id};
-    if (!CanTopicLinkInit(&robot_link,&can_config,outgoing,incoming,&encode,&decode,NULL,NULL,50u))
+    if (!CanTopicLinkInit(&robot_link,config->can_bus,&can_config,outgoing,incoming,&encode,&decode,NULL,NULL,50u))
         return 0u;
 #if defined(CHASSIS_BOARD)
     // 时钟失效或新停车命令通过检查后，先撤销旧许可再让底盘任务看到新话题。
@@ -79,15 +79,15 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
             RobotCanBridgeCommandInvalidated,NULL)!=CAN_BRIDGE_OK ||
         CanTopicBridgeSetBeforePublishCallback(&robot_link.bridge,
             RobotCanBridgeBeforeCommandPublish,NULL)!=CAN_BRIDGE_OK) {
-        CANUnregisterInstance(robot_link.transport.can);
+        CANUnregisterInstance(robot_link.can);
         memset(&robot_link,0,sizeof(robot_link));
         return 0u;
     }
 #endif
     // 对时使用同一个接收端点；失败时释放本次注册，不能启动无映射的双板控制。
-    if (!CanTimeSyncInit(&robot_time_sync,config->can_bus,config->tx_id,robot_link.transport.can) ||
+    if (!CanTimeSyncInit(&robot_time_sync,config->can_bus,config->tx_id,robot_link.can) ||
         !CanTopicLinkAttachTimeSync(&robot_link,&robot_time_sync)) {
-        CANUnregisterInstance(robot_link.transport.can);
+        CANUnregisterInstance(robot_link.can);
         memset(&robot_link,0,sizeof(robot_link));
         memset(&robot_time_sync,0,sizeof(robot_time_sync));
         return 0u;
@@ -137,6 +137,6 @@ uint8_t RobotCanBridgeGetTimeSyncState(TimeMappingState_t *output, uint32_t *upd
 void RobotCanBridgeServiceTx(void)
 {
     // 额外机会只作用于当前桥接总线，避免改变其他总线每轮的提交次数。
-    if (robot_link.ready && robot_link.transport.can!=NULL)
+    if (robot_link.ready && robot_link.can!=NULL)
         (void)PlatformCanProcessTxBus(robot_bridge_bus);
 }

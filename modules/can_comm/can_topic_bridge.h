@@ -100,14 +100,17 @@ CanTopicBridgeStatus_t CanTopicBridgeSend(CanTopicBridge_t *bridge, uint32_t now
 CanTopicBridgeStatus_t CanTopicBridgePublish(CanTopicBridge_t *bridge, const CanTopicMessage_t *message,
                                              uint32_t now_ms);
 
-/** @brief 消费传输对象中当前接收帧，完整后检查映射并发布。
+/** @brief 消费当前接收帧，完整后检查映射并发布。
  * @param[in,out] bridge 已初始化的桥接对象，由接收派发任务串行访问。
+ * @param[in] frame 只读 CAN 帧，调用期间有效。
+ * @param[in] received_ms 该帧进入接收队列时的本机毫秒时间。
  * @param[in] now_ms 本机当前毫秒时刻。
  * @param[in] timeout_ms 单个消息的拼接期限，1～INT32_MAX毫秒。
  * @return 等待分片、发布成功或具体错误；未完整或校验失败不发布。
- * @note 调用者须确保transport对应当前回调的CAN对象；还须按周期调用CanTopicBridgeCheckSync。
+ * @note 调用者须确认帧来自绑定端点；还须按周期调用CanTopicBridgeCheckSync。
  */
-CanTopicBridgeStatus_t CanTopicBridgeReceive(CanTopicBridge_t *bridge, uint32_t now_ms, uint32_t timeout_ms);
+CanTopicBridgeStatus_t CanTopicBridgeReceive(CanTopicBridge_t *bridge, const CanTopicFrame_t *frame,
+                                            uint32_t received_ms, uint32_t now_ms, uint32_t timeout_ms);
 
 /** @brief 撤销对端旧数据，并清除旧来源时刻和未完成的分片。
  * @param[in,out] bridge 已初始化且具有接收端点的桥接对象。

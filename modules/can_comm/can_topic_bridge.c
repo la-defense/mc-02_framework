@@ -10,7 +10,7 @@ CanTopicBridgeStatus_t CanTopicBridgeInit(CanTopicBridge_t *bridge, CanTopicTran
     const CanTopicCodec_t *outgoing_codec, const CanTopicCodec_t *incoming_codec,
     CanTopicMapTime_t map_time, void *map_context)
 {
-    if (bridge==NULL || transport==NULL || transport->can==NULL || (outgoing==NULL && incoming==NULL))
+    if (bridge==NULL || transport==NULL || transport->endpoint_identity==NULL || (outgoing==NULL && incoming==NULL))
         return CAN_BRIDGE_ARGUMENT;
     CanTopicBridge_t candidate={0};
     candidate.transport=transport; candidate.outgoing=outgoing; candidate.incoming=incoming;
@@ -69,7 +69,7 @@ static uint8_t CanTopicPendingFinished(CanTopicBridge_t *bridge)
 {
     if (bridge->pending_request_id==0u) return 1u;
     CAN_TxResult_t result;
-    if (!CANGetTxRequestState(bridge->pending_request_id,&result) ||
+    if (!PlatformCanGetRequest(bridge->pending_request_id,&result) ||
         (result.pending_frames==0u && (result.state==CAN_TX_RESULT_COMPLETE || result.state==CAN_TX_RESULT_FAILED ||
          result.state==CAN_TX_RESULT_EXPIRED || result.state==CAN_TX_RESULT_CANCELLED || result.state==CAN_TX_RESULT_SUPERSEDED))) {
         bridge->pending_request_id=0u;
@@ -80,7 +80,7 @@ static uint8_t CanTopicPendingFinished(CanTopicBridge_t *bridge)
 
 static uint8_t CanTopicCancelPending(CanTopicBridge_t *bridge)
 {
-    if (bridge->pending_request_id!=0u) (void)CANCancelTxRequest(bridge->pending_request_id);
+    if (bridge->pending_request_id!=0u) (void)PlatformCanCancelRequest(bridge->pending_request_id);
     // 已标记取消的组仍可能有帧在硬件中，必须等它们结束再提交新组。
     return CanTopicPendingFinished(bridge);
 }
@@ -164,11 +164,12 @@ CanTopicBridgeStatus_t CanTopicBridgePublish(CanTopicBridge_t *bridge, const Can
     return CAN_BRIDGE_OK;
 }
 
-CanTopicBridgeStatus_t CanTopicBridgeReceive(CanTopicBridge_t *bridge, uint32_t now_ms, uint32_t timeout_ms)
+CanTopicBridgeStatus_t CanTopicBridgeReceive(CanTopicBridge_t *bridge, const CanTopicFrame_t *frame,
+                                            uint32_t received_ms, uint32_t now_ms, uint32_t timeout_ms)
 {
     if (bridge==NULL || bridge->transport==NULL || bridge->incoming==NULL) return CAN_BRIDGE_ARGUMENT;
     CanTopicMessage_t message;
-    CanTopicWireStatus_t status=CanTopicTransportReceive(bridge->transport,now_ms,timeout_ms,&message);
+    CanTopicWireStatus_t status=CanTopicTransportReceive(bridge->transport,frame,received_ms,now_ms,timeout_ms,&message);
     if (status==CAN_TOPIC_INCOMPLETE) return CAN_BRIDGE_INCOMPLETE;
     if (status!=CAN_TOPIC_OK) return CAN_BRIDGE_WIRE;
     return CanTopicBridgePublish(bridge,&message,now_ms);

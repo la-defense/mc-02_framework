@@ -115,7 +115,7 @@ int main(void)
     TEST_CHECK(MessagePublisherInvalidate(shared)==MESSAGE_ERR_RELATION);
     TEST_CHECK(MessageReadSnapshot(shared_read,&shared_output,sizeof(shared_output),100u,NULL)==MESSAGE_OK && shared_output==55u);
     FDCAN_HandleTypeDef handle={0}; CANInstance can={.can_handle=&handle,.tx_id=0x321u};
-    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,&can));
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,PLATFORM_CAN_BUS_1,can.tx_id,&can));
     uint8_t synchronized=0u; CanTopicBridge_t bridge;
     const CanTopicCodec_t codec={copy_bytes,NULL,4u};
     TEST_CHECK(CanTopicBridgeInit(&bridge,&transport,out,remote,&codec,&codec,map_time,&synchronized)==CAN_BRIDGE_OK);
@@ -169,7 +169,7 @@ int main(void)
     TEST_CHECK(CanTopicBridgePublish(&bridge,&message,100u)==CAN_BRIDGE_OK);
     message.source_ms=1u; message.first_rx_ms=102u;
     TEST_CHECK(CanTopicBridgePublish(&bridge,&message,103u)==CAN_BRIDGE_OK);
-    TEST_CHECK(CanTopicTransportInit(&transport,&can));
+    TEST_CHECK(CanTopicTransportInit(&transport,PLATFORM_CAN_BUS_1,can.tx_id,&can));
     TEST_CHECK(CanTopicBridgeInit(&bridge,&transport,out,remote,&codec,&codec,map_time,&synchronized)==CAN_BRIDGE_OK);
     message.source_ms=20u; message.first_rx_ms=0u;
     CanTopicFrame_t frames[CAN_TOPIC_MAX_FRAMES]; size_t count=0u;
@@ -177,7 +177,7 @@ int main(void)
     for (size_t i=0u;i<count;++i) {
         can.rx_len=frames[i].length; memcpy(can.rx_buff,frames[i].bytes,can.rx_len);
         can.rx_timestamp_ms=121u+(uint32_t)i;
-        CanTopicBridgeStatus_t status=CanTopicBridgeReceive(&bridge,121u+(uint32_t)i,50u);
+        CanTopicBridgeStatus_t status=CanTopicBridgeReceive(&bridge,&frames[i],can.rx_timestamp_ms,121u+(uint32_t)i,50u);
         TEST_CHECK(status==(i+1u==count ? CAN_BRIDGE_OK : CAN_BRIDGE_INCOMPLETE));
     }
     TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),123u,&freshness)==MESSAGE_OK &&
@@ -197,9 +197,13 @@ int main(void)
     TEST_CHECK(CanTopicBridgePublish(&bridge,&message,126u)==CAN_BRIDGE_OK);
     TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),126u,&freshness)==MESSAGE_OK && output==value);
     CanTopicLink_t link={0}; CAN_Init_Config_s config={.can_handle=&handle,.tx_id=0x321u,.rx_id=0x123u};
-    TEST_CHECK(!CanTopicLinkInit(&link,&config,out,remote,&codec,&codec,map_time,&synchronized,0u));
-    TEST_CHECK(CanTopicLinkInit(&link,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
-    TEST_CHECK(!CanTopicLinkInit(&link,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
+    registered_can.can_handle=&handle;
+    // 配置的逻辑总线必须对应实际接收句柄，失败时不能注册回调。
+    TEST_CHECK(!CanTopicLinkInit(&link,PLATFORM_CAN_BUS_2,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
+    TEST_CHECK(registered_callback==NULL);
+    TEST_CHECK(!CanTopicLinkInit(&link,PLATFORM_CAN_BUS_1,&config,out,remote,&codec,&codec,map_time,&synchronized,0u));
+    TEST_CHECK(CanTopicLinkInit(&link,PLATFORM_CAN_BUS_1,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
+    TEST_CHECK(!CanTopicLinkInit(&link,PLATFORM_CAN_BUS_1,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
     message.source_ms=30u; message.first_rx_ms=0u;
     TEST_CHECK(CanTopicEncode(&message,9u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     for (size_t i=0u;i<count;++i) {
@@ -267,17 +271,17 @@ int main(void)
 
     // 同一个生产 CAN 接收入口先处理对时，再接收经过时间换算的话题。
     CanTopicLink_t timed_link={0};
-    TEST_CHECK(CanTopicLinkInit(&timed_link,&config,NULL,remote,NULL,&codec,NULL,NULL,50u));
+    TEST_CHECK(CanTopicLinkInit(&timed_link,PLATFORM_CAN_BUS_1,&config,NULL,remote,NULL,&codec,NULL,NULL,50u));
     CanTimeSync_t local_sync={0}, peer_sync={0};
     FDCAN_HandleTypeDef peer_handle={0};
     CANInstance peer_can={.can_handle=&peer_handle,.tx_id=0x123u};
     CanTimeSync_t wrong_sync={0};
     // 同一对象若配置了其他总线或发送 ID，不能接入当前链路。
-    TEST_CHECK(CanTimeSyncInit(&wrong_sync,PLATFORM_CAN_BUS_2,timed_link.transport.can->tx_id,timed_link.transport.can));
+    TEST_CHECK(CanTimeSyncInit(&wrong_sync,PLATFORM_CAN_BUS_2,timed_link.can->tx_id,timed_link.can));
     TEST_CHECK(!CanTopicLinkAttachTimeSync(&timed_link,&wrong_sync));
-    TEST_CHECK(CanTimeSyncInit(&wrong_sync,PLATFORM_CAN_BUS_1,0x7ffu,timed_link.transport.can));
+    TEST_CHECK(CanTimeSyncInit(&wrong_sync,PLATFORM_CAN_BUS_1,0x7ffu,timed_link.can));
     TEST_CHECK(!CanTopicLinkAttachTimeSync(&timed_link,&wrong_sync));
-    TEST_CHECK(CanTimeSyncInit(&local_sync,PLATFORM_CAN_BUS_1,timed_link.transport.can->tx_id,timed_link.transport.can));
+    TEST_CHECK(CanTimeSyncInit(&local_sync,PLATFORM_CAN_BUS_1,timed_link.can->tx_id,timed_link.can));
     TEST_CHECK(CanTimeSyncInit(&peer_sync,PLATFORM_CAN_BUS_1,peer_can.tx_id,&peer_can));
     CanTopicLink_t missing_endpoint={0};
     missing_endpoint.ready=1u;

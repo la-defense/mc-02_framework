@@ -4,10 +4,12 @@
  */
 #ifndef CAN_TOPIC_LINK_H
 #define CAN_TOPIC_LINK_H
+#include "bsp_can.h" // 接收注册暂由当前板级 CAN 实现提供。
 #include "can_topic_bridge.h"
 #include "can_time_sync.h"
 
 typedef struct {
+    CANInstance *can; /**< 当前板注册的接收端点，仅由链路和板级适配使用。 */
     CanTopicTransport_t transport;
     CanTopicBridge_t bridge;
     CanTimeSync_t *time_sync;
@@ -18,6 +20,7 @@ typedef struct {
 
 /** @brief 校验话题和期限后注册CAN接收端点。
  * @param[out] link 调用前清零，成功后长期保存；失败保持原值。
+ * @param[in] bus 与 can_config 句柄对应的逻辑总线，不匹配时拒绝。
  * @param[in] can_config CAN配置，仅在调用中读取；接收回调和id由本模块设置。
  * @param[in] outgoing,incoming 长期有效的订阅／发布句柄，至少一个非空。
  * @param[in] outgoing_codec,incoming_codec 启用方向的编码／解码配置，初始化时复制。
@@ -26,7 +29,7 @@ typedef struct {
  * @return 1为成功、0为参数／话题／资源错误；失败不占用CAN实例。
  * @note 调度器启动前串行调用，禁止CAN接收派发与初始化并发；成功后不提供运行期注销。
  */
-uint8_t CanTopicLinkInit(CanTopicLink_t *link, const CAN_Init_Config_s *can_config,
+uint8_t CanTopicLinkInit(CanTopicLink_t *link, PlatformCanBus_t bus, const CAN_Init_Config_s *can_config,
     MessageSubscriber_t *outgoing, MessagePublisher_t *incoming,
     const CanTopicCodec_t *outgoing_codec, const CanTopicCodec_t *incoming_codec, CanTopicMapTime_t map_time,
     void *map_context, uint32_t assembly_timeout_ms);

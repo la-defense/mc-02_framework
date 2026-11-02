@@ -1147,7 +1147,7 @@ static void test_can_tx_topic_group(void)
     CANInstance *can=CANRegister(&config);
     TEST_CHECK(can != NULL);
     CanTopicTransport_t transport;
-    TEST_CHECK(CanTopicTransportInit(&transport,can));
+    TEST_CHECK(CanTopicTransportInit(&transport,PLATFORM_CAN_BUS_1,can->tx_id,can));
     CanTopicMessage_t input={.topic_id=7u,.length=64u,.source_ms=25u};
     for (unsigned i=0u;i<64u;++i) input.payload[i]=(uint8_t)i;
     uint32_t topic_id=0u;
@@ -1181,7 +1181,7 @@ static void test_can_tx_topic_interrupt(void)
     config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
     config.can_module_callback=scheduler_rx_callback;
     CANInstance *can=CANRegister(&config); TEST_CHECK(can != NULL);
-    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,PLATFORM_CAN_BUS_1,can->tx_id,can));
     CanTopicMessage_t input={.topic_id=7u,.length=64u,.source_ms=25u};
     uint32_t topic_id=0u;
     TEST_CHECK(CanTopicTransportSend(&transport,&input,30u,&topic_id)==CAN_TX_SUBMIT_ACCEPTED);
@@ -1221,7 +1221,7 @@ static void test_can_tx_topic_rx(void)
     CanTopicLink_t link={0}; uint8_t synchronized=1u;
     const CanTopicCodec_t codec={test_topic_copy,NULL,4u};
     CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x501u;
-    TEST_CHECK(CanTopicLinkInit(&link,&config,NULL,publisher,NULL,&codec,test_topic_map,&synchronized,50u));
+    TEST_CHECK(CanTopicLinkInit(&link,PLATFORM_CAN_BUS_1,&config,NULL,publisher,NULL,&codec,test_topic_map,&synchronized,50u));
     CanTopicMessage_t message={.topic_id=19u,.length=4u,.source_ms=100u,.payload={1u,2u,3u,4u}};
     CanTopicFrame_t frames[CAN_TOPIC_MAX_FRAMES]; size_t count=0u;
     TEST_CHECK(CanTopicEncode(&message,1u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
@@ -1268,7 +1268,7 @@ static void test_can_tx_topic_cancel(void)
     CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x501u;
     config.can_module_callback=scheduler_rx_callback;
     CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
-    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,PLATFORM_CAN_BUS_1,can->tx_id,can));
     const CanTopicCodec_t codec={test_topic_copy,NULL,4u};
     CanTopicBridge_t bridge;
     TEST_CHECK(CanTopicBridgeInit(&bridge,&transport,subscriber,NULL,&codec,NULL,NULL,NULL)==CAN_BRIDGE_OK);
@@ -1293,7 +1293,7 @@ static void test_can_tx_topic_contention(void)
     CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
     config.can_module_callback=scheduler_rx_callback;
     CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
-    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,PLATFORM_CAN_BUS_1,can->tx_id,can));
     CanTopicMessage_t message={.topic_id=7u,.length=64u}; uint32_t topic_id=0u;
     TEST_CHECK(CanTopicTransportSend(&transport,&message,5u,&topic_id)==CAN_TX_SUBMIT_ACCEPTED);
     uint8_t data=0u; CAN_TxFrame_t control=scheduler_frame(0x101u,CAN_TX_ID_STANDARD,&data,1u);
@@ -1316,7 +1316,7 @@ static void test_can_tx_topic_drain(void)
     CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
     config.can_module_callback=scheduler_rx_callback;
     CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
-    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,PLATFORM_CAN_BUS_1,can->tx_id,can));
     CanTopicMessage_t message={.topic_id=7u,.length=21u}; uint32_t ids[6]={0};
     for (unsigned tick=0u;tick<30u;++tick) {
         now_us=(uint64_t)tick*1000u;
@@ -1377,7 +1377,7 @@ static void test_can_tx_topic_sync_budget(void)
     CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
     config.can_module_callback=scheduler_rx_callback;
     CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
-    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,PLATFORM_CAN_BUS_1,can->tx_id,can));
     CanTimeSync_t sync={0}; TEST_CHECK(CanTimeSyncInit(&sync,PLATFORM_CAN_BUS_1,can->tx_id,can));
     CanTopicMessage_t message={.topic_id=7u,.length=21u};
     uint32_t ids[6]={0u};
@@ -1423,7 +1423,7 @@ static void test_can_tx_topic_shared(void)
     CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
     config.can_module_callback=scheduler_rx_callback;
     CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
-    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,PLATFORM_CAN_BUS_1,can->tx_id,can));
     CanTopicMessage_t message={.topic_id=7u,.length=21u}; uint32_t topic_id=0u;
     TEST_CHECK(CanTopicTransportSend(&transport,&message,50u,&topic_id)==CAN_TX_SUBMIT_ACCEPTED);
     uint8_t data=0u; CAN_TxFrame_t control=scheduler_frame(0x101u,CAN_TX_ID_STANDARD,&data,1u);
@@ -1447,7 +1447,7 @@ static void test_can_tx_topic_pending(void)
     CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x500u;
     config.can_module_callback=scheduler_rx_callback;
     CANInstance *can=CANRegister(&config); TEST_CHECK(can!=NULL);
-    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,can));
+    CanTopicTransport_t transport; TEST_CHECK(CanTopicTransportInit(&transport,PLATFORM_CAN_BUS_1,can->tx_id,can));
     CanTopicMessage_t message={.topic_id=7u,.length=21u}; uint32_t topic_id=0u;
     TEST_CHECK(CanTopicTransportSend(&transport,&message,50u,&topic_id)==CAN_TX_SUBMIT_ACCEPTED);
     CANProcessTx(); uint32_t first=tx_latest_buffer[0];

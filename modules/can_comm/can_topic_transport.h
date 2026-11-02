@@ -4,21 +4,26 @@
  */
 #ifndef CAN_TOPIC_TRANSPORT_H
 #define CAN_TOPIC_TRANSPORT_H
-#include "bsp_can.h"
+#include "../../bsp/can/platform_can.h"
 #include "can_topic_wire.h"
 
 typedef struct {
-    CANInstance *can; /**< 已注册的长期有效CAN对象。 */
+    PlatformCanBus_t bus; /**< 本板发送使用的逻辑总线。 */
+    uint32_t tx_id; /**< 话题分片使用的标准发送 ID。 */
+    const void *endpoint_identity; /**< 长期端点标识，不由本层解引用。 */
     CanTopicReceiver_t receiver; /**< 仅由本实例的接收调用修改。 */
     uint8_t next_sequence; /**< 下次成功入队使用的序号。 */
 } CanTopicTransport_t;
 
 /** @brief 初始化调用者保存的传输状态。
  * @param[out] transport 长期保存的对象，失败保持原值。
- * @param[in] can 已注册的CAN对象，句柄及发送编号在生命周期内保持有效。
+ * @param[in] bus 本板逻辑总线，实际绑定由平台确认。
+ * @param[in] tx_id 标准发送 ID，范围 0～0x7FF。
+ * @param[in] endpoint_identity 长期端点标识，用于关联接收链路。
  * @return 1表示成功，0表示参数错误；须在收发之前调用，不得对运行中对象重复初始化。
  */
-uint8_t CanTopicTransportInit(CanTopicTransport_t *transport, CANInstance *can);
+uint8_t CanTopicTransportInit(CanTopicTransport_t *transport, PlatformCanBus_t bus,
+                              uint32_t tx_id, const void *endpoint_identity);
 
 /** @brief 复制完整分片组到CAN队列。
  * @param[in,out] transport 已初始化对象；仅成功入队时推进序号。
@@ -42,13 +47,16 @@ CAN_TxSubmitStatus_t CanTopicTransportSend(CanTopicTransport_t *transport,
 CAN_TxSubmitStatus_t CanTopicTransportSendUntil(CanTopicTransport_t *transport,
     const CanTopicMessage_t *message, uint32_t expiry_ms, uint32_t *request_id);
 
-/** @brief 消费CAN接收对象当前帧，完成后复制结果。
+/** @brief 消费调用者提供的 CAN 帧，完成后复制结果。
  * @param[in,out] transport 已初始化对象，接收回调中普通任务串行调用。
+ * @param[in] frame 当前帧的只读副本，调用期间有效。
+ * @param[in] received_ms 该帧进入接收队列时的本机毫秒时间。
  * @param[in] now_ms 当前本机毫秒时刻。
  * @param[in] timeout_ms 组包期限，1～INT32_MAX毫秒。
  * @param[out] output 成功后复制，其他结果保持原值。
  * @return 拼包状态；成功不表示远端源时间已经映射或数据可以控制执行器。
  */
 CanTopicWireStatus_t CanTopicTransportReceive(CanTopicTransport_t *transport,
-    uint32_t now_ms, uint32_t timeout_ms, CanTopicMessage_t *output);
+    const CanTopicFrame_t *frame, uint32_t received_ms, uint32_t now_ms,
+    uint32_t timeout_ms, CanTopicMessage_t *output);
 #endif

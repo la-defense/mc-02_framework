@@ -5,12 +5,13 @@
 #include "platform_sync.h"
 #include "../../bsp/board/board_can_stm32.h"
 #include <limits.h>
+#include <string.h>
 
 // CANProcessRx在普通任务中派发；消息组装及话题复制不在中断执行。
 static void CanTopicLinkReceive(CANInstance *instance)
 {
     CanTopicLink_t *link=instance == NULL ? NULL : instance->id;
-    if (link==NULL || !link->ready || link->transport.can!=instance || link->bridge.incoming==NULL) return;
+    if (link==NULL || !link->ready || link->can!=instance || link->bridge.incoming==NULL) return;
     // 对时帧与话题帧共用 CAN ID，但各自检查帧类型和内容。
     if (instance->rx_len>0u && (instance->rx_buff[0]&0xf0u)==0xc0u) {
         if (link->time_sync!=NULL) {
@@ -25,20 +26,24 @@ static void CanTopicLinkReceive(CANInstance *instance)
         }
         return;
     }
-    link->last_receive=CanTopicBridgeReceive(&link->bridge,PlatformTimeNowMs(),link->assembly_timeout_ms);
+    CanTopicFrame_t frame={0}; // 将本次接收数据复制成与芯片无关的帧。
+    frame.length=instance->rx_len; // 保留实际长度供协议检查。
+    if (frame.length<=sizeof(frame.bytes)) // 无效长度不读取超出接收缓冲的数据。
+        memcpy(frame.bytes,instance->rx_buff,frame.length);
+    link->last_receive=CanTopicBridgeReceive(&link->bridge,&frame,instance->rx_timestamp_ms,
+                                             PlatformTimeNowMs(),link->assembly_timeout_ms);
 }
 
-uint8_t CanTopicLinkInit(CanTopicLink_t *link, const CAN_Init_Config_s *can_config,
+uint8_t CanTopicLinkInit(CanTopicLink_t *link, PlatformCanBus_t bus, const CAN_Init_Config_s *can_config,
     MessageSubscriber_t *outgoing, MessagePublisher_t *incoming,
     const CanTopicCodec_t *outgoing_codec, const CanTopicCodec_t *incoming_codec, CanTopicMapTime_t map_time,
     void *map_context, uint32_t assembly_timeout_ms)
 {
     if (link==NULL || link->ready || can_config==NULL || can_config->can_handle==NULL ||
+        BoardCanResolve(bus)!=can_config->can_handle ||
         assembly_timeout_ms==0u || assembly_timeout_ms>INT32_MAX) return 0u;
-    CANInstance placeholder={0};
-    placeholder.can_handle=can_config->can_handle; placeholder.tx_id=can_config->tx_id;
     CanTopicLink_t candidate={0};
-    if (!CanTopicTransportInit(&candidate.transport,&placeholder) ||
+    if (!CanTopicTransportInit(&candidate.transport,bus,can_config->tx_id,link) ||
         CanTopicBridgeInit(&candidate.bridge,&candidate.transport,outgoing,incoming,
                            outgoing_codec,incoming_codec,map_time,map_context)!=CAN_BRIDGE_OK)
         return 0u;
@@ -47,7 +52,9 @@ uint8_t CanTopicLinkInit(CanTopicLink_t *link, const CAN_Init_Config_s *can_conf
     CANInstance *instance=CANRegister(&config);
     if (instance==NULL) return 0u;
     // 注册后没有其他可能失败的步骤；对象整体发布前禁止接收任务运行。
-    candidate.transport.can=instance; candidate.assembly_timeout_ms=assembly_timeout_ms;
+    candidate.can=instance; // 保存实际注册端点，供接收回调检查。
+    candidate.transport.endpoint_identity=instance; // 发布前将标识换成实际端点。
+    candidate.assembly_timeout_ms=assembly_timeout_ms;
     candidate.ready=1u;
     *link=candidate;
     link->bridge.transport=&link->transport;
@@ -56,10 +63,10 @@ uint8_t CanTopicLinkInit(CanTopicLink_t *link, const CAN_Init_Config_s *can_conf
 
 uint8_t CanTopicLinkAttachTimeSync(CanTopicLink_t *link, CanTimeSync_t *sync)
 {
-    if (link==NULL || !link->ready || link->transport.can==NULL || link->time_sync!=NULL || link->bridge.incoming==NULL ||
-        sync==NULL || !sync->initialized || sync->endpoint_identity!=link->transport.can ||
-        sync->tx_id!=link->transport.can->tx_id ||
-        BoardCanResolve(sync->bus)!=link->transport.can->can_handle)
+    if (link==NULL || !link->ready || link->can==NULL || link->time_sync!=NULL || link->bridge.incoming==NULL ||
+        sync==NULL || !sync->initialized || sync->endpoint_identity!=link->can ||
+        sync->tx_id!=link->transport.tx_id || sync->bus!=link->transport.bus ||
+        BoardCanResolve(sync->bus)!=link->can->can_handle)
         return 0u;
     if (CanTopicBridgeResetPeer(&link->bridge)!=CAN_BRIDGE_OK)
         return 0u;
