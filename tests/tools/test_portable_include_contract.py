@@ -24,6 +24,10 @@ class PortableIncludeContractTest(unittest.TestCase):
         # 安全模块的公开状态定义也可进入框架目标。
         check_portable_includes(self.entry("-Imodules/safety", "-Ibsp/os", "-Ibsp/log"),
                                 ROOT, "modules/safety/robot_safety.c")
+        # 板间链路可访问逻辑 CAN、时间映射和 CRC 的接口目录。
+        check_portable_includes(self.entry("-Ibsp/can", "-Imodules/can_comm",
+                                           "-Imodules/time_sync", "-Imodules/algorithm"),
+                                ROOT, "modules/can_comm/can_topic_link.c")
 
     def test_vendor_and_rtos_paths_are_rejected(self):
         # 同时覆盖拼接、分离和系统头参数，防止替换选项形式后漏检。
@@ -47,6 +51,10 @@ class PortableIncludeContractTest(unittest.TestCase):
         check_portable_dependencies(valid, ROOT, ROOT / "build", source)
         with self.assertRaises(SystemExit):
             check_portable_dependencies(valid + f"    {ROOT / 'Core/Inc/main.h'}\n",
+                                        ROOT, ROOT / "build", source)
+        # 可访问 CAN 框架目录也不允许间接引用芯片头。
+        with self.assertRaises(SystemExit):
+            check_portable_dependencies(valid + f"    {ROOT / 'Drivers/CMSIS/Include/core_cm7.h'}\n",
                                         ROOT, ROOT / "build", source)
         with self.assertRaises(SystemExit):
             check_portable_dependencies("object: deps not found\n", ROOT, ROOT / "build", source)

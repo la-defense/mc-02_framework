@@ -85,8 +85,8 @@ add_library(mc02_can_time_sync_portable OBJECT ../../modules/can_comm/can_time_s
 target_include_directories(mc02_can_time_sync_portable PRIVATE ../../modules/can_comm ../../modules/time_sync ../../modules/algorithm)
 target_compile_options(mc02_can_time_sync_portable PRIVATE -Wall -Wextra -Werror)
 # 话题分片与消息桥接只依赖框架消息和逻辑 CAN 接口。
-add_library(mc02_can_topic_portable OBJECT ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_bridge.c ../../modules/can_comm/can_topic_link.c)
-target_include_directories(mc02_can_topic_portable PRIVATE ../../modules/can_comm ../../modules/message_center ../../modules/time_sync ../../bsp/os)
+add_library(mc02_can_topic_portable OBJECT ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_bridge.c ../../modules/can_comm/can_topic_link.c ../../modules/time_sync/time_mapping.c)
+target_include_directories(mc02_can_topic_portable PRIVATE ../../modules/can_comm ../../modules/message_center ../../modules/time_sync ../../modules/algorithm ../../bsp/os)
 target_compile_options(mc02_can_topic_portable PRIVATE -Wall -Wextra -Werror)
 # 遥控公开头不需要 HAL 或 RTOS 头。
 add_library(mc02_remote_header_portable OBJECT remote_public_header.c)

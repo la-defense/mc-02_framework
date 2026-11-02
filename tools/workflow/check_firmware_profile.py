@@ -60,6 +60,15 @@ PORTABLE_FRAMEWORK_SOURCES = {
     "modules/message_center/message_center.c",  # 消息目录和有界队列。
     "modules/safety/robot_safety.c",  # 整车许可与故障管理。
 }
+# 可选文件只有被车型清单选中时才进入独立框架目标。
+OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
+    "modules/can_comm/can_topic_wire.c",  # 帧编码与校验。
+    "modules/can_comm/can_topic_transport.c",  # 分片传输。
+    "modules/can_comm/can_topic_bridge.c",  # 话题桥接。
+    "modules/can_comm/can_topic_link.c",  # 逻辑 CAN 端点绑定。
+    "modules/can_comm/can_time_sync.c",  # 板间对时。
+    "modules/time_sync/time_mapping.c",  # 跨设备时钟映射。
+}
 ASSEMBLY_SOURCES = {
     "startup_stm32h723xx.s",
     "Middlewares/Third_Party/SEGGER/RTT/SEGGER_RTT_ASM_ARMv7M.s",
@@ -141,6 +150,7 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
     selected = {line for line in lines if line.endswith(".c")}
     if not PORTABLE_FRAMEWORK_SOURCES <= selected:
         raise SystemExit("selected-source report is missing a portable framework source")
+    portable_sources = PORTABLE_FRAMEWORK_SOURCES | (OPTIONAL_PORTABLE_FRAMEWORK_SOURCES & selected)
     source_root = Path.cwd().resolve()
     compiled: set[str] = set()
     compiler_commands: list[str] = []
@@ -153,7 +163,7 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
             continue
         compiled.add(relative)
         compiler_commands.append(entry.get("command", ""))
-        if relative in PORTABLE_FRAMEWORK_SOURCES:
+        if relative in portable_sources:
             portable_counts[relative] = portable_counts.get(relative, 0) + 1
             check_portable_includes(entry, source_root, relative)
     expected_compiled = selected | DSP_SOURCES | NUMERIC_ADAPTER_SOURCES | ASSEMBLY_SOURCES
@@ -184,7 +194,7 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         raise SystemExit(f"source selection failed: missing={sorted(missing)}, "
                          f"unexpected_optional={sorted(unexpected)}, "
                          f"unregistered={sorted(unexpected_compiled)}")
-    if any(portable_counts.get(source, 0) != 1 for source in PORTABLE_FRAMEWORK_SOURCES):
+    if any(portable_counts.get(source, 0) != 1 for source in portable_sources):
         raise SystemExit(f"portable framework sources must compile exactly once: {portable_counts}")
 
     target_line = next((line for line in lines if line.startswith("target=")), None)
@@ -196,11 +206,11 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
     link_command = find_link_command(commands, target)
     for source in selected:
         # 框架源码由独立对象目标编译，其余源码仍由固件目标编译。
-        owner = "mc02_portable_framework" if source in PORTABLE_FRAMEWORK_SOURCES else target
+        owner = "mc02_portable_framework" if source in portable_sources else target
         object_path = f"{owner}.dir/{source}.obj"
         if object_path not in link_command:
             raise SystemExit(f"registered source is absent from the Ninja link command: {source}")
-    for source in PORTABLE_FRAMEWORK_SOURCES:
+    for source in portable_sources:
         # 检查实际预处理依赖，避免相对路径或绝对路径包含绕过编译选项检查。
         object_path = f"CMakeFiles/mc02_portable_framework.dir/{source}.obj"
         deps = subprocess.run(["ninja", "-C", str(build_dir), "-t", "deps", object_path],
@@ -211,7 +221,9 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
 def check_portable_includes(entry: dict, source_root: Path, source: str) -> None:
     """只允许框架公开头和日志格式检查头进入可移植源文件的编译路径。"""
     allowed = {source_root / "modules/daemon", source_root / "modules/message_center", source_root / "modules/safety",
-               source_root / "bsp/os", source_root / "bsp/log"}
+               source_root / "bsp/os", source_root / "bsp/log", source_root / "bsp/can",
+               source_root / "modules/can_comm", source_root / "modules/time_sync",
+               source_root / "modules/algorithm"}
     arguments = entry.get("arguments") or shlex.split(entry.get("command", ""))
     for index, argument in enumerate(arguments):
         # 同时处理 -Ipath、-I path 和 -isystem path，防止换一种写法绕过检查。
@@ -253,7 +265,9 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
     if not lines or "#deps" not in lines[0] or "(VALID)" not in lines[0]:
         raise SystemExit(f"portable framework source {source} has no valid Ninja dependencies")
     allowed = (source_root / "modules/daemon", source_root / "modules/message_center", source_root / "modules/safety",
-               source_root / "bsp/os", source_root / "bsp/log")
+               source_root / "bsp/os", source_root / "bsp/log", source_root / "bsp/can",
+               source_root / "modules/can_comm", source_root / "modules/time_sync",
+               source_root / "modules/algorithm")
     for line in lines[1:]:
         # 依赖可能为相对构建目录的路径，也可能为绝对路径。
         if not line.strip():

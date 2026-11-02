@@ -276,6 +276,19 @@ set(MC02_PORTABLE_FRAMEWORK_SOURCES
     modules/daemon/daemon_event_task.c # 来源事件处理任务的框架入口。
     modules/message_center/message_center.c # 有界消息与话题目录。
     modules/safety/robot_safety.c) # 整车许可、故障与急停状态。
+# 板间通信和时间映射仅在车型选择时进入独立目标。
+set(MC02_OPTIONAL_PORTABLE_SOURCES
+    modules/can_comm/can_topic_wire.c # 板间话题帧编码和校验。
+    modules/can_comm/can_topic_transport.c # 话题分片发送与接收。
+    modules/can_comm/can_topic_bridge.c # 话题与板间传输转换。
+    modules/can_comm/can_topic_link.c # 逻辑 CAN 端点和桥接。
+    modules/can_comm/can_time_sync.c # 板间时间同步交互。
+    modules/time_sync/time_mapping.c) # 不同时钟之间的时间换算。
+foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
+    if(source IN_LIST MC02_SELECTED_SOURCES)
+        list(APPEND MC02_PORTABLE_FRAMEWORK_SOURCES "${source}")
+    endif()
+endforeach()
 set(MC02_EXECUTABLE_SOURCES ${MC02_SELECTED_SOURCES})
 list(REMOVE_ITEM MC02_EXECUTABLE_SOURCES ${MC02_PORTABLE_FRAMEWORK_SOURCES})
 add_library(mc02_portable_framework OBJECT ${MC02_PORTABLE_FRAMEWORK_SOURCES})
@@ -286,6 +299,11 @@ target_include_directories(mc02_portable_framework PRIVATE
     bsp/log # 安全状态变化使用的有界事件接口。
     bsp/os) # 不暴露厂商类型的任务、时间和同步接口。
 mc02_apply_format_diagnostics(mc02_portable_framework)
+target_include_directories(mc02_portable_framework PRIVATE
+    bsp/can # 逻辑 CAN 端点和帧接口。
+    modules/can_comm # 板间话题和同步接口。
+    modules/time_sync # 时钟映射接口。
+    modules/algorithm) # 帧校验使用的软件 CRC 接口。
 
 add_executable(${MC02_OUTPUT_BASENAME}.elf ${MC02_EXECUTABLE_SOURCES}
     $<TARGET_OBJECTS:mc02_portable_framework> ${MC02_ASM_SOURCES} ${LINKER_SCRIPT})
