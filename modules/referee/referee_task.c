@@ -7,7 +7,8 @@
  * @copyright Copyright (c) 2022
  */
 #include "referee_task.h"
-#include "bsp_usart.h" // 当前 UI 临界区与时钟仍由板级接口提供。
+#include "platform_irq.h"
+#include "platform_sync.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -34,13 +35,12 @@ static UIFlight flight;
 
 static uint32_t UIEnter(void)
 {
-    uint32_t saved = __get_PRIMASK();
-    __disable_irq();
-    return saved;
+    // 保存进入前的屏蔽状态，以便嵌套调用后恢复原状态。
+    return PlatformIrqSaveAndDisable();
 }
 static void UIExit(uint32_t saved)
 {
-    __set_PRIMASK(saved);
+    PlatformIrqRestore(saved); // 恢复对应进入操作保存的状态。
 }
 static void UIPhase(UIPhase_t phase, UIStatus_t error)
 {
@@ -466,7 +466,7 @@ UIStatus_t UIRefresh(void)
         return UI_NOT_INITIALIZED;
 
     if (flight.id != 0u ||
-        (have_start && (uint32_t)(HAL_GetTick() - last_start_ms) < ui_config->frame_interval_ms))
+        (have_start && (uint32_t)(PlatformTimeNowMs() - last_start_ms) < ui_config->frame_interval_ms))
         return UI_OK;
 
     unsigned selected = ui_config->field_count;

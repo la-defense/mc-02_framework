@@ -41,6 +41,12 @@ set_property(SOURCE ../../modules/message_center/message_center.c APPEND PROPERT
 # Daemon 只需框架同步头，不依赖厂商或 RTOS 的头路径。
 set_property(SOURCE ../../modules/daemon/daemon.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+# 裁判 UI 使用框架中断和时间接口，不再从串口头间接获取芯片声明。
+set_property(SOURCE ../../modules/referee/referee_task.c APPEND PROPERTY
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+add_library(mc02_referee_ui_portable OBJECT ../../modules/referee/referee_task.c)
+target_include_directories(mc02_referee_ui_portable PRIVATE ../../modules/referee ../../bsp/usart ../../bsp/os)
+target_compile_options(mc02_referee_ui_portable PRIVATE -Wall -Wextra -Werror)
 # 遥控源码通过框架头访问时间和中断屏蔽；其硬件串口依赖仍单独处理。
 set_property(SOURCE ../../modules/remote/remote_control.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os;${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/board")
@@ -1540,7 +1546,7 @@ add_test(NAME production_crc_protocol_failure_and_compatibility COMMAND crc_prot
 # UI使用生产构图、组帧和任务逻辑；只替代传输与时钟，包装用于选定的一次计算失败。
 add_executable(referee_ui_test referee_ui_test.c crc_injection.c
   ../../modules/referee/referee_UI.c ../../modules/referee/rm_referee.c
-  ../../modules/referee/referee_task.c)
+  ../../modules/referee/referee_task.c referee_ui_platform_port.c)
 target_include_directories(referee_ui_test BEFORE PRIVATE crc_protocol_fakes can_comm_fakes)
 target_include_directories(referee_ui_test PRIVATE ../../modules/referee ../../modules/master_machine
   ../../modules/message_center)
@@ -1848,14 +1854,14 @@ endforeach()
 # UI状态机实际消费真实队列结果，身份从生产接收分帧和CRC发布。
 add_executable(uart_ui_integration_test uart_ui_integration_test.c uart_tx_hal_model.c
   ../../bsp/usart/bsp_usart.c ../../bsp/usart/bsp_usart_tx.c ../../bsp/usart/usart_tx_port.c
-  ../../modules/referee/rm_referee.c ../../modules/referee/referee_UI.c ../../modules/referee/referee_task.c)
+  ../../modules/referee/rm_referee.c ../../modules/referee/referee_UI.c ../../modules/referee/referee_task.c referee_ui_platform_port.c)
 target_include_directories(uart_ui_integration_test BEFORE PRIVATE usart_tx_fakes ../../bsp/usart
   remote_fakes crc_protocol_fakes can_comm_fakes)
 target_include_directories(uart_ui_integration_test PRIVATE . ../../modules/referee ../../modules/message_center
   ../../modules/master_machine ../../Core/Inc)
 target_link_libraries(uart_ui_integration_test PRIVATE mc02_software_crc Threads::Threads m)
 target_compile_options(uart_ui_integration_test PRIVATE -Wall -Wextra -Werror)
-foreach(scenario identity-before-start old-generation cadence failure latest queue-full partial-init reinit-inflight readonly link-recovery)
+foreach(scenario identity-before-start old-generation cadence failure latest queue-full partial-init reinit-inflight readonly link-recovery irq-restore)
   add_test(NAME production_uart_ui_${scenario} COMMAND uart_ui_integration_test ${scenario})
   set_tests_properties(production_uart_ui_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
@@ -1920,7 +1926,7 @@ set_tests_properties(dt7_input_tool PROPERTIES TIMEOUT 10)
 # 使用真实裁判和UART后端，验证两种业务竞争同一份发送额度。
 add_executable(referee_budget_test referee_budget_test.c uart_tx_hal_model.c
   ../../bsp/usart/bsp_usart.c ../../bsp/usart/bsp_usart_tx.c ../../bsp/usart/usart_tx_port.c
-  ../../modules/referee/rm_referee.c ../../modules/referee/referee_UI.c ../../modules/referee/referee_task.c)
+  ../../modules/referee/rm_referee.c ../../modules/referee/referee_UI.c ../../modules/referee/referee_task.c referee_ui_platform_port.c)
 target_include_directories(referee_budget_test BEFORE PRIVATE usart_tx_fakes ../../bsp/usart remote_fakes crc_protocol_fakes can_comm_fakes)
 target_include_directories(referee_budget_test PRIVATE . ../../modules/referee ../../modules/message_center ../../modules/master_machine ../../Core/Inc)
 target_link_libraries(referee_budget_test PRIVATE mc02_software_crc Threads::Threads m)

@@ -13,7 +13,6 @@
 #include "rm_referee.h"
 #include "referee_UI.h"
 #include "referee_ui_config.h"
-#include "robot_def.h"
 
 /** @brief UI流程阶段；运行只表示本机初始化帧已完成，不表示客户端已显示。 */
 typedef enum

@@ -125,6 +125,17 @@ int main(int argc, char **argv)
     TEST_CHECK(RefereeInit(PLATFORM_UART_1, NULL) == REFEREE_OK && UITaskInit(&test_ui_config) == UI_OK);
     identity(1u);
     UARTModelCheckRuntimeAllocation();
+    if (strcmp(argv[1], "irq-restore") == 0)
+    {
+        UIState_t output;
+        // 模拟调用前已屏蔽中断，UI 查询完成后不能提前解除屏蔽。
+        mc02_test_disable_irq();
+        TEST_CHECK(UIGetState(&output) == UI_OK);
+        TEST_CHECK(mc02_test_primask == 1u);
+        mc02_test_set_primask(0u);
+        TEST_CHECK(mc02_test_primask == 0u);
+        return 0;
+    }
     if (strcmp(argv[1], "identity-before-start") == 0)
     {
         TEST_CHECK(MyUIInit() == UI_SUBMITTED && UIRefresh() == UI_SUBMITTED);
