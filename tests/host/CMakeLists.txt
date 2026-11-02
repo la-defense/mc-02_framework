@@ -85,8 +85,8 @@ add_library(mc02_can_time_sync_portable OBJECT ../../modules/can_comm/can_time_s
 target_include_directories(mc02_can_time_sync_portable PRIVATE ../../modules/can_comm ../../modules/time_sync ../../modules/algorithm)
 target_compile_options(mc02_can_time_sync_portable PRIVATE -Wall -Wextra -Werror)
 # 话题分片与消息桥接只依赖框架消息和逻辑 CAN 接口。
-add_library(mc02_can_topic_portable OBJECT ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_bridge.c)
-target_include_directories(mc02_can_topic_portable PRIVATE ../../modules/can_comm ../../modules/message_center)
+add_library(mc02_can_topic_portable OBJECT ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_bridge.c ../../modules/can_comm/can_topic_link.c)
+target_include_directories(mc02_can_topic_portable PRIVATE ../../modules/can_comm ../../modules/message_center ../../modules/time_sync ../../bsp/os)
 target_compile_options(mc02_can_topic_portable PRIVATE -Wall -Wextra -Werror)
 # 遥控公开头不需要 HAL 或 RTOS 头。
 add_library(mc02_remote_header_portable OBJECT remote_public_header.c)
@@ -454,6 +454,7 @@ endforeach()
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
   ../../bsp/board/platform_can_stm32.c # 通过生产适配复用真实 CAN 队列。
+  ../../bsp/board/platform_can_rx_stm32.c # 通过生产适配注册与派发接收端点。
   ../../modules/motor/motor_pid.c
   ${MC02_HOST_DJI_SOURCES}
   ../../modules/algorithm/controller.c ${MC02_HOST_DAEMON_SOURCES} ../../bsp/can/bsp_can.c
@@ -761,7 +762,8 @@ set_tests_properties(production_can_topic_transport PROPERTIES TIMEOUT 10)
 add_executable(can_topic_bridge_test can_topic_bridge_test.c ../../modules/can_comm/can_topic_bridge.c
   ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c
   ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_time_sync.c ../../modules/time_sync/time_mapping.c
-  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../application/topics/chassis_topic_codec.c platform_can_request_fake.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../application/topics/chassis_topic_codec.c platform_can_request_fake.c
+  platform_can_rx_fake.c ../../bsp/board/platform_can_rx_stm32.c)
 target_include_directories(can_topic_bridge_test BEFORE PRIVATE can_comm_fakes init_resource_fakes chassis_fakes)
 target_include_directories(can_topic_bridge_test PRIVATE ../../modules/can_comm ../../modules/message_center ../../modules/time_sync ../../application ../../application/topics)
 target_link_libraries(can_topic_bridge_test PRIVATE mc02_software_crc)
@@ -774,6 +776,7 @@ foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
     ../../application/topics/robot_can_bridge.c ../../application/topics/robot_topics.c
     ../../bsp/board/board_can_stm32.c # 用生产板级绑定验证逻辑总线到测试句柄。
     ../../bsp/board/platform_can_stm32.c # 使用生产逻辑总线发送适配。
+    ../../bsp/board/platform_can_rx_stm32.c # 使用生产接收端点适配。
     ../../application/topics/chassis_topic_codec.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
     ../../modules/can_comm/can_topic_link.c ../../modules/can_comm/can_topic_bridge.c
     ../../modules/can_comm/can_topic_transport.c ../../modules/can_comm/can_topic_wire.c
@@ -1077,7 +1080,8 @@ add_executable(chassis_bridge_integration_test chassis_task_test.c
   ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/can_comm/can_topic_link.c
   ../../modules/can_comm/can_topic_bridge.c ../../modules/can_comm/can_topic_transport.c
   ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_time_sync.c
-  ../../modules/time_sync/time_mapping.c ../../modules/safety/robot_safety.c platform_can_request_fake.c)
+  ../../modules/time_sync/time_mapping.c ../../modules/safety/robot_safety.c platform_can_request_fake.c
+  platform_can_rx_fake.c ../../bsp/board/platform_can_rx_stm32.c)
 target_include_directories(chassis_bridge_integration_test BEFORE PRIVATE chassis_fakes can_comm_fakes)
 target_include_directories(chassis_bridge_integration_test PRIVATE ../../application ../../application/chassis
   ../../application/topics ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine

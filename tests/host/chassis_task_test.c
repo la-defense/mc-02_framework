@@ -10,6 +10,7 @@
 #include "robot_safety.h"
 #endif
 #if defined(CHASSIS_BRIDGE_INTEGRATION)
+#include "bsp_can.h" // 测试模型使用旧驱动类型注入接收帧。
 #include "can_topic_link.h"
 #include "chassis_topic_codec.h"
 #endif
@@ -141,9 +142,9 @@ static int test_bridge_to_chassis(void)
     MessagePublisher_t *publisher=MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
     MessageSubscriber_t *reader=MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CHASSIS);
     const CanTopicCodec_t decoder={ChassisCommandBridgeDecode,NULL,CHASSIS_COMMAND_WIRE_BYTES};
-    const CAN_Init_Config_s config={.can_handle=&bridge_can_handle,.tx_id=0x311u,.rx_id=0x312u};
+    const PlatformCanEndpoint_t config={.can_bus=PLATFORM_CAN_BUS_1,.tx_id=0x311u,.rx_id=0x312u};
     CanTopicLink_t link={0};
-    CHECK(publisher && reader && CanTopicLinkInit(&link,PLATFORM_CAN_BUS_1,&config,NULL,publisher,NULL,&decoder,bridge_map,NULL,50u));
+    CHECK(publisher && reader && CanTopicLinkInit(&link,&config,NULL,publisher,NULL,&decoder,bridge_map,NULL,50u));
     Chassis_Ctrl_Cmd_s command={.vx=100.0f,.chassis_mode=CHASSIS_NO_FOLLOW};
     CanTopicMessage_t message={.topic_id=ROBOT_TOPIC_CHASSIS_COMMAND,.length=CHASSIS_COMMAND_WIRE_BYTES,.source_ms=10u};
     CHECK(ChassisCommandEncode(&command,message.payload,sizeof(message.payload))==CHASSIS_CODEC_OK);

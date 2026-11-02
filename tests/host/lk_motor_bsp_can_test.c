@@ -1220,8 +1220,8 @@ static void test_can_tx_topic_rx(void)
     TEST_CHECK(publisher && subscriber);
     CanTopicLink_t link={0}; uint8_t synchronized=1u;
     const CanTopicCodec_t codec={test_topic_copy,NULL,4u};
-    CAN_Init_Config_s config={0}; config.can_handle=&hfdcan1; config.tx_id=0x321u; config.rx_id=0x501u;
-    TEST_CHECK(CanTopicLinkInit(&link,PLATFORM_CAN_BUS_1,&config,NULL,publisher,NULL,&codec,test_topic_map,&synchronized,50u));
+    PlatformCanEndpoint_t config={.can_bus=PLATFORM_CAN_BUS_1,.tx_id=0x321u,.rx_id=0x501u};
+    TEST_CHECK(CanTopicLinkInit(&link,&config,NULL,publisher,NULL,&codec,test_topic_map,&synchronized,50u));
     CanTopicMessage_t message={.topic_id=19u,.length=4u,.source_ms=100u,.payload={1u,2u,3u,4u}};
     CanTopicFrame_t frames[CAN_TOPIC_MAX_FRAMES]; size_t count=0u;
     TEST_CHECK(CanTopicEncode(&message,1u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);

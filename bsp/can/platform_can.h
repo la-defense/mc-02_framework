@@ -41,6 +41,12 @@ uint8_t PlatformCanBusIsBound(PlatformCanBus_t bus);
 uint8_t PlatformCanRxRegister(PlatformCanRxPort_t *port, const PlatformCanEndpoint_t *endpoint,
                               PlatformCanRxCallback_t callback, void *context);
 
+/** @brief 查询端点是否已完成注册。
+ * @param[in] port 长期保存的端点；可为 NULL。
+ * @return 1 为已注册，0 为未注册或参数为空；不代表设备在线。
+ */
+uint8_t PlatformCanRxIsRegistered(const PlatformCanRxPort_t *port);
+
 /** @brief 撤销启动期间尚未投入运行的接收注册。
  * @param[in,out] port 已注册端点；NULL 或未注册时不做处理。
  * @note 仅供启动失败回退；不得与接收派发、发送请求或运行中的回调并发。

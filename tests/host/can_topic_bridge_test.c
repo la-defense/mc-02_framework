@@ -11,6 +11,7 @@
 static uint32_t fake_now_ms;
 uint32_t HAL_GetTick(void) { return fake_now_ms; }
 static CANInstance registered_can;
+static uint8_t reject_registration;
 FDCAN_HandleTypeDef *BoardCanResolve(PlatformCanBus_t bus)
 {
     return bus == PLATFORM_CAN_BUS_1 ? registered_can.can_handle : NULL;
@@ -18,6 +19,7 @@ FDCAN_HandleTypeDef *BoardCanResolve(PlatformCanBus_t bus)
 static void (*registered_callback)(CANInstance *);
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
+    if (reject_registration) return NULL; // 模拟平台注册失败，验证链路保持原值。
     registered_can.can_handle=config->can_handle;
     registered_can.tx_id=config->tx_id;
     registered_can.id=config->id;
@@ -196,14 +198,20 @@ int main(void)
     message.source_ms=22u; message.first_rx_ms=125u;
     TEST_CHECK(CanTopicBridgePublish(&bridge,&message,126u)==CAN_BRIDGE_OK);
     TEST_CHECK(MessageReadSnapshot(in,&output,sizeof(output),126u,&freshness)==MESSAGE_OK && output==value);
-    CanTopicLink_t link={0}; CAN_Init_Config_s config={.can_handle=&handle,.tx_id=0x321u,.rx_id=0x123u};
+    CanTopicLink_t link={0}; PlatformCanEndpoint_t config={.can_bus=PLATFORM_CAN_BUS_1,.tx_id=0x321u,.rx_id=0x123u};
     registered_can.can_handle=&handle;
-    // 配置的逻辑总线必须对应实际接收句柄，失败时不能注册回调。
-    TEST_CHECK(!CanTopicLinkInit(&link,PLATFORM_CAN_BUS_2,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
+    // 未绑定的逻辑总线不能注册回调。
+    config.can_bus=PLATFORM_CAN_BUS_2;
+    TEST_CHECK(!CanTopicLinkInit(&link,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
     TEST_CHECK(registered_callback==NULL);
-    TEST_CHECK(!CanTopicLinkInit(&link,PLATFORM_CAN_BUS_1,&config,out,remote,&codec,&codec,map_time,&synchronized,0u));
-    TEST_CHECK(CanTopicLinkInit(&link,PLATFORM_CAN_BUS_1,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
-    TEST_CHECK(!CanTopicLinkInit(&link,PLATFORM_CAN_BUS_1,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
+    config.can_bus=PLATFORM_CAN_BUS_1;
+    TEST_CHECK(!CanTopicLinkInit(&link,&config,out,remote,&codec,&codec,map_time,&synchronized,0u));
+    reject_registration=1u;
+    TEST_CHECK(!CanTopicLinkInit(&link,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
+    TEST_CHECK(!link.ready && !PlatformCanRxIsRegistered(&link.port) && registered_callback==NULL);
+    reject_registration=0u;
+    TEST_CHECK(CanTopicLinkInit(&link,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
+    TEST_CHECK(!CanTopicLinkInit(&link,&config,out,remote,&codec,&codec,map_time,&synchronized,50u));
     message.source_ms=30u; message.first_rx_ms=0u;
     TEST_CHECK(CanTopicEncode(&message,9u,frames,CAN_TOPIC_MAX_FRAMES,&count)==CAN_TOPIC_OK);
     for (size_t i=0u;i<count;++i) {
@@ -271,17 +279,17 @@ int main(void)
 
     // 同一个生产 CAN 接收入口先处理对时，再接收经过时间换算的话题。
     CanTopicLink_t timed_link={0};
-    TEST_CHECK(CanTopicLinkInit(&timed_link,PLATFORM_CAN_BUS_1,&config,NULL,remote,NULL,&codec,NULL,NULL,50u));
+    TEST_CHECK(CanTopicLinkInit(&timed_link,&config,NULL,remote,NULL,&codec,NULL,NULL,50u));
     CanTimeSync_t local_sync={0}, peer_sync={0};
     FDCAN_HandleTypeDef peer_handle={0};
     CANInstance peer_can={.can_handle=&peer_handle,.tx_id=0x123u};
     CanTimeSync_t wrong_sync={0};
     // 同一对象若配置了其他总线或发送 ID，不能接入当前链路。
-    TEST_CHECK(CanTimeSyncInit(&wrong_sync,PLATFORM_CAN_BUS_2,timed_link.can->tx_id,timed_link.can));
+    TEST_CHECK(CanTimeSyncInit(&wrong_sync,PLATFORM_CAN_BUS_2,timed_link.transport.tx_id,&timed_link.port));
     TEST_CHECK(!CanTopicLinkAttachTimeSync(&timed_link,&wrong_sync));
-    TEST_CHECK(CanTimeSyncInit(&wrong_sync,PLATFORM_CAN_BUS_1,0x7ffu,timed_link.can));
+    TEST_CHECK(CanTimeSyncInit(&wrong_sync,PLATFORM_CAN_BUS_1,0x7ffu,&timed_link.port));
     TEST_CHECK(!CanTopicLinkAttachTimeSync(&timed_link,&wrong_sync));
-    TEST_CHECK(CanTimeSyncInit(&local_sync,PLATFORM_CAN_BUS_1,timed_link.can->tx_id,timed_link.can));
+    TEST_CHECK(CanTimeSyncInit(&local_sync,PLATFORM_CAN_BUS_1,timed_link.transport.tx_id,&timed_link.port));
     TEST_CHECK(CanTimeSyncInit(&peer_sync,PLATFORM_CAN_BUS_1,peer_can.tx_id,&peer_can));
     CanTopicLink_t missing_endpoint={0};
     missing_endpoint.ready=1u;
