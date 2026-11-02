@@ -887,12 +887,20 @@ add_test(NAME production_kalman_workspace_and_results COMMAND kalman_filter_init
 add_executable(dsp_numeric_test dsp_numeric_test.c)
 target_link_libraries(dsp_numeric_test PRIVATE mc02_kf)
 add_test(NAME production_dsp_matrix_and_trigonometry COMMAND dsp_numeric_test)
+# 姿态任务只接触样本、时间、同步和数值公共头，不继承硬件替身目录。
+add_library(mc02_ins_portable OBJECT ../../modules/imu/ins_task.c)
+target_include_directories(mc02_ins_portable PRIVATE ../../modules/imu ../../modules/BMI088 ../../modules/algorithm
+  ../../modules/task_monitor ../../modules/safety ../../modules/master_machine ../../bsp/usart ../../bsp/os ../../bsp/dwt ../../bsp/log)
+target_compile_options(mc02_ins_portable PRIVATE -Wall -Wextra -Werror)
 add_executable(ins_filter_test ins_filter_test.c ../../modules/imu/ins_task.c
+  ../../bsp/os/platform_sync_freertos.c # 使用测试的任务锁和模拟毫秒时钟。
+  ../../bsp/board/ins_sensor_mc02.c # 用板级适配器连接传感器替身。
+  ../../bsp/board/platform_probe_stm32.c # 用同一短时探针后端连接测试时钟。
   ../../modules/algorithm/attitude_filter.c ../../modules/algorithm/QuaternionEKF.c
   ../../Middlewares/Third_Party/Fusion/FusionAhrs.c)
 target_include_directories(ins_filter_test BEFORE PRIVATE ins_filter_fakes)
 target_include_directories(ins_filter_test PRIVATE ../../application ../../modules/imu ../../modules/BMI088
-  ../../Middlewares/Third_Party/Fusion)
+  ../../Middlewares/Third_Party/Fusion ../../bsp/os ../../bsp/dwt)
 target_compile_definitions(ins_filter_test PRIVATE MC02_VISION_PROTOCOL_V2=1
   MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=0)
 target_link_libraries(ins_filter_test PRIVATE mc02_kf mc02_numeric)
@@ -905,11 +913,14 @@ foreach(direction IN ITEMS tilt inverted zero short)
 endforeach()
 set_tests_properties(production_ins_numeric_init_failure PROPERTIES TIMEOUT 10)
 add_executable(ins_filter_fusion_test ins_filter_test.c ../../modules/imu/ins_task.c
+  ../../bsp/os/platform_sync_freertos.c # 与 EKF 测试使用相同的平台同步入口。
+  ../../bsp/board/ins_sensor_mc02.c # 同时验证板级传感器适配。
+  ../../bsp/board/platform_probe_stm32.c # 保留测试原有的耗时探针替身。
   ../../modules/algorithm/attitude_filter.c ../../modules/algorithm/QuaternionEKF.c
   ../../Middlewares/Third_Party/Fusion/FusionAhrs.c)
 target_include_directories(ins_filter_fusion_test BEFORE PRIVATE ins_filter_fakes)
 target_include_directories(ins_filter_fusion_test PRIVATE ../../application ../../modules/imu ../../modules/BMI088
-  ../../Middlewares/Third_Party/Fusion)
+  ../../Middlewares/Third_Party/Fusion ../../bsp/os ../../bsp/dwt)
 target_compile_definitions(ins_filter_fusion_test PRIVATE MC02_VISION_PROTOCOL_V2=1
   MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=1)
 target_link_libraries(ins_filter_fusion_test PRIVATE mc02_kf mc02_numeric)

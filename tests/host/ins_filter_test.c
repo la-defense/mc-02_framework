@@ -37,7 +37,13 @@ uint32_t HAL_GetTick(void){return now;}
 BMI088Instance *BMI088Register(const BMI088_Init_Config_s *c)
 {
     static BMI088Instance i;
-    (void)c;
+    // 不同片选值可以识别陀螺和加速度计绑定被交换的情况。
+    TEST_CHECK(c != NULL && c->work_mode == BMI088_BLOCK_PERIODIC_MODE);
+    TEST_CHECK(c->cali_mode == BMI088_CALIBRATE_ONLINE_MODE);
+    TEST_CHECK(c->spi_gyro_config.spi_handle == &hspi2 && c->spi_acc_config.spi_handle == &hspi2);
+    TEST_CHECK(c->spi_gyro_config.GPIOx == CS2_GYRO_GPIO_Port && c->spi_gyro_config.cs_pin == CS2_GYRO_Pin);
+    TEST_CHECK(c->spi_acc_config.GPIOx == CS2_ACCEL_GPIO_Port && c->spi_acc_config.cs_pin == CS2_ACCEL_Pin);
+    TEST_CHECK(c->spi_gyro_config.spi_work_mode == SPI_BLOCK_MODE && c->spi_acc_config.spi_work_mode == SPI_BLOCK_MODE);
     bmi_registration_calls++;
     return fail_bmi_registration ? NULL : &i;
 }

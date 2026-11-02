@@ -1,4 +1,4 @@
-﻿/**
+/**
 * @file ins_task.c
 * @brief 读取 BMI088 样本，更新姿态估计，并向视觉链路提供有效数据。
 * StartINSTASK 在专属任务中初始化本模块；INS_Task 按1kHz运行。
@@ -8,23 +8,20 @@
 * @date 2022/2/23
  */
 #include "ins_task.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include "bsp_dwt.h"
+#include "platform_sync.h"
+#include "platform_probe.h"
 #include "bsp_log.h"
 #include "controller.h"
 #include "attitude_filter.h"
-#include "spi.h"
-#include "tim.h"
 #include "vector3.h"
-#include "general_def.h"
-#include "config/build_selection.h"
+#include "../general_def.h"
+#include "../../application/config/build_selection.h"
 // 不含视觉功能的板卡仍运行姿态任务，但不依赖视觉链路发送模块。
 #if MC02_FEATURE_VISION
 #include "master_process.h"
 #endif
 #include "fast_trig.h"
-#include "bmi088.h"
+#include "ins_sensor_port.h"
 #include "robot_safety.h"
 #if MC02_FEATURE_HEATER
 #include "imu_heater.h"
@@ -38,10 +35,11 @@
 
 static INS_t INS;
 static IMU_Param_t IMU_Param;
-static BMI088Instance *bmi088_ins;
+static InsSensor *bmi088_ins;
 static BMI088_Data_t bmi088_data;
 static uint8_t ins_init_result;
 static INS_Control_Snapshot_s ins_control_snapshot;
+// 控制快照由任务读取和更新；任务临界区与原毫秒时基由平台提供。
 static AttitudeFilter_t attitude_filter;
 static _Alignas(ATTITUDE_FILTER_STORAGE_ALIGNMENT) uint8_t attitude_filter_workspace[ATTITUDE_FILTER_STORAGE_BYTES];
 #ifndef MC02_IMU_BACKEND_FUSION
@@ -86,8 +84,8 @@ static MathStatus_t InitQuaternion(float *init_q4)
     uint8_t successful_samples = 0u;
     for (uint16_t attempt = 0; attempt < 200u && successful_samples < 100u; ++attempt)
     {
-        if (BMI088Acquire(bmi088_ins, &bmi088_data) != BMI088_ACQUIRE_OK ||
-            !BMI088SampleIsFresh(&bmi088_data, HAL_GetTick()))
+        if (!InsSensorAcquire(bmi088_ins, &bmi088_data) ||
+            !BMI088SampleIsFresh(&bmi088_data, PlatformTimeNowMs()))
         {
             TaskMonitorDelayMs(TASK_MONITOR_INS, 1u);
             continue;
@@ -182,24 +180,7 @@ attitude_t *INS_Init(void)
     bmi088_sample_timestamp_ms_diag = 0u;
     imu_sample_valid_diag = 0u;
 
-    BMI088_Init_Config_s imu_cfg = {
-        .work_mode = BMI088_BLOCK_PERIODIC_MODE,
-        .cali_mode = BMI088_CALIBRATE_ONLINE_MODE,
-        .spi_gyro_config = {
-            .spi_handle = &hspi2,
-            .GPIOx = CS2_GYRO_GPIO_Port,
-            .cs_pin = CS2_GYRO_Pin,
-            .spi_work_mode = SPI_BLOCK_MODE,
-        },
-        .spi_acc_config = {
-            .spi_handle = &hspi2,
-            .GPIOx = CS2_ACCEL_GPIO_Port,
-            .cs_pin = CS2_ACCEL_Pin,
-            .spi_work_mode = SPI_BLOCK_MODE,
-        },
-        // heat_pwm_config 不配置: bmi088.c 仅在 htim 非空时注册温控 PWM, 温控由本任务自行控制
-    };
-    bmi088_ins = BMI088Register(&imu_cfg);
+    bmi088_ins = InsSensorRegister(); // 由板级后端绑定传感器和总线。
     if (bmi088_ins == NULL)
     {
 #if MC02_FEATURE_HEATER
@@ -212,8 +193,10 @@ attitude_t *INS_Init(void)
         INS.q[2] = 0.0f;
         INS.q[3] = 0.0f;
         INS.AccelLPF = 0.0085f;
-        DWT_GetDeltaT(&INS_DWT_Count);
-        BSP_LOG_EVENT_2(EV_MODULES_IMU_INS_TASK_C_01, BSP_LOG_FIELD_HEX32((unsigned)bmi088_init_error), BSP_LOG_FIELD_U32((unsigned)bmi088_init_retry_count));
+        PlatformProbeDeltaSeconds(&INS_DWT_Count);
+        uint32_t error = 0u, retries = 0u;
+        InsSensorGetInitDiagnostics(&error, &retries); // 失败日志保留原有诊断信息。
+        BSP_LOG_EVENT_2(EV_MODULES_IMU_INS_TASK_C_01, BSP_LOG_FIELD_HEX32((unsigned)error), BSP_LOG_FIELD_U32((unsigned)retries));
         // 保留姿态存储供任务继续运行，但安全状态会记录传感器无效。
         ins_init_result = 3u;
         return NULL;
@@ -241,7 +224,7 @@ attitude_t *INS_Init(void)
     }
     // 加速度读数波动较大，后续用低通滤波减小高频变化。
     INS.AccelLPF = 0.0085;
-    DWT_GetDeltaT(&INS_DWT_Count);
+    PlatformProbeDeltaSeconds(&INS_DWT_Count);
     ins_init_result = 2u;
     return (attitude_t *)&INS.Gyro; // @todo: 这里偷懒了,不要这样做! 修改INT_t结构体可能会导致异常,待修复.
 }
@@ -262,17 +245,17 @@ uint8_t INSGetControlSnapshot(INS_Control_Snapshot_s *snapshot)
 {
     if (snapshot == NULL)
         return 0u;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     *snapshot = ins_control_snapshot;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     return snapshot->valid;
 }
 
 static void INSInvalidateControlSnapshot(void)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     ins_control_snapshot.valid = 0u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 static void INSPublishControlSnapshot(void)
@@ -286,52 +269,52 @@ static void INSPublishControlSnapshot(void)
         .sequence = bmi088_data.sequence,
         .valid = 1u,
     };
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     ins_control_snapshot = candidate;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
    /* INS_Task 每1ms运行一次；这里的计数和温控间隔都按任务调用次数计算。 */
 /* ---------------- 性能探针(2026-09, CPU 占用排查) ----------------
    ins_prof_all   : 单次 INS_Task 总耗时
-   ins_prof_read  : BMI088Acquire(传感器读取)
+   ins_prof_read  : InsSensorAcquire(传感器读取)
    ins_prof_ekf   : 四元数 EKF 更新
    ins_prof_temp  : 温控(每 2 个 tick 一次) */
-volatile DWT_Probe_t ins_prof_all = {0};
-volatile DWT_Probe_t ins_prof_read = {0};
-volatile DWT_Probe_t ins_prof_ekf = {0};
-volatile DWT_Probe_t ins_prof_temp = {0};
+volatile PlatformProbe_t ins_prof_all = {0};
+volatile PlatformProbe_t ins_prof_read = {0};
+volatile PlatformProbe_t ins_prof_ekf = {0};
+volatile PlatformProbe_t ins_prof_temp = {0};
 
 void INS_Task(void)
 {
     static uint32_t count = 0;
     static float filter_elapsed_s=0.0f;
     const float gravity[3] = {0, 0, 9.81f};
-    uint32_t probe_all = DWT_ProbeStart();
+    uint32_t probe_all = PlatformProbeStart();
     uint32_t probe_seg;
 
     /* 左键或右键长按会提出标定请求；由本任务执行，避免和采样同时占用 SPI。 */
-    if (BMI088CalibService())
+    if (InsSensorCalibrationService())
     {
         INSInvalidateControlSnapshot();
-        DWT_GetDeltaT(&INS_DWT_Count); /* 丢掉标定耗时, 否则 EKF 会拿到一个巨大的 dt */
-        DWT_ProbeDone(&ins_prof_all, probe_all);
+        PlatformProbeDeltaSeconds(&INS_DWT_Count); /* 丢掉标定耗时, 否则 EKF 会拿到一个巨大的 dt */
+        PlatformProbeDone(&ins_prof_all, probe_all);
         return;
     }
 
-    dt = DWT_GetDeltaT(&INS_DWT_Count);
+    dt = PlatformProbeDeltaSeconds(&INS_DWT_Count);
     filter_elapsed_s+=dt;
     t += dt;
 
     // ins update
     if ((count % 1) == 0)
     {
-        probe_seg = DWT_ProbeStart();
-        uint8_t acq_ok = BMI088Acquire(bmi088_ins, &bmi088_data);
-        DWT_ProbeDone(&ins_prof_read, probe_seg);
+        probe_seg = PlatformProbeStart();
+        uint8_t acq_ok = InsSensorAcquire(bmi088_ins, &bmi088_data);
+        PlatformProbeDone(&ins_prof_read, probe_seg);
 
-        uint8_t sample_valid = (acq_ok == BMI088_ACQUIRE_OK) &&
-                               BMI088SampleIsFresh(&bmi088_data, HAL_GetTick());
+        uint8_t sample_valid = (acq_ok != 0u) &&
+                               BMI088SampleIsFresh(&bmi088_data, PlatformTimeNowMs());
         for (uint8_t axis = 0u; axis < 3u; ++axis)
             sample_valid = (uint8_t)(sample_valid && isfinite(bmi088_data.acc[axis]));
 
@@ -385,10 +368,10 @@ void INS_Task(void)
         // INS.atanyz = atan2f(INS.Accel[Y], INS.Accel[Z]) * 180 / PI;
 
         // 完整BMI088样本通过同一入口交给所选后端。
-        probe_seg = DWT_ProbeStart();
+        probe_seg = PlatformProbeStart();
         AttitudeFilterInput_t filter_input={
             .dt_s=filter_elapsed_s,
-            .now_ms=HAL_GetTick(),
+            .now_ms=PlatformTimeNowMs(),
             .sample_time_ms=bmi088_data.timestamp_ms,
             .sequence=bmi088_data.sequence,
             .accelerometer_valid=sample_valid,
@@ -401,7 +384,7 @@ void INS_Task(void)
         imu_filter_mode_diag=filter_state.filter.mode;
         imu_filter_age_ms_diag=filter_state.filter.prediction_age_ms;
         imu_filter_cause_diag=filter_state.filter.cause;
-        DWT_ProbeDone(&ins_prof_ekf, probe_seg);
+        PlatformProbeDone(&ins_prof_ekf, probe_seg);
 
         // 滤波失效立即撤销许可；严重预测失败由显式重置恢复，不重建参考姿态。
         if ((filter_status!=KF_OK && filter_status!=KF_PREDICTED) || !filter_state.filter.valid)
@@ -470,11 +453,11 @@ void INS_Task(void)
     // 每两次任务调用更新一次温控；急停或故障时强制关闭加热。
     if ((count % 2) == 0)
     {
-        probe_seg = DWT_ProbeStart();
+        probe_seg = PlatformProbeStart();
         Robot_Status_e state = RobotSafetyGetState();
         uint8_t force_off = (state == ROBOT_ESTOP || state == ROBOT_FAULT || !imu_sample_valid_diag) ? 1 : 0;
         IMUHeaterUpdate(&bmi088_data, force_off);
-        DWT_ProbeDone(&ins_prof_temp, probe_seg);
+        PlatformProbeDone(&ins_prof_temp, probe_seg);
     }
 #endif
 
@@ -482,7 +465,7 @@ void INS_Task(void)
     {
         // 1Hz 可以加入monitor函数,检查IMU是否正常运行/离线
     }
-    DWT_ProbeDone(&ins_prof_all, probe_all);
+    PlatformProbeDone(&ins_prof_all, probe_all);
 }
 
 

@@ -5,17 +5,17 @@
 #define MC02_INS_HARDWARE_FAKE_H
 #include <stdint.h>
 #include "bmi088_data.h"
-typedef struct { unsigned cycles; } DWT_Probe_t;
+#include "platform_probe.h"
+typedef PlatformProbe_t DWT_Probe_t;
 float DWT_GetDeltaT(uint32_t *counter);
 uint32_t DWT_ProbeStart(void);
 void DWT_ProbeDone(volatile DWT_Probe_t *p,uint32_t start);
 uint32_t HAL_GetTick(void);
 #define LOGERROR(...) ((void)0)
-#define RAD_2_DEGREE 57.295779513f
-#define CS2_GYRO_GPIO_Port 0
-#define CS2_GYRO_Pin 0
-#define CS2_ACCEL_GPIO_Port 0
-#define CS2_ACCEL_Pin 0
+#define CS2_GYRO_GPIO_Port 3
+#define CS2_GYRO_Pin 11
+#define CS2_ACCEL_GPIO_Port 4
+#define CS2_ACCEL_Pin 12
 #define SPI_BLOCK_MODE 0
 #define BMI088_BLOCK_PERIODIC_MODE 0
 #define BMI088_CALIBRATE_ONLINE_MODE 0

@@ -58,6 +58,14 @@ class PortableIncludeContractTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             check_portable_dependencies(valid + f"    {ROOT / 'application/robot_def.h'}\n",
                                         ROOT, ROOT / "build", source)
+        # 姿态任务可使用样本类型及短时探针声明，寄存器头仍不可带入。
+        check_portable_dependencies(valid + f"    {ROOT / 'modules/BMI088/bmi088_data.h'}\n"
+                                    f"    {ROOT / 'bsp/dwt/platform_probe.h'}\n"
+                                    f"    {ROOT / 'build/generated/mc02_build_config.h'}\n",
+                                    ROOT, ROOT / "build", source)
+        with self.assertRaises(SystemExit):
+            check_portable_dependencies(valid + f"    {ROOT / 'bsp/dwt/bsp_dwt.h'}\n",
+                                        ROOT, ROOT / "build", source)
         with self.assertRaises(SystemExit):
             check_portable_dependencies(valid + f"    {ROOT / 'bsp/board/board_uart_stm32.h'}\n",
                                         ROOT, ROOT / "build", source)

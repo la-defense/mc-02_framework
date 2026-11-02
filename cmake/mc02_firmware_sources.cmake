@@ -75,6 +75,8 @@ set(MC02_BSP_C_SOURCES
     bsp/board/platform_can_stm32.c # 逻辑 CAN 总线的发送队列适配。
     bsp/board/platform_can_rx_stm32.c # 逻辑 CAN 接收端点适配。
     bsp/board/board_numeric_caps_mc02.c # MC-02 数值硬件和当前编译能力声明。
+    bsp/board/ins_sensor_mc02.c # INS 与板载 BMI088 的 SPI 绑定。
+    bsp/board/platform_probe_stm32.c # 原有 DWT 周期计数与短时探针适配。
     bsp/board/board_uart_stm32.c # MC-02 逻辑 UART 与物理串口绑定。
     bsp/board/platform_uart_stm32.c # 逻辑 UART 接收注册与重启适配。
     bsp/board/platform_uart_tx_stm32.c # 逻辑 UART 发送队列适配。

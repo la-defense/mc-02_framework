@@ -72,6 +72,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/referee/rm_referee.c",  # 裁判协议解析及逻辑串口接入。
     "modules/remote/remote_control.c",  # 遥控输入解析及逻辑串口接入。
     "modules/master_machine/master_process.c",  # 上位机业务协议及传输状态。
+    "modules/imu/ins_task.c",  # IMU 采样与姿态业务。
 }
 ASSEMBLY_SOURCES = {
     "startup_stm32h723xx.s",
@@ -229,7 +230,10 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "modules/can_comm", source_root / "modules/time_sync",
                source_root / "modules/algorithm", source_root / "modules/referee",
                source_root / "bsp/usart", source_root / "modules/remote",
-               source_root / "modules/master_machine", source_root / "bsp/usb"}
+               source_root / "modules/master_machine", source_root / "bsp/usb",
+               source_root / "modules/imu", source_root / "modules/BMI088",
+               source_root / "modules/task_monitor", source_root / "bsp/dwt",
+               Path(entry["directory"]).resolve() / "generated"}
     arguments = entry.get("arguments") or shlex.split(entry.get("command", ""))
     for index, argument in enumerate(arguments):
         # 同时处理 -Ipath、-I path 和 -isystem path，防止换一种写法绕过检查。
@@ -275,15 +279,21 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                source_root / "modules/can_comm", source_root / "modules/time_sync",
                source_root / "modules/algorithm", source_root / "modules/referee",
                source_root / "bsp/usart", source_root / "modules/remote",
-               source_root / "modules/master_machine", source_root / "bsp/usb")
+               source_root / "modules/master_machine", source_root / "bsp/usb",
+               source_root / "modules/imu", source_root / "modules/task_monitor")
     for line in lines[1:]:
         # 依赖可能为相对构建目录的路径，也可能为绝对路径。
         if not line.strip():
             continue
         dependency = (build_dir / line.strip()).resolve()
-        # 只允许资源编号和话题声明这两个公共文件，板级及整车实现仍须拒绝。
+        # 限定公开声明文件，禁止借用同目录下的硬件实现头。
         public_files = {source_root / "bsp/board/platform_resources.h",
-                        source_root / "application/topics/robot_topics.h"}
+                        source_root / "application/topics/robot_topics.h",
+                        source_root / "application/config/build_selection.h",
+                        source_root / "modules/general_def.h",
+                        source_root / "modules/BMI088/bmi088_data.h",
+                        source_root / "bsp/dwt/platform_probe.h",
+                        build_dir.resolve() / "generated/mc02_build_config.h"}
         if dependency.is_relative_to(source_root) and dependency not in public_files and not any(
                 dependency.is_relative_to(directory) for directory in allowed):
             raise SystemExit(f"portable framework source {source} uses unsupported project header: {dependency}")

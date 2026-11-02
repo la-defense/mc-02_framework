@@ -17,6 +17,7 @@
 #include "main.h"
 #include "stdint.h"
 #include "bsp_log.h"
+#include "platform_probe.h"
 
 typedef struct
 {
@@ -29,13 +30,7 @@ typedef struct
 // 单次间隔须小于一个计数周期；480 MHz 时约 8.94 s，超过后无法仅凭差值知道过去多久。
 extern volatile uint32_t dwt_cpu_freq_mhz; /* 由 DWT_Init() 设置 */
 
-typedef struct
-{
-    volatile uint32_t last_us;  /* 最近一次耗时 */
-    volatile uint32_t max_us;   /* 最大耗时 */
-    volatile uint32_t total_us; /* 累计耗时(4295s 回绕, 会话内足够) */
-    volatile uint32_t calls;    /* 调用次数 */
-} DWT_Probe_t;
+typedef PlatformProbe_t DWT_Probe_t; // 保留已有诊断对象的字段与布局。
 
 /* 每个 probe 只能由一个串行执行者更新；字段为32位调试量，跨多个字段读取不构成一致快照。 */
 
