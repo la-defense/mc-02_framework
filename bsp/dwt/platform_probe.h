@@ -29,4 +29,12 @@ void PlatformProbeDone(volatile PlatformProbe_t *probe, uint32_t start);
  * @return 沿用底层计时器计算的秒数。
  */
 float PlatformProbeDeltaSeconds(uint32_t *previous);
+
+/** @brief 将两个原始周期计数之间的差值换算为秒。
+ * @param[in] start,end 同一平台时钟的周期计数，间隔必须小于一个计数回绕周期。
+ * @param[out] seconds 成功时写入秒数；失败时保持原值。
+ * @return 1 表示换算成功，0 表示输出为空或平台频率尚未就绪。
+ * @note 无符号差值允许计数跨零一次；调用者另用较粗时间检查长时间间隔。
+ */
+uint8_t PlatformProbeElapsedSeconds(uint32_t start, uint32_t end, float *seconds);
 #endif

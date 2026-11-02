@@ -7,6 +7,7 @@
 #include "bmi088_data.h"
 #include "platform_probe.h"
 typedef PlatformProbe_t DWT_Probe_t;
+extern volatile uint32_t dwt_cpu_freq_mhz;
 float DWT_GetDeltaT(uint32_t *counter);
 uint32_t DWT_ProbeStart(void);
 void DWT_ProbeDone(volatile DWT_Probe_t *p,uint32_t start);

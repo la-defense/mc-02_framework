@@ -48,6 +48,7 @@ extern volatile uint32_t imu_filter_age_ms_diag;
 extern volatile int32_t imu_filter_cause_diag;
 SPI_HandleTypeDef hspi1, hspi2;
 GPIO_TypeDef test_gyro_port, test_accel_port;
+volatile uint32_t dwt_cpu_freq_mhz = 480u;
 volatile uint32_t bmi088_init_error,bmi088_init_retry_count;
 float DWT_GetDeltaT(uint32_t *p){ *p=now;return period_s; }
 uint32_t DWT_ProbeStart(void){ return 0; }
@@ -95,6 +96,12 @@ static void tick(void){now+=(uint32_t)lroundf(period_s*1000);INS_Task();}
 static void invalid(void){TEST_CHECK(!valid && mode==0);for(int i=0;i<4;i++)TEST_CHECK(frame[i]==0);}
 int main(int argc,char **argv)
 {
+    float elapsed = -1.0f;
+    TEST_CHECK(PlatformProbeElapsedSeconds(UINT32_MAX - 99u, 380u, &elapsed));
+    TEST_CHECK(fabsf(elapsed - 0.000001f) < 0.00000001f); // 跨回绕后的 480 周期是 1 微秒。
+    dwt_cpu_freq_mhz = 0u;
+    TEST_CHECK(!PlatformProbeElapsedSeconds(0u, 1u, &elapsed) && elapsed > 0.0f);
+    dwt_cpu_freq_mhz = 480u;
 #ifdef INS_TEST_RESOURCE_WRAP
     if (argc > 1 && strncmp(argv[1], "--missing-", 10) == 0)
     {

@@ -1795,11 +1795,15 @@ static void test_platform_can_receive(void)
     rx_frame_count[0] = 1u;
     rx_frame_read[0] = 0u;
     now_us = 123000u; // 中断入队时间独立于后续任务派发时间。
+    test_dwt_cycles = 123456u; // 周期计数也应反映入队时刻。
     HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    const uint32_t queued_cycles = test_dwt_cycles; // 模型读取帧时会推进计数，记录实际入队值。
     TEST_CHECK(state.calls == 0u); // 回调必须留在接收任务执行。
     now_us = 125000u;
+    test_dwt_cycles = 999999u; // 改变派发前计数，验证不会覆盖入队值。
     CANProcessRx();
     TEST_CHECK(state.calls == 1u && state.last.length == 4u && state.last.received_ms == 123u);
+    TEST_CHECK(state.last.received_ticks == queued_cycles);
     TEST_CHECK(state.last.data[0] == 0x12u && state.last.data[3] == 0x34u);
     PlatformCanRxTestState other_state = {0};
     PlatformCanEndpoint_t other_endpoint = endpoint;

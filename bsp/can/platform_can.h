@@ -1,6 +1,6 @@
 /** @file platform_can.h
  * @brief 按逻辑总线提交有界 CAN 帧组及查询发送结果。
- * @note 接口不暴露芯片句柄；接收注册仍使用现有设备接口。
+ * @note 接口不暴露芯片句柄；接收由平台端点注册并在任务中派发。
  */
 #ifndef MC02_PLATFORM_CAN_H
 #define MC02_PLATFORM_CAN_H
@@ -12,6 +12,7 @@ typedef struct {
     uint8_t data[8]; /**< 接收字节，只有 length 范围内有效。 */
     uint8_t length; /**< 实际接收长度，范围 0～8。 */
     uint32_t received_ms; /**< 接收队列记录的原始本机时间，允许回绕。 */
+    uint32_t received_ticks; /**< 入队时的平台周期计数，32 位回绕；频率由平台计时接口解释。 */
 } PlatformCanRxFrame_t;
 
 /** @brief 普通接收派发任务中的回调；帧只在本次调用期间有效。 */

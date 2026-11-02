@@ -20,6 +20,7 @@ static void PlatformCanRxDispatch(CANInstance *instance)
     PlatformCanRxFrame_t frame = {0}; // 局部副本仅在回调期间有效。
     frame.length = instance->rx_len; // 保留实际接收长度。
     frame.received_ms = instance->rx_timestamp_ms; // 保留入队时间，不使用派发时刻。
+    frame.received_ticks = instance->rx_timestamp_cycles; // 保留同时记录的周期数，供高频反馈计算间隔。
     memcpy(frame.data, instance->rx_buff, frame.length); // 复制有效字节供上层只读处理。
     port->callback(port->context, &frame); // 同一接收任务中同步派发。
 }
