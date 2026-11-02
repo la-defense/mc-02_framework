@@ -50,6 +50,14 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
     *request_id = submitted;
     return CAN_TX_SUBMIT_ACCEPTED;
 }
+// 本测试没有发送前许可回调，复用原有的周期帧捕获。
+CAN_TxSubmitStatus_t CANSubmitPeriodicPrepared(FDCAN_HandleTypeDef *hcan, const void *source,
+    uint32_t key, const CAN_TxFrame_t *frame, CAN_TxPriority_t priority, uint32_t deadline_ms,
+    uint32_t period_us, CAN_TxPeriodicPrepareFn_t prepare, uint32_t *request_id)
+{
+    TEST_CHECK(prepare == NULL); // 该目标不启用底盘板许可。
+    return CANSubmitPeriodic(hcan, source, key, frame, priority, deadline_ms, period_us, request_id);
+}
 
 static void tick(uint64_t at)
 {

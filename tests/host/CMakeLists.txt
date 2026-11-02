@@ -531,6 +531,7 @@ add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test
 add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platform-can)
 add_test(NAME production_platform_can_receive COMMAND lk_motor_bsp_can_test platform-can-rx)
 add_test(NAME production_dji_receive_registration_rollback COMMAND lk_motor_bsp_can_test dji-rx-rollback)
+add_test(NAME production_dji_logical_send_groups COMMAND lk_motor_bsp_can_test dji-send-groups)
 add_test(NAME production_lk_motor_bsp_can_routing COMMAND lk_motor_bsp_can_test routing)
 add_test(NAME production_lk_motor_bsp_can_closed_loops COMMAND lk_motor_bsp_can_test closed_loops)
 add_test(NAME production_lk_motor_bsp_can_feedforward COMMAND lk_motor_bsp_can_test feedforward)
@@ -638,6 +639,7 @@ foreach(scenario IN ITEMS reference failures instances response)
 endforeach()
 add_executable(motor_pid_integration_test motor_pid_integration_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_feedback.c
+  ../../bsp/board/platform_can_periodic_stm32.c # 周期发送适配到测试队列。
   dji_can_unregister_fake.c # 此目标使用静态 CAN 测试实例。
   ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c)
@@ -651,6 +653,7 @@ target_link_libraries(motor_pid_integration_test PRIVATE mc02_numeric)
 add_test(NAME production_motor_pid_cascade_and_failure COMMAND motor_pid_integration_test)
 add_executable(motor_feedback_filter_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
+  ../../bsp/board/platform_can_periodic_stm32.c # 周期发送适配到测试队列。
   dji_can_unregister_fake.c # 此目标使用静态 CAN 测试实例。
   ../../modules/motor/motor_feedback.c
   ../../modules/algorithm/controller.c ../../modules/algorithm/sample_filter.c
@@ -668,6 +671,7 @@ foreach(mode IN ITEMS legacy time-constant bypass gap missing multi-instance bou
 endforeach()
 add_executable(motor_chassis_safety_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
+  ../../bsp/board/platform_can_periodic_stm32.c # 周期发送适配到测试队列。
   dji_can_unregister_fake.c # 此目标使用静态 CAN 测试实例。
   ../../modules/motor/motor_feedback.c ../../modules/algorithm/controller.c
   ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c

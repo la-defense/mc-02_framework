@@ -33,45 +33,24 @@ volatile uint32_t dji_current_sat_count = 0; /* 电流指令被饱和的次数(M
 static DJIMotorInstance *dji_motor_instance[DJI_MOTOR_CNT] = {NULL}; // 会在control任务中遍历该指针数组进行pid计算
 
 
-#ifdef FDCAN
-static CANInstance sender_assignment[9] = {
-    [0] = {.can_handle = &hfdcan1, .txconf.Identifier = 0x1ff, .txconf.IdType = FDCAN_STANDARD_ID, .txconf.TxFrameType = FDCAN_DATA_FRAME, .txconf.DataLength = FDCAN_DLC_BYTES_8, .txconf.FDFormat = FDCAN_CLASSIC_CAN,.txconf.BitRateSwitch = FDCAN_BRS_OFF, .tx_buff = {0}},
-    [1] = {.can_handle = &hfdcan1, .txconf.Identifier = 0x200, .txconf.IdType = FDCAN_STANDARD_ID, .txconf.TxFrameType = FDCAN_DATA_FRAME, .txconf.DataLength = FDCAN_DLC_BYTES_8, .txconf.FDFormat = FDCAN_CLASSIC_CAN,.txconf.BitRateSwitch = FDCAN_BRS_OFF, .tx_buff = {0}},
-    [2] = {.can_handle = &hfdcan1, .txconf.Identifier = 0x2ff, .txconf.IdType = FDCAN_STANDARD_ID, .txconf.TxFrameType = FDCAN_DATA_FRAME, .txconf.DataLength = FDCAN_DLC_BYTES_8, .txconf.FDFormat = FDCAN_CLASSIC_CAN,.txconf.BitRateSwitch = FDCAN_BRS_OFF, .tx_buff = {0}},
-    [3] = {.can_handle = &hfdcan2, .txconf.Identifier = 0x1ff, .txconf.IdType = FDCAN_STANDARD_ID, .txconf.TxFrameType = FDCAN_DATA_FRAME, .txconf.DataLength = FDCAN_DLC_BYTES_8, .txconf.FDFormat = FDCAN_CLASSIC_CAN,.txconf.BitRateSwitch = FDCAN_BRS_OFF, .tx_buff = {0}},
-    [4] = {.can_handle = &hfdcan2, .txconf.Identifier = 0x200, .txconf.IdType = FDCAN_STANDARD_ID, .txconf.TxFrameType = FDCAN_DATA_FRAME, .txconf.DataLength = FDCAN_DLC_BYTES_8, .txconf.FDFormat = FDCAN_CLASSIC_CAN,.txconf.BitRateSwitch = FDCAN_BRS_OFF, .tx_buff = {0}},
-    [5] = {.can_handle = &hfdcan2, .txconf.Identifier = 0x2ff, .txconf.IdType = FDCAN_STANDARD_ID, .txconf.TxFrameType = FDCAN_DATA_FRAME, .txconf.DataLength = FDCAN_DLC_BYTES_8, .txconf.FDFormat = FDCAN_CLASSIC_CAN,.txconf.BitRateSwitch = FDCAN_BRS_OFF, .tx_buff = {0}},
-    [6] = {.can_handle = &hfdcan3, .txconf.Identifier = 0x1ff, .txconf.IdType = FDCAN_STANDARD_ID, .txconf.TxFrameType = FDCAN_DATA_FRAME, .txconf.DataLength = FDCAN_DLC_BYTES_8, .txconf.FDFormat = FDCAN_CLASSIC_CAN,.txconf.BitRateSwitch = FDCAN_BRS_OFF, .tx_buff = {0}},
-    [7] = {.can_handle = &hfdcan3, .txconf.Identifier = 0x200, .txconf.IdType = FDCAN_STANDARD_ID, .txconf.TxFrameType = FDCAN_DATA_FRAME, .txconf.DataLength = FDCAN_DLC_BYTES_8, .txconf.FDFormat = FDCAN_CLASSIC_CAN,.txconf.BitRateSwitch = FDCAN_BRS_OFF, .tx_buff = {0}},
-    [8] = {.can_handle = &hfdcan3, .txconf.Identifier = 0x2ff, .txconf.IdType = FDCAN_STANDARD_ID, .txconf.TxFrameType = FDCAN_DATA_FRAME, .txconf.DataLength = FDCAN_DLC_BYTES_8, .txconf.FDFormat = FDCAN_CLASSIC_CAN,.txconf.BitRateSwitch = FDCAN_BRS_OFF, .tx_buff = {0}},
+// 每条逻辑总线按三个 ID 分组；组对象的地址长期稳定，供队列识别周期来源。
+typedef struct {
+    PlatformCanBus_t bus; // 车型使用的逻辑总线。
+    uint32_t identifier; // 四个电机共用的标准帧 ID。
+    uint8_t tx_buff[8]; // 每电机占两个字节，提交时由队列复制。
+} DJISendGroup_t;
+static DJISendGroup_t sender_assignment[9] = {
+    {PLATFORM_CAN_BUS_1, 0x1ffu, {0}}, // 总线 1 的 0x1ff 组。
+    {PLATFORM_CAN_BUS_1, 0x200u, {0}}, // 总线 1 的 0x200 组。
+    {PLATFORM_CAN_BUS_1, 0x2ffu, {0}}, // 总线 1 的 0x2ff 组。
+    {PLATFORM_CAN_BUS_2, 0x1ffu, {0}}, // 总线 2 的 0x1ff 组。
+    {PLATFORM_CAN_BUS_2, 0x200u, {0}}, // 总线 2 的 0x200 组。
+    {PLATFORM_CAN_BUS_2, 0x2ffu, {0}}, // 总线 2 的 0x2ff 组。
+    {PLATFORM_CAN_BUS_3, 0x1ffu, {0}}, // 总线 3 的 0x1ff 组。
+    {PLATFORM_CAN_BUS_3, 0x200u, {0}}, // 总线 3 的 0x200 组。
+    {PLATFORM_CAN_BUS_3, 0x2ffu, {0}}, // 总线 3 的 0x2ff 组。
 };
 
-#else
-
-/**
- * @brief 由于DJI电机发送以四个一组的形式进行,故对其进行特殊处理,用6个(2can*3group)can_instance专门负责发送
- *        该变量将在 DJIMotorControl() 中使用,分组在 MotorSenderGrouping()中进行
- *
- * @note  因为只用于发送,所以不需要在bsp_can中注册
- *
- * C610(m2006)/C620(m3508):0x1ff,0x200;
- * GM6020:0x1ff,0x2ff
- * 反馈(rx_id): GM6020: 0x204+id ; C610/C620: 0x200+id
- * can1: [0]:0x1FF,[1]:0x200,[2]:0x2FF
- * can2: [3]:0x1FF,[4]:0x200,[5]:0x2FF
- */
-static CANInstance sender_assignment[6] = {
-    [0] = {.can_handle = &hcan1, .txconf.StdId = 0x1ff, .txconf.IDE = CAN_ID_STD, .txconf.RTR = CAN_RTR_DATA, .txconf.DLC = 0x08, .tx_buff = {0}},
-    [1] = {.can_handle = &hcan1, .txconf.StdId = 0x200, .txconf.IDE = CAN_ID_STD, .txconf.RTR = CAN_RTR_DATA, .txconf.DLC = 0x08, .tx_buff = {0}},
-    [2] = {.can_handle = &hcan1, .txconf.StdId = 0x2ff, .txconf.IDE = CAN_ID_STD, .txconf.RTR = CAN_RTR_DATA, .txconf.DLC = 0x08, .tx_buff = {0}},
-    [3] = {.can_handle = &hcan2, .txconf.StdId = 0x1ff, .txconf.IDE = CAN_ID_STD, .txconf.RTR = CAN_RTR_DATA, .txconf.DLC = 0x08, .tx_buff = {0}},
-    [4] = {.can_handle = &hcan2, .txconf.StdId = 0x200, .txconf.IDE = CAN_ID_STD, .txconf.RTR = CAN_RTR_DATA, .txconf.DLC = 0x08, .tx_buff = {0}},
-    [5] = {.can_handle = &hcan2, .txconf.StdId = 0x2ff, .txconf.IDE = CAN_ID_STD, .txconf.RTR = CAN_RTR_DATA, .txconf.DLC = 0x08, .tx_buff = {0}},
-};
-
-#endif
-
-// 当前 FDCAN 三条总线各有三组发送帧；只给已有电机注册的组提交数据。
 static uint8_t sender_enable_flag[9] = {0};
 
 #define DJI_MULTITURN_MAX_GAP_MS 20u /* 超过此间隔无法从单圈编码器证明遗漏圈数。 */
@@ -1037,11 +1016,8 @@ void DJIMotorControl()
     // 遍历flag,检查是否要发送这一帧报文
     DWT_ProbeDone(&dji_prof_pid, probe_all);
     uint32_t probe_send = DWT_ProbeStart();
-#ifdef FDCAN
-    for (size_t i = 0; i < 9; ++i)
-#else
-    for (size_t i = 0; i < 6; ++i)
-#endif
+    // 遍历全部组，未注册电机的组不发送。
+    for (size_t i = 0; i < sizeof(sender_assignment) / sizeof(sender_assignment[0]); ++i)
     {
         if (sender_enable_flag[i])
         {
@@ -1049,13 +1025,8 @@ void DJIMotorControl()
             // 反馈异常先上报故障，再把许可检查与周期值复制放在同一临界区。
             const uint8_t feedback_healthy = DJIMotorChassisFeedbackIsHealthy(HAL_GetTick());
 #endif
-#ifdef FDCAN
-            const uint32_t identifier = sender_assignment[i].txconf.Identifier;
-#else
-            const uint32_t identifier = sender_assignment[i].txconf.StdId;
-#endif
             const CAN_TxFrame_t frame = {
-                .identifier = identifier,
+                .identifier = sender_assignment[i].identifier,
                 .identifier_type = CAN_TX_ID_STANDARD,
                 .data = sender_assignment[i].tx_buff,
                 .length = 8u,
@@ -1068,14 +1039,14 @@ void DJIMotorControl()
                 memset(sender_assignment[i].tx_buff, 0, sizeof(sender_assignment[i].tx_buff));
 #endif
 #if defined(CHASSIS_BOARD)
-            (void)CANSubmitPeriodicPrepared(sender_assignment[i].can_handle,
+            (void)PlatformCanSubmitPeriodic(sender_assignment[i].bus,
                                     &sender_assignment[i], 0u, &frame,
                                     CAN_TX_PRIORITY_CONTROL, 4u, 1000u,
                                     DJIMotorPrepareChassisOutput, &request_id);
 #else
-            (void)CANSubmitPeriodic(sender_assignment[i].can_handle,
+            (void)PlatformCanSubmitPeriodic(sender_assignment[i].bus,
                                     &sender_assignment[i], 0u, &frame,
-                                    CAN_TX_PRIORITY_CONTROL, 4u, 1000u, &request_id);
+                                    CAN_TX_PRIORITY_CONTROL, 4u, 1000u, NULL, &request_id);
 #endif
 #if defined(CHASSIS_BOARD)
             taskEXIT_CRITICAL();

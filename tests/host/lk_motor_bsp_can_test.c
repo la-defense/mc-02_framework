@@ -399,6 +399,37 @@ static void test_dji_receive_registration_rollback(void)
     TEST_CHECK(DJIMotorInit(&config) != NULL); // 不同总线允许同一反馈 ID。
 }
 
+// 真实队列验证三条总线上三类 DJI 分组均使用对应的标准帧 ID。
+static void test_dji_logical_send_groups(void)
+{
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus) // 逐条总线创建相同的三组电机。
+    {
+        Motor_Init_Config_s config = {0}; // 每条总线使用独立的初始配置。
+        config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL}; // 输出轴不减速、不反向。
+        config.can_init_config.can_bus = (PlatformCanBus_t)(PLATFORM_CAN_BUS_1 + bus); // 对应逻辑总线。
+        config.controller_setting_init_config.close_loop_type = OPEN_LOOP; // 测试组帧，不依赖闭环参数。
+        config.motor_type = M3508; // 3508 的 ID 1 属于 0x200 组。
+        config.can_init_config.tx_id = 1u; // 设备编号从 1 开始。
+        TEST_CHECK(DJIMotorInit(&config) != NULL); // 注册第一组。
+        config.can_init_config.tx_id = 5u; // 3508 的 ID 5 属于 0x1ff 组。
+        TEST_CHECK(DJIMotorInit(&config) != NULL); // 注册第二组。
+        config.motor_type = GM6020; // 6020 的 ID 5 属于 0x2ff 组。
+        TEST_CHECK(DJIMotorInit(&config) != NULL); // 注册第三组。
+    }
+    DJIMotorControl(); // 分组提交周期帧，默认停止输出。
+    for (uint8_t round = 0u; round < 3u; ++round) CANProcessTx(); // 每条总线推进三帧。
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus) // 检查没有跨总线误发。
+    {
+        TEST_CHECK(tx_accept_count[bus] == 3u); // 每条总线恰好收到三组。
+        TEST_CHECK(tx_id_history[bus][0] == 0x1ffu); // 第一组为 0x1ff。
+        TEST_CHECK(tx_id_history[bus][1] == 0x200u); // 第二组为 0x200。
+        TEST_CHECK(tx_id_history[bus][2] == 0x2ffu); // 第三组为 0x2ff。
+        for (uint8_t group = 0u; group < 3u; ++group) // 默认停止的电机不得输出非零值。
+            for (uint8_t byte = 0u; byte < 8u; ++byte) // 检查组帧中的每个电机字节。
+                TEST_CHECK(tx_data_history[bus][group][byte] == 0u); // 未启用时输出保持零。
+    }
+}
+
 static void test_production_registration_rollback(void)
 {
     Motor_Init_Config_s config = config_for(2u, 4u);
@@ -1902,6 +1933,8 @@ int main(int argc, char **argv)
         test_platform_can_receive();
     else if (strcmp(argv[1], "dji-rx-rollback") == 0)
         test_dji_receive_registration_rollback();
+    else if (strcmp(argv[1], "dji-send-groups") == 0)
+        test_dji_logical_send_groups();
     else if (strcmp(argv[1], "platform-can") == 0)
         test_platform_can_queue();
     else if (strcmp(argv[1], "rollback") == 0)
