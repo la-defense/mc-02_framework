@@ -23,7 +23,7 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *h,uint8_t *p,uint16_t n,
 { (void)h;(void)p;(void)n;(void)t;return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h,uint8_t *p,uint16_t n) { return HAL_UART_Transmit(h,p,n,0); }
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h,uint8_t *p,uint16_t n) { return HAL_UART_Transmit(h,p,n,0); }
-Vision_Recv_s *VisionInit(UART_HandleTypeDef *h) { (void)h;return &vision; }
+Vision_Recv_s *VisionInit(PlatformUartPort_t h) { (void)h;return &vision; }
 void VisionSend(void) {}
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *status)
 { *frame=vision;*status=vision_status; }

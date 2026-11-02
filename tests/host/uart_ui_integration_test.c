@@ -3,6 +3,7 @@
  * @note 仅HAL、RTOS、时间与daemon为模型；不连接硬件，不等待115ms。
  */
 #include "protocol_uart_binding_fake.h"
+#include "bsp_usart.h"
 #include "referee_task.h"
 #include "uart_tx_hal_model.h"
 #include "test_check.h"

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include "main.h"
 #include "robot_def.h"
 #include "robot_cmd.h"
 #include "robot_safety.h"
@@ -22,7 +23,7 @@ const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port) { (void)port; return
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
 { snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; }
-Vision_Recv_s *VisionInit(UART_HandleTypeDef *h) { (void)h; return &wire; }
+Vision_Recv_s *VisionInit(PlatformUartPort_t h) { (void)h; return &wire; }
 void VisionSend(void) {}
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link) { *frame=wire; *link=status; ++snapshots; }
 /* Subscribe to production messages rather than inspecting task-private state. */

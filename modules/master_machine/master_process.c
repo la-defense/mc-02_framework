@@ -90,8 +90,9 @@ static uint16_t vision_v2_tx_sequence;
 static VisionV2TimeSync_t vision_v2_time_sync;
 #endif
 
-#ifdef VISION_USE_UART
 #include "bsp_usart.h"
+#ifdef VISION_USE_UART
+#include "../../bsp/board/board_uart_stm32.h"
 static USARTInstance *vision_usart_instance;
 #endif
 
@@ -491,8 +492,17 @@ static void VisionVcpTxCompleted(void *context, const USBTxEvent_t *event)
 }
 #endif
 
-Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
+Vision_Recv_s *VisionInit(PlatformUartPort_t port)
 {
+#if defined(VISION_USE_UART) && !defined(VISION_USE_VCP)
+    // UART 模式先确认板级绑定，避免无效配置留下话题或守护实例。
+    UART_HandleTypeDef *handle = BoardUartResolve(port);
+    if (handle == NULL)
+        return NULL;
+#else
+    // USB 模式没有 UART 依赖，未选择传输方式时也无需查询串口。
+    (void)port;
+#endif
     memset(&recv_data, 0, sizeof(recv_data));
     memset(&send_data, 0, sizeof(send_data));
     vision_last_rx_ms = 0u;
@@ -563,7 +573,6 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
         return NULL;
 
 #ifdef VISION_USE_VCP
-    (void)_handle;
     USBTransportConfig_t conf = {VisionVcpRxCallback, VisionVcpTxCompleted, VisionVcpLinkChanged, NULL};
     if (USBTransportInit(&conf) != USB_OK)
     {
@@ -572,12 +581,6 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
         return NULL;
     }
 #elif defined(VISION_USE_UART)
-    if (_handle == NULL)
-    {
-        (void)DaemonUnregister(vision_daemon_instance);
-        vision_daemon_instance = NULL;
-        return NULL;
-    }
     USART_Init_Config_s conf = {0};
 #if defined(MC02_VISION_PROTOCOL_V2)
     conf.context = &vision_v2_stream;
@@ -586,7 +589,7 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
 #endif
     conf.module_callback = VisionUartRxCallback;
     conf.recv_buff_size = VISION_RECV_SIZE * 2;
-    conf.usart_handle = _handle;
+    conf.usart_handle = handle;
     vision_usart_instance = USARTRegister(&conf);
     if (vision_usart_instance == NULL)
     {
@@ -595,7 +598,6 @@ Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle)
         return NULL;
     }
 #else
-    (void)_handle;
     BSP_LOG_EVENT_0(EV_MODULES_MASTER_MACHINE_MASTER_PROCESS_C_02);
     (void)DaemonUnregister(vision_daemon_instance);
     vision_daemon_instance = NULL;

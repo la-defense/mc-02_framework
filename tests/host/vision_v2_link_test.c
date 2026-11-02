@@ -723,7 +723,7 @@ int main(void)
     };
     TEST_CHECK(VisionUpdateIMUSample(&sample_before_init) ==
         VISION_IMU_SAMPLE_UPDATE_ERR_NOT_INITIALIZED);
-    TEST_CHECK(VisionInit(NULL) != NULL);
+    TEST_CHECK(VisionInit(PLATFORM_UART_INVALID) != NULL);
     TEST_CHECK(usb_config.receive != NULL && daemon_config.transport_timeout_ms == 300u);
     now_ms = 1u;
     VisionIMUSample_t zero_time_sample = {

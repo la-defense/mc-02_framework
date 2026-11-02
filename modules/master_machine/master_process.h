@@ -4,7 +4,8 @@
 #ifndef MASTER_PROCESS_H
 #define MASTER_PROCESS_H
 
-#include "bsp_usart.h"
+#include "../../bsp/board/platform_resources.h"
+#include "usart_tx.h"
 #include "vision_imu_sample.h"
 #include "vision_protocol.h"
 #include <stdint.h>
@@ -120,14 +121,14 @@ typedef struct
 } VisionTimeSyncSnapshot_t;
 
 /** @brief 注册当前构建选定的视觉协议及传输，并启动链路离线计时。
-* @param[in] _handle UART 配置时须提供有效句柄；USB VCP 配置时忽略，可以为 NULL。
+* @param[in] port UART 配置时须为已绑定的逻辑串口；USB VCP 配置时忽略。
 * @return 成功返回兼容接收对象地址，长期有效且不可释放；任一注册失败返回NULL。
 * @note 仅初始化阶段调用一次；控制任务用VisionGetSnapshot()复制读取。
 * SP构建沿用固定帧解析；V2构建使用12字节头、精确负载长度和CRC16，
 * 以组成帧首块的本机接收时刻记录来源接收时间，块中断、连接代号变化或组帧超时会清残帧。
 * V2命令通过消息中心话题读取，返回对象只为保持初始化调用兼容。
  */
-Vision_Recv_s *VisionInit(UART_HandleTypeDef *_handle);
+Vision_Recv_s *VisionInit(PlatformUartPort_t port);
 
 /** @brief 按当前协议周期发送状态；V2轮流发送姿态、裁判摘要和IMU加速度。
 * @note 先初始化，由命令任务周期调用。SP状态由VisionUpdateTx()准备并按原帧格式发送；

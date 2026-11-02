@@ -7,4 +7,6 @@
 
 /** @brief 将测试句柄绑定至串口 1，句柄须活到测试结束。 */
 void TestRefereeUartBind(UART_HandleTypeDef *handle);
+/** @brief 将测试句柄绑定至串口 9，句柄须活到本次测试结束。 */
+void TestVisionUartBind(UART_HandleTypeDef *handle);
 #endif

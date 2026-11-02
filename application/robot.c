@@ -189,7 +189,7 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 #endif
     case ROBOT_MODULE_VISION:
 #if MC02_FEATURE_VISION
-        return (uint8_t)(VisionInit(&huart9) != NULL);
+        return (uint8_t)(VisionInit(config->vision_uart) != NULL);
 #else
         return 0u;
 #endif
@@ -320,7 +320,7 @@ uint8_t RobotInit(void)
 #if defined(MC02_PROFILE_BENCH_SAFE)
 #if MC02_FEATURE_VISION
     InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
-    ROBOT_INIT_CHECK(VisionInit(&huart9) != NULL, INIT_STAGE_APPLICATION, INIT_MODULE_VISION,
+    ROBOT_INIT_CHECK(VisionInit(robot_config->vision_uart) != NULL, INIT_STAGE_APPLICATION, INIT_MODULE_VISION,
                      INIT_FAILURE_DEPENDENCY, 0u);
 #endif
 #if MC02_BENCH_REFEREE_DIAGNOSTICS

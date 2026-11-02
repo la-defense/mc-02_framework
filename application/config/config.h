@@ -124,6 +124,7 @@ typedef struct
     Gimbal_Config_s gimbal_param;
     Shoot_Config_s shoot_param;
     PlatformUartPort_t referee_uart; // 裁判接收使用的逻辑串口，由板级适配绑定。
+    PlatformUartPort_t vision_uart; // 上位机 UART 模式使用的逻辑串口；USB 模式忽略。
     PlatformUartPort_t remote_uart; // 遥控接收使用的逻辑串口，由板级适配绑定。
     const RobotAlarmConfig_t *alarm_config; // 长期只读的状态与故障提示表。
     const RefereeUIConfig_t *referee_ui_config; // 可选的只读裁判界面布局；不影响裁判接收和控制许可。

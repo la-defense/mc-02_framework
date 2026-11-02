@@ -19,6 +19,7 @@ static RemoteSafetyGestures_s remote_gestures;
 #include "robot_safety.h"
 #include "daemon.h"
 #include "vision_control.h"
+#include "../../bsp/os/platform_sync.h"
 #if defined(MC02_CONFIG_GENERATED)
 #include "config/vehicle_selection.h"
 #endif
@@ -158,7 +159,7 @@ uint8_t RobotCMDInit(void)
         return 0u;
 #else
     remote_initialized = (uint8_t)(RemoteControlInit(PLATFORM_UART_5) != NULL);
-    if (!remote_initialized || VisionInit(&huart9) == NULL)
+    if (!remote_initialized || VisionInit(PLATFORM_UART_9) == NULL)
         return 0u;
 #endif
 #if defined(MC02_VISION_PROTOCOL_V2)
@@ -231,7 +232,7 @@ static VisionControlInput_s GetVisionControlInput(void)
         .online = vision_status_snapshot.online,
         .mode = vision_recv_snapshot.mode,
         .last_rx_ms = vision_status_snapshot.last_rx_ms,
-        .now_ms = HAL_GetTick(),
+        .now_ms = PlatformTimeNowMs(),
         .max_age_ms = VISION_CONTROL_MAX_AGE_MS,
         .limits = &vision_limits,
         .yaw = vision_recv_snapshot.yaw,
@@ -251,7 +252,7 @@ static VisionControlInput_s GetVisionV2ControlInput(void)
         .online = (uint8_t)(vision_status_snapshot.online && vision_v2_aim_valid),
         .mode = vision_v2_aim_valid ? vision_v2_aim_snapshot.mode : 0u,
         .last_rx_ms = vision_v2_aim_freshness.received_time_ms,
-        .now_ms = HAL_GetTick(),
+        .now_ms = PlatformTimeNowMs(),
         .max_age_ms = VISION_V2_AIM_MAX_AGE_MS,
         .limits = &vision_limits,
         .yaw = vision_v2_aim_snapshot.yaw_rad,
@@ -493,7 +494,7 @@ static void ApplySafeCommands(void)
 static void EmergencyHandler(uint8_t remote_online)
 {
     RemoteSafetyGesturesUpdate(&remote_gestures, remote_initialized ? &rc_data[TEMP] : NULL,
-                               remote_online, HAL_GetTick(), 1u);
+                               remote_online, PlatformTimeNowMs(), 1u);
     RobotSafetyUpdate();
     if (!RobotSafetyIsReady()) ApplySafeCommands();
 }
@@ -506,7 +507,7 @@ void RobotCMDTask()
    // BMI088Acquire(bmi088_test,&bmi088_data) ;
     // 控制选择不读取底盘回传，避免单板复制未使用的反馈或双板为它加锁。
     const uint8_t feedback_received = (uint8_t)(MessageReadSnapshot(gimbal_feed_sub,
-        &gimbal_fetch_data, sizeof(gimbal_fetch_data), HAL_GetTick(), NULL) == MESSAGE_OK);
+        &gimbal_fetch_data, sizeof(gimbal_fetch_data), PlatformTimeNowMs(), NULL) == MESSAGE_OK);
 
     // 每轮读取一次输入，即使没有新帧也会检查键鼠是否超过使用时间。
     if (remote_initialized) RemoteControlGetSnapshot(&remote_snapshot);
@@ -515,7 +516,7 @@ void RobotCMDTask()
     // 新协议分别复制瞄准与导航快照；彼此的更新不能替对方续期。
 #if defined(MC02_VISION_PROTOCOL_V2)
     VisionGetStatus(&vision_status_snapshot);
-    const uint32_t vision_now_ms = HAL_GetTick();
+    const uint32_t vision_now_ms = PlatformTimeNowMs();
     vision_v2_aim_valid = (uint8_t)(MessageReadSnapshot(vision_v2_aim_subscriber,
         &vision_v2_aim_snapshot, sizeof(vision_v2_aim_snapshot), vision_now_ms,
         &vision_v2_aim_freshness) == MESSAGE_OK);

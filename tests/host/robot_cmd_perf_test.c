@@ -8,6 +8,7 @@
 #define _GNU_SOURCE
 
 #include "test_check.h"
+#include "main.h"
 #include "robot_def.h"
 #include "robot_cmd.h"
 #include "robot_safety.h"
@@ -51,7 +52,7 @@ const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t handle)
     return &remote_input;
 }
 
-Vision_Recv_s *VisionInit(UART_HandleTypeDef *handle)
+Vision_Recv_s *VisionInit(PlatformUartPort_t handle)
 {
     (void)handle;
     return &vision_frame;

@@ -1,6 +1,7 @@
 /** @file uart_tx_callers_test.c
  * @brief 生产舵机、HC05和备用UART视觉发送，经真实队列及H723接入验证复制和结果。
  */
+#include "protocol_uart_binding_fake.h"
 #include "uart_tx_hal_model.h"
 #include "servo_motor.h"
 #include "HC05.h"
@@ -182,7 +183,8 @@ int main(int argc, char **argv)
         TEST_CHECK(failures == 1u && latest.result == USART_TX_EXPIRED && uart_model_leases == 0u);
         return 0;
     }
-    TEST_CHECK(VisionInit(&uart_handles[6]) != NULL);
+    TestVisionUartBind(&uart_handles[6]);
+    TEST_CHECK(VisionInit(PLATFORM_UART_9) != NULL);
     UARTModelCheckRuntimeAllocation();
     VisionUpdateTx(2u, 1.0f, 0.0f, 0.0f, 0.0f, 0.5f, -0.25f, 1.5f, -2.0f, 30.0f, 0x1234u);
     VisionSend();

@@ -2,6 +2,7 @@
  * @brief 经真实UART队列、分帧和CRC检查裁判及SP跨块接收、恢复与来源时间。
  * @note 只替代HAL传输、任务与看门狗；不连接设备，Release仍执行全部检查。
  */
+#include "protocol_uart_binding_fake.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -141,7 +142,10 @@ static void vision_cases(void)
 int main(void)
 {
     for (unsigned i=0;i<2;++i) endpoints[i].handle.hdmarx=&endpoints[i].dma;
-    TEST_CHECK(VisionInit(&endpoints[1].handle));
+    // 未绑定的 UART 必须拒绝初始化，之后可以使用有效绑定重试。
+    TEST_CHECK(VisionInit(PLATFORM_UART_INVALID) == NULL);
+    TestVisionUartBind(&endpoints[1].handle);
+    TEST_CHECK(VisionInit(PLATFORM_UART_9));
     vision_cases();
     return 0;
 }

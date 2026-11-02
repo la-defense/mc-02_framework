@@ -3,6 +3,7 @@
  * @note 使用生产RobotCMD和消息中心；外部输入由本地主机替身提供。
  */
 #include "test_check.h"
+#include "main.h"
 #include "robot_def.h"
 #include "robot_cmd.h"
 #include "robot_safety.h"
@@ -35,7 +36,7 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     snapshot->remote_online = remote_online;
     snapshot->pc_valid = pc_valid;
 }
-Vision_Recv_s *VisionInit(UART_HandleTypeDef *handle) { (void)handle; return &unused_wire_frame; }
+Vision_Recv_s *VisionInit(PlatformUartPort_t handle) { (void)handle; return &unused_wire_frame; }
 void VisionSend(void) {}
 void VisionGetStatus(Vision_Status_t *status)
 {

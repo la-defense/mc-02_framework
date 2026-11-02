@@ -2018,7 +2018,11 @@ add_library(mc02_referee_header_portable OBJECT referee_public_header.c)
 # 只提供通用发送类型所在目录，不提供芯片或 RTOS 头目录。
 target_include_directories(mc02_referee_header_portable PRIVATE ../../bsp/usart)
 mc02_apply_format_diagnostics(mc02_referee_header_portable)
-foreach(target IN ITEMS crc_protocol_test referee_ui_test referee_snapshot_test referee_budget_test uart_ui_integration_test)
+add_library(mc02_vision_header_portable OBJECT vision_public_header.c)
+# UART 发送结果类型是框架头，不需要芯片或 RTOS 目录。
+target_include_directories(mc02_vision_header_portable PRIVATE ../../bsp/usart)
+mc02_apply_format_diagnostics(mc02_vision_header_portable)
+foreach(target IN ITEMS crc_protocol_test referee_ui_test referee_snapshot_test referee_budget_test uart_ui_integration_test uart_stream_test uart_tx_callers_test)
   target_sources(${target} PRIVATE protocol_uart_binding_fake.c)
   # 新增的测试源位于第一次收集之后，需要补充同样的编译诊断。
   mc02_apply_format_diagnostics(${target})

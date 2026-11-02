@@ -3,6 +3,7 @@
  * @note CTest每场景独立进程；不连接硬件，Release检查仍执行。
  */
 #include "protocol_uart_binding_fake.h"
+#include "bsp_usart.h"
 #include "referee_task.h"
 #include "referee_tx_private.h"
 #include "uart_tx_hal_model.h"

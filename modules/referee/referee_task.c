@@ -7,6 +7,7 @@
  * @copyright Copyright (c) 2022
  */
 #include "referee_task.h"
+#include "bsp_usart.h" // 当前 UI 临界区与时钟仍由板级接口提供。
 #include <stdio.h>
 #include <string.h>
 
