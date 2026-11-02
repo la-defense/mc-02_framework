@@ -12,6 +12,7 @@
 #define __INS_TASK_H
 
 #include "stdint.h"
+#include "../../bsp/board/platform_resources.h"
 
 /* 用 enum 而非宏定义坐标轴索引, 避免 X/Y/Z 宏污染全局预处理器
  * (曾与 CMSIS core_cm7.h 位域成员 Z 冲突) */
@@ -88,12 +89,18 @@ typedef struct
     float Roll;
 } IMU_Param_t;
 
+/** @brief 启动阶段选择姿态任务使用的逻辑 IMU。
+ * @param[in] port 车型配置的逻辑编号。
+ * @return 1 为板级绑定存在，0 为编号无效或姿态任务已经初始化。
+ * @note 在 INS_Init 之前串行调用；失败时保留此前选择，不操作传感器。
+ */
+uint8_t INS_ConfigureSensor(PlatformImuPort_t port);
+
 /**
 * @brief 注册 BMI088 并准备姿态解算所需的滤波器。
 * @return 返回内部姿态数据地址；初始姿态计算或卡尔曼滤波器初始化失败时返回 NULL。
-* @note 由 StartINSTASK 在 INS 专属任务中调用。BMI088 初始化失败时仍返回地址，
-*       但 IMU 状态会标记为无效，应用不得使用旧姿态作为有效数据。
-*       BMI088 注册、姿态初始化或滤波器初始化失败均返回 NULL，重复调用保持失败；
+* @note 先调用 INS_ConfigureSensor，再由 StartINSTASK 在 INS 专属任务中调用。
+*       IMU 注册、姿态初始化或滤波器初始化失败均返回 NULL，重复调用保持失败；
 *       返回 NULL 时关闭加热并撤销 IMU／标定许可，业务不得使用旧姿态。
  */
 attitude_t *INS_Init(void);

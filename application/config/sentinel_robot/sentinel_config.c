@@ -130,6 +130,7 @@ const Robot_Config_s *SentinelConfigInit(void)
     static const Robot_Config_s sentinel_config = {
         .alarm_config = &sentinel_alarm_config,
         .referee_ui_config = &sentinel_referee_ui_config,
+        .imu_sensor = PLATFORM_IMU_BOARD_1, // 当前使用 MC-02 板载 IMU。
         .referee_uart = PLATFORM_UART_1, // 当前裁判系统接在板级声明的串口 1。
         .vision_uart = PLATFORM_UART_9, // 使用 UART 通信时沿用板级声明的串口 9。
         .remote_uart = PLATFORM_UART_5, // 当前遥控器接在板级声明的串口 5。

@@ -26,6 +26,12 @@ typedef enum {
     PLATFORM_UART_10 = 10      /**< 板级声明的串口 10。 */
 } PlatformUartPort_t;
 
+/** @brief 车型声明的 IMU 编号；实际传感器与总线由板级适配绑定。 */
+typedef enum {
+    PLATFORM_IMU_INVALID = 0, /**< 未选择传感器。 */
+    PLATFORM_IMU_BOARD_1      /**< 本板声明的第一个板载 IMU。 */
+} PlatformImuPort_t;
+
 /** @brief 业务声明的经典 CAN 端点，不包含芯片句柄和回调指针。 */
 typedef struct {
     PlatformCanBus_t can_bus; /**< 本板逻辑总线编号。 */

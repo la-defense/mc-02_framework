@@ -6,8 +6,14 @@
 #include "spi.h"
 #include <stddef.h>
 
-InsSensor *InsSensorRegister(void)
+uint8_t InsSensorIsBound(PlatformImuPort_t port)
 {
+    return (uint8_t)(port == PLATFORM_IMU_BOARD_1); // 当前板卡只声明板载 BMI088。
+}
+
+InsSensor *InsSensorRegister(PlatformImuPort_t port)
+{
+    if (!InsSensorIsBound(port)) return NULL; // 未绑定时不申请 SPI 资源或启动标定。
     BMI088_Init_Config_s config = {
         .work_mode = BMI088_BLOCK_PERIODIC_MODE, // 沿用任务周期内阻塞采样。
         .cali_mode = BMI088_CALIBRATE_ONLINE_MODE, // 启动时沿用在线标定。

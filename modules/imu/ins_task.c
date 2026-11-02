@@ -36,6 +36,7 @@
 static INS_t INS;
 static IMU_Param_t IMU_Param;
 static InsSensor *bmi088_ins;
+static PlatformImuPort_t ins_sensor_port = PLATFORM_IMU_INVALID; // 启动前由车型选择。
 static BMI088_Data_t bmi088_data;
 static uint8_t ins_init_result;
 static INS_Control_Snapshot_s ins_control_snapshot;
@@ -165,6 +166,13 @@ static MathStatus_t InitQuaternion(float *init_q4)
     return MATH_OK;
 }
 
+uint8_t INS_ConfigureSensor(PlatformImuPort_t port)
+{
+    if (ins_init_result != 0u || !InsSensorIsBound(port)) return 0u; // 初始化后不切换，未绑定时保留旧选择。
+    ins_sensor_port = port; // 只保存逻辑编号，不在此阶段访问硬件。
+    return 1u;
+}
+
 attitude_t *INS_Init(void)
 {
     INSInvalidateControlSnapshot();
@@ -180,7 +188,7 @@ attitude_t *INS_Init(void)
     bmi088_sample_timestamp_ms_diag = 0u;
     imu_sample_valid_diag = 0u;
 
-    bmi088_ins = InsSensorRegister(); // 由板级后端绑定传感器和总线。
+    bmi088_ins = InsSensorRegister(ins_sensor_port); // 由板级后端绑定所选传感器和总线。
     if (bmi088_ins == NULL)
     {
 #if MC02_FEATURE_HEATER

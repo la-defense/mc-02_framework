@@ -4,16 +4,24 @@
 #ifndef MC02_INS_SENSOR_PORT_H
 #define MC02_INS_SENSOR_PORT_H
 #include "bmi088_data.h"
+#include "../../bsp/board/platform_resources.h"
 #include <stdint.h>
 
 /** @brief 平台持有的传感器对象，业务只保存指针。 */
 typedef void InsSensor;
 
-/** @brief 注册当前板级 IMU；启动阶段串行调用。
+/** @brief 查询逻辑 IMU 是否有板级绑定。
+ * @param[in] port 车型指定的逻辑编号。
+ * @return 1 表示已绑定；0 表示不支持。此结果不代表设备已初始化。
+ */
+uint8_t InsSensorIsBound(PlatformImuPort_t port);
+
+/** @brief 注册所选板级 IMU；启动阶段串行调用。
+ * @param[in] port 已绑定的逻辑编号。
  * @return 成功返回长期有效的对象，失败返回 NULL。
  * @note 当前 MC-02 后端使用板载 BMI088、周期读取和原有启动标定配置。
  */
-InsSensor *InsSensorRegister(void);
+InsSensor *InsSensorRegister(PlatformImuPort_t port);
 
 /** @brief 读取一组加速度、角速度和温度。
  * @param[in] sensor 成功注册的对象。

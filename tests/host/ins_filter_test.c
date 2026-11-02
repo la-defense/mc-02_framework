@@ -3,6 +3,7 @@
  */
 #include "test_check.h"
 #include "ins_task.h"
+#include "ins_sensor_port.h"
 #include "attitude_filter.h"
 #include "master_process.h"
 #include "ins_hardware.h"
@@ -76,6 +77,16 @@ static void tick(void){now+=(uint32_t)lroundf(period_s*1000);INS_Task();}
 static void invalid(void){TEST_CHECK(!valid && mode==0);for(int i=0;i<4;i++)TEST_CHECK(frame[i]==0);}
 int main(int argc,char **argv)
 {
+    TEST_CHECK(!INS_ConfigureSensor(PLATFORM_IMU_INVALID)); // 未绑定时不能选择或启动传感器。
+    TEST_CHECK(InsSensorRegister(PLATFORM_IMU_INVALID) == NULL && bmi_registration_calls == 0u);
+    if (argc > 1 && strcmp(argv[1], "--unconfigured") == 0)
+    {
+        TEST_CHECK(INS_Init() == NULL && !valid && !calib_valid && force_off); // 缺少配置时保持失能。
+        TEST_CHECK(bmi_registration_calls == 0u); // 不得尝试初始化未选择的 SPI 设备。
+        return 0;
+    }
+    TEST_CHECK(INS_ConfigureSensor(PLATFORM_IMU_BOARD_1)); // 所有场景均使用显式板载选择。
+    TEST_CHECK(!INS_ConfigureSensor(PLATFORM_IMU_INVALID)); // 无效选择不能覆盖已确认的编号。
     if(argc>1 && strcmp(argv[1],"--bmi-registration-failure")==0)
     {
         fail_bmi_registration=1;
@@ -108,7 +119,9 @@ int main(int argc,char **argv)
 #else
     (void)argc;
 #endif
-    TEST_CHECK(INS_Init()!=NULL);tick();TEST_CHECK(valid && mode==1);
+    TEST_CHECK(INS_Init()!=NULL);
+    TEST_CHECK(!INS_ConfigureSensor(PLATFORM_IMU_BOARD_1)); // 初始化后不能改变传感器。
+    tick();TEST_CHECK(valid && mode==1);
     TEST_CHECK(imu_sample_updates==1u && vision_imu_sample.valid==1u &&
         vision_imu_sample.sample_sequence==seq && vision_imu_sample.sample_time_ms==now &&
         vision_imu_sample.acceleration_m_s2[2]==9.8f);

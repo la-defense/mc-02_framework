@@ -123,6 +123,7 @@ typedef struct
     Chassis_Config_s chassis_param;
     Gimbal_Config_s gimbal_param;
     Shoot_Config_s shoot_param;
+    PlatformImuPort_t imu_sensor; // 姿态解算使用的逻辑 IMU，由板级适配绑定。
     PlatformUartPort_t referee_uart; // 裁判接收使用的逻辑串口，由板级适配绑定。
     PlatformUartPort_t vision_uart; // 上位机 UART 模式使用的逻辑串口；USB 模式忽略。
     PlatformUartPort_t remote_uart; // 遥控接收使用的逻辑串口，由板级适配绑定。

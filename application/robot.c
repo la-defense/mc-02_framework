@@ -142,11 +142,12 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
     switch (module)
     {
     case ROBOT_MODULE_SAFETY:
-    case ROBOT_MODULE_IMU:
     case ROBOT_MODULE_LOG:
     case ROBOT_MODULE_HEATER:
     case ROBOT_MODULE_LCD:
         return 1u;
+    case ROBOT_MODULE_IMU:
+        return INS_ConfigureSensor(config->imu_sensor); // 先核对板级绑定，实际采样在 INS 任务初始化。
     case ROBOT_MODULE_COMMUNICATION:
 #if defined(MC02_PROFILE_ROBOT)
         return RobotTopicsInit();
@@ -307,6 +308,10 @@ uint8_t RobotInit(void)
                                          INIT_FAILURE_DEPENDENCY, module);
     }
 #else
+#if MC02_FEATURE_IMU
+    ROBOT_INIT_CHECK(INS_ConfigureSensor(robot_config->imu_sensor), INIT_STAGE_APPLICATION,
+                     INIT_MODULE_INS, INIT_FAILURE_DEPENDENCY, 0u);
+#endif
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
     ROBOT_INIT_CHECK(RobotCMDInit(), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
