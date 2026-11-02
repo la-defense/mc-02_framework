@@ -29,6 +29,7 @@ set(MC02_HOST_REMOTE_SOURCES
   ../../bsp/os/platform_irq_stm32.c # 保存并恢复测试目标的中断状态。
   ../../bsp/os/platform_sync_freertos.c # 使用测试目标的时钟与任务锁。
   ../../bsp/board/board_uart_stm32.c # 生产 UART 绑定使用该目标的测试句柄。
+  ../../bsp/board/platform_uart_stm32.c # 逻辑 UART 接收适配复用测试设备。
   remote_uart_handles.c) # 提供遥控测试未单独声明的其余 UART 句柄。
 # 电机测试按目标原有的 CAN 替身编译同一份板级绑定。
 set(MC02_HOST_DJI_SOURCES ../../modules/motor/DJImotor/dji_motor.c ../../bsp/board/board_can_stm32.c) # DJI 及逻辑 CAN 绑定。
@@ -101,6 +102,11 @@ target_compile_options(mc02_can_topic_portable PRIVATE -Wall -Wextra -Werror)
 add_library(mc02_remote_header_portable OBJECT remote_public_header.c)
 target_include_directories(mc02_remote_header_portable PRIVATE ../../modules/remote)
 target_compile_options(mc02_remote_header_portable PRIVATE -Wall -Wextra -Werror)
+# 遥控解析和在线状态只依赖逻辑 UART、来源监控及框架安全接口。
+add_library(mc02_remote_control_portable OBJECT ../../modules/remote/remote_control.c)
+target_include_directories(mc02_remote_control_portable PRIVATE ../../modules/remote ../../modules/daemon
+  ../../modules/safety ../../bsp/usart ../../bsp/os ../../bsp/log)
+target_compile_options(mc02_remote_control_portable PRIVATE -Wall -Wextra -Werror)
 # 仅提供框架头，验证消息中心本身不依赖 HAL／FreeRTOS 头路径。
 add_library(mc02_message_center_portable OBJECT ../../modules/message_center/message_center.c)
 target_include_directories(mc02_message_center_portable PRIVATE ../../modules/message_center ../../bsp/os)
@@ -2091,5 +2097,5 @@ foreach(target IN ITEMS crc_protocol_test referee_ui_test referee_snapshot_test 
 endforeach()
 # 裁判测试使用真实平台转接层，底层 UART 与板级绑定仍由各测试控制。
 foreach(target IN ITEMS crc_protocol_test referee_ui_test referee_snapshot_test referee_budget_test uart_ui_integration_test)
-  target_sources(${target} PRIVATE ../../bsp/board/platform_uart_stm32.c)
+  target_sources(${target} PRIVATE ../../bsp/board/platform_uart_stm32.c ../../bsp/board/platform_uart_tx_stm32.c)
 endforeach()

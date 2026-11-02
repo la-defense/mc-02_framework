@@ -4,18 +4,17 @@
 */
 #include "remote_control.h"
 #include "string.h"
-#include "bsp_usart.h"
+#include "platform_uart.h"
 #include "daemon.h"
 #include "bsp_log.h"
 #include "robot_safety.h"
 #include "platform_irq.h"
 #include "platform_sync.h"
-#include "board_uart_stm32.h"
 
 #define REMOTE_CONTROL_FRAME_SIZE 18u
 static RC_ctrl_t rc_ctrl[2];
 static uint8_t rc_init_flag;
-static USARTInstance *rc_usart_instance;
+static PlatformUartInstance *rc_usart_instance;
 static DaemonInstance *rc_daemon_instance;
 static RemoteControlDiagnostics_s remote_control_diag;
 static uint16_t pc_sequence;
@@ -216,20 +215,18 @@ static void RCLostCallback(const DaemonEvent_t *event, void *id)
     RobotSafetySetRcOnline(0u);
     PlatformIrqRestore(primask);
     EstopRequest(ESTOP_REASON_RC_OFFLINE);
-    USARTServiceInit(rc_usart_instance);
+    PlatformUartRestartReceive(rc_usart_instance);
     BSP_LOG_EVENT_0(EV_MODULES_REMOTE_REMOTE_CONTROL_C_01);
 }
 
 const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port)
 {
-    UART_HandleTypeDef *handle = BoardUartResolve(port); // 将车型逻辑编号绑定到板级串口。
-    if (handle == NULL)
+    if (!PlatformUartIsBound(port))
         return NULL; // 未绑定时不注册来源或启动 DMA。
-    USART_Init_Config_s conf = {
-        .module_callback = RemoteControlRxCallback,
-        .context = rc_ctrl,
-        .usart_handle = handle,
-        .recv_buff_size = REMOTE_CONTROL_FRAME_SIZE,
+    PlatformUartConfig conf = {
+        .receive = RemoteControlRxCallback, // 按原规则检查收到的 DBUS 帧。
+        .context = rc_ctrl, // 接收回调使用长期保存的遥控数据。
+        .receive_capacity = REMOTE_CONTROL_FRAME_SIZE, // 每块最多接收 18 字节。
     };
     memset(rc_ctrl, 0, sizeof(rc_ctrl));
     memset((void *)&remote_control_diag, 0, sizeof(remote_control_diag));
@@ -251,7 +248,7 @@ const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port)
     rc_daemon_instance = DaemonRegister(&daemon_conf);
     if (rc_daemon_instance == NULL)
         return NULL;
-    rc_usart_instance = USARTRegister(&conf);
+    rc_usart_instance = PlatformUartRegister(port, &conf);
     // 串口注册失败时撤销已注册的离线计时对象，避免留下无主回调。
     if (rc_usart_instance == NULL)
     {

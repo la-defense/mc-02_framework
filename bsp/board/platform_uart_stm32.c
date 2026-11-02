@@ -30,18 +30,3 @@ uint8_t PlatformUartRestartReceive(PlatformUartInstance *instance)
 {
     return USARTServiceInit((USARTInstance *)instance);
 }
-
-USARTSendStatus_t PlatformUartSubmit(PlatformUartInstance *instance, const USARTTxRequest_t *request, uint32_t *id)
-{
-    return USARTSubmitTx((USARTInstance *)instance, request, id);
-}
-
-USARTSendStatus_t PlatformUartCancel(PlatformUartInstance *instance, uint32_t id)
-{
-    return USARTCancelTx((USARTInstance *)instance, id);
-}
-
-USARTSendStatus_t PlatformUartGetTxState(const PlatformUartInstance *instance, USARTTxState_t *output)
-{
-    return USARTGetTxState((const USARTInstance *)instance, output);
-}

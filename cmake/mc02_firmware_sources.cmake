@@ -76,7 +76,8 @@ set(MC02_BSP_C_SOURCES
     bsp/board/platform_can_rx_stm32.c # 逻辑 CAN 接收端点适配。
     bsp/board/board_numeric_caps_mc02.c # MC-02 数值硬件和当前编译能力声明。
     bsp/board/board_uart_stm32.c # MC-02 逻辑 UART 与物理串口绑定。
-    bsp/board/platform_uart_stm32.c # 逻辑 UART 接收注册与发送队列适配。
+    bsp/board/platform_uart_stm32.c # 逻辑 UART 接收注册与重启适配。
+    bsp/board/platform_uart_tx_stm32.c # 逻辑 UART 发送队列适配。
     bsp/observation/bsp_observation.c
     bsp/bsp_init.c
     bsp/bsp_tools.c
