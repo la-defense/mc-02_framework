@@ -43,4 +43,16 @@ uint8_t PlatformTaskCreateTracked(const PlatformTaskConfig_t *config, PlatformTa
  * @note 不得从中断调用；不用于亚毫秒任务唤醒。
  */
 void PlatformTaskDelayMs(uint32_t milliseconds);
+
+/** @brief 查询任务调度器是否正在运行。
+ * @return 非零表示运行中，零表示尚未运行。
+ * @note H723 后端沿用 CMSIS osKernelRunning 的判断。
+ */
+uint8_t PlatformSchedulerIsRunning(void);
+
+/** @brief 在调度器启动前沿用平台原有的忙等实现。
+ * @param[in] milliseconds 等待时长，单位毫秒。
+ * @note 仅用于保留现有启动前行为；调用者须确保时基已初始化，期间不让出 CPU。
+ */
+void PlatformDelayBeforeSchedulerMs(uint32_t milliseconds);
 #endif

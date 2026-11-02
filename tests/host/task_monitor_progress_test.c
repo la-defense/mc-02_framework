@@ -7,6 +7,7 @@
 
 #include "main.h"
 #include "task_monitor.h"
+#include "bsp_reset_recovery.h"
 #include "test_check.h"
 
 GPIO_TypeDef mc02_test_gpiob;
@@ -26,6 +27,11 @@ static uint32_t degraded_id;
 static uint32_t degraded_mask;
 static uint32_t rtos_delay_count;
 static uint8_t scheduler_running;
+
+void MC02TestRecordFault(ResetRecoveryCause_e cause)
+{
+    (void)cause; // 此测试只观察任务状态和降级，不校验故障记录的具体内容。
+}
 
 uint8_t osKernelRunning(void)
 {
@@ -160,6 +166,11 @@ int main(void)
     TEST_CHECK(core_state.mode == TASK_MONITOR_MODE_PERIODIC);
     TEST_CHECK(core_state.state == TASK_MONITOR_STATE_NOT_STARTED);
     TEST_CHECK(core_state.started == 0u && core_state.has_completed == 0u);
+    mc02_test_primask = 1u; // 模拟调用者在进入前已经屏蔽中断。
+    TEST_CHECK(TaskMonitorGetProgressState(TASK_MONITOR_INS, &core_state) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(mc02_test_primask == 1u && mc02_test_irq_disabled == 1u); // 返回后继续保持屏蔽。
+    mc02_test_primask = 0u; // 后续测试恢复普通任务状态。
+    mc02_test_irq_disabled = 0u;
 
     // 调度器已运行时拒绝重置，不能借重初始化清除活动状态或锁存故障。
     TEST_CHECK(TaskMonitorInitConfigured(core_and_event_configs, 3u) ==
@@ -173,7 +184,7 @@ int main(void)
                TASK_MONITOR_RESULT_OK);
     TEST_CHECK(after_invalid_init.state == TASK_MONITOR_STATE_NOT_STARTED);
 
-    mc02_test_ipsr = 1u;
+    mc02_test_ipsr = 7u; // 任意非零异常编号都必须拒绝任务进度更新。
     TEST_CHECK(TaskMonitorBeginWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_CONTEXT);
     TEST_CHECK(TaskMonitorReportProgress(TASK_MONITOR_INS, 1u) == TASK_MONITOR_RESULT_CONTEXT);
     TEST_CHECK(TaskMonitorSetWaiting(TASK_MONITOR_INS, TASK_MONITOR_WAIT_EVENT) ==

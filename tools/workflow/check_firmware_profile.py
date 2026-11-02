@@ -76,6 +76,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/imu/imu_heater.c",  # 温控策略及逻辑模拟资源。
     "modules/motor/DJImotor/dji_motor.c",  # DJI 逻辑端点、控制和反馈。
     "modules/motor/motor_task.c",  # 通信派发顺序及电机周期调用。
+    "modules/task_monitor/task_monitor.c",  # 任务期限和故障处理策略。
     "application/robot_task_create.c",  # 按车型配置创建任务。
 }
 ASSEMBLY_SOURCES = {

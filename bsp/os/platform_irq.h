@@ -18,4 +18,10 @@ PlatformIrqState_t PlatformIrqSaveAndDisable(void);
  * @note 必须在同一执行上下文按照相反顺序配对，不得伪造状态。
  */
 void PlatformIrqRestore(PlatformIrqState_t saved);
+
+/** @brief 查询当前是否处于中断或异常处理上下文。
+ * @return 非零表示当前执行异常处理，零表示线程上下文。
+ * @note 当前 H723 后端检查 IPSR；不改变中断屏蔽状态。
+ */
+uint8_t PlatformIrqIsInHandler(void);
 #endif

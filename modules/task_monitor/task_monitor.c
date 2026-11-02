@@ -4,14 +4,12 @@
  */
 #include "task_monitor.h"
 
-#include "bsp_watchdog.h"
 #include "robot_safety.h"
 #include "bsp_log.h"
-#include "main.h"
-#include "bsp_safety.h"
-#include "bsp_reset_recovery.h"
-#include "bsp_dwt.h"
-#include "cmsis_os.h"
+#include "../../bsp/os/platform_irq.h"
+#include "../../bsp/os/platform_sync.h"
+#include "../../bsp/os/platform_os.h"
+#include "../../bsp/os/platform_safety.h"
 
 #include <limits.h>
 #include <string.h>
@@ -92,14 +90,12 @@ static void TaskMonitorNoteRuntimeStartLocked(uint32_t now, uint8_t scheduler_ru
 // 只在更新固定数组时关中断，日志和用户回调都在恢复中断后执行。
 static uint32_t TaskMonitorEnterCritical(void)
 {
-    const uint32_t previous = __get_PRIMASK();
-    __disable_irq();
-    return previous;
+    return PlatformIrqSaveAndDisable(); // 保留调用前的屏蔽状态，供同一上下文恢复。
 }
 
 static void TaskMonitorExitCritical(uint32_t previous)
 {
-    __set_PRIMASK(previous);
+    PlatformIrqRestore(previous); // 恢复进入前的状态，避免误开原本已屏蔽的中断。
 }
 
 static TaskMonitorItem_t *TaskMonitorFindItem(TaskMonitor_Id_e id)
@@ -236,8 +232,8 @@ static void TaskMonitorPublishFaultActions(const TaskMonitorFaultAction_t *actio
         if (action->role == TASK_MONITOR_ROLE_CORE)
         {
             // 先保存任务期限原因，之后IWDG复位才能计入有限恢复额度。
-            BSP_ResetRecoveryMarkFault(RESET_RECOVERY_CAUSE_CORE_TASK);
-            BSP_SafetyLatchOutputsOff();
+            PlatformRecordCoreTaskFault(); // 记录后重启才能识别任务故障。
+            PlatformSafetyLatchOutputsOff(); // 立即关断并保持中断屏蔽。
         }
         else if (action->callback != NULL)
             action->callback(action->id, action->dependency_mask, action->callback_context);
@@ -283,10 +279,10 @@ static uint8_t TaskMonitorValidateConfig(const TaskMonitorTaskConfig_t *configs,
 TaskMonitor_Result_e TaskMonitorInitConfigured(const TaskMonitorTaskConfig_t *configs,
                                                uint32_t count)
 {
-    if (__get_IPSR() != 0u)
+    if (PlatformIrqIsInHandler() != 0u)
         return TASK_MONITOR_RESULT_CONTEXT;
     // 运行后重新初始化会清除已锁存的故障，必须在创建任务前完成配置。
-    if (osKernelRunning() != 0u)
+    if (PlatformSchedulerIsRunning() != 0u)
         return TASK_MONITOR_RESULT_SCHEDULER_RUNNING;
     if (configs == NULL || count == 0u || count > TASK_MONITOR_MAX_TASKS)
         return TASK_MONITOR_RESULT_BAD_ARGUMENT;
@@ -294,7 +290,7 @@ TaskMonitor_Result_e TaskMonitorInitConfigured(const TaskMonitorTaskConfig_t *co
         return TASK_MONITOR_RESULT_BAD_CONFIGURATION;
 
     TaskMonitorItem_t candidate[TASK_MONITOR_MAX_TASKS] = {0};
-    const uint32_t now = HAL_GetTick();
+    const uint32_t now = PlatformTimeNowMs();
     for (uint32_t index = 0u; index < count; ++index)
     {
         candidate[index].config = configs[index];
@@ -328,15 +324,15 @@ uint8_t TaskMonitorInit(void)
 
 TaskMonitor_Result_e TaskMonitorBeginWork(TaskMonitor_Id_e id)
 {
-    if (__get_IPSR() != 0u)
+    if (PlatformIrqIsInHandler() != 0u)
         return TASK_MONITOR_RESULT_CONTEXT;
 
     TaskMonitor_Result_e result = TASK_MONITOR_RESULT_OK;
     TaskMonitorFaultAction_t action = {0};
     uint8_t publish_fault = 0u;
     uint8_t core_healthy = 1u;
-    const uint32_t now = HAL_GetTick();
-    const uint8_t scheduler_running = osKernelRunning();
+    const uint32_t now = PlatformTimeNowMs();
+    const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
     TaskMonitorItem_t *item = TaskMonitorFindItem(id);
@@ -383,13 +379,13 @@ TaskMonitor_Result_e TaskMonitorBeginWork(TaskMonitor_Id_e id)
 TaskMonitor_Result_e TaskMonitorReportProgress(TaskMonitor_Id_e id,
                                                uint32_t progress_value)
 {
-    if (__get_IPSR() != 0u)
+    if (PlatformIrqIsInHandler() != 0u)
         return TASK_MONITOR_RESULT_CONTEXT;
     if (monitor_initialized == 0u)
         return TASK_MONITOR_RESULT_NOT_INITIALIZED;
 
-    const uint32_t now = HAL_GetTick();
-    const uint8_t scheduler_running = osKernelRunning();
+    const uint32_t now = PlatformTimeNowMs();
+    const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
     TaskMonitorItem_t *item = TaskMonitorFindItem(id);
@@ -417,15 +413,15 @@ TaskMonitor_Result_e TaskMonitorReportProgress(TaskMonitor_Id_e id,
 TaskMonitor_Result_e TaskMonitorSetWaiting(TaskMonitor_Id_e id,
                                            TaskMonitor_WaitReason_e reason)
 {
-    if (__get_IPSR() != 0u)
+    if (PlatformIrqIsInHandler() != 0u)
         return TASK_MONITOR_RESULT_CONTEXT;
     if (monitor_initialized == 0u)
         return TASK_MONITOR_RESULT_NOT_INITIALIZED;
     if (reason == TASK_MONITOR_WAIT_NONE || (uint32_t)reason > TASK_MONITOR_WAIT_DELAY)
         return TASK_MONITOR_RESULT_BAD_ARGUMENT;
 
-    const uint32_t now = HAL_GetTick();
-    const uint8_t scheduler_running = osKernelRunning();
+    const uint32_t now = PlatformTimeNowMs();
+    const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
     TaskMonitorItem_t *item = TaskMonitorFindItem(id);
@@ -450,7 +446,7 @@ TaskMonitor_Result_e TaskMonitorSetWaiting(TaskMonitor_Id_e id,
 
 TaskMonitor_Result_e TaskMonitorCompleteWork(TaskMonitor_Id_e id)
 {
-    if (__get_IPSR() != 0u)
+    if (PlatformIrqIsInHandler() != 0u)
         return TASK_MONITOR_RESULT_CONTEXT;
     if (monitor_initialized == 0u)
         return TASK_MONITOR_RESULT_NOT_INITIALIZED;
@@ -459,8 +455,8 @@ TaskMonitor_Result_e TaskMonitorCompleteWork(TaskMonitor_Id_e id)
     uint8_t publish_fault = 0u;
     uint8_t core_healthy = 1u;
     TaskMonitor_Result_e result = TASK_MONITOR_RESULT_OK;
-    const uint32_t now = HAL_GetTick();
-    const uint8_t scheduler_running = osKernelRunning();
+    const uint32_t now = PlatformTimeNowMs();
+    const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
     TaskMonitorItem_t *item = TaskMonitorFindItem(id);
@@ -572,8 +568,8 @@ void TaskMonitorFeed(TaskMonitor_Id_e id)
     if (monitor_initialized == 0u)
         return;
 
-    const uint32_t now = HAL_GetTick();
-    const uint8_t scheduler_running = osKernelRunning();
+    const uint32_t now = PlatformTimeNowMs();
+    const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
     TaskMonitorItem_t *item = TaskMonitorFindItem(id);
@@ -593,9 +589,9 @@ void TaskMonitorDelayMs(TaskMonitor_Id_e id, uint32_t milliseconds)
     if ((uint32_t)id >= TASK_MONITOR_MAX_TASKS || milliseconds == 0u)
         return;
 
-    if (osKernelRunning() == 0u)
+    if (PlatformSchedulerIsRunning() == 0u)
     {
-        DWT_Delay((float)milliseconds / 1000.0f);
+        PlatformDelayBeforeSchedulerMs(milliseconds); // 保持调度器启动前原有的忙等。
         return;
     }
 
@@ -603,7 +599,7 @@ void TaskMonitorDelayMs(TaskMonitor_Id_e id, uint32_t milliseconds)
     while (milliseconds > 0u)
     {
         (void)TaskMonitorSetWaiting(id, TASK_MONITOR_WAIT_DELAY);
-        osDelay(1u);
+        PlatformTaskDelayMs(1u); // 使用原先 1 ms 的任务让出周期。
         TaskMonitorFeed(id);
         (void)TaskMonitorReportProgress(id, 0u);
         milliseconds--;
@@ -615,8 +611,8 @@ void TaskMonitorTick(void)
     TaskMonitorFaultAction_t actions[TASK_MONITOR_MAX_TASKS] = {0};
     uint32_t action_count = 0u;
     uint8_t core_healthy = 1u;
-    const uint32_t now = HAL_GetTick();
-    const uint8_t scheduler_running = osKernelRunning();
+    const uint32_t now = PlatformTimeNowMs();
+    const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
     if (monitor_initialized == 0u)
@@ -657,7 +653,7 @@ void TaskMonitorTick(void)
     TaskMonitorPublishFaultActions(actions, action_count, core_healthy);
     // 只有核心工作仍正常时才重载 IWDG；辅助服务故障保留为各自的降级状态。
     if (core_healthy != 0u)
-        BSP_WatchdogFeed();
+        PlatformWatchdogFeed(); // 仅在既有核心检查通过后重载看门狗。
 }
 
 uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id,
@@ -674,8 +670,8 @@ uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id,
     uint32_t action_count = 0u;
     uint8_t allowed = 1u;
     uint8_t core_healthy = 1u;
-    const uint32_t now = HAL_GetTick();
-    const uint8_t scheduler_running = osKernelRunning();
+    const uint32_t now = PlatformTimeNowMs();
+    const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
     TaskMonitor_LongOperationWindow_t *window = &long_operation_windows[id][operation];
@@ -732,8 +728,8 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id,
     uint32_t action_count = 0u;
     uint8_t within_limit = 0u;
     uint8_t core_healthy = 1u;
-    const uint32_t now = HAL_GetTick();
-    const uint8_t scheduler_running = osKernelRunning();
+    const uint32_t now = PlatformTimeNowMs();
+    const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
     TaskMonitor_LongOperationWindow_t *window = &long_operation_windows[id][operation];
@@ -826,7 +822,7 @@ uint8_t TaskMonitorAllCoreHealthyNow(void)
     if (monitor_initialized == 0u)
         return 0u;
 
-    const uint32_t now = HAL_GetTick();
+    const uint32_t now = PlatformTimeNowMs();
     const uint32_t previous = TaskMonitorEnterCritical();
     uint8_t has_core_task = 0u;
     uint8_t healthy = (uint8_t)(core_fault_latched == 0u &&

@@ -6,6 +6,7 @@
 
 #include "main.h"
 #include "task_monitor.h"
+#include "bsp_reset_recovery.h"
 
 #define CHECK(condition)                                                         \
     do                                                                           \
@@ -34,6 +35,16 @@ static uint8_t scheduler_running;
 static uint32_t rtos_delay_count;
 static uint32_t dwt_delay_count;
 static float last_dwt_delay_seconds;
+static uint32_t fault_mark_count;
+static uint8_t first_mark_before_shutdown;
+
+void MC02TestRecordFault(ResetRecoveryCause_e cause)
+{
+    if (fault_mark_count == 0u && cause == RESET_RECOVERY_CAUSE_CORE_TASK &&
+        mc02_test_tim3.CCR4 == 25u)
+        first_mark_before_shutdown = 1u; // 首次记录时输出尚未被关断函数清零。
+    fault_mark_count++; // 核心故障应在关断前记录原因。
+}
 
 uint8_t osKernelRunning(void)
 {
@@ -127,6 +138,8 @@ int main(void)
     watchdog_feed_count = 0u;
     logged_after_shutdown = 0u;
     log_count = 0u;
+    fault_mark_count = 0u; // 从即将注入的核心故障开始记录调用。
+    first_mark_before_shutdown = 0u;
     reported_task_health = 1u;
 
     mc02_test_gpiob.ODR = 1u << 1u;
@@ -146,6 +159,7 @@ int main(void)
     mc02_test_tick += 1u;
     TaskMonitorTick();
     CHECK(log_count >= 1u);
+    CHECK(fault_mark_count >= 1u && first_mark_before_shutdown == 1u); // 原因记录先于首次关断。
     CHECK(logged_after_shutdown == log_count);
     CHECK(reported_task_health == 0u);
     CHECK(watchdog_feed_count == 0u);

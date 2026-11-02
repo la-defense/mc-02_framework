@@ -1436,6 +1436,13 @@ add_executable(
   task_monitor_shutdown_test
   task_monitor_shutdown_test.c
   ../../modules/task_monitor/task_monitor.c
+  ../../bsp/board/platform_safety_stm32.c # 通过生产平台适配保留关断顺序。
+  task_monitor_delay_fake.c # 任务等待映射到可控时钟。
+  ../../bsp/os/platform_scheduler_freertos.c # 使用生产调度器状态适配。
+  ../../bsp/board/platform_startup_delay_stm32.c # 使用生产启动前等待适配。
+  ../../bsp/board/platform_context_stm32.c # 使用可控异常编号验证上下文检查。
+  ../../bsp/os/platform_irq_stm32.c # 验证生产中断状态保存与恢复。
+  ../../bsp/os/platform_sync_freertos.c # 验证生产毫秒时钟适配。
   ../../bsp/safety/bsp_safety.c)
 target_include_directories(task_monitor_shutdown_test BEFORE PRIVATE task_monitor_fakes fakes)
 target_include_directories(task_monitor_shutdown_test PRIVATE ../../modules/task_monitor ../../bsp/safety)
@@ -1446,11 +1453,26 @@ add_executable(
   task_monitor_progress_test
   task_monitor_progress_test.c
   ../../modules/task_monitor/task_monitor.c
+  ../../bsp/board/platform_safety_stm32.c # 通过生产平台适配保留看门狗行为。
+  task_monitor_delay_fake.c # 任务等待映射到可控时钟。
+  ../../bsp/os/platform_scheduler_freertos.c # 使用生产调度器状态适配。
+  ../../bsp/board/platform_startup_delay_stm32.c # 使用生产启动前等待适配。
+  ../../bsp/board/platform_context_stm32.c # 使用可控异常编号验证上下文检查。
+  ../../bsp/os/platform_irq_stm32.c # 复用生产中断屏蔽适配。
+  ../../bsp/os/platform_sync_freertos.c # 复用生产毫秒时钟适配。
   ../../bsp/safety/bsp_safety.c)
-target_include_directories(task_monitor_progress_test BEFORE PRIVATE fakes)
+target_include_directories(task_monitor_progress_test BEFORE PRIVATE task_monitor_fakes fakes)
 target_include_directories(task_monitor_progress_test PRIVATE ../../modules/task_monitor ../../bsp/safety)
 add_test(NAME task_monitor_progress_deadlines_and_auxiliary_degrade COMMAND task_monitor_progress_test)
 set_tests_properties(task_monitor_progress_deadlines_and_auxiliary_degrade PROPERTIES TIMEOUT 10)
+
+# 生产任务监控应只依赖框架接口，不继承芯片或 RTOS 头目录。
+add_library(task_monitor_portable_compile OBJECT ../../modules/task_monitor/task_monitor.c)
+target_include_directories(task_monitor_portable_compile PRIVATE
+  ../../modules/task_monitor # 任务期限和状态接口。
+  ../../modules/safety # 整车安全状态接口。
+  ../../bsp/log) # 有界日志事件接口。
+target_compile_options(task_monitor_portable_compile PRIVATE -Wall -Wextra -Werror)
 
 add_executable(
   watchdog_debug_safety_test

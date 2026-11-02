@@ -84,6 +84,10 @@ set(MC02_BSP_C_SOURCES
     bsp/board/platform_probe_stm32.c # 原有 DWT 周期计数与短时探针适配。
     bsp/board/platform_time_us_stm32.c # 保留现有微秒运行时间的框架入口。
     bsp/board/platform_dispatch_stm32.c # 任务派发绑定到现有 CAN 和串口队列。
+    bsp/board/platform_context_stm32.c # 查询当前线程或异常处理上下文。
+    bsp/board/platform_startup_delay_stm32.c # 保留调度器启动前的 DWT 等待。
+    bsp/board/platform_safety_stm32.c # 核心故障与看门狗绑定到原有安全路径。
+    bsp/os/platform_scheduler_freertos.c # 查询调度器的既有运行状态。
     bsp/board/board_uart_stm32.c # MC-02 逻辑 UART 与物理串口绑定。
     bsp/board/platform_uart_stm32.c # 逻辑 UART 接收注册与重启适配。
     bsp/board/platform_uart_tx_stm32.c # 逻辑 UART 发送队列适配。
