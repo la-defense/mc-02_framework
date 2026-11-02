@@ -116,6 +116,22 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
             PlatformTaskDelayMs(100u);
         }
     }
+#if MC02_FEATURE_HEATER
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_HEATER) && !IMUHeaterInitSucceeded())
+#else
+    if (!IMUHeaterInitSucceeded())
+#endif
+    {
+        IMUHeaterForceOff(); // 不论影响范围，先保持加热输出为零。
+        if (RobotReportHeaterInitFailure())
+        {
+            RobotFaultReport(ROBOT_FAULT_INIT_FAILURE); // 记录影响核心的启动失败。
+            RobotSafetyRequestDisable(); // 撤销整车运行许可。
+            BSP_SafetyStartupLatchOutputsOff(); // 使用板级直接关断路径锁存输出关闭。
+        }
+    }
+#endif
     InitDiagnosticMarkReady();
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_01);
     for (;;)

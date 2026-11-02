@@ -45,6 +45,7 @@ static float heater_target = IMU_HEATER_TARGET_DEFAULT;
 static uint16_t heater_duty = 0;
 volatile uint32_t imu_heater_duty_diag = 0u;
 static uint8_t heater_initialized = 0;
+static uint8_t heater_startup_valid = 0u; // PWM 准备成功后才允许清除运行故障。
 static uint8_t heater_configured = 0u;
 static PlatformPwmChannel_t heater_pwm = PLATFORM_PWM_INVALID; // 启动时由车型选择。
 static PlatformAdcChannel_t heater_supply = PLATFORM_ADC_INVALID; // 启动时由车型选择。
@@ -212,6 +213,7 @@ void IMUHeaterInit(void)
     heater_fault_sample_sequence = 0u;
     heater_fault_timestamp_ms = 0u;
     heater_initialized = 1u;
+    heater_startup_valid = 0u; // 本次初始化尚未完成输出准备。
     heater_pid_has_tick = 0u;
     if (pid_status != PID_OK)
     {
@@ -229,16 +231,31 @@ void IMUHeaterInit(void)
     }
 
     // 先写0，启热构建才启动 PWM，避免启动时沿用旧比较值。
-    (void)PlatformPwmSetCompare(heater_pwm, 0u);
+    if (!PlatformPwmSetCompare(heater_pwm, 0u))
+    {
+        (void)IMUHeaterLatchFault(PlatformTimeNowMs()); // 无法确认零输出时保持故障。
+        return;
+    }
 #if MC02_HEATER_ENABLED
-    (void)PlatformPwmStart(heater_pwm);
+    if (!PlatformPwmStart(heater_pwm))
+    {
+        (void)IMUHeaterLatchFault(PlatformTimeNowMs()); // 启动失败不允许恢复供热。
+        IMUHeaterApplyDuty(0u); // 再次请求零比较值。
+        return;
+    }
 #endif
+    heater_startup_valid = 1u; // 输出准备成功，运行故障才允许按原条件恢复。
 
     BSP_LOG_EVENT_4(EV_MODULES_IMU_IMU_HEATER_C_02,
                     BSP_LOG_FIELD_F32(heater_target),
                     BSP_LOG_FIELD_U32(IMU_HEATER_DUTY_NORMAL),
                     BSP_LOG_FIELD_U32(IMU_HEATER_ARR),
                     BSP_LOG_FIELD_F32(IMU_HEATER_MAX_POWER_W));
+}
+
+uint8_t IMUHeaterInitSucceeded(void)
+{
+    return heater_startup_valid; // 只反映启动结果，不替代运行故障状态。
 }
 
 void IMUHeaterForceOff(void)
@@ -298,7 +315,7 @@ uint8_t IMUHeaterClearFault(void)
     uint8_t supply_valid = IMUHeaterReadFreshSupply(&supply);
 
     // 运行状态尚未允许恢复，或最近一次更新没有接受可用温度时，保留故障。
-    if (!heater_initialized || heater_last_force_off_request ||
+    if (!heater_initialized || !heater_startup_valid || heater_last_force_off_request ||
         heater_long_operation_active_mask != 0u || heater_long_operation_failed_mask != 0u ||
         heater_require_new_sample || !heater_has_valid_sample || !last_sensor_valid)
         return 0u;

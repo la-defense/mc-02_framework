@@ -22,7 +22,7 @@ target_include_directories(robot_task_create_test PRIVATE task_creation_fakes . 
 target_compile_definitions(robot_task_create_test PRIVATE MC02_CONFIG_GENERATED=1 MC02_PROFILE_BENCH_SAFE=1)
 target_compile_options(robot_task_create_test PRIVATE -Wall -Wextra -Werror)
 foreach(scenario IN ITEMS normal core-ins core-motor core-daemon core-robot aux-ui core-ui disabled-ui
-    disabled-lcd aux-lcd core-lcd uart event no-event log core-log)
+    disabled-lcd aux-lcd core-lcd uart event no-event log core-log heater-core heater-aux)
   add_test(NAME production_task_creation_${scenario} COMMAND robot_task_create_test ${scenario})
   set_tests_properties(production_task_creation_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
@@ -1493,6 +1493,10 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
         NAME production_heater_${heater_profile}_${recovery_scenario}
         COMMAND ${heater_recovery_target} ${recovery_scenario})
     endforeach()
+    if(heater_profile STREQUAL "enabled")
+      add_test(NAME production_heater_enabled_pwm_start_failure
+        COMMAND ${heater_recovery_target} pwm-start-failure)
+    endif()
   endforeach()
 
   # 注入 PID 初始化拒绝，检查失败发生在 PWM 启动之前。

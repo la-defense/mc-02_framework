@@ -38,6 +38,7 @@ int main(void)
     IMUHeaterUpdate(&sample, 0u);
     IMUHeaterStatus_t status;
     IMUHeaterGetStatus(&status);
+    TEST_CHECK(!IMUHeaterInitSucceeded());
     TEST_CHECK(status.fault == 1u);
     TEST_CHECK(status.duty == 0u && htim3.compare == 0u);
     TEST_CHECK(pwm_starts == 0u);

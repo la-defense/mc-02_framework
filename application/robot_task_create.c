@@ -44,6 +44,21 @@ static void CreateTask(const char *name, PlatformTaskEntry_t entry, uint32_t sta
     (void)PlatformTaskCreateTracked(&config, handle); // 调用后由原检查集中报告失败。
 }
 
+#if MC02_FEATURE_HEATER
+uint8_t RobotReportHeaterInitFailure(void)
+{
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildMarkFailure(ROBOT_MODULE_HEATER) == 0u)
+    {
+        InitDiagnosticReportDegraded(INIT_STAGE_APPLICATION, INIT_MODULE_INS, INIT_FAILURE_RESOURCE, 0u);
+        return 0u; // 仅辅助功能受影响时保留其他模块。
+    }
+#endif
+    InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_INS, INIT_FAILURE_RESOURCE, 0u);
+    return 1u; // 核心失败由调用方立即关断并锁存。
+}
+#endif
+
 /** @brief 创建INS、通信派发、电机、UART发送、Daemon、整车、LCD及当前配置所需UI任务。
 * @return 1 表示核心任务创建成功；辅助任务失败已记录降级，核心任务失败返回0；不删除已创建任务。
 * @note 由 RobotInit() 在调度器启动前调用一次。

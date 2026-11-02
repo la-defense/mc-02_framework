@@ -21,6 +21,7 @@ static uint32_t primask;
 static BSP_ADC_Sample_t adc_sample;
 static BSP_ADC_Status_e adc_status;
 static unsigned pwm_starts;
+static int pwm_start_error;
 TIM_HandleTypeDef htim3;
 
 uint32_t HAL_GetTick(void) { return now_ms; }
@@ -50,7 +51,7 @@ int HAL_TIM_PWM_Start(TIM_HandleTypeDef *timer, uint32_t channel)
     (void)timer;
     (void)channel;
     ++pwm_starts;
-    return 0;
+    return pwm_start_error;
 }
 
 static int test_analog_resources(void)
@@ -92,11 +93,13 @@ static int test_unconfigured_and_invalid(void)
     IMUHeaterGetStatus(&status);
     ASSERT_TRUE(status.fault && !status.initialized && status.duty == 0u && pwm_starts == 0u,
                 "unconfigured heater must stay off and report failure");
+    ASSERT_TRUE(!IMUHeaterInitSucceeded(), "unconfigured heater must report unsuccessful startup");
     ASSERT_TRUE(IMUHeaterConfigure(PLATFORM_PWM_IMU_HEATER, PLATFORM_ADC_VCC_IN), "valid resources must bind");
     ASSERT_TRUE(!IMUHeaterConfigure(PLATFORM_PWM_INVALID, PLATFORM_ADC_VCC_IN), "invalid replacement must fail");
     IMUHeaterInit(); // 失败的替换不能破坏已经接受的资源配置。
     IMUHeaterGetStatus(&status);
     ASSERT_TRUE(status.initialized && !status.fault && status.duty == 0u, "valid binding must initialize safely");
+    ASSERT_TRUE(IMUHeaterInitSucceeded(), "valid initialization must report successful startup");
     ASSERT_TRUE(!IMUHeaterConfigure(PLATFORM_PWM_IMU_HEATER, PLATFORM_ADC_VCC_IN),
                 "initialized heater must reject reconfiguration");
     return EXIT_SUCCESS;
@@ -502,10 +505,24 @@ static int test_clear_requires_initialized_fresh_state(void)
     return EXIT_SUCCESS;
 }
 
+static int test_pwm_start_failure(void)
+{
+    pwm_start_error = 1; // 注入底层启动拒绝，不连接真实 PWM。
+    setup(100u);
+    ASSERT_TRUE(!IMUHeaterInitSucceeded() && pwm_starts == 1u && htim3.compare == 0u,
+                "PWM start failure must leave output zero and report failure");
+    update_at(101u, 1u, 20.0f);
+    update_at(102u, 2u, 20.0f);
+    ASSERT_TRUE(IMUHeaterClearFault() == 0u && htim3.compare == 0u,
+                "fresh samples must not clear a startup failure");
+    return EXIT_SUCCESS;
+}
+
 static int run(const char *name)
 {
     if (strcmp(name, "analog-resources") == 0) return test_analog_resources();
     if (strcmp(name, "unconfigured") == 0) return test_unconfigured_and_invalid();
+    if (strcmp(name, "pwm-start-failure") == 0) return test_pwm_start_failure();
     if (strcmp(name, "pid-timing") == 0) return test_pid_timing();
     if (strcmp(name, "recovery") == 0) return test_overtemp_and_manual_recovery();
     if (strcmp(name, "invalid-temperature") == 0) return test_clear_rejects_invalid_temperature();

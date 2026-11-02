@@ -52,10 +52,16 @@ uint8_t IMUHeaterConfigure(PlatformPwmChannel_t pwm, PlatformAdcChannel_t supply
  * @brief 首次初始化温控，目标设为40°C，输出置0；需先配置 TIM3。
  * @note 须先调用 IMUHeaterConfigure；未配置或 PID 参数失败时记录故障且不启动 PWM。
  *       禁热也不启动 PWM。
- *       启热且 PID 初始化成功时调用 HAL 启动 CH4，本接口不报告 HAL 启动结果。
+ *       启热且 PID 初始化成功时启动所选 PWM；失败保持故障并禁止供热。
  *       重复调用只执行 ForceOff，不重设目标、不清除故障或耗时操作记录。
  */
 void IMUHeaterInit(void);
+
+/** @brief 查询温控启动是否完成。
+ * @return 1 表示初始化已完成，0 表示尚未完成或启动失败；禁热构建不会启动 PWM。
+ * @note 与 IMUHeaterInit 在同一任务串行调用；运行故障通过 IMUHeaterGetStatus 查询。
+ */
+uint8_t IMUHeaterInitSucceeded(void);
 
 /**
  * @brief 根据本次数据更新温控；先调用 Init，目前由 INS 约每2ms调用一次。

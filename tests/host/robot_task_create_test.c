@@ -59,14 +59,16 @@ uint8_t RobotBuildMarkFailure(RobotModule_t module) {return (uint8_t)(module == 
 void InitDiagnosticReportFailure(InitDiagnosticStage_e stage, uint8_t module,
                                  InitDiagnosticReason_e reason, uint16_t resource)
 {
-    TEST_CHECK(stage == INIT_STAGE_TASKS && module == INIT_MODULE_TASKS && reason == INIT_FAILURE_TASK_CREATE);
+    TEST_CHECK((stage == INIT_STAGE_TASKS && module == INIT_MODULE_TASKS && reason == INIT_FAILURE_TASK_CREATE) ||
+               (stage == INIT_STAGE_APPLICATION && module == INIT_MODULE_INS && reason == INIT_FAILURE_RESOURCE));
     ++failures;
     last_failure = resource;
 }
 void InitDiagnosticReportDegraded(InitDiagnosticStage_e stage, uint8_t module,
                                   InitDiagnosticReason_e reason, uint16_t resource)
 {
-    TEST_CHECK(stage == INIT_STAGE_TASKS && module == INIT_MODULE_TASKS && reason == INIT_FAILURE_TASK_CREATE);
+    TEST_CHECK((stage == INIT_STAGE_TASKS && module == INIT_MODULE_TASKS && reason == INIT_FAILURE_TASK_CREATE) ||
+               (stage == INIT_STAGE_APPLICATION && module == INIT_MODULE_INS && reason == INIT_FAILURE_RESOURCE));
     ++degraded;
     last_degraded = resource;
 }
@@ -74,6 +76,14 @@ void InitDiagnosticReportDegraded(InitDiagnosticStage_e stage, uint8_t module,
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
+    if (strcmp(argv[1], "heater-core") == 0 || strcmp(argv[1], "heater-aux") == 0)
+    {
+        core_failure = strcmp(argv[1], "heater-core") == 0 ? ROBOT_MODULE_HEATER : ROBOT_MODULE_COUNT;
+        uint8_t core = RobotReportHeaterInitFailure(); // 不创建任务，单独检查初始化故障分类。
+        TEST_CHECK(core == (core_failure == ROBOT_MODULE_HEATER));
+        TEST_CHECK(failures == core && degraded == (unsigned)!core);
+        return 0;
+    }
     if (strcmp(argv[1], "core-ins") == 0) failure_name = "instask";
     else if (strcmp(argv[1], "core-motor") == 0) failure_name = "motortask";
     else if (strcmp(argv[1], "core-daemon") == 0) failure_name = "daemontask";
