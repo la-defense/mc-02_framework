@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file master_process.c
  * @brief 视觉数据收发, SP+CRC16 协议(与上位机 sp_vision_25 对齐)
  *        按构建配置使用SP兼容帧或V2业务帧，并支持USB VCP或UART传输。
@@ -11,8 +11,7 @@
 #include "bsp_log.h"
 #include "robot_def.h"
 #include "string.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "platform_sync.h"
 #include <math.h>
 
 #if defined(MC02_VISION_PROTOCOL_V2)
@@ -32,6 +31,8 @@ static uint32_t vision_tx_drop_count = 0;
 static uint32_t vision_crc_error_count = 0;
 static uint32_t vision_last_rx_ms = 0;
 static uint8_t vision_has_valid_frame;
+// 收发和连接事件由任务派发；共享计数与数据仍在任务临界区中更新。
+// 平台毫秒时钟沿用 H723 原计数，不改变接收期限及回绕计算。
 #if defined(MC02_VISION_PROTOCOL_V2)
 static VisionV2Stream_t vision_v2_stream;
 #else
@@ -90,10 +91,9 @@ static uint16_t vision_v2_tx_sequence;
 static VisionV2TimeSync_t vision_v2_time_sync;
 #endif
 
-#include "bsp_usart.h"
 #ifdef VISION_USE_UART
-#include "../../bsp/board/board_uart_stm32.h"
-static USARTInstance *vision_usart_instance;
+#include "platform_uart.h"
+static PlatformUartInstance *vision_usart_instance;
 #endif
 
 #ifdef VISION_USE_VCP
@@ -111,9 +111,9 @@ static void VisionFrameReceived(void *context, const Vision_Recv_s *packet,
         !isfinite(packet->yaw_acc) || !isfinite(packet->pitch) || !isfinite(packet->pitch_vel) ||
         !isfinite(packet->pitch_acc))
         return;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     uint8_t current = (uint8_t)(vision_stream_reset_requested == 0u &&
-        (uint32_t)(HAL_GetTick() - received_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS);
+        (uint32_t)(PlatformTimeNowMs() - received_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS);
 #ifdef VISION_USE_VCP
     current = (uint8_t)(current && USBTransportGenerationIsCurrent(generation));
 #else
@@ -132,7 +132,7 @@ static void VisionFrameReceived(void *context, const Vision_Recv_s *packet,
         (void)DaemonReportAt(vision_daemon_instance, received_ms,
             DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
     }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 #endif
 
@@ -162,11 +162,11 @@ static uint8_t VisionV2InvalidateInputSnapshots(const VisionV2Frame_t *frame,
 
 static void VisionV2RejectTimeReply(VisionTimeSyncLastResult_t result)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (vision_v2_time_sync.rejected_replies != UINT32_MAX)
         ++vision_v2_time_sync.rejected_replies;
     vision_v2_time_sync.last_result = result;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 // 接收任务只把匹配回应复制到单槽邮箱；时间映射由RobotTask独占更新。
@@ -180,7 +180,7 @@ static void VisionV2HandleTimeReply(const VisionV2Frame_t *frame)
         return;
     }
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (vision_v2_time_sync.request_pending == 0u ||
         vision_v2_time_sync.pending_generation != frame->generation ||
         vision_v2_time_sync.pending_request_id != reply.request_id ||
@@ -189,7 +189,7 @@ static void VisionV2HandleTimeReply(const VisionV2Frame_t *frame)
         if (vision_v2_time_sync.rejected_replies != UINT32_MAX)
             ++vision_v2_time_sync.rejected_replies;
         vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_RESPONSE_REJECTED;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return;
     }
 
@@ -201,7 +201,7 @@ static void VisionV2HandleTimeReply(const VisionV2Frame_t *frame)
         if (vision_v2_time_sync.rejected_replies != UINT32_MAX)
             ++vision_v2_time_sync.rejected_replies;
         vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_RESPONSE_REJECTED;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return;
     }
 
@@ -211,7 +211,7 @@ static void VisionV2HandleTimeReply(const VisionV2Frame_t *frame)
     vision_v2_time_sync.reply_event.t4_ms = frame->completed_time_ms;
     vision_v2_time_sync.reply_event.generation = frame->generation;
     vision_v2_time_sync.reply_ready = 1u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 // 每类命令独立检查序号与本地接收年龄，再发布原始远端时刻。
@@ -225,7 +225,7 @@ static void VisionV2FrameReceived(void *context, const VisionV2Frame_t *frame)
     if (!USBTransportGenerationIsCurrent(frame->generation))
         return;
 #endif
-    const uint32_t now_ms = HAL_GetTick();
+    const uint32_t now_ms = PlatformTimeNowMs();
     if (frame->type == VISION_V2_TIME_SYNC_REPLY)
     {
         VisionV2HandleTimeReply(frame);
@@ -257,14 +257,14 @@ static void VisionV2FrameReceived(void *context, const VisionV2Frame_t *frame)
     else
         return;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (vision_v2_sequence_generation_valid == 0u ||
         frame->generation != vision_v2_sequence_generation)
     {
         if (vision_v2_sequence_generation_valid != 0u &&
             VisionV2InvalidateInputSnapshots(frame, now_ms) == 0u)
         {
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return;
         }
         memset(vision_v2_sequence_valid, 0, sizeof(vision_v2_sequence_valid));
@@ -281,7 +281,7 @@ static void VisionV2FrameReceived(void *context, const VisionV2Frame_t *frame)
     {
         if (!VisionV2SequenceIsNew(type_index, frame->sequence))
         {
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return;
         }
         message_status = MessagePublishAt(vision_v2_aim_publisher, &aim,
@@ -291,7 +291,7 @@ static void VisionV2FrameReceived(void *context, const VisionV2Frame_t *frame)
     {
         if (!VisionV2SequenceIsNew(type_index, frame->sequence))
         {
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
             return;
         }
         message_status = MessagePublishAt(vision_v2_navigation_publisher, &navigation,
@@ -300,7 +300,7 @@ static void VisionV2FrameReceived(void *context, const VisionV2Frame_t *frame)
 
     if (message_status != MESSAGE_OK)
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return;
     }
     vision_v2_last_sequence[type_index] = frame->sequence;
@@ -313,7 +313,7 @@ static void VisionV2FrameReceived(void *context, const VisionV2Frame_t *frame)
 #endif
     (void)DaemonReportAt(vision_daemon_instance, frame->received_time_ms,
         DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 #ifdef VISION_USE_VCP
     USBTransportReportValidCommand(frame->generation, frame->received_time_ms);
 #endif
@@ -324,10 +324,10 @@ static void VisionV2FrameReceived(void *context, const VisionV2Frame_t *frame)
 static void VisionFeedBlock(const uint8_t *data, size_t length, uint32_t received_ms,
                             uint32_t sequence, uint32_t generation)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     uint8_t reset = vision_stream_reset_requested;
     vision_stream_reset_requested = 0u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     if (reset)
     {
 #if !defined(MC02_VISION_PROTOCOL_V2)
@@ -339,14 +339,14 @@ static void VisionFeedBlock(const uint8_t *data, size_t length, uint32_t receive
     uint32_t errors = 0u;
 #if defined(MC02_VISION_PROTOCOL_V2)
     (void)VisionV2StreamFeed(&vision_v2_stream, data, length, received_ms, sequence,
-        generation, HAL_GetTick(), VisionV2FrameReceived, NULL, &errors);
+        generation, PlatformTimeNowMs(), VisionV2FrameReceived, NULL, &errors);
 #else
     (void)VisionProtocolStreamFeed(&vision_stream, data, length, received_ms, sequence,
-        generation, HAL_GetTick(), VisionFrameReceived, NULL, &errors);
+        generation, PlatformTimeNowMs(), VisionFrameReceived, NULL, &errors);
 #endif
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     vision_crc_error_count += errors;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 #ifdef VISION_USE_UART
@@ -364,7 +364,7 @@ static void VisionOfflineCallback(const DaemonEvent_t *event, void *id)
     (void)id;
     if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
         return;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     memset(&recv_data, 0, sizeof(recv_data));
     vision_last_rx_ms = 0u;
     vision_has_valid_frame = 0u;
@@ -372,9 +372,9 @@ static void VisionOfflineCallback(const DaemonEvent_t *event, void *id)
 #if defined(MC02_VISION_PROTOCOL_V2)
     memset(vision_v2_sequence_valid, 0, sizeof(vision_v2_sequence_valid));
 #endif
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 #ifdef VISION_USE_UART
-    USARTServiceInit(vision_usart_instance);
+    PlatformUartRestartReceive(vision_usart_instance);
 #endif
     BSP_LOG_EVENT_0(EV_MODULES_MASTER_MACHINE_MASTER_PROCESS_C_01);
 }
@@ -385,7 +385,7 @@ void VisionUpdateTx(uint8_t mode,
                     float pitch, float pitch_vel,
                     float bullet_speed, uint16_t bullet_count)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     send_data.head[0] = 'S';
     send_data.head[1] = 'P';
     send_data.mode = mode;
@@ -401,7 +401,7 @@ void VisionUpdateTx(uint8_t mode,
     send_data.pitch_vel = pitch_vel;
     send_data.bullet_speed = bullet_speed;
     send_data.bullet_count = bullet_count;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 
 #if defined(MC02_VISION_PROTOCOL_V2)
     VisionV2PostureStatus_t posture = {
@@ -445,7 +445,7 @@ VisionIMUSampleUpdateStatus_t VisionUpdateIMUSample(const VisionIMUSample_t *sam
     if (vision_v2_imu_sample_publisher == NULL)
         return VISION_IMU_SAMPLE_UPDATE_ERR_NOT_INITIALIZED;
 
-    const uint32_t now_ms = HAL_GetTick();
+    const uint32_t now_ms = PlatformTimeNowMs();
     // 无效标记没有传感器来源时刻；本地发布时间仅用于保留它到下一发送轮次。
     const uint32_t freshness_time_ms = sample->valid != 0u ? sample->sample_time_ms : now_ms;
     if (MessagePublishAt(vision_v2_imu_sample_publisher, sample, freshness_time_ms,
@@ -467,7 +467,7 @@ static void VisionVcpRxCallback(void *context, const USBRxBlock_t *block)
 static void VisionVcpLinkChanged(void *context, uint32_t generation, USBLinkReason_t reason)
 {
     (void)context; (void)generation; (void)reason;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     // 新连接可能已先收到首帧；迟一点执行的连接通知不能再清掉这份新数据。
     if (!vision_has_valid_frame || vision_usb_generation != generation ||
         !USBTransportGenerationIsCurrent(generation))
@@ -482,13 +482,13 @@ static void VisionVcpLinkChanged(void *context, uint32_t generation, USBLinkReas
         vision_v2_time_sync.sync_generation != generation)
         vision_v2_time_sync.reset_requested = 1u;
 #endif
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 static void VisionVcpTxCompleted(void *context, const USBTxEvent_t *event)
 {
     (void)context;
     if (event->result != USB_TX_COMPLETE)
-    { taskENTER_CRITICAL(); ++vision_tx_drop_count; taskEXIT_CRITICAL(); }
+    { PlatformTaskCriticalEnter(); ++vision_tx_drop_count; PlatformTaskCriticalExit(); }
 }
 #endif
 
@@ -496,8 +496,7 @@ Vision_Recv_s *VisionInit(PlatformUartPort_t port)
 {
 #if defined(VISION_USE_UART) && !defined(VISION_USE_VCP)
     // UART 模式先确认板级绑定，避免无效配置留下话题或守护实例。
-    UART_HandleTypeDef *handle = BoardUartResolve(port);
-    if (handle == NULL)
+    if (!PlatformUartIsBound(port))
         return NULL;
 #else
     // USB 模式没有 UART 依赖，未选择传输方式时也无需查询串口。
@@ -581,16 +580,15 @@ Vision_Recv_s *VisionInit(PlatformUartPort_t port)
         return NULL;
     }
 #elif defined(VISION_USE_UART)
-    USART_Init_Config_s conf = {0};
+    PlatformUartConfig conf = {0}; // 未使用的发送检查保持空值。
 #if defined(MC02_VISION_PROTOCOL_V2)
     conf.context = &vision_v2_stream;
 #else
     conf.context = &vision_stream;
 #endif
-    conf.module_callback = VisionUartRxCallback;
-    conf.recv_buff_size = VISION_RECV_SIZE * 2;
-    conf.usart_handle = handle;
-    vision_usart_instance = USARTRegister(&conf);
+    conf.receive = VisionUartRxCallback; // 保持视觉流接收与拼帧逻辑。
+    conf.receive_capacity = VISION_RECV_SIZE * 2; // 沿用原来的双帧接收容量。
+    vision_usart_instance = PlatformUartRegister(port, &conf); // 由平台解析逻辑串口并启动接收。
     if (vision_usart_instance == NULL)
     {
         (void)DaemonUnregister(vision_daemon_instance);
@@ -610,7 +608,7 @@ Vision_Recv_s *VisionInit(PlatformUartPort_t port)
 // 即使没有离线回调，读取或发送时也检查 50 ms 时限，避免旧目标继续使用。
 static void VisionExpireIfStale(uint32_t now_ms)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
 #if defined(MC02_VISION_PROTOCOL_V2)
     const uint32_t link_max_age_ms = 300u;
 #else
@@ -625,7 +623,7 @@ static void VisionExpireIfStale(uint32_t now_ms)
         memset(&recv_data, 0, sizeof(recv_data));
         vision_has_valid_frame = 0u;
     }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 #ifdef VISION_USE_UART
@@ -633,9 +631,9 @@ static USARTTxEvent_t vision_uart_last_tx;
 static void VisionTxCompleted(void *context, const USARTTxEvent_t *event)
 {
     (void)context;
-    taskENTER_CRITICAL();vision_uart_last_tx=*event;
+    PlatformTaskCriticalEnter();vision_uart_last_tx=*event;
     if(event->result!=USART_TX_COMPLETE)++vision_tx_drop_count;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 #endif
 
@@ -686,7 +684,7 @@ static uint8_t VisionV2BuildRefereeSummary(VisionV2RefereeSummary_t *summary)
 
 static void VisionV2NoteTxResult(uint8_t accepted)
 {
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (accepted != 0u)
     {
         vision_tx_count++;
@@ -694,7 +692,7 @@ static void VisionV2NoteTxResult(uint8_t accepted)
     }
     else
         vision_tx_drop_count++;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 static uint8_t VisionV2SubmitFrameAt(uint8_t type, uint32_t source_time_ms,
@@ -725,7 +723,7 @@ static uint8_t VisionV2SubmitFrameAt(uint8_t type, uint32_t source_time_ms,
         .context = NULL,
     };
     uint32_t id = 0u;
-    accepted = (uint8_t)(USARTSubmitTx(vision_usart_instance, &request, &id) ==
+    accepted = (uint8_t)(PlatformUartSubmit(vision_usart_instance, &request, &id) ==
                          USART_SEND_ACCEPTED);
 #else
     (void)frame;
@@ -767,7 +765,7 @@ static void VisionV2ProcessTimeSync(uint32_t now_ms)
     uint8_t reset_mapping = 0u;
     uint8_t have_reply = 0u;
     VisionV2TimeSyncReplyEvent_t reply_event = {0};
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (have_transport != 0u &&
         (vision_v2_time_sync.generation_valid == 0u ||
          vision_v2_time_sync.sync_generation != generation))
@@ -818,17 +816,17 @@ static void VisionV2ProcessTimeSync(uint32_t now_ms)
             vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_TIMEOUT;
         }
     }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 
     if (reset_mapping != 0u)
     {
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         (void)TimeMappingReset(&vision_v2_time_sync.mapping);
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
     }
     if (have_reply != 0u)
     {
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         if (vision_v2_time_sync.reset_requested == 0u &&
             reply_event.generation == vision_v2_time_sync.sync_generation)
         {
@@ -850,7 +848,7 @@ static void VisionV2ProcessTimeSync(uint32_t now_ms)
                 vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_RESPONSE_REJECTED;
             }
         }
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
     }
 }
 
@@ -862,13 +860,13 @@ static uint8_t VisionV2TrySendTimeProbe(uint32_t now_ms)
         return 0u;
 
     uint32_t request_id = 0u;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     const uint8_t period_elapsed = (uint8_t)(vision_v2_time_sync.probe_attempted == 0u ||
         (uint32_t)(now_ms - vision_v2_time_sync.last_probe_attempt_ms) >=
             VISION_V2_TIME_SYNC_PERIOD_MS);
     if (vision_v2_time_sync.request_pending != 0u || period_elapsed == 0u)
     {
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return 0u;
     }
 
@@ -885,37 +883,37 @@ static uint8_t VisionV2TrySendTimeProbe(uint32_t now_ms)
     vision_v2_time_sync.last_probe_attempt_ms = now_ms;
     vision_v2_time_sync.probe_attempted = 1u;
     vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_WAITING;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 
     const VisionV2TimeSyncProbe_t probe = {.request_id = request_id};
     uint8_t payload[4];
     if (VisionV2EncodeTimeSyncProbe(&probe, payload, sizeof(payload)) != VISION_V2_OK)
     {
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         if (vision_v2_time_sync.request_pending != 0u &&
             vision_v2_time_sync.pending_request_id == request_id)
             vision_v2_time_sync.request_pending = 0u;
         vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_SEND_REJECTED;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         return 1u;
     }
     const uint8_t accepted = VisionV2SubmitFrameAt(VISION_V2_TIME_SYNC_PROBE,
         now_ms, payload, sizeof(payload));
     if (accepted == 0u)
     {
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         if (vision_v2_time_sync.request_pending != 0u &&
             vision_v2_time_sync.pending_request_id == request_id)
             vision_v2_time_sync.request_pending = 0u;
         vision_v2_time_sync.last_result = VISION_TIME_SYNC_RESULT_SEND_REJECTED;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
     }
     return 1u;
 }
 
 static void VisionSendV2(void)
 {
-    const uint32_t now_ms = HAL_GetTick();
+    const uint32_t now_ms = PlatformTimeNowMs();
     VisionExpireIfStale(now_ms);
     // 先收取单槽回应并检查超时，避免50ms状态发送节流影响映射更新。
     VisionV2ProcessTimeSync(now_ms);
@@ -1002,12 +1000,12 @@ void VisionSend(void)
     VisionSendV2();
     return;
 #else
-    VisionExpireIfStale(HAL_GetTick());
+    VisionExpireIfStale(PlatformTimeNowMs());
     // 两种传输都在提交时复制；组包使用本次独占的局部内容。
     Vision_Send_s tx_pkt;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     tx_pkt = send_data;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     tx_pkt.head[0] = 'S';
     tx_pkt.head[1] = 'P';
     uint32_t crc;
@@ -1020,19 +1018,19 @@ void VisionSend(void)
 #ifdef VISION_USE_VCP
     uint32_t id;
     USBStatus_t usb_status = USBTransportSubmit((const uint8_t *)&tx_pkt, sizeof(tx_pkt), &id);
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     if (usb_status == USB_ACCEPTED)
         vision_tx_count++;
     else
         vision_tx_drop_count++;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 #elif defined(VISION_USE_UART)
     uint32_t id;
     USARTTxRequest_t request={(const uint8_t *)&tx_pkt,sizeof(tx_pkt),USART_TRANSFER_DMA,
         20u,VisionTxCompleted,NULL,NULL};
-    if(USARTSubmitTx(vision_usart_instance,&request,&id)==USART_SEND_ACCEPTED)
+    if(PlatformUartSubmit(vision_usart_instance,&request,&id)==USART_SEND_ACCEPTED)
         vision_tx_count++;
-    else { taskENTER_CRITICAL();++vision_tx_drop_count;taskEXIT_CRITICAL(); }
+    else { PlatformTaskCriticalEnter();++vision_tx_drop_count;PlatformTaskCriticalExit(); }
 #endif
 #endif
 }
@@ -1044,8 +1042,8 @@ void VisionGetStatus(Vision_Status_t *status)
 
 void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status)
 {
-    VisionExpireIfStale(HAL_GetTick());
-    taskENTER_CRITICAL();
+    VisionExpireIfStale(PlatformTimeNowMs());
+    PlatformTaskCriticalEnter();
     // 两个输出可各自省略；需要哪份数据就复制哪份，整个复制过程放在一起。
     if (frame != NULL)
         *frame = recv_data;
@@ -1068,7 +1066,7 @@ void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status)
         status->bullet_speed = send_data.bullet_speed;
         status->bullet_count = send_data.bullet_count;
     }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 VisionTimeSyncStatus_t VisionGetTimeSyncSnapshot(VisionTimeSyncSnapshot_t *output)
@@ -1079,7 +1077,7 @@ VisionTimeSyncStatus_t VisionGetTimeSyncSnapshot(VisionTimeSyncSnapshot_t *outpu
     TimeMapping_t mapping;
     VisionTimeSyncSnapshot_t candidate = {0};
     uint8_t initialized = 0u;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     initialized = vision_v2_time_sync.mapping_initialized;
     if (initialized != 0u)
     {
@@ -1093,12 +1091,12 @@ VisionTimeSyncStatus_t VisionGetTimeSyncSnapshot(VisionTimeSyncSnapshot_t *outpu
         candidate.transport_generation = vision_v2_time_sync.sync_generation;
         candidate.last_result = vision_v2_time_sync.last_result;
     }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     if (initialized == 0u)
         return VISION_TIME_SYNC_ERR_NOT_INITIALIZED;
 
     TimeMappingState_t mapping_state = {0};
-    if (TimeMappingGetState(&mapping, HAL_GetTick(), &mapping_state) != TIME_MAPPING_OK)
+    if (TimeMappingGetState(&mapping, PlatformTimeNowMs(), &mapping_state) != TIME_MAPPING_OK)
         return VISION_TIME_SYNC_ERR_TIME;
     candidate.remote_minus_local_ms = mapping_state.remote_minus_local_ms;
     candidate.sample_age_ms = mapping_state.sample_age_ms;
@@ -1132,7 +1130,7 @@ VisionTimeSyncStatus_t VisionMapRemoteTime(uint32_t remote_ms,
     TimeMapping_t mapping;
     uint32_t mapping_generation = 0u;
     uint8_t generation_valid = 0u;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     const uint8_t initialized = vision_v2_time_sync.mapping_initialized;
     if (initialized != 0u)
     {
@@ -1140,7 +1138,7 @@ VisionTimeSyncStatus_t VisionMapRemoteTime(uint32_t remote_ms,
         mapping_generation = vision_v2_time_sync.sync_generation;
         generation_valid = vision_v2_time_sync.generation_valid;
     }
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     if (initialized == 0u)
         return VISION_TIME_SYNC_ERR_NOT_INITIALIZED;
 

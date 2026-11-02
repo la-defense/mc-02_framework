@@ -51,6 +51,9 @@ set_property(SOURCE ../../modules/safety/robot_safety.c APPEND PROPERTY
 # 板间接收及对时服务只通过框架接口获取时间与任务临界区。
 set_property(SOURCE ../../modules/can_comm/can_topic_link.c ../../application/topics/robot_can_bridge.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
+# 上位机通信使用框架任务锁和原有毫秒时钟。
+set_property(SOURCE ../../modules/master_machine/master_process.c APPEND PROPERTY
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
 add_library(mc02_robot_safety_portable OBJECT ../../modules/safety/robot_safety.c)
 target_include_directories(mc02_robot_safety_portable PRIVATE ../../modules/safety ../../bsp/os ../../bsp/log)
 target_compile_options(mc02_robot_safety_portable PRIVATE -Wall -Wextra -Werror)
@@ -2098,4 +2101,10 @@ endforeach()
 # 裁判测试使用真实平台转接层，底层 UART 与板级绑定仍由各测试控制。
 foreach(target IN ITEMS crc_protocol_test referee_ui_test referee_snapshot_test referee_budget_test uart_ui_integration_test)
   target_sources(${target} PRIVATE ../../bsp/board/platform_uart_stm32.c ../../bsp/board/platform_uart_tx_stm32.c)
+endforeach()
+# UART 视觉测试也复用生产逻辑端口转接层。
+foreach(target IN ITEMS uart_stream_test uart_tx_callers_test)
+  target_sources(${target} PRIVATE ../../bsp/board/platform_uart_stm32.c ../../bsp/board/platform_uart_tx_stm32.c
+    ../../bsp/os/platform_sync_freertos.c)
+  target_include_directories(${target} PRIVATE ../../bsp/os)
 endforeach()
