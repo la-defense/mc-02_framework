@@ -289,3 +289,5 @@ JSONL 的性能样本保留事件外层字段，统计快照放在 `decoded` 子
 `mc02_portable_framework` 独立编译 Daemon 和消息中心，仅提供框架自己的头文件目录。只看源码里的 `#include` 还不够：[check_firmware_profile.py](../../tools/workflow/check_firmware_profile.py) 同时核对编译命令、Ninja 实际头文件依赖，以及最终 ELF 链接命令中的对象。检查会拒绝厂商目录、强制包含和只编译却没有链接的对象，避免构建配置掩盖不小心引入的依赖。
 
 同一工具链、同一 Debug 配置还可用 `-fstack-usage` 比较单个函数的静态栈：例如本轮事件任务初始化从 64 B 变为 56 B，但它新增调用的任务适配函数自身使用 40 B。单函数数字不能直接当作完整调用链的峰值；还要考虑被调函数和中断嵌套。具体基线、测试和其余未迁移范围见 [MC02-0086 记录](../workflow/tickets/MC02-0086.md)。
+
+初始化诊断也进入这一独立目标。[init_diagnostic.c](../../application/init_diagnostic.c) 通过 `PlatformIrqSaveAndDisable` 保存调用前的中断状态，再用 `PlatformIrqRestore` 原样恢复；如果外层已经屏蔽中断，内层结束时不会提前打开。事件时间通过 `PlatformTimeNowMs` 获取，H723 后端仍读取原来的 HAL 毫秒计数，因此单位与 32 位回绕规则保持一致。主机测试分别检查原本开启和已屏蔽的情况，以及事件顺序和首次失败记录；禁热裁判诊断固件的实际编译依赖和链接输入也通过检查。这些结果不代表其他业务文件已经完成隔离。

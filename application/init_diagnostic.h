@@ -96,7 +96,7 @@ typedef enum
 typedef struct
 {
     uint32_t sequence;   ///< 非0事件序号，递增到上限后回到1
-    uint32_t timestamp_ms; ///< 事件发生时刻，单位 ms
+    uint32_t timestamp_ms; ///< 平台本地事件时刻，单位 ms，32 位回绕。
     uint16_t resource_id; ///< 与 InitDiagnosticSnapshot_s 相同的资源编号
     uint8_t kind;       ///< InitDiagnosticEventKind_e
     uint8_t stage;      ///< InitDiagnosticStage_e

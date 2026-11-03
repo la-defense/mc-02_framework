@@ -5,15 +5,21 @@
  */
 #include "test_check.h"
 #include "init_diagnostic.h"
+#include "platform_irq.h"
+#include "platform_sync.h"
 #include <stdint.h>
 #include <string.h>
 
 static uint32_t primask;
 static uint32_t now_ms;
-uint32_t __get_PRIMASK(void) { return primask; }
-void __disable_irq(void) { primask = 1u; }
-void __set_PRIMASK(uint32_t value) { primask = value; }
-uint32_t HAL_GetTick(void) { return now_ms; }
+PlatformIrqState_t PlatformIrqSaveAndDisable(void)
+{
+    const uint32_t previous = primask; // 保存调用前状态，模拟可嵌套的屏蔽操作。
+    primask = 1u; // 记录区间内视为中断已屏蔽。
+    return previous; // 退出时用这个值恢复原状态。
+}
+void PlatformIrqRestore(PlatformIrqState_t value) { primask = value; }
+uint32_t PlatformTimeNowMs(void) { TEST_CHECK(primask == 1u); return now_ms; }
 
 static void TestFirstFailure(void)
 {
@@ -55,6 +61,10 @@ static void TestFirstFailure(void)
     TEST_CHECK(events.events[3].sequence == 4u && events.events[3].timestamp_ms == 12u);
     TEST_CHECK(events.events[3].module == 2u && events.events[3].reason == INIT_FAILURE_TASK_CREATE);
     TEST_CHECK(events.events[3].severity == INIT_DIAGNOSTIC_SEVERITY_ERROR);
+    primask = 1u; // 模拟调用前已屏蔽中断，退出诊断后必须保持原状。
+    InitDiagnosticHeartbeat();
+    TEST_CHECK(InitDiagnosticGetEvents(&events) == 1u);
+    TEST_CHECK(primask == 1u);
 }
 
 static void TestEventHistory(void)

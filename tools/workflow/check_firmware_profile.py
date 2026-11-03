@@ -55,6 +55,7 @@ NUMERIC_ADAPTER_SOURCES = {
 }
 # 这些源文件编入无芯片／RTOS 头路径的框架对象目标，仍属于车型源码清单。
 PORTABLE_FRAMEWORK_SOURCES = {
+    "application/init_diagnostic.c",  # 初始化结果及事件记录。
     "modules/daemon/daemon.c",  # 来源状态和事件队列。
     "modules/daemon/daemon_event_task.c",  # 来源事件任务入口。
     "modules/message_center/message_center.c",  # 消息目录和有界队列。

@@ -414,7 +414,7 @@ function(mc02_add_vehicle_health_test suffix)
   add_executable(${target} vehicle_health_test.c ../../application/vehicle_health.c
     ../../application/vehicle_health_diag.c ../../application/init_diagnostic.c)
   target_include_directories(${target} BEFORE PRIVATE init_diagnostic_fakes)
-  target_include_directories(${target} PRIVATE ../../application ../../bsp/log)
+  target_include_directories(${target} PRIVATE ../../application ../../bsp/log ../../bsp/os)
   target_compile_features(${target} PRIVATE c_std_11)
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
   target_compile_definitions(${target} PRIVATE ${ARGN})
@@ -928,7 +928,7 @@ set_tests_properties(production_iic_registration_contract production_iic_registr
   PROPERTIES TIMEOUT 10)
 add_executable(init_diagnostic_test init_diagnostic_test.c ../../application/init_diagnostic.c)
 target_include_directories(init_diagnostic_test BEFORE PRIVATE init_diagnostic_fakes)
-target_include_directories(init_diagnostic_test PRIVATE ../../application)
+target_include_directories(init_diagnostic_test PRIVATE ../../application ../../bsp/os)
 add_test(NAME production_init_diagnostic_preserves_first_failure COMMAND init_diagnostic_test first-failure)
 add_test(NAME production_init_diagnostic_event_ring COMMAND init_diagnostic_test history)
 set_tests_properties(production_init_diagnostic_preserves_first_failure

@@ -78,10 +78,14 @@ uint8_t VehicleHealthSourceCapture(VehicleHealthSourceSnapshot_t *output)
 
 uint32_t VehicleHealthSourceNowMs(void) { return now_ms; }
 uint8_t VehicleHealthSourceInIsr(void) { return in_isr; }
-uint32_t __get_PRIMASK(void) { return primask; }
-void __disable_irq(void) { primask = 1u; }
-void __set_PRIMASK(uint32_t value) { primask = value; }
-uint32_t HAL_GetTick(void) { return now_ms; }
+uint32_t PlatformIrqSaveAndDisable(void)
+{
+    const uint32_t previous = primask; // 保存诊断调用之前的中断状态。
+    primask = 1u; // 模拟屏蔽中断。
+    return previous; // 恢复时继续使用调用前的状态。
+}
+void PlatformIrqRestore(uint32_t value) { primask = value; }
+uint32_t PlatformTimeNowMs(void) { return now_ms; }
 BSPLogStatus_t BSPLogRegisterHealthSnapshotHandler(BSPLogHealthSnapshotHandler_t handler)
 {
     if (handler == NULL)

@@ -4,7 +4,8 @@
  * 修改或复制记录时暂时关闭普通中断，避免处理到一半时被其他代码改写。
  */
 #include "init_diagnostic.h"
-#include "main.h"
+#include "platform_irq.h"
+#include "platform_sync.h"
 #include <string.h>
 
 // 普通全局变量在启动时清零，本次启动中的失败会一直保留到下次启动。
@@ -16,17 +17,15 @@ static uint8_t init_event_write;
 static uint8_t init_event_count;
 
 // 保存原中断开关状态，再暂时关闭普通中断。
-static uint32_t EnterCritical(void)
+static PlatformIrqState_t EnterCritical(void)
 {
-    uint32_t previous = __get_PRIMASK();
-    __disable_irq();
-    return previous;
+    return PlatformIrqSaveAndDisable(); // 保留原来的屏蔽状态，供退出时恢复。
 }
 
 // 恢复调用前的状态，调用前已关中断时继续保持关闭。
-static void ExitCritical(uint32_t previous)
+static void ExitCritical(PlatformIrqState_t previous)
 {
-    __set_PRIMASK(previous);
+    PlatformIrqRestore(previous); // 调用前已屏蔽时仍保持屏蔽。
 }
 
 static uint32_t NextEventSequence(uint32_t sequence)
@@ -42,7 +41,7 @@ static void RecordEventLocked(InitDiagnosticEventKind_e kind, InitDiagnosticStag
 {
     InitDiagnosticEvent_t event = {
         .sequence = NextEventSequence(init_event_sequence),
-        .timestamp_ms = HAL_GetTick(),
+        .timestamp_ms = PlatformTimeNowMs(),
         .resource_id = resource_id,
         .kind = (uint8_t)kind,
         .stage = (uint8_t)stage,
