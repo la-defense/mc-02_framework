@@ -1,4 +1,4 @@
-﻿/**
+/**
 * @file bmi088.c
 * @brief 实现 BMI088 的寄存器读写、采样、启动检查和在线标定。
 * BMI088Acquire 只在整份样本读取成功后更新输出；标定由 INS 任务执行。
@@ -16,8 +16,9 @@
 #if MC02_FEATURE_HEATER
 #include "imu_heater.h"
 #endif
-#include "cmsis_os.h"
-#include "bsp_dwt.h"
+#include "../../bsp/os/platform_os.h" // 标定让出调度器的框架接口。
+#include "../../bsp/os/platform_sync.h" // 使用原有毫秒计数。
+#include "../../bsp/dwt/platform_probe.h" // 短时采样等待和耗时统计。
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -348,7 +349,7 @@ static void BMI088AccINTCallback(GPIOInstance *gpio)
         return;
     for (uint8_t i = 0; i < 3u; ++i)
         bmi088->acc[i] = bmi088->acc_coef * (float)(int16_t)(((uint16_t)buf[2u * i + 1u] << 8u) | buf[2u * i]);
-    bmi088->acc_sample_timestamp_ms = HAL_GetTick();
+    bmi088->acc_sample_timestamp_ms = PlatformTimeNowMs();
     bmi088->update_flag.acc = 1u;
     bmi088->update_flag.imu_ready = bmi088->update_flag.gyro;
 }
@@ -361,7 +362,7 @@ static void BMI088GyroINTCallback(GPIOInstance *gpio)
         return;
     for (uint8_t i = 0; i < 3u; ++i)
         bmi088->gyro[i] = bmi088->BMI088_GYRO_SEN * (float)(int16_t)(((uint16_t)buf[2u * i + 1u] << 8u) | buf[2u * i]);
-    bmi088->gyro_sample_timestamp_ms = HAL_GetTick();
+    bmi088->gyro_sample_timestamp_ms = PlatformTimeNowMs();
     bmi088->update_flag.gyro = 1u;
     bmi088->update_flag.imu_ready = bmi088->update_flag.acc;
 }
@@ -418,7 +419,7 @@ BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data
     }
     else if (bmi088->work_mode == BMI088_BLOCK_TRIGGER_MODE)
     {
-        uint32_t now_ms = HAL_GetTick();
+        uint32_t now_ms = PlatformTimeNowMs();
         if (!(bmi088->update_flag.imu_ready && bmi088->update_flag.acc && bmi088->update_flag.gyro))
         {
             bmi088->last_acquire_status = BMI088_ACQUIRE_NO_DATA;
@@ -460,7 +461,7 @@ BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data
     staged.sequence = bmi088->sample_sequence + 1u;
     if (staged.sequence == 0u)
         staged.sequence = 1u;
-    staged.timestamp_ms = HAL_GetTick();
+    staged.timestamp_ms = PlatformTimeNowMs();
     staged.valid = 1u;
 
     memcpy(bmi088->acc, staged.acc, sizeof(staged.acc));
@@ -524,22 +525,22 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
         uint16_t valid_samples = 0u;
 
         BMI088_Data_t raw_data = {0};
-        startCycle = DWT_ProbeStart();
+        startCycle = PlatformProbeStart();
         // 环境不合适时重新收集一轮；最多尝试 BMI088_CALI_MAX_ATTEMPTS 次。
         do // 用do while至少执行一次,省得对上面的参数进行初始化
         {  // 标定超时,直接使用预标定参数(如果有)
             cali_diag_outer++;
             attempt++;
             bmi088_calib_attempts = (uint8_t)attempt;
-            cali_diag_elapsed_ms = DWT_ProbeElapsedUs(startCycle) / 1000u;
-            if (DWT_ProbeElapsedUs(startCycle) > 12010000u) /* 12.01s */
+            cali_diag_elapsed_ms = PlatformProbeElapsedUs(startCycle) / 1000u;
+            if (PlatformProbeElapsedUs(startCycle) > 12010000u) /* 12.01s */
             { // 两次都没有成功就切换标定模式,丢给下一个if处理,使用预标定参数
                 cali_diag_timeout_hit++;
                 timed_out = 1;
                 break;
             }
 
-            DWT_Delay(0.0005);
+            PlatformProbeDelay500Us();
             _bmi088->gNorm = 0;
             valid_samples = 0u;
             gNormDiff = INFINITY;
@@ -551,33 +552,33 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
             // @todo : 这里也有获取bmi088数据的操作,后续与BMI088Acquire合并.注意标定时的工作模式是阻塞,且offset和acc_coef要初始化成0和1,标定完成后再设定为标定值
             while (valid_samples < CaliTimes)
             {
-                uint32_t diag_iter = DWT_ProbeStart();
+                uint32_t diag_iter = PlatformProbeStart();
                 cali_diag_inner = valid_samples;
-                if (DWT_ProbeElapsedUs(startCycle) > 12010000u)
+                if (PlatformProbeElapsedUs(startCycle) > 12010000u)
                 {
                     cali_diag_timeout_hit++;
                     timed_out = 1u;
                     break;
                 }
                 /* 周期性让出 CPU，让 daemon 和 LCD 继续运行；标定不直接喂狗。 */
-                if (((valid_samples % BMI088_CALI_YIELD_INTERVAL) == 0u) && osKernelRunning())
-                    osDelay(BMI088_CALI_YIELD_MS);
-                uint32_t diag_acq = DWT_ProbeStart();
+                if (((valid_samples % BMI088_CALI_YIELD_INTERVAL) == 0u) && PlatformSchedulerIsRunning())
+                    PlatformTaskDelayMs(BMI088_CALI_YIELD_MS);
+                uint32_t diag_acq = PlatformProbeStart();
                 if (BMI088Acquire(_bmi088, &raw_data) != BMI088_ACQUIRE_OK)
                 {
                     cali_diag_acq_fail++;
-                    DWT_Delay(0.0005);
+                    PlatformProbeDelay500Us();
                     continue;
                 }
                 cali_diag_acq_ok++;
                 // 数学失败的样本不计数、不累加，仍受本轮总超时限制。
                 if (Vec3NormF32(raw_data.acc, &gNormTemp) != MATH_OK)
                 {
-                    DWT_Delay(0.0005);
+                    PlatformProbeDelay500Us();
                     continue;
                 }
                 valid_samples++;
-                uint32_t acq_us = DWT_ProbeElapsedUs(diag_acq);
+                uint32_t acq_us = PlatformProbeElapsedUs(diag_acq);
                 if (acq_us > cali_diag_acq_us_max)
                     cali_diag_acq_us_max = acq_us;
                 cali_diag_acc_norm = gNormTemp;
@@ -617,12 +618,12 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
                     cali_diag_diff_break++;
                     break;         // 超出范围了,重开! remake到while循环,外面还有一层
                 }
-                uint32_t diag_delay = DWT_ProbeStart();
-                DWT_Delay(0.0005); // 休息一会再开始下一轮数据获取,IMU准备数据需要时间
-                uint32_t delay_us = DWT_ProbeElapsedUs(diag_delay);
+                uint32_t diag_delay = PlatformProbeStart();
+                PlatformProbeDelay500Us(); // 休息一会再开始下一轮数据获取,IMU准备数据需要时间
+                uint32_t delay_us = PlatformProbeElapsedUs(diag_delay);
                 if (delay_us > cali_diag_delay_us_max)
                     cali_diag_delay_us_max = delay_us;
-                uint32_t iter_us = DWT_ProbeElapsedUs(diag_iter);
+                uint32_t iter_us = PlatformProbeElapsedUs(diag_iter);
                 if (iter_us > cali_diag_iter_us_max)
                     cali_diag_iter_us_max = iter_us;
             }
@@ -759,7 +760,7 @@ static uint8_t BMI088CalibSave(BMI088Instance *b)
         .meta = {
             .result = (uint32_t)PARAM_IMU_CALIB_OK,
             .temperature = b->temperature,
-            .time_s = (uint32_t)(HAL_GetTick() / 1000u),
+            .time_s = (uint32_t)(PlatformTimeNowMs() / 1000u),
         },
         .has_meta = 1u,
     };

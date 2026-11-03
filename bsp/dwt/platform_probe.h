@@ -18,6 +18,11 @@ typedef struct {
  */
 uint32_t PlatformProbeStart(void);
 
+/** @brief 在读取 BMI088 标定样本之间忙等 500 微秒。
+ * @note 只保留现有短时等待，调用前须初始化平台计数器；不用于长时间延时。
+ */
+void PlatformProbeDelay500Us(void);
+
 /** @brief 读取原有的浮点毫秒运行时间，供低频诊断使用。
  * @return 自平台原有时基初始化起的毫秒数，精度随浮点数值增大而降低。
  * @note H723 后端保留原有 DWT 时间计算；不用于跨设备时钟比较。

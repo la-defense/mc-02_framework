@@ -6,6 +6,9 @@
 #include "bmi088_regNdef.h"
 #include "imu_heater.h"
 #include "task_monitor.h"
+#include "../../bsp/os/platform_os.h"
+#include "../../bsp/os/platform_sync.h"
+#include "../../bsp/dwt/platform_probe.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -213,6 +216,12 @@ void osDelay(uint32_t milliseconds)
     bmi088_host_fixture.os_delay_call_count++;
     bmi088_host_fixture.unyielded_busy_wait_us = 0u;
 }
+uint32_t PlatformProbeStart(void) { return DWT_ProbeStart(); } // 继续使用原有合成周期。
+uint32_t PlatformProbeElapsedUs(uint32_t start) { return DWT_ProbeElapsedUs(start); }
+void PlatformProbeDelay500Us(void) { DWT_Delay(0.0005); } // 与原采样间隔一致。
+uint32_t PlatformTimeNowMs(void) { return HAL_GetTick(); }
+uint8_t PlatformSchedulerIsRunning(void) { return osKernelRunning(); }
+void PlatformTaskDelayMs(uint32_t milliseconds) { osDelay(milliseconds); }
 void TaskMonitorFeed(TaskMonitor_Id_e id)
 {
     if (id == TASK_MONITOR_INS)
