@@ -82,6 +82,11 @@ float DWT_GetDeltaT(uint32_t *counter)
     return 0.001f;
 }
 
+float PlatformProbeDeltaSeconds(uint32_t *counter)
+{
+    return DWT_GetDeltaT(counter); // 测试继续使用原反馈间隔替身。
+}
+
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
     ++can_attempts;

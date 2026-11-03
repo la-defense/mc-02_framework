@@ -11,11 +11,9 @@
 #include "stdlib.h"
 #include "general_def.h"
 #include "daemon.h"
-#include "bsp_dwt.h"
+#include "../../../bsp/os/platform_sync.h" // 任务临界区和原有时间来源。
+#include "../../../bsp/dwt/platform_probe.h" // 保留原反馈间隔计算。
 #include "bsp_log.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include "stm32h7xx_hal.h"
 
 static LKMotorInstance *lkmotor_instance[DEVICE_CAN_CNT][LK_MOTOR_PER_BUS_CNT] = {{NULL}};
 static CANInstance *lk_sender_instance[DEVICE_CAN_CNT] = {NULL};
@@ -114,13 +112,13 @@ static void LKMotorDecode(CANInstance *_instance)
         return;
     LKMotorInstance *motor = (LKMotorInstance *)_instance->id; // 通过父对象指针取得对应实例。
     LKMotor_Measure_t candidate;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     candidate = motor->measure;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     LKMotor_Measure_t *measure = &candidate;
     uint8_t *rx_buff = _instance->rx_buff;
 
-    measure->feed_dt = DWT_GetDeltaT(&measure->feed_dwt_cnt);
+    measure->feed_dt = PlatformProbeDeltaSeconds(&measure->feed_dwt_cnt);
 
     measure->last_ecd = measure->ecd;
     measure->ecd = (uint16_t)((rx_buff[7] << 8) | rx_buff[6]);
@@ -142,13 +140,13 @@ static void LKMotorDecode(CANInstance *_instance)
         measure->total_round++;
     measure->total_angle = measure->total_round * 360 + measure->angle_single_round;
 
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->measure = candidate;
     motor->feedback_timestamp_ms = _instance->rx_timestamp_ms;
     motor->feedback_sequence++;
     if (motor->feedback_sequence == 0u)
         motor->feedback_sequence++;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     (void)DaemonReportAt(motor->daemon, _instance->rx_timestamp_ms,
         DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
 }
@@ -220,7 +218,7 @@ LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
     motor->speed_feedforward = config->controller_param_init_config.speed_feedforward;
     motor->current_feedforward = config->controller_param_init_config.current_feedforward;
 
-    DWT_GetDeltaT(&motor->measure.feed_dwt_cnt);
+    PlatformProbeDeltaSeconds(&motor->measure.feed_dwt_cnt);
 
     Daemon_Init_Config_s daemon_config = {
         .transport_timeout_ms = 50u,
@@ -299,12 +297,12 @@ Motor_Feedback_Status_e LKMotorGetFeedbackSnapshot(const LKMotorInstance *motor,
     LKMotor_Measure_t measure;
     Motor_Output_Axis_Config_s axis;
     uint32_t timestamp_ms, sequence;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     measure = motor->measure;
     axis = motor->output_axis;
     timestamp_ms = motor->feedback_timestamp_ms;
     sequence = motor->feedback_sequence;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     if (sequence == 0u)
         return MOTOR_FEEDBACK_NOT_READY;
 
@@ -344,7 +342,7 @@ void LKMotorControl(void)
             Motor_Signal_Source_s angle_source, speed_source, speed_ff, current_ff;
             Motor_Working_Type_e stop_flag;
             float pid_ref;
-            taskENTER_CRITICAL();
+            PlatformTaskCriticalEnter();
             measure = motor->measure;
             setting = motor->motor_settings;
             axis = motor->output_axis;
@@ -354,7 +352,7 @@ void LKMotorControl(void)
             current_ff = motor->current_feedforward;
             pid_ref = motor->pid_ref;
             stop_flag = motor->stop_flag;
-            taskEXIT_CRITICAL();
+            PlatformTaskCriticalExit();
 
             const uint8_t angle_active = (uint8_t)((setting.close_loop_type & ANGLE_LOOP) != 0u &&
                                                     setting.outer_loop_type == ANGLE_LOOP);
@@ -362,10 +360,10 @@ void LKMotorControl(void)
                 (setting.outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
             const uint8_t current_active = (uint8_t)((setting.close_loop_type & CURRENT_LOOP) != 0u);
             const uint8_t axis_outer = (uint8_t)((setting.outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
-            const uint32_t now_ms = HAL_GetTick();
+            const uint32_t now_ms = PlatformTimeNowMs();
             float dt_s = 0.0f, feedback = 0.0f, position = 0.0f, speed = 0.0f;
             uint8_t internal_valid = 0u;
-            PID_Status_e result = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &dt_s);
+            PID_Status_e result = MotorPIDBegin(&motor->pid_clock, PlatformTimeNowUs(), &dt_s);
             if ((angle_active && setting.angle_feedback_source == MOTOR_FEED) ||
                 (speed_active && setting.speed_feedback_source == MOTOR_FEED))
             {
@@ -472,27 +470,27 @@ void LKMotorStop(LKMotorInstance *motor)
 {
     if (motor == NULL)
         return;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->stop_flag = MOTOR_STOP;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 void LKMotorEnable(LKMotorInstance *motor)
 {
     if (motor == NULL)
         return;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->stop_flag = MOTOR_ENALBED;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 void LKMotorSetRef(LKMotorInstance *motor, float ref)
 {
     if (motor == NULL)
         return;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->pid_ref = ref;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 uint8_t LKMotorIsOnline(LKMotorInstance *motor)

@@ -549,6 +549,7 @@ endforeach()
 # 生产 LK、PID 和 Daemon 共同链接；仅替换 CAN 与硬件时基，检查资源回滚及三总线路由。
 add_executable(lk_motor_registration_test lk_motor_registration_test.c
   ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
+  ../../bsp/board/platform_time_us_stm32.c # 微秒时间沿用测试的 DWT 替身。
   ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c ${MC02_HOST_DAEMON_SOURCES})
 target_include_directories(lk_motor_registration_test BEFORE PRIVATE lk_motor_fakes)
