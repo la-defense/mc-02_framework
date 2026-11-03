@@ -85,6 +85,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/alarm/buzzer.c",  # 音符到频率的转换。
     "modules/alarm/led.c",  # RGB 输出状态和发送推进。
     "application/alarm_startup.c",  # 依据模块计划处理告警降级。
+    "application/robot_task.c",  # 常驻任务的周期调用和监控。
     "modules/lcd/lcd_buf.c",  # LCD 有界绘图及像素缓冲。
     "modules/lcd/lcd_task.c",  # LCD 页面、按键和运行统计任务。
     "application/robot_task_create.c",  # 按车型配置创建任务。
@@ -249,7 +250,7 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "modules/master_machine", source_root / "bsp/usb",
                source_root / "modules/imu", source_root / "modules/BMI088",
                source_root / "modules/task_monitor", source_root / "modules/alarm", source_root / "bsp/board", source_root / "bsp/dwt",
-               source_root / "bsp/adc", source_root / "bsp/observation",
+               source_root / "bsp/adc", source_root / "bsp/observation", source_root / "bsp/crash",
                source_root / "bsp/safety", source_root / "application",
                source_root / "application/config",
                Path(entry["directory"]).resolve() / "generated"}
@@ -319,6 +320,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/config/module_plan.h",
                         source_root / "application/robot_task_create.h",
                         source_root / "application/robot_task.h",
+                        source_root / "application/robot.h",
                         source_root / "application/init_diagnostic.h",
                         source_root / "application/alarm_startup.h",
                         source_root / "application/vehicle_health.h",
@@ -331,6 +333,8 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "bsp/adc/bsp_adc.h",
                         source_root / "bsp/observation/bsp_observation.h",
                         source_root / "bsp/safety/bsp_safety.h",
+                        source_root / "bsp/crash/bsp_crash.h",
+                        source_root / "bsp/crash/bsp_crash_record.h",
                         source_root / "bsp/dwt/platform_probe.h",
                         build_dir.resolve() / "generated/mc02_build_config.h"}
         if dependency.is_relative_to(source_root) and dependency not in public_files and not any(

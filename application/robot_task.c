@@ -2,8 +2,8 @@
  * @brief 实现现有常驻任务；周期、调度和故障处理保持原有行为。
  */
 #include "robot_task.h"
-#include "main.h"
 #include "platform_os.h"
+#include <stddef.h>
 
 #include "robot.h"
 #include "robot_task_create.h"
@@ -14,22 +14,16 @@
 #include "ins_task.h"
 #include "motor_task.h"
 #if MC02_SELECTED_DRIVER_DJI
-#include "dji_motor.h"
+#include "DJImotor/dji_motor.h"
 #endif
 #if MC02_FEATURE_REFEREE || MC02_FEATURE_UI
 #include "referee_task.h"
 #endif
 #include "daemon.h"
-#if MC02_SELECTED_DRIVER_HT
-#include "HT04.h"
-#endif
 #if MC02_FEATURE_ALARM
 #include "robot_alarm.h"
 #endif
 #include "task_monitor.h"
-#if MC02_FEATURE_LCD
-#include "lcd_task.h"
-#endif
 #include "bsp_crash.h"
 #include "bsp_safety.h"
 #if MC02_FEATURE_HEATER

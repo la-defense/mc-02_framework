@@ -301,6 +301,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/alarm/buzzer.c # 音符映射和蜂鸣器输出参数检查。
     modules/alarm/led.c # RGB 输出状态转换和任务推进。
     application/alarm_startup.c # 按核心依赖处理告警初始化结果。
+    application/robot_task.c # 现有任务循环与周期维护。
     modules/lcd/lcd_buf.c # LCD 有界绘图与字体转换。
     modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
     application/robot_task_create.c) # 已选任务的创建与失败处理。
@@ -319,6 +320,7 @@ target_include_directories(mc02_portable_framework PRIVATE
     bsp/log # 安全状态变化使用的有界事件接口。
     bsp/os # 不暴露厂商类型的任务、时间和同步接口。
     bsp/adc # LCD 按键只读的 ADC 样本接口。
+    bsp/crash # 崩溃诊断的公开记录接口。
     bsp/observation # 只读运行状态记录接口。
     bsp/safety # 启动失败时使用的板级直接关断入口。
     application # LCD 标记初始化诊断结果。
