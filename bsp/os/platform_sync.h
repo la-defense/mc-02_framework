@@ -4,6 +4,7 @@
 #ifndef MC02_PLATFORM_SYNC_H
 #define MC02_PLATFORM_SYNC_H
 #include <stdint.h>
+#include <stdatomic.h>
 
 /** @brief 进入任务临界区，允许按后端规则嵌套。
  * @note 可在调度器启动前或任务上下文调用，不得从中断调用；区内不得等待或调用可能阻塞的接口。
@@ -27,4 +28,12 @@ uint32_t PlatformTimeNowMs(void);
  * @note H723 后端沿用 DWT_GetTimeline_us 的计数与同步规则；不提供跨设备对时。
  */
 uint64_t PlatformTimeNowUs(void);
+
+/** @brief 发布或读取跨执行上下文共享的普通内存前，建立完整内存顺序。
+ * @note 使用 C11 顺序一致栅栏；当前 Cortex-M7 编译器会生成所需的内存屏障指令。
+ */
+static inline void PlatformMemoryBarrier(void)
+{
+    atomic_thread_fence(memory_order_seq_cst);
+}
 #endif

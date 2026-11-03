@@ -78,6 +78,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/motor/motor_task.c",  # 通信派发顺序及电机周期调用。
     "modules/task_monitor/task_monitor.c",  # 任务期限和故障处理策略。
     "modules/lcd/lcd_buf.c",  # LCD 有界绘图及像素缓冲。
+    "modules/lcd/lcd_task.c",  # LCD 页面、按键和运行统计任务。
     "application/robot_task_create.c",  # 按车型配置创建任务。
 }
 ASSEMBLY_SOURCES = {
@@ -240,6 +241,9 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "modules/master_machine", source_root / "bsp/usb",
                source_root / "modules/imu", source_root / "modules/BMI088",
                source_root / "modules/task_monitor", source_root / "bsp/dwt",
+               source_root / "bsp/adc", source_root / "bsp/observation",
+               source_root / "bsp/safety", source_root / "application",
+               source_root / "application/config",
                Path(entry["directory"]).resolve() / "generated"}
     arguments = entry.get("arguments") or shlex.split(entry.get("command", ""))
     for index, argument in enumerate(arguments):
@@ -308,6 +312,10 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / source,
                         source_root / "modules/general_def.h",
                         source_root / "modules/BMI088/bmi088_data.h",
+                        source_root / "modules/BMI088/bmi088_calibration.h",
+                        source_root / "bsp/adc/bsp_adc.h",
+                        source_root / "bsp/observation/bsp_observation.h",
+                        source_root / "bsp/safety/bsp_safety.h",
                         source_root / "bsp/dwt/platform_probe.h",
                         build_dir.resolve() / "generated/mc02_build_config.h"}
         if dependency.is_relative_to(source_root) and dependency not in public_files and not any(

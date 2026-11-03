@@ -294,6 +294,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/motor/motor_task.c # 单一通信派发和电机周期任务。
     modules/task_monitor/task_monitor.c # 任务进度、期限及核心故障策略。
     modules/lcd/lcd_buf.c # LCD 有界绘图与字体转换。
+    modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
     application/robot_task_create.c) # 已选任务的创建与失败处理。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
     if(source IN_LIST MC02_SELECTED_SOURCES)
@@ -308,7 +309,13 @@ target_include_directories(mc02_portable_framework PRIVATE
     modules/message_center # 消息目录和新鲜度类型。
     modules/safety # 整车状态和安全管理的公开类型。
     bsp/log # 安全状态变化使用的有界事件接口。
-    bsp/os) # 不暴露厂商类型的任务、时间和同步接口。
+    bsp/os # 不暴露厂商类型的任务、时间和同步接口。
+    bsp/adc # LCD 按键只读的 ADC 样本接口。
+    bsp/observation # 只读运行状态记录接口。
+    bsp/safety # 启动失败时使用的板级直接关断入口。
+    application # LCD 标记初始化诊断结果。
+    application/config # 编译选择和生成的车型标识。
+    modules/BMI088) # 与板级采样类型分离的标定控制接口。
 mc02_apply_format_diagnostics(mc02_portable_framework)
 target_include_directories(mc02_portable_framework PRIVATE
     bsp/can # 逻辑 CAN 端点和帧接口。

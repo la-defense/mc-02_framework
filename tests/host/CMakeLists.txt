@@ -198,6 +198,14 @@ if(UNIX AND NOT APPLE)
   target_link_libraries(platform_sync_test PRIVATE Threads::Threads)
   add_test(NAME production_platform_sync_nesting_and_wrap COMMAND platform_sync_test)
   set_tests_properties(production_platform_sync_nesting_and_wrap PROPERTIES TIMEOUT 10)
+  # FreeRTOS 统计只在后端转换，测试验证名称边界、数量变化和失败输出不变。
+  add_executable(platform_task_stats_test platform_task_stats_test.c
+    ../../bsp/os/platform_task_stats_freertos.c) # 用生产后端适配器，替身只实现 RTOS 返回数据。
+  target_include_directories(platform_task_stats_test BEFORE PRIVATE platform_task_stats_fakes)
+  target_include_directories(platform_task_stats_test PRIVATE ../../bsp/os .)
+  target_compile_options(platform_task_stats_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME production_platform_task_stats_snapshot_and_bounds COMMAND platform_task_stats_test)
+  set_tests_properties(production_platform_task_stats_snapshot_and_bounds PROPERTIES TIMEOUT 10)
   add_executable(daemon_source_monitor_test daemon_source_monitor_test.c
     ${MC02_HOST_DAEMON_SOURCES} ../../modules/daemon/daemon_event_task.c
     ../../bsp/os/platform_os_freertos.c # 用生产适配器调用测试中的 CMSIS 替身。

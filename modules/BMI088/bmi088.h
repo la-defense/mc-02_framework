@@ -15,6 +15,7 @@
 #include "controller.h"
 #include "bsp_pwm.h"
 #include "stdint.h"
+#include "bmi088_calibration.h"
 
 #define BMI088_INIT_MAX_RETRY 5u // 初始化重试上限, 传感器异常时避免开机死循环
 
@@ -163,24 +164,8 @@ typedef enum
     BMI088_CALIB_SRC_DEFAULT,    /* 标定失败, 退回编译期默认值 */
 } BMI088_CalibSource_e;
 
-/* ---------------- 按需标定状态机 ---------------- */
-typedef enum
-{
-    BMI088_RECALIB_IDLE = 0, /* 空闲 */
-    BMI088_RECALIB_BUSY,     /* 已受理, 标定/写参数进行中 */
-    BMI088_RECALIB_OK,       /* 成功(已写参数区) */
-    BMI088_RECALIB_FAIL,     /* 失败(保留旧值, 已置 CALIB_INVALID) */
-} BMI088_RecalibState_e;
-
 extern volatile uint8_t bmi088_calib_source;   /* BMI088_CalibSource_e */
 extern volatile float bmi088_calib_temp;       /* 标定时 IMU 温度(摄氏度) */
-extern volatile uint8_t bmi088_calib_attempts; /* 最近一次标定用了几轮 */
-
-/**
-* @brief 申请一次运行中标定；当前由 LCD 左键或右键长按松开后调用。
-* @return 返回1表示请求已受理并进入 BUSY；未注册 IMU 或已有请求时返回0。
- */
-uint8_t BMI088CalibRequest(void);
 
 /**
 * @brief 在 INS 任务中处理已受理的标定请求。
@@ -189,10 +174,6 @@ uint8_t BMI088CalibRequest(void);
  */
 uint8_t BMI088CalibService(void);
 
-/** @brief 读取当前标定状态，返回 BMI088_RecalibState_e 中的值。 */
-uint8_t BMI088CalibGetState(void);
-/** @brief 显示完 OK 或 FAIL 后调用，把结果状态清回 IDLE。 */
-void BMI088CalibAckResult(void);
 /** @brief 当前标定值可信时返回非0；返回0时安全状态不能进入 READY。 */
 uint8_t BMI088CalibIsValid(void);
 

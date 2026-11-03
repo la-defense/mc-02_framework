@@ -9,12 +9,12 @@
 #include "lcd_task_diag_state.h"
 #include "bsp_adc.h"
 #include "bsp_log.h"
-#include "bsp_dwt.h"
 #include "bsp_observation.h"
-#include "cmsis_os.h"
-#include "main.h"
-#include "task.h"
-#include "bmi088.h"
+#include "platform_os.h"
+#include "platform_probe.h"
+#include "platform_sync.h"
+#include "platform_task_stats.h"
+#include "bmi088_calibration.h"
 #include "robot_safety.h"
 #include "config/build_selection.h"
 #if defined(MC02_CONFIG_GENERATED)
@@ -113,7 +113,7 @@ volatile uint32_t lcd_prof_cycles = 0;
 // 每 25 个刷新周期记录一次任务运行计数，供调试读取；任务耗时比例用前后差值计算。
 // 原始计数来自 getRunTimeCounterValue()，当前返回 CYCCNT/1000。
 #define LCD_TASK_STATS_PERIOD 25u /* 25 个 200ms 周期 = 5s */
-#define LCD_TASK_STATS_MAX 12u
+#define LCD_TASK_STATS_MAX PLATFORM_TASK_STATS_MAX_COUNT
 #define LCD_TASK_STATS_LAYOUT 0x52543102u
 volatile uint32_t lcd_stats_layout = LCD_TASK_STATS_LAYOUT;
 volatile uint32_t lcd_stats_generation = 0u;
@@ -125,29 +125,29 @@ volatile uint32_t lcd_stats_total = 0;
 volatile uint8_t lcd_stats_count = 0;
 _Alignas(uint32_t) volatile uint32_t lcd_stats_runtime[LCD_TASK_STATS_MAX] = {0};
 _Alignas(uint32_t) volatile uint8_t lcd_stats_prio[LCD_TASK_STATS_MAX] = {0};
-_Alignas(uint32_t) volatile char lcd_stats_name[LCD_TASK_STATS_MAX][12] = {{0}};
+_Alignas(uint32_t) volatile char lcd_stats_name[LCD_TASK_STATS_MAX][PLATFORM_TASK_STATS_NAME_SIZE] = {{0}};
 /* 各任务"历史最小剩余栈"（word, 4 字节/word；0 = 已经溢出）。
-   来源: uxTaskGetSystemState() 填的 TaskStatus_t.usStackHighWaterMark。
+   统计由平台任务接口读取，当前 FreeRTOS 后端映射 usStackHighWaterMark。
    顺序与 lcd_stats_name[] / [cpu] 那一行一致 —— 改动任务栈大小前先看这个数字。 */
 _Alignas(uint32_t) volatile uint16_t lcd_stats_stack[LCD_TASK_STATS_MAX] = {0};
 
 /* 其它模块的分段探针(定义见各自的 .c), 用于 RTT 汇总行 */
 #if MC02_FEATURE_MOTOR_CONTROL
-extern volatile DWT_Probe_t motor_prof_all, motor_prof_dji, motor_prof_lk;
+extern volatile PlatformProbe_t motor_prof_all, motor_prof_dji, motor_prof_lk;
 #endif
-extern volatile DWT_Probe_t dji_prof_all;
+extern volatile PlatformProbe_t dji_prof_all;
 #if MC02_SELECTED_DRIVER_DJI
-extern volatile DWT_Probe_t dji_prof_pid, dji_prof_send;
+extern volatile PlatformProbe_t dji_prof_pid, dji_prof_send;
 #endif
-extern volatile DWT_Probe_t ins_prof_all, ins_prof_read, ins_prof_ekf, ins_prof_temp;
-extern volatile DWT_Probe_t can_prof_tx, can_prof_rx_isr;
+extern volatile PlatformProbe_t ins_prof_all, ins_prof_read, ins_prof_ekf, ins_prof_temp;
+extern volatile PlatformProbe_t can_prof_tx, can_prof_rx_isr;
 extern volatile uint32_t can_prof_tx_spins, can_prof_tx_full, can_prof_rx_frames;
 
 /* RTOS 计时单位: getRunTimeCounterValue() 返回 CYCCNT/1000, 即"千周期",
    480MHz 下一单位 = 1/480 ms ≈ 2.083us。换算成 us 用 *1000/480。 */
 typedef struct
 {
-    char name[12];
+    char name[PLATFORM_TASK_STATS_NAME_SIZE];
     uint32_t runtime;
 } LcdTaskPrev_t;
 
@@ -230,7 +230,8 @@ static void lcd_stats_prepare_logs(uint32_t delta_total, const uint32_t *deltas)
                                 : 0u;
         lcd_stats_set_pair((uint8_t)(i / 4u), (uint8_t)(i % 4u),
                            (const char *)lcd_stats_name[i],
-                           lcd_stats_text_length((const char *)lcd_stats_name[i], 11u), permille);
+                           lcd_stats_text_length((const char *)lcd_stats_name[i],
+                                                 PLATFORM_TASK_STATS_NAME_SIZE - 1u), permille);
     }
     for (uint8_t i = 0u; i < 10u; ++i)
         lcd_stats_set_literal((uint8_t)(3u + i / 4u), (uint8_t)(i % 4u),
@@ -243,7 +244,8 @@ static void lcd_stats_prepare_logs(uint32_t delta_total, const uint32_t *deltas)
     for (uint8_t i = 0u; i < lcd_stats_count; ++i)
         lcd_stats_set_pair((uint8_t)(9u + i / 4u), (uint8_t)(i % 4u),
                            (const char *)lcd_stats_name[i],
-                           lcd_stats_text_length((const char *)lcd_stats_name[i], 11u),
+                           lcd_stats_text_length((const char *)lcd_stats_name[i],
+                                                 PLATFORM_TASK_STATS_NAME_SIZE - 1u),
                            lcd_stats_stack[i]);
 
     lcd_stats_log_next_group = 0u;
@@ -263,64 +265,51 @@ static void lcd_stats_log_step(void)
 // 记录各任务计数与剩余栈；第一次只保存基数，从第二次开始报告这一段时间的占用。
 static void lcd_task_stats_snapshot(void)
 {
-    static TaskStatus_t st[LCD_TASK_STATS_MAX];
     static LcdTaskPrev_t prev[LCD_TASK_STATS_MAX];
     static uint8_t prev_cnt = 0;
-    uint32_t total = 0;
+    PlatformTaskStatsInfo_t task_info;
 
     if (lcd_stats_layout != LCD_TASK_STATS_LAYOUT)
-        return;
+        return; // 调试工具声明了不兼容的布局时，不覆盖它正在读取的数组。
 
-    uint32_t generation = lcd_stats_generation + 1u;
+    const uint32_t previous_generation = lcd_stats_generation; // 保存上一次完整版本，失败时恢复。
+    uint32_t generation = previous_generation + 1u; // 奇数版本告诉读取者数组正在更新。
     if ((generation & 1u) == 0u)
-        ++generation;
-    lcd_stats_generation = generation;
-    __DMB();
-
-    UBaseType_t tasks_before = uxTaskGetNumberOfTasks();
-    UBaseType_t n = uxTaskGetSystemState(st, LCD_TASK_STATS_MAX, &total);
-    UBaseType_t tasks_after = uxTaskGetNumberOfTasks();
-    if (n > LCD_TASK_STATS_MAX)
-        n = LCD_TASK_STATS_MAX;
-
-    UBaseType_t task_total = tasks_before;
-    if (tasks_after > task_total)
-        task_total = tasks_after;
-    if (n > task_total)
-        task_total = n;
+        ++generation; // 即使输入版本异常为奇数，也选一个奇数作为写入标记。
+    lcd_stats_generation = generation; // 先发布写入状态，随后才改统计字段。
+    PlatformMemoryBarrier(); // 确保调试读取者先看到奇数版本号，再看到新数组内容。
+    if (!PlatformTaskStatsCapture(&task_info))
+    {
+        // 后端统计暂不可用时还原旧版本号，避免把旧任务列表冒充为新数据。
+        lcd_stats_generation = previous_generation; // 捕获失败时数组尚未改写，可继续使用旧版本。
+        return; // 没有新的任务记录时结束本轮快照。
+    }
+    const uint32_t n = task_info.captured_count; // 固定统计数组只处理后端实际捕获的记录。
 
     // 总量取各任务累计计数之和，计数单位沿用 CYCCNT/1000，下面按同名任务求差。
-    (void)total;
-    uint32_t sum = 0;
-    for (UBaseType_t i = 0; i < n; ++i)
-        sum += st[i].ulRunTimeCounter;
-    lcd_stats_total = sum;
-    lcd_stats_count = (uint8_t)n;
-    lcd_stats_task_total = (uint32_t)task_total;
-    lcd_stats_truncated = (uint8_t)(task_total > n);
-    lcd_stats_captured_ms = HAL_GetTick();
-    ++lcd_stats_sample_id;
+    uint32_t sum = 0u; // 在逐项复制时累计被记录任务的运行计数。
+    lcd_stats_count = (uint8_t)n; // 发布本次数组中实际记录的任务数。
+    lcd_stats_task_total = task_info.total_task_count; // 保存捕获前后观察到的任务总数。
+    lcd_stats_truncated = (uint8_t)(task_info.total_task_count > n); // 标记固定容量未能容纳全部任务。
+    lcd_stats_captured_ms = PlatformTimeNowMs(); // 为本次统计附上平台毫秒时间。
+    ++lcd_stats_sample_id; // 每次成功捕获都推进样本编号。
     if (lcd_stats_sample_id == 0u)
-        lcd_stats_sample_id = 1u;
+        lcd_stats_sample_id = 1u; // 0 保留为尚未发布统计的标记。
 
-    uint32_t deltas[LCD_TASK_STATS_MAX] = {0};
-    uint32_t delta_total = 0;
+    uint32_t deltas[LCD_TASK_STATS_MAX] = {0}; // 任务索引对应的占用差值先清零。
+    uint32_t delta_total = 0u; // 汇总本轮能与旧任务名匹配的运行计数差。
 
     // 按任务逐项保存名称、优先级和剩余栈，再与上次记录配对。
-    for (UBaseType_t i = 0; i < n; ++i)
+    for (uint32_t i = 0; i < n; ++i)
     {
-        lcd_stats_runtime[i] = st[i].ulRunTimeCounter;
-        lcd_stats_prio[i] = (uint8_t)st[i].uxCurrentPriority;
-        lcd_stats_stack[i] = (uint16_t)st[i].usStackHighWaterMark;
-        for (uint8_t k = 0; k < 12u; ++k)
-            lcd_stats_name[i][k] = '\0';
-        for (uint8_t k = 0; k < 11u; ++k)
-        {
-            char c = st[i].pcTaskName[k];
-            lcd_stats_name[i][k] = c;
-            if (c == '\0')
-                break;
-        }
+        PlatformTaskStatsEntry_t entry; // 用短时局部记录承接后端转换结果，避免第二份静态数组。
+        if (!PlatformTaskStatsGetEntry(i, &entry))
+            return; // 异常索引时保留奇数版本，表示当前数组未完成发布。
+        lcd_stats_runtime[i] = entry.runtime_counter; // 保存任务累计运行计数。
+        lcd_stats_prio[i] = (uint8_t)entry.priority; // 保留原调试布局中的8位优先级。
+        lcd_stats_stack[i] = (uint16_t)entry.stack_high_water_words; // 保留原布局的剩余栈字数。
+        memcpy((void *)lcd_stats_name[i], entry.name, sizeof(entry.name)); // 连同结束符复制完整任务名。
+        sum += entry.runtime_counter; // 计算被捕获任务的累计运行计数之和。
 
         // 任务排列可能变化，按名字查找上一次记录，找到后只计算这一对的差值。
         for (uint8_t k = 0; k < prev_cnt; ++k)
@@ -328,42 +317,43 @@ static void lcd_task_stats_snapshot(void)
             if (strncmp((const char *)lcd_stats_name[i], prev[k].name, sizeof(prev[k].name)) == 0)
             {
                 deltas[i] = lcd_stats_runtime[i] - prev[k].runtime;
-                delta_total += deltas[i];
-                break;
+                delta_total += deltas[i]; // 只累计同名任务两次快照之间的无符号差值。
+                break; // 每条当前任务最多匹配一条历史记录。
             }
         }
     }
+    lcd_stats_total = sum; // 完成逐条复制后再发布运行计数总量。
 
     if (prev_cnt != 0u)
-        lcd_stats_prepare_logs(delta_total, deltas);
+        lcd_stats_prepare_logs(delta_total, deltas); // 首次只建立基线，之后才生成差值日志。
 
     // 本次结果作为下一轮的比较起点，名称连同结尾 0 一起保存。
-    for (uint8_t i = 0; i < n; ++i)
+    for (uint32_t i = 0; i < n; ++i)
     {
-        for (uint8_t k = 0; k < 12u; ++k)
+        for (uint8_t k = 0; k < PLATFORM_TASK_STATS_NAME_SIZE; ++k)
             prev[i].name[k] = (char)lcd_stats_name[i][k];
-        prev[i].runtime = lcd_stats_runtime[i];
+        prev[i].runtime = lcd_stats_runtime[i]; // 保存同一任务本次的累计计数基线。
     }
-    prev_cnt = (uint8_t)n;
+    prev_cnt = (uint8_t)n; // 下一次统计只匹配本次确实捕获到的任务。
 
     /* 清掉旧任务留下的尾项，避免调试器把缩短后的列表误读成完整快照。 */
-    for (UBaseType_t i = n; i < LCD_TASK_STATS_MAX; ++i)
+    for (uint32_t i = n; i < LCD_TASK_STATS_MAX; ++i)
     {
-        lcd_stats_runtime[i] = 0u;
-        lcd_stats_prio[i] = 0u;
-        lcd_stats_stack[i] = 0u;
-        memset((void *)lcd_stats_name[i], 0, sizeof(lcd_stats_name[i]));
+        lcd_stats_runtime[i] = 0u; // 清除上次比本次更多的任务运行计数。
+        lcd_stats_prio[i] = 0u; // 清除对应的旧优先级。
+        lcd_stats_stack[i] = 0u; // 清除对应的旧栈余量。
+        memset((void *)lcd_stats_name[i], 0, sizeof(lcd_stats_name[i])); // 清除旧名称避免误读。
     }
 
-    __DMB();
-    lcd_stats_generation = generation + 1u;
-    BSPObservationCapture();
+    PlatformMemoryBarrier(); // 确保数组先写完，再让调试读取者看到偶数版本。
+    lcd_stats_generation = generation + 1u; // 偶数版本表示本次统计可以完整读取。
+    BSPObservationCapture(); // 同步更新供现有只读工具读取的通用观测记录。
 }
 
 // 保存本次耗时及历史最大耗时，并加入 LCD 操作的累计时间。
 static void lcd_prof_record(uint32_t t0, volatile uint32_t *last, volatile uint32_t *maxv)
 {
-    uint32_t dt = DWT_ProbeElapsedUs(t0); /* 探针统一直接读 CYCCNT */
+    uint32_t dt = PlatformProbeElapsedUs(t0);
     *last = dt;
     if (dt > *maxv)
         *maxv = dt;
@@ -459,7 +449,7 @@ static uint8_t lcd_bench_diag_service(void)
         return 1u;
     }
 
-    uint32_t now = HAL_GetTick();
+    uint32_t now = PlatformTimeNowMs();
     if ((uint32_t)(now - lcd_bench_diag_started_ms) < 15000u)
         return 1u;
 
@@ -557,10 +547,10 @@ static void lcd_module_presence_check(void)
             lcd_module_absent = 0u;
             lcd_recover_count++;
             BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_02, BSP_LOG_FIELD_U32((unsigned long)lcd_recover_count));
-            uint32_t t0 = DWT_ProbeStart();
+            uint32_t t0 = PlatformProbeStart();
             LCDStatus_t status = LCD_UI_Recover();
             lcd_init_done = (uint8_t)(status == LCD_OK);
-            lcd_prof_recover_us = DWT_ProbeElapsedUs(t0);
+            lcd_prof_recover_us = PlatformProbeElapsedUs(t0);
         }
     }
 }
@@ -569,7 +559,7 @@ static void lcd_module_presence_check(void)
 static void lcd_key_update(void)
 {
     LcdKey_e key = lcd_key_read();
-    uint32_t now = HAL_GetTick();
+    uint32_t now = PlatformTimeNowMs();
     uint8_t key_sample_valid = (uint8_t)(lcd_adc_sample_valid && lcd_raw_valid_level(lcd_key_raw));
     LCDKeyEvent_t key_event;
     LCDKeyInputUpdate(&lcd_key_input, key_sample_valid, key, now, &key_event);
@@ -642,10 +632,10 @@ static void lcd_key_update(void)
             lcd_frozen = 0u;
             (void)LCD_UI_SetFrozen(0u);
             BSP_LOG_EVENT_1(EV_MODULES_LCD_LCD_TASK_C_06, BSP_LOG_FIELD_U32((unsigned long)lcd_recover_count));
-            uint32_t t0 = DWT_ProbeStart();
+            uint32_t t0 = PlatformProbeStart();
             LCDStatus_t status = LCD_UI_Recover();
             lcd_init_done = (uint8_t)(status == LCD_OK);
-            lcd_prof_recover_us = DWT_ProbeElapsedUs(t0);
+            lcd_prof_recover_us = PlatformProbeElapsedUs(t0);
         }
         return;
     }
@@ -668,7 +658,7 @@ static void lcd_key_update(void)
         return;
     }
 
-    uint32_t t0 = DWT_ProbeStart();
+    uint32_t t0 = PlatformProbeStart();
     LCDStatus_t status = LCD_UI_DrawStatic(lcd_page);
     if (status == LCD_OK)
         status = LCD_UI_UpdateValues(lcd_page);
@@ -703,10 +693,10 @@ static void lcd_calib_service(void)
         {
             (void)LCD_UI_ShowCalibMsg((st == BMI088_RECALIB_OK) ? 2u : 3u);
             lcd_calib_msg = 2u;
-            lcd_calib_result_until = HAL_GetTick() + LCD_CALIB_RESULT_MS;
+            lcd_calib_result_until = PlatformTimeNowMs() + LCD_CALIB_RESULT_MS;
             BSP_LOG_EVENT_2(EV_MODULES_LCD_LCD_TASK_C_09, BSP_LOG_FIELD_CSTR_LIMIT(((st == BMI088_RECALIB_OK) ? "OK" : "FAIL"), 48u), BSP_LOG_FIELD_U32((unsigned)bmi088_calib_attempts));
         }
-        if ((int32_t)(HAL_GetTick() - lcd_calib_result_until) >= 0)
+        if ((int32_t)(PlatformTimeNowMs() - lcd_calib_result_until) >= 0)
         {
             BMI088CalibAckResult();
             RobotSafetyRequestCalib(0); /* 回 SAFE: 必须重新走正常使能流程 */
@@ -731,9 +721,9 @@ void StartLCDTASK(void const *argument)
     (void)argument;
 
     lcd_task_entered = 1;
-    uint32_t t0 = DWT_ProbeStart();
+    uint32_t t0 = PlatformProbeStart();
     LCDStatus_t init_status = LCD_UI_Init();
-    lcd_prof_init_us = DWT_ProbeElapsedUs(t0);
+    lcd_prof_init_us = PlatformProbeElapsedUs(t0);
     lcd_init_done = (uint8_t)(init_status == LCD_OK);
     if (init_status != LCD_OK)
     {
@@ -759,7 +749,7 @@ void StartLCDTASK(void const *argument)
         for (;;)
         {
             ++lcd_heartbeat;
-            osDelay(100u);
+            PlatformTaskDelayMs(100u);
         }
     }
     if (init_status == LCD_OK)
@@ -768,7 +758,7 @@ void StartLCDTASK(void const *argument)
     if (init_status == LCD_OK && LCD_UI_DrawDiagnosticPattern(0u) == LCD_OK)
     {
         lcd_bench_diag_pattern = 0u;
-        lcd_bench_diag_started_ms = HAL_GetTick();
+        lcd_bench_diag_started_ms = PlatformTimeNowMs();
         lcd_bench_diag_ignore_release = 0u;
         lcd_bench_diag_state = LCD_TASK_DIAG_RUNNING;
     }
@@ -784,11 +774,11 @@ void StartLCDTASK(void const *argument)
         /* 50ms 采样按键与模组在位状态, 200ms 刷新一次数值(5Hz) */
         for (uint8_t i = 0; i < 4u; ++i)
         {
-            uint32_t ts = DWT_ProbeStart();
+            uint32_t ts = PlatformProbeStart();
             lcd_key_update();
             lcd_module_presence_check();
             lcd_prof_record(ts, &lcd_prof_sample_last_us, &lcd_prof_sample_max_us);
-            osDelay(50);
+            PlatformTaskDelayMs(50u);
         }
 
         if (!lcd_bench_diag_active())
@@ -800,7 +790,7 @@ void StartLCDTASK(void const *argument)
         uint8_t lcd_usable = (uint8_t)(LCDGetState(&lcd_state) == LCD_OK && lcd_state.ui_usable);
         if (!diagnostic_active && lcd_usable && !lcd_frozen && !lcd_module_absent && lcd_calib_msg == 0u)
         {
-            uint32_t tu = DWT_ProbeStart();
+            uint32_t tu = PlatformProbeStart();
             LCDStatus_t update_status = LCD_UI_UpdateValues(lcd_page);
             if (update_status != LCD_OK)
                 LCD_UI_InvalidateValueCache();
