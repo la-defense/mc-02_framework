@@ -303,6 +303,8 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/alarm/led.c # RGB 输出状态转换和任务推进。
     application/alarm_startup.c # 按核心依赖处理告警初始化结果。
     application/robot_task.c # 现有任务循环与周期维护。
+    application/gimbal/gimbal.c # 云台命令、反馈和电机控制。
+    application/shoot/shoot.c # 发射命令和拨弹时序。
     modules/lcd/lcd_buf.c # LCD 有界绘图与字体转换。
     modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
     application/robot_task_create.c) # 已选任务的创建与失败处理。
@@ -343,6 +345,7 @@ target_include_directories(mc02_portable_framework PRIVATE
     modules/algorithm # 帧校验使用的软件 CRC 接口。
     modules # 电机控制使用的公共单位定义。
     modules/motor # 电机能力、反馈及 PID 接口。
+    modules/motor/DJImotor # DJI 电机公开控制接口。
     modules/lcd # 显示状态和绘图接口。
     modules/alarm # 告警策略与灯声输出接口。
     bsp/board # 板级资源和蜂鸣器公开接口。

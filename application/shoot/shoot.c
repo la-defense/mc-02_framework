@@ -8,9 +8,9 @@
 #include "dji_motor.h"
 #include "message_center.h"
 #include "topics/robot_topics.h"
-#include "bsp_dwt.h"
+#include "platform_probe.h"
 #include "general_def.h"
-#include "main.h"
+#include "platform_sync.h"
 #include <stddef.h>
 #include <string.h>
 #include <math.h>
@@ -28,7 +28,7 @@ static uint8_t require_load_stop = 1u; // 数据中断后先等一次停止供�
 static Shoot_Ctrl_Cmd_s shoot_cmd_recv; // 来自cmd的发射控制信息
 static MessageSubscriber_t *shoot_sub;
 
-// dwt定时,计算冷却用
+// 使用平台保留的浮点毫秒时基计算拨弹冷却，单位与原 DWT 接口一致。
 static float hibernate_time = 0, dead_time = 0;
 
 uint8_t ShootInit(void)
@@ -108,7 +108,7 @@ void ShootTask()
 {
     // 从cmd获取控制数据
     const uint8_t command_fresh = (uint8_t)(MessageReadSnapshot(shoot_sub, &shoot_cmd_recv,
-        sizeof(shoot_cmd_recv), HAL_GetTick(), NULL) == MESSAGE_OK);
+        sizeof(shoot_cmd_recv), PlatformTimeNowMs(), NULL) == MESSAGE_OK);
     if (!command_fresh)
     {
         memset(&shoot_cmd_recv, 0, sizeof(shoot_cmd_recv));
@@ -144,7 +144,7 @@ void ShootTask()
 
     // 如果上一次触发单发或3发指令的时间加上不应期仍然大于当前时间(尚未休眠完毕),直接返回即可
     // 单发模式主要提供给能量机关激活使用(以及英雄的射击大部分处于单发)
-    // if (hibernate_time + dead_time > DWT_GetTimeline_ms())
+    // if (hibernate_time + dead_time > PlatformProbeTimelineMs())
     //     return;
 
     // 若不在休眠状态,根据robotCMD传来的控制模式进行拨盘电机参考值设定和模式切换
@@ -161,15 +161,15 @@ void ShootTask()
         break;
     // 仅从其他模式进入单发且等待时间已到时，增加一次目标角度，避免每个周期重复增加。
     case LOAD_1_BULLET:
-        if (last_load_mode != LOAD_1_BULLET && hibernate_time + dead_time <= DWT_GetTimeline_ms())
+        if (last_load_mode != LOAD_1_BULLET && hibernate_time + dead_time <= PlatformProbeTimelineMs())
         {
             Motor_Feedback_Snapshot_s feedback = {0};
-            if (DJIMotorGetFeedbackSnapshot(loader, HAL_GetTick(), &feedback) == MOTOR_FEEDBACK_OK &&
+            if (DJIMotorGetFeedbackSnapshot(loader, PlatformTimeNowMs(), &feedback) == MOTOR_FEEDBACK_OK &&
                 feedback.position.valid != 0u)
             {
                 DJIMotorOuterLoop(loader, ANGLE_LOOP);
                 DJIMotorSetRef(loader, feedback.position.value + one_bullet_delta);
-                hibernate_time = DWT_GetTimeline_ms();
+                hibernate_time = PlatformProbeTimelineMs();
                 dead_time = 150;
             }
             else
@@ -182,15 +182,15 @@ void ShootTask()
         break;
     // 三发同样只在新进入时触发，随后至少等 300 ms。
     case LOAD_3_BULLET:
-        if (last_load_mode != LOAD_3_BULLET && hibernate_time + dead_time <= DWT_GetTimeline_ms())
+        if (last_load_mode != LOAD_3_BULLET && hibernate_time + dead_time <= PlatformProbeTimelineMs())
         {
             Motor_Feedback_Snapshot_s feedback = {0};
-            if (DJIMotorGetFeedbackSnapshot(loader, HAL_GetTick(), &feedback) == MOTOR_FEEDBACK_OK &&
+            if (DJIMotorGetFeedbackSnapshot(loader, PlatformTimeNowMs(), &feedback) == MOTOR_FEEDBACK_OK &&
                 feedback.position.valid != 0u)
             {
                 DJIMotorOuterLoop(loader, ANGLE_LOOP);
                 DJIMotorSetRef(loader, feedback.position.value + 3.0f * one_bullet_delta);
-                hibernate_time = DWT_GetTimeline_ms();
+                hibernate_time = PlatformProbeTimelineMs();
                 dead_time = 300;
             }
             else

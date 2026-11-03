@@ -87,6 +87,8 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/alarm/led.c",  # RGB 输出状态和发送推进。
     "application/alarm_startup.c",  # 依据模块计划处理告警降级。
     "application/robot_task.c",  # 常驻任务的周期调用和监控。
+    "application/gimbal/gimbal.c",  # 云台命令和反馈。
+    "application/shoot/shoot.c",  # 发射命令和拨弹控制。
     "modules/lcd/lcd_buf.c",  # LCD 有界绘图及像素缓冲。
     "modules/lcd/lcd_task.c",  # LCD 页面、按键和运行统计任务。
     "application/robot_task_create.c",  # 按车型配置创建任务。
@@ -246,7 +248,7 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "bsp/os", source_root / "bsp/log", source_root / "bsp/can",
                source_root / "modules/can_comm", source_root / "modules/time_sync",
                source_root / "modules/algorithm", source_root / "modules/referee",
-               source_root / "modules", source_root / "modules/motor", source_root / "modules/lcd",
+               source_root / "modules", source_root / "modules/motor", source_root / "modules/motor/DJImotor", source_root / "modules/lcd",
                source_root / "bsp/usart", source_root / "modules/remote",
                source_root / "modules/master_machine", source_root / "bsp/usb",
                source_root / "modules/imu", source_root / "modules/BMI088",
@@ -335,6 +337,8 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/chassis/chassis_kinematics.h",
                         source_root / "application/chassis/omni.h",
                         source_root / "application/cmd/robot_cmd.h",
+                        source_root / "application/gimbal/gimbal.h",
+                        source_root / "application/shoot/shoot.h",
                         source_root / "application/topics/robot_can_bridge_config.h",
                         source_root / "application/init_diagnostic.h",
                         source_root / "application/alarm_startup.h",

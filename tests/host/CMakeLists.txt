@@ -1316,7 +1316,7 @@ target_include_directories(gimbal_mode_test BEFORE PRIVATE gimbal_mode_fakes)
 target_include_directories(gimbal_mode_test PRIVATE . ../../application ../../application/gimbal
   ../../application/topics ../../modules/imu ../../modules/master_machine ../../modules/motor
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon
-  ../../modules/message_center ../../modules ../../bsp/can)
+  ../../modules/message_center ../../modules ../../bsp/can ../../bsp/os)
 target_compile_definitions(gimbal_mode_test PRIVATE MC02_PROFILE_BENCH_SAFE=1)
 target_compile_options(gimbal_mode_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
 target_link_libraries(gimbal_mode_test PRIVATE m)
@@ -1375,7 +1375,7 @@ target_include_directories(shoot_freshness_test PRIVATE ../../application ../../
   ../../modules ../../modules/message_center ../../modules/master_machine ../../modules/imu
   ../../modules/algorithm ../../modules/BMI088
   ../../Middlewares/Third_Party/CMSIS-DSP-1.7.0/Include ../../Drivers/CMSIS/Include
-  ../../Drivers/CMSIS/Device/ST/STM32H7xx/Include ../../bsp/usart)
+  ../../Drivers/CMSIS/Device/ST/STM32H7xx/Include ../../bsp/usart ../../bsp/os ../../bsp/dwt)
 add_test(NAME production_shoot_init_and_expired_command_rearm COMMAND shoot_freshness_test)
 if(UNIX AND NOT APPLE)
   foreach(profile IN ITEMS bench_safe robot robot_chassis)

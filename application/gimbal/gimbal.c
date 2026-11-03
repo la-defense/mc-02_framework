@@ -9,7 +9,7 @@
 #include "message_center.h"
 #include "topics/robot_topics.h"
 #include "general_def.h"
-#include "main.h"
+#include "platform_sync.h"
 #include <string.h>
 
 static attitude_t *gimba_IMU_data; // 云台IMU数据
@@ -124,7 +124,7 @@ void GimbalTask()
 {
     // 只采用不超过 50 ms 的控制消息；失败清零后进入停机分支。
     if (MessageReadSnapshot(gimbal_sub, &gimbal_cmd_recv, sizeof(gimbal_cmd_recv),
-                            HAL_GetTick(), NULL) != MESSAGE_OK)
+                            PlatformTimeNowMs(), NULL) != MESSAGE_OK)
         memset(&gimbal_cmd_recv, 0, sizeof(gimbal_cmd_recv));
 
     // 闭环反馈使用外部 IMU；上传给上层的状态仍包含 yaw 电机单圈角度。

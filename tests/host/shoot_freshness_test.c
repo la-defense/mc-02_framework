@@ -41,7 +41,7 @@ static Shoot_Config_s shoot_config = {
 };
 
 uint32_t HAL_GetTick(void) { return now_ms; }
-float DWT_GetTimeline_ms(void) { return timeline_ms; }
+float PlatformProbeTimelineMs(void) { return timeline_ms; }
 const Shoot_Config_s *ShootConfigFeed(void) { return &shoot_config; }
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {

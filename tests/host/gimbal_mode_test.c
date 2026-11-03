@@ -130,7 +130,7 @@ uint8_t INSGetControlSnapshot(INS_Control_Snapshot_s *snapshot)
     return 1u;
 }
 
-uint32_t HAL_GetTick(void)
+uint32_t PlatformTimeNowMs(void)
 {
     return current_time_ms;
 }
