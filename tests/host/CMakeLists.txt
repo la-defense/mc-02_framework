@@ -297,9 +297,10 @@ if(UNIX AND NOT APPLE)
   add_test(NAME production_lcd_diagnostic_failure_releases_ui COMMAND lcd_diag_state_test)
   set_tests_properties(production_lcd_diagnostic_failure_releases_ui PROPERTIES TIMEOUT 10)
 
-  add_executable(lcd_spi_timing_test lcd_spi_timing_test.c ../../Core/Src/spi.c ../../modules/lcd/lcd.c)
+  add_executable(lcd_spi_timing_test lcd_spi_timing_test.c ../../Core/Src/spi.c ../../modules/lcd/lcd.c
+    ../../bsp/board/platform_lcd_mc02.c) # 生产 LCD 平台后端连接 HAL 替身。
   target_include_directories(lcd_spi_timing_test BEFORE PRIVATE lcd_spi_fakes)
-  target_include_directories(lcd_spi_timing_test PRIVATE ../../modules/lcd)
+  target_include_directories(lcd_spi_timing_test PRIVATE ../../modules/lcd ../../bsp/board)
   target_compile_options(lcd_spi_timing_test PRIVATE -ffunction-sections -fdata-sections)
   target_link_options(lcd_spi_timing_test PRIVATE -Wl,--gc-sections)
   add_test(NAME production_lcd_rising_edge_timing COMMAND lcd_spi_timing_test)
@@ -308,6 +309,7 @@ if(UNIX AND NOT APPLE)
   target_include_directories(lcd_buf_portable_compile PRIVATE ../../modules/lcd) # 仅使用面板公开头。
   target_compile_options(lcd_buf_portable_compile PRIVATE -Wall -Wextra -Werror -fno-fast-math)
   add_executable(lcd_bounds_test lcd_bounds_test.c ../../modules/lcd/lcd.c
+    ../../bsp/board/platform_lcd_mc02.c # 生产 LCD 平台后端连接 HAL 替身。
     ../../modules/lcd/lcd_buf.c ../../modules/lcd/lcd_font_cn.c ../../modules/lcd/lcd_ui.c
     ../../bsp/board/platform_probe_elapsed_stm32.c # 使用生产耗时适配，时钟由测试提供。
     ../../modules/lcd/lcd_referee_rows.c)
@@ -316,7 +318,7 @@ if(UNIX AND NOT APPLE)
   target_include_directories(lcd_bounds_test PRIVATE ../../modules/lcd ../../Core/Inc ../../application
     ../../modules/safety ../../modules/algorithm ../../modules/imu ../../modules/remote
     ../../modules/master_machine ../../modules/referee ../../modules/task_monitor ../../modules/BMI088
-    ../../modules/message_center ../../bsp/adc ../../bsp/watchdog ../../bsp/can ../../bsp/crash ../../bsp/usart
+    ../../modules/message_center ../../bsp/board ../../bsp/adc ../../bsp/watchdog ../../bsp/can ../../bsp/crash ../../bsp/usart
     ../../Drivers/STM32H7xx_HAL_Driver/Inc ../../Drivers/CMSIS/Device/ST/STM32H7xx/Include
     ../../Drivers/CMSIS/Include ../../Middlewares/Third_Party/CMSIS-DSP-1.7.0/Include
     ../../Middlewares/Third_Party/FreeRTOS/Source/include

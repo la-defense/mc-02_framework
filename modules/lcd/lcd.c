@@ -5,9 +5,7 @@
  */
 #include "lcd_internal.h"
 
-#include "main.h" // 仅面板硬件实现使用板级 GPIO 定义。
-#include "spi.h" // 仅面板硬件实现使用 STM32 SPI 句柄。
-#include "bsp_hal_tick.h"
+#include "platform_lcd.h" // 面板传输与引脚由板级后端提供。
 
 #include <limits.h>
 #include <string.h>
@@ -17,14 +15,14 @@ volatile uint32_t lcd_spi_errors = 0u;
 #define LCD_HAL_SEND_TIMEOUT_MS 2u
 #define LCD_INIT_BUDGET_MS 1000u
 
-#define LCD_RES_Clr() HAL_GPIO_WritePin(LCD_RES_GPIO_Port, LCD_RES_Pin, GPIO_PIN_RESET) // 拉低复位。
-#define LCD_RES_Set() HAL_GPIO_WritePin(LCD_RES_GPIO_Port, LCD_RES_Pin, GPIO_PIN_SET) // 释放复位。
-#define LCD_DC_Clr() HAL_GPIO_WritePin(LCD_DC_GPIO_Port, LCD_DC_Pin, GPIO_PIN_RESET) // 选择命令。
-#define LCD_DC_Set() HAL_GPIO_WritePin(LCD_DC_GPIO_Port, LCD_DC_Pin, GPIO_PIN_SET) // 选择数据。
-#define LCD_CS_Clr() HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_RESET) // 选中面板。
-#define LCD_CS_Set() HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_SET) // 释放面板。
-#define LCD_BLK_Clr(unused) do { (void)(unused); HAL_GPIO_WritePin(LCD_BLK_GPIO_Port, LCD_BLK_Pin, GPIO_PIN_RESET); } while (0) // 关闭背光。
-#define LCD_BLK_Set(unused) do { (void)(unused); HAL_GPIO_WritePin(LCD_BLK_GPIO_Port, LCD_BLK_Pin, GPIO_PIN_SET); } while (0) // 打开背光。
+#define LCD_RES_Clr() PlatformLcdReset(0u) // 拉低复位。
+#define LCD_RES_Set() PlatformLcdReset(1u) // 释放复位。
+#define LCD_DC_Clr() PlatformLcdDataMode(0u) // 选择命令。
+#define LCD_DC_Set() PlatformLcdDataMode(1u) // 选择数据。
+#define LCD_CS_Clr() PlatformLcdChipSelect(0u) // 选中面板。
+#define LCD_CS_Set() PlatformLcdChipSelect(1u) // 释放面板。
+#define LCD_BLK_Clr(unused) do { (void)(unused); PlatformLcdBacklight(0u); } while (0) // 关闭背光。
+#define LCD_BLK_Set(unused) do { (void)(unused); PlatformLcdBacklight(1u); } while (0) // 打开背光。
 
 static LCDState_t lcd_state;
 static uint8_t operation_depth;
@@ -63,7 +61,7 @@ static void lcd_latch_failure(LCDStatus_t status)
         lcd_state.stop_isolated = 1u;
     }
     lcd_state.last_result = status;
-    lcd_state.last_failure_ms = HAL_GetTick();
+    lcd_state.last_failure_ms = PlatformLcdNowMs();
     if (lcd_state.failure_count != UINT32_MAX)
         lcd_state.failure_count++;
     if (lcd_spi_errors != UINT32_MAX)
@@ -83,7 +81,7 @@ static LCDStatus_t lcd_set_operation_error(LCDStatus_t status)
 
 static LCDStatus_t lcd_check_context(void)
 {
-    if (__get_IPSR() != 0u)
+    if (PlatformLcdInHandler())
         return LCD_BAD_CONTEXT;
     if (!operation_active)
         return LCD_BAD_CONTEXT;
@@ -94,7 +92,7 @@ LCDStatus_t LCD_InternalBegin(uint32_t budget_ms, uint8_t recovery)
 {
     if (budget_ms == 0u || budget_ms > INT32_MAX)
         return LCD_OUT_OF_RANGE;
-    if (__get_IPSR() != 0u)
+    if (PlatformLcdInHandler())
         return LCD_BAD_CONTEXT;
 
     if (operation_active)
@@ -111,16 +109,16 @@ LCDStatus_t LCD_InternalBegin(uint32_t budget_ms, uint8_t recovery)
         return LCD_STOP_FAILED;
     if (lcd_state.failure_latched && recovery == 0u)
         return LCD_UNAVAILABLE;
-    if (hspi1.Instance != SPI1)
+    if (!PlatformLcdBusReady())
         return LCD_NOT_INITIALIZED;
-    if (BSP_HALTickTryAcquireBlockingWait() == 0u)
+    if (!PlatformLcdAcquireTimebase())
         return LCD_TIMEBASE_UNAVAILABLE;
 
     operation_active = 1u;
     operation_depth = 1u;
     recovery_operation = recovery ? 1u : 0u;
     operation_status = LCD_OK;
-    operation_deadline_ms = HAL_GetTick() + budget_ms;
+    operation_deadline_ms = PlatformLcdNowMs() + budget_ms;
     return LCD_OK;
 }
 
@@ -144,7 +142,7 @@ LCDStatus_t LCD_InternalEnd(LCDStatus_t result)
     recovery_operation = 0u;
     operation_status = LCD_OK;
     lcd_state.last_result = final_status;
-    BSP_HALTickReleaseBlockingWait();
+    PlatformLcdReleaseTimebase();
     return final_status;
 }
 
@@ -161,7 +159,7 @@ LCDStatus_t LCD_InternalCheckDeadline(void)
     if (status != LCD_OK)
         return status;
 
-    if ((int32_t)(HAL_GetTick() - operation_deadline_ms) >= 0)
+    if ((int32_t)(PlatformLcdNowMs() - operation_deadline_ms) >= 0)
         return lcd_set_operation_error(LCD_DEADLINE_EXPIRED);
     return LCD_OK;
 }
@@ -174,19 +172,19 @@ static LCDStatus_t lcd_transfer(uint8_t *data, size_t length)
     if (data == NULL || length == 0u || length > UINT16_MAX)
         return lcd_set_operation_error(LCD_BAD_ARGUMENT);
 
-    uint32_t remaining_ms = operation_deadline_ms - HAL_GetTick();
+    uint32_t remaining_ms = operation_deadline_ms - PlatformLcdNowMs();
     uint32_t timeout_ms = (remaining_ms < LCD_HAL_SEND_TIMEOUT_MS)
                               ? remaining_ms
                               : LCD_HAL_SEND_TIMEOUT_MS;
     if (timeout_ms == 0u)
         return lcd_set_operation_error(LCD_DEADLINE_EXPIRED);
 
-    HAL_StatusTypeDef hal_status = HAL_SPI_Transmit(&hspi1, data, (uint16_t)length, timeout_ms);
-    if (hal_status == HAL_BUSY)
+    PlatformLcdTransferStatus_t transfer_status = PlatformLcdTransmit(data, (uint16_t)length, timeout_ms);
+    if (transfer_status == PLATFORM_LCD_TRANSFER_BUSY)
         status = LCD_SEND_BUSY;
-    else if (hal_status == HAL_TIMEOUT)
+    else if (transfer_status == PLATFORM_LCD_TRANSFER_TIMEOUT)
         status = LCD_SEND_TIMEOUT;
-    else if (hal_status != HAL_OK)
+    else if (transfer_status != PLATFORM_LCD_TRANSFER_OK)
         status = LCD_SEND_ERROR;
     else
     {
@@ -328,11 +326,8 @@ LCDStatus_t LCD_InternalStopForRecovery(void)
     if (!recovery_operation)
         return lcd_set_operation_error(LCD_BAD_CONTEXT);
 
-    if (HAL_SPI_GetState(&hspi1) != HAL_SPI_STATE_READY)
-    {
-        if (HAL_SPI_Abort(&hspi1) != HAL_OK || HAL_SPI_GetState(&hspi1) != HAL_SPI_STATE_READY)
-            return lcd_set_operation_error(LCD_STOP_FAILED);
-    }
+    if (!PlatformLcdStop()) // 未确认空闲时保持隔离，不复用面板总线。
+        return lcd_set_operation_error(LCD_STOP_FAILED);
 
     LCD_CS_Set();
     LCD_BLK_Clr(0);
@@ -347,7 +342,7 @@ LCDStatus_t LCDGetState(LCDState_t *output)
 {
     if (output == NULL)
         return LCD_BAD_ARGUMENT;
-    if (__get_IPSR() != 0u)
+    if (PlatformLcdInHandler())
         return LCD_BAD_CONTEXT;
 
     LCDState_t candidate = lcd_state;
@@ -375,20 +370,20 @@ LCDStatus_t LCD_Init(void)
         goto done;
 
     LCD_RES_Clr();
-    HAL_Delay(100u);
+    PlatformLcdDelayMs(100u);
     status = LCD_InternalCheckDeadline();
     if (status != LCD_OK) goto done;
     LCD_RES_Set();
-    HAL_Delay(100u);
+    PlatformLcdDelayMs(100u);
     status = LCD_InternalCheckDeadline();
     if (status != LCD_OK) goto done;
-    HAL_Delay(100u);
+    PlatformLcdDelayMs(100u);
     status = LCD_InternalCheckDeadline();
     if (status != LCD_OK) goto done;
 
     status = LCD_InternalWriteCommand(0x11u);
     if (status != LCD_OK) goto done;
-    HAL_Delay(120u);
+    PlatformLcdDelayMs(120u);
     status = LCD_InternalCheckDeadline();
     if (status != LCD_OK) goto done;
 

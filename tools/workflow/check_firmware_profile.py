@@ -81,6 +81,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/master_machine/vision_protocol.c",  # SP 帧解析。
     "modules/power/power_manager.c",  # 功率管理占位。
     "modules/lcd/lcd_font_cn.c",  # LCD 中文字模。
+    "modules/lcd/lcd.c",  # LCD 面板协议及故障处理。
     "modules/can_comm/can_topic_wire.c",  # 帧编码与校验。
     "modules/can_comm/can_topic_transport.c",  # 分片传输。
     "modules/can_comm/can_topic_bridge.c",  # 话题桥接。
@@ -345,6 +346,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "bsp/board/platform_analog.h",
                         source_root / "bsp/board/platform_buzzer.h",
                         source_root / "bsp/board/platform_rgb.h",
+                        source_root / "bsp/board/platform_lcd.h",  # 面板传输和引脚公开接口。
                         source_root / "application/topics/robot_topics.h",
                         source_root / "application/topics/robot_can_bridge_task.h",
                         source_root / "application/topics/robot_can_bridge.h",

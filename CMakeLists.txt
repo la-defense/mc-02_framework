@@ -297,6 +297,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/master_machine/vision_protocol.c # SP 协议帧查找与校验。
     modules/power/power_manager.c # 当前功率管理占位实现。
     modules/lcd/lcd_font_cn.c # LCD 中文字模数据。
+    modules/lcd/lcd.c # LCD 面板协议、期限与故障处理。
     modules/can_comm/can_topic_wire.c # 板间话题帧编码和校验。
     modules/can_comm/can_topic_transport.c # 话题分片发送与接收。
     modules/can_comm/can_topic_bridge.c # 话题与板间传输转换。

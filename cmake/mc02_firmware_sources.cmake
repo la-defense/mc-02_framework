@@ -246,6 +246,8 @@ endif()
 # 未启用模块连同其输出驱动退出源码清单；依赖者使用同一份生成选择。
 if(NOT MC02_FEATURE_LCD)
     list(FILTER MC02_COMMON_MODULE_C_SOURCES EXCLUDE REGEX "^modules/lcd/")
+else()
+    list(APPEND MC02_BSP_C_SOURCES bsp/board/platform_lcd_mc02.c) # 已选 LCD 的板级总线和引脚。
 endif()
 if(NOT MC02_FEATURE_ALARM)
     list(FILTER MC02_COMMON_MODULE_C_SOURCES EXCLUDE REGEX "^modules/alarm/")
