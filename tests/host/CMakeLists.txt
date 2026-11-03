@@ -356,6 +356,16 @@ target_compile_options(platform_maintenance_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_platform_maintenance_dispatch COMMAND platform_maintenance_test)
 set_tests_properties(production_platform_maintenance_dispatch PROPERTIES TIMEOUT 10)
 
+# 只用替身验证显式启用的回环入口，主机测试不连接 CAN 硬件。
+add_executable(platform_can_diagnostic_test platform_can_diagnostic_test.c
+  ../../bsp/board/platform_can_diagnostic_stm32.c)
+target_include_directories(platform_can_diagnostic_test BEFORE PRIVATE platform_maintenance_fakes)
+target_include_directories(platform_can_diagnostic_test PRIVATE ../../bsp/os)
+target_compile_definitions(platform_can_diagnostic_test PRIVATE CAN_SELFTEST_LOOPBACK=1)
+target_compile_options(platform_can_diagnostic_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_platform_can_diagnostic COMMAND platform_can_diagnostic_test)
+set_tests_properties(production_platform_can_diagnostic PROPERTIES TIMEOUT 10)
+
 # 只替换 DWT 时间来源，检查诊断毫秒值经过平台后端保持不变。
 add_executable(platform_timeline_ms_test platform_timeline_ms_test.c
   ../../bsp/board/platform_timeline_ms_stm32.c)

@@ -43,7 +43,7 @@
 #include "bsp_log.h"
 #include "platform_probe.h"
 #include "platform_maintenance.h"
-#include "bsp_can.h" // 旧 CAN 诊断开关和回环入口暂由板级头声明。
+#include "platform_can_diagnostic.h"
 
 #if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_ROBOT)
 /* 保留完整任务轮次最大耗时，供固定只读快照与任务栈数据一起核对。 */
@@ -195,7 +195,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 #if CAN_SELFTEST_LOOPBACK
     /* FDCAN 回环自测(默认关闭): 必须在所有设备注册完成之后跑(否则 CANRegister 会重新
        配置总线把自测配置覆盖掉), 放在任务上下文里也便于用 HAL_GetTick 做超时 */
-    CANRunLoopbackSelfTest();
+    (void)PlatformCanRunLoopbackDiagnostic();
 #endif
 #if MC02_BENCH_CRASH_DIAGNOSTICS
     /* 专用固件启动稳定后才检查许可；许可本身须由匹配Build ID的工具写入。 */

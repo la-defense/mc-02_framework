@@ -4,4 +4,5 @@
 #ifndef TEST_MAINTENANCE_CAN_H
 #define TEST_MAINTENANCE_CAN_H
 void CANHealthMonitor(void);
+#include "bsp_can_diagnostic_stub.h"
 #endif

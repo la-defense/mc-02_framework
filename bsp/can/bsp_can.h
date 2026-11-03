@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "../os/platform_can_diagnostic.h"
 #ifdef FDCAN
 #include "fdcan.h"
 #define hcan1  hfdcan1
@@ -31,11 +32,7 @@
 
 #endif
 
-// 默认关闭回环自测。实际模式由 bsp_can.c 的 CAN_SELFTEST_MODE 决定，默认外部回环，
-// 会短暂切换总线并发出测试帧；不能把它当作不影响外部设备的普通状态查询。
-#ifndef CAN_SELFTEST_LOOPBACK
-#define CAN_SELFTEST_LOOPBACK 0   /* 置 1 = 启动后在 daemon 任务里跑一次 FDCAN 回环自测 */
-#endif
+// 回环自测开关在平台诊断头中声明；实际模式由 bsp_can.c 的 CAN_SELFTEST_MODE 决定。
 #ifdef BXCAN
 #include "can.h"
 // 最多能够支持的CAN设备数
