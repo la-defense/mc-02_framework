@@ -316,58 +316,6 @@ static uint8_t BMI088GyroInit(BMI088Instance *bmi088)
 }
 // -------------------------以上为私有函数,用于初始化BMI088acc和gyro的硬件和配置--------------------------------//
 
-// -------------------------以下为私有函数,private用于IT模式下的中断处理---------------------------------//
-
-/**
- * @brief 待编写,很快!
- *
- */
-static void BMI088AccSPIFinishCallback(SPIInstance *spi)
-{
-    // static BMI088Instance *bmi088;
-    // bmi088 = (BMI088Instance *)(spi->id);
-   
-    // 若第一次读取加速度,则在这里启动温度读取
-// 若采用异步姿态更新，可在这里唤醒负责处理新测量的任务。
-}
-
-static void BMI088GyroSPIFinishCallback(SPIInstance *spi)
-{
-    // static BMI088Instance *bmi088;
-    // bmi088 = (BMI088Instance *)(spi->id);
-    // 若不是异步,啥也不做;否则启动姿态的预测步(propagation)
-}
-
-static void BMI088AccINTCallback(GPIOInstance *gpio)
-{
-    BMI088Instance *bmi088 = (BMI088Instance *)gpio->id;
-    uint8_t buf[6] = {0};
-    if (BMI088AccelRead(bmi088, BMI088_ACCEL_XOUT_L, buf, 6u) != PLATFORM_SPI_OK)
-        return;
-    for (uint8_t i = 0; i < 3u; ++i)
-        bmi088->acc[i] = bmi088->acc_coef * (float)(int16_t)(((uint16_t)buf[2u * i + 1u] << 8u) | buf[2u * i]);
-    bmi088->acc_sample_timestamp_ms = PlatformTimeNowMs();
-    bmi088->update_flag.acc = 1u;
-    bmi088->update_flag.imu_ready = bmi088->update_flag.gyro;
-}
-
-static void BMI088GyroINTCallback(GPIOInstance *gpio)
-{
-    BMI088Instance *bmi088 = (BMI088Instance *)gpio->id;
-    uint8_t buf[6] = {0};
-    if (BMI088GyroRead(bmi088, BMI088_GYRO_X_L, buf, 6u) != PLATFORM_SPI_OK)
-        return;
-    for (uint8_t i = 0; i < 3u; ++i)
-        bmi088->gyro[i] = bmi088->BMI088_GYRO_SEN * (float)(int16_t)(((uint16_t)buf[2u * i + 1u] << 8u) | buf[2u * i]);
-    bmi088->gyro_sample_timestamp_ms = PlatformTimeNowMs();
-    bmi088->update_flag.gyro = 1u;
-    bmi088->update_flag.imu_ready = bmi088->update_flag.acc;
-}
-
-// -------------------------以上为私有函数,private用于IT模式下的中断处理---------------------------------//
-
-// -------------------------以下为公有函数,用于注册BMI088,标定和数据读取--------------------------------//
-
 /* 检查样本中的温度、三轴加速度和角速度，拒绝 NaN 或无穷大。 */
 static uint8_t BMI088SampleValuesAreFinite(const BMI088_Data_t *sample)
 {
@@ -971,29 +919,15 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         free(bmi088_instance);
         return NULL;
     }
-    // 从右向左赋值,让bsp instance保存指向bmi088_instance的指针(父指针),便于在底层中断中访问bmi088_instance
+    // 沿用外设配置中的实例上下文；当前注册只接受周期阻塞采样。
     config->acc_int_config.id =
         config->gyro_int_config.id =
             config->spi_acc_config.id =
                 config->spi_gyro_config.id =
                     config->heat_pwm_config.id = bmi088_instance;
-    // @todo:
-    // 目前只实现了!!!阻塞读取模式!!!.如果需要使用IT模式,则需要修改这里的代码,为spi和gpio注册callback(默认为NULL)
-    // 还需要设置SPI的传输模式为DMA模式或IT模式(默认为blocking)
-    // 可以通过conditional compilation或者runtime参数判断
-    // code to go here ...
-
-    // INT_ACC EXTI CALLBACK: 检查是否有传输正在进行,如果没有则开启SPI DMA传输,有则置位wait标志位;
-    // 第一次是加速度计,第二次是温度.
-
-    // INT_GYRO EXTI CALLBACK: 开启SPI DMA传输,不会出现等待传输的情况
-    // SPI_GYRO DMA CALLBACK: 解算陀螺仪数据,
-    // SPI_ACC DMA CALLBACK: 解算加速度计数据,清除温度wait标志位并启动温度传输,第二次进入中断时解算温度数据
-
-    // 还有其他方案可用,比如阻塞等待传输完成,但是比较笨.
-        config->spi_acc_config.spi_work_mode = SPI_BLOCK_MODE;
-        config->spi_gyro_config.spi_work_mode = SPI_BLOCK_MODE;
-    // 根据参数选择工作模式
+    // 两个设备的栈缓冲均只用于同步传输，异步采样另行实现。
+    config->spi_acc_config.spi_work_mode = SPI_BLOCK_MODE;
+    config->spi_gyro_config.spi_work_mode = SPI_BLOCK_MODE;
     bmi088_instance->spi_acc = SPIRegister(&config->spi_acc_config);
     bmi088_instance->spi_gyro = SPIRegister(&config->spi_gyro_config);
     if (bmi088_instance->spi_acc == NULL || bmi088_instance->spi_gyro == NULL)
@@ -1048,20 +982,5 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     // 优先使用已保存的标定值；没有可用记录时在线标定，失败则保留默认值并报告无效。
     BMI088CalibInit(bmi088_instance, config->cali_mode);
     bmi088_instance->work_mode = config->work_mode; // 恢复工作模式
-    if (config->work_mode == BMI088_BLOCK_TRIGGER_MODE)
-    {
-        bmi088_instance->spi_acc->spi_work_mode = SPI_DMA_MODE;
-        bmi088_instance->spi_gyro->spi_work_mode = SPI_DMA_MODE;
-        
-        // 设置回调函数
-        bmi088_instance->spi_acc->callback = BMI088AccSPIFinishCallback;
-        bmi088_instance->spi_gyro->callback = BMI088GyroSPIFinishCallback;
-        
-        bmi088_instance->acc_int = GPIORegister(&config->acc_int_config); // 只有在非阻塞模式下才需要注册中断
-        bmi088_instance->gyro_int = GPIORegister(&config->gyro_int_config);
-
-        bmi088_instance->acc_int->gpio_model_callback = BMI088AccINTCallback;
-        bmi088_instance->gyro_int->gpio_model_callback = BMI088GyroINTCallback;
-    } // 注册实例
     return bmi088_instance;
 }

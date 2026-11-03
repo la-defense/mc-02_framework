@@ -75,11 +75,8 @@ typedef struct
     BMI088_Work_Mode_e work_mode;
     BMI088_Calibrate_Mode_e cali_mode;
     // SPI接口
-    SPIInstance *spi_gyro; // 注意,SPIInstnace内部也有一个GPIOInstance,用于控制片选CS
-    SPIInstance *spi_acc;  // 注意,SPIInstnace内部也有一个GPIOInstance,用于控制片选CS
-    // EXTI GPIO,如果BMI088工作在中断模式,则需要配置中断引脚(有数据产生时触发解算)
-    GPIOInstance *gyro_int;
-    GPIOInstance *acc_int;
+    void *spi_gyro; // 不透明设备句柄，由平台同步 SPI 接口使用。
+    void *spi_acc;  // 加速度计和陀螺仪分别保持各自的片选。
     // 温度控制
     PIDInstance heat_pid; // 恒温PID
     PWMInstance *heat_pwm; // 加热PWM

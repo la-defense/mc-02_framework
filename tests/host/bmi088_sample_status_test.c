@@ -85,12 +85,13 @@ int main(void)
 
     BMI088_Data_t before_mode_failure = sample; // 用已发布样本检查拒绝异步设备时的结果。
     uint32_t before_transfers = bmi088_host_fixture.transfer_count;
-    instance->spi_acc->spi_work_mode = SPI_DMA_MODE; // 栈缓冲不能用于 DMA。
+    SPIInstance *fake_acc = instance->spi_acc; // 测试替身在板级边界检查设备模式。
+    fake_acc->spi_work_mode = SPI_DMA_MODE; // 栈缓冲不能用于 DMA。
     if (BMI088Acquire(instance, &sample) != BMI088_ACQUIRE_SPI_ERROR ||
         memcmp(&sample, &before_mode_failure, sizeof(sample)) != 0 ||
         bmi088_host_fixture.transfer_count != before_transfers)
         fail("blocking transfer must reject DMA without publishing or submitting");
-    instance->spi_acc->spi_work_mode = SPI_BLOCK_MODE; // 恢复后续测试所需的同步模式。
+    fake_acc->spi_work_mode = SPI_BLOCK_MODE; // 恢复后续测试所需的同步模式。
 
     uint8_t tx = 0u, rx = 0u;
     if (PlatformSpiTransferBlocking(NULL, &rx, &tx, 1u) != PLATFORM_SPI_ERROR ||
