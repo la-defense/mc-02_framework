@@ -1882,6 +1882,7 @@ endforeach()
 
 # HT04生产接收回调保留真实平均和PID，只替换CAN、任务及计时。
 add_executable(ht_numeric_test ht_numeric_test.c ${MC02_HOST_HT_SOURCES}
+  ../../bsp/os/platform_os_freertos.c # 任务入口使用生产平台适配。
   ../../modules/motor/motor_feedback.c ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c)
 target_include_directories(ht_numeric_test BEFORE PRIVATE ht_numeric_fakes motor_pid_fakes)
@@ -1893,6 +1894,7 @@ set_tests_properties(production_ht_numeric_feedback PROPERTIES TIMEOUT 10)
 
 # HT04 控制回归捕获生产任务入口，并用有限延时轮次检查反馈源和失败输出。
 add_executable(ht_control_test ht_control_test.c ${MC02_HOST_HT_SOURCES}
+  ../../bsp/os/platform_os_freertos.c # 任务入口使用生产平台适配。
   ../../modules/motor/motor_feedback.c ../../modules/motor/motor_pid.c
   ../../modules/algorithm/controller.c)
 target_include_directories(ht_control_test BEFORE PRIVATE ht_control_fakes ht_numeric_fakes

@@ -5,12 +5,20 @@
 #define MC02_HT_CONTROL_OS_H
 #include <stdint.h>
 typedef void *osThreadId;
+typedef int osPriority;
 typedef void (*osTaskFunction_t)(void const *argument);
 typedef struct
 {
-    osTaskFunction_t entry;
+    char *name;
+    osTaskFunction_t pthread;
+    int tpriority;
+    uint32_t instances;
+    uint32_t stacksize;
 } osThreadDef_t;
 #define osPriorityNormal 0
+#define osPriorityBelowNormal (-1)
+#define osPriorityAboveNormal 1
+#define osPriorityLow (-2)
 #define osThreadDef(name, thread_fn, priority, count, stack) \
     const osThreadDef_t os_def_##name = {(thread_fn)}
 #define osThread(name) (&os_def_##name)

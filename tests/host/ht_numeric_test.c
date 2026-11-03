@@ -6,6 +6,8 @@
 #include "test_check.h"
 #include "bsp_dwt.h"
 #include "cmsis_os.h"
+#include "../../bsp/os/platform_sync.h"
+#include "../../bsp/dwt/platform_probe.h"
 #include <math.h>
 #include <string.h>
 
@@ -52,7 +54,12 @@ uint64_t DWT_GetTimeline_us(void){return 0;}
 float DWT_GetDeltaT(uint32_t *counter){++clock_reads;++*counter;return .001f;}
 void DWT_Delay(float seconds){(void)seconds;}
 uint32_t HAL_GetTick(void){return test_tick;}
-void *osThreadCreate(const int *definition,void *argument)
+void PlatformTaskCriticalEnter(void) {} // 本测试串行交错两台电机的反馈。
+void PlatformTaskCriticalExit(void) {}
+uint32_t PlatformTimeNowMs(void) { return HAL_GetTick(); }
+uint64_t PlatformTimeNowUs(void) { return DWT_GetTimeline_us(); }
+float PlatformProbeDeltaSeconds(uint32_t *counter) { return DWT_GetDeltaT(counter); }
+void *osThreadCreate(const osThreadDef_t *definition,void *argument)
 {(void)definition;(void)argument;return NULL;}
 void osDelay(uint32_t milliseconds){(void)milliseconds;}
 char *__itoa(int value,char *output,int base)

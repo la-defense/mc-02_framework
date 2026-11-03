@@ -5,15 +5,21 @@
 #define MC02_HT_NUMERIC_OS_H
 #include <stdint.h>
 typedef void *osThreadId;
+typedef int osPriority;
+typedef void (*osTaskFunction_t)(void const *argument);
+typedef struct { char *name; osTaskFunction_t pthread; int tpriority; uint32_t instances, stacksize; } osThreadDef_t;
+#define osPriorityBelowNormal (-1)
 #define osPriorityNormal 0
-#define osThreadDef(name,function,priority,count,stack) const int os_def_##name=0
+#define osPriorityAboveNormal 1
+#define osPriorityLow (-2)
+#define osThreadDef(name,function,priority,count,stack) const osThreadDef_t os_def_##name={0}
 #define osThread(name) (&os_def_##name)
 /** @brief 返回未启动的占位任务。
  * @param[in] definition 宏生成的测试声明。
  * @param[in] argument 原生产实参，测试不使用。
  * @return 固定空指针。
  */
-void *osThreadCreate(const int *definition,void *argument);
+void *osThreadCreate(const osThreadDef_t *definition,void *argument);
 /** @brief 保留生产任务延时调用，测试不运行任务。
  * @param[in] milliseconds 原延时毫秒数，替身不等待。
  */

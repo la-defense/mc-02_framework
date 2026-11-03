@@ -1,4 +1,4 @@
-﻿/** @file HT04.c
+/** @file HT04.c
 * @brief 解码 HT04 协议，并用每电机独立任务计算所选控制环及发送力矩字段。
  */
 #include "HT04.h"
@@ -9,10 +9,9 @@
 #include "memory.h"
 #include "general_def.h"
 #include "sample_filter.h"
-#include "cmsis_os.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include "stm32h7xx_hal.h"
+#include "../../../bsp/os/platform_os.h" // 保留现有任务创建与毫秒等待。
+#include "../../../bsp/os/platform_sync.h" // 反馈共享及原有毫秒／微秒时间。
+#include "../../../bsp/dwt/platform_probe.h" // 保留原反馈周期计算。
 #include "string.h"
 #include "daemon.h"
 #include "stdlib.h"
@@ -20,7 +19,7 @@
 
 static uint8_t idx;
 static HTMotorInstance *ht_motor_instance[HT_MOTOR_CNT];
-static osThreadId ht_task_handle[HT_MOTOR_CNT];
+static PlatformTaskHandle_t ht_task_handle[HT_MOTOR_CNT];
 static uint8_t zero_buff[6] = {0};
 
 static uint8_t HTSourceValid(const Motor_Signal_Source_s *source,
@@ -153,14 +152,14 @@ static void HTMotorDecode(CANInstance *motor_can)
     candidate.real_current = CURRENT_SMOOTH_COEF * uint_to_float(tmp, T_MIN, T_MAX, 12) +
                             (1 - CURRENT_SMOOTH_COEF) * measure->real_current;
     if (!isfinite(candidate.real_current)) return;
-    candidate.feed_dt = DWT_GetDeltaT(&candidate.feed_cnt);
-    taskENTER_CRITICAL();
+    candidate.feed_dt = PlatformProbeDeltaSeconds(&candidate.feed_cnt);
+    PlatformTaskCriticalEnter();
     *measure = candidate;
     motor->feedback_timestamp_ms = motor_can->rx_timestamp_ms;
     motor->feedback_sequence++;
     if (motor->feedback_sequence == 0u)
         motor->feedback_sequence++;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     (void)DaemonReportAt(motor->motor_daemon, motor_can->rx_timestamp_ms,
         DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
 }
@@ -303,12 +302,12 @@ Motor_Feedback_Status_e HTMotorGetFeedbackSnapshot(const HTMotorInstance *motor,
     Motor_Output_Axis_Config_s output_axis;
     uint32_t timestamp_ms;
     uint32_t sequence;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     measure = motor->measure;
     output_axis = motor->output_axis;
     timestamp_ms = motor->feedback_timestamp_ms;
     sequence = motor->feedback_sequence;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     if (sequence == 0u)
         return MOTOR_FEEDBACK_NOT_READY;
 
@@ -348,9 +347,9 @@ void HTMotorSetRef(HTMotorInstance *motor, float ref)
 {
     if (motor == NULL)
         return;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     motor->pid_ref = ref;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
 }
 
 /**
@@ -372,7 +371,7 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
         Motor_Output_Axis_Config_s output_axis;
         Motor_Signal_Source_s angle_source, speed_source, speed_feedforward, current_feedforward;
         Motor_Working_Type_e stop_flag;
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         measure = motor->measure;
         setting = motor->motor_settings;
         output_axis = motor->output_axis;
@@ -382,13 +381,13 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
         current_feedforward = motor->current_feedforward;
         pid_ref = motor->pid_ref;
         stop_flag = motor->stop_flag;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         const uint8_t axis_outer = (uint8_t)((setting.outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u);
         const float axis_direction = (float)output_axis.direction;
-        const uint32_t now_ms = HAL_GetTick();
+        const uint32_t now_ms = PlatformTimeNowMs();
         // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
         float control_dt = 0.0f;
-        PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, DWT_GetTimeline_us(), &control_dt);
+        PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, PlatformTimeNowUs(), &control_dt);
         if (pid_status == PID_OK && (setting.close_loop_type & ANGLE_LOOP) &&
             setting.outer_loop_type == ANGLE_LOOP)
         {
@@ -491,24 +490,25 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
         (void)CANSubmitPeriodic(motor_can->can_handle, motor_can, 0u, &frame,
                                 CAN_TX_PRIORITY_CONTROL, 4u, 1000u, &request_id);
 
-        osDelay(1);
+        PlatformTaskDelayMs(1u); // 保留原来的 1 ms 任务让出。
     }
 }
 
 void HTMotorControlInit()
 {
-    char ht_task_name[5] = "ht";
     // 遍历所有电机实例,创建任务
     if (!idx)
         return;
     for (size_t i = 0; i < idx; i++)
     {
-        char ht_id_buff[2] = {0};
-        __itoa(i, ht_id_buff, 10);
-        strcat(ht_task_name, ht_id_buff); // osThreadDef 使用宏参数作为名称，构造文本并不会直接改变其宏名称。
-        // @todo 还需要一个更优雅的方案来区分不同的电机任务
-        osThreadDef(ht_task_name, HTMotorTask, osPriorityNormal, 0, 128);
-        ht_task_handle[i] = osThreadCreate(osThread(ht_task_name), ht_motor_instance[i]);
+        const PlatformTaskConfig_t config = {
+            .name = "ht_task_name", // 保留 CMSIS 宏原先生成的任务名。
+            .entry = HTMotorTask, // 每个任务继续执行原控制循环。
+            .argument = ht_motor_instance[i], // 绑定对应的长期电机实例。
+            .stack_words = 128u, // 保持原有栈容量。
+            .priority = PLATFORM_TASK_NORMAL, // 保持原有普通优先级。
+        };
+        (void)PlatformTaskCreateTracked(&config, &ht_task_handle[i]); // 原接口仍不报告创建失败。
     }
 }
 

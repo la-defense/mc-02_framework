@@ -8,6 +8,8 @@
 #include "test_check.h"
 #include "general_def.h"
 #include "motor_feedback_test_support.h"
+#include "../../bsp/os/platform_sync.h"
+#include "../../bsp/dwt/platform_probe.h"
 #include <float.h>
 #include <math.h>
 #include <setjmp.h>
@@ -79,11 +81,17 @@ uint64_t DWT_GetTimeline_us(void) { return now_us; }
 float DWT_GetDeltaT(uint32_t *counter) { ++*counter; return 0.001f; }
 void DWT_Delay(float seconds) { (void)seconds; }
 uint32_t HAL_GetTick(void) { return (uint32_t)(now_us / 1000u); }
+void PlatformTaskCriticalEnter(void) {} // 该测试的控制循环按确定顺序执行。
+void PlatformTaskCriticalExit(void) {}
+uint32_t PlatformTimeNowMs(void) { return HAL_GetTick(); }
+uint64_t PlatformTimeNowUs(void) { return DWT_GetTimeline_us(); }
+float PlatformProbeDeltaSeconds(uint32_t *counter) { return DWT_GetDeltaT(counter); }
 
 void *osThreadCreate(const osThreadDef_t *definition, void *argument)
 {
-    TEST_CHECK(definition != NULL && definition->entry != NULL && task_count < 2u);
-    tasks[task_count].entry = definition->entry;
+    TEST_CHECK(definition != NULL && definition->pthread != NULL && task_count < 2u);
+    TEST_CHECK(strcmp(definition->name, "ht_task_name") == 0 && definition->stacksize == 128u);
+    tasks[task_count].entry = definition->pthread;
     tasks[task_count].argument = argument;
     return &tasks[task_count++];
 }
