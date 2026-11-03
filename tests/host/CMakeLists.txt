@@ -347,6 +347,15 @@ endif()
 
 include(CTest)
 
+# 只替换 DWT 时间来源，检查诊断毫秒值经过平台后端保持不变。
+add_executable(platform_timeline_ms_test platform_timeline_ms_test.c
+  ../../bsp/board/platform_timeline_ms_stm32.c)
+target_include_directories(platform_timeline_ms_test BEFORE PRIVATE shoot_fakes)
+target_include_directories(platform_timeline_ms_test PRIVATE ../../bsp/dwt)
+target_compile_options(platform_timeline_ms_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_platform_timeline_ms COMMAND platform_timeline_ms_test)
+set_tests_properties(production_platform_timeline_ms PROPERTIES TIMEOUT 10)
+
 add_executable(time_mapping_test time_mapping_test.c
   ../../modules/time_sync/time_mapping.c)
 target_include_directories(time_mapping_test PRIVATE ../../modules/time_sync)

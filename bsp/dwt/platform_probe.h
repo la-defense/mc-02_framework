@@ -18,6 +18,12 @@ typedef struct {
  */
 uint32_t PlatformProbeStart(void);
 
+/** @brief 读取原有的浮点毫秒运行时间，供低频诊断使用。
+ * @return 自平台原有时基初始化起的毫秒数，精度随浮点数值增大而降低。
+ * @note H723 后端保留原有 DWT 时间计算；不用于跨设备时钟比较。
+ */
+float PlatformProbeTimelineMs(void);
+
 /** @brief 将一次短时测量的周期差换算为微秒。
  * @param[in] start PlatformProbeStart 返回的起点。
  * @return 沿用平台原有的 32 位微秒耗时结果。

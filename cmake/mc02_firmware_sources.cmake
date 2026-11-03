@@ -85,6 +85,7 @@ set(MC02_BSP_C_SOURCES
     bsp/board/platform_probe_stm32.c # 原有 DWT 周期计数与短时探针适配。
     bsp/board/platform_probe_elapsed_stm32.c # 原有短时探针的微秒耗时查询。
     bsp/board/platform_time_us_stm32.c # 保留现有微秒运行时间的框架入口。
+    bsp/board/platform_timeline_ms_stm32.c # 保留现有浮点毫秒诊断时间。
     bsp/board/platform_dispatch_stm32.c # 任务派发绑定到现有 CAN 和串口队列。
     bsp/board/platform_context_stm32.c # 查询当前线程或异常处理上下文。
     bsp/board/platform_startup_delay_stm32.c # 保留调度器启动前的 DWT 等待。

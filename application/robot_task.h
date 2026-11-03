@@ -41,7 +41,7 @@
 #include "robot_safety.h"
 
 #include "bsp_log.h"
-#include "bsp_dwt.h"
+#include "platform_probe.h"
 #include "bsp_spi.h"
 #include "bsp_adc.h"
 #include "bsp_usart.h"
@@ -49,10 +49,10 @@
 
 #if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_ROBOT)
 /* 保留完整任务轮次最大耗时，供固定只读快照与任务栈数据一起核对。 */
-volatile DWT_Probe_t r25_task_ins = {0};
-volatile DWT_Probe_t r25_task_motor = {0};
-volatile DWT_Probe_t r25_task_daemon = {0};
-volatile DWT_Probe_t r25_task_robot = {0};
+volatile PlatformProbe_t r25_task_ins = {0};
+volatile PlatformProbe_t r25_task_motor = {0};
+volatile PlatformProbe_t r25_task_daemon = {0};
+volatile PlatformProbe_t r25_task_robot = {0};
 #endif
 
 
@@ -143,12 +143,12 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
             continue;
         }
         /* 用轻量周期计数代替 DWT_GetTimeline_ms(): 后者内部有 64bit 除法, 1kHz 下也不便宜 */
-        uint32_t ins_probe = DWT_ProbeStart();
+        uint32_t ins_probe = PlatformProbeStart();
         INS_Task();
-        DWT_ProbeDone(&r25_task_ins, ins_probe);
+        PlatformProbeDone(&r25_task_ins, ins_probe);
         if (r25_task_ins.last_us > 1000u)
         {
-            ins_start = DWT_GetTimeline_ms(); /* 便于 Live Watch 查看最近一次超时刻 */
+            ins_start = PlatformProbeTimelineMs(); /* 便于 Live Watch 查看最近一次超时刻 */
             (void)ins_start;
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_02,
                             BSP_LOG_FIELD_U32(r25_task_ins.last_us));
@@ -172,9 +172,9 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
             PlatformTaskDelayMs(1u);
             continue;
         }
-        uint32_t motor_probe = DWT_ProbeStart();
+        uint32_t motor_probe = PlatformProbeStart();
         MotorControlTask();
-        DWT_ProbeDone(&r25_task_motor, motor_probe);
+        PlatformProbeDone(&r25_task_motor, motor_probe);
         if (r25_task_motor.last_us > 1000u)
         {
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_04,
@@ -215,7 +215,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
             PlatformTaskDelayMs(10u);
             continue;
         }
-        uint32_t daemon_probe = DWT_ProbeStart();
+        uint32_t daemon_probe = PlatformProbeStart();
 #if LOG_TEST
         static uint32_t s_log_test_tick = 0u;
         if (++s_log_test_tick >= 200u)
@@ -248,7 +248,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 #if CAN_DJI_INJECT_TEST >= 2
         DJIInjectStressTick(); /* 压测模式: 持续往接收队列里灌帧 */
 #endif
-        DWT_ProbeDone(&r25_task_daemon, daemon_probe);
+        PlatformProbeDone(&r25_task_daemon, daemon_probe);
         if (r25_task_daemon.last_us > 10000u)
         {
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_06,
@@ -271,9 +271,9 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
             PlatformTaskDelayMs(5u);
             continue;
         }
-        uint32_t robot_probe = DWT_ProbeStart();
+        uint32_t robot_probe = PlatformProbeStart();
         RobotTask();
-        DWT_ProbeDone(&r25_task_robot, robot_probe);
+        PlatformProbeDone(&r25_task_robot, robot_probe);
         if (r25_task_robot.last_us > 5000u)
         {
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_08,

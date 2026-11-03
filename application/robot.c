@@ -2,7 +2,8 @@
 * @brief 启动板级资源、应用和任务，失败时统一关闭输出，并提供整车周期入口。
 */
 #include "bsp_init.h"
-#include "main.h"
+#include "platform_irq.h"
+#include "platform_sync.h"
 #include "config/build_selection.h"
 #if MC02_FEATURE_VISION
 #include "master_process.h"
@@ -24,7 +25,6 @@
 #include "vehicle_health.h"
 #include "bsp_safety.h"
 #include "bsp_reset_recovery.h"
-#include "usart.h"
 #if defined(MC02_CONFIG_GENERATED)
 #include "config/vehicle_selection.h"
 #include "topics/robot_topics.h"
@@ -238,8 +238,7 @@ uint8_t RobotInit(void)
     // 关闭中断,防止在初始化过程中发生中断
     // 请不要在初始化过程中使用中断和延时函数！
     // 若必须,则只允许使用DWT_Delay()
-    const uint32_t previous_primask = __get_PRIMASK();
-    __disable_irq();
+    const PlatformIrqState_t previous_primask = PlatformIrqSaveAndDisable(); // 保留进入前的屏蔽状态。
     InitDiagnosticBegin(INIT_STAGE_BSP);
     
     BSPInit();
@@ -371,7 +370,7 @@ uint8_t RobotInit(void)
 
     InitDiagnosticSetStage(INIT_STAGE_FREERTOS);
 #undef ROBOT_INIT_CHECK
-    __set_PRIMASK(previous_primask);
+    PlatformIrqRestore(previous_primask); // 成功后恢复调用前的中断状态。
     return 1u;
 
 // 保留首次初始化失败，失能并恢复调用前的中断状态，让 main 继续运行诊断。
@@ -380,7 +379,7 @@ init_failed:
     RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
     RobotSafetyRequestDisable();
     BSP_SafetyStartupLatchOutputsOff();
-    __set_PRIMASK(previous_primask);
+    PlatformIrqRestore(previous_primask); // 输出关断后才恢复原中断状态。
     return 0u;
 }
 
@@ -447,7 +446,7 @@ void RobotTask()
 #endif
 
     (void)VehicleHealthProcess();
-    (void)BSP_ResetRecoveryObserveControl(HAL_GetTick(), RobotSafetyIsReady(),
+    (void)BSP_ResetRecoveryObserveControl(PlatformTimeNowMs(), RobotSafetyIsReady(),
                                           TaskMonitorAllCoreHealthyNow());
 
 }
