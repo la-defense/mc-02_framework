@@ -53,6 +53,9 @@ NUMERIC_ADAPTER_SOURCES = {
     "modules/algorithm/fast_trig_cmsis.c",  # 快速三角函数的CMSIS-DSP后端。
     "modules/algorithm/dsp_matrix.c",  # 矩阵接口的CMSIS-DSP后端。
 }
+# 姿态适配及可选上游实现各自使用独立的窄头路径。
+ATTITUDE_ADAPTER_SOURCE = "modules/algorithm/attitude_filter.c"
+FUSION_SOURCE = "Middlewares/Third_Party/Fusion/FusionAhrs.c"
 # 这些源文件编入无芯片／RTOS 头路径的框架对象目标，仍属于车型源码清单。
 PORTABLE_FRAMEWORK_SOURCES = {
     "application/init_diagnostic.c",  # 初始化结果及事件记录。
@@ -205,6 +208,8 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
     compiled: set[str] = set()
     compiler_commands: list[str] = []
     portable_counts: dict[str, int] = {}  # 每个框架源文件必须恰好编译一次。
+    attitude_counts: dict[str, int] = {}  # 适配器和可选上游源码也必须恰好编译一次。
+    attitude_sources = {ATTITUDE_ADAPTER_SOURCE} | ({FUSION_SOURCE} & selected)
     for entry in json.loads(database.read_text(encoding="utf-8")):
         source = Path(entry["file"]).resolve()
         try:
@@ -216,6 +221,9 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         if relative in portable_sources:
             portable_counts[relative] = portable_counts.get(relative, 0) + 1
             check_portable_includes(entry, source_root, relative)
+        if relative in attitude_sources:
+            attitude_counts[relative] = attitude_counts.get(relative, 0) + 1
+            check_attitude_includes(entry, source_root, relative)
     expected_compiled = selected | DSP_SOURCES | NUMERIC_ADAPTER_SOURCES | ASSEMBLY_SOURCES
     missing = expected_compiled - compiled
     unexpected_compiled = compiled - expected_compiled
@@ -246,6 +254,8 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
                          f"unregistered={sorted(unexpected_compiled)}")
     if any(portable_counts.get(source, 0) != 1 for source in portable_sources):
         raise SystemExit(f"portable framework sources must compile exactly once: {portable_counts}")
+    if any(attitude_counts.get(source, 0) != 1 for source in attitude_sources):
+        raise SystemExit(f"attitude sources must compile exactly once: {attitude_counts}")
 
     target_line = next((line for line in lines if line.startswith("target=")), None)
     if target_line is None:
@@ -256,7 +266,9 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
     link_command = find_link_command(commands, target)
     for source in selected:
         # 框架源码由独立对象目标编译，其余源码仍由固件目标编译。
-        owner = "mc02_portable_framework" if source in portable_sources else target
+        owner = ("mc02_portable_framework" if source in portable_sources else
+                 "mc02_attitude_adapter" if source == ATTITUDE_ADAPTER_SOURCE else
+                 "mc02_fusion_backend" if source == FUSION_SOURCE else target)
         object_path = f"{owner}.dir/{source}.obj"
         if object_path not in link_command:
             raise SystemExit(f"registered source is absent from the Ninja link command: {source}")
@@ -266,6 +278,55 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         deps = subprocess.run(["ninja", "-C", str(build_dir), "-t", "deps", object_path],
                               capture_output=True, text=True, check=True, timeout=15).stdout
         check_portable_dependencies(deps, source_root, build_dir, source)
+    for source in attitude_sources:
+        # 分别检查适配器和上游实现的真实头依赖，不让芯片或 RTOS 头从相对路径进入。
+        owner = "mc02_attitude_adapter" if source == ATTITUDE_ADAPTER_SOURCE else "mc02_fusion_backend"
+        object_path = f"CMakeFiles/{owner}.dir/{source}.obj"
+        deps = subprocess.run(["ninja", "-C", str(build_dir), "-t", "deps", object_path],
+                              capture_output=True, text=True, check=True, timeout=15).stdout
+        check_attitude_dependencies(deps, source_root, build_dir, source)
+
+
+def check_attitude_includes(entry: dict, source_root: Path, source: str) -> None:
+    """只允许姿态适配或上游实现使用自身所需的头目录。"""
+    allowed = {source_root / "Middlewares/Third_Party/Fusion",
+               source_root / "bsp/log"}  # 格式诊断选项需要的公共路径。
+    if source == ATTITUDE_ADAPTER_SOURCE:
+        allowed.add(source_root / "modules/algorithm")
+    arguments = entry.get("arguments") or shlex.split(entry.get("command", ""))
+    for index, argument in enumerate(arguments):
+        if argument.startswith(("-include", "-imacros", "-iquote", "-idirafter")):
+            raise SystemExit(f"attitude source {source} uses unsupported include option: {argument}")
+        if argument in ("-I", "-isystem"):
+            if index + 1 >= len(arguments):
+                raise SystemExit(f"missing include path for {source}")
+            directory = arguments[index + 1]
+        elif argument.startswith("-I") and len(argument) > 2:
+            directory = argument[2:]
+        elif argument.startswith("-isystem") and len(argument) > len("-isystem"):
+            directory = argument[len("-isystem"):]
+        else:
+            continue
+        resolved = (Path(entry["directory"]) / directory).resolve()
+        if resolved not in allowed:
+            raise SystemExit(f"attitude source {source} inherits unsupported include: {resolved}")
+
+
+def check_attitude_dependencies(deps: str, source_root: Path, build_dir: Path, source: str) -> None:
+    """根据实际依赖拒绝姿态后端以相对路径包含芯片或 RTOS 头。"""
+    lines = deps.splitlines()
+    if not lines or "#deps" not in lines[0] or "(VALID)" not in lines[0]:
+        raise SystemExit(f"attitude source {source} has no valid Ninja dependencies")
+    allowed = [source_root / "Middlewares/Third_Party/Fusion"]
+    if source == ATTITUDE_ADAPTER_SOURCE:
+        allowed.append(source_root / "modules/algorithm")
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        dependency = (build_dir / line.strip()).resolve()
+        if dependency.is_relative_to(source_root) and not any(
+                dependency.is_relative_to(directory) for directory in allowed):
+            raise SystemExit(f"attitude source {source} uses unsupported project header: {dependency}")
 
 
 def check_portable_includes(entry: dict, source_root: Path, source: str) -> None:

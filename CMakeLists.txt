@@ -165,10 +165,6 @@ endif()
 include(cmake/mc02_configure_vehicle.cmake)
 # 源码清单读取已经解析并校验过的配置，确保协议和板级角色只编译所选实现。
 include(cmake/mc02_firmware_sources.cmake)
-if(MC02_IMU_BACKEND STREQUAL "fusion")
-    list(APPEND MC02_EXTRA_INCLUDE_DIRS Middlewares/Third_Party/Fusion)
-endif()
-
 if(MC02_PROFILE STREQUAL "bench_safe")
     set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_bench_safe")
 elseif(MC02_BOARD_ROLE STREQUAL "single")
@@ -341,6 +337,19 @@ foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
 endforeach()
 set(MC02_EXECUTABLE_SOURCES ${MC02_SELECTED_SOURCES})
 list(REMOVE_ITEM MC02_EXECUTABLE_SOURCES ${MC02_PORTABLE_FRAMEWORK_SOURCES})
+# 姿态适配单独持有算法后端头；不向业务目标提供第三方头路径。
+set(MC02_ATTITUDE_ADAPTER_SOURCE modules/algorithm/attitude_filter.c)
+list(REMOVE_ITEM MC02_EXECUTABLE_SOURCES ${MC02_ATTITUDE_ADAPTER_SOURCE})
+add_library(mc02_attitude_adapter OBJECT ${MC02_ATTITUDE_ADAPTER_SOURCE})
+target_include_directories(mc02_attitude_adapter PRIVATE modules/algorithm) # 框架姿态和矩阵接口。
+mc02_apply_format_diagnostics(mc02_attitude_adapter)
+if(MC02_IMU_BACKEND STREQUAL "fusion")
+    target_include_directories(mc02_attitude_adapter PRIVATE Middlewares/Third_Party/Fusion) # 仅适配器读取 Fusion 类型。
+    set(MC02_FUSION_SOURCE Middlewares/Third_Party/Fusion/FusionAhrs.c)
+    list(REMOVE_ITEM MC02_EXECUTABLE_SOURCES ${MC02_FUSION_SOURCE})
+    add_library(mc02_fusion_backend OBJECT ${MC02_FUSION_SOURCE})
+    target_include_directories(mc02_fusion_backend PRIVATE Middlewares/Third_Party/Fusion) # 上游实现所需头文件。
+endif()
 add_library(mc02_portable_framework OBJECT ${MC02_PORTABLE_FRAMEWORK_SOURCES})
 target_include_directories(mc02_portable_framework PRIVATE
     modules/daemon # 来源监控的公开类型。
@@ -388,7 +397,11 @@ target_include_directories(mc02_portable_framework PRIVATE
     bsp/usart) # 串口发送结果的框架类型。
 
 add_executable(${MC02_OUTPUT_BASENAME}.elf ${MC02_EXECUTABLE_SOURCES}
-    $<TARGET_OBJECTS:mc02_portable_framework> ${MC02_ASM_SOURCES} ${LINKER_SCRIPT})
+    $<TARGET_OBJECTS:mc02_portable_framework> $<TARGET_OBJECTS:mc02_attitude_adapter>
+    ${MC02_ASM_SOURCES} ${LINKER_SCRIPT})
+if(TARGET mc02_fusion_backend)
+    target_sources(${MC02_OUTPUT_BASENAME}.elf PRIVATE $<TARGET_OBJECTS:mc02_fusion_backend>) # 仅选择 Fusion 时链接上游实现。
+endif()
 # 保留USB任务和恢复后端的静态栈使用报告，配合裸板历史最小余量核对。
 set_source_files_properties(Core/Src/freertos.c bsp/usb/usb_transport.c
     bsp/usb/usb_transport_port_stm32.c USB_DEVICE/Target/usbd_conf.c

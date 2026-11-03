@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/workflow"))
 from check_firmware_profile import (  # noqa: E402
     check_portable_dependencies, check_portable_includes, find_link_command,
+    check_attitude_dependencies, check_attitude_includes,
 )
 
 
@@ -67,9 +68,9 @@ class PortableIncludeContractTest(unittest.TestCase):
                                     ROOT, ROOT / "build", source)
         check_portable_dependencies(valid + f"    {ROOT / 'application/topics/robot_can_bridge_task.h'}\n",
                                     ROOT, ROOT / "build", source)  # 电机任务仅需桥接服务入口。
-        with self.assertRaises(SystemExit):
-            check_portable_dependencies(valid + f"    {ROOT / 'application/robot_def.h'}\n",
-                                        ROOT, ROOT / "build", source)
+        # 整车配置现为框架公开接口；板级适配实现仍不属于公开头。
+        check_portable_dependencies(valid + f"    {ROOT / 'application/robot_def.h'}\n",
+                                    ROOT, ROOT / "build", source)
         # 任务创建只允许依赖模块选择和初始化诊断的公开声明。
         check_portable_dependencies(valid + f"    {ROOT / 'application/config/vehicle_selection.h'}\n"
                                     f"    {ROOT / 'application/config/module_plan.h'}\n"
@@ -103,6 +104,20 @@ class PortableIncludeContractTest(unittest.TestCase):
         self.assertNotIn("module.c.obj", link)
         with self.assertRaises(SystemExit):
             find_link_command(commands, "missing.elf")
+
+    def test_attitude_adapter_isolated_from_chip_headers(self):
+        # 姿态适配器可使用框架算法和 Fusion，不可继承芯片目录或强制包含芯片头。
+        source = "modules/algorithm/attitude_filter.c"
+        check_attitude_includes(self.entry("-Imodules/algorithm", "-IMiddlewares/Third_Party/Fusion"),
+                                ROOT, source)
+        for flags in (("-ICore/Inc",), ("-include", "Core/Inc/main.h")):
+            with self.subTest(flags=flags), self.assertRaises(SystemExit):
+                check_attitude_includes(self.entry(*flags), ROOT, source)
+        valid = f"object: #deps 2, deps mtime 1 (VALID)\n    {ROOT / source}\n    {ROOT / 'Middlewares/Third_Party/Fusion/FusionAhrs.h'}\n"
+        check_attitude_dependencies(valid, ROOT, ROOT / "build", source)
+        with self.assertRaises(SystemExit):
+            check_attitude_dependencies(valid + f"    {ROOT / 'Core/Inc/main.h'}\n",
+                                        ROOT, ROOT / "build", source)
 
 
 if __name__ == "__main__":
