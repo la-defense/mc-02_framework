@@ -45,10 +45,12 @@ static void TestNoteMapping(void)
 {
     static const float expected_hz[BUZZER_NOTE_COUNT] = {
         0.0f, 523.0f, 587.0f, 659.0f, 698.0f, 784.0f, 880.0f, 988.0f, 1046.0f};
-    TEST_CHECK(PlatformBuzzerInit(0u) == 0u); // 零频率不得进入周期换算或占用资源。
+    TEST_CHECK(PlatformBuzzerInit(PLATFORM_PWM_BUZZER_1, 0u) == 0u); // 零频率不得进入周期换算或占用资源。
+    TEST_CHECK(BuzzerInit(PLATFORM_PWM_INVALID) == BUZZER_STATUS_RESOURCE); // 无绑定时不得注册。
     TEST_CHECK(register_calls == 0u);
-    TEST_CHECK(BuzzerInit() == BUZZER_STATUS_OK);
-    TEST_CHECK(BuzzerInit() == BUZZER_STATUS_OK);
+    TEST_CHECK(BuzzerInit(PLATFORM_PWM_BUZZER_1) == BUZZER_STATUS_OK);
+    TEST_CHECK(BuzzerInit(PLATFORM_PWM_BUZZER_1) == BUZZER_STATUS_OK);
+    TEST_CHECK(BuzzerInit(PLATFORM_PWM_IMU_HEATER) == BUZZER_STATUS_RESOURCE); // 已初始化后不能换用其他通道。
     TEST_CHECK(register_calls == 1u);
     TEST_CHECK(registered_config.htim == &htim12);
     TEST_CHECK(registered_config.channel == TIM_CHANNEL_2);
@@ -74,10 +76,10 @@ static void TestNoteMapping(void)
 static void TestRegistrationFailure(void)
 {
     registration_fails = 1u;
-    TEST_CHECK(BuzzerInit() == BUZZER_STATUS_RESOURCE);
+    TEST_CHECK(BuzzerInit(PLATFORM_PWM_BUZZER_1) == BUZZER_STATUS_RESOURCE);
     TEST_CHECK(BuzzerSetTone(OCTAVE_1, 100u) == BUZZER_STATUS_UNINITIALIZED);
     registration_fails = 0u;
-    TEST_CHECK(BuzzerInit() == BUZZER_STATUS_OK);
+    TEST_CHECK(BuzzerInit(PLATFORM_PWM_BUZZER_1) == BUZZER_STATUS_OK);
     TEST_CHECK(register_calls == 2u);
     TEST_CHECK(BuzzerSetTone(OCTAVE_8, 500u) == BUZZER_STATUS_OK);
 }

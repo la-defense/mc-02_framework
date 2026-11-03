@@ -7,6 +7,7 @@
 #define MC02_ALARM_LED_H
 
 #include <stdint.h>
+#include "platform_resources.h"
 
 typedef enum
 {
@@ -18,10 +19,11 @@ typedef enum
 } LEDStatus_t;
 
 /** @brief 初始化板级 RGB 输出。
+ * @param[in] port 车型声明的逻辑 RGB 指示灯。
  * @return 成功为 LED_STATUS_OK；资源忙为 BUSY，其余初始化失败为 TRANSFER。
  * @note 可重复调用；不调用 Error_Handler，也不修改 ADC 按键 PA5。
  */
-LEDStatus_t LEDInit(void);
+LEDStatus_t LEDInit(PlatformRgbPort_t port);
 
 /** @brief 在普通任务推进 LED 发送和超时恢复，不改变 safety 状态。
  * @note 由唯一告警任务约每10ms调用；初始化失败时不执行操作。

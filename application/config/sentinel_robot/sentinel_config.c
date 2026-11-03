@@ -102,6 +102,8 @@ static const RobotAlarmStateRule_t sentinel_alarm_states[] = {
 };
 
 static const RobotAlarmConfig_t sentinel_alarm_config = {
+    .rgb_port = PLATFORM_RGB_BOARD_1, // 选择本板 RGB 指示灯。
+    .buzzer_pwm = PLATFORM_PWM_BUZZER_1, // 选择本板蜂鸣器 PWM 通道。
     .fault_rule_count = (uint8_t)(sizeof(sentinel_alarm_faults) /
                                   sizeof(sentinel_alarm_faults[0])),
     .fault_rules = sentinel_alarm_faults,

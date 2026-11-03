@@ -6,6 +6,7 @@
 #include "platform_rgb.h"
 
 static uint8_t led_initialized;
+static PlatformRgbPort_t led_port;
 
 void LEDProcess(void)
 {
@@ -13,12 +14,15 @@ void LEDProcess(void)
         PlatformRgbProcess();
 }
 
-LEDStatus_t LEDInit(void)
+LEDStatus_t LEDInit(PlatformRgbPort_t port)
 {
-    const PlatformRgbStatus_t result = PlatformRgbInit();
+    if (led_initialized != 0u)
+        return port == led_port ? LED_STATUS_OK : LED_STATUS_TRANSFER;
+    const PlatformRgbStatus_t result = PlatformRgbInit(port);
     if (result != PLATFORM_RGB_OK)
         return result == PLATFORM_RGB_BUSY ? LED_STATUS_BUSY : LED_STATUS_TRANSFER;
 
+    led_port = port;
     led_initialized = 1u;
     return LED_STATUS_OK;
 }

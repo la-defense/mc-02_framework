@@ -85,8 +85,8 @@ RobotAlarmStatus_t RobotAlarmInit(const RobotAlarmConfig_t *config)
         return robot_alarm_config == config ? published_alarm_state.last_status :
                ROBOT_ALARM_ERROR_BUSY;
 
-    const uint8_t led_available = LEDInit() == LED_STATUS_OK ? 1u : 0u;
-    const uint8_t buzzer_available = BuzzerInit() == BUZZER_STATUS_OK ? 1u : 0u;
+    const uint8_t led_available = LEDInit(config->rgb_port) == LED_STATUS_OK ? 1u : 0u;
+    const uint8_t buzzer_available = BuzzerInit(config->buzzer_pwm) == BUZZER_STATUS_OK ? 1u : 0u;
     const RobotAlarmOutputOps_t output = {
         .write_led = RobotAlarmWriteLed,
         .write_buzzer = RobotAlarmWriteBuzzer,

@@ -4,6 +4,7 @@
 #ifndef MC02_PLATFORM_RGB_H
 #define MC02_PLATFORM_RGB_H
 #include <stdint.h>
+#include "platform_resources.h"
 
 /** @brief 本机发送的完成、进行中和不可用状态。 */
 typedef enum {
@@ -13,10 +14,11 @@ typedef enum {
 } PlatformRgbStatus_t;
 
 /** @brief 初始化板载 RGB 输出。
+ * @param[in] port 车型声明的逻辑 RGB 指示灯。
  * @return 初始化成功、资源忙或失败的状态。
  * @note 在任务启动前串行调用；后端定义实际资源与初始化条件。
  */
-PlatformRgbStatus_t PlatformRgbInit(void);
+PlatformRgbStatus_t PlatformRgbInit(PlatformRgbPort_t port);
 
 /** @brief 复制一组颜色并推进本机发送。
  * @param[in] r 红色分量，范围 0～255。

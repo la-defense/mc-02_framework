@@ -53,9 +53,11 @@ uint8_t RobotSafetyGetSnapshot(RobotSafetySnapshot_t *snapshot)
     return 1u;
 }
 
-LEDStatus_t LEDInit(void)
+LEDStatus_t LEDInit(PlatformRgbPort_t port)
 {
     ++led_init_calls;
+    if (port != PLATFORM_RGB_BOARD_1)
+        return LED_STATUS_TRANSFER;
     return led_init_result;
 }
 
@@ -70,9 +72,11 @@ LEDStatus_t LEDSetRGB(uint8_t r, uint8_t g, uint8_t b)
     return LED_STATUS_OK;
 }
 
-BuzzerStatus_t BuzzerInit(void)
+BuzzerStatus_t BuzzerInit(PlatformPwmChannel_t channel)
 {
     ++buzzer_init_calls;
+    if (channel != PLATFORM_PWM_BUZZER_1)
+        return BUZZER_STATUS_RESOURCE;
     return buzzer_init_result;
 }
 
@@ -119,6 +123,8 @@ static void PrepareConfig(void)
         };
     }
     config = (RobotAlarmConfig_t){
+        .rgb_port = PLATFORM_RGB_BOARD_1,
+        .buzzer_pwm = PLATFORM_PWM_BUZZER_1,
         .fault_rule_count = 9u,
         .fault_rules = fault_rules,
         .state_rule_count = ROBOT_ALARM_STATE_COUNT,
@@ -177,6 +183,20 @@ static void TestPartialChannel(void)
                last_g == ROBOT_ALARM_STATE_READY + 1u &&
                last_b == ROBOT_ALARM_STATE_READY + 2u);
     TEST_CHECK(buzzer_write_calls == 0u);
+}
+
+static void TestMissingResource(void)
+{
+    ResetFakeState();
+    config.rgb_port = PLATFORM_RGB_INVALID; // 模拟车型选择了本板未绑定的灯。
+    TEST_CHECK(RobotAlarmInit(&config) == ROBOT_ALARM_DEGRADED);
+    safety_snapshot.fault_flags = 1u << 4; // 使用包含声音的故障样式。
+    TEST_CHECK(RobotAlarmTask() == ROBOT_ALARM_DEGRADED);
+    RobotAlarmState_t state;
+    TEST_CHECK(RobotAlarmGetState(&state) == ROBOT_ALARM_OK);
+    TEST_CHECK(state.led_available == 0u && state.buzzer_available == 1u);
+    TEST_CHECK(led_write_calls == 0u); // 不向不可用通道提交输出。
+    TEST_CHECK(buzzer_write_calls != 0u); // 另一通道仍被正常驱动。
 }
 
 static void TestMuteGeneration(void)
@@ -262,6 +282,8 @@ int main(int argc, char **argv)
         TestInitDegraded();
     else if (strcmp(argv[1], "partial") == 0)
         TestPartialChannel();
+    else if (strcmp(argv[1], "missing-resource") == 0)
+        TestMissingResource();
     else if (strcmp(argv[1], "mute-generation") == 0)
         TestMuteGeneration();
     else if (strcmp(argv[1], "mute-serial") == 0)

@@ -7,10 +7,10 @@
 
 static PWMInstance *buzzer_pwm;
 
-uint8_t PlatformBuzzerInit(uint16_t initial_frequency_hz)
+uint8_t PlatformBuzzerInit(PlatformPwmChannel_t channel, uint16_t initial_frequency_hz)
 {
-    if (initial_frequency_hz == 0u)
-        return 0u; // 避免周期换算除以零。
+    if (channel != PLATFORM_PWM_BUZZER_1 || initial_frequency_hz == 0u)
+        return 0u; // 未绑定的通道不可使用，零频率不能换算周期。
     if (buzzer_pwm != NULL)
         return 1u; // 复用已注册的通道。
 

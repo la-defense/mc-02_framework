@@ -300,6 +300,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/alarm/robot_alarm_policy.c # 故障仲裁、节奏与静音策略。
     modules/alarm/buzzer.c # 音符映射和蜂鸣器输出参数检查。
     modules/alarm/led.c # RGB 输出状态转换和任务推进。
+    application/alarm_startup.c # 按核心依赖处理告警初始化结果。
     modules/lcd/lcd_buf.c # LCD 有界绘图与字体转换。
     modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
     application/robot_task_create.c) # 已选任务的创建与失败处理。

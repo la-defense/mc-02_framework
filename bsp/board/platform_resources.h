@@ -49,8 +49,15 @@ typedef enum {
 /** @brief 业务使用的逻辑 PWM 通道。 */
 typedef enum {
     PLATFORM_PWM_INVALID = 0, /**< 未选择通道。 */
-    PLATFORM_PWM_IMU_HEATER  /**< 本板 IMU 加热输出。 */
+    PLATFORM_PWM_IMU_HEATER, /**< 本板 IMU 加热输出。 */
+    PLATFORM_PWM_BUZZER_1 /**< 本板蜂鸣器变频输出。 */
 } PlatformPwmChannel_t;
+
+/** @brief 车型选择的逻辑 RGB 指示灯。 */
+typedef enum {
+    PLATFORM_RGB_INVALID = 0, /**< 未选择指示灯。 */
+    PLATFORM_RGB_BOARD_1 /**< 本板声明的第一个 RGB 指示灯。 */
+} PlatformRgbPort_t;
 
 /** @brief 业务使用的逻辑模拟输入。 */
 typedef enum {

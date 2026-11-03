@@ -248,6 +248,7 @@ if(NOT MC02_FEATURE_ALARM)
 else()
     list(APPEND MC02_BSP_C_SOURCES bsp/board/platform_buzzer_mc02.c) # 板载蜂鸣器 PWM 绑定。
     list(APPEND MC02_BSP_C_SOURCES bsp/board/platform_rgb_mc02.c) # 板载 RGB 异步输出绑定。
+    list(APPEND MC02_APPLICATION_COMMON_C_SOURCES application/alarm_startup.c) # 按依赖处理告警降级。
 endif()
 foreach(pair IN ITEMS "DJI;DJImotor/dji_motor.c" "LK;LKmotor/LK9025.c" "HT;HTmotor/HT04.c")
     list(GET pair 0 driver)

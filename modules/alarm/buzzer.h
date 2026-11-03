@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include "robot_alarm.h"
+#include "platform_resources.h"
 
 typedef enum
 {
@@ -18,10 +19,11 @@ typedef enum
 } BuzzerStatus_t;
 
 /** @brief 初始化板级蜂鸣器输出并以静音状态启动。
+ * @param[in] channel 车型声明的逻辑 PWM 通道。
  * @return 成功或已初始化为 BUZZER_STATUS_OK，PWM 注册失败为 RESOURCE。
  * @note 初始化只创建一个 PWM 实例；失败不影响整车 safety 状态。
  */
-BuzzerStatus_t BuzzerInit(void);
+BuzzerStatus_t BuzzerInit(PlatformPwmChannel_t channel);
 /** @brief 设置一个音符和占空比。
  * @param[in] note OCTAVE_1～OCTAVE_8，分别为 Do、Re、Mi、Fa、So、La、Si、高音 Do。
  * @param[in] duty_permille PWM 占空比，范围 1～1000。

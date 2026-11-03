@@ -6,6 +6,7 @@
 #include "platform_buzzer.h"
 
 static uint8_t buzzer_initialized;
+static PlatformPwmChannel_t buzzer_channel;
 
 static const uint16_t buzzer_note_frequency_hz[BUZZER_NOTE_COUNT] = {
     0u, // 静音不使用频率。
@@ -18,12 +19,13 @@ static const uint16_t buzzer_note_frequency_hz[BUZZER_NOTE_COUNT] = {
     988u, // Si，Hz。
     1046u}; // 高音 Do，Hz。
 
-BuzzerStatus_t BuzzerInit(void)
+BuzzerStatus_t BuzzerInit(PlatformPwmChannel_t channel)
 {
     if (buzzer_initialized != 0u)
-        return BUZZER_STATUS_OK;
-    if (PlatformBuzzerInit(buzzer_note_frequency_hz[OCTAVE_1]) == 0u)
+        return channel == buzzer_channel ? BUZZER_STATUS_OK : BUZZER_STATUS_RESOURCE;
+    if (PlatformBuzzerInit(channel, buzzer_note_frequency_hz[OCTAVE_1]) == 0u)
         return BUZZER_STATUS_RESOURCE;
+    buzzer_channel = channel;
     buzzer_initialized = 1u;
     return BUZZER_STATUS_OK;
 }

@@ -13,6 +13,7 @@
 #include "robot_safety.h"
 #include "config.h"
 #include "robot_alarm.h"
+#include "alarm_startup.h"
 #include "task_monitor.h"
 #include "bsp_watchdog.h"
 #include "bsp_param.h"
@@ -211,9 +212,7 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 #endif
     case ROBOT_MODULE_ALARM:
 #if MC02_FEATURE_ALARM
-        if (config->alarm_config == NULL)
-            return 0u;
-        return (uint8_t)(RobotAlarmInit(config->alarm_config) == ROBOT_ALARM_OK);
+        return RobotStartAlarmConfigured(config->alarm_config, RobotBuildGetPlan());
 #else
         return 0u;
 #endif

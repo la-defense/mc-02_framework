@@ -13,8 +13,10 @@ static PlatformRgbStatus_t MapStatus(HAL_StatusTypeDef status)
     return PLATFORM_RGB_ERROR; // 错误和超时均报告通道不可用。
 }
 
-PlatformRgbStatus_t PlatformRgbInit(void)
+PlatformRgbStatus_t PlatformRgbInit(PlatformRgbPort_t port)
 {
+    if (port != PLATFORM_RGB_BOARD_1)
+        return PLATFORM_RGB_ERROR; // 不访问未绑定到本板的指示灯。
     return MapStatus(WS2812_Init());
 }
 

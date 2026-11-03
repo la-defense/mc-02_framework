@@ -4,13 +4,13 @@
 
 ## 初始化与调用
 
-`RobotInit()` 先选择车型配置并调用 `RobotAlarmInit()`。该入口注册 TIM12 通道2并把 PWM 占空比设为零。PWM 注册失败会使蜂鸣器告警通道标记为不可用，不报告整车初始化故障，也不改变 safety 许可。
+`RobotInit()` 先选择车型配置并调用 `RobotAlarmInit()`。车型指定逻辑蜂鸣器 PWM；MC-02 后端将其绑定到 TIM12 通道2，并在注册时把占空比设为零。未绑定或注册失败时，蜂鸣器通道标记为不可用；辅助告警记录降级并保留其他可用通道，属于核心依赖时由启动计划报告失败。
 
-Daemon 每轮调用 `RobotAlarmTask()`。它读取一致的 safety 快照，由 `robot_alarm_policy.c` 选择当前最高优先级事件，再按实际经过的 HAL 毫秒数决定当前音符。不同告警切换时重新建立时间起点；静音请求只作用于当前允许静音的故障声音，并在配置时限到达后恢复原节奏。
+Daemon 每轮调用 `RobotAlarmTask()`。它读取一致的 safety 快照，由 `robot_alarm_policy.c` 选择当前最高优先级事件，再按平台毫秒计数决定当前音符。不同告警切换时重新建立时间起点；静音请求只作用于当前允许静音的故障声音，并在配置时限到达后恢复原节奏。
 
 驱动接口为：
 
-- `BuzzerInit()`：注册单个 PWM 实例；重复调用不重复注册。
+- `BuzzerInit(channel)`：注册车型指定的逻辑 PWM；重复选择同一通道不重复注册，其他通道被拒绝。
 - `BuzzerSetTone(note, duty_permille)`：播放 `OCTAVE_1`～`OCTAVE_8`，占空比范围为1～1000‰。
 - `BuzzerSilence()`：将占空比置零。
 

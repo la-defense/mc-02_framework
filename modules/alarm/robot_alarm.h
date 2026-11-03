@@ -8,6 +8,7 @@
 #define ROBOT_ALARM_H
 
 #include <stdint.h>
+#include "platform_resources.h"
 
 #define ROBOT_ALARM_MAX_SEGMENTS 8u
 #define ROBOT_ALARM_MAX_PATTERN_MS 10000u
@@ -128,6 +129,8 @@ typedef struct
 /** @brief 车型告警表；本体和所有数组须在 RobotAlarmInit 至停机期间保持只读。 */
 typedef struct
 {
+    PlatformRgbPort_t rgb_port; /**< 本车型选用的逻辑 RGB 指示灯。 */
+    PlatformPwmChannel_t buzzer_pwm; /**< 本车型选用的逻辑蜂鸣器 PWM。 */
     uint8_t fault_rule_count; /**< 本版本必须为9。 */
     const RobotAlarmFaultRule_t *fault_rules; /**< 长期只读故障规则数组。 */
     uint8_t state_rule_count; /**< 必须等于 ROBOT_ALARM_STATE_COUNT。 */
@@ -203,7 +206,7 @@ typedef RobotAlarmWriteResult_t (*RobotAlarmWriteBuzzerFn)(void *context,
 RobotAlarmStatus_t RobotAlarmInit(const RobotAlarmConfig_t *config);
 /** @brief 读取一致 safety 快照并推进当前告警一次。
  * @return 两个通道均可用为 OK；通道忙或不可用为 DEGRADED；未初始化时返回错误。
- * @note 在普通任务中调用，时间使用 HAL 毫秒计数；LED 发送异步推进，故障恢复按任务轮次检查。
+ * @note 在普通任务中调用，时间使用平台毫秒计数；LED 发送异步推进，故障恢复按任务轮次检查。
  */
 RobotAlarmStatus_t RobotAlarmTask(void);
 /** @brief 为当前允许静音的故障提交一次限时静音请求。

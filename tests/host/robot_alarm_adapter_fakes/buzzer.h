@@ -14,7 +14,7 @@ typedef enum
     BUZZER_STATUS_RESOURCE,
 } BuzzerStatus_t;
 
-BuzzerStatus_t BuzzerInit(void);
+BuzzerStatus_t BuzzerInit(PlatformPwmChannel_t channel);
 BuzzerStatus_t BuzzerSetTone(BuzzerNote_t note, uint16_t duty_permille);
 BuzzerStatus_t BuzzerSilence(void);
 

@@ -376,7 +376,7 @@ endif()
 # 告警策略使用生产纯逻辑，独立覆盖仲裁、节奏、静音期限和输出通道降级。
 add_executable(robot_alarm_policy_test robot_alarm_policy_test.c
   ../../modules/alarm/robot_alarm_policy.c)
-target_include_directories(robot_alarm_policy_test PRIVATE ../../modules/alarm)
+target_include_directories(robot_alarm_policy_test PRIVATE ../../modules/alarm ../../bsp/board)
 target_compile_options(robot_alarm_policy_test PRIVATE -Wall -Wextra -Werror
   -fno-fast-math)
 foreach(scenario priority timing mute validation outputs)
@@ -399,13 +399,21 @@ foreach(scenario notes failure)
 endforeach()
 
 # 告警运行桥接链接生产策略和适配层；替换平台时钟、中断、安全状态及两个外设驱动。
+add_executable(alarm_startup_test alarm_startup_test.c ../../application/alarm_startup.c
+  ../../application/config/module_plan.c)
+target_include_directories(alarm_startup_test PRIVATE ../../application ../../application/config
+  ../../modules/alarm ../../bsp/board)
+target_compile_options(alarm_startup_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_alarm_startup_core_and_degraded COMMAND alarm_startup_test)
+set_tests_properties(production_alarm_startup_core_and_degraded PROPERTIES TIMEOUT 10)
+
 add_executable(robot_alarm_adapter_test robot_alarm_adapter_test.c
   ../../modules/alarm/robot_alarm.c ../../modules/alarm/robot_alarm_policy.c)
 target_include_directories(robot_alarm_adapter_test BEFORE PRIVATE robot_alarm_adapter_fakes)
-target_include_directories(robot_alarm_adapter_test PRIVATE ../../modules/alarm ../../bsp/os)
+target_include_directories(robot_alarm_adapter_test PRIVATE ../../modules/alarm ../../bsp/os ../../bsp/board)
 target_compile_options(robot_alarm_adapter_test PRIVATE -Wall -Wextra -Werror
   -fno-fast-math)
-foreach(scenario init-degraded partial mute-generation mute-serial snapshot-failure unknown-state idempotent-init)
+foreach(scenario init-degraded partial missing-resource mute-generation mute-serial snapshot-failure unknown-state idempotent-init)
   add_test(NAME production_robot_alarm_adapter_${scenario}
     COMMAND robot_alarm_adapter_test ${scenario})
   set_tests_properties(production_robot_alarm_adapter_${scenario} PROPERTIES TIMEOUT 10)
