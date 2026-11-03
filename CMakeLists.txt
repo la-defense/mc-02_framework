@@ -275,6 +275,7 @@ set(MC02_PORTABLE_FRAMEWORK_SOURCES
     application/init_diagnostic.c # 初始化阶段与故障事件记录。
     application/vehicle_health.c # 整车健康信息的采集和发布。
     application/vehicle_health_diag.c # 健康信息的只读诊断应答。
+    application/robot.c # 整车启动与周期协调。
     modules/daemon/daemon.c # 来源期限、状态和事件队列。
     modules/daemon/daemon_event_task.c # 来源事件处理任务的框架入口。
     modules/message_center/message_center.c # 有界消息与话题目录。
@@ -321,10 +322,18 @@ target_include_directories(mc02_portable_framework PRIVATE
     bsp/os # 不暴露厂商类型的任务、时间和同步接口。
     bsp/adc # LCD 按键只读的 ADC 样本接口。
     bsp/crash # 崩溃诊断的公开记录接口。
+    bsp # 基础启动入口。
+    bsp/param # 参数事务公开接口。
+    bsp/watchdog # 看门狗公开接口。
+    bsp/reset_recovery # 复位恢复状态接口。
     bsp/observation # 只读运行状态记录接口。
     bsp/safety # 启动失败时使用的板级直接关断入口。
     application # LCD 标记初始化诊断结果。
     application/config # 编译选择和生成的车型标识。
+    application/chassis # 底盘配置和接口。
+    application/gimbal # 云台业务接口。
+    application/shoot # 发射业务接口。
+    application/cmd # 整车命令接口。
     modules/BMI088) # 与板级采样类型分离的标定控制接口。
 mc02_apply_format_diagnostics(mc02_portable_framework)
 target_include_directories(mc02_portable_framework PRIVATE

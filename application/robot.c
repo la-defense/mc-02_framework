@@ -9,6 +9,7 @@
 #include "master_process.h"
 #endif
 #include "robot.h"
+#include "robot_control_tasks.h"
 #include "robot_def.h"
 #include "robot_task_create.h"
 #include "robot_safety.h"
@@ -39,15 +40,6 @@
 #if MC02_BENCH_RC_DIAGNOSTICS
 #include "remote_bench.h"
 #endif
-#endif
-#if MC02_FEATURE_CHASSIS
-#include "chassis.h"
-#endif
-#if MC02_FEATURE_GIMBAL
-#include "gimbal.h"
-#endif
-#if MC02_FEATURE_SHOOTER
-#include "shoot.h"
 #endif
 #if MC02_FEATURE_UI
 #include "referee_task.h"
@@ -120,13 +112,7 @@ static uint8_t RobotParamFlashOperationEnd(uint8_t success)
 #pragma message "check if you have configured the parameters in robot_def.h, IF NOT, please refer to the comments AND DO IT, otherwise the robot will have FATAL ERRORS!!!"
 #endif // !ROBOT_DEF_PARAM_WARNING
 
-#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
-#include "chassis.h"
-#endif
-
-#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
-#include "gimbal.h"
-#include "shoot.h"
+#if MC02_FEATURE_COMMAND || defined(ONE_BOARD) || defined(GIMBAL_BOARD)
 #include "robot_cmd.h"
 #endif
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))

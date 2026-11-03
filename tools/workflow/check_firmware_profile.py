@@ -58,6 +58,7 @@ PORTABLE_FRAMEWORK_SOURCES = {
     "application/init_diagnostic.c",  # 初始化结果及事件记录。
     "application/vehicle_health.c",  # 整车健康信息采集和发布。
     "application/vehicle_health_diag.c",  # 只读诊断应答。
+    "application/robot.c",  # 整车启动和周期协调。
     "modules/daemon/daemon.c",  # 来源状态和事件队列。
     "modules/daemon/daemon_event_task.c",  # 来源事件任务入口。
     "modules/message_center/message_center.c",  # 消息目录和有界队列。
@@ -251,6 +252,9 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "modules/imu", source_root / "modules/BMI088",
                source_root / "modules/task_monitor", source_root / "modules/alarm", source_root / "bsp/board", source_root / "bsp/dwt",
                source_root / "bsp/adc", source_root / "bsp/observation", source_root / "bsp/crash",
+               source_root / "bsp", source_root / "bsp/param", source_root / "bsp/watchdog",
+               source_root / "bsp/reset_recovery", source_root / "application/chassis",
+               source_root / "application/gimbal", source_root / "application/shoot", source_root / "application/cmd",
                source_root / "bsp/safety", source_root / "application",
                source_root / "application/config",
                Path(entry["directory"]).resolve() / "generated"}
@@ -315,12 +319,23 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "bsp/board/platform_rgb.h",
                         source_root / "application/topics/robot_topics.h",
                         source_root / "application/topics/robot_can_bridge_task.h",
+                        source_root / "application/topics/robot_can_bridge.h",
+                        source_root / "application/topics/robot_topics_diag.h",
                         source_root / "application/config/build_selection.h",
                         source_root / "application/config/vehicle_selection.h",
                         source_root / "application/config/module_plan.h",
                         source_root / "application/robot_task_create.h",
                         source_root / "application/robot_task.h",
                         source_root / "application/robot.h",
+                        source_root / "application/robot_control_tasks.h",
+                        source_root / "application/robot_def.h",
+                        source_root / "application/config/config.h",
+                        source_root / "application/config/shoot_config_types.h",
+                        source_root / "application/chassis/chassis_motion.h",
+                        source_root / "application/chassis/chassis_kinematics.h",
+                        source_root / "application/chassis/omni.h",
+                        source_root / "application/cmd/robot_cmd.h",
+                        source_root / "application/topics/robot_can_bridge_config.h",
                         source_root / "application/init_diagnostic.h",
                         source_root / "application/alarm_startup.h",
                         source_root / "application/vehicle_health.h",
@@ -333,6 +348,11 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "bsp/adc/bsp_adc.h",
                         source_root / "bsp/observation/bsp_observation.h",
                         source_root / "bsp/safety/bsp_safety.h",
+                        source_root / "bsp/bsp_init.h",
+                        source_root / "bsp/param/bsp_param.h",
+                        source_root / "bsp/watchdog/bsp_watchdog.h",
+                        source_root / "bsp/reset_recovery/bsp_reset_recovery.h",
+                        source_root / "bsp/reset_recovery/reset_recovery_policy.h",
                         source_root / "bsp/crash/bsp_crash.h",
                         source_root / "bsp/crash/bsp_crash_record.h",
                         source_root / "bsp/dwt/platform_probe.h",
