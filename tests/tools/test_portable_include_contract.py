@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/workflow"))
 from check_firmware_profile import (  # noqa: E402
     check_portable_dependencies, check_portable_includes, find_link_command,
-    check_attitude_dependencies, check_attitude_includes,
+    check_attitude_dependencies, check_attitude_includes, source_target,
 )
 
 
@@ -118,6 +118,22 @@ class PortableIncludeContractTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             check_attitude_dependencies(valid + f"    {ROOT / 'Core/Inc/main.h'}\n",
                                         ROOT, ROOT / "build", source)
+
+    def test_source_target_follows_build_layers(self):
+        # 验证已隔离源码、适配器、板级、第三方及未迁移业务各自归属。
+        portable = {"modules/lcd/lcd.c"}
+        cases = {
+            "modules/lcd/lcd.c": "mc02_portable_framework",
+            "modules/algorithm/attitude_filter.c": "mc02_attitude_adapter",
+            "Middlewares/Third_Party/Fusion/FusionAhrs.c": "mc02_fusion_backend",
+            "Core/Src/main.c": "mc02_board_backend",
+            "bsp/board/platform_can_stm32.c": "mc02_board_backend",
+            "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal.c": "mc02_vendor_system",
+            "modules/BMI088/bmi088.c": "firmware.elf",
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                self.assertEqual(source_target(source, portable, "firmware.elf"), expected)
 
 
 if __name__ == "__main__":

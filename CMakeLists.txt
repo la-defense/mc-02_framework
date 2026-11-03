@@ -351,6 +351,22 @@ if(MC02_IMU_BACKEND STREQUAL "fusion")
     add_library(mc02_fusion_backend OBJECT ${MC02_FUSION_SOURCE})
     target_include_directories(mc02_fusion_backend PRIVATE Middlewares/Third_Party/Fusion) # 上游实现所需头文件。
 endif()
+# 当前尚未迁移的业务文件暂留在固件目标；板级实现和第三方系统库分别编译。
+set(MC02_BOARD_BACKEND_SOURCES)
+set(MC02_VENDOR_SYSTEM_SOURCES)
+foreach(source IN LISTS MC02_EXECUTABLE_SOURCES)
+    if(source MATCHES "^(Core/|USB_DEVICE/|bsp/)")
+        list(APPEND MC02_BOARD_BACKEND_SOURCES "${source}") # 板级初始化、系统适配和 BSP。
+    elseif(source MATCHES "^(Drivers/|Middlewares/)")
+        list(APPEND MC02_VENDOR_SYSTEM_SOURCES "${source}") # HAL、RTOS、USB 和 RTT 上游实现。
+    endif()
+endforeach()
+list(REMOVE_ITEM MC02_EXECUTABLE_SOURCES ${MC02_BOARD_BACKEND_SOURCES} ${MC02_VENDOR_SYSTEM_SOURCES})
+add_library(mc02_board_backend OBJECT ${MC02_BOARD_BACKEND_SOURCES})
+target_include_directories(mc02_board_backend PRIVATE ${MC02_INCLUDE_DIRS} "${CMAKE_BINARY_DIR}/generated") # 保持当前板级适配所需路径。
+mc02_apply_format_diagnostics(mc02_board_backend)
+add_library(mc02_vendor_system OBJECT ${MC02_VENDOR_SYSTEM_SOURCES})
+target_include_directories(mc02_vendor_system PRIVATE ${MC02_INCLUDE_DIRS} "${CMAKE_BINARY_DIR}/generated") # 上游实现沿用当前平台配置。
 add_library(mc02_portable_framework OBJECT ${MC02_PORTABLE_FRAMEWORK_SOURCES})
 target_include_directories(mc02_portable_framework PRIVATE
     modules/daemon # 来源监控的公开类型。
@@ -399,6 +415,7 @@ target_include_directories(mc02_portable_framework PRIVATE
 
 add_executable(${MC02_OUTPUT_BASENAME}.elf ${MC02_EXECUTABLE_SOURCES}
     $<TARGET_OBJECTS:mc02_portable_framework> $<TARGET_OBJECTS:mc02_attitude_adapter>
+    $<TARGET_OBJECTS:mc02_board_backend> $<TARGET_OBJECTS:mc02_vendor_system>
     ${MC02_ASM_SOURCES} ${LINKER_SCRIPT})
 if(TARGET mc02_fusion_backend)
     target_sources(${MC02_OUTPUT_BASENAME}.elf PRIVATE $<TARGET_OBJECTS:mc02_fusion_backend>) # 仅选择 Fusion 时链接上游实现。

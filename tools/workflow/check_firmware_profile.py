@@ -207,6 +207,7 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
     portable_sources = PORTABLE_FRAMEWORK_SOURCES | (OPTIONAL_PORTABLE_FRAMEWORK_SOURCES & selected)
     source_root = Path.cwd().resolve()
     compiled: set[str] = set()
+    selected_counts: dict[str, int] = {}  # 每份配置选中的源码必须恰好编译一次。
     compiler_commands: list[str] = []
     portable_counts: dict[str, int] = {}  # 每个框架源文件必须恰好编译一次。
     attitude_counts: dict[str, int] = {}  # 适配器和可选上游源码也必须恰好编译一次。
@@ -218,6 +219,8 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         except ValueError:
             continue
         compiled.add(relative)
+        if relative in selected:
+            selected_counts[relative] = selected_counts.get(relative, 0) + 1
         compiler_commands.append(entry.get("command", ""))
         if relative in portable_sources:
             portable_counts[relative] = portable_counts.get(relative, 0) + 1
@@ -253,6 +256,8 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         raise SystemExit(f"source selection failed: missing={sorted(missing)}, "
                          f"unexpected_optional={sorted(unexpected)}, "
                          f"unregistered={sorted(unexpected_compiled)}")
+    if any(selected_counts.get(source, 0) != 1 for source in selected):
+        raise SystemExit(f"selected sources must compile exactly once: {selected_counts}")
     if any(portable_counts.get(source, 0) != 1 for source in portable_sources):
         raise SystemExit(f"portable framework sources must compile exactly once: {portable_counts}")
     if any(attitude_counts.get(source, 0) != 1 for source in attitude_sources):
@@ -266,10 +271,8 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
                               capture_output=True, text=True, check=True, timeout=15).stdout
     link_command = find_link_command(commands, target)
     for source in selected:
-        # 框架源码由独立对象目标编译，其余源码仍由固件目标编译。
-        owner = ("mc02_portable_framework" if source in portable_sources else
-                 "mc02_attitude_adapter" if source == ATTITUDE_ADAPTER_SOURCE else
-                 "mc02_fusion_backend" if source == FUSION_SOURCE else target)
+        # 核对每份源码所属目标以及它是否真正进入最终链接。
+        owner = source_target(source, portable_sources, target)
         object_path = f"{owner}.dir/{source}.obj"
         if object_path not in link_command:
             raise SystemExit(f"registered source is absent from the Ninja link command: {source}")
@@ -286,6 +289,21 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         deps = subprocess.run(["ninja", "-C", str(build_dir), "-t", "deps", object_path],
                               capture_output=True, text=True, check=True, timeout=15).stdout
         check_attitude_dependencies(deps, source_root, build_dir, source)
+
+
+def source_target(source: str, portable_sources: set[str], executable: str) -> str:
+    """按 CMake 的分类规则查询源码应归属的目标。"""
+    if source in portable_sources:
+        return "mc02_portable_framework"
+    if source == ATTITUDE_ADAPTER_SOURCE:
+        return "mc02_attitude_adapter"
+    if source == FUSION_SOURCE:
+        return "mc02_fusion_backend"
+    if source.startswith(("Core/", "USB_DEVICE/", "bsp/")):
+        return "mc02_board_backend"
+    if source.startswith(("Drivers/", "Middlewares/")):
+        return "mc02_vendor_system"
+    return executable  # 尚未迁移的自有实现仍由固件入口编译。
 
 
 def check_attitude_includes(entry: dict, source_root: Path, source: str) -> None:
