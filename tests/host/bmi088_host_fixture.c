@@ -80,7 +80,25 @@ BMI088Instance *BMI088HostRegisterOnline(void)
     BMI088_Init_Config_s config = {0};
     config.work_mode = BMI088_BLOCK_PERIODIC_MODE;
     config.cali_mode = BMI088_CALIBRATE_ONLINE_MODE;
+    config.spi_acc_config = (PlatformSpiEndpoint_t){PLATFORM_SPI_BUS_2, PLATFORM_GPIO_IMU_ACCEL_CS};
+    config.spi_gyro_config = (PlatformSpiEndpoint_t){PLATFORM_SPI_BUS_2, PLATFORM_GPIO_IMU_GYRO_CS};
     return BMI088Register(&config);
+}
+
+void *PlatformSpiRegisterBlocking(const PlatformSpiEndpoint_t *endpoint, void *owner)
+{
+    if (endpoint == NULL || endpoint->bus != PLATFORM_SPI_BUS_2 ||
+        (endpoint->chip_select != PLATFORM_GPIO_IMU_ACCEL_CS && endpoint->chip_select != PLATFORM_GPIO_IMU_GYRO_CS))
+        return NULL; // 测试替身只绑定板载 IMU 的两个片选。
+    SPI_Init_Config_s config = {0};
+    config.spi_work_mode = SPI_BLOCK_MODE; // 测试与生产一样只注册阻塞设备。
+    config.id = owner; // 传递设备上下文。
+    return SPIRegister(&config);
+}
+
+uint8_t PlatformSpiUnregister(void *device)
+{
+    return SPIUnregister(device);
 }
 
 SPIInstance *SPIRegister(SPI_Init_Config_s *config)
@@ -101,6 +119,7 @@ SPIInstance *SPIRegister(SPI_Init_Config_s *config)
 
 uint8_t SPIUnregister(SPIInstance *instance)
 {
+    if (instance != NULL) ++bmi088_host_fixture.spi_unregister_count;
     return (uint8_t)(instance != NULL);
 }
 

@@ -4,6 +4,28 @@
 #ifndef MC02_PLATFORM_SPI_BLOCKING_H
 #define MC02_PLATFORM_SPI_BLOCKING_H
 #include <stdint.h>
+#include "../board/platform_resources.h"
+
+/** @brief 一个同步 SPI 从设备的逻辑总线和片选。 */
+typedef struct {
+    PlatformSpiBus_t bus; // 板级声明的总线。
+    PlatformGpioPin_t chip_select; // 对应该从设备的片选引脚。
+} PlatformSpiEndpoint_t;
+
+/** @brief 按逻辑端点注册阻塞 SPI 设备。
+ * @param[in] endpoint 逻辑总线和片选；不能为空。
+ * @param[in] owner 可选的长期设备上下文。
+ * @return 成功返回长期设备句柄，资源未绑定或注册失败返回 NULL。
+ * @note 启动阶段串行调用；资源实际配置由平台后端完成。
+ */
+void *PlatformSpiRegisterBlocking(const PlatformSpiEndpoint_t *endpoint, void *owner);
+
+/** @brief 撤销启动失败时的空闲 SPI 设备注册。
+ * @param[in] device 注册成功的设备，允许为 NULL。
+ * @return 成功注销返回 1；其他情况返回 0。
+ * @note 不得与传输或其他注册并发；成功后句柄失效。
+ */
+uint8_t PlatformSpiUnregister(void *device);
 
 /** @brief 同步传输结果；数值保留既有初始化诊断含义。 */
 typedef enum {

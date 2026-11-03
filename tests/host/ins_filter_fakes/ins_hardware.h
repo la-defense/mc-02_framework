@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "bmi088_data.h"
 #include "platform_probe.h"
+#include "../../../bsp/spi/platform_spi_blocking.h"
 typedef PlatformProbe_t DWT_Probe_t;
 extern volatile uint32_t dwt_cpu_freq_mhz;
 float DWT_GetDeltaT(uint32_t *counter);
@@ -25,8 +26,7 @@ extern GPIO_TypeDef test_gyro_port, test_accel_port;
 #define BMI088_CALIBRATE_ONLINE_MODE 0
 #define BMI088_ACQUIRE_OK 1
 typedef struct { int unused; } BMI088Instance;
-typedef struct { SPI_HandleTypeDef *spi_handle; GPIO_TypeDef *GPIOx; int cs_pin,spi_work_mode; } FakeSPIConfig;
-typedef struct { int work_mode,cali_mode; FakeSPIConfig spi_gyro_config,spi_acc_config; } BMI088_Init_Config_s;
+typedef struct { int work_mode,cali_mode; PlatformSpiEndpoint_t spi_gyro_config,spi_acc_config; } BMI088_Init_Config_s;
 extern SPI_HandleTypeDef hspi1, hspi2;
 extern volatile uint32_t bmi088_init_error,bmi088_init_retry_count;
 BMI088Instance *BMI088Register(const BMI088_Init_Config_s *c);

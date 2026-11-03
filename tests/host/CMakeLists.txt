@@ -15,6 +15,15 @@ if(UNIX)
 endif()
 include(../../cmake/mc02_dsp.cmake)
 mc02_add_dsp(mc02_dsp_host TRUE)
+# 使用真实板级资源绑定验证同步 SPI 注册及失败传递。
+add_executable(platform_spi_registration_test platform_spi_registration_test.c
+  ../../bsp/board/platform_spi_register_stm32.c ../../bsp/board/board_spi_stm32.c
+  ../../bsp/board/board_gpio_stm32.c)
+target_include_directories(platform_spi_registration_test BEFORE PRIVATE spi_registration_fakes ins_filter_fakes
+  . ../../bsp/board ../../bsp/dwt ../../modules/BMI088)
+target_compile_options(platform_spi_registration_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_platform_spi_registration COMMAND platform_spi_registration_test)
+set_tests_properties(production_platform_spi_registration PROPERTIES TIMEOUT 10)
 # 使用可控的任务后端验证真实启动计划，失败不启动真实线程。
 add_executable(robot_task_create_test robot_task_create_test.c ../../application/robot_task_create.c)
 target_include_directories(robot_task_create_test PRIVATE task_creation_fakes . ../../application

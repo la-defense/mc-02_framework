@@ -16,6 +16,7 @@
 #include "bsp_pwm.h"
 #include "stdint.h"
 #include "bmi088_calibration.h"
+#include "../../bsp/spi/platform_spi_blocking.h"
 
 #define BMI088_INIT_MAX_RETRY 5u // 初始化重试上限, 传感器异常时避免开机死循环
 
@@ -116,8 +117,8 @@ typedef struct
 {
     BMI088_Work_Mode_e work_mode;
     BMI088_Calibrate_Mode_e cali_mode;
-    SPI_Init_Config_s spi_gyro_config;
-    SPI_Init_Config_s spi_acc_config;
+    PlatformSpiEndpoint_t spi_gyro_config; // 陀螺仪逻辑总线和片选。
+    PlatformSpiEndpoint_t spi_acc_config; // 加速度计逻辑总线和片选。
     GPIO_Init_Config_s gyro_int_config;
     GPIO_Init_Config_s acc_int_config;
     PID_Init_Config_s heat_pid_config; // 仅配置旧热控 PWM 时检查，启用时须给出有效 dt 范围。

@@ -12,6 +12,7 @@ typedef struct
     uint32_t os_delay_call_count;
     uint32_t ins_monitor_feed_count;
     uint32_t transfer_count;
+    uint32_t spi_unregister_count; // 统计启动失败回退时释放的有效设备。
     uint32_t failed_spi_transfer_count;
     uint32_t fail_transfer_number;
     uint32_t spi_write_transfer_count;

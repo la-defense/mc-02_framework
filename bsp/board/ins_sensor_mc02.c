@@ -41,16 +41,12 @@ InsSensor *InsSensorRegister(PlatformImuPort_t port)
         .work_mode = BMI088_BLOCK_PERIODIC_MODE, // 沿用任务周期内阻塞采样。
         .cali_mode = BMI088_CALIBRATE_ONLINE_MODE, // 启动时沿用在线标定。
         .spi_gyro_config = {
-            .spi_handle = binding.bus, // 陀螺使用绑定的 SPI 控制器。
-            .GPIOx = binding.gyro_cs.port, // 陀螺片选所在端口。
-            .cs_pin = binding.gyro_cs.pin, // 陀螺片选引脚。
-            .spi_work_mode = SPI_BLOCK_MODE, // 采样沿用阻塞传输。
+            .bus = PLATFORM_SPI_BUS_2, // 陀螺使用本板第二条 SPI 总线。
+            .chip_select = PLATFORM_GPIO_IMU_GYRO_CS, // 陀螺片选由板级表绑定。
         },
         .spi_acc_config = {
-            .spi_handle = binding.bus, // 加速度计与陀螺共享 SPI 控制器。
-            .GPIOx = binding.accel_cs.port, // 加速度计片选所在端口。
-            .cs_pin = binding.accel_cs.pin, // 加速度计片选引脚。
-            .spi_work_mode = SPI_BLOCK_MODE, // 采样沿用阻塞传输。
+            .bus = PLATFORM_SPI_BUS_2, // 加速度计与陀螺共享总线。
+            .chip_select = PLATFORM_GPIO_IMU_ACCEL_CS, // 加速度计使用独立片选。
         },
         // 加热 PWM 仍由温控模块单独管理，注册时不配置。
     };

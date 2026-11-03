@@ -920,21 +920,15 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         return NULL;
     }
     // 沿用外设配置中的实例上下文；当前注册只接受周期阻塞采样。
-    config->acc_int_config.id =
-        config->gyro_int_config.id =
-            config->spi_acc_config.id =
-                config->spi_gyro_config.id =
-                    config->heat_pwm_config.id = bmi088_instance;
-    // 两个设备的栈缓冲均只用于同步传输，异步采样另行实现。
-    config->spi_acc_config.spi_work_mode = SPI_BLOCK_MODE;
-    config->spi_gyro_config.spi_work_mode = SPI_BLOCK_MODE;
-    bmi088_instance->spi_acc = SPIRegister(&config->spi_acc_config);
-    bmi088_instance->spi_gyro = SPIRegister(&config->spi_gyro_config);
+    config->acc_int_config.id = config->gyro_int_config.id = config->heat_pwm_config.id = bmi088_instance;
+    // 平台根据逻辑端点分配两个同步 SPI 设备。
+    bmi088_instance->spi_acc = PlatformSpiRegisterBlocking(&config->spi_acc_config, bmi088_instance);
+    bmi088_instance->spi_gyro = PlatformSpiRegisterBlocking(&config->spi_gyro_config, bmi088_instance);
     if (bmi088_instance->spi_acc == NULL || bmi088_instance->spi_gyro == NULL)
     {
         bmi088_init_error = BMI088_RESOURCE_ERROR;
-        (void)SPIUnregister(bmi088_instance->spi_acc);
-        (void)SPIUnregister(bmi088_instance->spi_gyro);
+        (void)PlatformSpiUnregister(bmi088_instance->spi_acc);
+        (void)PlatformSpiUnregister(bmi088_instance->spi_gyro);
         free(bmi088_instance);
         return NULL;
     }
@@ -944,8 +938,8 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         if (bmi088_instance->heat_pwm == NULL)
         {
             bmi088_init_error = BMI088_RESOURCE_ERROR;
-            (void)SPIUnregister(bmi088_instance->spi_acc);
-            (void)SPIUnregister(bmi088_instance->spi_gyro);
+            (void)PlatformSpiUnregister(bmi088_instance->spi_acc);
+            (void)PlatformSpiUnregister(bmi088_instance->spi_gyro);
             free(bmi088_instance);
             return NULL;
         }
@@ -969,8 +963,8 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     {
         BSP_LOG_EVENT_6(EV_MODULES_BMI088_BMI088_C_18, BSP_LOG_FIELD_U32((unsigned)init_retry), BSP_LOG_FIELD_HEX32((unsigned)error), BSP_LOG_FIELD_HEX32((unsigned)bmi088_init_acc_chip_id), BSP_LOG_FIELD_U32((unsigned)bmi088_init_acc_status), BSP_LOG_FIELD_HEX32((unsigned)bmi088_init_gyro_chip_id), BSP_LOG_FIELD_U32((unsigned)bmi088_init_gyro_status));
         (void)PWMUnregister(bmi088_instance->heat_pwm);
-        (void)SPIUnregister(bmi088_instance->spi_acc);
-        (void)SPIUnregister(bmi088_instance->spi_gyro);
+        (void)PlatformSpiUnregister(bmi088_instance->spi_acc);
+        (void)PlatformSpiUnregister(bmi088_instance->spi_gyro);
         free(bmi088_instance);
         return NULL;
     }

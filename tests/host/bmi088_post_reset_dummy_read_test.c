@@ -19,6 +19,8 @@ int main(void)
     BMI088_Init_Config_s config = {0};
     config.work_mode = BMI088_BLOCK_PERIODIC_MODE;
     config.cali_mode = BMI088_LOAD_PRE_CALI_MODE;
+    config.spi_acc_config = (PlatformSpiEndpoint_t){PLATFORM_SPI_BUS_2, PLATFORM_GPIO_IMU_ACCEL_CS};
+    config.spi_gyro_config = (PlatformSpiEndpoint_t){PLATFORM_SPI_BUS_2, PLATFORM_GPIO_IMU_GYRO_CS};
     BMI088Instance *instance = BMI088Register(&config);
 
     if (instance == NULL)

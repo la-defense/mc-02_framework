@@ -75,6 +75,14 @@ int main(void)
     if (BMI088Register(&trigger_config) != NULL)
         fail("unsupported asynchronous mode must fail closed instead of publishing transient DMA buffers");
 
+    BMI088_Init_Config_s partial_config = {0};
+    partial_config.spi_acc_config = (PlatformSpiEndpoint_t){PLATFORM_SPI_BUS_2, PLATFORM_GPIO_IMU_ACCEL_CS};
+    partial_config.spi_gyro_config = (PlatformSpiEndpoint_t){PLATFORM_SPI_BUS_2, PLATFORM_GPIO_INVALID};
+    if (BMI088Register(&partial_config) != NULL || bmi088_host_fixture.spi_unregister_count != 1u ||
+        bmi088_host_fixture.transfer_count != 0u)
+        fail("failed gyro registration must release the accelerometer before sensor transfers");
+    BMI088HostReset(); // 后续采样测试独立使用干净的设备替身。
+
     BMI088Instance *instance = BMI088HostCreateAcquireInstance();
 
     BMI088_Data_t sample = {0};
