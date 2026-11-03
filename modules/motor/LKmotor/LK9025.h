@@ -7,14 +7,15 @@
 #define LK9025_H
 
 #include "stdint.h"
-#include "bsp_can.h"
+#include "../../../bsp/can/platform_can.h"
 #include "controller.h"
 #include "motor_def.h"
 #include "daemon.h"
 #include "lk_motor_task.h"
 
 #define LK_MOTOR_PER_BUS_CNT 4u /**< 每条 CAN 总线最多登记的 LK 电机数。 */
-#define LK_MOTOR_MX_CNT (DEVICE_CAN_CNT * LK_MOTOR_PER_BUS_CNT) /**< H723 三条总线共最多12个。 */
+#define LK_CAN_BUS_COUNT 3u /**< 当前框架支持的逻辑 CAN 总线数量。 */
+#define LK_MOTOR_MX_CNT (LK_CAN_BUS_COUNT * LK_MOTOR_PER_BUS_CNT) /**< 三条逻辑总线共最多12个。 */
 
 #define I_MIN -2000
 #define I_MAX 2000
@@ -59,9 +60,9 @@ typedef struct
 
     Motor_Working_Type_e stop_flag; // 启停标志
 
-    CANInstance *motor_can_ins;
+    PlatformCanRxPort_t can_rx; // 长期保存接收端点，不暴露芯片句柄。
     uint8_t motor_id;      // 反馈编号1～4，与发送帧中的两字节位置对应。
-    uint8_t can_bus_index; // 对应 DEVICE_CAN_CNT 中的物理总线序号。
+    uint8_t can_bus_index; // 对应逻辑总线的零起始序号。
     uint32_t feedback_timestamp_ms; // 最后一份 CAN 反馈进入接收队列的 HAL 毫秒时刻。
     uint32_t feedback_sequence; // 有效反馈递增序号，0 保留给未收到样本。
 

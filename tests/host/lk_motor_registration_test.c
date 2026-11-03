@@ -4,6 +4,7 @@
  * @note 每个场景由独立进程运行，避免依赖生产注册表清理接口。
  */
 #include "LK9025.h"
+#include "bsp_can.h" // 本测试直接检查底层注册替身接收的参数。
 #include "bsp_dwt.h"
 #include "test_check.h"
 #include <math.h>
@@ -109,6 +110,29 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     return instance;
 }
 
+uint8_t PlatformCanBusIsBound(PlatformCanBus_t bus)
+{
+    return (uint8_t)(bus >= PLATFORM_CAN_BUS_1 && bus <= PLATFORM_CAN_BUS_3);
+}
+
+uint8_t PlatformCanRxRegister(PlatformCanRxPort_t *port, const PlatformCanEndpoint_t *endpoint,
+                              PlatformCanRxCallback_t callback, void *context)
+{
+    FDCAN_HandleTypeDef *handles[] = {&hfdcan1, &hfdcan2, &hfdcan3};
+    if (port == NULL || endpoint == NULL || !PlatformCanBusIsBound(endpoint->can_bus)) return 0u;
+    CAN_Init_Config_s config = {0};
+    config.can_handle = handles[endpoint->can_bus - PLATFORM_CAN_BUS_1]; // 按逻辑编号选择替身。
+    config.tx_id = endpoint->tx_id;
+    config.rx_id = endpoint->rx_id;
+    config.id = port;
+    CANInstance *instance = CANRegister(&config); // 保留原有注册失败注入。
+    if (instance == NULL) return 0u;
+    port->backend = instance;
+    port->callback = callback;
+    port->context = context;
+    return 1u;
+}
+
 CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
                                        uint32_t key, const CAN_TxFrame_t *frame,
                                        CAN_TxPriority_t priority, uint32_t deadline_ms,
@@ -128,6 +152,16 @@ CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *so
     ++can_transmit_calls;
     *request_id = submission_count;
     return submission->accepted != 0u ? CAN_TX_SUBMIT_ACCEPTED : CAN_TX_SUBMIT_FULL;
+}
+
+CAN_TxSubmitStatus_t PlatformCanSubmitPeriodic(PlatformCanBus_t bus, const void *source,
+    uint32_t key, const CAN_TxFrame_t *frame, CAN_TxPriority_t priority, uint32_t deadline_ms,
+    uint32_t period_us, CAN_TxPeriodicPrepareFn_t prepare, uint32_t *request_id)
+{
+    FDCAN_HandleTypeDef *handles[] = {&hfdcan1, &hfdcan2, &hfdcan3};
+    TEST_CHECK(PlatformCanBusIsBound(bus) && prepare == NULL);
+    return CANSubmitPeriodic(handles[bus - PLATFORM_CAN_BUS_1], source, key, frame,
+                             priority, deadline_ms, period_us, request_id);
 }
 
 static Motor_Init_Config_s config_for(uint8_t bus, uint32_t motor_id)
@@ -214,10 +248,10 @@ static void test_registration(void)
     TEST_CHECK(memcmp(&config, &before, sizeof(config)) == 0);
     TEST_CHECK(motor->motor_id == 1u && motor->can_bus_index == 0u);
     TEST_CHECK(can_registered == 1u && can_attempts == 1u);
-    TEST_CHECK(motor->motor_can_ins->tx_id == 0x280u);
-    TEST_CHECK(motor->motor_can_ins->txconf.Identifier == 0x280u);
-    TEST_CHECK(motor->motor_can_ins->rx_id == 0x141u);
-    TEST_CHECK(motor->motor_can_ins->id == motor);
+    TEST_CHECK(((CANInstance *)motor->can_rx.backend)->tx_id == 0x280u);
+    TEST_CHECK(((CANInstance *)motor->can_rx.backend)->txconf.Identifier == 0x280u);
+    TEST_CHECK(((CANInstance *)motor->can_rx.backend)->rx_id == 0x141u);
+    TEST_CHECK(((CANInstance *)motor->can_rx.backend)->id == &motor->can_rx);
     TEST_CHECK(motor->stop_flag == MOTOR_ENALBED);
 
     // 同总线同编号会在资源申请前拒绝，已有 CAN 和 Daemon 实例保持不变。
@@ -253,8 +287,8 @@ static void test_can_failure_rollback(void)
     LKMotorInstance *motor = LKMotorInit(&config);
     TEST_CHECK(motor != NULL && motor->motor_id == 3u);
     TEST_CHECK(can_registered == 1u && can_attempts == 2u);
-    TEST_CHECK(motor->motor_can_ins->txconf.Identifier == 0x280u);
-    TEST_CHECK(motor->motor_can_ins->rx_id == 0x143u);
+    TEST_CHECK(((CANInstance *)motor->can_rx.backend)->txconf.Identifier == 0x280u);
+    TEST_CHECK(((CANInstance *)motor->can_rx.backend)->rx_id == 0x143u);
 }
 
 static void set_expected(uint8_t *frame, uint8_t motor_id, int16_t value)
@@ -280,8 +314,8 @@ static void test_routing(void)
             Motor_Init_Config_s config = config_for(bus, motor_id);
             motors[bus][motor_id - 1u] = LKMotorInit(&config);
             TEST_CHECK(motors[bus][motor_id - 1u] != NULL);
-            TEST_CHECK(motors[bus][motor_id - 1u]->motor_can_ins->tx_id == 0x280u);
-            TEST_CHECK(motors[bus][motor_id - 1u]->motor_can_ins->rx_id == 0x140u + motor_id);
+            TEST_CHECK(((CANInstance *)motors[bus][motor_id - 1u]->can_rx.backend)->tx_id == 0x280u);
+            TEST_CHECK(((CANInstance *)motors[bus][motor_id - 1u]->can_rx.backend)->rx_id == 0x140u + motor_id);
             if (bus == 0u)
                 break;
         }

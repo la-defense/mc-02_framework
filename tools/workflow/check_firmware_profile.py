@@ -102,6 +102,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/imu/ins_task.c",  # IMU 采样与姿态业务。
     "modules/imu/imu_heater.c",  # 温控策略及逻辑模拟资源。
     "modules/motor/DJImotor/dji_motor.c",  # DJI 逻辑端点、控制和反馈。
+    "modules/motor/LKmotor/LK9025.c",  # LK 逻辑端点和分组发送。
     "modules/motor/motor_task.c",  # 通信派发顺序及电机周期调用。
     "modules/motor/motor_feedback.c",  # 电机能力及反馈换算。
     "modules/motor/motor_pid.c",  # 电机 PID 周期控制。
@@ -354,7 +355,7 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "bsp/os", source_root / "bsp/log", source_root / "bsp/can",
                source_root / "modules/can_comm", source_root / "modules/time_sync",
                source_root / "modules/algorithm", source_root / "modules/referee",
-               source_root / "modules", source_root / "modules/motor", source_root / "modules/motor/DJImotor", source_root / "modules/lcd",
+               source_root / "modules", source_root / "modules/motor", source_root / "modules/motor/DJImotor", source_root / "modules/motor/LKmotor", source_root / "modules/lcd",
                source_root / "bsp/usart", source_root / "modules/remote",
                source_root / "modules/master_machine", source_root / "bsp/usb",
                source_root / "modules/imu", source_root / "modules/BMI088",

@@ -462,10 +462,42 @@ static void test_production_registration_rollback(void)
     LKMotorInstance *motor = LKMotorInit(&config);
     TEST_CHECK(motor != NULL);
     TEST_CHECK(motor->motor_id == 4u && motor->can_bus_index == 2u);
-    TEST_CHECK(motor->motor_can_ins->rx_id == 0x144u);
-    TEST_CHECK(motor->motor_can_ins->tx_id == 0x280u);
-    TEST_CHECK(motor->motor_can_ins->txconf.Identifier == 0x280u);
+    TEST_CHECK(((CANInstance *)motor->can_rx.backend)->rx_id == 0x144u);
+    TEST_CHECK(((CANInstance *)motor->can_rx.backend)->tx_id == 0x280u);
+    TEST_CHECK(((CANInstance *)motor->can_rx.backend)->txconf.Identifier == 0x280u);
     TEST_CHECK(filter_count[2] == 1u && filter_rx_id[2] == 0x144u);
+}
+
+// 使用生产 CAN 入队和端点派发验证 LK 反馈原始时间及错误长度。
+static void test_lk_logical_receive(void)
+{
+    Motor_Init_Config_s config = config_for(0u, 1u); // 将一号电机绑定到逻辑总线一。
+    LKMotorInstance *motor = LKMotorInit(&config); // 注册真实平台适配及过滤器。
+    TEST_CHECK(motor != NULL);
+    TestRxFrame_t *item = &rx_frames[0][0]; // 构造真实 CAN 接收替身的第一帧。
+    memset(item, 0, sizeof(*item));
+    item->header.Identifier = 0x141u;
+    item->header.RxFrameType = FDCAN_DATA_FRAME;
+    item->header.IdType = FDCAN_STANDARD_ID;
+    item->header.DataLength = 8u << 16u;
+    item->data[1] = 42u; // 温度用于证明正确数据到达电机对象。
+    item->data[6] = 0x34u;
+    item->data[7] = 0x12u;
+    rx_frame_count[0] = 1u;
+    now_us = 123000u; // 中断记录的时间早于任务派发时间。
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    TEST_CHECK(motor->feedback_sequence == 0u); // 中断只入队，不运行解码。
+    now_us = 125000u;
+    CANProcessRx(); // 接收任务调用逻辑端点回调。
+    TEST_CHECK(motor->feedback_sequence == 1u && motor->feedback_timestamp_ms == 123u);
+    TEST_CHECK(motor->measure.ecd == 0x1234u && motor->measure.temperature == 42u);
+    rx_frames[0][1] = *item; // 短帧不得刷新上一次有效反馈。
+    rx_frames[0][1].header.DataLength = 7u << 16u;
+    rx_frame_count[0] = 2u;
+    now_us = 130000u;
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    CANProcessRx();
+    TEST_CHECK(motor->feedback_sequence == 1u && motor->feedback_timestamp_ms == 123u);
 }
 
 static void test_production_can_routing(void)
@@ -1956,7 +1988,9 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
     CANInitWorkspace();
-    if (strcmp(argv[1], "platform-can-status") == 0)
+    if (strcmp(argv[1], "lk-logical-receive") == 0)
+        test_lk_logical_receive();
+    else if (strcmp(argv[1], "platform-can-status") == 0)
         test_platform_can_status();
     else if (strcmp(argv[1], "platform-can-rx") == 0)
         test_platform_can_receive();

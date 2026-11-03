@@ -4,7 +4,6 @@
  * 实例只在启动阶段登记，资源在运行期间长期保留。
  */
 #include "LK9025.h"
-#include "board_can_stm32.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
@@ -15,20 +14,16 @@
 #include "../../../bsp/dwt/platform_probe.h" // 保留原反馈间隔计算。
 #include "bsp_log.h"
 
-static LKMotorInstance *lkmotor_instance[DEVICE_CAN_CNT][LK_MOTOR_PER_BUS_CNT] = {{NULL}};
-static CANInstance *lk_sender_instance[DEVICE_CAN_CNT] = {NULL};
-static uint8_t lk_bus_count[DEVICE_CAN_CNT] = {0};
+static LKMotorInstance *lkmotor_instance[LK_CAN_BUS_COUNT][LK_MOTOR_PER_BUS_CNT] = {{NULL}};
+static uint8_t lk_sender_active[LK_CAN_BUS_COUNT] = {0}; // 地址同时作为周期帧的长期来源标识。
+static uint8_t lk_bus_count[LK_CAN_BUS_COUNT] = {0};
 
-// 拒绝未知句柄，避免资源申请后才发现目标不属于当前 H723 的三条 CAN 总线。
-static int8_t LKBusIndexFromHandle(FDCAN_HandleTypeDef *can_handle)
+// 只接受框架声明且板级已绑定的逻辑总线，避免失败后才申请资源。
+static int8_t LKBusIndex(PlatformCanBus_t bus)
 {
-    if (can_handle == &hfdcan1)
-        return 0;
-    if (can_handle == &hfdcan2)
-        return 1;
-    if (can_handle == &hfdcan3)
-        return 2;
-    return -1;
+    if (bus < PLATFORM_CAN_BUS_1 || bus > PLATFORM_CAN_BUS_3 || !PlatformCanBusIsBound(bus))
+        return -1;
+    return (int8_t)(bus - PLATFORM_CAN_BUS_1);
 }
 
 static uint8_t LKSourceValid(const Motor_Signal_Source_s *source,
@@ -104,50 +99,55 @@ static uint8_t LKControlConfigValid(const Motor_Init_Config_s *config)
 /**
  * @brief 电机反馈报文解析
  *
- * @param _instance 发生中断的caninstance
+ * @param context 长期保存的电机对象，由逻辑端点原样传入。
+ * @param frame 接收任务交付的只读帧，保留原始接收时间。
  */
-static void LKMotorDecode(CANInstance *_instance)
+static void LKMotorDecode(void *context, const PlatformCanRxFrame_t *frame)
 {
-    if (_instance == NULL || _instance->id == NULL || _instance->rx_len != 8u)
+    // 必须有完整八字节反馈，短帧不能刷新电机状态。
+    if (context == NULL || frame == NULL || frame->length != 8u)
         return;
-    LKMotorInstance *motor = (LKMotorInstance *)_instance->id; // 通过父对象指针取得对应实例。
-    LKMotor_Measure_t candidate;
-    PlatformTaskCriticalEnter();
-    candidate = motor->measure;
-    PlatformTaskCriticalExit();
-    LKMotor_Measure_t *measure = &candidate;
-    uint8_t *rx_buff = _instance->rx_buff;
+    LKMotorInstance *motor = context; // 接收端点保存长期电机对象。
+    LKMotor_Measure_t candidate; // 在局部副本中更新全部反馈字段。
+    PlatformTaskCriticalEnter(); // 防止读取跨任务修改的一半状态。
+    candidate = motor->measure; // 复制上次编码器、滤波及计时状态。
+    PlatformTaskCriticalExit(); // 后续解析在临界区外完成。
+    LKMotor_Measure_t *measure = &candidate; // 后续计算只修改局部副本。
+    const uint8_t *rx_buff = frame->data; // 该只读数据只在回调期间有效。
 
-    measure->feed_dt = PlatformProbeDeltaSeconds(&measure->feed_dwt_cnt);
+    measure->feed_dt = PlatformProbeDeltaSeconds(&measure->feed_dwt_cnt); // 沿用原反馈计时。
 
-    measure->last_ecd = measure->ecd;
-    measure->ecd = (uint16_t)((rx_buff[7] << 8) | rx_buff[6]);
+    measure->last_ecd = measure->ecd; // 保存上次单圈值以判断跨零。
+    measure->ecd = (uint16_t)((rx_buff[7] << 8) | rx_buff[6]); // 按小端读取编码器。
 
-    measure->angle_single_round = ECD_ANGLE_COEF_LK * measure->ecd;
+    measure->angle_single_round = ECD_ANGLE_COEF_LK * measure->ecd; // 单圈编码器转为角度。
 
+    // 把速度由度每秒转为弧度每秒，并沿用原滤波系数。
     measure->speed_rads = (1 - SPEED_SMOOTH_COEF) * measure->speed_rads +
                           DEGREE_2_RAD * SPEED_SMOOTH_COEF * (float)((int16_t)(rx_buff[5] << 8 | rx_buff[4]));
 
+    // 电流字段按有符号小端解码后沿用原滤波系数。
     measure->real_current = (1 - CURRENT_SMOOTH_COEF) * measure->real_current +
                             CURRENT_SMOOTH_COEF * (float)((int16_t)(rx_buff[3] << 8 | rx_buff[2]));
 
-    measure->temperature = rx_buff[1];
+    measure->temperature = rx_buff[1]; // 保存设备报告的温度。
 
     // 假定两次反馈间转动小于半圈，跨越单圈零点时补减圈数。
     if (measure->ecd - measure->last_ecd > 32768)
-        measure->total_round--;
+        measure->total_round--; // 从低值跨到高值，计作反向跨零。
     else if (measure->ecd - measure->last_ecd < -32768)
-        measure->total_round++;
-    measure->total_angle = measure->total_round * 360 + measure->angle_single_round;
+        measure->total_round++; // 从高值跨到低值，计作正向跨零。
+    measure->total_angle = measure->total_round * 360 + measure->angle_single_round; // 合成多圈角度。
 
-    PlatformTaskCriticalEnter();
-    motor->measure = candidate;
-    motor->feedback_timestamp_ms = _instance->rx_timestamp_ms;
-    motor->feedback_sequence++;
+    PlatformTaskCriticalEnter(); // 反馈、源时间和序号必须一起发布。
+    motor->measure = candidate; // 完整解析后再交付新反馈。
+    motor->feedback_timestamp_ms = frame->received_ms; // 保留中断入队时间。
+    motor->feedback_sequence++; // 每份有效反馈递增序号。
     if (motor->feedback_sequence == 0u)
-        motor->feedback_sequence++;
-    PlatformTaskCriticalExit();
-    (void)DaemonReportAt(motor->daemon, _instance->rx_timestamp_ms,
+        motor->feedback_sequence++; // 零保留给尚未接收反馈的状态。
+    PlatformTaskCriticalExit(); // 完整发布后再允许其他任务读取。
+    // 只有完整帧才刷新该电机的来源期限。
+    (void)DaemonReportAt(motor->daemon, frame->received_ms,
         DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
 }
 
@@ -166,9 +166,7 @@ LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
     if (config == NULL || config->motor_type != LK9025)
         return NULL;
 
-    CAN_Init_Config_s can_config; // 暂存当前板级映射，不修改调用方配置。
-    if (!BoardCanPrepareEndpoint(&config->can_init_config, &can_config)) return NULL; // 未绑定总线不注册。
-    int8_t bus_index = LKBusIndexFromHandle(can_config.can_handle); // 以实际总线选择独立发送组。
+    int8_t bus_index = LKBusIndex(config->can_init_config.can_bus); // 按逻辑总线选择独立发送组。
     uint32_t motor_id = config->can_init_config.tx_id;
     if (bus_index < 0 || motor_id < 1u || motor_id > LK_MOTOR_PER_BUS_CNT)
         return NULL;
@@ -240,12 +238,12 @@ LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
         return NULL;
     }
 
-    can_config.id = motor;
-    can_config.can_module_callback = LKMotorDecode;
-    can_config.rx_id = 0x140u + motor_id;
-    can_config.tx_id = 0x280u;
-    motor->motor_can_ins = CANRegister(&can_config);
-    if (motor->motor_can_ins == NULL)
+    const PlatformCanEndpoint_t endpoint = {
+        .can_bus = config->can_init_config.can_bus, // 沿用车型选择的逻辑总线。
+        .tx_id = 0x280u, // 所有 LK 电机共用组发送 ID。
+        .rx_id = 0x140u + motor_id, // 每个电机使用独立反馈 ID。
+    };
+    if (!PlatformCanRxRegister(&motor->can_rx, &endpoint, LKMotorDecode, motor))
     {
         // CAN 失败时先移除离线回调，避免它引用即将释放的候选对象。
         (void)DaemonUnregister(motor->daemon);
@@ -254,8 +252,7 @@ LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
     }
 
     // 所有可能失败的资源申请已完成，至此才让控制和接收路径看到实例。
-    if (lk_sender_instance[(uint8_t)bus_index] == NULL)
-        lk_sender_instance[(uint8_t)bus_index] = motor->motor_can_ins;
+    lk_sender_active[(uint8_t)bus_index] = 1u; // 注册成功后才允许此总线组发送。
     LKMotorEnable(motor);
     lkmotor_instance[(uint8_t)bus_index][slot] = motor;
     lk_bus_count[(uint8_t)bus_index]++;
@@ -263,7 +260,7 @@ LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
     return motor;
 }
 
-/* 各总线使用本组首个成功登记实例的发送缓冲区。 */
+/* 转换原始反馈，两个输出只在完整转换成功后写入。 */
 static Motor_Feedback_Status_e LKConvertMeasureToOutputAxis(
     const Motor_Output_Axis_Config_s *config, const LKMotor_Measure_t *measure,
     float *position_rad, float *speed_rad_s)
@@ -325,11 +322,11 @@ Motor_Feedback_Status_e LKMotorGetFeedbackSnapshot(const LKMotorInstance *motor,
     return MOTOR_FEEDBACK_OK;
 }
 
-/* 各总线使用本组首个成功登记实例的发送缓冲区。 */
+/* 每条逻辑总线分别组帧，并使用长期组标识提交最新周期目标。 */
 void LKMotorControl(void)
 {
-    uint8_t tx_frames[DEVICE_CAN_CNT][8] = {{0}};
-    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+    uint8_t tx_frames[LK_CAN_BUS_COUNT][8] = {{0}};
+    for (uint8_t bus = 0u; bus < LK_CAN_BUS_COUNT; ++bus)
     {
         for (uint8_t slot = 0u; slot < LK_MOTOR_PER_BUS_CNT; ++slot)
         {
@@ -449,9 +446,9 @@ void LKMotorControl(void)
             tx_frames[bus][offset + 1u] = (uint8_t)(wire >> 8u);
         }
     }
-    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+    for (uint8_t bus = 0u; bus < LK_CAN_BUS_COUNT; ++bus)
     {
-        if (lk_sender_instance[bus] == NULL)
+        if (!lk_sender_active[bus])
             continue;
         const CAN_TxFrame_t frame = {
             .identifier = 0x280u,
@@ -460,9 +457,9 @@ void LKMotorControl(void)
             .length = 8u,
         };
         uint32_t request_id = 0u;
-        (void)CANSubmitPeriodic(lk_sender_instance[bus]->can_handle,
-                                lk_sender_instance[bus], 0u, &frame,
-                                CAN_TX_PRIORITY_CONTROL, 4u, 1000u, &request_id);
+        (void)PlatformCanSubmitPeriodic((PlatformCanBus_t)(PLATFORM_CAN_BUS_1 + bus),
+                                       &lk_sender_active[bus], 0u, &frame,
+                                       CAN_TX_PRIORITY_CONTROL, 4u, 1000u, NULL, &request_id);
     }
 }
 
