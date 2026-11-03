@@ -17,7 +17,7 @@ typedef enum
     BUZZER_STATUS_RESOURCE,
 } BuzzerStatus_t;
 
-/** @brief 注册 TIM12 通道 2 并以静音状态启动。
+/** @brief 初始化板级蜂鸣器输出并以静音状态启动。
  * @return 成功或已初始化为 BUZZER_STATUS_OK，PWM 注册失败为 RESOURCE。
  * @note 初始化只创建一个 PWM 实例；失败不影响整车 safety 状态。
  */

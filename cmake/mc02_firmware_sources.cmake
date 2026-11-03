@@ -245,6 +245,8 @@ endif()
 if(NOT MC02_FEATURE_ALARM)
     list(FILTER MC02_COMMON_MODULE_C_SOURCES EXCLUDE REGEX "^modules/alarm/")
     list(REMOVE_ITEM MC02_BSP_C_SOURCES bsp/ws2812/ws2812.c)
+else()
+    list(APPEND MC02_BSP_C_SOURCES bsp/board/platform_buzzer_mc02.c) # 板载蜂鸣器 PWM 绑定。
 endif()
 foreach(pair IN ITEMS "DJI;DJImotor/dji_motor.c" "LK;LKmotor/LK9025.c" "HT;HTmotor/HT04.c")
     list(GET pair 0 driver)

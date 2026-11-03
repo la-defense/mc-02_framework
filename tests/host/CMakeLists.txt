@@ -384,9 +384,10 @@ foreach(scenario priority timing mute validation outputs)
 endforeach()
 
 # 蜂鸣器目标链接生产音符映射；仅以记录 PWM 调用的替身代替定时器外设。
-add_executable(buzzer_driver_test buzzer_driver_test.c ../../modules/alarm/buzzer.c)
+add_executable(buzzer_driver_test buzzer_driver_test.c ../../modules/alarm/buzzer.c
+  ../../bsp/board/platform_buzzer_mc02.c)
 target_include_directories(buzzer_driver_test BEFORE PRIVATE alarm_driver_fakes)
-target_include_directories(buzzer_driver_test PRIVATE ../../modules/alarm)
+target_include_directories(buzzer_driver_test PRIVATE ../../modules/alarm ../../bsp/board)
 target_compile_options(buzzer_driver_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
 if(UNIX)
   target_link_libraries(buzzer_driver_test PRIVATE m)

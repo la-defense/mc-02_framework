@@ -5,6 +5,7 @@
 #include "test_check.h"
 #include "buzzer.h"
 #include "bsp_pwm.h"
+#include "platform_buzzer.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -44,6 +45,8 @@ static void TestNoteMapping(void)
 {
     static const float expected_hz[BUZZER_NOTE_COUNT] = {
         0.0f, 523.0f, 587.0f, 659.0f, 698.0f, 784.0f, 880.0f, 988.0f, 1046.0f};
+    TEST_CHECK(PlatformBuzzerInit(0u) == 0u); // 零频率不得进入周期换算或占用资源。
+    TEST_CHECK(register_calls == 0u);
     TEST_CHECK(BuzzerInit() == BUZZER_STATUS_OK);
     TEST_CHECK(BuzzerInit() == BUZZER_STATUS_OK);
     TEST_CHECK(register_calls == 1u);
