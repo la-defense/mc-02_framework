@@ -296,6 +296,8 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/motor/DJImotor/dji_motor.c # DJI 普通控制及逻辑 CAN 接口。
     modules/motor/motor_task.c # 单一通信派发和电机周期任务。
     modules/task_monitor/task_monitor.c # 任务进度、期限及核心故障策略。
+    modules/alarm/robot_alarm.c # 安全状态与灯声输出的告警协调。
+    modules/alarm/robot_alarm_policy.c # 故障仲裁、节奏与静音策略。
     modules/lcd/lcd_buf.c # LCD 有界绘图与字体转换。
     modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
     application/robot_task_create.c) # 已选任务的创建与失败处理。
@@ -328,6 +330,7 @@ target_include_directories(mc02_portable_framework PRIVATE
     modules # 电机控制使用的公共单位定义。
     modules/motor # 电机能力、反馈及 PID 接口。
     modules/lcd # 显示状态和绘图接口。
+    modules/alarm # 告警策略与灯声输出接口。
     modules/referee # 裁判协议与图形接口。
     modules/remote # 遥控输入公开接口。
     modules/master_machine # 上位机协议和传输选择接口。

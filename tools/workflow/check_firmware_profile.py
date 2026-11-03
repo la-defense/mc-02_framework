@@ -80,6 +80,8 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/motor/DJImotor/dji_motor.c",  # DJI 逻辑端点、控制和反馈。
     "modules/motor/motor_task.c",  # 通信派发顺序及电机周期调用。
     "modules/task_monitor/task_monitor.c",  # 任务期限和故障处理策略。
+    "modules/alarm/robot_alarm.c",  # 告警协调与状态发布。
+    "modules/alarm/robot_alarm_policy.c",  # 告警仲裁和灯声节奏。
     "modules/lcd/lcd_buf.c",  # LCD 有界绘图及像素缓冲。
     "modules/lcd/lcd_task.c",  # LCD 页面、按键和运行统计任务。
     "application/robot_task_create.c",  # 按车型配置创建任务。
@@ -243,7 +245,7 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "bsp/usart", source_root / "modules/remote",
                source_root / "modules/master_machine", source_root / "bsp/usb",
                source_root / "modules/imu", source_root / "modules/BMI088",
-               source_root / "modules/task_monitor", source_root / "bsp/dwt",
+               source_root / "modules/task_monitor", source_root / "modules/alarm", source_root / "bsp/dwt",
                source_root / "bsp/adc", source_root / "bsp/observation",
                source_root / "bsp/safety", source_root / "application",
                source_root / "application/config",
@@ -295,7 +297,8 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                source_root / "modules/motor", source_root / "modules/lcd",
                source_root / "bsp/usart", source_root / "modules/remote",
                source_root / "modules/master_machine", source_root / "bsp/usb",
-               source_root / "modules/imu", source_root / "modules/task_monitor")
+               source_root / "modules/imu", source_root / "modules/task_monitor",
+               source_root / "modules/alarm")
     for line in lines[1:]:
         # 依赖可能为相对构建目录的路径，也可能为绝对路径。
         if not line.strip():

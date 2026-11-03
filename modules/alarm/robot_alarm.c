@@ -9,7 +9,8 @@
 
 #include "buzzer.h"
 #include "led.h"
-#include "main.h"
+#include "platform_irq.h"
+#include "platform_sync.h"
 #include "robot_safety.h"
 
 #include <string.h>
@@ -24,16 +25,14 @@ static uint32_t mute_request_duration_ms;
 static RobotAlarmStatus_t last_mute_status = ROBOT_ALARM_ERROR_UNINITIALIZED;
 static RobotAlarmState_t published_alarm_state;
 
-static uint32_t RobotAlarmEnterCritical(void)
+static PlatformIrqState_t RobotAlarmEnterCritical(void)
 {
-    const uint32_t previous = __get_PRIMASK();
-    __disable_irq();
-    return previous;
+    return PlatformIrqSaveAndDisable(); // 保存已有屏蔽状态并保护请求和输出状态。
 }
 
-static void RobotAlarmExitCritical(uint32_t previous)
+static void RobotAlarmExitCritical(PlatformIrqState_t previous)
 {
-    __set_PRIMASK(previous);
+    PlatformIrqRestore(previous); // 恢复进入前的状态，允许与外层屏蔽嵌套。
 }
 
 static RobotAlarmWriteResult_t RobotAlarmWriteLed(void *context,
@@ -126,7 +125,7 @@ RobotAlarmStatus_t RobotAlarmTask(void)
         .fault_flags = safety_snapshot.fault_flags,
         .estop_latched = safety_snapshot.estop_latched,
     };
-    const uint32_t now_ms = HAL_GetTick();
+    const uint32_t now_ms = PlatformTimeNowMs(); // 使用后端原有的毫秒计数推进灯声节奏。
     RobotAlarmStatus_t result = RobotAlarmPolicyUpdate(&robot_alarm_policy, &input,
                                                        now_ms);
     RobotAlarmState_t current_state;

@@ -396,11 +396,11 @@ foreach(scenario notes failure)
   set_tests_properties(production_buzzer_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
 
-# 告警运行桥接链接生产策略和适配层；仅替换 HAL、安全快照及两个外设驱动。
+# 告警运行桥接链接生产策略和适配层；替换平台时钟、中断、安全状态及两个外设驱动。
 add_executable(robot_alarm_adapter_test robot_alarm_adapter_test.c
   ../../modules/alarm/robot_alarm.c ../../modules/alarm/robot_alarm_policy.c)
 target_include_directories(robot_alarm_adapter_test BEFORE PRIVATE robot_alarm_adapter_fakes)
-target_include_directories(robot_alarm_adapter_test PRIVATE ../../modules/alarm)
+target_include_directories(robot_alarm_adapter_test PRIVATE ../../modules/alarm ../../bsp/os)
 target_compile_options(robot_alarm_adapter_test PRIVATE -Wall -Wextra -Werror
   -fno-fast-math)
 foreach(scenario init-degraded partial mute-generation mute-serial snapshot-failure unknown-state idempotent-init)

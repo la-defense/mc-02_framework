@@ -1,12 +1,14 @@
 /** @file robot_alarm_adapter_test.c
  * @brief 检查生产告警适配层只读 safety 快照并将外设失败限制在辅助输出。
- * @note HAL、安全输出和告警外设由独立进程中的替身提供；不连接机器人硬件。
+ * @note 平台接口、安全状态和告警外设由独立进程中的替身提供；不连接机器人硬件。
  */
 #include "test_check.h"
 #include "robot_alarm.h"
 #include "robot_safety.h"
 #include "buzzer.h"
 #include "led.h"
+#include "platform_irq.h"
+#include "platform_sync.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -34,10 +36,14 @@ static RobotAlarmFaultRule_t fault_rules[9];
 static RobotAlarmStateRule_t state_rules[ROBOT_ALARM_STATE_COUNT];
 static RobotAlarmConfig_t config;
 
-uint32_t HAL_GetTick(void) { return tick_ms; }
-uint32_t __get_PRIMASK(void) { return primask; }
-void __disable_irq(void) { primask = 1u; }
-void __set_PRIMASK(uint32_t previous) { primask = previous; }
+uint32_t PlatformTimeNowMs(void) { return tick_ms; }
+PlatformIrqState_t PlatformIrqSaveAndDisable(void)
+{
+    const uint32_t previous = primask; // 保留进入前状态，模拟可嵌套屏蔽。
+    primask = 1u; // 记录保护区内的屏蔽状态。
+    return previous; // 退出时使用原状态。
+}
+void PlatformIrqRestore(PlatformIrqState_t previous) { primask = previous; }
 
 uint8_t RobotSafetyGetSnapshot(RobotSafetySnapshot_t *snapshot)
 {
@@ -190,6 +196,9 @@ static void TestMuteGeneration(void)
     TEST_CHECK(state.mute_active == 0u);
     TEST_CHECK(state.last_mute_status == ROBOT_ALARM_ERROR_EVENT_CHANGED);
     TEST_CHECK(last_note == OCTAVE_2 && last_duty == 200u);
+    primask = 1u; // 模拟调用前已屏蔽中断，查询不能提前解除屏蔽。
+    TEST_CHECK(RobotAlarmGetState(&state) == ROBOT_ALARM_OK);
+    TEST_CHECK(primask == 1u);
 }
 
 static void TestMuteRequestDuringProcessing(void)
