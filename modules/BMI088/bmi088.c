@@ -6,6 +6,7 @@
 #include "bmi088_regNdef.h"
 #include "bmi088.h"
 #include "bmi088_temperature.h"
+#include "../../bsp/spi/platform_spi_blocking.h"
 #include "vector3.h"
 #include "daemon.h"
 #include "bsp_log.h"
@@ -27,8 +28,8 @@ volatile uint32_t bmi088_init_error = BMI088_NO_ERROR;
 volatile uint32_t bmi088_init_retry_count = 0u;
 volatile uint32_t bmi088_init_stage = BMI088_INIT_STAGE_IDLE;
 volatile uint32_t bmi088_init_failure_stage = BMI088_INIT_STAGE_IDLE;
-volatile uint32_t bmi088_init_acc_status = HAL_OK;
-volatile uint32_t bmi088_init_gyro_status = HAL_OK;
+volatile uint32_t bmi088_init_acc_status = PLATFORM_SPI_OK;
+volatile uint32_t bmi088_init_gyro_status = PLATFORM_SPI_OK;
 volatile uint32_t bmi088_init_acc_chip_id = 0u;
 volatile uint32_t bmi088_init_gyro_chip_id = 0u;
 
@@ -62,19 +63,18 @@ volatile uint32_t cali_diag_iter_us_max = 0;  /* 内层单轮最大总耗时(us)
  * @param dataptr 读取到的数据存放的指针
  * @param len 读取长度
  */
-static HAL_StatusTypeDef BMI088AccelRead(BMI088Instance *bmi088, uint8_t reg, uint8_t *dataptr, uint8_t len)
+static PlatformSpiStatus_t BMI088AccelRead(BMI088Instance *bmi088, uint8_t reg, uint8_t *dataptr, uint8_t len)
 {
-    /* The local receive buffer is valid only for a synchronous SPI transfer. */
-    if (bmi088 == NULL || bmi088->spi_acc == NULL || dataptr == NULL || len == 0u || len > 6u ||
-        bmi088->spi_acc->spi_work_mode != SPI_BLOCK_MODE)
-        return HAL_ERROR;
-    uint8_t tx[8] = {0};
-    uint8_t rx[8] = {0};
-    tx[0] = (uint8_t)(0x80u | reg);
-    HAL_StatusTypeDef status = SPITransRecv(bmi088->spi_acc, rx, tx, (uint8_t)(len + 2u));
-    if (status == HAL_OK)
-        memcpy(dataptr, rx + 2, len);
-    return status;
+    // 只接受可容纳于下面 8 字节帧中的寄存器读取。
+    if (bmi088 == NULL || bmi088->spi_acc == NULL || dataptr == NULL || len == 0u || len > 6u)
+        return PLATFORM_SPI_ERROR;
+    uint8_t tx[8] = {0}; // 首字节为地址，后续字节产生读取时钟。
+    uint8_t rx[8] = {0}; // 阻塞传输结束前保持接收缓冲有效。
+    tx[0] = (uint8_t)(0x80u | reg); // 最高位表示读取寄存器。
+    PlatformSpiStatus_t status = PlatformSpiTransferBlocking(bmi088->spi_acc, rx, tx, (uint8_t)(len + 2u)); // 加速度计有一个额外空字节。
+    if (status == PLATFORM_SPI_OK) // 只有完整传输才交付数据。
+        memcpy(dataptr, rx + 2, len); // 跳过命令与空字节。
+    return status; // 保留错误类别供初始化和采样报告。
 }
 
 /**
@@ -85,19 +85,18 @@ static HAL_StatusTypeDef BMI088AccelRead(BMI088Instance *bmi088, uint8_t reg, ui
  * @param dataptr 读取到的数据存放的指针
  * @param len 读取长度
  */
-static HAL_StatusTypeDef BMI088GyroRead(BMI088Instance *bmi088, uint8_t reg, uint8_t *dataptr, uint8_t len)
+static PlatformSpiStatus_t BMI088GyroRead(BMI088Instance *bmi088, uint8_t reg, uint8_t *dataptr, uint8_t len)
 {
-    /* The local receive buffer is valid only for a synchronous SPI transfer. */
-    if (bmi088 == NULL || bmi088->spi_gyro == NULL || dataptr == NULL || len == 0u || len > 6u ||
-        bmi088->spi_gyro->spi_work_mode != SPI_BLOCK_MODE)
-        return HAL_ERROR;
-    uint8_t tx[7] = {0};
-    uint8_t rx[7] = {0};
-    tx[0] = (uint8_t)(0x80u | reg);
-    HAL_StatusTypeDef status = SPITransRecv(bmi088->spi_gyro, rx, tx, (uint8_t)(len + 1u));
-    if (status == HAL_OK)
-        memcpy(dataptr, rx + 1, len);
-    return status;
+    // 只接受可容纳于下面 7 字节帧中的寄存器读取。
+    if (bmi088 == NULL || bmi088->spi_gyro == NULL || dataptr == NULL || len == 0u || len > 6u)
+        return PLATFORM_SPI_ERROR;
+    uint8_t tx[7] = {0}; // 首字节为地址，后续字节产生读取时钟。
+    uint8_t rx[7] = {0}; // 阻塞传输结束前保持接收缓冲有效。
+    tx[0] = (uint8_t)(0x80u | reg); // 最高位表示读取寄存器。
+    PlatformSpiStatus_t status = PlatformSpiTransferBlocking(bmi088->spi_gyro, rx, tx, (uint8_t)(len + 1u)); // 陀螺数据紧随命令字节。
+    if (status == PLATFORM_SPI_OK) // 只有完整传输才交付数据。
+        memcpy(dataptr, rx + 1, len); // 跳过命令字节。
+    return status; // 保留错误类别供初始化和采样报告。
 }
 
 /**
@@ -108,14 +107,13 @@ static HAL_StatusTypeDef BMI088GyroRead(BMI088Instance *bmi088, uint8_t reg, uin
  * @param reg  待写入的寄存器地址
  * @param data 待写入的数据(注意不是指针)
  */
-static HAL_StatusTypeDef BMI088AccelWriteSingleReg(BMI088Instance *bmi088, uint8_t reg, uint8_t data)
+static PlatformSpiStatus_t BMI088AccelWriteSingleReg(BMI088Instance *bmi088, uint8_t reg, uint8_t data)
 {
-    if (bmi088 == NULL || bmi088->spi_acc == NULL ||
-        bmi088->spi_acc->spi_work_mode != SPI_BLOCK_MODE)
-        return HAL_ERROR;
+    if (bmi088 == NULL || bmi088->spi_acc == NULL)
+        return PLATFORM_SPI_ERROR;
     uint8_t tx[2] = {reg, data};
     uint8_t rx[2] = {0};
-    return SPITransRecv(bmi088->spi_acc, rx, tx, sizeof(tx));
+    return PlatformSpiTransferBlocking(bmi088->spi_acc, rx, tx, sizeof(tx));
 }
 
 /**
@@ -126,14 +124,13 @@ static HAL_StatusTypeDef BMI088AccelWriteSingleReg(BMI088Instance *bmi088, uint8
  * @param reg  待写入的寄存器地址
  * @param data 待写入的数据(注意不是指针)
  */
-static HAL_StatusTypeDef BMI088GyroWriteSingleReg(BMI088Instance *bmi088, uint8_t reg, uint8_t data)
+static PlatformSpiStatus_t BMI088GyroWriteSingleReg(BMI088Instance *bmi088, uint8_t reg, uint8_t data)
 {
-    if (bmi088 == NULL || bmi088->spi_gyro == NULL ||
-        bmi088->spi_gyro->spi_work_mode != SPI_BLOCK_MODE)
-        return HAL_ERROR;
+    if (bmi088 == NULL || bmi088->spi_gyro == NULL)
+        return PLATFORM_SPI_ERROR;
     uint8_t tx[2] = {reg, data};
     uint8_t rx[2] = {0};
-    return SPITransRecv(bmi088->spi_gyro, rx, tx, sizeof(tx));
+    return PlatformSpiTransferBlocking(bmi088->spi_gyro, rx, tx, sizeof(tx));
 }
 // -------------------------以上为私有函数,封装了BMI088寄存器读写函数,blocking--------------------------------//
 
@@ -173,9 +170,9 @@ static uint8_t BMI088AccelInit(BMI088Instance *bmi088)
 
     // 加速度计以I2C模式启动,需要一次上升沿来切换到SPI模式,因此进行一次fake write
     bmi088_init_stage = BMI088_INIT_STAGE_ACCEL_INTERFACE_PROBE;
-    HAL_StatusTypeDef status = BMI088AccelRead(bmi088, BMI088_ACC_CHIP_ID, &whoami_check, 1);
+    PlatformSpiStatus_t status = BMI088AccelRead(bmi088, BMI088_ACC_CHIP_ID, &whoami_check, 1);
     bmi088_init_acc_status = (uint32_t)status;
-    if (status != HAL_OK)
+    if (status != PLATFORM_SPI_OK)
     {
         BMI088RecordInitFailureStage();
         return BMI088_NO_SENSOR;
@@ -185,7 +182,7 @@ static uint8_t BMI088AccelInit(BMI088Instance *bmi088)
     bmi088_init_stage = BMI088_INIT_STAGE_ACCEL_SOFT_RESET;
     status = BMI088AccelWriteSingleReg(bmi088, BMI088_ACC_SOFTRESET, BMI088_ACC_SOFTRESET_VALUE);
     bmi088_init_acc_status = (uint32_t)status;
-    if (status != HAL_OK)
+    if (status != PLATFORM_SPI_OK)
     {
         BMI088RecordInitFailureStage();
         return BMI088_NO_SENSOR;
@@ -197,7 +194,7 @@ static uint8_t BMI088AccelInit(BMI088Instance *bmi088)
     whoami_check = 0u;
     status = BMI088AccelRead(bmi088, BMI088_ACC_CHIP_ID, &whoami_check, 1);
     bmi088_init_acc_status = (uint32_t)status;
-    if (status != HAL_OK)
+    if (status != PLATFORM_SPI_OK)
     {
         BMI088RecordInitFailureStage();
         return BMI088_NO_SENSOR;
@@ -209,7 +206,7 @@ static uint8_t BMI088AccelInit(BMI088Instance *bmi088)
     status = BMI088AccelRead(bmi088, BMI088_ACC_CHIP_ID, &whoami_check, 1);
     bmi088_init_acc_status = (uint32_t)status;
     bmi088_init_acc_chip_id = whoami_check;
-    if (status != HAL_OK || whoami_check != BMI088_ACC_CHIP_ID_VALUE)
+    if (status != PLATFORM_SPI_OK || whoami_check != BMI088_ACC_CHIP_ID_VALUE)
     {
         BMI088RecordInitFailureStage();
         return BMI088_NO_SENSOR;
@@ -226,7 +223,7 @@ static uint8_t BMI088AccelInit(BMI088Instance *bmi088)
         data = BMI088_Accel_Init_Table[i][BMI088DATA];
         status = BMI088AccelWriteSingleReg(bmi088, reg, data);
         bmi088_init_acc_status = (uint32_t)status;
-        if (status != HAL_OK)
+        if (status != PLATFORM_SPI_OK)
         {
             BMI088RecordInitFailureStage();
             return BMI088_NO_SENSOR;
@@ -235,7 +232,7 @@ static uint8_t BMI088AccelInit(BMI088Instance *bmi088)
         status = BMI088AccelRead(bmi088, reg, &data, 1); // 写完之后立刻读回检查
         bmi088_init_acc_status = (uint32_t)status;
         TaskMonitorDelayMs(TASK_MONITOR_INS, 10u);
-        if (status != HAL_OK)
+        if (status != PLATFORM_SPI_OK)
         {
             BMI088RecordInitFailureStage();
             return BMI088_NO_SENSOR;
@@ -260,10 +257,10 @@ static uint8_t BMI088GyroInit(BMI088Instance *bmi088)
     // 后续添加reset和通信检查?
     // code to go here ...
     bmi088_init_stage = BMI088_INIT_STAGE_GYRO_SOFT_RESET;
-    HAL_StatusTypeDef status = BMI088GyroWriteSingleReg(
+    PlatformSpiStatus_t status = BMI088GyroWriteSingleReg(
         bmi088, BMI088_GYRO_SOFTRESET, BMI088_GYRO_SOFTRESET_VALUE);
     bmi088_init_gyro_status = (uint32_t)status;
-    if (status != HAL_OK)
+    if (status != PLATFORM_SPI_OK)
     {
         BMI088RecordInitFailureStage();
         return BMI088_NO_SENSOR;
@@ -276,7 +273,7 @@ static uint8_t BMI088GyroInit(BMI088Instance *bmi088)
     status = BMI088GyroRead(bmi088, BMI088_GYRO_CHIP_ID, &whoami_check, 1);
     bmi088_init_gyro_status = (uint32_t)status;
     bmi088_init_gyro_chip_id = whoami_check;
-    if (status != HAL_OK || whoami_check != BMI088_GYRO_CHIP_ID_VALUE)
+    if (status != PLATFORM_SPI_OK || whoami_check != BMI088_GYRO_CHIP_ID_VALUE)
     {
         BMI088RecordInitFailureStage();
         return BMI088_NO_SENSOR;
@@ -294,7 +291,7 @@ static uint8_t BMI088GyroInit(BMI088Instance *bmi088)
         data = BMI088_Gyro_Init_Table[i][BMI088DATA];
         status = BMI088GyroWriteSingleReg(bmi088, reg, data);
         bmi088_init_gyro_status = (uint32_t)status;
-        if (status != HAL_OK)
+        if (status != PLATFORM_SPI_OK)
         {
             BMI088RecordInitFailureStage();
             return BMI088_NO_SENSOR;
@@ -303,7 +300,7 @@ static uint8_t BMI088GyroInit(BMI088Instance *bmi088)
         status = BMI088GyroRead(bmi088, reg, &data, 1); // 写完之后立刻读回对应寄存器检查是否写入成功
         bmi088_init_gyro_status = (uint32_t)status;
         TaskMonitorDelayMs(TASK_MONITOR_INS, 1u);
-        if (status != HAL_OK)
+        if (status != PLATFORM_SPI_OK)
         {
             BMI088RecordInitFailureStage();
             return BMI088_NO_SENSOR;
@@ -345,7 +342,7 @@ static void BMI088AccINTCallback(GPIOInstance *gpio)
 {
     BMI088Instance *bmi088 = (BMI088Instance *)gpio->id;
     uint8_t buf[6] = {0};
-    if (BMI088AccelRead(bmi088, BMI088_ACCEL_XOUT_L, buf, 6u) != HAL_OK)
+    if (BMI088AccelRead(bmi088, BMI088_ACCEL_XOUT_L, buf, 6u) != PLATFORM_SPI_OK)
         return;
     for (uint8_t i = 0; i < 3u; ++i)
         bmi088->acc[i] = bmi088->acc_coef * (float)(int16_t)(((uint16_t)buf[2u * i + 1u] << 8u) | buf[2u * i]);
@@ -358,7 +355,7 @@ static void BMI088GyroINTCallback(GPIOInstance *gpio)
 {
     BMI088Instance *bmi088 = (BMI088Instance *)gpio->id;
     uint8_t buf[6] = {0};
-    if (BMI088GyroRead(bmi088, BMI088_GYRO_X_L, buf, 6u) != HAL_OK)
+    if (BMI088GyroRead(bmi088, BMI088_GYRO_X_L, buf, 6u) != PLATFORM_SPI_OK)
         return;
     for (uint8_t i = 0; i < 3u; ++i)
         bmi088->gyro[i] = bmi088->BMI088_GYRO_SEN * (float)(int16_t)(((uint16_t)buf[2u * i + 1u] << 8u) | buf[2u * i]);
@@ -394,26 +391,26 @@ BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data
     // 先在局部变量中准备数据；所有检查通过后再一次写入实例和输出。
     BMI088_Data_t staged = {0};
     uint8_t raw[6] = {0};
-    HAL_StatusTypeDef spi_status;
+    PlatformSpiStatus_t spi_status;
 
     if (bmi088->work_mode == BMI088_BLOCK_PERIODIC_MODE)
     {
         spi_status = BMI088AccelRead(bmi088, BMI088_ACCEL_XOUT_L, raw, 6u);
-        if (spi_status != HAL_OK)
+        if (spi_status != PLATFORM_SPI_OK)
             goto spi_failure;
         // 每两个寄存器字节组成一个有符号轴数据，再乘对应换算系数。
         for (uint8_t i = 0; i < 3u; ++i)
             staged.acc[i] = bmi088->acc_coef * (float)(int16_t)(((uint16_t)raw[2u * i + 1u] << 8u) | raw[2u * i]);
 
         spi_status = BMI088GyroRead(bmi088, BMI088_GYRO_X_L, raw, 6u);
-        if (spi_status != HAL_OK)
+        if (spi_status != PLATFORM_SPI_OK)
             goto spi_failure;
         // 陀螺仪同样按 x、y、z 顺序读取和换算。
         for (uint8_t i = 0; i < 3u; ++i)
             staged.gyro[i] = bmi088->BMI088_GYRO_SEN * (float)(int16_t)(((uint16_t)raw[2u * i + 1u] << 8u) | raw[2u * i]);
 
         spi_status = BMI088AccelRead(bmi088, BMI088_TEMP_M, raw, 2u);
-        if (spi_status != HAL_OK)
+        if (spi_status != PLATFORM_SPI_OK)
             goto spi_failure;
         staged.temperature = BMI088DecodeTemperature(raw[0], raw[1]);
     }
@@ -438,7 +435,7 @@ BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data
         memcpy(staged.acc, bmi088->acc, sizeof(staged.acc));
         memcpy(staged.gyro, bmi088->gyro, sizeof(staged.gyro));
         spi_status = BMI088AccelRead(bmi088, BMI088_TEMP_M, raw, 2u);
-        if (spi_status != HAL_OK)
+        if (spi_status != PLATFORM_SPI_OK)
             goto spi_failure;
         staged.temperature = BMI088DecodeTemperature(raw[0], raw[1]);
         bmi088->update_flag.acc = 0u;
@@ -473,12 +470,12 @@ BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data
     return BMI088_ACQUIRE_OK;
 
 spi_failure:
-    if (spi_status == HAL_BUSY)
+    if (spi_status == PLATFORM_SPI_BUSY)
     {
         bmi088->last_acquire_status = BMI088_ACQUIRE_SPI_BUSY;
         return BMI088_ACQUIRE_SPI_BUSY;
     }
-    if (spi_status == HAL_TIMEOUT)
+    if (spi_status == PLATFORM_SPI_TIMEOUT)
     {
         bmi088->last_acquire_status = BMI088_ACQUIRE_SPI_TIMEOUT;
         return BMI088_ACQUIRE_SPI_TIMEOUT;
@@ -943,8 +940,8 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     bmi088_init_retry_count = 0u;
     bmi088_init_stage = BMI088_INIT_STAGE_IDLE;
     bmi088_init_failure_stage = BMI088_INIT_STAGE_IDLE;
-    bmi088_init_acc_status = HAL_OK;
-    bmi088_init_gyro_status = HAL_OK;
+    bmi088_init_acc_status = PLATFORM_SPI_OK;
+    bmi088_init_gyro_status = PLATFORM_SPI_OK;
     bmi088_init_acc_chip_id = 0u;
     bmi088_init_gyro_chip_id = 0u;
 

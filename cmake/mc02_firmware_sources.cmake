@@ -80,6 +80,7 @@ set(MC02_BSP_C_SOURCES
     bsp/board/platform_adc_stm32.c # 电源电压逻辑模拟输入适配。
     bsp/board/platform_can_stm32.c # 逻辑 CAN 总线的发送队列适配。
     bsp/board/platform_can_oneshot_stm32.c # 一次性 CAN 命令的逻辑总线适配。
+    bsp/board/platform_spi_blocking_stm32.c # 同步 SPI 状态与阻塞模式检查。
     bsp/board/platform_can_status_stm32.c # 逻辑 CAN 控制器状态查询。
     bsp/board/platform_can_periodic_stm32.c # 逻辑 CAN 周期发送及发送前检查。
     bsp/board/platform_can_rx_stm32.c # 逻辑 CAN 接收端点适配。
