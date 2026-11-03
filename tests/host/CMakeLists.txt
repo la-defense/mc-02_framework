@@ -1190,13 +1190,13 @@ add_test(NAME production_chassis_motion_limits COMMAND chassis_motion_test)
 foreach(chassis_limits_profile IN ITEMS configured unconfigured)
   set(target chassis_task_${chassis_limits_profile}_test)
   add_executable(${target} chassis_task_test.c
-    ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
+    ../../application/chassis/chassis.c ../../application/chassis/chassis_supercap_legacy.c ../../application/chassis/chassis_motion.c
     ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c
     ../../application/topics/robot_topics.c
     ${MC02_HOST_MESSAGE_CENTER_SOURCES})
   target_include_directories(${target} BEFORE PRIVATE chassis_fakes)
   target_include_directories(${target} PRIVATE ../../application ../../application/chassis
-    ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine)
+    ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine ../../bsp/os)
   target_link_libraries(${target} PRIVATE mc02_dsp_host)
   if(UNIX)
     target_link_libraries(${target} PRIVATE m)
@@ -1215,14 +1215,14 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
   add_test(NAME production_chassis_task_${chassis_limits_profile} COMMAND ${target})
 endforeach()
 add_executable(chassis_dual_topic_test chassis_task_test.c
-  ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
+  ../../application/chassis/chassis.c ../../application/chassis/chassis_supercap_legacy.c ../../application/chassis/chassis_motion.c
     ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c
   ../../application/topics/robot_topics.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
   ../../modules/safety/robot_safety.c)
 target_include_directories(chassis_dual_topic_test BEFORE PRIVATE chassis_fakes)
 target_include_directories(chassis_dual_topic_test PRIVATE ../../application ../../application/chassis
   ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine
-  ../../modules/safety ../../bsp/usart)
+  ../../modules/safety ../../bsp/usart ../../bsp/os)
 target_compile_definitions(chassis_dual_topic_test PRIVATE CHASSIS_BOARD=1 CHASSIS_TASK_EXPECT_CONFIGURED=1
   CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=10.0f
   CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
@@ -1230,7 +1230,7 @@ target_link_libraries(chassis_dual_topic_test PRIVATE mc02_dsp_host m)
 add_test(NAME production_chassis_dual_topic_invalidation COMMAND chassis_dual_topic_test)
 set_tests_properties(production_chassis_dual_topic_invalidation PROPERTIES TIMEOUT 10)
 add_executable(chassis_bridge_integration_test chassis_task_test.c
-  ../../application/chassis/chassis.c ../../application/chassis/chassis_motion.c
+  ../../application/chassis/chassis.c ../../application/chassis/chassis_supercap_legacy.c ../../application/chassis/chassis_motion.c
     ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c
   ../../application/topics/robot_topics.c ../../application/topics/chassis_topic_codec.c
   ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/can_comm/can_topic_link.c
@@ -1241,7 +1241,7 @@ add_executable(chassis_bridge_integration_test chassis_task_test.c
 target_include_directories(chassis_bridge_integration_test BEFORE PRIVATE chassis_fakes can_comm_fakes)
 target_include_directories(chassis_bridge_integration_test PRIVATE ../../application ../../application/chassis
   ../../application/topics ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine
-  ../../modules/can_comm ../../modules/time_sync ../../modules/safety ../../bsp/usart)
+  ../../modules/can_comm ../../modules/time_sync ../../modules/safety ../../bsp/usart ../../bsp/os)
 target_compile_definitions(chassis_bridge_integration_test PRIVATE CHASSIS_BOARD=1 CHASSIS_BRIDGE_INTEGRATION=1
   CHASSIS_TASK_EXPECT_CONFIGURED=1 CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=10.0f
   CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
@@ -1255,6 +1255,21 @@ foreach(scenario cap-failure motor-failure)
   add_test(NAME production_chassis_init_${scenario} COMMAND chassis_task_configured_test ${scenario})
   set_tests_properties(production_chassis_init_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
+# 普通供电功率限制尚未完成，正式配置保留电容失效时的底盘启动检查。
+add_executable(chassis_generated_cap_test chassis_task_test.c
+  ../../application/chassis/chassis.c ../../application/chassis/chassis_supercap_legacy.c ../../application/chassis/chassis_motion.c
+  ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c
+  ../../application/chassis/omni.c ../../application/topics/robot_topics.c
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES})
+target_include_directories(chassis_generated_cap_test BEFORE PRIVATE chassis_fakes chassis_generated_fakes)
+target_include_directories(chassis_generated_cap_test PRIVATE ../../application ../../application/chassis
+  ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine ../../bsp/os)
+target_compile_definitions(chassis_generated_cap_test PRIVATE MC02_CONFIG_GENERATED=1 ONE_BOARD=1
+  CHASSIS_TASK_EXPECT_CONFIGURED=1 CHASSIS_MOTION_LIMITS_CONFIGURED=1
+  CHASSIS_MAX_WZ_DEG_S=10.0f CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
+target_link_libraries(chassis_generated_cap_test PRIVATE mc02_dsp_host m)
+add_test(NAME production_chassis_cap_missing_fail_closed COMMAND chassis_generated_cap_test cap-failure)
+set_tests_properties(production_chassis_cap_missing_fail_closed PROPERTIES TIMEOUT 10)
 add_executable(robot_cmd_task_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c
   ../../application/topics/robot_topics.c

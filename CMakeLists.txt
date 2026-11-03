@@ -305,6 +305,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     application/robot_task.c # 现有任务循环与周期维护。
     application/gimbal/gimbal.c # 云台命令、反馈和电机控制。
     application/shoot/shoot.c # 发射命令和拨弹时序。
+    application/chassis/chassis.c # 底盘命令、反馈和电机控制。
     modules/lcd/lcd_buf.c # LCD 有界绘图与字体转换。
     modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
     application/robot_task_create.c) # 已选任务的创建与失败处理。

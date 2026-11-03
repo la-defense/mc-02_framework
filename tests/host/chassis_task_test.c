@@ -66,6 +66,7 @@ static unsigned motor_count;
 static unsigned operation_order;
 static SuperCapInstance cap;
 static int fail_cap, fail_motor;
+static unsigned supercap_init_calls;
 #ifdef CHASSIS_BOARD
 static attitude_t chassis_attitude;
 attitude_t *INS_GetStorage(void) { return &chassis_attitude; }
@@ -98,7 +99,7 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uin
     if (motor->feedback_age_ms > 20u) return MOTOR_FEEDBACK_STALE;
     return MOTOR_FEEDBACK_OK;
 }
-SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config) { (void)config; return fail_cap ? NULL : &cap; }
+SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config) { (void)config; ++supercap_init_calls; return fail_cap ? NULL : &cap; }
 RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *config)
 { (void)port; (void)config; return REFEREE_OK; }
 void MC02ChassisTestLogError(void) {}
@@ -304,6 +305,9 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "cap-failure") == 0) fail_cap = 1;
     if (argc == 2 && strcmp(argv[1], "motor-failure") == 0) fail_motor = 1;
     uint8_t initialized = ChassisInit();
+#if defined(MC02_CONFIG_GENERATED)
+    if (fail_cap) { CHECK(initialized == 0u && supercap_init_calls == 1u); return 0; }
+#endif
     // 未实现普通功率回退前，电容注册或核心电机失败都保留原失败结果。
     if (fail_cap || fail_motor) { CHECK(initialized == 0u); return 0; }
     CHECK(initialized != 0u);

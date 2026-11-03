@@ -89,6 +89,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "application/robot_task.c",  # 常驻任务的周期调用和监控。
     "application/gimbal/gimbal.c",  # 云台命令和反馈。
     "application/shoot/shoot.c",  # 发射命令和拨弹控制。
+    "application/chassis/chassis.c",  # 底盘命令和电机控制。
     "modules/lcd/lcd_buf.c",  # LCD 有界绘图及像素缓冲。
     "modules/lcd/lcd_task.c",  # LCD 页面、按键和运行统计任务。
     "application/robot_task_create.c",  # 按车型配置创建任务。
@@ -334,6 +335,8 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/config/config.h",
                         source_root / "application/config/shoot_config_types.h",
                         source_root / "application/chassis/chassis_motion.h",
+                        source_root / "application/chassis/chassis.h",
+                        source_root / "application/chassis/chassis_supercap_legacy.h",
                         source_root / "application/chassis/chassis_kinematics.h",
                         source_root / "application/chassis/omni.h",
                         source_root / "application/cmd/robot_cmd.h",

@@ -266,6 +266,8 @@ if(NOT MC02_SELECTED_DRIVER_DJI)
 endif()
 if(NOT MC02_FEATURE_SUPERCAP)
     list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES modules/super_cap/super_cap.c)
+else()
+    list(APPEND MC02_APPLICATION_COMMON_C_SOURCES application/chassis/chassis_supercap_legacy.c) # 保留旧电容启动检查与板级绑定。
 endif()
 if(NOT MC02_FEATURE_MOTOR_CONTROL AND NOT MC02_FEATURE_COMM_DISPATCH)
     list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES modules/motor/motor_task.c)

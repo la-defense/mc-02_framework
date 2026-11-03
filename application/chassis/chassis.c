@@ -13,12 +13,13 @@
 
 #include "chassis.h"
 #include "chassis_motion.h"
+#include "platform_sync.h"
 #include "robot_def.h"
 #include "config.h"
 #include "config/build_selection.h"
 #include "dji_motor.h"
 #if MC02_FEATURE_SUPERCAP
-#include "super_cap.h"
+#include "chassis_supercap_legacy.h"
 #endif
 #include "message_center.h"
 #include "topics/robot_topics.h"
@@ -44,9 +45,6 @@ static Chassis_Ctrl_Cmd_s chassis_cmd_recv;         // 底盘接收到的控制�
 static Chassis_Upload_Data_s chassis_feedback_data; // 底盘回传的反馈数据
 #endif
 
-#if MC02_FEATURE_SUPERCAP
-static SuperCapInstance *cap;                                       // 超级电容
-#endif
 static const Chassis_Config_s *chassis_config;
 static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left right forward back
 #ifdef CHASSIS_BOARD
@@ -92,13 +90,7 @@ uint8_t ChassisInit(void)
 #endif
 
 #if MC02_FEATURE_SUPERCAP
-    SuperCap_Init_Config_s cap_conf = {
-        .can_config = {
-            .can_handle = &hcan2,
-            .tx_id = 0x302, // 超级电容默认接收id
-            .rx_id = 0x301, // 超级电容默认发送id,注意tx和rx在其他人看来是反的
-        }};
-    cap = SuperCapInit(&cap_conf); // 超级电容初始化
+    const uint8_t cap_available = ChassisLegacySuperCapInit(); // 普通供电限制未实现前，保留原启动检查。
 #endif
 
     // 发布订阅初始化,如果为双板,则需要can comm来传递消息
@@ -116,7 +108,7 @@ uint8_t ChassisInit(void)
     if (motor_lf == NULL || motor_rf == NULL || motor_lb == NULL || motor_rb == NULL ||
         referee_status != REFEREE_OK
 #if MC02_FEATURE_SUPERCAP
-        || cap == NULL
+        || cap_available == 0u
 #endif
         )
         return 0u;
@@ -159,7 +151,7 @@ static uint8_t ChassisMotorFeedbackIsHealthy(void)
     for (size_t i = 0u; i < sizeof(motors) / sizeof(motors[0]); ++i)
     {
         // 每个电机读取前重新取时，避免遍历期间跨毫秒后沿用较早时刻。
-        const uint32_t now_ms = HAL_GetTick();
+        const uint32_t now_ms = PlatformTimeNowMs();
         Motor_Feedback_Snapshot_s feedback = {0};
         if (DJIMotorGetFeedbackSnapshot(motors[i], now_ms, &feedback) != MOTOR_FEEDBACK_OK ||
             feedback.speed.valid == 0u || feedback.current.valid == 0u)
@@ -189,7 +181,7 @@ void ChassisTask()
     MessageFreshness_t command_freshness = {0};
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     command_fresh = (uint8_t)(MessageReadSnapshot(chassis_sub, &chassis_cmd_recv,
-        sizeof(chassis_cmd_recv), HAL_GetTick(), &command_freshness) == MESSAGE_OK);
+        sizeof(chassis_cmd_recv), PlatformTimeNowMs(), &command_freshness) == MESSAGE_OK);
 #endif
     if (!command_fresh)
         memset(&chassis_cmd_recv, 0, sizeof(chassis_cmd_recv));
@@ -229,7 +221,7 @@ void ChassisTask()
         if (chassis_rearm_tracking == 0u)
         {
             // 记录本地恢复时刻和当时已接收的序号，旧分片晚到也不能取得新许可。
-            chassis_rearm_after_ms = HAL_GetTick();
+            chassis_rearm_after_ms = PlatformTimeNowMs();
             chassis_rearm_sequence_valid = (uint8_t)(command_fresh != 0u &&
                                                        command_freshness.valid != 0u);
             if (chassis_rearm_sequence_valid != 0u)
@@ -254,7 +246,7 @@ void ChassisTask()
     {
         remote_permit = RobotSafetyTryGrantRemoteChassisPermit(
             safety_snapshot.chassis_inhibit_generation,
-            command_freshness.source_time_ms, chassis_command_max_age_ms, HAL_GetTick());
+            command_freshness.source_time_ms, chassis_command_max_age_ms, PlatformTimeNowMs());
         if (remote_permit == 0u)
         {
             chassis_command_rearm_required = 1u;
@@ -265,7 +257,7 @@ void ChassisTask()
     else
         RobotSafetyRevokeRemoteChassisPermit();
     RobotSafetyUpdate();
-    uint8_t local_permit = (uint8_t)(RobotSafetyIsReadyAt(HAL_GetTick()) != 0u &&
+    uint8_t local_permit = (uint8_t)(RobotSafetyIsReadyAt(PlatformTimeNowMs()) != 0u &&
                                      local_ready != 0u);
 #endif
 
@@ -321,10 +313,10 @@ void ChassisTask()
         MessageFreshness_t latest_freshness = {0};
         const uint8_t latest_is_same_and_fresh = (uint8_t)(
             MessageReadSnapshot(chassis_sub, &latest_command, sizeof(latest_command),
-                                HAL_GetTick(), &latest_freshness) == MESSAGE_OK &&
+                                PlatformTimeNowMs(), &latest_freshness) == MESSAGE_OK &&
             latest_freshness.sequence == command_freshness.sequence &&
             latest_freshness.source_time_ms == command_freshness.source_time_ms);
-        if (latest_is_same_and_fresh == 0u || RobotSafetyIsReadyAt(HAL_GetTick()) == 0u ||
+        if (latest_is_same_and_fresh == 0u || RobotSafetyIsReadyAt(PlatformTimeNowMs()) == 0u ||
             ChassisMotorFeedbackIsHealthy() == 0u)
         {
             command_allowed = 0u;
