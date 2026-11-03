@@ -318,6 +318,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/config/vehicle_selection.h",
                         source_root / "application/config/module_plan.h",
                         source_root / "application/robot_task_create.h",
+                        source_root / "application/robot_task.h",
                         source_root / "application/init_diagnostic.h",
                         source_root / "application/alarm_startup.h",
                         source_root / "application/vehicle_health.h",

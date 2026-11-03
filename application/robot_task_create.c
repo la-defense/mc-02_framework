@@ -2,6 +2,7 @@
  * @brief 按已确定的模块启动结果创建任务并报告失败。
  */
 #include "robot_task_create.h"
+#include "robot_task.h"
 #include "config/build_selection.h"
 #if defined(MC02_CONFIG_GENERATED)
 #include "config/vehicle_selection.h"
@@ -16,11 +17,6 @@
 #include "../modules/motor/HTmotor/ht_motor_task.h"
 #endif
 
-void StartINSTASK(void const *argument);
-void StartMOTORTASK(void const *argument);
-void StartDAEMONTASK(void const *argument);
-void StartROBOTTASK(void const *argument);
-void StartUITASK(void const *argument);
 void StartLCDTASK(void const *argument);
 PlatformTaskHandle_t insTaskHandle;
 PlatformTaskHandle_t robotTaskHandle;

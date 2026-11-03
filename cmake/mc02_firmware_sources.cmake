@@ -177,6 +177,7 @@ if(MC02_IMU_BACKEND STREQUAL "fusion")
 endif()
 
 set(MC02_APPLICATION_COMMON_C_SOURCES
+    application/robot_task.c # 常驻任务的周期执行与监控。
     application/robot_task_create.c # 使用框架接口创建现有整车任务。
     application/init_diagnostic.c
     application/vehicle_health.c
