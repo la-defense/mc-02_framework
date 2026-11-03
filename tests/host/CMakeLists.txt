@@ -356,9 +356,10 @@ set_tests_properties(production_time_mapping_wrap_expiry_and_recovery PROPERTIES
 
 # 生产 WS2812 初始化只配置 PA7，避免改写 ADC 按键的 PA5 模拟输入。
 add_executable(ws2812_pin_ownership_test ws2812_pin_ownership_test.c
-  ../../bsp/ws2812/ws2812.c ../../modules/alarm/led.c ../../modules/alarm/robot_alarm_policy.c)
+  ../../bsp/ws2812/ws2812.c ../../bsp/board/platform_rgb_mc02.c
+  ../../modules/alarm/led.c ../../modules/alarm/robot_alarm_policy.c)
 target_include_directories(ws2812_pin_ownership_test BEFORE PRIVATE ws2812_pin_fakes)
-target_include_directories(ws2812_pin_ownership_test PRIVATE . ../../bsp/ws2812 ../../Core/Inc ../../modules/alarm)
+target_include_directories(ws2812_pin_ownership_test PRIVATE . ../../bsp/ws2812 ../../bsp/board ../../Core/Inc ../../modules/alarm)
 target_compile_options(ws2812_pin_ownership_test PRIVATE -Wall -Wextra -Werror)
 foreach(scenario success timeout isolation error cache dirty cache-active early early-error late false-ready start-error complete-error policy resource-busy dma-stop-error spi-stop-error)
   add_test(NAME production_ws2812_${scenario} COMMAND ws2812_pin_ownership_test ${scenario})

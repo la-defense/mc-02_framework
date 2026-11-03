@@ -452,6 +452,8 @@ int main(int argc, char **argv)
     {
         WS2812TransferState_t state = {WS2812_TRANSFER_ISOLATED, HAL_TIMEOUT, 17u};
         fake_scb.CCR = SCB_CCR_DC_Msk;
+        TEST_CHECK(LEDInit() == LED_STATUS_TRANSFER); // 平台接口保留初始化错误。
+        TEST_CHECK(LEDSetRGB(1u, 2u, 3u) == LED_STATUS_UNINITIALIZED);
         TEST_CHECK(WS2812_Init() == HAL_ERROR && WS2812_GetState(&state) == HAL_ERROR);
         TEST_CHECK(state.phase == WS2812_TRANSFER_ISOLATED && state.last_result == HAL_TIMEOUT &&
                    state.buffer_reusable == 17u);
@@ -460,6 +462,7 @@ int main(int argc, char **argv)
     else if (strcmp(argv[1], "resource-busy") == 0)
     {
         fake_bdma0.CCR = BDMA_CCR_EN;
+        TEST_CHECK(LEDInit() == LED_STATUS_BUSY); // 资源被占用时仍返回忙。
         TEST_CHECK(WS2812_Init() == HAL_BUSY && spi_init_calls == 0u && pins == 0u);
         fake_bdma0.CCR = 0u;
         fake_spi6.CR1 = SPI_CR1_SPE;

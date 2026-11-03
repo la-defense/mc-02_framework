@@ -83,6 +83,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/alarm/robot_alarm.c",  # 告警协调与状态发布。
     "modules/alarm/robot_alarm_policy.c",  # 告警仲裁和灯声节奏。
     "modules/alarm/buzzer.c",  # 音符到频率的转换。
+    "modules/alarm/led.c",  # RGB 输出状态和发送推进。
     "modules/lcd/lcd_buf.c",  # LCD 有界绘图及像素缓冲。
     "modules/lcd/lcd_task.c",  # LCD 页面、按键和运行统计任务。
     "application/robot_task_create.c",  # 按车型配置创建任务。
@@ -309,6 +310,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
         public_files = {source_root / "bsp/board/platform_resources.h",
                         source_root / "bsp/board/platform_analog.h",
                         source_root / "bsp/board/platform_buzzer.h",
+                        source_root / "bsp/board/platform_rgb.h",
                         source_root / "application/topics/robot_topics.h",
                         source_root / "application/topics/robot_can_bridge_task.h",
                         source_root / "application/config/build_selection.h",
