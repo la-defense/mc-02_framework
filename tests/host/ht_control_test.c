@@ -25,6 +25,7 @@ static uint8_t initial_frames[3][8]; // 记录前 3 帧，核对初始化命令�
 static uint32_t initial_delays[4]; // 保存初始化四次忙等时长。
 static unsigned delay_count;
 static unsigned task_count;
+static unsigned fail_task_at = 2u; // 默认允许测试中的两个任务创建。
 static struct
 {
     osTaskFunction_t entry;
@@ -99,6 +100,7 @@ void *osThreadCreate(const osThreadDef_t *definition, void *argument)
 {
     TEST_CHECK(definition != NULL && definition->pthread != NULL && task_count < 2u);
     TEST_CHECK(strcmp(definition->name, "ht_task_name") == 0 && definition->stacksize == 128u);
+    if (task_count == fail_task_at) return NULL; // 模拟指定任务的 RTOS 创建失败。
     tasks[task_count].entry = definition->pthread;
     tasks[task_count].argument = argument;
     return &tasks[task_count++];
@@ -510,10 +512,24 @@ static void test_feedforward_overflow(void)
     check_torque(motor, 0.0);
 }
 
+static void test_task_creation_failure(void)
+{
+    Motor_Init_Config_s config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
+    TEST_CHECK(HTMotorControlInit() == 1u); // 无电机时无需创建任务。
+    TEST_CHECK(HTMotorInit(&config) != NULL && HTMotorInit(&config) != NULL);
+    fail_task_at = 1u; // 第一台成功后让第二台失败。
+    TEST_CHECK(HTMotorControlInit() == 0u && task_count == 1u);
+    fail_task_at = 2u; // 后端恢复后只补建第二台任务。
+    TEST_CHECK(HTMotorControlInit() == 1u && task_count == 2u);
+    TEST_CHECK(HTMotorControlInit() == 1u && task_count == 2u); // 重复调用不新增任务。
+}
+
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
-    if (strncmp(argv[1], "feedback_", 9u) == 0)
+    if (strcmp(argv[1], "task_create_failure") == 0)
+        test_task_creation_failure();
+    else if (strncmp(argv[1], "feedback_", 9u) == 0)
         test_feedback_combination((unsigned)(argv[1][9] - '0'));
     else if (strncmp(argv[1], "direction-angle-", 16u) == 0)
         test_direction_combination(0u, (unsigned)(argv[1][16] - '0'));

@@ -26,6 +26,17 @@ foreach(scenario IN ITEMS normal core-ins core-motor core-daemon core-robot aux-
   add_test(NAME production_task_creation_${scenario} COMMAND robot_task_create_test ${scenario})
   set_tests_properties(production_task_creation_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
+# 使用机器人配置单独检查 HT 独立任务的创建结果如何进入整车故障。
+add_executable(robot_ht_task_create_test robot_task_create_test.c ../../application/robot_task_create.c)
+target_include_directories(robot_ht_task_create_test PRIVATE task_creation_fakes . ../../application
+  ../../modules/daemon ../../bsp/os ../../bsp/usart ../../bsp/log)
+target_compile_definitions(robot_ht_task_create_test PRIVATE MC02_CONFIG_GENERATED=1
+  MC02_SELECTED_DRIVER_HT=1 TEST_HT_TASK=1)
+target_compile_options(robot_ht_task_create_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario IN ITEMS normal ht-failure core-ins)
+  add_test(NAME production_ht_task_creation_${scenario} COMMAND robot_ht_task_create_test ${scenario})
+  set_tests_properties(production_ht_task_creation_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
 # 每个消息中心测试都编译自己的平台适配器，使其使用该测试配置的锁和时钟替身。
 set(MC02_HOST_MESSAGE_CENTER_SOURCES
   ../../modules/message_center/message_center.c # 实际话题实现。
@@ -1905,7 +1916,7 @@ target_include_directories(ht_control_test PRIVATE ../../modules/motor/HTmotor
 target_link_libraries(ht_control_test PRIVATE mc02_numeric)
 foreach(scenario IN ITEMS feedback_0 feedback_1 feedback_2 feedback_3
     feedforward_1 feedforward_2 feedforward_3 init_failures runtime_recovery
-    runtime_speed_failure feedforward_overflow)
+    runtime_speed_failure feedforward_overflow task_create_failure)
   add_test(NAME production_ht_control_${scenario} COMMAND ht_control_test ${scenario})
   set_tests_properties(production_ht_control_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()

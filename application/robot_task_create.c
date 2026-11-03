@@ -212,7 +212,13 @@ uint8_t OSTaskInit(void)
     if (all_created)
     {
 #if !defined(MC02_PROFILE_BENCH_SAFE) && MC02_SELECTED_DRIVER_HT
-        HTMotorControlInit(); // 没有注册HT电机则不会执行
+        if (!HTMotorControlInit())
+        {
+            // HT 控制任务创建失败时，沿用电机任务失败的整车锁存路径。
+            InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                        INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_MOTOR);
+            all_created = 0u;
+        }
 #endif
     }
     return all_created;

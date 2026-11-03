@@ -2,6 +2,7 @@
 * @brief 解码 HT04 协议，并用每电机独立任务计算所选控制环及发送力矩字段。
  */
 #include "HT04.h"
+#include "ht_motor_task.h"
 #include <string.h>
 #include <math.h>
 #include "memory.h"
@@ -495,13 +496,13 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
     }
 }
 
-void HTMotorControlInit()
+uint8_t HTMotorControlInit(void)
 {
-    // 遍历所有电机实例,创建任务
-    if (!idx)
-        return;
+    // 在调度器启动前遍历已注册电机，保留先前成功创建的任务。
     for (size_t i = 0; i < idx; i++)
     {
+        if (ht_task_handle[i] != NULL)
+            continue; // 重试时不能为同一电机创建第二个控制任务。
         const PlatformTaskConfig_t config = {
             .name = "ht_task_name", // 保留 CMSIS 宏原先生成的任务名。
             .entry = HTMotorTask, // 每个任务继续执行原控制循环。
@@ -509,8 +510,11 @@ void HTMotorControlInit()
             .stack_words = 128u, // 保持原有栈容量。
             .priority = PLATFORM_TASK_NORMAL, // 保持原有普通优先级。
         };
-        (void)PlatformTaskCreateTracked(&config, &ht_task_handle[i]); // 原接口仍不报告创建失败。
+        // 失败立即交给整车启动流程；已创建的任务由启动失败保护处理。
+        if (!PlatformTaskCreateTracked(&config, &ht_task_handle[i]))
+            return 0u;
     }
+    return 1u; // 无电机和所有任务创建成功均无需阻止启动。
 }
 
 void HTMotorStop(HTMotorInstance *motor)

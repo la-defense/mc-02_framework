@@ -20,6 +20,11 @@ static uint16_t last_failure, last_degraded;
 static int handle_storage[6];
 static DaemonStatus_t daemon_result = DAEMON_OK;
 static BSPLogStatus_t log_result = BSP_LOG_STATUS_OK;
+#if defined(TEST_HT_TASK)
+static uint8_t ht_result = 1u; // 专项场景控制 HT 创建结果。
+static unsigned ht_calls;
+uint8_t HTMotorControlInit(void) {++ht_calls; return ht_result;}
+#endif
 
 void StartINSTASK(void const *arg) {(void)arg;}
 void StartMOTORTASK(void const *arg) {(void)arg;}
@@ -84,7 +89,14 @@ int main(int argc, char **argv)
         TEST_CHECK(failures == core && degraded == (unsigned)!core);
         return 0;
     }
-    if (strcmp(argv[1], "core-ins") == 0) failure_name = "instask";
+    if (strcmp(argv[1], "ht-failure") == 0) {
+#if defined(TEST_HT_TASK)
+        ht_result = 0u; // 测试 HT 创建失败传递给整车。
+#else
+        TEST_CHECK(0 && "HT 测试未启用");
+#endif
+    }
+    else if (strcmp(argv[1], "core-ins") == 0) failure_name = "instask";
     else if (strcmp(argv[1], "core-motor") == 0) failure_name = "motortask";
     else if (strcmp(argv[1], "core-daemon") == 0) failure_name = "daemontask";
     else if (strcmp(argv[1], "core-robot") == 0) failure_name = "robottask";
@@ -102,7 +114,9 @@ int main(int argc, char **argv)
     else TEST_CHECK(strcmp(argv[1], "normal") == 0);
 
     uint8_t result = OSTaskInit(); // 入口只创建模拟任务，不启动执行器。
-    if (failure_name != NULL && strcmp(failure_name, "instask") == 0)
+    if (strcmp(argv[1], "ht-failure") == 0)
+        TEST_CHECK(result == 0u && failures == 1u && last_failure == INIT_RESOURCE_TASK_MOTOR);
+    else if (failure_name != NULL && strcmp(failure_name, "instask") == 0)
         TEST_CHECK(result == 0u && failures == 1u && last_failure == INIT_RESOURCE_TASK_INS);
     else if (failure_name != NULL && strcmp(failure_name, "motortask") == 0)
         TEST_CHECK(result == 0u && failures == 1u && last_failure == INIT_RESOURCE_TASK_MOTOR);
@@ -129,5 +143,8 @@ int main(int argc, char **argv)
     else
         TEST_CHECK(result == 1u && failures == 0u && degraded == 0u);
     TEST_CHECK(created == 4u + ui_started + lcd_started); // 未启用的辅助模块不创建任务。
+#if defined(TEST_HT_TASK)
+    TEST_CHECK(ht_calls == (unsigned)(failure_name == NULL)); // 已有核心任务失败时不启动 HT。
+#endif
     return 0;
 }
