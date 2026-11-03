@@ -87,6 +87,7 @@ set(MC02_BSP_C_SOURCES
     bsp/board/platform_time_us_stm32.c # 保留现有微秒运行时间的框架入口。
     bsp/board/platform_timeline_ms_stm32.c # 保留现有浮点毫秒诊断时间。
     bsp/board/platform_dispatch_stm32.c # 任务派发绑定到现有 CAN 和串口队列。
+    bsp/board/platform_maintenance_stm32.c # 周期维护绑定到原有 SPI、ADC 和 CAN 入口。
     bsp/board/platform_context_stm32.c # 查询当前线程或异常处理上下文。
     bsp/board/platform_startup_delay_stm32.c # 保留调度器启动前的 DWT 等待。
     bsp/board/platform_safety_stm32.c # 核心故障与看门狗绑定到原有安全路径。

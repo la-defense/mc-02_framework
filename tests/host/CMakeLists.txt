@@ -347,6 +347,15 @@ endif()
 
 include(CTest)
 
+# 验证周期维护入口各自只调用其板级后端。
+add_executable(platform_maintenance_test platform_maintenance_test.c
+  ../../bsp/board/platform_maintenance_stm32.c)
+target_include_directories(platform_maintenance_test BEFORE PRIVATE platform_maintenance_fakes)
+target_include_directories(platform_maintenance_test PRIVATE ../../bsp/os)
+target_compile_options(platform_maintenance_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_platform_maintenance_dispatch COMMAND platform_maintenance_test)
+set_tests_properties(production_platform_maintenance_dispatch PROPERTIES TIMEOUT 10)
+
 # 只替换 DWT 时间来源，检查诊断毫秒值经过平台后端保持不变。
 add_executable(platform_timeline_ms_test platform_timeline_ms_test.c
   ../../bsp/board/platform_timeline_ms_stm32.c)

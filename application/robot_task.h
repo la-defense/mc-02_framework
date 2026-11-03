@@ -42,10 +42,8 @@
 
 #include "bsp_log.h"
 #include "platform_probe.h"
-#include "bsp_spi.h"
-#include "bsp_adc.h"
-#include "bsp_usart.h"
-#include "bsp_can.h"
+#include "platform_maintenance.h"
+#include "bsp_can.h" // 旧 CAN 诊断开关和回环入口暂由板级头声明。
 
 #if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_ROBOT)
 /* 保留完整任务轮次最大耗时，供固定只读快照与任务栈数据一起核对。 */
@@ -225,9 +223,9 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
         }
 #endif
         // 约每 10 ms 停止出错或到期的异步 SPI，停止失败的总线保持隔离。
-        (void)SPIProcessTimeouts();
+        PlatformMaintainSpi();
         // 电压诊断只记录读取结果，内部每 250ms 更新一次，不参与控制许可。
-        BSP_ADCUpdateDiagnostics();
+        PlatformMaintainAnalog();
         DaemonTask();
 #if MC02_FEATURE_ALARM
 #if defined(MC02_CONFIG_GENERATED)
@@ -236,7 +234,7 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 #endif
             (void)RobotAlarmTask();
 #endif
-        CANHealthMonitor(); /* 10Hz: 检测 BusOff 并恢复(空总线/异常时防止 CAN 永久死掉) */
+        PlatformMaintainCan(); /* 10Hz: 检查总线故障并按现有规则恢复。 */
         TaskMonitorTick();
 #if MC02_BENCH_CRASH_DIAGNOSTICS
         // 给其他任务留出启动时间；无许可时检查无副作用，有许可时只消费一次后复位。
