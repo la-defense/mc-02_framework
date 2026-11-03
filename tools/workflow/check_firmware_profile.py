@@ -56,6 +56,8 @@ NUMERIC_ADAPTER_SOURCES = {
 # 这些源文件编入无芯片／RTOS 头路径的框架对象目标，仍属于车型源码清单。
 PORTABLE_FRAMEWORK_SOURCES = {
     "application/init_diagnostic.c",  # 初始化结果及事件记录。
+    "application/vehicle_health.c",  # 整车健康信息采集和发布。
+    "application/vehicle_health_diag.c",  # 只读诊断应答。
     "modules/daemon/daemon.c",  # 来源状态和事件队列。
     "modules/daemon/daemon_event_task.c",  # 来源事件任务入口。
     "modules/message_center/message_center.c",  # 消息目录和有界队列。
@@ -309,6 +311,8 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/config/module_plan.h",
                         source_root / "application/robot_task_create.h",
                         source_root / "application/init_diagnostic.h",
+                        source_root / "application/vehicle_health.h",
+                        source_root / "application/vehicle_health_source.h",
                         source_root / "modules/motor/HTmotor/ht_motor_task.h",
                         source_root / source,
                         source_root / "modules/general_def.h",

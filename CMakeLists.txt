@@ -273,6 +273,8 @@ set_source_files_properties(${MC02_ASM_SOURCES} PROPERTIES COMPILE_FLAGS "-x ass
 # 这些框架文件只依赖自有接口和标准 C；单独编译以阻止继承芯片或 RTOS 头路径。
 set(MC02_PORTABLE_FRAMEWORK_SOURCES
     application/init_diagnostic.c # 初始化阶段与故障事件记录。
+    application/vehicle_health.c # 整车健康信息的采集和发布。
+    application/vehicle_health_diag.c # 健康信息的只读诊断应答。
     modules/daemon/daemon.c # 来源期限、状态和事件队列。
     modules/daemon/daemon_event_task.c # 来源事件处理任务的框架入口。
     modules/message_center/message_center.c # 有界消息与话题目录。
