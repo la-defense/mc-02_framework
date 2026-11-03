@@ -8,10 +8,7 @@
 * 样本中的角速度单位为 rad/s，加速度为 m/s²，温度为 °C。
  */
 
-#include "bsp_spi.h"
-#include "main.h"
 #include "bmi088_data.h"
-#include "bsp_gpio.h"
 #include "controller.h"
 #include "bsp_pwm.h"
 #include "stdint.h"
@@ -119,8 +116,6 @@ typedef struct
     BMI088_Calibrate_Mode_e cali_mode;
     PlatformSpiEndpoint_t spi_gyro_config; // 陀螺仪逻辑总线和片选。
     PlatformSpiEndpoint_t spi_acc_config; // 加速度计逻辑总线和片选。
-    GPIO_Init_Config_s gyro_int_config;
-    GPIO_Init_Config_s acc_int_config;
     PID_Init_Config_s heat_pid_config; // 仅配置旧热控 PWM 时检查，启用时须给出有效 dt 范围。
     PWM_Init_Config_s heat_pwm_config;
 } BMI088_Init_Config_s;

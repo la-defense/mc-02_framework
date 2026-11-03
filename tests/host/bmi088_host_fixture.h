@@ -2,6 +2,7 @@
 #define MC02_BMI088_HOST_FIXTURE_H
 
 #include "bmi088.h"
+#include "bsp_spi.h" // 测试替身需要表示注入的 HAL 状态。
 #include "bsp_param.h"
 
 typedef struct

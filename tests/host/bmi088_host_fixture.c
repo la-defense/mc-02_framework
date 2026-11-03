@@ -266,9 +266,6 @@ void TaskMonitorDelayMs(TaskMonitor_Id_e id, uint32_t milliseconds)
 
 PID_Status_e PIDInit(PIDInstance *pid, const PID_Init_Config_s *config) { (void)pid; (void)config; return PID_OK; }
 PWMInstance *PWMRegister(PWM_Init_Config_s *config) { (void)config; return NULL; }
-GPIOInstance *GPIORegister(GPIO_Init_Config_s *config) { (void)config; return NULL; }
-void GPIOSet(GPIOInstance *instance) { (void)instance; }
-void GPIOReset(GPIOInstance *instance) { (void)instance; }
 void RobotSafetySetCalibValid(uint8_t valid) { (void)valid; }
 uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperation_e operation)
 {

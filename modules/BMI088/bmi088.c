@@ -919,8 +919,8 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         free(bmi088_instance);
         return NULL;
     }
-    // 沿用外设配置中的实例上下文；当前注册只接受周期阻塞采样。
-    config->acc_int_config.id = config->gyro_int_config.id = config->heat_pwm_config.id = bmi088_instance;
+    // 可选旧温控保留设备上下文；当前注册只接受周期阻塞采样。
+    config->heat_pwm_config.id = bmi088_instance;
     // 平台根据逻辑端点分配两个同步 SPI 设备。
     bmi088_instance->spi_acc = PlatformSpiRegisterBlocking(&config->spi_acc_config, bmi088_instance);
     bmi088_instance->spi_gyro = PlatformSpiRegisterBlocking(&config->spi_gyro_config, bmi088_instance);
