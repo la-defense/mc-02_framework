@@ -70,6 +70,17 @@ PORTABLE_FRAMEWORK_SOURCES = {
 }
 # 可选文件只有被车型清单选中时才进入独立框架目标。
 OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
+    "modules/algorithm/QuaternionEKF.c",  # 四元数姿态估计。
+    "modules/algorithm/controller.c",  # 通用 PID 计算。
+    "modules/algorithm/crc.c",  # 软件 CRC。
+    "modules/algorithm/kalman_filter.c",  # 卡尔曼滤波。
+    "modules/algorithm/math_utils.c",  # 标量数值工具。
+    "modules/algorithm/sample_filter.c",  # 采样滤波。
+    "modules/algorithm/vector3.c",  # 三维向量工具。
+    "modules/master_machine/vision_control.c",  # 视觉控制命令换算。
+    "modules/master_machine/vision_protocol.c",  # SP 帧解析。
+    "modules/power/power_manager.c",  # 功率管理占位。
+    "modules/lcd/lcd_font_cn.c",  # LCD 中文字模。
     "modules/can_comm/can_topic_wire.c",  # 帧编码与校验。
     "modules/can_comm/can_topic_transport.c",  # 分片传输。
     "modules/can_comm/can_topic_bridge.c",  # 话题桥接。
@@ -366,6 +377,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "modules/motor/HTmotor/ht_motor_task.h",
                         source_root / source,
                         source_root / "modules/general_def.h",
+                        source_root / "modules/power/power_manager.h",  # 当前功率占位模块的公开接口。
                         source_root / "modules/BMI088/bmi088_data.h",
                         source_root / "modules/BMI088/bmi088_calibration.h",
                         source_root / "bsp/adc/bsp_adc.h",

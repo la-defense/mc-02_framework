@@ -286,6 +286,17 @@ set(MC02_PORTABLE_FRAMEWORK_SOURCES
     modules/safety/robot_safety.c) # 整车许可、故障与急停状态。
 # 板间通信和时间映射仅在车型选择时进入独立目标。
 set(MC02_OPTIONAL_PORTABLE_SOURCES
+    modules/algorithm/QuaternionEKF.c # 四元数姿态估计，矩阵调用经框架接口。
+    modules/algorithm/controller.c # 通用 PID 计算。
+    modules/algorithm/crc.c # 软件 CRC 计算。
+    modules/algorithm/kalman_filter.c # 通用卡尔曼滤波。
+    modules/algorithm/math_utils.c # 标量数值工具。
+    modules/algorithm/sample_filter.c # 有界采样滤波。
+    modules/algorithm/vector3.c # 三维向量计算。
+    modules/master_machine/vision_control.c # 视觉数据到控制命令的检查和换算。
+    modules/master_machine/vision_protocol.c # SP 协议帧查找与校验。
+    modules/power/power_manager.c # 当前功率管理占位实现。
+    modules/lcd/lcd_font_cn.c # LCD 中文字模数据。
     modules/can_comm/can_topic_wire.c # 板间话题帧编码和校验。
     modules/can_comm/can_topic_transport.c # 话题分片发送与接收。
     modules/can_comm/can_topic_bridge.c # 话题与板间传输转换。
