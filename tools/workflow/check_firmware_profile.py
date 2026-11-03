@@ -94,6 +94,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/referee/referee_UI.c",  # 裁判图形编码及发送状态。
     "modules/referee/referee_task.c",  # 裁判界面状态和字段更新。
     "modules/referee/referee_tx_budget.c",  # 裁判发送额度计算。
+    "modules/referee/referee_bench.c",  # 禁热裁判诊断的有限发送流程。
     "modules/referee/rm_referee.c",  # 裁判协议解析及逻辑串口接入。
     "modules/remote/remote_control.c",  # 遥控输入解析及逻辑串口接入。
     "modules/remote/remote_safety.c",  # 遥控安全手势处理。

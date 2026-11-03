@@ -303,6 +303,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/referee/referee_UI.c # 裁判图形编码和发送状态。
     modules/referee/referee_task.c # 裁判界面状态与字段更新。
     modules/referee/referee_tx_budget.c # 裁判通信发送额度。
+    modules/referee/referee_bench.c # 禁热裁判诊断的有限发送流程。
     modules/referee/rm_referee.c # 裁判协议解析和逻辑串口接入。
     modules/remote/remote_control.c # 遥控解析与逻辑串口接入。
     modules/remote/remote_safety.c # 遥控手势与安全请求。

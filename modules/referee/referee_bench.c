@@ -7,9 +7,8 @@
 #error "Referee diagnostics require bench_safe"
 #endif
 #include "referee_bench.h"
-#include "bsp_usart.h"
 #include "rm_referee.h"
-#include "cmsis_os.h"
+#include "platform_sync.h" // 沿用任务临界区、毫秒时钟和内存发布顺序。
 #include <string.h>
 typedef struct
 {
@@ -37,7 +36,7 @@ static const uint8_t ui_noop[2] = {0u, 0u};
 static void BenchComplete(void *context, const USARTTxEvent_t *event)
 {
     BenchRequest *request = context;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter(); // 与诊断任务共享请求状态和记录。
     request->pending = 0u;
     if (event->started)
     {
@@ -46,7 +45,7 @@ static void BenchComplete(void *context, const USARTTxEvent_t *event)
     }
     uint32_t count = referee_bench_diag.write_count / 2u;
     referee_bench_diag.write_count = count * 2u + 1u;
-    __DMB();
+    PlatformMemoryBarrier(); // 先发布写入中的奇数版本号。
     RefereeBenchRecord record = {event->id,
                                  event->submitted_ms,
                                  event->started_ms,
@@ -56,9 +55,9 @@ static void BenchComplete(void *context, const USARTTxEvent_t *event)
                                  (uint32_t)request->length | ((uint32_t)request->kind << 8u) |
                                      ((uint32_t)request->receiver << 16u)};
     referee_bench_diag.records[count % 64u] = record;
-    __DMB();
+    PlatformMemoryBarrier(); // 记录写完后才发布偶数版本号。
     referee_bench_diag.write_count = count * 2u + 2u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit(); // 恢复调用前的任务临界区嵌套。
 }
 uint8_t RefereeBenchInit(PlatformUartPort_t port)
 {
@@ -79,7 +78,7 @@ void RefereeBenchTask(void)
     if (RefereeGetSnapshot(&snapshot) != REFEREE_OK)
         return;
     const RefereeCommandSnapshot_t *robot = &snapshot.command[REF_CMD_ROBOT_STATE];
-    uint32_t now = HAL_GetTick();
+    uint32_t now = PlatformTimeNowMs(); // 继续使用原本的毫秒时钟。
     if (referee_bench_diag.phase == 0u)
     {
         if (robot->state != REFEREE_DATA_FRESH)
@@ -99,13 +98,13 @@ void RefereeBenchTask(void)
         return;
     uint16_t sender = robot->data.robot_state.robot_id;
     uint8_t kind = 0u;
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter(); // 同步读取发送回调修改的请求状态。
     if (age >= 30000u && !requests[1].pending &&
         (!requests[1].has_start || (uint32_t)(now - requests[1].last_start_ms) >= 115u))
         kind = 1u;
     BenchRequest *r = &requests[kind];
     uint8_t pending = r->pending;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     if (pending)
         return;
     uint16_t receiver = kind ? (uint16_t)(sender + 0x100u) : (sender >= 101u ? 104u : 4u);
@@ -120,15 +119,15 @@ void RefereeBenchTask(void)
     r->receiver = receiver;
     uint32_t id;
     // 先标记，防止高优先级发送任务在Submit返回后立刻通知并被旧赋值覆盖。
-    taskENTER_CRITICAL();
+    PlatformTaskCriticalEnter();
     r->pending = 1u;
-    taskEXIT_CRITICAL();
+    PlatformTaskCriticalExit();
     RefereeSendStatus_t result = RefereeSubmit(&request, &id);
     if (result != REFEREE_SEND_ACCEPTED)
     {
-        taskENTER_CRITICAL();
+        PlatformTaskCriticalEnter();
         r->pending = 0u;
-        taskEXIT_CRITICAL();
+        PlatformTaskCriticalExit();
         if (result == REFEREE_SEND_BUSY)
             ++referee_bench_diag.busy;
         else

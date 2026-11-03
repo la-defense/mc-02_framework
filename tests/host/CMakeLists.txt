@@ -52,6 +52,14 @@ set(MC02_HOST_DJI_SOURCES
 set(MC02_HOST_LK_SOURCES ../../modules/motor/LKmotor/LK9025.c ../../bsp/board/board_can_stm32.c) # LK 及逻辑 CAN 绑定。
 set(MC02_HOST_HT_SOURCES ../../modules/motor/HTmotor/HT04.c ../../bsp/board/board_can_stm32.c) # HT 及逻辑 CAN 绑定。
 set(MC02_HOST_DM_SOURCES ../../modules/motor/DMmotor/dmmotor.c ../../bsp/board/board_can_stm32.c) # DM 及逻辑 CAN 绑定。
+# 裁判裸板诊断使用框架时钟和任务锁替身，验证完成通知的竞争窗口。
+add_executable(referee_bench_platform_test referee_bench_platform_test.c
+  ../../modules/referee/referee_bench.c) # 使用生产诊断状态机和主机时间替身。
+target_include_directories(referee_bench_platform_test PRIVATE ../../modules/referee ../../bsp/os ../../bsp/usart)
+target_compile_definitions(referee_bench_platform_test PRIVATE MC02_BENCH_REFEREE_DIAGNOSTICS=1 MC02_PROFILE_BENCH_SAFE=1)
+target_compile_options(referee_bench_platform_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_referee_bench_platform COMMAND referee_bench_platform_test)
+
 # 消息中心单独取得平台公共头，其他主机测试不继承额外路径。
 set_property(SOURCE ../../modules/message_center/message_center.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
