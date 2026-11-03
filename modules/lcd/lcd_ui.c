@@ -29,9 +29,8 @@
 #include "gimbal.h"
 #include "shoot.h"
 #endif
-#include "bsp_can.h"
-#include "fdcan.h"
-#include "bmi088.h"
+#include "platform_can.h"
+#include "bmi088_calibration.h"
 #include "bsp_crash.h"
 #include <stdio.h>
 #include <string.h>
@@ -138,15 +137,15 @@ static const Lcd_CnChar_e *online_label(uint8_t online)
 }
 
 // 把 CAN 状态换成短文字，未识别的状态显示 --。
-static const char *can_status_str(CAN_Status_e status)
+static const char *can_status_str(PlatformCanStatus_t status)
 {
     switch (status)
     {
-    case CAN_STATUS_OK:
+    case PLATFORM_CAN_STATUS_OK:
         return "OK";
-    case CAN_STATUS_ERROR:
+    case PLATFORM_CAN_STATUS_ERROR:
         return "ERR";
-    case CAN_STATUS_BUSOFF:
+    case PLATFORM_CAN_STATUS_BUSOFF:
         return "OFF";
     default:
         return "--";
@@ -735,12 +734,11 @@ static void draw_page3_values(void)
     draw_value_ascii(3, buf);
 #endif
 
-    CAN_Status_t c1, c2, c3;
-    CANGetStatus(&hfdcan1, &c1);
-    CANGetStatus(&hfdcan2, &c2);
-    CANGetStatus(&hfdcan3, &c3);
-    snprintf(buf, sizeof(buf), "C1:%s C2:%s C3:%s", can_status_str(c1.status),
-             can_status_str(c2.status), can_status_str(c3.status));
+    PlatformCanStatus_t c1 = PlatformCanGetStatus(PLATFORM_CAN_BUS_1);
+    PlatformCanStatus_t c2 = PlatformCanGetStatus(PLATFORM_CAN_BUS_2);
+    PlatformCanStatus_t c3 = PlatformCanGetStatus(PLATFORM_CAN_BUS_3);
+    snprintf(buf, sizeof(buf), "C1:%s C2:%s C3:%s", can_status_str(c1),
+             can_status_str(c2), can_status_str(c3));
     draw_value_ascii(5, buf);
 
     Vision_Status_t vs;

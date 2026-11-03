@@ -22,9 +22,8 @@
 
 GPIO_TypeDef fake_gpiob, fake_gpioc, fake_gpiod, fake_gpioe;
 SPI_HandleTypeDef hspi1, hspi2;
-FDCAN_HandleTypeDef hfdcan1, hfdcan2, hfdcan3;
-BMI088_CalibSource_e bmi088_calib_source = BMI088_CALIB_SRC_DEFAULT;
-float bmi088_calib_temp = 25.0f;
+volatile uint8_t bmi088_calib_source = BMI088_CALIB_SRC_DEFAULT;
+volatile float bmi088_calib_temp = 25.0f;
 volatile uint16_t lcd_key_raw_min = 0u;
 extern volatile uint32_t lcd_rows_drawn;
 extern volatile uint32_t lcd_rows_skipped;
@@ -141,11 +140,10 @@ void IMUHeaterGetStatus(IMUHeaterStatus_t *output)
         *output = test_heater_status;
 }
 attitude_t *INS_GetAttitude(void) { return &test_attitude; }
-void CANGetStatus(FDCAN_HandleTypeDef *handle, CAN_Status_t *output)
+PlatformCanStatus_t PlatformCanGetStatus(PlatformCanBus_t bus)
 {
-    (void)handle;
-    if (output != NULL)
-        output->status = CAN_STATUS_OK;
+    (void)bus;
+    return PLATFORM_CAN_STATUS_OK; // 页面测试只需稳定的总线状态。
 }
 RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output)
 {

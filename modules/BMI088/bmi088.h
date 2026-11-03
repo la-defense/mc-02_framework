@@ -154,19 +154,6 @@ BMI088_AcquireStatus_e BMI088Acquire(BMI088Instance *bmi088, BMI088_Data_t *data
  */
 uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088);
 
-/* ---------------- 标定来源(供 LCD / RTT / OpenOCD 观察) ---------------- */
-typedef enum
-{
-    BMI088_CALIB_SRC_NONE = 0,   /* 尚未确定 */
-    BMI088_CALIB_SRC_FLASH,      /* 直接用内部 Flash 参数区里的记录 */
-    BMI088_CALIB_SRC_FIRST_AUTO, /* 首次启动自动标定, 已保存 */
-    BMI088_CALIB_SRC_MANUAL,     /* 运行期按需标定, 已保存 */
-    BMI088_CALIB_SRC_DEFAULT,    /* 标定失败, 退回编译期默认值 */
-} BMI088_CalibSource_e;
-
-extern volatile uint8_t bmi088_calib_source;   /* BMI088_CalibSource_e */
-extern volatile float bmi088_calib_temp;       /* 标定时 IMU 温度(摄氏度) */
-
 /**
 * @brief 在 INS 任务中处理已受理的标定请求。
 * @return 返回1表示本轮已处理请求，调用方应跳过姿态解算；返回0表示没有待处理请求。

@@ -557,6 +557,7 @@ endforeach()
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
   ../../bsp/board/platform_can_stm32.c # 通过生产适配复用真实 CAN 队列。
+  ../../bsp/board/platform_can_status_stm32.c # 通过生产适配查询逻辑总线状态。
   ../../bsp/board/platform_can_periodic_stm32.c # 周期发送使用生产平台适配。
   ../../bsp/board/platform_can_rx_stm32.c # 通过生产适配注册与派发接收端点。
   ../../modules/motor/motor_pid.c
@@ -580,6 +581,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
 endif()
 add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test rollback)
 add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platform-can)
+add_test(NAME production_platform_can_status COMMAND lk_motor_bsp_can_test platform-can-status)
 add_test(NAME production_platform_can_receive COMMAND lk_motor_bsp_can_test platform-can-rx)
 add_test(NAME production_dji_receive_registration_rollback COMMAND lk_motor_bsp_can_test dji-rx-rollback)
 add_test(NAME production_dji_logical_send_groups COMMAND lk_motor_bsp_can_test dji-send-groups)

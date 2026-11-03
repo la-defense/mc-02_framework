@@ -18,6 +18,20 @@ typedef struct {
 /** @brief 普通接收派发任务中的回调；帧只在本次调用期间有效。 */
 typedef void (*PlatformCanRxCallback_t)(void *context, const PlatformCanRxFrame_t *frame);
 
+/** @brief 逻辑总线的控制器状态，不表示各设备在线。 */
+typedef enum {
+    PLATFORM_CAN_STATUS_OK, /**< 控制器未报告错误。 */
+    PLATFORM_CAN_STATUS_ERROR, /**< 控制器报告错误。 */
+    PLATFORM_CAN_STATUS_BUSOFF, /**< 控制器进入总线关闭状态。 */
+    PLATFORM_CAN_STATUS_UNKNOWN /**< 总线未绑定或状态无法识别。 */
+} PlatformCanStatus_t;
+
+/** @brief 查询逻辑总线的控制器状态。
+ * @param[in] bus 板级声明的逻辑总线编号。
+ * @return 当前控制器状态；没有绑定时返回 UNKNOWN。
+ */
+PlatformCanStatus_t PlatformCanGetStatus(PlatformCanBus_t bus);
+
 /** @brief 调用者长期保存的接收端点；初始化前清零，注册后不可复制或改写。 */
 typedef struct {
     void *backend; /**< 平台私有对象；业务不得读取或修改。 */

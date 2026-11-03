@@ -319,6 +319,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/lcd/lcd_buf.c # LCD 有界绘图与字体转换。
     modules/lcd/lcd_key_input.c # LCD 按键去抖和事件。
     modules/lcd/lcd_referee_rows.c # 裁判数据显示行格式化。
+    modules/lcd/lcd_ui.c # LCD 页面只读取框架状态接口。
     modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
     application/robot_task_create.c) # 已选任务的创建与失败处理。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)

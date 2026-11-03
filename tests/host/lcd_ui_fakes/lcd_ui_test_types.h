@@ -8,6 +8,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "platform_can.h"
+#include "bmi088_calibration.h"
 
 typedef enum { ROBOT_INIT, ROBOT_SAFE, ROBOT_CALIB, ROBOT_READY, ROBOT_FAULT, ROBOT_ESTOP } Robot_Status_e;
 #define ROBOT_FAULT_RC_OFFLINE (1u << 0)
@@ -48,17 +50,6 @@ typedef struct
 void IMUHeaterGetStatus(IMUHeaterStatus_t *output);
 typedef struct { float Yaw, Pitch, Roll; } attitude_t;
 attitude_t *INS_GetAttitude(void);
-
-typedef enum { CAN_STATUS_OK, CAN_STATUS_ERROR, CAN_STATUS_BUSOFF, CAN_STATUS_UNKNOWN } CAN_Status_e;
-typedef struct { CAN_Status_e status; } CAN_Status_t;
-typedef struct { uintptr_t Instance; } FDCAN_HandleTypeDef;
-extern FDCAN_HandleTypeDef hfdcan1, hfdcan2, hfdcan3;
-void CANGetStatus(FDCAN_HandleTypeDef *handle, CAN_Status_t *output);
-
-typedef enum { BMI088_CALIB_SRC_FLASH, BMI088_CALIB_SRC_FIRST_AUTO,
-               BMI088_CALIB_SRC_MANUAL, BMI088_CALIB_SRC_DEFAULT } BMI088_CalibSource_e;
-extern BMI088_CalibSource_e bmi088_calib_source;
-extern float bmi088_calib_temp;
 
 typedef enum { CRASH_TYPE_ASSERT, CRASH_TYPE_STACK_OVF } CrashType_e;
 typedef struct { CrashType_e type; uint32_t pc, count; char task_name[12]; } CrashLog_t;

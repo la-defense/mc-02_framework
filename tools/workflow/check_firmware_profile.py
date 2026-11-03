@@ -103,6 +103,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/lcd/lcd_buf.c",  # LCD 有界绘图及像素缓冲。
     "modules/lcd/lcd_key_input.c",  # LCD 按键事件处理。
     "modules/lcd/lcd_referee_rows.c",  # LCD 裁判数据显示。
+    "modules/lcd/lcd_ui.c",  # LCD 页面状态展示。
     "modules/lcd/lcd_task.c",  # LCD 页面、按键和运行统计任务。
     "application/robot_task_create.c",  # 按车型配置创建任务。
 }

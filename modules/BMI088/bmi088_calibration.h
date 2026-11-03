@@ -6,6 +6,19 @@
 
 #include <stdint.h>
 
+/** @brief 当前标定参数的来源。 */
+typedef enum
+{
+    BMI088_CALIB_SRC_NONE = 0, /**< 尚未确定来源。 */
+    BMI088_CALIB_SRC_FLASH, /**< 读取已保存的参数。 */
+    BMI088_CALIB_SRC_FIRST_AUTO, /**< 首次自动标定并保存。 */
+    BMI088_CALIB_SRC_MANUAL, /**< 运行中手动标定并保存。 */
+    BMI088_CALIB_SRC_DEFAULT /**< 标定失败后使用默认参数。 */
+} BMI088_CalibSource_e;
+
+extern volatile uint8_t bmi088_calib_source; /**< BMI088_CalibSource_e 中的来源值。 */
+extern volatile float bmi088_calib_temp; /**< 标定温度，单位 °C。 */
+
 /** @brief 按需标定的运行状态。 */
 typedef enum
 {

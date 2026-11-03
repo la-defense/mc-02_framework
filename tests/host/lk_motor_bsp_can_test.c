@@ -58,6 +58,9 @@ static uint8_t rx_frame_read[DEVICE_CAN_CNT];
 static uint32_t burst_rx_count[DEVICE_CAN_CNT];
 static uint32_t burst_rx_bad[DEVICE_CAN_CNT];
 static uint32_t burst_last_cycle[DEVICE_CAN_CNT];
+static uint8_t status_busoff[DEVICE_CAN_CNT]; // 模拟各总线独立的关闭状态。
+static uint8_t status_error[DEVICE_CAN_CNT]; // 模拟各总线独立的错误状态。
+static uint8_t status_read_failure; // 模拟 HAL 查询失败。
 
 #if defined(LK_TEST_ALLOC_WRAP)
 static unsigned malloc_calls;
@@ -196,8 +199,13 @@ uint32_t HAL_FDCAN_GetLatestTxFifoQRequestBuffer(FDCAN_HandleTypeDef *handle)
 }
 uint32_t HAL_FDCAN_GetProtocolStatus(FDCAN_HandleTypeDef *handle, FDCAN_ProtocolStatusTypeDef *status)
 {
-    (void)handle;
     memset(status, 0, sizeof(*status));
+    if (status_read_failure) return HAL_ERROR;
+    uint8_t bus = bus_for_handle(handle);
+    if (bus < DEVICE_CAN_CNT) {
+        status->BusOff = status_busoff[bus];
+        status->ErrorPassive = status_error[bus];
+    }
     return HAL_OK;
 }
 uint32_t HAL_FDCAN_GetErrorCounters(FDCAN_HandleTypeDef *handle, FDCAN_ErrorCountersTypeDef *counters)
@@ -1931,11 +1939,26 @@ static void test_platform_can_queue(void)
     TEST_CHECK(PlatformCanGetRequest(id, &result) && result.state == CAN_TX_RESULT_CANCELLED);
 }
 
+// 通过真实板级绑定及驱动检查三条总线和不可用状态。
+static void test_platform_can_status(void)
+{
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_INVALID) == PLATFORM_CAN_STATUS_UNKNOWN);
+    status_error[1] = 1u; // 第二条总线报告错误。
+    status_busoff[2] = 1u; // 第三条总线进入总线关闭。
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_OK);
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_2) == PLATFORM_CAN_STATUS_ERROR);
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_3) == PLATFORM_CAN_STATUS_BUSOFF);
+    status_read_failure = 1u; // 硬件查询失败时不显示为正常。
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_UNKNOWN);
+}
+
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
     CANInitWorkspace();
-    if (strcmp(argv[1], "platform-can-rx") == 0)
+    if (strcmp(argv[1], "platform-can-status") == 0)
+        test_platform_can_status();
+    else if (strcmp(argv[1], "platform-can-rx") == 0)
         test_platform_can_receive();
     else if (strcmp(argv[1], "dji-rx-rollback") == 0)
         test_dji_receive_registration_rollback();
