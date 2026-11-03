@@ -77,13 +77,18 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/can_comm/can_time_sync.c",  # 板间对时。
     "modules/time_sync/time_mapping.c",  # 跨设备时钟映射。
     "modules/referee/referee_UI.c",  # 裁判图形编码及发送状态。
+    "modules/referee/referee_task.c",  # 裁判界面状态和字段更新。
+    "modules/referee/referee_tx_budget.c",  # 裁判发送额度计算。
     "modules/referee/rm_referee.c",  # 裁判协议解析及逻辑串口接入。
     "modules/remote/remote_control.c",  # 遥控输入解析及逻辑串口接入。
+    "modules/remote/remote_safety.c",  # 遥控安全手势处理。
     "modules/master_machine/master_process.c",  # 上位机业务协议及传输状态。
     "modules/imu/ins_task.c",  # IMU 采样与姿态业务。
     "modules/imu/imu_heater.c",  # 温控策略及逻辑模拟资源。
     "modules/motor/DJImotor/dji_motor.c",  # DJI 逻辑端点、控制和反馈。
     "modules/motor/motor_task.c",  # 通信派发顺序及电机周期调用。
+    "modules/motor/motor_feedback.c",  # 电机能力及反馈换算。
+    "modules/motor/motor_pid.c",  # 电机 PID 周期控制。
     "modules/task_monitor/task_monitor.c",  # 任务期限和故障处理策略。
     "modules/alarm/robot_alarm.c",  # 告警协调与状态发布。
     "modules/alarm/robot_alarm_policy.c",  # 告警仲裁和灯声节奏。
@@ -96,6 +101,8 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "application/chassis/chassis.c",  # 底盘命令和电机控制。
     "application/cmd/robot_cmd.c",  # 遥控、视觉与控制命令。
     "modules/lcd/lcd_buf.c",  # LCD 有界绘图及像素缓冲。
+    "modules/lcd/lcd_key_input.c",  # LCD 按键事件处理。
+    "modules/lcd/lcd_referee_rows.c",  # LCD 裁判数据显示。
     "modules/lcd/lcd_task.c",  # LCD 页面、按键和运行统计任务。
     "application/robot_task_create.c",  # 按车型配置创建任务。
 }

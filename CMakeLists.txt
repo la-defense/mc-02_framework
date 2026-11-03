@@ -293,13 +293,18 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/can_comm/can_time_sync.c # 板间时间同步交互。
     modules/time_sync/time_mapping.c # 不同时钟之间的时间换算。
     modules/referee/referee_UI.c # 裁判图形编码和发送状态。
+    modules/referee/referee_task.c # 裁判界面状态与字段更新。
+    modules/referee/referee_tx_budget.c # 裁判通信发送额度。
     modules/referee/rm_referee.c # 裁判协议解析和逻辑串口接入。
     modules/remote/remote_control.c # 遥控解析与逻辑串口接入。
+    modules/remote/remote_safety.c # 遥控手势与安全请求。
     modules/master_machine/master_process.c # 上位机协议和传输状态处理。
     modules/imu/ins_task.c # 姿态采样、解算和安全状态。
     modules/imu/imu_heater.c # 温控策略使用逻辑 PWM 与模拟输入。
     modules/motor/DJImotor/dji_motor.c # DJI 普通控制及逻辑 CAN 接口。
     modules/motor/motor_task.c # 单一通信派发和电机周期任务。
+    modules/motor/motor_feedback.c # 电机能力和输出轴换算。
+    modules/motor/motor_pid.c # 电机控制周期与 PID 状态。
     modules/task_monitor/task_monitor.c # 任务进度、期限及核心故障策略。
     modules/alarm/robot_alarm.c # 安全状态与灯声输出的告警协调。
     modules/alarm/robot_alarm_policy.c # 故障仲裁、节奏与静音策略。
@@ -312,6 +317,8 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     application/chassis/chassis.c # 底盘命令、反馈和电机控制。
     application/cmd/robot_cmd.c # 遥控、视觉和控制命令仲裁。
     modules/lcd/lcd_buf.c # LCD 有界绘图与字体转换。
+    modules/lcd/lcd_key_input.c # LCD 按键去抖和事件。
+    modules/lcd/lcd_referee_rows.c # 裁判数据显示行格式化。
     modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
     application/robot_task_create.c) # 已选任务的创建与失败处理。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
