@@ -60,6 +60,12 @@ target_compile_definitions(referee_bench_platform_test PRIVATE MC02_BENCH_REFERE
 target_compile_options(referee_bench_platform_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_referee_bench_platform COMMAND referee_bench_platform_test)
 
+# 使用生产平台信号适配和 CMSIS 替身检查参数及返回值。
+add_executable(platform_signal_test platform_signal_test.c ../../bsp/os/platform_signal_freertos.c)
+target_include_directories(platform_signal_test BEFORE PRIVATE signal_fakes ../../bsp/os)
+target_compile_options(platform_signal_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_platform_signal_adapter COMMAND platform_signal_test)
+
 # 消息中心单独取得平台公共头，其他主机测试不继承额外路径。
 set_property(SOURCE ../../modules/message_center/message_center.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")

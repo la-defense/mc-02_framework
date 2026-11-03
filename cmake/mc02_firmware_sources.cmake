@@ -69,6 +69,7 @@ set(MC02_PLATFORM_C_SOURCES
 
 set(MC02_BSP_C_SOURCES
     bsp/os/platform_os_freertos.c # 任务接口的 FreeRTOS 后端。
+    bsp/os/platform_signal_freertos.c # 可合并任务信号位的 FreeRTOS 后端。
     bsp/os/platform_sync_freertos.c # 任务临界区与原有毫秒时钟的后端。
     bsp/os/platform_task_stats_freertos.c # 有界任务运行统计的 FreeRTOS 后端。
     bsp/os/platform_irq_stm32.c # STM32 中断屏蔽状态保存与恢复。
