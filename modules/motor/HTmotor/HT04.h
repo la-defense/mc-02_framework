@@ -6,7 +6,7 @@
 #define HT04_H
 
 #include <stdint.h>
-#include "bsp_can.h"
+#include "../../../bsp/can/platform_can.h"
 #include "controller.h"
 #include "motor_def.h"
 #include "daemon.h"
@@ -63,7 +63,9 @@ typedef struct
 
     Motor_Working_Type_e stop_flag; // 启停标志
 
-    CANInstance *motor_can_instace;
+    PlatformCanRxPort_t can_rx; // 长期保存的逻辑接收端点。
+    PlatformCanEndpoint_t can_endpoint; // 保存逻辑总线与收发 ID。
+    uint8_t tx_buff[8]; // 复用原有控制帧内容，提交时由平台复制。
 
     DaemonInstance *motor_daemon;
     uint32_t lost_cnt;

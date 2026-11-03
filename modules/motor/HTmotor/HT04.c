@@ -2,9 +2,7 @@
 * @brief 解码 HT04 协议，并用每电机独立任务计算所选控制环及发送力矩字段。
  */
 #include "HT04.h"
-#include "board_can_stm32.h"
 #include <string.h>
-#include "bsp_dwt.h"
 #include <math.h>
 #include "memory.h"
 #include "general_def.h"
@@ -97,18 +95,20 @@ static uint8_t HTControlConfigValid(const Motor_Init_Config_s *config)
  */
 static void HTMotorSetMode(HTMotor_Mode_t cmd, HTMotorInstance *motor)
 {
-    memset(motor->motor_can_instace->tx_buff, 0xff, 7);  // 发送电机指令的时候前面7bytes都是0xff
-    motor->motor_can_instace->tx_buff[7] = (uint8_t)cmd; // 最后一位是命令id
+    memset(motor->tx_buff, 0xff, 7);  // 发送电机指令的时候前面7bytes都是0xff
+    motor->tx_buff[7] = (uint8_t)cmd; // 最后一位是命令id
     const CAN_TxFrame_t frame = {
-        .identifier = motor->motor_can_instace->tx_id,
-        .identifier_type = CAN_TX_ID_STANDARD,
-        .data = motor->motor_can_instace->tx_buff,
-        .length = 8u,
+        .identifier = motor->can_endpoint.tx_id, // 使用车型配置的电机发送 ID。
+        .identifier_type = CAN_TX_ID_STANDARD, // HT 模式命令使用标准帧。
+        .data = motor->tx_buff, // 提交接口会复制这 8 字节。
+        .length = 8u, // 前 7 字节和命令字节组成完整模式命令。
     };
     uint32_t request_id = 0u;
-    (void)CANSubmitOneShot(motor->motor_can_instace->can_handle, motor->motor_can_instace,
-                           &frame, CAN_TX_PRIORITY_URGENT, 100u, &request_id);
-    memcpy(motor->motor_can_instace->tx_buff, zero_buff, 6);
+    // 单次命令进入有界重试队列，不能被下一次周期控制覆盖。
+    (void)PlatformCanSubmitOneShot(motor->can_endpoint.can_bus, &motor->can_rx,
+                                   &frame, CAN_TX_PRIORITY_URGENT, 100u, &request_id);
+    // 提交时已复制数据，恢复控制帧的前 6 字节供周期任务使用。
+    memcpy(motor->tx_buff, zero_buff, 6);
 }
 /* 两个用于将uint值和float值进行映射的函数,在设定发送值和解析反馈值时使用 */
 static uint16_t float_to_uint(float x, float x_min, float x_max, uint8_t bits)
@@ -127,14 +127,17 @@ static float uint_to_float(int x_int, float x_min, float x_max, int bits)
 /**
  * @brief 解析电机反馈值
  *
- * @param motor_can 收到
+ * @param context 长期保存的电机对象。
+ * @param frame 接收任务交付的只读帧和原始接收时间。
  */
-static void HTMotorDecode(CANInstance *motor_can)
+static void HTMotorDecode(void *context, const PlatformCanRxFrame_t *frame)
 {
+    if (context == NULL || frame == NULL || frame->length < 6u)
+        return; // 无完整反馈时不能读取或刷新状态。
     uint16_t tmp; // 用于暂存解析值,稍后转换成float数据,避免多次创建临时变量
-    uint8_t const *rxbuff = motor_can->rx_buff;
-    HTMotorInstance *motor = (HTMotorInstance *)motor_can->id;
-    HTMotor_Measure_t *measure = &(motor->measure); // 将can实例中保存的id转换成电机实例的指针
+    uint8_t const *rxbuff = frame->data; // 数据仅在本次回调期间可读。
+    HTMotorInstance *motor = context; // 逻辑接收端点保存长期电机对象。
+    HTMotor_Measure_t *measure = &(motor->measure);
 
     HTMotor_Measure_t candidate = *measure;
     candidate.last_angle = measure->total_angle;
@@ -155,12 +158,12 @@ static void HTMotorDecode(CANInstance *motor_can)
     candidate.feed_dt = PlatformProbeDeltaSeconds(&candidate.feed_cnt);
     PlatformTaskCriticalEnter();
     *measure = candidate;
-    motor->feedback_timestamp_ms = motor_can->rx_timestamp_ms;
+    motor->feedback_timestamp_ms = frame->received_ms;
     motor->feedback_sequence++;
     if (motor->feedback_sequence == 0u)
         motor->feedback_sequence++;
     PlatformTaskCriticalExit();
-    (void)DaemonReportAt(motor->motor_daemon, motor_can->rx_timestamp_ms,
+    (void)DaemonReportAt(motor->motor_daemon, frame->received_ms,
         DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT | DAEMON_REPORT_DATA_VALID);
 }
 
@@ -171,7 +174,7 @@ static void HTMotorLostCallback(const DaemonEvent_t *event, void *motor_ptr)
     HTMotorInstance *motor = (HTMotorInstance *)motor_ptr;
     // 每次确认进入离线只提交一条模式请求；重试须等待新通信恢复后再次失联。
     BSP_LOG_EVENT_1(EV_MODULES_MOTOR_HTMOTOR_HT04_C_01,
-                    BSP_LOG_FIELD_I32((int)motor->motor_can_instace->tx_id));
+                    BSP_LOG_FIELD_I32((int)motor->can_endpoint.tx_id));
     motor->lost_cnt++;
     HTMotorSetMode(CMD_MOTOR_MODE, motor);
 }
@@ -186,7 +189,7 @@ void HTMotorCalibEncoder(HTMotorInstance *motor)
     kd = float_to_uint(0, KD_MIN, KD_MAX, 12);
     t = float_to_uint(0, T_MIN, T_MAX, 12);
 
-    uint8_t *buf = motor->motor_can_instace->tx_buff;
+    uint8_t *buf = motor->tx_buff;
     buf[0] = p >> 8;
     buf[1] = p & 0xFF;
     buf[2] = v >> 4;
@@ -197,17 +200,17 @@ void HTMotorCalibEncoder(HTMotorInstance *motor)
     buf[7] = t & 0xff;
     memcpy(zero_buff, buf, 6); // 初始化的时候至少调用一次,故将其他指令为0时发送的报文保存一下,详见ht04电机说明
     const CAN_TxFrame_t control_frame = {
-        .identifier = motor->motor_can_instace->tx_id,
+        .identifier = motor->can_endpoint.tx_id,
         .identifier_type = CAN_TX_ID_STANDARD,
         .data = buf,
         .length = 8u,
     };
     uint32_t request_id = 0u;
-    (void)CANSubmitOneShot(motor->motor_can_instace->can_handle, motor->motor_can_instace,
-                           &control_frame, CAN_TX_PRIORITY_URGENT, 100u, &request_id);
-    DWT_Delay(0.005);
+    (void)PlatformCanSubmitOneShot(motor->can_endpoint.can_bus, &motor->can_rx,
+                                   &control_frame, CAN_TX_PRIORITY_URGENT, 100u, &request_id);
+    PlatformHtLegacyDelayMs(5u);
     HTMotorSetMode(CMD_ZERO_POSITION, motor); // 发出置零命令；本接口没有读取结果确认零位。
-    DWT_Delay(0.005);
+    PlatformHtLegacyDelayMs(5u);
     // HTMotorSetMode(CMD_MOTOR_MODE, motor);
 }
 
@@ -215,8 +218,7 @@ HTMotorInstance *HTMotorInit(const Motor_Init_Config_s *config)
 {
     if (config == NULL || !HTControlConfigValid(config))
         return NULL;
-    CAN_Init_Config_s can_config; // 保存板级解析结果，不修改车型配置。
-    if (!BoardCanPrepareEndpoint(&config->can_init_config, &can_config)) return NULL; // 总线未绑定时不分配或注册。
+    if (!PlatformCanBusIsBound(config->can_init_config.can_bus)) return NULL; // 总线未绑定时不分配或注册。
 
     const Motor_Control_Setting_s *setting = &config->controller_setting_init_config;
     uint8_t angle_active = (uint8_t)((setting->close_loop_type & ANGLE_LOOP) != 0u &&
@@ -243,6 +245,7 @@ HTMotorInstance *HTMotorInit(const Motor_Init_Config_s *config)
     memset(motor, 0, sizeof(HTMotorInstance));
 
     motor->motor_settings = *setting;
+    motor->can_endpoint = config->can_init_config; // 保存车型声明的逻辑收发端点。
     motor->output_axis = config->output_axis;
     motor->current_PID = current_pid;
     motor->speed_PID = speed_pid;
@@ -272,21 +275,20 @@ HTMotorInstance *HTMotorInit(const Motor_Init_Config_s *config)
         return NULL;
     }
 
-    can_config.can_module_callback = HTMotorDecode;
-    can_config.id = motor;
-    motor->motor_can_instace = CANRegister(&can_config);
-    if (motor->motor_can_instace == NULL)
+    if (!PlatformCanRxRegister(&motor->can_rx, &motor->can_endpoint, HTMotorDecode, motor))
     {
+        // 接收端点注册失败时撤销此前注册的离线监控。
         (void)DaemonUnregister(motor->motor_daemon);
+        // 释放尚未交给周期任务的电机对象。
         free(motor);
         return NULL;
     }
 
     HTMotorEnable(motor);
     HTMotorSetMode(CMD_MOTOR_MODE, motor); // 确保电机已经上电并执行电机模式
-    DWT_Delay(0.05f);
+    PlatformHtLegacyDelayMs(50u);
     HTMotorCalibEncoder(motor); // 将当前编码器位置作为零位
-    DWT_Delay(0.05f);           // 保证下一个电机发送时CAN是空闲的,注意应用在初始化模块的时候不应该进入中断
+    PlatformHtLegacyDelayMs(50u); // 延续原初始化等待，不能在中断中执行。
     ht_motor_instance[idx++] = motor;
     return motor;
 }
@@ -360,7 +362,6 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
 {
     float set, pid_measure, pid_ref;
     HTMotorInstance *motor = (HTMotorInstance *)argument;
-    CANInstance *motor_can = motor->motor_can_instace;
     uint16_t tmp;
 
     // 持续取目标，依次计算已选角度、速度和当前反馈环；最后停止标记覆盖为零力矩。
@@ -477,18 +478,18 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
         tmp = float_to_uint(set, T_MIN, T_MAX, 12);
         if (stop_flag == MOTOR_STOP)
             tmp = float_to_uint(0, T_MIN, T_MAX, 12);
-        motor_can->tx_buff[6] = (tmp >> 8);
-        motor_can->tx_buff[7] = tmp & 0xff;
+        motor->tx_buff[6] = (tmp >> 8);
+        motor->tx_buff[7] = tmp & 0xff;
 
         const CAN_TxFrame_t frame = {
-            .identifier = motor_can->tx_id,
+            .identifier = motor->can_endpoint.tx_id,
             .identifier_type = CAN_TX_ID_STANDARD,
-            .data = motor_can->tx_buff,
+            .data = motor->tx_buff,
             .length = 8u,
         };
         uint32_t request_id = 0u;
-        (void)CANSubmitPeriodic(motor_can->can_handle, motor_can, 0u, &frame,
-                                CAN_TX_PRIORITY_CONTROL, 4u, 1000u, &request_id);
+        (void)PlatformCanSubmitPeriodic(motor->can_endpoint.can_bus, &motor->can_rx, 0u, &frame,
+                                        CAN_TX_PRIORITY_CONTROL, 4u, 1000u, NULL, &request_id);
 
         PlatformTaskDelayMs(1u); // 保留原来的 1 ms 任务让出。
     }

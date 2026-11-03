@@ -17,13 +17,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-FDCAN_HandleTypeDef hcan1, hcan2; // 为生产板级映射提供两条测试 CAN 总线。
-static CANInstance can_instances[2];
-static void (*callbacks[2])(CANInstance *);
 static DaemonInstance daemons[2];
 static unsigned registered;
 static unsigned daemon_count;
 static unsigned transmit_count;
+static uint8_t initial_frames[3][8]; // 记录前 3 帧，核对初始化命令顺序。
+static uint32_t initial_delays[4]; // 保存初始化四次忙等时长。
+static unsigned delay_count;
 static unsigned task_count;
 static struct
 {
@@ -34,35 +34,38 @@ static uint64_t now_us;
 static unsigned task_iterations_remaining;
 static jmp_buf task_exit;
 
-CANInstance *CANRegister(CAN_Init_Config_s *config)
+uint8_t PlatformCanBusIsBound(PlatformCanBus_t bus)
 {
-    if (config == NULL || registered >= 2u)
-        return NULL;
-    CANInstance *instance = &can_instances[registered];
-    memset(instance, 0, sizeof(*instance));
-    instance->can_handle = config->can_handle;
-    instance->tx_id = config->tx_id;
-    instance->id = config->id;
-    callbacks[registered] = config->can_module_callback;
+    return (uint8_t)(bus == PLATFORM_CAN_BUS_1 || bus == PLATFORM_CAN_BUS_2);
+}
+uint8_t PlatformCanRxRegister(PlatformCanRxPort_t *port, const PlatformCanEndpoint_t *endpoint,
+                              PlatformCanRxCallback_t callback, void *context)
+{
+    if (port == NULL || endpoint == NULL || !PlatformCanBusIsBound(endpoint->can_bus) || registered >= 2u)
+        return 0u;
+    port->backend = port; // 使用长期端点本身作为不透明测试标记。
+    port->callback = callback;
+    port->context = context;
     ++registered;
-    return instance;
+    return 1u;
 }
 
 static CAN_TxSubmitStatus_t fake_tx_submit(const CAN_TxFrame_t *frame, uint32_t *request_id)
 {
     TEST_CHECK(frame != NULL && request_id != NULL && frame->length <= 8u);
+    if (transmit_count < 3u && frame->length == 8u)
+        memcpy(initial_frames[transmit_count], frame->data, 8u); // 在调用者复用缓冲前复制。
     ++transmit_count;
     *request_id = transmit_count;
     return CAN_TX_SUBMIT_ACCEPTED;
 }
-CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan,const void *source,uint32_t key,
-                                       const CAN_TxFrame_t *frame,CAN_TxPriority_t priority,
-                                       uint32_t deadline_ms,uint32_t period_us,uint32_t *request_id)
-{(void)hcan;(void)source;(void)key;(void)priority;(void)deadline_ms;(void)period_us;return fake_tx_submit(frame,request_id);}
-CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan,const void *source,
-                                      const CAN_TxFrame_t *frame,CAN_TxPriority_t priority,
-                                      uint32_t deadline_ms,uint32_t *request_id)
-{(void)hcan;(void)source;(void)priority;(void)deadline_ms;return fake_tx_submit(frame,request_id);}
+CAN_TxSubmitStatus_t PlatformCanSubmitPeriodic(PlatformCanBus_t bus,const void *source,uint32_t key,
+    const CAN_TxFrame_t *frame,CAN_TxPriority_t priority,uint32_t deadline_ms,uint32_t period_us,
+    CAN_TxPeriodicPrepareFn_t prepare,uint32_t *request_id)
+{(void)bus;(void)source;(void)key;(void)priority;(void)deadline_ms;(void)period_us;(void)prepare;return fake_tx_submit(frame,request_id);}
+CAN_TxSubmitStatus_t PlatformCanSubmitOneShot(PlatformCanBus_t bus,const void *source,
+    const CAN_TxFrame_t *frame,CAN_TxPriority_t priority,uint32_t deadline_ms,uint32_t *request_id)
+{(void)bus;(void)source;(void)priority;(void)deadline_ms;return fake_tx_submit(frame,request_id);}
 
 DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config)
 {
@@ -80,6 +83,11 @@ uint8_t DaemonUnregister(DaemonInstance *instance) { (void)instance; return 1u; 
 uint64_t DWT_GetTimeline_us(void) { return now_us; }
 float DWT_GetDeltaT(uint32_t *counter) { ++*counter; return 0.001f; }
 void DWT_Delay(float seconds) { (void)seconds; }
+void PlatformHtLegacyDelayMs(uint32_t milliseconds)
+{
+    if (delay_count < 4u) initial_delays[delay_count] = milliseconds; // 记录顺序但不实际等待。
+    ++delay_count;
+}
 uint32_t HAL_GetTick(void) { return (uint32_t)(now_us / 1000u); }
 void PlatformTaskCriticalEnter(void) {} // 该测试的控制循环按确定顺序执行。
 void PlatformTaskCriticalExit(void) {}
@@ -177,8 +185,8 @@ static void run_task(unsigned index, unsigned iterations)
 static void check_torque(const HTMotorInstance *motor, double torque)
 {
     uint16_t expected = expected_wire_torque(torque);
-    TEST_CHECK(motor->motor_can_instace->tx_buff[6] == (uint8_t)(expected >> 8u));
-    TEST_CHECK(motor->motor_can_instace->tx_buff[7] == (uint8_t)expected);
+    TEST_CHECK(motor->tx_buff[6] == (uint8_t)(expected >> 8u));
+    TEST_CHECK(motor->tx_buff[7] == (uint8_t)expected);
 }
 
 static void test_feedback_combination(unsigned combination)
@@ -192,6 +200,12 @@ static void test_feedback_combination(unsigned combination)
         (combination & 2u) != 0u ? OTHER_FEED : MOTOR_FEED;
     HTMotorInstance *motor = HTMotorInit(&config);
     TEST_CHECK(motor != NULL);
+    TEST_CHECK(transmit_count == 3u && delay_count == 4u);
+    TEST_CHECK(initial_frames[0][0] == 0xffu && initial_frames[0][7] == CMD_MOTOR_MODE);
+    TEST_CHECK(initial_frames[1][0] == 0x7fu && initial_frames[1][1] == 0xffu);
+    TEST_CHECK(initial_frames[2][0] == 0xffu && initial_frames[2][7] == CMD_ZERO_POSITION);
+    TEST_CHECK(initial_delays[0] == 50u && initial_delays[1] == 5u &&
+               initial_delays[2] == 5u && initial_delays[3] == 50u);
     TEST_CHECK(motor->other_angle_feedback.context == &external_angle);
     TEST_CHECK(motor->other_speed_feedback.context == &external_speed);
     HTMotorSetRef(motor, 30.0f / (float)RAD_2_DEGREE);

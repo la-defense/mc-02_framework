@@ -50,7 +50,7 @@ set(MC02_HOST_DJI_SOURCES
   ../../bsp/board/platform_probe_stm32.c # 周期计数到秒的换算适配。
   ../../bsp/board/platform_time_us_stm32.c) # 沿用测试的微秒时间来源。
 set(MC02_HOST_LK_SOURCES ../../modules/motor/LKmotor/LK9025.c ../../bsp/board/board_can_stm32.c) # LK 及逻辑 CAN 绑定。
-set(MC02_HOST_HT_SOURCES ../../modules/motor/HTmotor/HT04.c ../../bsp/board/board_can_stm32.c) # HT 及逻辑 CAN 绑定。
+set(MC02_HOST_HT_SOURCES ../../modules/motor/HTmotor/HT04.c) # HT 使用逻辑 CAN 端点替身。
 set(MC02_HOST_DM_SOURCES ../../modules/motor/DMmotor/dmmotor.c ../../bsp/board/board_can_stm32.c) # DM 及逻辑 CAN 绑定。
 # 裁判裸板诊断使用框架时钟和任务锁替身，验证完成通知的竞争窗口。
 add_executable(referee_bench_platform_test referee_bench_platform_test.c
@@ -574,6 +574,7 @@ endforeach()
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
   ../../bsp/board/platform_can_stm32.c # 通过生产适配复用真实 CAN 队列。
+  ../../bsp/board/platform_can_oneshot_stm32.c # 一次性命令使用生产板级适配。
   ../../bsp/board/platform_can_status_stm32.c # 通过生产适配查询逻辑总线状态。
   ../../bsp/board/platform_can_periodic_stm32.c # 周期发送使用生产平台适配。
   ../../bsp/board/platform_can_rx_stm32.c # 通过生产适配注册与派发接收端点。

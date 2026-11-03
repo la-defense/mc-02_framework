@@ -11,22 +11,24 @@
 #include <math.h>
 #include <string.h>
 
-FDCAN_HandleTypeDef hcan1, hcan2; // 为生产板级映射提供测试句柄。
-static CANInstance instances[2];
-static void (*callbacks[2])(CANInstance *);
+static PlatformCanRxPort_t *ports[2]; // 保存测试中注册的长期端点。
 static DaemonInstance daemons[2];
 static unsigned registered,daemon_count,reloads,clock_reads;
 static uint32_t test_tick;
 
-CANInstance *CANRegister(CAN_Init_Config_s *config)
+uint8_t PlatformCanBusIsBound(PlatformCanBus_t bus)
 {
-    TEST_CHECK(registered<2);
-    CANInstance *instance=&instances[registered];
-    instance->can_handle=config->can_handle;
-    instance->tx_id=config->tx_id;
-    instance->id=config->id;
-    callbacks[registered++]=config->can_module_callback;
-    return instance;
+    return (uint8_t)(bus == PLATFORM_CAN_BUS_1 || bus == PLATFORM_CAN_BUS_2);
+}
+uint8_t PlatformCanRxRegister(PlatformCanRxPort_t *port, const PlatformCanEndpoint_t *endpoint,
+                              PlatformCanRxCallback_t callback, void *context)
+{
+    TEST_CHECK(port != NULL && endpoint != NULL && registered < 2u);
+    port->backend = port;
+    port->callback = callback;
+    port->context = context;
+    ports[registered++] = port;
+    return 1u;
 }
 static CAN_TxSubmitStatus_t fake_tx_submit(const CAN_TxFrame_t *frame, uint32_t *request_id)
 {
@@ -34,15 +36,13 @@ static CAN_TxSubmitStatus_t fake_tx_submit(const CAN_TxFrame_t *frame, uint32_t 
     *request_id = 1u;
     return CAN_TX_SUBMIT_ACCEPTED;
 }
-CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *hcan, const void *source,
-                                       uint32_t key, const CAN_TxFrame_t *frame,
-                                       CAN_TxPriority_t priority, uint32_t deadline_ms,
-                                       uint32_t period_us, uint32_t *request_id)
-{(void)hcan;(void)source;(void)key;(void)priority;(void)deadline_ms;(void)period_us;return fake_tx_submit(frame,request_id);}
-CAN_TxSubmitStatus_t CANSubmitOneShot(FDCAN_HandleTypeDef *hcan, const void *source,
-                                      const CAN_TxFrame_t *frame,CAN_TxPriority_t priority,
-                                      uint32_t deadline_ms,uint32_t *request_id)
-{(void)hcan;(void)source;(void)priority;(void)deadline_ms;return fake_tx_submit(frame,request_id);}
+CAN_TxSubmitStatus_t PlatformCanSubmitPeriodic(PlatformCanBus_t bus,const void *source,uint32_t key,
+    const CAN_TxFrame_t *frame,CAN_TxPriority_t priority,uint32_t deadline_ms,uint32_t period_us,
+    CAN_TxPeriodicPrepareFn_t prepare,uint32_t *request_id)
+{(void)bus;(void)source;(void)key;(void)priority;(void)deadline_ms;(void)period_us;(void)prepare;return fake_tx_submit(frame,request_id);}
+CAN_TxSubmitStatus_t PlatformCanSubmitOneShot(PlatformCanBus_t bus,const void *source,
+    const CAN_TxFrame_t *frame,CAN_TxPriority_t priority,uint32_t deadline_ms,uint32_t *request_id)
+{(void)bus;(void)source;(void)priority;(void)deadline_ms;return fake_tx_submit(frame,request_id);}
 DaemonInstance *DaemonRegister(const Daemon_Init_Config_s *config)
 {(void)config;TEST_CHECK(daemon_count<2);return &daemons[daemon_count++];}
 void DaemonReload(DaemonInstance *instance){(void)instance;++reloads;}
@@ -53,6 +53,7 @@ uint8_t DaemonIsOnline(DaemonInstance *instance){(void)instance;return 1u;}
 uint64_t DWT_GetTimeline_us(void){return 0;}
 float DWT_GetDeltaT(uint32_t *counter){++clock_reads;++*counter;return .001f;}
 void DWT_Delay(float seconds){(void)seconds;}
+void PlatformHtLegacyDelayMs(uint32_t milliseconds) { (void)milliseconds; } // 不在主机实际等待。
 uint32_t HAL_GetTick(void){return test_tick;}
 void PlatformTaskCriticalEnter(void) {} // 本测试串行交错两台电机的反馈。
 void PlatformTaskCriticalExit(void) {}
@@ -68,10 +69,11 @@ char *__itoa(int value,char *output,int base)
 // 只构造协议反馈并调用登记的生产回调，不触发控制任务。
 static void receive(unsigned index,uint16_t speed)
 {
-    uint8_t *bytes=instances[index].rx_buff;
+    PlatformCanRxFrame_t frame = {.length = 6u, .received_ms = test_tick};
+    uint8_t *bytes=frame.data;
     bytes[1]=0x80;bytes[2]=0;
     bytes[3]=(uint8_t)(speed>>4);bytes[4]=(uint8_t)((speed&15u)<<4);
-    callbacks[index](&instances[index]);
+    ports[index]->callback(ports[index]->context, &frame);
 }
 
 /** @brief 交错喂入两组速度，再损坏历史检查整帧保持及修复后恢复。 */
@@ -97,14 +99,22 @@ int main(void)
             TEST_CHECK(fabs(motor->measure.speed_rads-expected)<2e-5);
         }
     TEST_CHECK(reloads==14 && clock_reads==14);
+    const uint32_t previous_sequence = a->feedback_sequence;
+    const uint32_t previous_time = a->feedback_timestamp_ms;
+    PlatformCanRxFrame_t short_frame = {.length = 5u, .received_ms = 70u};
+    ports[0]->callback(ports[0]->context, &short_frame); // 少于六字节时不得刷新来源。
+    TEST_CHECK(a->feedback_sequence == previous_sequence && a->feedback_timestamp_ms == previous_time);
+    TEST_CHECK(reloads == 14u && clock_reads == 14u);
     a->measure.speed_buff[0]=NAN;
     HTMotor_Measure_t before=a->measure;
     receive(0,2048);
     TEST_CHECK(memcmp(&a->measure,&before,sizeof(before))==0);
     TEST_CHECK(reloads==14 && clock_reads==14);
     memset(a->measure.speed_buff,0,sizeof(a->measure.speed_buff));
+    test_tick = 77u; // 交付帧中保存的原始接收时间。
     receive(0,4095);
     TEST_CHECK(reloads==15 && clock_reads==15 && a->measure.feed_cnt==8);
+    TEST_CHECK(a->feedback_timestamp_ms == 77u);
     TEST_CHECK(fabsf(a->measure.speed_rads-(45.0f-HT_SPEED_BIAS)/5)<2e-5f);
     return 0;
 }

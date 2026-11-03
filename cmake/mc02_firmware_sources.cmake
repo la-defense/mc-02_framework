@@ -79,6 +79,7 @@ set(MC02_BSP_C_SOURCES
     bsp/board/platform_pwm_stm32.c # 板载加热 PWM 的逻辑通道适配。
     bsp/board/platform_adc_stm32.c # 电源电压逻辑模拟输入适配。
     bsp/board/platform_can_stm32.c # 逻辑 CAN 总线的发送队列适配。
+    bsp/board/platform_can_oneshot_stm32.c # 一次性 CAN 命令的逻辑总线适配。
     bsp/board/platform_can_status_stm32.c # 逻辑 CAN 控制器状态查询。
     bsp/board/platform_can_periodic_stm32.c # 逻辑 CAN 周期发送及发送前检查。
     bsp/board/platform_can_rx_stm32.c # 逻辑 CAN 接收端点适配。
@@ -268,6 +269,9 @@ foreach(pair IN ITEMS "DJI;DJImotor/dji_motor.c" "LK;LKmotor/LK9025.c" "HT;HTmot
 endforeach()
 if(NOT MC02_SELECTED_DRIVER_DJI)
     list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES bsp/board/dji_can_diagnostic_stm32.c) # 无 DJI 电机时不编入诊断。
+endif()
+if(MC02_SELECTED_DRIVER_HT)
+    list(APPEND MC02_BSP_C_SOURCES bsp/board/platform_ht_delay_stm32.c) # 仅 HT 沿用的初始化忙等。
 endif()
 if(NOT MC02_FEATURE_SUPERCAP)
     list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES modules/super_cap/super_cap.c)

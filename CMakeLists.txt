@@ -312,6 +312,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/imu/imu_heater.c # 温控策略使用逻辑 PWM 与模拟输入。
     modules/motor/DJImotor/dji_motor.c # DJI 普通控制及逻辑 CAN 接口。
     modules/motor/LKmotor/LK9025.c # LK 反馈及按逻辑总线组帧。
+    modules/motor/HTmotor/HT04.c # HT 反馈、模式命令与周期控制。
     modules/motor/motor_task.c # 单一通信派发和电机周期任务。
     modules/motor/motor_feedback.c # 电机能力和输出轴换算。
     modules/motor/motor_pid.c # 电机控制周期与 PID 状态。
@@ -401,6 +402,7 @@ target_include_directories(mc02_portable_framework PRIVATE
     modules/motor # 电机能力、反馈及 PID 接口。
     modules/motor/DJImotor # DJI 电机公开控制接口。
     modules/motor/LKmotor # LK 电机公开控制接口。
+    modules/motor/HTmotor # HT 电机公开控制接口。
     modules/lcd # 显示状态和绘图接口。
     modules/alarm # 告警策略与灯声输出接口。
     bsp/board # 板级资源和蜂鸣器公开接口。

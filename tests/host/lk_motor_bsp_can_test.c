@@ -1969,6 +1969,14 @@ static void test_platform_can_queue(void)
         CAN_TX_PRIORITY_NORMAL, 50u, &id) == CAN_TX_SUBMIT_ACCEPTED);
     TEST_CHECK(PlatformCanCancelRequest(id) == 1u);
     TEST_CHECK(PlatformCanGetRequest(id, &result) && result.state == CAN_TX_RESULT_CANCELLED);
+    id = 99u; // 一次性命令也必须拒绝未绑定总线且不改编号。
+    TEST_CHECK(PlatformCanSubmitOneShot(PLATFORM_CAN_INVALID, &data, &frame,
+        CAN_TX_PRIORITY_URGENT, 50u, &id) == CAN_TX_SUBMIT_NOT_READY && id == 99u);
+    TEST_CHECK(PlatformCanSubmitOneShot(PLATFORM_CAN_BUS_1, &data, &frame,
+        CAN_TX_PRIORITY_URGENT, 50u, &id) == CAN_TX_SUBMIT_ACCEPTED);
+    tx_busy_mask = 1u; // 保持硬件繁忙，核对一次性命令沿用有限重试。
+    for (unsigned attempt = 0u; attempt < 4u; ++attempt) CANProcessTx();
+    TEST_CHECK(PlatformCanGetRequest(id, &result) && result.state == CAN_TX_RESULT_FAILED);
 }
 
 // 通过真实板级绑定及驱动检查三条总线和不可用状态。

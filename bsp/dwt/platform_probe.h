@@ -23,6 +23,12 @@ uint32_t PlatformProbeStart(void);
  */
 void PlatformProbeDelay500Us(void);
 
+/** @brief 保留 HT 驱动初始化／置零中的旧忙等。
+ * @param[in] milliseconds 等待时间，单位毫秒；当前调用为 5 或 50。
+ * @note 调用前须初始化平台计数器；等待期间不让出处理器，不用于新的周期任务。
+ */
+void PlatformHtLegacyDelayMs(uint32_t milliseconds);
+
 /** @brief 读取原有的浮点毫秒运行时间，供低频诊断使用。
  * @return 自平台原有时基初始化起的毫秒数，精度随浮点数值增大而降低。
  * @note H723 后端保留原有 DWT 时间计算；不用于跨设备时钟比较。

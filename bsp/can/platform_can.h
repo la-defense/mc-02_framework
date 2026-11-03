@@ -62,6 +62,18 @@ uint8_t PlatformCanRxRegister(PlatformCanRxPort_t *port, const PlatformCanEndpoi
  */
 uint8_t PlatformCanRxIsRegistered(const PlatformCanRxPort_t *port);
 
+/** @brief 提交一帧一次性 CAN 命令，沿用现有有界重试规则。
+ * @param[in] bus 已绑定的逻辑总线。
+ * @param[in] source 请求来源标识，必须保持有效直到完成。
+ * @param[in] frame 只读帧，提交成功后数据已复制，可立即复用。
+ * @param[in] priority 调度优先级，deadline_ms 是入队起的总时限。
+ * @param[in] deadline_ms 总期限，单位 ms，范围 1～INT32_MAX。
+ * @param[out] request_id 接受时写入编号；失败保持原值。
+ * @return 队列提交结果，未绑定时返回 NOT_READY。
+ */
+CAN_TxSubmitStatus_t PlatformCanSubmitOneShot(PlatformCanBus_t bus, const void *source,
+    const CAN_TxFrame_t *frame, CAN_TxPriority_t priority, uint32_t deadline_ms, uint32_t *request_id);
+
 /** @brief 撤销启动期间尚未投入运行的接收注册。
  * @param[in,out] port 已注册端点；NULL 或未注册时不做处理。
  * @note 仅供启动失败回退；不得与接收派发、发送请求或运行中的回调并发。
