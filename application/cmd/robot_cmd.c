@@ -15,7 +15,6 @@ static RemoteSafetyGestures_s remote_gestures;
 #include "topics/robot_topics.h"
 #include "general_def.h"
 #include "dji_motor.h"
-#include "bmi088.h"
 #include "robot_safety.h"
 #include "daemon.h"
 #include "vision_control.h"
@@ -43,7 +42,6 @@ _Static_assert((int)LOAD_3_BULLET == (int)VISION_CONTROL_LOAD_THREE_BULLETS,
 _Static_assert((int)LOAD_BURSTFIRE == (int)VISION_CONTROL_LOAD_BURSTFIRE,
                "Vision control loader mapping must match LOAD_BURSTFIRE");
 // bsp
-#include "bsp_dwt.h"
 #include "bsp_log.h"
 
 // 私有宏,自动将编码器转换成角度值
@@ -129,8 +127,6 @@ static Gimbal_Upload_Data_s gimbal_fetch_data; // 从云台获取的反馈信息
 static MessagePublisher_t *shoot_cmd_pub;           // 发射控制消息发布者
 static Shoot_Ctrl_Cmd_s shoot_cmd_send;      // 传递给发射的控制信息
 
-BMI088Instance *bmi088_test; // 云台IMU
-BMI088_Data_t bmi088_data;
 uint8_t RobotCMDInit(void)
 {
     if (!RobotTopicsInit())
@@ -504,7 +500,6 @@ void RobotCMDTask()
 {
    // 来源离线事件在整车任务中执行，确保撤销遥控许可与视觉清理不挤入监控任务。
    (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_ROBOT_TASK, DAEMON_EVENT_MAX_DEPTH, NULL);
-   // BMI088Acquire(bmi088_test,&bmi088_data) ;
     // 控制选择不读取底盘回传，避免单板复制未使用的反馈或双板为它加锁。
     const uint8_t feedback_received = (uint8_t)(MessageReadSnapshot(gimbal_feed_sub,
         &gimbal_fetch_data, sizeof(gimbal_fetch_data), PlatformTimeNowMs(), NULL) == MESSAGE_OK);

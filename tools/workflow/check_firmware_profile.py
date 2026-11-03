@@ -59,6 +59,10 @@ PORTABLE_FRAMEWORK_SOURCES = {
     "application/vehicle_health.c",  # 整车健康信息采集和发布。
     "application/vehicle_health_diag.c",  # 只读诊断应答。
     "application/robot.c",  # 整车启动和周期协调。
+    "application/robot_def.c",  # 车型配置读取与参数校验。
+    "application/config/module_plan.c",  # 模块依赖和启动结果。
+    "application/config/vehicle_selection.c",  # 车型身份和启动计划。
+    "application/config/sentinel_robot/sentinel_config.c",  # 哨兵静态配置。
     "modules/daemon/daemon.c",  # 来源状态和事件队列。
     "modules/daemon/daemon_event_task.c",  # 来源事件任务入口。
     "modules/message_center/message_center.c",  # 消息目录和有界队列。
@@ -90,6 +94,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "application/gimbal/gimbal.c",  # 云台命令和反馈。
     "application/shoot/shoot.c",  # 发射命令和拨弹控制。
     "application/chassis/chassis.c",  # 底盘命令和电机控制。
+    "application/cmd/robot_cmd.c",  # 遥控、视觉与控制命令。
     "modules/lcd/lcd_buf.c",  # LCD 有界绘图及像素缓冲。
     "modules/lcd/lcd_task.c",  # LCD 页面、按键和运行统计任务。
     "application/robot_task_create.c",  # 按车型配置创建任务。
@@ -257,6 +262,7 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "bsp/adc", source_root / "bsp/observation", source_root / "bsp/crash",
                source_root / "bsp", source_root / "bsp/param", source_root / "bsp/watchdog",
                source_root / "bsp/reset_recovery", source_root / "application/chassis",
+               source_root / "application/config/sentinel_robot",
                source_root / "application/gimbal", source_root / "application/shoot", source_root / "application/cmd",
                source_root / "bsp/safety", source_root / "application",
                source_root / "application/config",
@@ -333,12 +339,14 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/robot_control_tasks.h",
                         source_root / "application/robot_def.h",
                         source_root / "application/config/config.h",
+                        source_root / "application/config/sentinel_robot/sentinel_config.h",
                         source_root / "application/config/shoot_config_types.h",
                         source_root / "application/chassis/chassis_motion.h",
                         source_root / "application/chassis/chassis.h",
                         source_root / "application/chassis/chassis_supercap_legacy.h",
                         source_root / "application/chassis/chassis_kinematics.h",
                         source_root / "application/chassis/omni.h",
+                        source_root / "application/chassis/mecanum.h",
                         source_root / "application/cmd/robot_cmd.h",
                         source_root / "application/gimbal/gimbal.h",
                         source_root / "application/shoot/shoot.h",

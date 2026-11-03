@@ -276,6 +276,10 @@ set(MC02_PORTABLE_FRAMEWORK_SOURCES
     application/vehicle_health.c # 整车健康信息的采集和发布。
     application/vehicle_health_diag.c # 健康信息的只读诊断应答。
     application/robot.c # 整车启动与周期协调。
+    application/robot_def.c # 车型配置选择与参数校验。
+    application/config/module_plan.c # 模块依赖和启动结果。
+    application/config/vehicle_selection.c # 车型身份和模块计划。
+    application/config/sentinel_robot/sentinel_config.c # 哨兵静态车型配置。
     modules/daemon/daemon.c # 来源期限、状态和事件队列。
     modules/daemon/daemon_event_task.c # 来源事件处理任务的框架入口。
     modules/message_center/message_center.c # 有界消息与话题目录。
@@ -306,6 +310,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     application/gimbal/gimbal.c # 云台命令、反馈和电机控制。
     application/shoot/shoot.c # 发射命令和拨弹时序。
     application/chassis/chassis.c # 底盘命令、反馈和电机控制。
+    application/cmd/robot_cmd.c # 遥控、视觉和控制命令仲裁。
     modules/lcd/lcd_buf.c # LCD 有界绘图与字体转换。
     modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
     application/robot_task_create.c) # 已选任务的创建与失败处理。
@@ -333,6 +338,7 @@ target_include_directories(mc02_portable_framework PRIVATE
     bsp/safety # 启动失败时使用的板级直接关断入口。
     application # LCD 标记初始化诊断结果。
     application/config # 编译选择和生成的车型标识。
+    application/config/sentinel_robot # 当前哨兵配置入口。
     application/chassis # 底盘配置和接口。
     application/gimbal # 云台业务接口。
     application/shoot # 发射业务接口。
