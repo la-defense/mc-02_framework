@@ -70,11 +70,17 @@ int main(void)
     int status = DSPMatrixMultiplyF32(&ma, &mb, &mo); // 迁移后经框架接口调用。
 #endif
     printf("matrix %d %.9g %.9g %.9g %.9g\n", status, result[0], result[1], result[2], result[3]);
+    if (status != 0)
+        return 1; // 两版同时失败也不能作为正确的矩阵乘法结果。
     status = DSPMatrixInverseF32(&ma, &mo, scratch, 8);
     printf("inverse %d %.9g %.9g %.9g %.9g\n", status, result[0], result[1], result[2], result[3]);
+    if (status != 0)
+        return 1; // 非奇异矩阵必须可以求逆。
     a[0] = a[1] = a[2] = a[3] = 1.0f; // 奇异矩阵应返回错误并保持上次结果。
     status = DSPMatrixInverseF32(&ma, &mo, scratch, 8);
     printf("singular %d %.9g\n", status, result[0]);
+    if (status != -5)
+        return 1; // 两版约定的奇异矩阵状态均为 -5。
 
     // 覆盖正负角及周期边界，分别读取两版实际使用的正弦与余弦入口。
     for (int i = -128; i <= 128; ++i)
@@ -85,6 +91,8 @@ int main(void)
 #else
         const float sine = FastTrigSinF32(angle), cosine = FastTrigCosF32(angle);
 #endif
+        if (!isfinite(sine) || !isfinite(cosine))
+            return 1; // 合法角度不能产生非有限结果。
         printf("trig %d %.9g %.9g\n", i, sine, cosine);
     }
 
@@ -97,11 +105,15 @@ int main(void)
         const KFStatus_t step_status = trace_step(&fixture, i + 1, &measurement);
         printf("kf %u %d %.9g %.9g\n", i, step_status,
                fixture.k.FilteredValue[0], fixture.k.published_P[0]);
+        if (step_status != KF_OK)
+            return 1; // 合法新量测应完成校正。
     }
     float invalid_measurement = NAN;
     status = trace_step(&fixture, 33, &invalid_measurement); // 比较非法量测的处理。
     printf("kf_bad %d %.9g %.9g %d\n", status, fixture.k.FilteredValue[0],
            fixture.k.published_P[0], fixture.k.result.cause);
+    if (status != KF_PREDICTED || fixture.k.result.cause != KF_ERROR_NUMERIC)
+        return 1; // 非法量测使用有限预测并报告数值原因。
 
     AttitudeFilter_t filter = {0};
     AttitudeFilterConfig_t config = {0};
@@ -120,6 +132,8 @@ int main(void)
     float quaternion[4] = {1, 0, 0, 0}; // 两版使用同一初始姿态。
     status = AttitudeFilterInit(&filter, &config, quaternion, workspace, sizeof workspace);
     printf("att_init %d\n", status);
+    if (status != KF_OK)
+        return 1; // 未成功初始化时不运行姿态轨迹。
     for (unsigned i = 0; i < 32; ++i)
     {
         AttitudeFilterInput_t input = trace_input(i + 1); // 同一组采样时间与序号。
@@ -128,11 +142,15 @@ int main(void)
         printf("att %u %d %d %.9g %.9g %.9g %.9g %.9g\n", i, status, state.filter.valid,
                state.quaternion[0], state.quaternion[1], state.quaternion[2],
                state.quaternion[3], state.yaw_deg);
+        if (status != KF_OK || state.filter.valid == 0u)
+            return 1; // 有效样本应获得可用的校正姿态。
     }
     AttitudeFilterInput_t invalid_input = trace_input(33);
     invalid_input.accelerometer_m_s2[2] = NAN; // 观察非法加速度时的预测结果。
     status = AttitudeFilterUpdate(&filter, &invalid_input, &state);
     printf("att_bad %d %d %.9g\n", status, state.filter.valid, state.yaw_deg);
+    if (status != KF_PREDICTED || state.filter.valid == 0u)
+        return 1; // 一次非法加速度应进入仍在期限内的预测。
 
     RLS_t rls = {0};
     RLSConfig_t rls_config = {2, 10.0f, 0.99f};
@@ -140,12 +158,16 @@ int main(void)
     float initial[2] = {0, 0};
     status = RLSInit(&rls, &rls_config, initial, 2, rls_workspace, sizeof rls_workspace);
     printf("rls_init %d\n", status);
+    if (status != RLS_STATUS_OK)
+        return 1; // 未成功初始化时不执行辨识。
     for (unsigned i = 0; i < 32; ++i)
     {
         float input[2] = {1.0f, (float)((int)(i % 9) - 4) * 0.25f};
         float params[2], covariance[4], gain[2];
         RLSStateInfo_t info;
         status = RLSUpdate(&rls, input, 2, 1.5f - 0.75f * input[1]); // 同一线性模型产生量测。
+        if (status != RLS_STATUS_OK)
+            return 1; // 有效量测必须成功更新参数。
         if (RLSGetState(&rls, params, 2, covariance, 4, gain, 2, &info) != RLS_STATUS_OK)
             return 1; // 取状态失败时不能输出未初始化的数值。
         printf("rls %u %d %.9g %.9g %.9g %.9g\n", i, status,
@@ -154,5 +176,7 @@ int main(void)
     float invalid_input_rls[2] = {NAN, 0};
     status = RLSUpdate(&rls, invalid_input_rls, 2, 1.0f);
     printf("rls_bad %d\n", status);
+    if (status != RLS_ERROR_NUMERIC)
+        return 1; // 非有限输入必须明确拒绝。
     return 0;
 }
