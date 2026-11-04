@@ -187,6 +187,53 @@ target_compile_options(mc02_message_center_portable PRIVATE -Wall -Wextra -Werro
 add_library(mc02_numeric_public_headers OBJECT numeric_public_headers.c)
 target_include_directories(mc02_numeric_public_headers PRIVATE ../../modules/algorithm)
 target_compile_options(mc02_numeric_public_headers PRIVATE -Wall -Wextra -Werror)
+# 每份平台公开头都单独成为一个翻译单元，不能依靠其他头提前声明类型。
+set(MC02_PLATFORM_PUBLIC_HEADERS
+  bsp/board/platform_analog.h # 逻辑 PWM 和 ADC 输入。
+  bsp/board/platform_buzzer.h # 板载蜂鸣器输出。
+  bsp/board/platform_lcd.h # LCD 平台传输接口。
+  bsp/board/platform_numeric_caps.h # 浮点与数学加速能力。
+  bsp/board/platform_resources.h # 各类逻辑资源编号。
+  bsp/board/platform_rgb.h # 板载 RGB 输出。
+  bsp/can/platform_can.h # 逻辑 CAN 收发。
+  bsp/dwt/platform_probe.h # 短时耗时测量。
+  bsp/os/platform_can_diagnostic.h # CAN 诊断入口。
+  bsp/os/platform_dispatch.h # 接收和定时派发。
+  bsp/os/platform_irq.h # 中断屏蔽状态保存和恢复。
+  bsp/os/platform_maintenance.h # 存储等维护期入口。
+  bsp/os/platform_os.h # 任务创建和等待。
+  bsp/os/platform_safety.h # 安全输出平台入口。
+  bsp/os/platform_signal.h # 任务信号通知。
+  bsp/os/platform_sync.h # 临界区和毫秒时钟。
+  bsp/os/platform_task_stats.h # 任务统计副本。
+  bsp/pwm/platform_pwm_legacy.h # 旧 PWM 设备适配。
+  bsp/spi/platform_spi_blocking.h # 逻辑 SPI 阻塞事务。
+  bsp/usart/platform_uart.h # 逻辑串口收发。
+  modules/algorithm/dsp_matrix.h # 公共矩阵运算。
+  modules/algorithm/fast_trig.h) # 公共三角函数。
+# 新平台公开头必须显式登记，避免增加接口后未进入独立编译检查。
+get_filename_component(MC02_PLATFORM_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+file(GLOB_RECURSE MC02_DISCOVERED_PLATFORM_HEADERS CONFIGURE_DEPENDS
+  "${MC02_PLATFORM_SOURCE_ROOT}/bsp/platform_*.h")
+foreach(header IN LISTS MC02_DISCOVERED_PLATFORM_HEADERS)
+  if(header MATCHES "(_stm32|_freertos)\\.h$")
+    continue() # 芯片和 RTOS 私有后端不属于业务公开接口。
+  endif()
+  file(RELATIVE_PATH header_relative "${MC02_PLATFORM_SOURCE_ROOT}" "${header}")
+  if(NOT header_relative IN_LIST MC02_PLATFORM_PUBLIC_HEADERS)
+    message(FATAL_ERROR "Platform public header is not checked: ${header_relative}")
+  endif()
+endforeach()
+set(MC02_PLATFORM_HEADER_PROBES)
+foreach(header IN LISTS MC02_PLATFORM_PUBLIC_HEADERS)
+  string(REPLACE "/" "_" probe_name "${header}") # 路径转为唯一的生成文件名。
+  set(probe "${CMAKE_CURRENT_BINARY_DIR}/public-header-${probe_name}.c")
+  file(WRITE "${probe}" "#include \"${CMAKE_CURRENT_SOURCE_DIR}/../../${header}\"\n")
+  list(APPEND MC02_PLATFORM_HEADER_PROBES "${probe}")
+endforeach()
+add_library(mc02_platform_public_headers OBJECT ${MC02_PLATFORM_HEADER_PROBES})
+set_target_properties(mc02_platform_public_headers PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+target_compile_options(mc02_platform_public_headers PRIVATE -Wall -Wextra -Werror)
 add_library(mc02_kf STATIC ../../modules/algorithm/kalman_filter.c)
 target_include_directories(mc02_kf PUBLIC ../../modules/algorithm)
 target_link_libraries(mc02_kf PUBLIC mc02_dsp_host)
