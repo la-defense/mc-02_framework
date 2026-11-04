@@ -64,26 +64,28 @@ uint8_t OSTaskInit(void)
     CreateTask("motortask", StartMOTORTASK, 512u, PLATFORM_TASK_NORMAL, &motorTaskHandle); // 通信与电机任务。
 #endif
 
-    uint8_t uart_tx_created = PlatformUartStartTxTask();
-    uint8_t all_created = 1u;
+    uint8_t uart_tx_created = PlatformUartStartTxTask(); // 尝试创建串口发送任务。
+    uint8_t all_created = 1u; // 先假定核心任务均创建成功。
 
-    /* 日志配置为辅助时降级继续；若车型核心依赖日志，失败必须锁存启动失败。 */
-    const BSPLogStatus_t log_status = BSPLogTaskInit();
+    // 日志是辅助功能时可降级；被核心依赖时创建失败须阻止启动。
+    const BSPLogStatus_t log_status = BSPLogTaskInit(); // 获取日志任务创建结果。
 #if defined(MC02_CONFIG_GENERATED)
     if (log_status != BSP_LOG_STATUS_OK && log_status != BSP_LOG_STATUS_QUEUED)
     {
         if (RobotBuildMarkFailure(ROBOT_MODULE_LOG) != 0u)
         {
+            // 将依赖核心的日志失败记录为任务创建故障。
             InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                         INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LOG);
-            all_created = 0u;
+            all_created = 0u; // 向整车流程传递核心失败。
         }
         else
+            // 辅助日志失败时记录降级，继续创建其他任务。
             InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                          INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LOG);
     }
 #else
-    (void)log_status;
+    (void)log_status; // 旧配置沿用原日志初始化行为。
 #endif
 
     // 只有登记了独立事件来源时才创建工作线程；来源事件不能在监控任务里直接恢复模块。

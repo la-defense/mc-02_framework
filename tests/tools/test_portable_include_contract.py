@@ -10,6 +10,7 @@ from check_firmware_profile import (  # noqa: E402
     check_portable_dependencies, check_portable_includes, find_link_command, expand_link_response,
     check_attitude_dependencies, check_attitude_includes, source_target,
 )
+from check_selected_headers import display_header, is_selected_header  # noqa: E402
 
 
 class PortableIncludeContractTest(unittest.TestCase):
@@ -18,6 +19,20 @@ class PortableIncludeContractTest(unittest.TestCase):
     def entry(self, *arguments):
         """构造编译数据库项，不运行编译器或改写工作区。"""
         return {"directory": str(ROOT), "arguments": ["cc", *arguments]}
+
+    def test_external_build_generated_header_is_checked(self):
+        # 模拟仓库外构建目录，生成配置头仍须进入独立编译检查。
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            root, build = base / "source", base / "outside-build"
+            generated = build / "generated" / "mc02_build_config.h"
+            source = root / "application" / "robot.h"
+            internal_build = build / "CMakeFiles" / "private.h"
+            self.assertTrue(is_selected_header(generated, root, build))
+            self.assertTrue(is_selected_header(source, root, build))
+            self.assertFalse(is_selected_header(internal_build, root, build))
+            self.assertEqual(display_header(generated, root, build),
+                             str(Path("<build>") / "generated" / "mc02_build_config.h"))
 
     def test_framework_paths_are_accepted(self):
         # 分离和拼接两种写法都应识别为已允许的框架目录。

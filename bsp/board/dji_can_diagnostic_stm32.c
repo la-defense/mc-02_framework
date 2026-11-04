@@ -132,38 +132,38 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
     }
 
     // 检查累计角度与圈数、编码器读数一致。
-    float expect_angle = (float)(r0 * 360) + ECD_ANGLE_COEF_DJI * 1000.0f;
+    float expect_angle = (float)(r0 * 360) + ECD_ANGLE_COEF_DJI * 1000.0f; // 从圈数和单圈角度计算期望值。
     if (fabsf(s_inject_target->measure.total_angle - expect_angle) < 0.5f)
-        can_dji_inject_pass++;
+        can_dji_inject_pass++; // 角度误差在允许范围内。
     else
-        can_dji_inject_fail++;
+        can_dji_inject_fail++; // 角度与期望不一致。
 
     // 连续注入多帧并逐帧检查接收顺序。
-    uint8_t seq_ok = 1u;
+    uint8_t seq_ok = 1u; // 先假定连续反馈均按顺序到达。
     for (uint16_t k = 0; k < 20u; ++k)
     {
-        uint16_t e = (uint16_t)((1000u + k * 13u) & 0x1FFFu);
-        DJIInjectSend(e, 0, 0, 42u);
+        uint16_t e = (uint16_t)((1000u + k * 13u) & 0x1FFFu); // 生成单圈范围内的下一个编码器值。
+        DJIInjectSend(e, 0, 0, 42u); // 提交这一帧反馈。
         if (!DJIInjectWaitEcd(e, 2000u))
         {
-            seq_ok = 0u;
-            break;
+            seq_ok = 0u; // 超时后标记序列失败。
+            break; // 不再发送后续序列帧。
         }
     }
     if (seq_ok)
-        can_dji_inject_pass++;
+        can_dji_inject_pass++; // 所有帧都在限时内收到。
     else
-        can_dji_inject_fail++;
+        can_dji_inject_fail++; // 至少一帧未按期收到。
 
 #if CAN_DJI_INJECT_TEST >= 2
     // 压测模式保留回环，由 daemon 持续注入以观察队列。
     BSP_LOG_EVENT_2(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_08, BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_pass), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_fail));
 #else
     // 还原反馈、恢复正常模式并重装滤镜。
-    s_inject_target->measure = s_inject_backup;
-    (void)CANForceMode(s_inject_h, FDCAN_MODE_NORMAL, 0u);
-    CANReapplyFilters();
-    s_inject_h = NULL;
+    s_inject_target->measure = s_inject_backup; // 恢复测试前的电机反馈。
+    (void)CANForceMode(s_inject_h, FDCAN_MODE_NORMAL, 0u); // 尝试切回正常总线模式。
+    CANReapplyFilters(); // 重装模式切换可能清除的接收滤镜。
+    s_inject_h = NULL; // 结束后不再允许继续注入。
 #endif
 
     BSP_LOG_EVENT_4(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_09, BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_pass), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_fail), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_multi_turn_err), BSP_LOG_FIELD_U32((unsigned long)can_dji_inject_frame_cnt));
