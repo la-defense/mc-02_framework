@@ -364,19 +364,24 @@ if(MC02_IMU_BACKEND STREQUAL "fusion")
     add_library(mc02_fusion_backend OBJECT ${MC02_FUSION_SOURCE})
     target_include_directories(mc02_fusion_backend PRIVATE Middlewares/Third_Party/Fusion) # 上游实现所需头文件。
 endif()
-# 当前尚未迁移的业务文件暂留在固件目标；板级实现和第三方系统库分别编译。
+# 板级实现和第三方系统库分别编译；不能将未分类的业务源码留给固件入口。
 set(MC02_BOARD_BACKEND_SOURCES)
 set(MC02_VENDOR_SYSTEM_SOURCES)
 foreach(source IN LISTS MC02_EXECUTABLE_SOURCES)
     if(source MATCHES "^(Core/|USB_DEVICE/|bsp/)" OR
        source STREQUAL "application/vehicle_health_port_stm32.c" OR
-       source STREQUAL "application/chassis/chassis_supercap_legacy.c")
+       source STREQUAL "application/chassis/chassis_supercap_legacy.c" OR
+       source STREQUAL "modules/super_cap/super_cap.c")
         list(APPEND MC02_BOARD_BACKEND_SOURCES "${source}") # 板级初始化、系统适配和 BSP。
     elseif(source MATCHES "^(Drivers/|Middlewares/)")
         list(APPEND MC02_VENDOR_SYSTEM_SOURCES "${source}") # HAL、RTOS、USB 和 RTT 上游实现。
     endif()
 endforeach()
 list(REMOVE_ITEM MC02_EXECUTABLE_SOURCES ${MC02_BOARD_BACKEND_SOURCES} ${MC02_VENDOR_SYSTEM_SOURCES})
+if(MC02_EXECUTABLE_SOURCES)
+    # 迫使新增源码明确归属，避免它继承固件入口的 HAL 和 RTOS 头路径。
+    message(FATAL_ERROR "Selected sources have no isolated target: ${MC02_EXECUTABLE_SOURCES}")
+endif()
 add_library(mc02_board_backend OBJECT ${MC02_BOARD_BACKEND_SOURCES})
 target_include_directories(mc02_board_backend PRIVATE ${MC02_INCLUDE_DIRS} "${CMAKE_BINARY_DIR}/generated") # 保持当前板级适配所需路径。
 mc02_apply_format_diagnostics(mc02_board_backend)

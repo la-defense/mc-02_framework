@@ -317,11 +317,12 @@ def source_target(source: str, portable_sources: set[str], executable: str) -> s
     if source.startswith(("Core/", "USB_DEVICE/", "bsp/")) or source in {
         "application/vehicle_health_port_stm32.c",  # 整车健康的 STM32 来源适配。
         "application/chassis/chassis_supercap_legacy.c",  # 尚未选型的旧电容板级绑定。
+        "modules/super_cap/super_cap.c",  # 尚未验证的旧电容板级协议实现。
     }:
         return "mc02_board_backend"
     if source.startswith(("Drivers/", "Middlewares/")):
         return "mc02_vendor_system"
-    return executable  # 尚未迁移的自有实现仍由固件入口编译。
+    raise SystemExit(f"selected source has no isolated target: {source}")
 
 
 def check_attitude_includes(entry: dict, source_root: Path, source: str) -> None:

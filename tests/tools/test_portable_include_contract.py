@@ -144,7 +144,7 @@ class PortableIncludeContractTest(unittest.TestCase):
                                         ROOT, ROOT / "build", source)
 
     def test_source_target_follows_build_layers(self):
-        # 验证已隔离源码、适配器、板级、第三方及未迁移业务各自归属。
+        # 验证已隔离源码、适配器、板级和第三方源码各自归属。
         portable = {"modules/lcd/lcd.c"}
         cases = {
             "modules/lcd/lcd.c": "mc02_portable_framework",
@@ -154,12 +154,15 @@ class PortableIncludeContractTest(unittest.TestCase):
             "bsp/board/platform_can_stm32.c": "mc02_board_backend",
             "application/vehicle_health_port_stm32.c": "mc02_board_backend",
             "application/chassis/chassis_supercap_legacy.c": "mc02_board_backend",
+            "modules/super_cap/super_cap.c": "mc02_board_backend",
             "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal.c": "mc02_vendor_system",
-            "modules/BMI088/bmi088.c": "firmware.elf",
         }
         for source, expected in cases.items():
             with self.subTest(source=source):
                 self.assertEqual(source_target(source, portable, "firmware.elf"), expected)
+        # 新业务若漏登记到框架目标，检查器不能允许它继承固件入口的厂商头路径。
+        with self.assertRaises(SystemExit):
+            source_target("modules/example/unclassified.c", portable, "firmware.elf")
 
 
 if __name__ == "__main__":
