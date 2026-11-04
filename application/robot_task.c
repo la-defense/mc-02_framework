@@ -49,38 +49,41 @@ volatile PlatformProbe_t r25_task_robot = {0};
 __attribute__((noreturn)) void StartINSTASK(void const *argument)
 {
     static volatile float ins_start;
-    TaskMonitorFeed(TASK_MONITOR_INS);
+    TaskMonitorFeed(TASK_MONITOR_INS); // 初始化前登记姿态任务已开始运行。
     if (INS_Init() == NULL)
     {
 #if defined(MC02_CONFIG_GENERATED)
-        const uint8_t core_failure = RobotBuildMarkFailure(ROBOT_MODULE_IMU);
+        const uint8_t core_failure = RobotBuildMarkFailure(ROBOT_MODULE_IMU); // 向依赖图传播 IMU 初始化失败。
         if (core_failure != 0u)
         {
+            // 依赖链影响核心模块时保留失败原因。
             InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_INS,
                                         INIT_FAILURE_RESOURCE, 0u);
-            RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
-            RobotSafetyRequestDisable();
-            BSP_SafetyStartupLatchOutputsOff();
+            RobotFaultReport(ROBOT_FAULT_INIT_FAILURE); // 上报整车初始化故障。
+            RobotSafetyRequestDisable(); // 撤销控制许可。
+            BSP_SafetyStartupLatchOutputsOff(); // 立即关闭板级受控输出。
         }
         else
+            // 仅辅助模块受影响时记录降级，其他核心功能继续运行。
             InitDiagnosticReportDegraded(INIT_STAGE_APPLICATION, INIT_MODULE_INS,
                                          INIT_FAILURE_RESOURCE, 0u);
 #else
+        // 旧配置没有依赖图，沿用核心失败处理。
         InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_INS,
                                     INIT_FAILURE_RESOURCE, 0u);
-        RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
-        RobotSafetyRequestDisable();
+        RobotFaultReport(ROBOT_FAULT_INIT_FAILURE); // 锁存初始化故障。
+        RobotSafetyRequestDisable(); // 撤销运行许可。
 #if MC02_FEATURE_HEATER
-        IMUHeaterForceOff();
+        IMUHeaterForceOff(); // 已启用温控时先关闭加热。
 #endif
-        BSP_SafetyStartupLatchOutputsOff();
+        BSP_SafetyStartupLatchOutputsOff(); // 再关闭板级受控输出。
 #endif
         // 算法初始化失败后保持输出关闭，但继续更新诊断和本任务记录，供人工读取。
         for (;;)
         {
-            InitDiagnosticHeartbeat();
-            TaskMonitorFeed(TASK_MONITOR_INS);
-            PlatformTaskDelayMs(100u);
+            InitDiagnosticHeartbeat(); // 维持可读取的启动诊断。
+            TaskMonitorFeed(TASK_MONITOR_INS); // 表明任务仍在处理失败状态。
+            PlatformTaskDelayMs(100u); // 限制失败循环的执行频率。
         }
     }
 #if MC02_FEATURE_HEATER
@@ -99,32 +102,33 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
         }
     }
 #endif
-    InitDiagnosticMarkReady();
-    BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_01);
+    InitDiagnosticMarkReady(); // 初始化检查完成后更新诊断阶段。
+    BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_01); // 记录姿态任务进入周期循环。
     for (;;)
     {
         // 1kHz
         if (TaskMonitorBeginWork(TASK_MONITOR_INS) != TASK_MONITOR_RESULT_OK)
         {
-            PlatformTaskDelayMs(1u);
-            continue;
+            PlatformTaskDelayMs(1u); // 本轮不能开始时先让出处理器。
+            continue; // 下一周期重新请求工作许可。
         }
-        /* 用轻量周期计数代替 DWT_GetTimeline_ms(): 后者内部有 64bit 除法, 1kHz 下也不便宜 */
-        uint32_t ins_probe = PlatformProbeStart();
-        INS_Task();
-        PlatformProbeDone(&r25_task_ins, ins_probe);
+        // 使用轻量周期计数，避免每轮读取带 64 位除法的时间线。
+        uint32_t ins_probe = PlatformProbeStart(); // 记录本轮计算起点。
+        INS_Task(); // 读取样本并执行姿态更新。
+        PlatformProbeDone(&r25_task_ins, ins_probe); // 保存本轮计算耗时。
         if (r25_task_ins.last_us > 1000u)
         {
-            ins_start = PlatformProbeTimelineMs(); /* 便于 Live Watch 查看最近一次超时刻 */
-            (void)ins_start;
+            ins_start = PlatformProbeTimelineMs(); // 保存最近一次超时的时间供调试查看。
+            (void)ins_start; // 该变量仅供调试器读取。
+            // 记录超过 1 ms 的实际耗时。
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_02,
                             BSP_LOG_FIELD_U32(r25_task_ins.last_us));
         }
-        (void)TaskMonitorCompleteWork(TASK_MONITOR_INS);
+        (void)TaskMonitorCompleteWork(TASK_MONITOR_INS); // 结束本轮进度记录。
         // 视觉上行数据由 INS_Task 内的 VisionUpdateTx() 填充,
         // VisionSend() 统一在 RobotCMDTask(200Hz) 中调用, 避免多任务并发 DMA 发送
-        (void)TaskMonitorSetWaiting(TASK_MONITOR_INS, TASK_MONITOR_WAIT_PERIOD);
-        PlatformTaskDelayMs(1);
+        (void)TaskMonitorSetWaiting(TASK_MONITOR_INS, TASK_MONITOR_WAIT_PERIOD); // 标记进入周期等待。
+        PlatformTaskDelayMs(1); // 等待下一轮任务执行。
     }
 }
 

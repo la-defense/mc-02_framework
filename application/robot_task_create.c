@@ -55,10 +55,6 @@ uint8_t RobotReportHeaterInitFailure(void)
 }
 #endif
 
-/** @brief 创建INS、通信派发、电机、UART发送、Daemon、整车、LCD及当前配置所需UI任务。
-* @return 1 表示核心任务创建成功；辅助任务失败已记录降级，核心任务失败返回0；不删除已创建任务。
-* @note 由 RobotInit() 在调度器启动前调用一次。
- */
 uint8_t OSTaskInit(void)
 {
     CreateTask("instask", StartINSTASK, 1024u, PLATFORM_TASK_ABOVE_NORMAL, &insTaskHandle); // 姿态读取需要较高优先级。
@@ -125,40 +121,46 @@ uint8_t OSTaskInit(void)
 #endif
     if (!event_task_created)
     {
+        // 来源事件任务创建失败，记录具体资源并阻止核心启动。
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_DAEMON);
-        all_created = 0u;
+        all_created = 0u; // 汇总结果通知整车启动流程。
     }
     if (!uart_tx_created) {
+        // 串口发送任务缺失时，保留失败原因供启动诊断查询。
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
             INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UART_TX);
-        all_created = 0u;
+        all_created = 0u; // 核心任务缺失不允许继续启动。
     }
     if (insTaskHandle == NULL)
     {
+        // 姿态任务没有句柄时记录创建失败。
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_INS);
-        all_created = 0u;
+        all_created = 0u; // 姿态任务是当前构建的核心任务。
     }
 #if MC02_FEATURE_COMM_DISPATCH
     if (motorTaskHandle == NULL)
     {
+        // 已启用通信派发时，电机任务创建失败会阻断核心启动。
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_MOTOR);
-        all_created = 0u;
+        all_created = 0u; // 向整车启动流程传递失败。
     }
 #endif
     if (daemonTaskHandle == NULL)
     {
+        // 来源监控任务缺失时记录对应资源。
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_DAEMON);
-        all_created = 0u;
+        all_created = 0u; // 不在缺少监控任务时启动控制。
     }
     if (robotTaskHandle == NULL)
     {
+        // 整车协调任务缺失时记录对应资源。
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_ROBOT);
-        all_created = 0u;
+        all_created = 0u; // 向上返回核心失败。
     }
 #if MC02_FEATURE_UI
 #if defined(MC02_CONFIG_GENERATED)
@@ -170,17 +172,20 @@ uint8_t OSTaskInit(void)
 #if defined(MC02_CONFIG_GENERATED)
         if (RobotBuildMarkFailure(ROBOT_MODULE_UI) != 0u)
         {
+            // UI 影响核心依赖时记录致命创建失败。
             InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                         INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
-            all_created = 0u;
+            all_created = 0u; // 阻止整车核心启动。
         }
         else
+            // UI 仅为辅助模块时，记录降级并继续启动其他任务。
             InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                          INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
 #else
+        // 旧配置没有模块依赖图，沿用失败即阻断的行为。
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UI);
-        all_created = 0u;
+        all_created = 0u; // 将旧配置的创建失败传回整车。
 #endif
     }
 #endif
@@ -194,17 +199,20 @@ uint8_t OSTaskInit(void)
 #if defined(MC02_CONFIG_GENERATED)
         if (RobotBuildMarkFailure(ROBOT_MODULE_LCD) != 0u)
         {
+            // LCD 被核心依赖时，创建失败须阻断整车。
             InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                         INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
-            all_created = 0u;
+            all_created = 0u; // 传递核心失败。
         }
         else
+            // LCD 是辅助模块时记录降级，其他任务继续启动。
             InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                          INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
 #else
+        // 旧配置没有模块依赖图，保留失败即阻断的处理。
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
             INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_LCD);
-        all_created = 0u;
+        all_created = 0u; // 将旧配置的创建失败传回整车。
 #endif
     }
 #endif

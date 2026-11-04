@@ -19,14 +19,14 @@ typedef struct
     float acc[3];          /**< x/y/z 轴加速度，单位 m/s²，包含重力的影响。 */
     float temperature;     /**< 传感器温度，单位 °C。 */
     uint32_t sequence;     /**< 每次成功采样加1，超过最大值后从1继续；0表示尚无数据。 */
-    uint32_t timestamp_ms; /**< 本次完整数据准备好时的 HAL 毫秒计数，来自 HAL_GetTick()。 */
+    uint32_t timestamp_ms; /**< 完整数据准备好时的平台毫秒计数，32 位自然回绕。 */
     uint8_t valid;         /**< 非0表示已标记可用；使用时仍需检查序号和时间。 */
 } BMI088_Data_t;
 
 /**
  * @brief 检查数据是否已标记可用，并且距准备完成不超过5ms。
  * @param[in] sample 待检查数据，空指针返回0；函数不改写其中的内容。
- * @param[in] now_ms 当前毫秒计数，应与 timestamp_ms 一样来自 HAL_GetTick()。
+ * @param[in] now_ms 当前毫秒计数，须与 timestamp_ms 使用同一平台时钟和回绕规则。
  * @return sample 非空、valid 和 sequence 均非0，且经过时间不大于5ms时返回1；其余返回0。
  * @note 本函数不比较上次序号，也不检查温度、角速度或加速度的数值范围。
  */

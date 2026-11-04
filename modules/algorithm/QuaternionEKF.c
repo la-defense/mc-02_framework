@@ -371,14 +371,14 @@ static KFStatus_t IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf,void *context)
     Q_MATRIX(DSPMatrixTransposeF32(&kf->H, &kf->HT),&kf->HT); // 把量测模型转置供后续乘法使用。
     kf->temp_matrix.numRows = kf->H.numRows; // H*P 的行数等于量测维度。
     kf->temp_matrix.numCols = kf->Pminus.numCols; // H*P 的列数等于状态维度。
-    Q_MATRIX(DSPMatrixMultiplyF32(&kf->H, &kf->Pminus, &kf->temp_matrix),&kf->temp_matrix); // temp_matrix = H·P'(k)
+    Q_MATRIX(DSPMatrixMultiplyF32(&kf->H, &kf->Pminus, &kf->temp_matrix),&kf->temp_matrix); // H·P'(k)：将预测协方差映射到量测方向。
     kf->temp_matrix1.numRows = kf->temp_matrix.numRows; // H*P*Hᵀ 的行数。
     kf->temp_matrix1.numCols = kf->HT.numCols; // H*P*Hᵀ 的列数。
-    Q_MATRIX(DSPMatrixMultiplyF32(&kf->temp_matrix, &kf->HT, &kf->temp_matrix1),&kf->temp_matrix1); // temp_matrix1 = H·P'(k)·HT
+    Q_MATRIX(DSPMatrixMultiplyF32(&kf->temp_matrix, &kf->HT, &kf->temp_matrix1),&kf->temp_matrix1); // H·P'(k)·Hᵀ：得到量测空间的预测协方差。
     kf->S.numRows = kf->R.numRows; // 残差协方差行数与量测噪声一致。
     kf->S.numCols = kf->R.numCols; // 残差协方差列数与量测噪声一致。
-    Q_MATRIX(DSPMatrixAddF32(&kf->temp_matrix1, &kf->R, &kf->S),&kf->S); // S = H P'(k) HT + R
-    Q_MATRIX(DSPMatrixInverseF32(&kf->S,&kf->temp_matrix1,kf->inverse_workspace,18u),&kf->temp_matrix1);     // temp_matrix1 = inv(H·P'(k)·HT + R)
+    Q_MATRIX(DSPMatrixAddF32(&kf->temp_matrix1, &kf->R, &kf->S),&kf->S); // 加入量测噪声 R，形成残差协方差 S。
+    Q_MATRIX(DSPMatrixInverseF32(&kf->S,&kf->temp_matrix1,kf->inverse_workspace,18u),&kf->temp_matrix1); // 求 S 的逆，供后续量测差距检查使用。
 
     q0 = kf->xhatminus_data[0]; // 读取预测四元数 w。
     q1 = kf->xhatminus_data[1]; // 读取预测四元数 x。
@@ -401,7 +401,7 @@ static KFStatus_t IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf,void *context)
     // 用加速度计数据修正预测姿态。
     kf->temp_vector1.numRows = kf->z.numRows;
     kf->temp_vector1.numCols = 1;
-    Q_MATRIX(DSPMatrixSubF32(&kf->z, &kf->temp_vector, &kf->temp_vector1),&kf->temp_vector1); // temp_vector1 = z(k) - h(xhat'(k))
+    Q_MATRIX(DSPMatrixSubF32(&kf->z, &kf->temp_vector, &kf->temp_vector1),&kf->temp_vector1); // 实测方向减预测方向，得到量测残差。
 
     // 计算测量方向与预测方向的差距，并结合噪声大小判断本轮测量是否可信。
     kf->temp_matrix.numRows = kf->temp_vector1.numRows;
