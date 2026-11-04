@@ -1063,9 +1063,13 @@ set_tests_properties(production_init_diagnostic_preserves_first_failure
 add_executable(kalman_filter_init_test kalman_filter_init_test.c)
 target_link_libraries(kalman_filter_init_test PRIVATE mc02_kf)
 add_test(NAME production_kalman_workspace_and_results COMMAND kalman_filter_init_test)
+# 单个用例超过 10 秒就判失败，与上面各条保持一致；不写这条会落到默认的 1500 秒，
+# 用例卡住时整轮 ctest 要白等 25 分钟才报错。
+set_tests_properties(production_kalman_workspace_and_results PROPERTIES TIMEOUT 10)
 add_executable(dsp_numeric_test dsp_numeric_test.c)
 target_link_libraries(dsp_numeric_test PRIVATE mc02_kf)
 add_test(NAME production_dsp_matrix_and_trigonometry COMMAND dsp_numeric_test)
+set_tests_properties(production_dsp_matrix_and_trigonometry PROPERTIES TIMEOUT 10)
 # 姿态任务只接触样本、时间、同步和数值公共头，不继承硬件替身目录。
 add_library(mc02_ins_portable OBJECT ../../modules/imu/ins_task.c)
 target_include_directories(mc02_ins_portable PRIVATE ../../modules/imu ../../modules/BMI088 ../../modules/algorithm

@@ -8,6 +8,13 @@
 
 **==标为黄色高亮的代表紧急程度高。==**
 
+## 2026-11-04：WSL 主机测试整机卡死
+
+- [x] **MC02-0126** [bug] 排查并修复 WSL 主机测试长时间不返回，补齐两个缺失超时的用例。
+  验收完成：确认 18:00 起五条 `ctest -R production_*` 卡住源于 WSL 虚拟机整体僵死——guest 在 10 秒内只消耗 0.05 秒 CPU、无磁盘写入，`wsl --version` 与 `wsl -l -v` 秒回但任何进入发行版的会话（`-e /bin/sh -c "echo OK"`、`--cd /`、重定向到文件）都不返回；排除了宿主内存（剩 5.1 GB）、guest 内存（459 MB／7943 MB）、磁盘队列和测试代码四个方向。根因改动在 `%USERPROFILE%\.wslconfig`：注释掉指向自编译 Android 内核的 `kernel=`，由构建签名 `#4 … Thu Oct 29 00:54:29 CST 2026`、gcc 11.4.0 换回官方 `#1 … Tue Oct 6 19:13:07 UTC 2026`、gcc 13.2.0。仓库内为 `production_kalman_workspace_and_results` 和 `production_dsp_matrix_and_trigonometry` 补 `TIMEOUT 10`，此前它们只落到默认 1500 秒。
+  验证：`wsl --shutdown` 重启后 8 个 `production_(dsp|kalman|quaternion|rls|attitude)` 用例全部通过（0.12 秒，回归日志 `build/wsl/ctest_after_kernel_switch.log`）；重新配置后 `CTestTestfile.cmake` 中两条 `TIMEOUT "10"` 已生效；新内核 `lsmod` 无树外模块，本次启动 `dmesg` 无 panic／oops；残留 `wsl.exe` 客户端归零。证据局限：僵死状态下进不去 guest，没有内核栈；`%LOCALAPPDATA%\Temp\wsl-crashes` 中 2026-10-29 的 panic 记录含 `ashmem_linux(O)` 与 `memcpy` 页错误，只能说明该内核崩过，把内核认定为根因仍是相关性推断，需观察是否复发。补超时不影响本次事件，那批 `ctest` 根本没开始执行。
+  教学资料：[第21篇](../docs/学习笔记/21-从TODO到可重复验证的工程闭环.md#wsl-里的-ctest-一直不返回时先看虚拟机mc02-0126)。
+
 ## 2026-10-17：分批补充业务文件注释
 
 - [x] **MC02-0123** [enhancement] 按用户授权完成本轮业务文件注释补充。逐项整理清单剩余137份文件，参考已认可的写法说明文件用途、接口、单位、失败处理以及重要判断和循环；保留作者与许可信息，未更改函数签名或运行步骤。
