@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import re
 import shlex
 import subprocess
 
@@ -101,6 +102,17 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/master_machine/master_process.c",  # 上位机业务协议及传输状态。
     "modules/imu/ins_task.c",  # IMU 采样与姿态业务。
     "modules/imu/imu_heater.c",  # 温控策略及逻辑模拟资源。
+    "modules/BMI088/bmi088.c",  # BMI088 采样与标定通过框架接口访问平台。
+    "modules/remote/remote_bench.c",  # 裸板遥控诊断。
+    "modules/master_machine/vision_protocol_v2.c",  # V2 协议编解码。
+    "application/chassis/chassis_motion.c",  # 模式、坐标和轮速目标计算。
+    "application/chassis/chassis_kinematics.c",  # 轮组几何和运动映射。
+    "application/chassis/mecanum.c",  # 麦轮几何适配。
+    "application/chassis/omni.c",  # 全向轮几何适配。
+    "application/topics/chassis_topic_codec.c",  # 底盘话题编解码。
+    "application/topics/robot_topics.c",  # 车型话题目录。
+    "application/topics/robot_topics_diag.c",  # 话题统计查询。
+    "application/topics/robot_can_bridge.c",  # 双板话题与 CAN 适配。
     "modules/motor/DJImotor/dji_motor.c",  # DJI 逻辑端点、控制和反馈。
     "modules/motor/LKmotor/LK9025.c",  # LK 逻辑端点和分组发送。
     "modules/motor/HTmotor/HT04.c",  # HT 逻辑端点和控制。
@@ -272,6 +284,7 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
     commands = subprocess.run(["ninja", "-C", str(build_dir), "-t", "commands", target],
                               capture_output=True, text=True, check=True, timeout=15).stdout
     link_command = find_link_command(commands, target)
+    link_command = expand_link_response(link_command, build_dir)
     for source in selected:
         # 核对每份源码所属目标以及它是否真正进入最终链接。
         owner = source_target(source, portable_sources, target)
@@ -301,7 +314,10 @@ def source_target(source: str, portable_sources: set[str], executable: str) -> s
         return "mc02_attitude_adapter"
     if source == FUSION_SOURCE:
         return "mc02_fusion_backend"
-    if source.startswith(("Core/", "USB_DEVICE/", "bsp/")):
+    if source.startswith(("Core/", "USB_DEVICE/", "bsp/")) or source in {
+        "application/vehicle_health_port_stm32.c",  # 整车健康的 STM32 来源适配。
+        "application/chassis/chassis_supercap_legacy.c",  # 尚未选型的旧电容板级绑定。
+    }:
         return "mc02_board_backend"
     if source.startswith(("Drivers/", "Middlewares/")):
         return "mc02_vendor_system"
@@ -395,13 +411,34 @@ def find_link_command(commands: str, target: str) -> str:
     for line in commands.splitlines():
         arguments = shlex.split(line)
         # 编译命令的输出是 .obj，只有最终链接命令输出目标 ELF。
-        if any(argument == "-o" and index + 1 < len(arguments) and
-               Path(arguments[index + 1]).name == target
-               for index, argument in enumerate(arguments)):
+        direct = any(argument == "-o" and index + 1 < len(arguments) and
+                     Path(arguments[index + 1]).name == target
+                     for index, argument in enumerate(arguments))
+        # Windows Ninja 把整个链接命令包进 cmd.exe 的引号，shlex 会把内部参数当成一个字符串。
+        wrapped = any(Path((match.group(1) or match.group(2)).replace("\\", "/")).name == target
+                      for match in re.finditer(r'(?:^|\s)-o\s+(?:"([^"]+)"|([^\s"]+))', line))
+        if direct or wrapped:
             matches.append(line)
     if len(matches) != 1:
         raise SystemExit(f"expected one link command for {target}, got {len(matches)}")
     return matches[0]
+
+
+def expand_link_response(command: str, build_dir: Path) -> str:
+    """读取链接命令实际使用的响应文件；缺失或越出构建目录时拒绝检查。"""
+    matches = list(re.finditer(r'(?:^|\s)@(?:"([^"]+)"|([^\s"]+))', command))
+    if not matches:
+        return command  # 没有响应文件时继续检查原始命令。
+    if len(matches) != 1:
+        raise SystemExit("link command must reference at most one response file")
+    name = (matches[0].group(1) or matches[0].group(2)).replace("\\", "/")
+    response = (build_dir / name).resolve()  # 仅允许读取当前构建目录内的实际链接输入。
+    if not response.is_relative_to(build_dir.resolve()) or not response.is_file():
+        raise SystemExit(f"link response file missing or outside build directory: {name}")
+    contents = response.read_text(encoding="utf-8")
+    if re.search(r'(?:^|\s)@', contents):
+        raise SystemExit("nested link response files are not supported")
+    return command.replace("\\", "/") + "\n" + contents.replace("\\", "/")
 
 
 def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, source: str) -> None:
@@ -432,6 +469,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/topics/robot_topics.h",
                         source_root / "application/topics/robot_can_bridge_task.h",
                         source_root / "application/topics/robot_can_bridge.h",
+                        source_root / "application/topics/chassis_topic_codec.h",  # 底盘话题字节格式。
                         source_root / "application/topics/robot_topics_diag.h",
                         source_root / "application/config/build_selection.h",
                         source_root / "application/config/vehicle_selection.h",
@@ -464,6 +502,9 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "modules/power/power_manager.h",  # 当前功率占位模块的公开接口。
                         source_root / "modules/BMI088/bmi088_data.h",
                         source_root / "modules/BMI088/bmi088_calibration.h",
+                        source_root / "modules/BMI088/bmi088.h",  # 传感器接口不包含板级类型。
+                        source_root / "bsp/spi/platform_spi_blocking.h",  # 同步 SPI 设备接口。
+                        source_root / "bsp/pwm/platform_pwm_legacy.h",  # 旧 PWM 的不透明设备接口。
                         source_root / "bsp/adc/bsp_adc.h",
                         source_root / "bsp/observation/bsp_observation.h",
                         source_root / "bsp/safety/bsp_safety.h",
@@ -476,6 +517,10 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "bsp/crash/bsp_crash_record.h",
                         source_root / "bsp/dwt/platform_probe.h",
                         build_dir.resolve() / "generated/mc02_build_config.h"}
+        if source == "modules/BMI088/bmi088.c":
+            # 寄存器和内部温度换算只供 BMI088 驱动使用，不放宽其他框架源码的依赖。
+            public_files.update({source_root / "modules/BMI088/bmi088_regNdef.h",
+                                 source_root / "modules/BMI088/bmi088_temperature.h"})
         if dependency.is_relative_to(source_root) and dependency not in public_files and not any(
                 dependency.is_relative_to(directory) for directory in allowed):
             raise SystemExit(f"portable framework source {source} uses unsupported project header: {dependency}")

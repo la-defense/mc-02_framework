@@ -18,6 +18,7 @@ BMI088HostFixture_t bmi088_host_fixture;
 
 static SPIInstance accelerometer_spi = {.is_accelerometer = 1u};
 static SPIInstance gyroscope_spi = {.is_accelerometer = 0u};
+static PWMInstance legacy_pwm_instance;
 static uint8_t accelerometer_registers[128];
 static uint8_t gyroscope_registers[128];
 static uint8_t spi_register_count;
@@ -125,6 +126,7 @@ uint8_t SPIUnregister(SPIInstance *instance)
 
 uint8_t PWMUnregister(PWMInstance *instance)
 {
+    if (instance != NULL) ++bmi088_host_fixture.legacy_pwm_unregister_count;
     return (uint8_t)(instance != NULL);
 }
 
@@ -264,8 +266,18 @@ void TaskMonitorDelayMs(TaskMonitor_Id_e id, uint32_t milliseconds)
     }
 }
 
-PID_Status_e PIDInit(PIDInstance *pid, const PID_Init_Config_s *config) { (void)pid; (void)config; return PID_OK; }
-PWMInstance *PWMRegister(PWM_Init_Config_s *config) { (void)config; return NULL; }
+PID_Status_e PIDInit(PIDInstance *pid, const PID_Init_Config_s *config)
+{
+    (void)pid; (void)config;
+    ++bmi088_host_fixture.legacy_pid_calls;
+    return bmi088_host_fixture.legacy_pid_fail ? PID_BAD_CONFIG : PID_OK;
+}
+PWMInstance *PWMRegister(PWM_Init_Config_s *config)
+{
+    ++bmi088_host_fixture.legacy_pwm_calls;
+    bmi088_host_fixture.legacy_pwm_owner = config->id; // 核对平台适配后的所有者。
+    return bmi088_host_fixture.legacy_pwm_allow ? &legacy_pwm_instance : NULL;
+}
 void RobotSafetySetCalibValid(uint8_t valid) { (void)valid; }
 uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperation_e operation)
 {

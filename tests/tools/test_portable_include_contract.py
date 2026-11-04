@@ -1,12 +1,13 @@
 """验证可移植框架目标不会通过编译选项继承厂商或 RTOS 头路径。"""
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/workflow"))
 from check_firmware_profile import (  # noqa: E402
-    check_portable_dependencies, check_portable_includes, find_link_command,
+    check_portable_dependencies, check_portable_includes, find_link_command, expand_link_response,
     check_attitude_dependencies, check_attitude_includes, source_target,
 )
 
@@ -90,6 +91,11 @@ class PortableIncludeContractTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             check_portable_dependencies(valid + f"    {ROOT / 'Core/Inc/main.h'}\n",
                                         ROOT, ROOT / "build", source)
+        # BMI088 私有寄存器头仅允许该驱动使用，不允许其他业务越过采样接口。
+        sensor_private = f"    {ROOT / 'modules/BMI088/bmi088_regNdef.h'}\n"
+        with self.assertRaises(SystemExit):
+            check_portable_dependencies(valid + sensor_private, ROOT, ROOT / "build", source)
+        check_portable_dependencies(valid + sensor_private, ROOT, ROOT / "build", "modules/BMI088/bmi088.c")
         # 可访问 CAN 框架目录也不允许间接引用芯片头。
         with self.assertRaises(SystemExit):
             check_portable_dependencies(valid + f"    {ROOT / 'Drivers/CMSIS/Include/core_cm7.h'}\n",
@@ -104,6 +110,24 @@ class PortableIncludeContractTest(unittest.TestCase):
         self.assertNotIn("module.c.obj", link)
         with self.assertRaises(SystemExit):
             find_link_command(commands, "missing.elf")
+
+    def test_windows_link_response_is_required_and_bounded(self):
+        # cmd.exe 的外层引号不能遮住 ELF 输出，响应文件必须提供实际对象。
+        command = 'cmd.exe /C "cc @CMakeFiles\\firmware.rsp -o firmware.elf && echo done"'
+        self.assertEqual(find_link_command(command, "firmware.elf"), command)
+        with tempfile.TemporaryDirectory() as directory:
+            build = Path(directory)
+            with self.assertRaises(SystemExit):
+                expand_link_response(command, build)  # 缺失响应文件不能视为通过。
+            response = build / "CMakeFiles" / "firmware.rsp"
+            response.parent.mkdir()
+            response.write_text('CMakeFiles\\module.dir\\module.c.obj', encoding="utf-8")
+            self.assertIn("CMakeFiles/module.dir/module.c.obj", expand_link_response(command, build))
+            response.write_text('@other.rsp', encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                expand_link_response(command, build)  # 防止未检查的嵌套文件隐藏输入。
+            with self.assertRaises(SystemExit):
+                expand_link_response('cc @../outside.rsp -o firmware.elf', build)
 
     def test_attitude_adapter_isolated_from_chip_headers(self):
         # 姿态适配器可使用框架算法和 Fusion，不可继承芯片目录或强制包含芯片头。
@@ -128,6 +152,8 @@ class PortableIncludeContractTest(unittest.TestCase):
             "Middlewares/Third_Party/Fusion/FusionAhrs.c": "mc02_fusion_backend",
             "Core/Src/main.c": "mc02_board_backend",
             "bsp/board/platform_can_stm32.c": "mc02_board_backend",
+            "application/vehicle_health_port_stm32.c": "mc02_board_backend",
+            "application/chassis/chassis_supercap_legacy.c": "mc02_board_backend",
             "Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal.c": "mc02_vendor_system",
             "modules/BMI088/bmi088.c": "firmware.elf",
         }

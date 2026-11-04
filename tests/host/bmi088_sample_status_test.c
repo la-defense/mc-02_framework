@@ -1,5 +1,6 @@
 #include "bmi088_host_fixture.h"
 #include "bmi088_regNdef.h"
+#include "main.h" // 测试替身声明用于比较的毫秒时钟。
 #include "../../bsp/spi/platform_spi_blocking.h"
 
 #include <math.h>
@@ -74,6 +75,29 @@ int main(void)
     trigger_config.work_mode = BMI088_BLOCK_TRIGGER_MODE;
     if (BMI088Register(&trigger_config) != NULL)
         fail("unsupported asynchronous mode must fail closed instead of publishing transient DMA buffers");
+
+    PWM_Init_Config_s legacy_pwm = {0}; // 板级替身保存旧 PWM 配置。
+    BMI088_Init_Config_s legacy_config = {0};
+    legacy_config.spi_acc_config = (PlatformSpiEndpoint_t){PLATFORM_SPI_BUS_2, PLATFORM_GPIO_IMU_ACCEL_CS};
+    legacy_config.spi_gyro_config = (PlatformSpiEndpoint_t){PLATFORM_SPI_BUS_2, PLATFORM_GPIO_IMU_GYRO_CS};
+    legacy_config.legacy_pwm_config = &legacy_pwm;
+    bmi088_host_fixture.legacy_pid_fail = 1u; // PID 失败应发生在申请 SPI 资源之前。
+    if (BMI088Register(&legacy_config) != NULL || bmi088_host_fixture.legacy_pid_calls != 1u ||
+        bmi088_host_fixture.legacy_pwm_calls != 0u || bmi088_host_fixture.spi_unregister_count != 0u)
+        fail("invalid legacy heater PID must fail before registering peripherals");
+    BMI088HostReset();
+    if (BMI088Register(&legacy_config) != NULL || bmi088_host_fixture.legacy_pid_calls != 1u ||
+        bmi088_host_fixture.legacy_pwm_calls != 1u || bmi088_host_fixture.spi_unregister_count != 2u ||
+        bmi088_host_fixture.transfer_count != 0u)
+        fail("legacy PWM registration failure must release both SPI devices before transfers");
+    BMI088HostReset();
+    bmi088_host_fixture.legacy_pwm_allow = 1u; // 成功注册 PWM 后模拟传感器初始化失败。
+    BMI088HostSetAccelChipId(0u);
+    if (BMI088Register(&legacy_config) != NULL || bmi088_host_fixture.legacy_pwm_calls != 1u ||
+        bmi088_host_fixture.legacy_pwm_owner == NULL || legacy_pwm.id != NULL ||
+        bmi088_host_fixture.legacy_pwm_unregister_count != 1u || bmi088_host_fixture.spi_unregister_count != 2u)
+        fail("sensor failure must release legacy PWM and leave the caller configuration unchanged");
+    BMI088HostReset();
 
     BMI088_Init_Config_s partial_config = {0};
     partial_config.spi_acc_config = (PlatformSpiEndpoint_t){PLATFORM_SPI_BUS_2, PLATFORM_GPIO_IMU_ACCEL_CS};

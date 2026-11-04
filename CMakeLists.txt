@@ -291,6 +291,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/algorithm/vector3.c # 三维向量计算。
     modules/master_machine/vision_control.c # 视觉数据到控制命令的检查和换算。
     modules/master_machine/vision_protocol.c # SP 协议帧查找与校验。
+    modules/master_machine/vision_protocol_v2.c # V2 协议帧编解码和校验。
     modules/power/power_manager.c # 当前功率管理占位实现。
     modules/lcd/lcd_font_cn.c # LCD 中文字模数据。
     modules/lcd/lcd.c # LCD 面板协议、期限与故障处理。
@@ -306,8 +307,10 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/referee/referee_bench.c # 禁热裁判诊断的有限发送流程。
     modules/referee/rm_referee.c # 裁判协议解析和逻辑串口接入。
     modules/remote/remote_control.c # 遥控解析与逻辑串口接入。
+    modules/remote/remote_bench.c # 裸板遥控诊断状态与失效处理。
     modules/remote/remote_safety.c # 遥控手势与安全请求。
     modules/master_machine/master_process.c # 上位机协议和传输状态处理。
+    modules/BMI088/bmi088.c # 寄存器协议、同步采样和标定。
     modules/imu/ins_task.c # 姿态采样、解算和安全状态。
     modules/imu/imu_heater.c # 温控策略使用逻辑 PWM 与模拟输入。
     modules/motor/DJImotor/dji_motor.c # DJI 普通控制及逻辑 CAN 接口。
@@ -326,6 +329,14 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     application/gimbal/gimbal.c # 云台命令、反馈和电机控制。
     application/shoot/shoot.c # 发射命令和拨弹时序。
     application/chassis/chassis.c # 底盘命令、反馈和电机控制。
+    application/chassis/chassis_motion.c # 底盘模式和轮速目标计算。
+    application/chassis/chassis_kinematics.c # 轮组几何校验与运动映射。
+    application/chassis/mecanum.c # 麦轮几何到轮速的适配。
+    application/chassis/omni.c # 全向轮几何到轮速的适配。
+    application/topics/chassis_topic_codec.c # 双板底盘话题的字节编解码。
+    application/topics/robot_topics.c # 车型启用的话题和消息目录。
+    application/topics/robot_topics_diag.c # 话题统计的诊断输出。
+    application/topics/robot_can_bridge.c # 双板话题与逻辑 CAN 的适配。
     application/cmd/robot_cmd.c # 遥控、视觉和控制命令仲裁。
     modules/lcd/lcd_buf.c # LCD 有界绘图与字体转换。
     modules/lcd/lcd_key_input.c # LCD 按键去抖和事件。
@@ -357,7 +368,9 @@ endif()
 set(MC02_BOARD_BACKEND_SOURCES)
 set(MC02_VENDOR_SYSTEM_SOURCES)
 foreach(source IN LISTS MC02_EXECUTABLE_SOURCES)
-    if(source MATCHES "^(Core/|USB_DEVICE/|bsp/)")
+    if(source MATCHES "^(Core/|USB_DEVICE/|bsp/)" OR
+       source STREQUAL "application/vehicle_health_port_stm32.c" OR
+       source STREQUAL "application/chassis/chassis_supercap_legacy.c")
         list(APPEND MC02_BOARD_BACKEND_SOURCES "${source}") # 板级初始化、系统适配和 BSP。
     elseif(source MATCHES "^(Drivers/|Middlewares/)")
         list(APPEND MC02_VENDOR_SYSTEM_SOURCES "${source}") # HAL、RTOS、USB 和 RTT 上游实现。

@@ -333,3 +333,7 @@ SP仍是原来的29字节命令和43字节状态，未增加隐式字段。固�
 裁判机器人身份失效时，UI停止刷新并取消尚未启动的旧身份报文；再次收到有效身份或身份编号变化时，自动进行一次有限重绘。`MyUIInit()`可由上层显式请求重新绘制。UI与机器人交互消息共用REF-03队列和额度，实际发送还需通过启动身份检查。`UI_SUBMITTED`只表示本机队列接受，`UI_OK`表示本轮没有提交新报文；两者都不代表裁判客户端已显示。
 
 软件回归由[裁判UI测试](../../tests/host/referee_ui_test.c)、[UI与UART队列联测](../../tests/host/uart_ui_integration_test.c)和[裁判发送预算测试](../../tests/host/referee_budget_test.c)覆盖。WSL Debug／Release全量CTest各486/486，ASan／UBSan专项31/31；哨兵UI开启固件在Debug及RelWithDebInfo下成功构建。链接报告主RAM仍接近128KiB上限：分别剩余256和296字节；不能把“链接成功”理解成后续无需检查静态RAM。没有实测真实串口波形或客户端屏幕显示，证据见[MC02-0095记录](../workflow/tickets/MC02-0095.md)。
+
+## V2 编解码的编译边界（MC02-0086）
+
+车型选择 V2 协议时，`vision_protocol_v2.c` 现在进入框架对象目标，只引用标准 C 和框架 CRC 接口。Windows ARM 编译与依赖检查没有发现厂商或 RTOS 头；Windows 主机在 `-O0` 和 `-O2` 下通过既有固定帧及流式拼帧测试，WSL Debug／Release 全量回归也覆盖该测试。尝试配置禁热 V2 固件时被现有构建门槛拒绝：当前 V2 仅允许 `robot/single`，因此完整 V2 固件链接仍待验证。

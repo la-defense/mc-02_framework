@@ -7,6 +7,7 @@
 #include "bmi088.h"
 #include "bmi088_temperature.h"
 #include "../../bsp/spi/platform_spi_blocking.h"
+#include "../../bsp/pwm/platform_pwm_legacy.h"
 #include "vector3.h"
 #include "daemon.h"
 #include "bsp_log.h"
@@ -882,7 +883,7 @@ uint8_t BMI088CalibIsValid(void)
     return s_calib_ok;
 }
 
-BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
+BMI088Instance *BMI088Register(const BMI088_Init_Config_s *config)
 {
     bmi088_init_error = BMI088_NO_ERROR;
     bmi088_init_retry_count = 0u;
@@ -900,10 +901,6 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         return NULL;
     }
 
-    // 在本地副本中填写内部 id 和 SPI 模式，保留调用者传入的配置。
-    BMI088_Init_Config_s local_config = *config;
-    config = &local_config;
-
     // 申请内存
     BMI088Instance *bmi088_instance = (BMI088Instance *)calloc(1u, sizeof(BMI088Instance));
     if (bmi088_instance == NULL)
@@ -912,15 +909,13 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         return NULL;
     }
     // 旧温控 PID 先于外设注册检查；上层独立温控不需要初始化该零配置实例。
-    if (config->heat_pwm_config.htim != NULL &&
+    if (config->legacy_pwm_config != NULL &&
         PIDInit(&bmi088_instance->heat_pid, &config->heat_pid_config) != PID_OK)
     {
         bmi088_init_error = BMI088_RESOURCE_ERROR;
         free(bmi088_instance);
         return NULL;
     }
-    // 可选旧温控保留设备上下文；当前注册只接受周期阻塞采样。
-    config->heat_pwm_config.id = bmi088_instance;
     // 平台根据逻辑端点分配两个同步 SPI 设备。
     bmi088_instance->spi_acc = PlatformSpiRegisterBlocking(&config->spi_acc_config, bmi088_instance);
     bmi088_instance->spi_gyro = PlatformSpiRegisterBlocking(&config->spi_gyro_config, bmi088_instance);
@@ -932,9 +927,9 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
         free(bmi088_instance);
         return NULL;
     }
-    if (config->heat_pwm_config.htim != NULL) // 温控 PWM 可选: 未配置 htim 时不注册, 由上层自行控温
+    if (config->legacy_pwm_config != NULL) // 未配置旧 PWM 时由独立温控管理。
     {
-        bmi088_instance->heat_pwm = PWMRegister(&config->heat_pwm_config);
+        bmi088_instance->heat_pwm = PlatformLegacyPwmRegister(config->legacy_pwm_config, bmi088_instance);
         if (bmi088_instance->heat_pwm == NULL)
         {
             bmi088_init_error = BMI088_RESOURCE_ERROR;
@@ -962,7 +957,7 @@ BMI088Instance *BMI088Register(BMI088_Init_Config_s *config)
     if (error != 0)
     {
         BSP_LOG_EVENT_6(EV_MODULES_BMI088_BMI088_C_18, BSP_LOG_FIELD_U32((unsigned)init_retry), BSP_LOG_FIELD_HEX32((unsigned)error), BSP_LOG_FIELD_HEX32((unsigned)bmi088_init_acc_chip_id), BSP_LOG_FIELD_U32((unsigned)bmi088_init_acc_status), BSP_LOG_FIELD_HEX32((unsigned)bmi088_init_gyro_chip_id), BSP_LOG_FIELD_U32((unsigned)bmi088_init_gyro_status));
-        (void)PWMUnregister(bmi088_instance->heat_pwm);
+        (void)PlatformLegacyPwmUnregister(bmi088_instance->heat_pwm);
         (void)PlatformSpiUnregister(bmi088_instance->spi_acc);
         (void)PlatformSpiUnregister(bmi088_instance->spi_gyro);
         free(bmi088_instance);

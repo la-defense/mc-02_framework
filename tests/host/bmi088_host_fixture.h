@@ -3,6 +3,7 @@
 
 #include "bmi088.h"
 #include "bsp_spi.h" // 测试替身需要表示注入的 HAL 状态。
+#include "bsp_pwm.h" // 旧温控测试使用板级配置替身。
 #include "bsp_param.h"
 
 typedef struct
@@ -14,6 +15,12 @@ typedef struct
     uint32_t ins_monitor_feed_count;
     uint32_t transfer_count;
     uint32_t spi_unregister_count; // 统计启动失败回退时释放的有效设备。
+    uint32_t legacy_pid_calls; // 统计旧温控 PID 检查次数。
+    uint32_t legacy_pwm_calls; // 统计旧 PWM 注册次数。
+    uint32_t legacy_pwm_unregister_count; // 统计旧 PWM 失败回退次数。
+    void *legacy_pwm_owner; // 验证后端为 PWM 传入传感器上下文。
+    uint8_t legacy_pid_fail; // 非零时模拟 PID 参数校验失败。
+    uint8_t legacy_pwm_allow; // 非零时模拟 PWM 注册成功。
     uint32_t failed_spi_transfer_count;
     uint32_t fail_transfer_number;
     uint32_t spi_write_transfer_count;

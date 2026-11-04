@@ -10,7 +10,6 @@
 
 #include "bmi088_data.h"
 #include "controller.h"
-#include "bsp_pwm.h"
 #include "stdint.h"
 #include "bmi088_calibration.h"
 #include "../../bsp/spi/platform_spi_blocking.h"
@@ -77,7 +76,7 @@ typedef struct
     void *spi_acc;  // 加速度计和陀螺仪分别保持各自的片选。
     // 温度控制
     PIDInstance heat_pid; // 恒温PID
-    PWMInstance *heat_pwm; // 加热PWM
+    void *heat_pwm; // 仅旧温控路径使用的不透明 PWM 设备。
     // IMU数据
     float gyro[3];     // 陀螺仪 x/y/z 轴角速度，单位 rad/s
     float acc[3];      // 加速度计 x/y/z 轴读数，单位 m/s²，包含重力
@@ -117,16 +116,17 @@ typedef struct
     PlatformSpiEndpoint_t spi_gyro_config; // 陀螺仪逻辑总线和片选。
     PlatformSpiEndpoint_t spi_acc_config; // 加速度计逻辑总线和片选。
     PID_Init_Config_s heat_pid_config; // 仅配置旧热控 PWM 时检查，启用时须给出有效 dt 范围。
-    PWM_Init_Config_s heat_pwm_config;
+    const void *legacy_pwm_config; // NULL 时由独立温控模块管理；非空由平台后端解释。
 } BMI088_Init_Config_s;
 
 /**
 * @brief 注册并初始化 BMI088，成功后返回传感器实例。
-* @param config SPI、读取方式、标定方式和可选温控配置；不能为 NULL。
+* @param config SPI、读取方式、标定方式和可选旧温控配置；不能为 NULL。
 * @return 成功时返回 BMI088 实例；配置为空、读取方式不支持或资源/传感器初始化失败时返回 NULL。
 * @note 当前只支持 BMI088_BLOCK_PERIODIC_MODE。初始化最多重试 BMI088_INIT_MAX_RETRY 次。
+* 非空 legacy_pwm_config 必须是所选平台后端接受的有效配置，注册期间保持有效。
  */
-BMI088Instance *BMI088Register(BMI088_Init_Config_s *config);
+BMI088Instance *BMI088Register(const BMI088_Init_Config_s *config);
 
 /**
 * @brief 读取并换算一份完整的 BMI088 样本。

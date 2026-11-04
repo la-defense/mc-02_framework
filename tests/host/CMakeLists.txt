@@ -1752,7 +1752,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
     bmi088_calibration_temperature_test.c
     bmi088_host_fixture.c
     ../../modules/BMI088/bmi088.c
-    ../../bsp/board/platform_spi_blocking_stm32.c) # ???? SPI ?????
+    ../../bsp/board/platform_spi_blocking_stm32.c
+    ../../bsp/board/platform_pwm_legacy_stm32.c) # 复用生产 SPI 和旧 PWM 适配。
   target_include_directories(
     bmi088_calibration_temperature_test
     BEFORE PRIVATE bmi088_fakes)
@@ -1769,7 +1770,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
     bmi088_init_failure_test.c
     bmi088_host_fixture.c
     ../../modules/BMI088/bmi088.c
-    ../../bsp/board/platform_spi_blocking_stm32.c) # ???? SPI ?????
+    ../../bsp/board/platform_spi_blocking_stm32.c
+    ../../bsp/board/platform_pwm_legacy_stm32.c) # 复用生产 SPI 和旧 PWM 适配。
   target_include_directories(bmi088_init_failure_test BEFORE PRIVATE bmi088_fakes)
   target_include_directories(bmi088_init_failure_test PRIVATE . ../../modules/BMI088)
   target_compile_options(bmi088_init_failure_test PRIVATE -ffunction-sections -fdata-sections)
@@ -1782,7 +1784,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
     bmi088_post_reset_dummy_read_test.c
     bmi088_host_fixture.c
     ../../modules/BMI088/bmi088.c
-    ../../bsp/board/platform_spi_blocking_stm32.c) # ???? SPI ?????
+    ../../bsp/board/platform_spi_blocking_stm32.c
+    ../../bsp/board/platform_pwm_legacy_stm32.c) # 复用生产 SPI 和旧 PWM 适配。
   target_include_directories(bmi088_post_reset_dummy_read_test BEFORE PRIVATE bmi088_fakes)
   target_include_directories(bmi088_post_reset_dummy_read_test PRIVATE . ../../modules/BMI088)
   target_compile_options(bmi088_post_reset_dummy_read_test PRIVATE -ffunction-sections -fdata-sections)
@@ -1795,7 +1798,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
     bmi088_init_write_error_test.c
     bmi088_host_fixture.c
     ../../modules/BMI088/bmi088.c
-    ../../bsp/board/platform_spi_blocking_stm32.c) # ???? SPI ?????
+    ../../bsp/board/platform_spi_blocking_stm32.c
+    ../../bsp/board/platform_pwm_legacy_stm32.c) # 复用生产 SPI 和旧 PWM 适配。
   target_include_directories(bmi088_init_write_error_test BEFORE PRIVATE bmi088_fakes)
   target_include_directories(bmi088_init_write_error_test PRIVATE . ../../modules/BMI088)
   target_compile_options(bmi088_init_write_error_test PRIVATE -ffunction-sections -fdata-sections)
@@ -1808,7 +1812,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
     bmi088_sample_status_test.c
     bmi088_host_fixture.c
     ../../modules/BMI088/bmi088.c
-    ../../bsp/board/platform_spi_blocking_stm32.c) # ???? SPI ?????
+    ../../bsp/board/platform_spi_blocking_stm32.c
+    ../../bsp/board/platform_pwm_legacy_stm32.c) # 复用生产 SPI 和旧 PWM 适配。
   target_include_directories(bmi088_sample_status_test BEFORE PRIVATE bmi088_fakes)
   target_include_directories(bmi088_sample_status_test PRIVATE . ../../modules/BMI088)
   target_compile_options(bmi088_sample_status_test PRIVATE -ffunction-sections -fdata-sections)
@@ -1951,7 +1956,8 @@ endforeach()
 if(UNIX AND NOT APPLE)
   add_executable(bmi088_numeric_test bmi088_numeric_test.c bmi088_host_fixture.c
     ../../modules/BMI088/bmi088.c
-    ../../bsp/board/platform_spi_blocking_stm32.c) # ???? SPI ?????
+    ../../bsp/board/platform_spi_blocking_stm32.c
+    ../../bsp/board/platform_pwm_legacy_stm32.c) # 复用生产 SPI 和旧 PWM 适配。
   target_include_directories(bmi088_numeric_test BEFORE PRIVATE bmi088_fakes)
   target_include_directories(bmi088_numeric_test PRIVATE ../../modules/BMI088)
   target_link_options(bmi088_numeric_test PRIVATE -Wl,--wrap=Vec3NormF32 -Wl,--wrap=calloc)
