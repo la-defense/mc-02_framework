@@ -1,27 +1,60 @@
 /** @file numeric_migration_trace.c
  * @brief 用同一组输入输出数值迁移前后的可比较轨迹；只供主机离线验证。
  * @note 分别链接对应版本的真实算法与 CMSIS-DSP。旧版本定义 OLD_VERSION，
- *       include 路径指向该版本的 tests/host、modules/algorithm 和 DSP 头。
+ *       include 路径指向该版本的 modules/algorithm 和 DSP 头。
  *       两次输出均使用九位有效数字，可无损区分有限的 float 数值。
  */
 #include <stdio.h>
 #include <math.h>
 #include "arm_math.h"
 #include "dsp_matrix.h"
+#include "kalman_filter.h"
+#include "attitude_filter.h"
+#include "RLS.h"
 #ifndef OLD_VERSION
 #include "fast_trig.h"
 #endif
 
-// 复用两版已有的测试输入工厂；改名避免测试程序的 main 与本工具冲突。
-#define main previous_kf_test_main
-#include "kalman_filter_init_test.c"
-#undef main
-#define main previous_attitude_test_main
-#include "attitude_filter_test.c"
-#undef main
-#define main previous_rls_test_main
-#include "rls_test.c"
-#undef main
+/** @brief 一维 KF 实例及独占工作区，布局可同时用于两版接口。 */
+typedef struct {
+    KalmanFilter_t k;
+    _Alignas(KF_WORKSPACE_ALIGNMENT) unsigned char w[KF_WORKSPACE_BYTES(2, 1, 3)];
+} TraceFixture;
+
+// 使用两版公共接口建立相同的一维模型，失败时不执行后续样本。
+static KFStatus_t trace_init(TraceFixture *fixture)
+{
+    const KFConfig_t config = {1, 0, 1, 20u, 20u, 2.0f, 0.1f, NULL, NULL, NULL};
+    const float initial[2] = {0, 0}, covariance[4] = {1, 0, 0, 1};
+    const KFStatus_t status = KFInit(&fixture->k, &config, fixture->w,
+                                     KF_WORKSPACE_BYTES(1, 0, 1), initial, covariance);
+    if (status != KF_OK)
+        return status;
+    fixture->k.F_data[0] = 1.0f; // 状态转移采用单位矩阵。
+    fixture->k.H_data[0] = 1.0f; // 直接测量该状态。
+    fixture->k.R_data[0] = 1.0f; // 量测噪声协方差。
+    return KF_OK;
+}
+
+// 每个量测使用相同的本机时刻、源时刻和递增序号。
+static KFStatus_t trace_step(TraceFixture *fixture, uint32_t time, float *measurement)
+{
+    const KFStep_t step = {0.001f, time, time, time, measurement, NULL, 1, NULL};
+    return KFUpdate(&fixture->k, &step);
+}
+
+// 姿态输入沿用现有后端测试的重力和样本时间约定。
+static AttitudeFilterInput_t trace_input(uint32_t time)
+{
+    AttitudeFilterInput_t input = {0};
+    input.dt_s = 0.001f; // 相邻样本间隔1 ms。
+    input.now_ms = time;
+    input.sample_time_ms = time;
+    input.sequence = time;
+    input.accelerometer_valid = 1u;
+    input.accelerometer_m_s2[2] = 9.81f;
+    return input;
+}
 
 int main(void)
 {
@@ -55,22 +88,33 @@ int main(void)
         printf("trig %d %.9g %.9g\n", i, sine, cosine);
     }
 
-    Fixture fixture = {0};
-    init(&fixture, 1, 1); // 使用现有 KF 测试工厂创建一维滤波器。
+    TraceFixture fixture = {0};
+    if (trace_init(&fixture) != KF_OK)
+        return 1; // 初始化失败时没有可比较的轨迹。
     for (unsigned i = 0; i < 32; ++i)
     {
         float measurement = (float)((int)(i % 7) - 3) * 0.125f; // 周期变化的有限量测。
-        const KFStatus_t step_status = step(&fixture, i + 1, i + 1, i + 1, &measurement, 1);
+        const KFStatus_t step_status = trace_step(&fixture, i + 1, &measurement);
         printf("kf %u %d %.9g %.9g\n", i, step_status,
                fixture.k.FilteredValue[0], fixture.k.published_P[0]);
     }
     float invalid_measurement = NAN;
-    status = step(&fixture, 33, 33, 33, &invalid_measurement, 1); // 比较非法量测的处理。
+    status = trace_step(&fixture, 33, &invalid_measurement); // 比较非法量测的处理。
     printf("kf_bad %d %.9g %.9g %d\n", status, fixture.k.FilteredValue[0],
            fixture.k.published_P[0], fixture.k.result.cause);
 
     AttitudeFilter_t filter = {0};
-    AttitudeFilterConfig_t config = make_config(ATTITUDE_BACKEND_QUATERNION_EKF);
+    AttitudeFilterConfig_t config = {0};
+    config.backend = ATTITUDE_BACKEND_QUATERNION_EKF; // 比较四元数 EKF 后端。
+    config.max_prediction_ms = 20u; // 允许缺少校正数据时预测20 ms。
+    config.max_measurement_age_ms = 20u; // 加速度样本最大年龄20 ms。
+    config.max_dt_s = 0.02f; // 最大采样间隔0.02 s。
+    config.qekf.process_noise1 = 10.0f; // 四元数状态过程噪声。
+    config.qekf.process_noise2 = 0.001f; // 陀螺偏置过程噪声。
+    config.qekf.measure_noise = 1000000.0f; // 加速度量测噪声。
+    config.qekf.lambda = 1.0f; // 协方差渐消系数。
+    config.qekf.lpf = 0.0f; // 不额外低通加速度。
+    config.qekf.variance_ratio = 2.0f; // 预测协方差允许的增长倍率。
     AttitudeFilterState_t state = {0};
     max_align_t workspace[(ATTITUDE_FILTER_STORAGE_BYTES + sizeof(max_align_t) - 1) / sizeof(max_align_t)];
     float quaternion[4] = {1, 0, 0, 0}; // 两版使用同一初始姿态。
@@ -78,14 +122,14 @@ int main(void)
     printf("att_init %d\n", status);
     for (unsigned i = 0; i < 32; ++i)
     {
-        AttitudeFilterInput_t input = make_input(i + 1, i + 1); // 同一组采样时间与序号。
+        AttitudeFilterInput_t input = trace_input(i + 1); // 同一组采样时间与序号。
         input.gyroscope_rad_s[2] = (float)(i % 5) * 0.04f; // 输入周期变化的偏航角速度。
         status = AttitudeFilterUpdate(&filter, &input, &state);
         printf("att %u %d %d %.9g %.9g %.9g %.9g %.9g\n", i, status, state.filter.valid,
                state.quaternion[0], state.quaternion[1], state.quaternion[2],
                state.quaternion[3], state.yaw_deg);
     }
-    AttitudeFilterInput_t invalid_input = make_input(33, 33);
+    AttitudeFilterInput_t invalid_input = trace_input(33);
     invalid_input.accelerometer_m_s2[2] = NAN; // 观察非法加速度时的预测结果。
     status = AttitudeFilterUpdate(&filter, &invalid_input, &state);
     printf("att_bad %d %d %.9g\n", status, state.filter.valid, state.yaw_deg);
