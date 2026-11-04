@@ -31,7 +31,9 @@ uint8_t PlatformSignalSet(PlatformTaskHandle_t task, uint32_t bits);
  * @param[in] timeout_ms 等待毫秒数；0 为立即检查，PLATFORM_SIGNAL_WAIT_FOREVER 为无限等待。
  * @param[out] observed 成功时写入后端报告的全部信号位；其他结果不改变原值。
  * @return 收到、超时、参数错误或后端错误。
- * @note 只能由普通任务调用；后端可能因其他位唤醒，调用者须自行检查所需位并重新等待。
+ * @note 只能由普通任务调用；后端可能因其他位唤醒，未清除的位会保持待处理。
+ * 调用者应处理返回的全部位，或在继续等待前明确清除不需要的位，避免反复立即唤醒。
+ * 后端无法重新标记未清除位时返回错误，不修改 observed。
  * H723 保持当前 CMSIS 等待时间到 RTOS tick 的换算，不承诺亚毫秒分辨率。
  */
 PlatformSignalResult_t PlatformSignalWait(uint32_t clear_bits, uint32_t timeout_ms, uint32_t *observed);

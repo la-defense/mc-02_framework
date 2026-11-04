@@ -19,6 +19,12 @@ PlatformSignalResult_t PlatformSignalWait(uint32_t clear_bits, uint32_t timeout_
         return PLATFORM_SIGNAL_INVALID; // 非法输入时保留调用者原值。
     const osEvent event = osSignalWait((int32_t)clear_bits, timeout_ms); // 沿用 CMSIS 等待与清位行为。
     if (event.status == osEventSignal) {
+        const uint32_t pending = (uint32_t)event.value.signals & ~clear_bits; // 取出未被本次消费的位。
+        if (pending != 0u) {
+            const osThreadId current = osThreadGetId(); // 获取刚完成等待的当前任务。
+            if (current == NULL || osSignalSet(current, (int32_t)pending) < 0)
+                return PLATFORM_SIGNAL_ERROR; // 无法恢复待处理标志时不能报告成功。
+        }
         *observed = (uint32_t)event.value.signals; // 只在收到信号后交付后端返回值。
         return PLATFORM_SIGNAL_RECEIVED;
     }

@@ -5,6 +5,7 @@
 typedef void *osThreadId;
 typedef enum { osOK = 0, osEventSignal = 0x08, osEventTimeout = 0x40, osErrorISR = 0x82 } osStatus;
 typedef struct { osStatus status; union { int32_t signals; } value; } osEvent;
+osThreadId osThreadGetId(void);
 int32_t osSignalSet(osThreadId thread, int32_t signals);
 osEvent osSignalWait(int32_t signals, uint32_t milliseconds);
 #endif
