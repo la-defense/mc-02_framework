@@ -39,6 +39,9 @@ def main() -> None:
         "MC02_ENABLE_REFEREE_UI",  # 随板角色重新指定。
         "MC02_VISION_PROTOCOL_",  # 随命令行协议选择重新指定。
         "VISION_USE_",  # 随命令行传输选择重新指定。
+        "ONE_BOARD",  # 随测试角色重新指定单板选择。
+        "CHASSIS_BOARD",  # 随测试角色重新指定底盘板选择。
+        "GIMBAL_BOARD",  # 随测试角色重新指定云台板选择。
     )
     flags: list[str] = []
     index = 1
