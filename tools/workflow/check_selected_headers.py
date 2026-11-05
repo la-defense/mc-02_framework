@@ -27,7 +27,7 @@ def display_header(header: Path, root: Path, build: Path) -> str:
     """生成可读名称，支持源码树及仓库外的构建目录。"""
     if header.is_relative_to(root):
         return str(header.relative_to(root))
-    return f"<build>/{header.relative_to(build)}"
+    return f"<build>/{header.relative_to(build).as_posix()}"
 
 
 def main() -> None:

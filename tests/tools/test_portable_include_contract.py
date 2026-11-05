@@ -32,7 +32,7 @@ class PortableIncludeContractTest(unittest.TestCase):
             self.assertTrue(is_selected_header(source, root, build))
             self.assertFalse(is_selected_header(internal_build, root, build))
             self.assertEqual(display_header(generated, root, build),
-                             str(Path("<build>") / "generated" / "mc02_build_config.h"))
+                             "<build>/generated/mc02_build_config.h")
 
     def test_framework_paths_are_accepted(self):
         # 分离和拼接两种写法都应识别为已允许的框架目录。
