@@ -50,11 +50,13 @@ static uint8_t tx_data_history[DEVICE_CAN_CNT][64][8];
 typedef struct
 {
     FDCAN_RxHeaderTypeDef header;
-    uint8_t data[8];
+    uint8_t data[64]; // 模拟 HAL 最多复制一帧 CAN FD 的负载，验证目标缓冲容量。
 } TestRxFrame_t;
 static TestRxFrame_t rx_frames[DEVICE_CAN_CNT][64];
 static uint8_t rx_frame_count[DEVICE_CAN_CNT];
 static uint8_t rx_frame_read[DEVICE_CAN_CNT];
+static uint8_t rx_read_failures; // 受控注入接收失败，避免测试因错误循环无限运行。
+static uint32_t rx_read_calls; // 记录 HAL 实际读取次数。
 static uint32_t burst_rx_count[DEVICE_CAN_CNT];
 static uint32_t burst_rx_bad[DEVICE_CAN_CNT];
 static uint32_t burst_last_cycle[DEVICE_CAN_CNT];
@@ -224,6 +226,12 @@ uint32_t HAL_FDCAN_GetRxMessage(FDCAN_HandleTypeDef *handle, uint32_t fifo,
                                 FDCAN_RxHeaderTypeDef *header, uint8_t *data)
 {
     (void)fifo;
+    ++rx_read_calls; // 每次调用都计数，验证失败后不会继续读取。
+    if (rx_read_failures != 0u)
+    {
+        --rx_read_failures; // 本次失败保持 FIFO 中的原帧。
+        return HAL_ERROR;
+    }
     uint8_t bus = bus_for_handle(handle);
     if (bus >= DEVICE_CAN_CNT || rx_frame_read[bus] >= rx_frame_count[bus])
         return HAL_ERROR;
@@ -232,6 +240,43 @@ uint32_t HAL_FDCAN_GetRxMessage(FDCAN_HandleTypeDef *handle, uint32_t fifo,
     *header = frame->header;
     memcpy(data, frame->data, sizeof(frame->data));
     return HAL_OK;
+}
+
+static uint32_t valid_rx_count;
+static uint8_t valid_rx_length;
+static void validate_rx_callback(CANInstance *instance)
+{
+    ++valid_rx_count; // 只统计实际交给模块的合法帧。
+    valid_rx_length = instance->rx_len; // 记录零长度等有效边界。
+}
+
+static void test_rx_failure_and_invalid_frames(void)
+{
+    CAN_Init_Config_s config = {0}; // 默认标准 ID，与现有调用保持兼容。
+    config.can_handle = &hfdcan1; // 测试第一条总线。
+    config.tx_id = 0x300u; // 发送 ID 不影响接收校验。
+    config.rx_id = 0x321u; // 仅接收此 ID。
+    config.can_module_callback = validate_rx_callback; // 检查实际派发。
+    TEST_CHECK(CANRegister(&config) != NULL);
+    rx_frame_count[0] = 1u; // 第一条测试帧保持在硬件 FIFO 中。
+    rx_frames[0][0].header.Identifier = config.rx_id;
+    rx_read_failures = 2u; // 若失败后继续读取，就会触发第二次失败。
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    TEST_CHECK(rx_read_calls == 1u); // HAL 失败必须立即结束本轮中断处理。
+    TEST_CHECK(rx_frame_read[0] == 0u); // 失败不应消费或派发旧数据。
+    CANProcessRx();
+    TEST_CHECK(valid_rx_count == 0u);
+
+    rx_read_failures = 0u; // 后续中断恢复读取。
+    rx_frame_count[0] = 3u; // 两帧无效，最后一帧是合法的零长度帧。
+    rx_frames[0][0].header.DataLength = 9u << 16u; // 超过经典 CAN 的 8 字节。
+    rx_frames[0][1].header.Identifier = config.rx_id;
+    rx_frames[0][1].header.FDFormat = FDCAN_FD_CAN; // FD 帧不属于经典 CAN 入口。
+    rx_frames[0][2].header.Identifier = config.rx_id;
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    CANProcessRx();
+    TEST_CHECK(valid_rx_count == 1u); // 无效帧不能被伪装成零长度数据。
+    TEST_CHECK(valid_rx_length == 0u); // 真正的零长度经典数据帧仍可交付。
 }
 
 static void burst_rx_callback(CANInstance *instance)
@@ -1998,6 +2043,8 @@ int main(int argc, char **argv)
     CANInitWorkspace();
     if (strcmp(argv[1], "lk-logical-receive") == 0)
         test_lk_logical_receive();
+    else if (strcmp(argv[1], "rx-invalid") == 0)
+        test_rx_failure_and_invalid_frames();
     else if (strcmp(argv[1], "platform-can-status") == 0)
         test_platform_can_status();
     else if (strcmp(argv[1], "platform-can-rx") == 0)

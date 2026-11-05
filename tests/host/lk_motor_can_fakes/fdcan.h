@@ -53,6 +53,7 @@ typedef uint32_t HAL_StatusTypeDef;
 #define FDCAN_ESI_ACTIVE 0u
 #define FDCAN_BRS_OFF 0u
 #define FDCAN_CLASSIC_CAN 0u
+#define FDCAN_FD_CAN 1u
 #define FDCAN_NO_TX_EVENTS 0u
 
 typedef struct
@@ -112,6 +113,7 @@ typedef struct
     uint32_t DataLength;
     uint32_t RxFrameType;
     uint32_t IdType;
+    uint32_t FDFormat;
 } FDCAN_RxHeaderTypeDef;
 
 typedef struct

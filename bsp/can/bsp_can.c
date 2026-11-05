@@ -1867,28 +1867,22 @@ void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status)
 // 两个 FDCAN FIFO 共用的中断处理：取完所有帧，查出对应实例后只入队，不调用模块解析。
 static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
 {
-    static FDCAN_RxHeaderTypeDef rxconf; // 同上
-	static uint16_t DataLength = 0;
-    static uint8_t fdcan_rx_buff[8];
+    FDCAN_RxHeaderTypeDef rxconf = {0}; // 各次中断使用独立帧头，避免嵌套时覆盖。
+    uint8_t fdcan_rx_buff[64] = {0}; // HAL 先复制数据再返回帧头，预留 FD 最大长度以便安全丢弃。
     uint32_t probe_start = DWT_ProbeStart();
     CANBusState_t *bus = CANBusFromHandle(_hfdcan);
     uint8_t bus_idx = CANBusIndexFromHandle(_hfdcan);
 
     while (HAL_FDCAN_GetRxFifoFillLevel(_hfdcan, fifox)) // FIFO不为空,有可能在其他中断时有多帧数据进入
     {
-        HAL_FDCAN_GetRxMessage(_hfdcan, fifox, &rxconf, fdcan_rx_buff); // 从FIFO中获取数据
+        if (HAL_FDCAN_GetRxMessage(_hfdcan, fifox, &rxconf, fdcan_rx_buff) != HAL_OK)
+            break; // 读取失败可能不会移除 FIFO 条目，必须结束本轮中断。
         can_prof_rx_frames++;
         if (bus != NULL)
             bus->bus.rx_frames++;
-		//解析数据长度，@Todo 此处在用新版本重新生成后可能得修改，DataLength可能不需要右移，具体情况具体看	！
-		if(((rxconf.DataLength >> 16) & 0xF)>=0 && ((rxconf.DataLength >> 16) & 0xF)<=8)
-		{
-			DataLength=(rxconf.DataLength >> 16) & 0xF; // 保存接收到的数据长度
-		}
-		else
-		{
-			DataLength=0;
-		}
+        uint32_t data_length = (rxconf.DataLength >> 16u) & 0xFu; // 取 HAL 提供的经典帧 DLC。
+        if (data_length > 8u || rxconf.FDFormat != FDCAN_CLASSIC_CAN)
+            continue; // 非法长度及 FD 帧不能伪装成零长度经典帧。
         if(rxconf.RxFrameType==FDCAN_DATA_FRAME && rxconf.IdType==FDCAN_STANDARD_ID)
         {
         	/* 常见路径: 用 rx_id 低 9 位查表, O(1) 找到归属实例 */
@@ -1917,7 +1911,7 @@ static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
         		/* 只入队, 不在中断里解析(BSPCAN-02):
         		   解析(含滤波/多圈累加)延后到 CANProcessRx() 在任务上下文逐帧执行,
         		   既让中断最短, 又消除了"中断写 measure / 任务读 measure"的数据竞争。 */
-        		CANRxQueuePush(bus, target, (uint8_t)DataLength, fdcan_rx_buff);
+                CANRxQueuePush(bus, target, (uint8_t)data_length, fdcan_rx_buff);
         	}
         	/* 注意: 这里不能 return! 必须把 FIFO 里的帧全部取完, 否则 FIFO 满就会丢帧 */
         }

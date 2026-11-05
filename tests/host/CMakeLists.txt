@@ -692,6 +692,8 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
     -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free -Wl,--gc-sections)
 endif()
 add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test rollback)
+add_test(NAME production_can_rx_invalid COMMAND lk_motor_bsp_can_test rx-invalid)
+set_tests_properties(production_can_rx_invalid PROPERTIES TIMEOUT 10)
 add_test(NAME production_lk_motor_logical_receive COMMAND lk_motor_bsp_can_test lk-logical-receive)
 add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platform-can)
 add_test(NAME production_platform_can_status COMMAND lk_motor_bsp_can_test platform-can-status)
