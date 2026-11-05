@@ -158,6 +158,17 @@ class VehicleSelectionTest(unittest.TestCase):
         result = self.run_case('mc02_validate_vehicle_identity(sentinel stm32h723 mc02 freertos omni dji)\n')
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_unadapted_dm_is_rejected_before_firmware_selection(self):
+        # DM 旧驱动尚未进入框架源码清单，不能被能力检查误认为可用。
+        result = self.run_case('mc02_validate_vehicle_identity(sentinel stm32h723 mc02 freertos omni dm)\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Motor driver dm', result.stderr)
+        for driver in ('dji', 'lk', 'ht'):
+            with self.subTest(driver=driver):
+                # 已经适配的三个驱动仍可通过身份能力检查。
+                accepted = self.run_case(f'mc02_validate_vehicle_identity(sentinel stm32h723 mc02 freertos omni {driver})\n')
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
     def test_module_order_matches_cmake_and_health_mapping(self):
         plan_header = (ROOT / "application/config/module_plan.h").read_text(encoding="utf-8")
         enum_body = re.search(r"typedef enum\s*\{(.*?)ROBOT_MODULE_COUNT", plan_header, re.S)

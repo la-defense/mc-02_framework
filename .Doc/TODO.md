@@ -169,7 +169,7 @@
   2026-10-04 供电审查补充验收范围：CI 还需使用生产逻辑验证 MC02-0034～0040 的加热关断、BMI088 成功／新鲜度、ADC 停更、CALIB／Flash 入口、异常出口和锁存恢复；课程模拟与现有 SP 主机测试不能代替这些回归。证据见 [6S 审查](../docs/6S上电安全审查_2026-10-04.md)。
 - [x] **R25-14** [bug] 审核跨任务共享的命令、传感器状态和消息中心队列，按生产者/消费者选择临界区、队列或双缓冲。已记录共享数据清单及同步策略；Safety、遥控器／Daemon、消息中心事件FIFO及DWT时间轴通过真实 pthread 并发测试，WSL Debug／Release 全量各365/365、ASan／UBSan并发专项4/4；bench、rcdiag及三种robot角色 Debug／RelWithDebInfo 共10种ARM禁热固件构建通过。本轮仅主机和固件编译验证，不连接硬件；遗留指针及诊断字段限制已记录。见 [R25-14票据](../docs/workflow/tickets/R25-14.md) 与 [学习笔记14](../docs/学习笔记/14-原子操作与临界区入门.md)。
 - [ ] **MC02-0032** [enhancement] [ready-for-human] 修复 CMake 源文件和头文件目录 glob 在已有 Ninja 构建目录中漏检变化的问题。验收：Windows/WSL 增量回归、主机 Debug/Release、六种禁热固件及 ELF 检查通过；GitHub Actions 在新提交上通过后关闭。本机证据见 [MC02-0032 票据](../docs/workflow/tickets/MC02-0032.md)，远端 CI 尚未触发。
-- [ ] **MC02-0051** [bug] [needs-triage] 审查 R25-10 未覆盖的可选/未启用驱动初始化路径：IIC、GPIO 中断型 BMI088、TFmini、IST8310、LED、Servo、LK/HT/DM/XM 电机、PowerManager 与 RLS。验收：逐项确认当前是否进入任一固件配置；实际启用项补参数、容量、分配、底层启动和组合回滚检查及主机故障注入；确认未使用项后记录移除或未来启用前置条件。关联 R25-10。本轮实际选中项按对应任务推进；IST8310、TFminiPlus、OLED、HC05 等仅保留未验证和启用前置条件，暂缓主题不因审查而恢复。本轮 MOTOR-03 已覆盖 DM 注册回退和任务创建回收；其余可选驱动仍待逐项审查，见 [实施记录](../docs/workflow/tickets/MOTOR-03.md)。
+- [ ] **MC02-0051** [bug] [needs-triage] 审查 R25-10 未覆盖的可选/未启用驱动初始化路径：IIC、GPIO 中断型 BMI088、TFmini、IST8310、LED、Servo、LK/HT/DM/XM 电机、PowerManager 与 RLS。验收：逐项确认当前是否进入任一固件配置；实际启用项补参数、容量、分配、底层启动和组合回滚检查及主机故障注入；确认未使用项后记录移除或未来启用前置条件。关联 R25-10。本轮实际选中项按对应任务推进；IST8310、TFminiPlus、OLED、HC05 等仅保留未验证和启用前置条件，暂缓主题不因审查而恢复。本轮 MOTOR-03 已覆盖 DM 注册回退和任务创建回收；DM 尚未接入平台源码清单及任务派发，车型选用时明确拒绝，启用前需完成平台适配及相关验证，关联 MC02-0073。其余可选驱动仍待逐项审查，见 [实施记录](../docs/workflow/tickets/MOTOR-03.md)。
 
 ## 2026-10-08：旧代码审查清单归并
 
