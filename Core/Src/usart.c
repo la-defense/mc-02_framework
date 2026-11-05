@@ -1014,7 +1014,9 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   else if(uartHandle->Instance==UART8)
   {
   /* USER CODE BEGIN UART8_MspDeInit 0 */
-
+    // 先停止并清除 UART 中断，再释放 DMA 和外设资源。
+    HAL_NVIC_DisableIRQ(UART8_IRQn);
+    HAL_NVIC_ClearPendingIRQ(UART8_IRQn);
   /* USER CODE END UART8_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_UART8_CLK_DISABLE();
@@ -1035,7 +1037,9 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   else if(uartHandle->Instance==UART9)
   {
   /* USER CODE BEGIN UART9_MspDeInit 0 */
-
+    // 先停止并清除 UART 中断，再释放 DMA 和外设资源。
+    HAL_NVIC_DisableIRQ(UART9_IRQn);
+    HAL_NVIC_ClearPendingIRQ(UART9_IRQn);
   /* USER CODE END UART9_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_UART9_CLK_DISABLE();

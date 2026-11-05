@@ -259,6 +259,20 @@ file(WRITE "${{CMAKE_BINARY_DIR}}/selected-sources.txt" "${{MC02_SELECTED_SOURCE
         self.assertIn("APP-10", result.stderr)
         self.assertEqual(self.run_case('mc02_require_production_core(bench_safe FALSE FALSE)\n').returncode, 0)
 
+    def test_power_declaration_requires_confirmed_production_rails(self):
+        # 裸板保持关闭，可在尚不清楚实车接线时编译。
+        result = self.run_case('mc02_validate_power_plan(bench_safe UNCONFIRMED UNCONFIRMED UNCONFIRMED)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # 测试声明只用于校验配置规则，不作为真实机器人供电参数。
+        result = self.run_case('mc02_validate_power_plan(robot OFF BEFORE_DEVICES AFTER_DEVICES)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # 任一路未确认都不能进入生产配置，非法阶段同样明确拒绝。
+        for values in ('UNCONFIRMED OFF OFF', 'OFF UNCONFIRMED OFF',
+                       'OFF OFF UNCONFIRMED', 'OFF UNKNOWN OFF', 'OFF OFF'):
+            with self.subTest(values=values):
+                result = self.run_case(f'mc02_validate_power_plan(robot {values})\n')
+                self.assertNotEqual(result.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

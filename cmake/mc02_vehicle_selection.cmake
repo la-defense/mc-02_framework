@@ -23,6 +23,23 @@ function(mc02_validate_vehicle_identity vehicle platform board rtos chassis)
     endforeach()
 endfunction()
 
+function(mc02_validate_power_plan profile)
+    # 固定三路电源，避免漏写其中一路后误当作已确认关闭。
+    list(LENGTH ARGN rail_count)
+    if(NOT rail_count EQUAL 3)
+        message(FATAL_ERROR "Vehicle power plan must declare all three controlled rails")
+    endif()
+    foreach(rail IN LISTS ARGN)
+        # OFF 表示确认不使用；两个阶段由后续板级启动流程执行。
+        if(NOT rail MATCHES "^(UNCONFIRMED|OFF|BEFORE_DEVICES|AFTER_DEVICES)$")
+            message(FATAL_ERROR "Vehicle power plan contains invalid rail stage: ${rail}")
+        endif()
+        if("${profile}" STREQUAL "robot" AND rail STREQUAL "UNCONFIRMED")
+            message(FATAL_ERROR "Vehicle controlled power load or stage is unconfirmed; see MC02-0067")
+        endif()
+    endforeach()
+endfunction()
+
 function(mc02_require_production_core profile mechanics gimbal)
     if("${profile}" STREQUAL "robot" AND (NOT mechanics OR NOT gimbal))
         message(FATAL_ERROR "sentinel core configuration is unconfirmed or unavailable: APP-10 mechanical data / MC02-0058 three-axis gimbal; robot firmware is forbidden")

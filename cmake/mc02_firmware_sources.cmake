@@ -68,6 +68,7 @@ set(MC02_PLATFORM_C_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c)
 
 set(MC02_BSP_C_SOURCES
+    bsp/board/platform_exti_stm32.c # 逐引脚处理板载 IMU 的共享 EXTI 组。
     bsp/os/platform_os_freertos.c # 任务接口的 FreeRTOS 后端。
     bsp/os/platform_signal_freertos.c # 可合并任务信号位的 FreeRTOS 后端。
     bsp/os/platform_sync_freertos.c # 任务临界区与原有毫秒时钟的后端。

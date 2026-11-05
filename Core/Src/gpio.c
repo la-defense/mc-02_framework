@@ -136,9 +136,8 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /* BMI088 数据就绪中断: PE10/PE12 均为 EXTI15_10 组, 按 bmi088.md 配置下降沿触发 */
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+  /* 当前 BMI088 使用同步采样；不启用未接入的引脚中断。 */
+  HAL_NVIC_DisableIRQ(EXTI15_10_IRQn);
 
 }
 

@@ -162,7 +162,11 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
   if(i2cHandle->Instance==I2C2)
   {
   /* USER CODE BEGIN I2C2_MspDeInit 0 */
-
+    // 停用并清除事件和错误中断，避免退出后访问已释放的资源。
+    HAL_NVIC_DisableIRQ(I2C2_EV_IRQn);
+    HAL_NVIC_DisableIRQ(I2C2_ER_IRQn);
+    HAL_NVIC_ClearPendingIRQ(I2C2_EV_IRQn);
+    HAL_NVIC_ClearPendingIRQ(I2C2_ER_IRQn);
   /* USER CODE END I2C2_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_I2C2_CLK_DISABLE();

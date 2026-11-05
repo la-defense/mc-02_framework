@@ -15,6 +15,12 @@ if(UNIX)
 endif()
 include(../../cmake/mc02_dsp.cmake)
 mc02_add_dsp(mc02_dsp_host TRUE)
+# 使用生产共享 EXTI 入口与 HAL 待处理位模型验证逐引脚派发。
+add_executable(exti_group_test exti_group_test.c ../../bsp/board/platform_exti_stm32.c)
+target_include_directories(exti_group_test BEFORE PRIVATE exti_fakes .)
+target_compile_options(exti_group_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_exti_group_dispatch COMMAND exti_group_test)
+set_tests_properties(production_exti_group_dispatch PROPERTIES TIMEOUT 10)
 # 使用真实板级资源绑定验证同步 SPI 注册及失败传递。
 add_executable(platform_spi_registration_test platform_spi_registration_test.c
   ../../bsp/board/platform_spi_register_stm32.c ../../bsp/board/board_spi_stm32.c
