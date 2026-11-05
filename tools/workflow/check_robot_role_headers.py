@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""用测试配置独立编译机器人角色相关框架头；不生成机器人固件。"""
+"""用测试配置检查机器人角色相关框架源码或头；不生成机器人固件。"""
 
 import argparse
 import json
@@ -13,9 +13,10 @@ from check_firmware_profile import check_portable_includes
 
 
 def main() -> None:
-    """复用固件编译器和框架头路径，逐角色检查同名业务头。"""
+    """复用固件编译器和框架头路径，逐角色检查声明或源码。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, required=True, help="已构建的 Ninja 固件目录")
+    parser.add_argument("--sources", action="store_true", help="检查源码语法，跳过不适用角色的文件")
     args = parser.parse_args()
     root = Path.cwd().resolve()
     build = args.build_dir.resolve()
@@ -50,26 +51,37 @@ def main() -> None:
     if not match:
         raise SystemExit("未找到框架源码清单")
     sources = re.findall(r"(?m)^\s*((?:application|modules)/[A-Za-z0-9_/]+\.c)", match.group(1))
-    headers = sorted({(root / source).with_suffix(".h") for source in sources
-                      if (root / source).with_suffix(".h").is_file()})
-    if not headers:
-        raise SystemExit("未找到框架源码对应的头文件")
+    if args.sources:
+        files = sorted({root / source for source in sources if (root / source).is_file()})
+    else:
+        files = sorted({(root / source).with_suffix(".h") for source in sources
+                        if (root / source).with_suffix(".h").is_file()})
+    if not files:
+        raise SystemExit("未找到框架源码或对应头文件")
     config = (build / "generated/mc02_build_config.h").read_text(encoding="utf-8")
     # 测试副本启用可选功能，以检查条件编译声明；它不作为生产配置或参数确认。
     config = re.sub(r"(#define MC02_(?:FEATURE|SELECTED_DRIVER)_[A-Z_]+) 0\b", r"\1 1", config)
     with tempfile.TemporaryDirectory(prefix="mc02-header-config-") as directory:
         (Path(directory) / "mc02_build_config.h").write_text(config, encoding="utf-8")
+        checked = 0
         for role in ("ONE_BOARD", "CHASSIS_BOARD", "GIMBAL_BOARD"):
-            for header in headers:
+            for source_file in files:
+                if args.sources and source_file.name in ("referee_bench.c", "remote_bench.c"):
+                    continue  # 裸板专用入口不属于机器人固件。
+                if args.sources and role == "ONE_BOARD" and source_file.name == "robot_can_bridge.c":
+                    continue  # 板间桥接只在双板角色中使用。
                 # 测试头目录排在生成目录之前，避免读取实际禁热配置。
-                command = [arguments[0], "-std=c11", "-Wall", "-Wextra", "-Werror",
-                           "-I" + directory, "-DMC02_PROFILE_ROBOT=1", "-D" + role + "=1",
+                warnings = [] if args.sources else ["-Wall", "-Wextra", "-Werror"]
+                command = [arguments[0], "-std=c11", *warnings, "-I" + directory,
+                           "-DMC02_PROFILE_ROBOT=1", "-D" + role + "=1",
                            *flags, "-fsyntax-only", "-x", "c", "-"]
-                result = subprocess.run(command, input=f'#include "{header}"\n',
+                result = subprocess.run(command, input=f'#include "{source_file}"\n',
                                         text=True, capture_output=True)
                 if result.returncode:
-                    raise SystemExit(f"{role}: {header.relative_to(root)}\n{result.stderr}")
-    print(f"PASS: {len(headers)} 份同名框架头在3种测试角色下独立通过 C11 编译")
+                    raise SystemExit(f"{role}: {source_file.relative_to(root)}\n{result.stderr}")
+                checked += 1
+    print(f"PASS: {len(files)} 份框架{'源码' if args.sources else '同名头'}，"
+          f"3种测试角色共 {checked} 次 C11 语法检查通过")
 
 
 if __name__ == "__main__":
