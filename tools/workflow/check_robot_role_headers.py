@@ -17,7 +17,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, required=True, help="已构建的 Ninja 固件目录")
     parser.add_argument("--sources", action="store_true", help="检查源码语法，跳过不适用角色的文件")
+    parser.add_argument("--dependencies", action="store_true", help="检查每种角色源码依赖的工程头")
     args = parser.parse_args()
+    if args.dependencies and not args.sources:
+        raise SystemExit("--dependencies 需要与 --sources 一起使用")
     root = Path.cwd().resolve()
     build = args.build_dir.resolve()
     entries = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
@@ -67,6 +70,7 @@ def main() -> None:
     config = re.sub(r"(#define MC02_(?:FEATURE|SELECTED_DRIVER)_[A-Z_]+) 0\b", r"\1 1", config)
     with tempfile.TemporaryDirectory(prefix="mc02-header-config-") as directory:
         checked = 0
+        checked_headers = 0
         for heater in (0, 1):
             # 功能选择与底层温控宏保持一致，分别检查两种分支。
             for role in ("ONE_BOARD", "CHASSIS_BOARD", "GIMBAL_BOARD"):
@@ -74,6 +78,7 @@ def main() -> None:
                 variant = re.sub(r"(#define MC02_FEATURE_HEATER) 1\b", rf"\g<1> {heater}", config)
                 variant = re.sub(r"(#define MC02_FEATURE_UI) 1\b", rf"\g<1> {ui}", variant)
                 (Path(directory) / "mc02_build_config.h").write_text(variant, encoding="utf-8")
+                dependencies: set[Path] = set()  # 每种宏组合分别收集其实际包含的头。
                 for source_file in files:
                     if args.sources and source_file.name in ("referee_bench.c", "remote_bench.c"):
                         continue  # 裸板专用入口不属于机器人固件。
@@ -85,13 +90,44 @@ def main() -> None:
                                "-DMC02_PROFILE_ROBOT=1", "-D" + role + "=1",
                                f"-DMC02_HEATER_ENABLED={heater}", f"-DMC02_ENABLE_REFEREE_UI={ui}", *flags,
                                "-fsyntax-only", "-x", "c", "-"]
+                    dep_file = Path(directory) / "dependencies.d"  # 单次编译使用固定临时文件。
+                    if args.dependencies:
+                        command[-4:-4] = ["-MD", "-MF", str(dep_file), "-MT", "mc02-test"]
                     result = subprocess.run(command, input=f'#include "{source_file}"\n',
                                             text=True, capture_output=True)
                     if result.returncode:
                         raise SystemExit(f"{role} heater={heater}: {source_file.relative_to(root)}\n{result.stderr}")
+                    if args.dependencies:
+                        # 展开 Make 续行，读取编译器报告的完整包含链。
+                        dep_tokens = shlex.split(dep_file.read_text(encoding="utf-8").replace("\\\n", " "))
+                        if not dep_tokens or dep_tokens[0] != "mc02-test:":
+                            raise SystemExit(f"依赖记录不完整：{source_file.relative_to(root)}")
+                        for token in dep_tokens[1:]:
+                            candidate = Path(token).resolve()  # 编译器输出的相对路径以仓库为基准。
+                            if candidate.suffix != ".h" or not candidate.is_relative_to(root):
+                                continue  # 排除源文件和编译器自带头。
+                            if candidate.is_relative_to(build):
+                                continue  # 实际构建的生成头不属于此测试副本。
+                            relative = candidate.relative_to(root)
+                            if relative.parts[0] in ("Core", "Drivers", "Middlewares", "USB_DEVICE"):
+                                raise SystemExit(f"框架源码包含厂商头：{relative}")
+                            dependencies.add(candidate)  # 后面为每份头生成独立翻译单元。
                     checked += 1
+                for header in sorted(dependencies):
+                    # 每份头单独包含，避免其他头预先提供缺失的类型。
+                    command = [arguments[0], "-std=c11", "-Wall", "-Wextra", "-Werror", "-I" + directory,
+                               "-DMC02_PROFILE_ROBOT=1", "-D" + role + "=1",
+                               f"-DMC02_HEATER_ENABLED={heater}", f"-DMC02_ENABLE_REFEREE_UI={ui}", *flags,
+                               "-fsyntax-only", "-x", "c", "-"]
+                    result = subprocess.run(command, input=f'#include "{header}"\n',
+                                            text=True, capture_output=True)
+                    if result.returncode:
+                        raise SystemExit(f"{role} heater={heater}: {header.relative_to(root)}\n{result.stderr}")
+                    checked_headers += 1
     print(f"PASS: {len(files)} 份框架{'源码' if args.sources else '同名头'}，"
           f"3种测试角色和2种温控选择共 {checked} 次 C11 语法检查通过")
+    if args.dependencies:
+        print(f"PASS: 各组合实际依赖的工程头共 {checked_headers} 次独立 C11 检查通过")
 
 
 if __name__ == "__main__":
