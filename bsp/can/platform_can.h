@@ -45,6 +45,13 @@ typedef struct {
  */
 uint8_t PlatformCanBusIsBound(PlatformCanBus_t bus);
 
+/** @brief 启动已完成板级初始化的一条逻辑 CAN 总线。
+ * @param[in] bus 已绑定的逻辑总线。
+ * @return 1 表示已启动或已经处于启动状态；无绑定或启动失败返回 0。
+ * @note 由启动协调者串行调用；设备注册可复用已启动的总线。
+ */
+uint8_t PlatformCanStartBus(PlatformCanBus_t bus);
+
 /** @brief 注册一个标准 ID 接收端点。
  * @param[in,out] port 调用前清零，成功后长期保存在原地址；失败不修改。
  * @param[in] endpoint 本板逻辑总线和收发 ID，调用期间可读。

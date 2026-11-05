@@ -35,6 +35,7 @@ static uint32_t filter_fail_once;
 static uint32_t tx_busy_mask;
 static uint32_t tx_error_mask;
 static uint32_t bus_start_count[DEVICE_CAN_CNT];
+static uint32_t bus_stop_count[DEVICE_CAN_CNT]; // 记录各总线的独立退出次数。
 static uint32_t filter_count[DEVICE_CAN_CNT];
 static uint32_t filter_rx_id[DEVICE_CAN_CNT];
 static uint32_t tx_attempt_count[DEVICE_CAN_CNT];
@@ -135,6 +136,8 @@ uint32_t HAL_FDCAN_Start(FDCAN_HandleTypeDef *handle)
 }
 uint32_t HAL_FDCAN_Stop(FDCAN_HandleTypeDef *handle)
 {
+    const uint8_t bus = bus_for_handle(handle); // 找出本次停止的总线。
+    if (bus < DEVICE_CAN_CNT) ++bus_stop_count[bus]; // 检查故障回退是否影响其他总线。
     handle->State = 1u;
     handle->Instance->CCCR |= FDCAN_CCCR_INIT;
     return HAL_OK;
@@ -248,6 +251,29 @@ static void validate_rx_callback(CANInstance *instance)
 {
     ++valid_rx_count; // 只统计实际交给模块的合法帧。
     valid_rx_length = instance->rx_len; // 记录零长度等有效边界。
+}
+
+static void test_bus_start_and_rollback_isolation(void)
+{
+    CAN_Init_Config_s config = {0}; // 从默认标准帧配置开始。
+    config.can_handle = &hfdcan1; // 第一条总线先启用。
+    config.tx_id = 0x300u; // 测试发送号。
+    config.rx_id = 0x321u; // 测试接收号。
+    config.can_module_callback = validate_rx_callback; // 接收时计数。
+    TEST_CHECK(CANRegister(&config) != NULL); // 第一条总线应成功启动。
+    TEST_CHECK(bus_start_count[0] == 1u && bus_start_count[1] == 0u && bus_start_count[2] == 0u);
+    config.can_handle = &hfdcan2; // 第二条总线稍后才启用。
+    filter_fail_once = 1u; // 注入第二条总线的过滤器失败。
+    TEST_CHECK(CANRegister(&config) == NULL); // 本次端点必须回退。
+    TEST_CHECK(bus_stop_count[0] == 0u && bus_stop_count[1] == 1u && bus_stop_count[2] == 0u);
+    TEST_CHECK(hfdcan1.State == HAL_FDCAN_STATE_BUSY); // 第一条总线仍在运行。
+    TEST_CHECK(CANRegister(&config) != NULL); // 修复后可重新注册第二条总线。
+    TEST_CHECK(bus_start_count[0] == 1u && bus_start_count[1] == 2u && bus_start_count[2] == 0u);
+    rx_frames[0][0].header.Identifier = config.rx_id; // 从第一条总线投递一帧。
+    rx_frame_count[0] = 1u; // 只启用一条接收记录。
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 模拟接收中断。
+    CANProcessRx(); // 在任务上下文派发。
+    TEST_CHECK(valid_rx_count == 1u); // 失败回退后原端点仍可正常接收。
 }
 
 static void test_rx_failure_and_invalid_frames(void)
@@ -554,7 +580,7 @@ static void test_production_can_routing(void)
     TEST_CHECK(motor_a != NULL && motor_b != NULL);
     TEST_CHECK(filter_count[2] == 1u && filter_rx_id[2] == 0x144u);
     TEST_CHECK(filter_count[0] == 1u && filter_rx_id[0] == 0x142u);
-    TEST_CHECK(bus_start_count[0] == 1u && bus_start_count[1] == 1u && bus_start_count[2] == 1u);
+    TEST_CHECK(bus_start_count[0] == 1u && bus_start_count[1] == 0u && bus_start_count[2] == 1u);
 
     LKMotorSetRef(motor_a, 1234.0f);
     LKMotorSetRef(motor_b, -321.0f);
@@ -1177,6 +1203,7 @@ static void test_can_tx_queue_batch_and_buses(void)
     TEST_CHECK(CANConfigureTxBus(&hfdcan1, &bus0_config) == CAN_TX_SUBMIT_ACCEPTED);
     TEST_CHECK(CANConfigureTxBus(&hfdcan2, &bus1_config) == CAN_TX_SUBMIT_ACCEPTED);
     scheduler_register();
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_2)); // 纯发送总线由启动计划单独启用。
 
     const uint8_t a_data[2] = {0xA1u, 0xA2u};
     const uint8_t b_data[2] = {0xB1u, 0xB2u};
@@ -2028,6 +2055,10 @@ static void test_platform_can_queue(void)
 static void test_platform_can_status(void)
 {
     TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_INVALID) == PLATFORM_CAN_STATUS_UNKNOWN);
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_UNKNOWN); // 尚未启动不查询 HAL。
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_1)); // 启动各总线后才查询硬件状态。
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_2));
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_3));
     status_error[1] = 1u; // 第二条总线报告错误。
     status_busoff[2] = 1u; // 第三条总线进入总线关闭。
     TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_OK);
@@ -2043,6 +2074,8 @@ int main(int argc, char **argv)
     CANInitWorkspace();
     if (strcmp(argv[1], "lk-logical-receive") == 0)
         test_lk_logical_receive();
+    else if (strcmp(argv[1], "bus-isolation") == 0)
+        test_bus_start_and_rollback_isolation();
     else if (strcmp(argv[1], "rx-invalid") == 0)
         test_rx_failure_and_invalid_frames();
     else if (strcmp(argv[1], "platform-can-status") == 0)

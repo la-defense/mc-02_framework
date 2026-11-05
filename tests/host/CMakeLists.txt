@@ -672,6 +672,7 @@ add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ../../bsp/board/platform_can_status_stm32.c # 通过生产适配查询逻辑总线状态。
   ../../bsp/board/platform_can_periodic_stm32.c # 周期发送使用生产平台适配。
   ../../bsp/board/platform_can_rx_stm32.c # 通过生产适配注册与派发接收端点。
+  ../../bsp/board/platform_can_start_stm32.c # 使用生产适配单独启动 CAN 总线。
   ../../modules/motor/motor_pid.c
   ${MC02_HOST_DJI_SOURCES}
   ../../modules/algorithm/controller.c ${MC02_HOST_DAEMON_SOURCES} ../../bsp/can/bsp_can.c
@@ -694,6 +695,8 @@ endif()
 add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test rollback)
 add_test(NAME production_can_rx_invalid COMMAND lk_motor_bsp_can_test rx-invalid)
 set_tests_properties(production_can_rx_invalid PROPERTIES TIMEOUT 10)
+add_test(NAME production_can_bus_start_and_rollback_isolation COMMAND lk_motor_bsp_can_test bus-isolation)
+set_tests_properties(production_can_bus_start_and_rollback_isolation PROPERTIES TIMEOUT 10)
 add_test(NAME production_lk_motor_logical_receive COMMAND lk_motor_bsp_can_test lk-logical-receive)
 add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platform-can)
 add_test(NAME production_platform_can_status COMMAND lk_motor_bsp_can_test platform-can-status)

@@ -88,6 +88,7 @@ set(MC02_BSP_C_SOURCES
     bsp/board/platform_can_status_stm32.c # 逻辑 CAN 控制器状态查询。
     bsp/board/platform_can_periodic_stm32.c # 逻辑 CAN 周期发送及发送前检查。
     bsp/board/platform_can_rx_stm32.c # 逻辑 CAN 接收端点适配。
+    bsp/board/platform_can_start_stm32.c # 逻辑 CAN 总线的独立启动入口。
     bsp/board/board_numeric_caps_mc02.c # MC-02 数值硬件和当前编译能力声明。
     bsp/board/ins_sensor_mc02.c # INS 与板载 BMI088 的 SPI 绑定。
     bsp/board/platform_probe_stm32.c # 原有 DWT 周期计数与短时探针适配。

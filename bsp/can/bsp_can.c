@@ -17,7 +17,13 @@
 // 注册表用于 ID 查找、过滤规则重装及注销；中断不直接运行模块解析。
 static CANInstance *can_instance[CAN_MX_REGISTER_CNT] = {NULL};
 static uint8_t idx;
-static uint8_t can_service_started;
+static uint8_t can_service_started; // 每一位表示对应总线已启动，互不影响。
+// 只查询有效总线的启动位；未配置的总线不能调用 HAL 收发。
+static uint8_t CANBusIsActive(uint8_t bus_index)
+{
+    return (uint8_t)(bus_index < DEVICE_CAN_CNT &&
+                     (can_service_started & (uint8_t)(1u << bus_index)) != 0u);
+}
 #ifdef BXCAN
 static uint8_t can1_filter_idx;
 static uint8_t can2_filter_idx = 14u;
@@ -440,7 +446,7 @@ CAN_TxSubmitStatus_t CANConfigureTxBus(FDCAN_HandleTypeDef *hcan,
     const uint8_t bus_index = CANBusIndexFromHandle(hcan);
     if (bus_index == 0xffu || !CANTxConfigValid(config))
         return CAN_TX_SUBMIT_INVALID;
-    if (can_service_started != 0u || idx != 0u)
+    if (CANBusIsActive(bus_index))
         return CAN_TX_SUBMIT_NOT_READY;
 
     CANTxSchedulerEnsureInitialized(bus_index);
@@ -502,7 +508,7 @@ CAN_TxSubmitStatus_t CANSubmitPeriodicPrepared(FDCAN_HandleTypeDef *hcan, const 
         return CAN_TX_SUBMIT_INVALID;
     if (!CANSubmitContextValid())
         return CAN_TX_SUBMIT_CONTEXT;
-    if (bus_index == 0xffu || can_service_started == 0u)
+    if (!CANBusIsActive(bus_index))
         return CAN_TX_SUBMIT_NOT_READY;
 
     CANTxSchedulerEnsureInitialized(bus_index);
@@ -620,7 +626,7 @@ static CAN_TxSubmitStatus_t CANSubmitBatchInternal(FDCAN_HandleTypeDef *hcan, co
             return CAN_TX_SUBMIT_INVALID;
     if (!CANSubmitContextValid())
         return CAN_TX_SUBMIT_CONTEXT;
-    if (bus_index == 0xffu || can_service_started == 0u)
+    if (!CANBusIsActive(bus_index))
         return CAN_TX_SUBMIT_NOT_READY;
 
     CANTxSchedulerEnsureInitialized(bus_index);
@@ -843,6 +849,7 @@ static void CANProcessTxSelected(uint8_t selected_bus)
     for (uint8_t bus_index = 0u; bus_index < DEVICE_CAN_CNT; ++bus_index)
     {
         if (selected_bus != CAN_TX_INVALID_RESULT_INDEX && bus_index != selected_bus) continue;
+        if (!CANBusIsActive(bus_index)) continue; // 没启用的总线不访问硬件。
         CANBusState_t *bus = &can_bus[bus_index];
         CANTxScheduler_t *scheduler = &bus->tx_scheduler;
         CANTxSchedulerEnsureInitialized(bus_index);
@@ -1271,49 +1278,47 @@ static uint8_t CANBusConfigure(FDCAN_HandleTypeDef *h)
     return 1u;
 }
 
-// 启动某条总线失败时统一停止已启动部分，重置过滤规则编号。
-static void CANServiceStop(void)
+// 仅停止当前初始化失败的总线，其他总线的端点和过滤器保持可用。
+static void CANServiceStop(uint8_t bus_index)
 {
 #ifdef FDCAN
-    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
-        CANTxSchedulerEnsureInitialized(i);
-    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
-        (void)HAL_FDCAN_Stop(can_bus[i].handle);
-    memset(can_filter_idx, 0, sizeof(can_filter_idx));
+    if (bus_index >= DEVICE_CAN_CNT) return; // 无效编号不改变任何总线。
+    (void)HAL_FDCAN_Stop(can_bus[bus_index].handle); // 只停止本次启动的控制器。
+    can_filter_idx[bus_index] = 0u; // 此总线尚无已发布端点，可清除过滤器计数。
 #else
-    (void)HAL_CAN_Stop(&hcan1);
-    (void)HAL_CAN_Stop(&hcan2);
-    can1_filter_idx = 0u;
-    can2_filter_idx = 14u;
+    if (bus_index == 0u) { (void)HAL_CAN_Stop(&hcan1); can1_filter_idx = 0u; }
+    else if (bus_index == 1u) { (void)HAL_CAN_Stop(&hcan2); can2_filter_idx = 14u; }
+    else return;
 #endif
-    can_service_started = 0u;
+    can_service_started &= (uint8_t)~(1u << bus_index); // 只撤销本总线的可用标记。
 }
 
-// 依次启动各总线，一条失败便停止本轮全部服务，不留下部分启动状态。
-static uint8_t CANServiceInit(void)
+// 按端点需要启动一条总线，不触碰尚未使用的控制器。
+static uint8_t CANServiceInit(uint8_t bus_index)
 {
     CANBusStateEnsureInitialized();
+    if (bus_index >= DEVICE_CAN_CNT) return 0u; // 越界编号不能访问总线表。
+    if (CANBusIsActive(bus_index)) return 1u; // 已启动的总线不重复配置。
 #ifdef FDCAN
-    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
-    {
-        if (!CANBusConfigure(can_bus[i].handle))
-        {
-            CANServiceStop();
-            return 0u;
-        }
-    }
+    if (!CANBusConfigure(can_bus[bus_index].handle)) return 0u; // 本总线失败不停止其他总线。
 #else
-    if (HAL_CAN_Start(&hcan1) != HAL_OK ||
-        HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING) != HAL_OK ||
-        HAL_CAN_Start(&hcan2) != HAL_OK ||
-        HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING) != HAL_OK)
+    CAN_HandleTypeDef *handle = bus_index == 0u ? &hcan1 : &hcan2;
+    if (HAL_CAN_Start(handle) != HAL_OK ||
+        HAL_CAN_ActivateNotification(handle, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING) != HAL_OK)
     {
-        CANServiceStop();
+        CANServiceStop(bus_index);
         return 0u;
     }
 #endif
-    can_service_started = 1u;
+    can_service_started |= (uint8_t)(1u << bus_index); // 完成配置后才允许该总线收发。
     return 1u;
+}
+
+uint8_t CANStartBus(FDCAN_HandleTypeDef *hcan)
+{
+    const uint8_t bus_index = CANBusIndexFromHandle(hcan); // 将硬件句柄映射到固定总线编号。
+    if (bus_index >= DEVICE_CAN_CNT) return 0u; // 未知句柄不得启动其他总线。
+    return CANServiceInit(bus_index); // 串行启动指定总线或复用现有服务。
 }
 
 /* ----------------------- two extern callable function -----------------------*/
@@ -1622,8 +1627,8 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     instance->id = config->id;
 
     // 第一次注册才启动服务；随后添加过滤规则失败时，清理本次分配和本次启动。
-    uint8_t started_here = (uint8_t)!can_service_started;
-    if (started_here && !CANServiceInit())
+    uint8_t started_here = (uint8_t)!CANBusIsActive(bus_idx); // 记录是否由本次注册启动。
+    if (started_here && !CANServiceInit(bus_idx))
     {
         free(instance);
         return NULL;
@@ -1631,7 +1636,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     if (!CANAddFilter(instance))
     {
         if (started_here)
-            CANServiceStop();
+            CANServiceStop(bus_idx); // 首次注册失败只撤销本次启动的总线。
         free(instance);
         return NULL;
     }
@@ -1740,7 +1745,7 @@ uint8_t CANGetObservationCounters(uint8_t bus_index, CAN_ObservationCounters_t *
     CAN_ObservationCounters_t candidate;
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    candidate.active = can_service_started ? 1u : 0u;
+    candidate.active = CANBusIsActive(bus_index); // 每条总线分别报告实际启动状态。
     candidate.tx_ok = bus->tx.tx_ok;
     candidate.tx_drop = bus->tx.tx_drop;
     candidate.tx_error = bus->tx.tx_error;
@@ -1779,6 +1784,7 @@ void CANHealthMonitor(void)
 #ifdef FDCAN
     for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
     {
+        if (!CANBusIsActive(i)) continue; // 未启用的控制器不能执行健康查询或恢复。
         FDCAN_ProtocolStatusTypeDef ps;
         FDCAN_ErrorCountersTypeDef ec;
         CANBusState_t *bus = &can_bus[i];
@@ -1843,6 +1849,9 @@ void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status)
     status->status = CAN_STATUS_UNKNOWN;
     status->rx_error_count = 0;
     status->tx_error_count = 0;
+
+    if (!CANBusIsActive(CANBusIndexFromHandle(hcan)))
+        return; // 未初始化的控制器不能读取 HAL 状态，保持 UNKNOWN。
 
     if (HAL_FDCAN_GetProtocolStatus(hcan, &protocol_status) != HAL_OK)
         return;

@@ -191,6 +191,13 @@ CANInstance *CANRegister(CAN_Init_Config_s *config);
  */
 void CANInitWorkspace(void);
 
+/** @brief 启动已经完成板级初始化的一条 CAN 总线，允许无接收端点的发送用途。
+ * @param[in] hcan 板级已初始化的控制器句柄；空指针和未知句柄会被拒绝。
+ * @return 1 表示已启动或先前已启动，0 表示参数或硬件启动失败。
+ * @note 启动协调者串行调用；不得与注册、回退或模式切换并发。
+ */
+uint8_t CANStartBus(FDCAN_HandleTypeDef *hcan);
+
 /** @brief 配置一条 FDCAN 总线的发送容量和周期利用率预算。
 * @param[in] hcan 已支持的 FDCAN 句柄；必须在首次 CANRegister() 前调用。
 * @param[in] config 每总线独立配置；队列容量 1～16、利用率 1～1000‰、速率大于零。
