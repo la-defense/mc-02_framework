@@ -2,6 +2,8 @@
 
 The installed skills are pinned to mattpocock/skills in skills-lock.json. These local changes adapt tracker paths, C/C++ exercises, and teaching triggers to this repository. Do not replace them during a skill update without reviewing the diff.
 
+Which task takes which skill, and whether the model may invoke it, is routing: that lives in [docs/agents/skills.md](../agents/skills.md). This file records only the diff from upstream.
+
 | Skill | Project adaptation |
 |---|---|
 | ask-matt | Routes task tracking through each repository TODO and includes the teaching / learning-note path. |
@@ -14,5 +16,7 @@ The installed skills are pinned to mattpocock/skills in skills-lock.json. These 
 | teach | On-demand lessons in docs/课程/自瞄链路; teaching documents are mandatory for every change even when teach is not invoked. |
 | retro | Brief reflection accompanies delivery; a formal retrospective is reserved for major failures, phase completion, or an explicit request. |
 | scaffold-exercises | Uses host C/C++, CMake/CTest, and local link checks instead of TypeScript and pnpm. |
+
+`wayfinder`, `to-spec`, `to-tickets`, and `triage` lost their `disable-model-invocation` header on 2026-11-05 so the routing table can reach them; their bodies are otherwise unchanged. `implement`, `implement-spec`, and `retro` keep the header and therefore stay manual.
 
 The writing skills remain interactive for substantial co-written articles. Routine task learning notes are drafted from project evidence and trusted sources.

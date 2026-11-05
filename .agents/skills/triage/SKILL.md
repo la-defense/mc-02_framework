@@ -1,7 +1,6 @@
 ---
 name: triage
 description: Groom an unclassified defect or improvement request into the firmware or vision repository's local TODO contract.
-disable-model-invocation: true
 ---
 
 # Triage

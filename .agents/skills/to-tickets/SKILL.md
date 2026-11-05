@@ -1,7 +1,6 @@
 ---
 name: to-tickets
 description: Break an agreed large-feature specification into dependency-ordered TODO tasks with concrete acceptance conditions.
-disable-model-invocation: true
 ---
 
 # To Tickets

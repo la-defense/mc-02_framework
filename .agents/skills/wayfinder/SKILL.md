@@ -1,7 +1,6 @@
 ---
 name: wayfinder
 description: Map a large, uncertain engineering effort into local decision tasks when the destination is clear but the route is not.
-disable-model-invocation: true
 ---
 
 # Wayfinder

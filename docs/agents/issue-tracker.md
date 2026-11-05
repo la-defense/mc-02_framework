@@ -41,8 +41,4 @@ These files hold rationale, dependencies, evidence, and acceptance detail. They 
 
 ## Skills 的选择
 
-- triage / wayfinder 在 TODO 中管理任务，较长依据留在 docs/workflow。
-- to-spec / to-tickets 只服务需要规格和依赖拆分的大功能或跨模块改造。
-- implement / implement-spec 按上述流程实施，相关任务共用分支，不接入审查或 PR 链条。
-- tdd 是统一验证阶段的可选方法；teach 是按需教学工具。每次提交教学文档独立于是否调用 teach，掌握记录只依据用户展示的理解。
-- code-review / pr 保留为用户明确要求时才使用的独立工具，不由实现、路由或复盘自动调用。
+技能路由只在 [skills.md](skills.md) 维护，本节不再重复清单。默认流程不自动接入审查、双代理复审、推送和 PR；只有用户明确要求时，这些工作才作为独立任务执行。

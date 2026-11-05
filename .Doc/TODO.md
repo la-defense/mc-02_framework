@@ -8,6 +8,11 @@
 
 **==标为黄色高亮的代表紧急程度高。==**
 
+## 2026-11-05：技能路由接线
+
+- [x] **MC02-0127** [enhancement] 把技能路由收成单一入口，并接通四个流程技能。验收：`AGENTS.md` 的「本地适配规则」改为分别链接路由与适配文档；新建 `docs/agents/skills.md` 作为唯一路由表；`issue-tracker.md` 与 `skill-overrides.md` 不再重复任务清单；`wayfinder`／`to-spec`／`to-tickets`／`triage` 可由模型目录触发；`research` 与 `diagnosing-bugs` 写明触发条件；同步技能说明与学习笔记索引。
+  验证：会话技能目录在删除 `disable-model-invocation` 后立即出现这四个技能，扫描与解析正常；`tools/workflow/check_todo.py` 通过；改动文件内的相对链接逐个核对存在；差异只涉及文档和四个 `SKILL.md` 的文件头，未改源码或构建配置。未运行固件编译与主机回归，因为不涉及代码。`skills-lock.json` 保持上游哈希不变，与本地改写不匹配属于预期。说明见[第27篇](../docs/学习笔记/27-技能按需加载与路由.md)。
+
 ## 2026-11-04：WSL 主机测试整机卡死
 
 - [x] **MC02-0126** [bug] 排查并修复 WSL 主机测试长时间不返回，补齐两个缺失超时的用例。

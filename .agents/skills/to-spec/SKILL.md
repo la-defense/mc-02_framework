@@ -1,7 +1,6 @@
 ---
 name: to-spec
 description: "Turn the current conversation into a local specification linked from the repository TODO, without re-interviewing settled requirements."
-disable-model-invocation: true
 ---
 
 This skill takes the current conversation context and codebase understanding and produces a spec. Do NOT interview the user; just synthesize what you already know.
