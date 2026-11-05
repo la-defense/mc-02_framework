@@ -53,14 +53,10 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
-  /*Configure GPIO pin Output Level */
-#if defined(MC02_PROFILE_BENCH_SAFE)
+  /* 受控电源先保持低电平，具体开启由已确认的启动计划负责。 */
   HAL_GPIO_WritePin(GPIOC, POWER_24V_2_Pin|POWER_24V_1_Pin|POWER_5V_Pin, GPIO_PIN_RESET);
+  /* 传感器片选和摄像头待机引脚沿用原有初始电平。 */
   HAL_GPIO_WritePin(GPIOC, CS2_ACCEL_Pin|CS2_GYRO_Pin|DCMI_PWDN_Pin, GPIO_PIN_SET);
-#else
-  HAL_GPIO_WritePin(GPIOC, POWER_24V_2_Pin|POWER_24V_1_Pin|POWER_5V_Pin|CS2_ACCEL_Pin
-                          |CS2_GYRO_Pin|DCMI_PWDN_Pin, GPIO_PIN_SET);
-#endif
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_RESET);

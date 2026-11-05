@@ -15,12 +15,32 @@ if(UNIX)
 endif()
 include(../../cmake/mc02_dsp.cmake)
 mc02_add_dsp(mc02_dsp_host TRUE)
+# 使用可控周期计数检查启动前固定期限和计数停止时的退出。
+add_executable(platform_startup_wait_test platform_startup_wait_test.c
+  ../../bsp/os/platform_startup_wait.c)
+target_include_directories(platform_startup_wait_test PRIVATE . ../../bsp/os)
+target_compile_options(platform_startup_wait_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_platform_startup_wait COMMAND platform_startup_wait_test)
+set_tests_properties(production_platform_startup_wait PROPERTIES TIMEOUT 10)
 # 使用生产共享 EXTI 入口与 HAL 待处理位模型验证逐引脚派发。
 add_executable(exti_group_test exti_group_test.c ../../bsp/board/platform_exti_stm32.c)
 target_include_directories(exti_group_test BEFORE PRIVATE exti_fakes .)
 target_compile_options(exti_group_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_exti_group_dispatch COMMAND exti_group_test)
 set_tests_properties(production_exti_group_dispatch PROPERTIES TIMEOUT 10)
+# 两种固件宏都联编生产 GPIO 初始化，检查电源先关闭再配置输出。
+foreach(power_profile IN ITEMS bench robot)
+  add_executable(power_gpio_${power_profile}_test power_gpio_test.c ../../Core/Src/gpio.c)
+  target_include_directories(power_gpio_${power_profile}_test BEFORE PRIVATE power_gpio_fakes .)
+  if(power_profile STREQUAL "bench")
+    target_compile_definitions(power_gpio_${power_profile}_test PRIVATE MC02_PROFILE_BENCH_SAFE=1)
+  else()
+    target_compile_definitions(power_gpio_${power_profile}_test PRIVATE MC02_PROFILE_ROBOT=1)
+  endif()
+  target_compile_options(power_gpio_${power_profile}_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME production_power_gpio_${power_profile} COMMAND power_gpio_${power_profile}_test)
+  set_tests_properties(production_power_gpio_${power_profile} PROPERTIES TIMEOUT 10)
+endforeach()
 # 使用真实板级资源绑定验证同步 SPI 注册及失败传递。
 add_executable(platform_spi_registration_test platform_spi_registration_test.c
   ../../bsp/board/platform_spi_register_stm32.c ../../bsp/board/board_spi_stm32.c
@@ -210,6 +230,7 @@ set(MC02_PLATFORM_PUBLIC_HEADERS
   bsp/os/platform_os.h # 任务创建和等待。
   bsp/os/platform_safety.h # 安全输出平台入口。
   bsp/os/platform_signal.h # 任务信号通知。
+  bsp/os/platform_startup_wait.h # 早期启动的有界等待。
   bsp/os/platform_sync.h # 临界区和毫秒时钟。
   bsp/os/platform_task_stats.h # 任务统计副本。
   bsp/pwm/platform_pwm_legacy.h # 旧 PWM 设备适配。

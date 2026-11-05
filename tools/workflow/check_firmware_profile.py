@@ -59,6 +59,7 @@ ATTITUDE_ADAPTER_SOURCE = "modules/algorithm/attitude_filter.c"
 FUSION_SOURCE = "Middlewares/Third_Party/Fusion/FusionAhrs.c"
 # 这些源文件编入无芯片／RTOS 头路径的框架对象目标，仍属于车型源码清单。
 PORTABLE_FRAMEWORK_SOURCES = {
+    "bsp/os/platform_startup_wait.c",  # 启动前的固定期限和检查次数。
     "application/init_diagnostic.c",  # 初始化结果及事件记录。
     "application/vehicle_health.c",  # 整车健康信息采集和发布。
     "application/vehicle_health_diag.c",  # 只读诊断应答。

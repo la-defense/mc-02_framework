@@ -60,12 +60,7 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-#define W25Qxx_NumByteToTest   	32*1024					// 测试数据的长度，32K
 
-int32_t OSPI_Status ; 		 //检测标志位
-
-uint8_t  W25Qxx_WriteBuffer[W25Qxx_NumByteToTest];		//	写数据数组
-uint8_t  W25Qxx_ReadBuffer[W25Qxx_NumByteToTest];		//	读数据数组
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
