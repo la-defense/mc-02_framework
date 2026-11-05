@@ -36,12 +36,16 @@ def main() -> None:
             if index + 1 >= len(arguments):
                 raise SystemExit(f"编译参数缺少取值：{argument}")
             value = arguments[index + 1]
-            if not (argument == "-D" and value.startswith("MC02_PROFILE_BENCH_SAFE")):
+            if argument == "-D" and value.startswith("MC02_BENCH_"):
+                flags.extend((argument, value.split("=", 1)[0] + "=0"))  # 机器人角色不运行裸板诊断。
+            elif not (argument == "-D" and value.startswith(("MC02_PROFILE_BENCH_SAFE", "MC02_HEATER_ENABLED", "MC02_ENABLE_REFEREE_UI"))):
                 flags.extend((argument, value))  # 角色测试单独指定 robot 宏。
             index += 2
             continue
         if argument.startswith(("-I", "-D", "-isystem", "-mcpu=", "-mfpu=", "-mfloat-abi=", "-mthumb")):
-            if not argument.startswith("-DMC02_PROFILE_BENCH_SAFE"):
+            if argument.startswith("-DMC02_BENCH_"):
+                flags.append(argument.split("=", 1)[0] + "=0")  # 保留宏名并关闭裸板诊断。
+            elif not argument.startswith(("-DMC02_PROFILE_BENCH_SAFE", "-DMC02_HEATER_ENABLED", "-DMC02_ENABLE_REFEREE_UI")):
                 flags.append(argument)
         index += 1
 
@@ -62,26 +66,32 @@ def main() -> None:
     # 测试副本启用可选功能，以检查条件编译声明；它不作为生产配置或参数确认。
     config = re.sub(r"(#define MC02_(?:FEATURE|SELECTED_DRIVER)_[A-Z_]+) 0\b", r"\1 1", config)
     with tempfile.TemporaryDirectory(prefix="mc02-header-config-") as directory:
-        (Path(directory) / "mc02_build_config.h").write_text(config, encoding="utf-8")
         checked = 0
-        for role in ("ONE_BOARD", "CHASSIS_BOARD", "GIMBAL_BOARD"):
-            for source_file in files:
-                if args.sources and source_file.name in ("referee_bench.c", "remote_bench.c"):
-                    continue  # 裸板专用入口不属于机器人固件。
-                if args.sources and role == "ONE_BOARD" and source_file.name == "robot_can_bridge.c":
-                    continue  # 板间桥接只在双板角色中使用。
-                # 测试头目录排在生成目录之前，避免读取实际禁热配置。
-                warnings = [] if args.sources else ["-Wall", "-Wextra", "-Werror"]
-                command = [arguments[0], "-std=c11", *warnings, "-I" + directory,
-                           "-DMC02_PROFILE_ROBOT=1", "-D" + role + "=1",
-                           *flags, "-fsyntax-only", "-x", "c", "-"]
-                result = subprocess.run(command, input=f'#include "{source_file}"\n',
-                                        text=True, capture_output=True)
-                if result.returncode:
-                    raise SystemExit(f"{role}: {source_file.relative_to(root)}\n{result.stderr}")
-                checked += 1
+        for heater in (0, 1):
+            # 功能选择与底层温控宏保持一致，分别检查两种分支。
+            for role in ("ONE_BOARD", "CHASSIS_BOARD", "GIMBAL_BOARD"):
+                ui = int(role != "GIMBAL_BOARD")  # 裁判 UI 不运行在云台板角色。
+                variant = re.sub(r"(#define MC02_FEATURE_HEATER) 1\b", rf"\g<1> {heater}", config)
+                variant = re.sub(r"(#define MC02_FEATURE_UI) 1\b", rf"\g<1> {ui}", variant)
+                (Path(directory) / "mc02_build_config.h").write_text(variant, encoding="utf-8")
+                for source_file in files:
+                    if args.sources and source_file.name in ("referee_bench.c", "remote_bench.c"):
+                        continue  # 裸板专用入口不属于机器人固件。
+                    if args.sources and role == "ONE_BOARD" and source_file.name == "robot_can_bridge.c":
+                        continue  # 板间桥接只在双板角色中使用。
+                    # 测试头目录排在生成目录之前，避免读取实际禁热配置。
+                    warnings = [] if args.sources else ["-Wall", "-Wextra", "-Werror"]
+                    command = [arguments[0], "-std=c11", *warnings, "-I" + directory,
+                               "-DMC02_PROFILE_ROBOT=1", "-D" + role + "=1",
+                               f"-DMC02_HEATER_ENABLED={heater}", f"-DMC02_ENABLE_REFEREE_UI={ui}", *flags,
+                               "-fsyntax-only", "-x", "c", "-"]
+                    result = subprocess.run(command, input=f'#include "{source_file}"\n',
+                                            text=True, capture_output=True)
+                    if result.returncode:
+                        raise SystemExit(f"{role} heater={heater}: {source_file.relative_to(root)}\n{result.stderr}")
+                    checked += 1
     print(f"PASS: {len(files)} 份框架{'源码' if args.sources else '同名头'}，"
-          f"3种测试角色共 {checked} 次 C11 语法检查通过")
+          f"3种测试角色和2种温控选择共 {checked} 次 C11 语法检查通过")
 
 
 if __name__ == "__main__":
