@@ -113,6 +113,8 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 
 __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 {
+    while (!TaskMonitorRuntimeReleased())
+        PlatformTaskDelayMs(1u); // 等待协调者放行，再执行诊断和设备访问。
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_05);
 #if LOG_TEST
     /* 类型化日志自测默认关闭；普通事件也需在bench_safe显式开启诊断输出。 */
@@ -213,6 +215,8 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
 __attribute__((noreturn)) void StartUITASK(void const *argument)
 {
     (void)argument;
+    while (!TaskMonitorRuntimeReleased())
+        PlatformTaskDelayMs(1u); // 启动失败时不提交裁判界面消息。
     // 只登记一次请求；每轮最多提交一帧，身份失效后由显式MyUIInit恢复。
     (void)MyUIInit();
     for (;;)

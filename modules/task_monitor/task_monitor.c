@@ -409,6 +409,16 @@ TaskMonitor_Result_e TaskMonitorReleaseRuntime(void)
     return result;
 }
 
+uint8_t TaskMonitorRuntimeReleased(void)
+{
+    const uint8_t scheduler_running = PlatformSchedulerIsRunning(); // 查询调度器是否已经运行。
+    const uint32_t previous = TaskMonitorEnterCritical(); // 与放行操作使用同一短临界区。
+    const uint8_t released = (uint8_t)(scheduler_running && monitor_initialized &&
+                                       !monitor_runtime_deferred); // 尚未初始化或仍在协调时保持关闭。
+    TaskMonitorExitCritical(previous); // 恢复调用前的中断状态。
+    return released; // 查询不会改变期限或故障状态。
+}
+
 TaskMonitor_Result_e TaskMonitorBeginWork(TaskMonitor_Id_e id)
 {
     if (PlatformIrqIsInHandler() != 0u)

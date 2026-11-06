@@ -174,6 +174,12 @@ TaskMonitor_Result_e TaskMonitorRemoveDeferredAuxiliary(TaskMonitor_Id_e id);
  */
 TaskMonitor_Result_e TaskMonitorReleaseRuntime(void);
 
+/** @brief 查询启动协调者是否已放行业务任务。
+ * @return 监控已初始化、调度器运行且未处于延迟阶段时返回 1；否则返回 0。
+ * @note 查询不启动监控、不改变期限，也不代替运行许可或故障检查。
+ */
+uint8_t TaskMonitorRuntimeReleased(void);
+
 /**
  * @brief 开始一轮周期工作或一个事件任务。
  * @param[in] id 已配置任务编号。

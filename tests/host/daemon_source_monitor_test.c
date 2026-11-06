@@ -7,6 +7,7 @@
 #include "daemon.h"
 #include "cmsis_os.h"
 #include "platform_os.h"
+#include "task_monitor.h"
 #include "test_check.h"
 
 #include <pthread.h>
@@ -15,6 +16,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+uint8_t TaskMonitorRuntimeReleased(void)
+{
+    return 1u; // 此测试只创建事件任务，不实际执行任务入口。
+}
 
 static _Atomic uint32_t test_tick;
 static unsigned task_create_calls;

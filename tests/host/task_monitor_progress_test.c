@@ -383,7 +383,9 @@ int main(void)
     ResetFakes(900u);
     TEST_CHECK(TaskMonitorInitConfigured(startup_configs, 2u) == TASK_MONITOR_RESULT_OK);
     TEST_CHECK(TaskMonitorDeferRuntime() == TASK_MONITOR_RESULT_OK); // 调度器启动前声明延迟放行。
+    TEST_CHECK(!TaskMonitorRuntimeReleased()); // 调度器尚未启动，业务入口保持关闭。
     scheduler_running = 1u; // 模拟默认任务开始运行，但控制任务尚未创建。
+    TEST_CHECK(!TaskMonitorRuntimeReleased()); // 调度器运行不代表启动协调已完成。
     mc02_test_tick += 1000u; // 启动耗时不能消耗控制任务的首次运行宽限。
     TaskMonitorTick(); // 即使误调用监控，也不能因未放行任务超时或喂狗。
     TEST_CHECK(watchdog_feed_count == 0u && TaskMonitorAllAlive() == 0u);
@@ -408,6 +410,7 @@ int main(void)
     TEST_CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
     TEST_CHECK(TaskMonitorStartupCalibrationSample(4u) == TASK_MONITOR_RESULT_NOT_RUNNING); // 标定结束后不可继续喂狗。
     TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_OK); // 此时固定所有任务的首次期限。
+    TEST_CHECK(TaskMonitorRuntimeReleased()); // 明确放行后业务入口才能继续。
     TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_NOT_RUNNING); // 放行操作不可再次重设期限。
     TEST_CHECK(TaskMonitorBeginWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_OK);
     TEST_CHECK(TaskMonitorCompleteWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_OK);

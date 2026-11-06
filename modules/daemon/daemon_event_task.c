@@ -5,6 +5,7 @@
 #include "daemon.h"
 
 #include "platform_os.h"
+#include "task_monitor.h"
 
 #include <stddef.h>
 
@@ -14,6 +15,8 @@
 static void DaemonIndependentEventTask(void const *argument)
 {
     (void)argument;
+    while (!TaskMonitorRuntimeReleased())
+        PlatformTaskDelayMs(1u); // 协调结束前不执行来源恢复回调。
     for (;;)
     {
         uint8_t processed = 0u;

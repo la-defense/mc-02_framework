@@ -14,6 +14,7 @@
 #include "platform_probe.h"
 #include "platform_sync.h"
 #include "platform_task_stats.h"
+#include "task_monitor.h"
 #include "bmi088_calibration.h"
 #include "robot_safety.h"
 #include "config/build_selection.h"
@@ -718,6 +719,8 @@ static void lcd_calib_service(void)
 
 void StartLCDTASK(void const *argument)
 {
+    while (!TaskMonitorRuntimeReleased())
+        PlatformTaskDelayMs(1u); // 协调结束前不初始化或访问显示设备。
     (void)argument;
 
     lcd_task_entered = 1;
