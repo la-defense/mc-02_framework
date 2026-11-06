@@ -23,7 +23,7 @@ typedef uint32_t (*PlatformStartupCyclesFn)(void *context); /**< 返回同一 32
  * @param[in] timeout_cycles 固定期限，范围 1～INT32_MAX 个周期。
  * @param[in] max_polls 条件最多检查次数，必须大于零；计数停止时也会退出。
  * @return 就绪、周期超时、检查次数用尽或参数错误。
- * @note 仅用于短暂启动等待；不调用 HAL、RTOS、日志或看门狗，不测量硬件实际耗时。
+ * @note 仅用于短暂启动等待；条件函数返回后再次检查固定期限。接口不调用 HAL、RTOS、日志或看门狗。
  */
 PlatformStartupWaitResult_t PlatformStartupWait(PlatformStartupReadyFn ready,
     PlatformStartupCyclesFn cycles, void *context, uint32_t timeout_cycles, uint32_t max_polls);

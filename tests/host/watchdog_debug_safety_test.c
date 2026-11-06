@@ -63,6 +63,11 @@ int main(void)
     CHECK(error_log_count == 2u);
     CHECK(mc02_test_iwdg.KR == 0x0000AAAAu);
     CHECK(info_log_count == 2u);
+    /* DWT 停止且更新标志一直不清时，检查次数上限仍必须让等待退出。 */
+    dwt_cycle_step = 0u;
+    BSP_WatchdogInit(200u);
+    CHECK(error_log_count == 4u);
+    CHECK(info_log_count == 3u);
     puts("PASS: watchdog remains active in debug and flag polling is bounded without HAL tick");
     return 0;
 }

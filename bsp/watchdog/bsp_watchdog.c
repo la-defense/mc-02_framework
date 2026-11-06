@@ -7,6 +7,9 @@
 #include "main.h"
 #include "bsp_log.h"
 #include "bsp_dwt.h"
+#include "../os/platform_startup_wait.h"
+#include <limits.h>
+#include <stddef.h>
 
 // 写入 KR 的三条命令分别用于重载计数、启动看门狗和允许修改配置。
 #define IWDG_KEY_RELOAD 0x0000AAAAu
@@ -23,24 +26,33 @@ static volatile uint32_t watchdog_timeout_ms = 200;
 static volatile uint8_t watchdog_started = 0;
 static volatile uint8_t iwdg_reset_flag = 0;
 
-// DWT 必须正在计数；更新标志清零时返回 1，按 CPU 频率估算已等到 20ms 时返回 0。
+// 读取看门狗更新标记；清零后才允许下一次寄存器配置。
+static uint8_t IWDG_UpdateReady(void *context)
+{
+    (void)context; // 硬件寄存器不需要调用方上下文。
+    return (uint8_t)((IWDG1->SR & IWDG_UPDATE_FLAGS) == 0u); // 全部更新完成才返回成功。
+}
+
+// 获取当前 DWT 计数，供等待函数计算固定期限和回绕。
+static uint32_t IWDG_ReadCycles(void *context)
+{
+    (void)context; // 时钟来源由本板固定选择。
+    return DWT->CYCCNT; // 不依赖由中断更新的 HAL tick。
+}
+
+// DWT 正常时按周期限制等待；计数停止时由检查次数上限退出。
 static uint8_t IWDG_WaitForUpdateFlags(void)
 {
-    uint32_t cycles_per_ms = dwt_cpu_freq_mhz * 1000u;
+    uint32_t frequency_mhz = dwt_cpu_freq_mhz; // 固定读取一次频率，避免等待期间改变总期限。
     // 没有频率记录时按当前板的 480MHz 估算，仍须保证计数器已启动。
-    if (cycles_per_ms == 0u)
-        cycles_per_ms = 480000u;
-    const uint32_t timeout_cycles = cycles_per_ms * IWDG_UPDATE_TIMEOUT_MS;
-    const uint32_t start = DWT->CYCCNT;
-
-    // 反复检查分频、重载和窗口更新是否结束；时间差用无符号减法处理计数器从最大值回到 0。
-    while (IWDG1->SR & IWDG_UPDATE_FLAGS)
-    {
-        // 单次等待到达 20ms 就退出，不依赖由中断更新的 HAL tick。
-        if ((uint32_t)(DWT->CYCCNT - start) >= timeout_cycles)
-            return 0;
-    }
-    return 1;
+    if (frequency_mhz == 0u)
+        frequency_mhz = 480u; // 没有频率记录时保留原有 H723 默认值。
+    const uint64_t cycles = (uint64_t)frequency_mhz * 1000u * IWDG_UPDATE_TIMEOUT_MS; // 使用宽整数避免乘法溢出。
+    if (cycles == 0u || cycles > INT32_MAX) return 0u; // 回绕判断要求期限在半个周期范围内。
+    const uint32_t timeout_cycles = (uint32_t)cycles; // 范围检查后才转换为 DWT 位宽。
+    const uint32_t max_polls = timeout_cycles + 1u; // 一次检查至少耗费一个 CPU 周期；DWT 停止也可退出。
+    return (uint8_t)(PlatformStartupWait(IWDG_UpdateReady, IWDG_ReadCycles, NULL,
+                                          timeout_cycles, max_polls) == STARTUP_WAIT_READY);
 }
 
 // 将请求时限换算后写入 PR/RLR，并重载计数；写前、写后各自等待更新。

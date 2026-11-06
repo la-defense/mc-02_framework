@@ -1676,7 +1676,8 @@ target_compile_options(task_monitor_portable_compile PRIVATE -Wall -Wextra -Werr
 add_executable(
   watchdog_debug_safety_test
   watchdog_debug_safety_test.c
-  ../../bsp/watchdog/bsp_watchdog.c)
+  ../../bsp/watchdog/bsp_watchdog.c
+  ../../bsp/os/platform_startup_wait.c) # 与固件相同的固定期限和计数停止兜底。
 target_include_directories(watchdog_debug_safety_test BEFORE PRIVATE watchdog_fakes fakes)
 target_include_directories(watchdog_debug_safety_test PRIVATE ../../bsp/watchdog ../../bsp/dwt)
 add_test(NAME watchdog_debug_freeze_and_bounded_wait COMMAND watchdog_debug_safety_test)

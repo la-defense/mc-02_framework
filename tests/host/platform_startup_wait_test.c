@@ -10,6 +10,7 @@ typedef struct {
     uint32_t step;
     unsigned checks;
     unsigned ready_after;
+    uint32_t ready_cost; // 模拟条件检查本身消耗的周期数。
 } WaitModel;
 
 static uint32_t ReadCycles(void *context)
@@ -24,6 +25,7 @@ static uint8_t IsReady(void *context)
 {
     WaitModel *model = context;
     ++model->checks;
+    model->cycles += model->ready_cost; // 条件检查耗时不能被排除在总期限之外。
     return (uint8_t)(model->ready_after != 0u && model->checks >= model->ready_after);
 }
 
@@ -37,6 +39,11 @@ int main(void)
     model = (WaitModel){.cycles = UINT32_MAX - 3u, .step = 2u};
     TEST_CHECK(PlatformStartupWait(IsReady, ReadCycles, &model, 6u, 20u) == STARTUP_WAIT_TIMEOUT);
     TEST_CHECK(model.checks == 3u);
+    // 条件函数返回成功时若已到期限，不能把迟到结果交给启动流程。
+    model = (WaitModel){.cycles = 10u, .step = 1u, .ready_after = 1u, .ready_cost = 5u};
+    TEST_CHECK(PlatformStartupWait(IsReady, ReadCycles, &model, 5u, 10u) == STARTUP_WAIT_TIMEOUT);
+    model = (WaitModel){.cycles = 10u, .step = 1u, .ready_cost = 5u};
+    TEST_CHECK(PlatformStartupWait(IsReady, ReadCycles, &model, 5u, 1u) == STARTUP_WAIT_TIMEOUT); // 最后一次检查超时也要报告真实原因。
 
     // 周期计数停止时由次数上限退出，不依赖 HAL tick。
     model = (WaitModel){.cycles = 17u, .step = 0u};
