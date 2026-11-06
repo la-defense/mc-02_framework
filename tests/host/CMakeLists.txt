@@ -1665,6 +1665,16 @@ target_include_directories(fatal_error_entry_test PRIVATE ../../bsp/safety)
 target_compile_definitions(fatal_error_entry_test PRIVATE MC02_HOST_TEST)
 add_test(NAME production_fatal_error_entry_shutdown COMMAND fatal_error_entry_test)
 
+# 使用生产致命错误入口模拟提前失败与恢复额度耗尽；不会触发真实复位。
+add_executable(fatal_startup_test fatal_startup_test.c ../../bsp/safety/bsp_safety_error.c)
+target_include_directories(fatal_startup_test BEFORE PRIVATE fatal_startup_fakes .
+  ../../bsp/safety ../../bsp/reset_recovery)
+target_compile_options(fatal_startup_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario IN ITEMS reset locked)
+  add_test(NAME production_fatal_startup_${scenario} COMMAND fatal_startup_test ${scenario})
+  set_tests_properties(production_fatal_startup_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+
 add_executable(
   bsp_crash_frame_test
   bsp_crash_frame_test.c

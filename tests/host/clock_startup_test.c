@@ -12,6 +12,7 @@
 
 ClockTestDebug_t clock_test_debug;
 ClockTestDwt_t clock_test_dwt;
+ClockTestWatchdog_t clock_test_watchdog;
 volatile uint32_t uwTick;
 uint32_t clock_test_irq;
 uint8_t clock_test_vos;
@@ -127,5 +128,6 @@ int main(int argc, char **argv)
     TEST_CHECK(saved_cause == expected_cause); // 复位记录保留具体阶段。
     TEST_CHECK(reset_requested == !locked); // 仅有恢复额度时请求复位。
     TEST_CHECK(flags_cleared == !locked); // 已锁定时不重启，也不清除现场标志。
+    TEST_CHECK(!locked || clock_test_watchdog.KR == 0xAAAAu); // 已锁定时重载可能仍在运行的硬件看门狗。
     return 0;
 }

@@ -150,5 +150,9 @@ void PlatformClockStartupFail(PlatformClockFailure_t failure)
         __HAL_RCC_CLEAR_RESET_FLAGS(); // 防止旧 POR 标志在软件复位后误清恢复次数。
         NVIC_SystemReset(); // 让下一次启动重新检查全部核心条件。
     }
-    for (;;) __NOP(); // 已锁定或复位意外返回时保持关断，不继续启动。
+    for (;;)
+    {
+        IWDG1->KR = 0xAAAAu; // 若看门狗跨复位仍在运行，防止锁定状态再次触发复位。
+        __NOP(); // 已锁定或复位意外返回时保持关断，不继续启动。
+    }
 }

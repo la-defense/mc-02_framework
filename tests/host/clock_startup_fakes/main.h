@@ -7,8 +7,10 @@
 
 typedef struct { uint32_t DEMCR; } ClockTestDebug_t;
 typedef struct { uint32_t CTRL; uint32_t CYCCNT; } ClockTestDwt_t;
+typedef struct { uint32_t KR; } ClockTestWatchdog_t;
 extern ClockTestDebug_t clock_test_debug;
 extern ClockTestDwt_t clock_test_dwt;
+extern ClockTestWatchdog_t clock_test_watchdog;
 extern volatile uint32_t uwTick;
 extern uint32_t clock_test_irq;
 extern uint8_t clock_test_vos;
@@ -16,6 +18,7 @@ uint32_t ClockTestReadTick(void);
 #define CLOCK_STARTUP_READ_RAW_TICK() ClockTestReadTick()
 #define CoreDebug (&clock_test_debug)
 #define DWT (&clock_test_dwt)
+#define IWDG1 (&clock_test_watchdog)
 #define CoreDebug_DEMCR_TRCENA_Msk 1u
 #define DWT_CTRL_CYCCNTENA_Msk 1u
 #define PWR_FLAG_VOSRDY 1u

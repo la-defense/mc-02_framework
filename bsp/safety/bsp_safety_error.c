@@ -9,22 +9,30 @@
 #include "bsp_reset_recovery.h"
 
 /**
- * @brief 关闭普通中断和已知输出，避免错误发生后继续执行原来的流程。
- * @note 定义 MC02_HOST_TEST 时关断后返回；固件中保持普通中断关闭并持续等待。
+ * @brief 关闭输出、记录致命故障并按剩余恢复额度处理。
+ * @note 定义 MC02_HOST_TEST 时关断并记录后返回；固件不返回。
  */
 void Error_Handler(void)
 {
-    BSP_ResetRecoveryMarkFault(RESET_RECOVERY_CAUSE_FATAL_HANDLER);
     __disable_irq();
     // 模块初始化可能尚未完成，使用直接操作寄存器的关闭入口。
     BSP_SafetyLatchOutputsOff();
+    BSP_ResetRecoveryMarkFault(RESET_RECOVERY_CAUSE_FATAL_HANDLER); // 在关断之后保存本次故障。
 
 #if defined(MC02_HOST_TEST)
     // 主机测试需要返回，才能检查中断、引脚和定时器是否已按要求设置。
     return;
 #else
-    // 留在这里，避免返回出错的调用处继续执行；等待看门狗或外部操作复位。
+    if (!BSP_ResetRecoveryIsLockedOut())
+    {
+        __HAL_RCC_CLEAR_RESET_FLAGS(); // 避免旧上电标志在软件复位后清掉恢复次数。
+        NVIC_SystemReset(); // 有恢复额度时重新启动并检查全部核心条件。
+    }
+    // 已锁定或复位意外返回时保持关断；看门狗跨复位仍运行时阻止无限复位。
     for (;;)
-        ;
+    {
+        IWDG1->KR = 0xAAAAu; // 重载可能仍在运行的独立看门狗。
+        __NOP(); // 不执行任何初始化或业务控制。
+    }
 #endif
 }
