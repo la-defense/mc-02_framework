@@ -35,6 +35,10 @@ typedef struct
     uint8_t calibration_meta_committed;
     uint32_t calibration_monitor_begin_count;
     uint32_t calibration_monitor_end_count;
+    uint32_t startup_progress_count; // 统计有效样本报告次数。
+    uint32_t startup_progress_last_sequence; // 核对每次标定内的连续编号。
+    uint32_t startup_progress_sequence_errors; // 记录跳号或倒退。
+    uint32_t startup_progress_fail_at; // 非零时在指定样本模拟启动监控拒绝。
     uint32_t calibration_heater_begin_count;
     uint32_t calibration_heater_end_count;
     uint8_t calibration_monitor_end_success;

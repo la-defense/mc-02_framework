@@ -392,9 +392,21 @@ int main(void)
     TEST_CHECK(TaskMonitorGetProgressState(TASK_MONITOR_INS, &core_state) == TASK_MONITOR_RESULT_OK);
     TEST_CHECK(core_state.started == 0u && core_state.begin_count == 0u && core_state.progress_count == 0u);
     TEST_CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
+    TEST_CHECK(TaskMonitorStartupCalibrationSample(1u) == TASK_MONITOR_RESULT_OK); // 第一份样本接受但不足喂狗间隔。
+    TEST_CHECK(TaskMonitorStartupCalibrationSample(1u) == TASK_MONITOR_RESULT_BAD_ARGUMENT); // 重复数据不能制造进度。
+    TEST_CHECK(watchdog_feed_count == 0u);
+    mc02_test_tick += 100u; // 时钟前进且新样本到达时才允许重载。
+    TEST_CHECK(TaskMonitorStartupCalibrationSample(2u) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(watchdog_feed_count == 1u);
+    TEST_CHECK(TaskMonitorStartupCalibrationSample(3u) == TASK_MONITOR_RESULT_OK); // 相同时间的新样本不再喂狗。
+    TEST_CHECK(watchdog_feed_count == 1u);
+    mc02_test_ipsr = 1u; // 模拟中断试图借用启动进度。
+    TEST_CHECK(TaskMonitorStartupCalibrationSample(4u) == TASK_MONITOR_RESULT_CONTEXT);
+    mc02_test_ipsr = 0u;
     TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_BUSY); // 标定未结束不得放行。
     mc02_test_tick += 1000u; // 标定时长属于启动阶段，不计入未运行任务的宽限。
     TEST_CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
+    TEST_CHECK(TaskMonitorStartupCalibrationSample(4u) == TASK_MONITOR_RESULT_NOT_RUNNING); // 标定结束后不可继续喂狗。
     TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_OK); // 此时固定所有任务的首次期限。
     TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_NOT_RUNNING); // 放行操作不可再次重设期限。
     TEST_CHECK(TaskMonitorBeginWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_OK);
@@ -404,13 +416,34 @@ int main(void)
     mc02_test_tick += 1u; TaskMonitorTick(); // 宽限到期后未启动的核心任务应失效。
     TEST_CHECK(TaskMonitorAllAlive() == 0u && OutputsAreOff() != 0u);
 
+    ResetFakes(UINT32_MAX - 50u); // 启动标定跨毫秒计数回绕时仍按实际间隔判断。
+    TEST_CHECK(TaskMonitorInitConfigured(startup_configs, 2u) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorDeferRuntime() == TASK_MONITOR_RESULT_OK);
+    scheduler_running = 1u;
+    TEST_CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
+    mc02_test_tick = 49u; // 无符号差值恰为 100 ms。
+    TEST_CHECK(TaskMonitorStartupCalibrationSample(0u) == TASK_MONITOR_RESULT_BAD_ARGUMENT);
+    TEST_CHECK(TaskMonitorStartupCalibrationSample(1u) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(watchdog_feed_count == 1u); // 时钟回绕后仍只依据新样本喂狗。
+    TEST_CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
+
+    ResetFakes(200u); // 申请新窗口时发现旧标定超期，也不能放行新操作。
+    TEST_CHECK(TaskMonitorInitConfigured(startup_configs, 2u) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorDeferRuntime() == TASK_MONITOR_RESULT_OK);
+    scheduler_running = 1u;
+    TEST_CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
+    mc02_test_tick += 15000u;
+    TEST_CHECK(!TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH));
+    TEST_CHECK(TaskMonitorStartupCalibrationSample(1u) == TASK_MONITOR_RESULT_BUSY);
+    TEST_CHECK(OutputsAreOff() && watchdog_feed_count == 0u); // 样本报告发布已发现的超期故障。
+
     ResetFakes(100u); // 另起一次启动，检查延迟放行不会放宽标定自身期限。
     TEST_CHECK(TaskMonitorInitConfigured(startup_configs, 2u) == TASK_MONITOR_RESULT_OK);
     TEST_CHECK(TaskMonitorDeferRuntime() == TASK_MONITOR_RESULT_OK);
     scheduler_running = 1u;
     TEST_CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
     mc02_test_tick += 15000u; // 标定达到不可续期的总时限。
-    TaskMonitorTick(); // 启动协调过程中仍可检查长操作超期。
+    TEST_CHECK(TaskMonitorStartupCalibrationSample(1u) == TASK_MONITOR_RESULT_BUSY); // 超期样本触发固定期限检查。
     TEST_CHECK(OutputsAreOff() != 0u && watchdog_feed_count == 0u); // 超时关断且不喂狗。
     TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_BUSY); // 故障锁存后不能放行。
     TEST_CHECK(!TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));

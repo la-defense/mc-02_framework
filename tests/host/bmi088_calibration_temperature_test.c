@@ -28,6 +28,10 @@ int main(void)
         fail("BMI088 startup initialization must yield to RTOS tasks and keep INS health monitoring alive");
     if (cali_diag_acq_fail != 1u || cali_diag_acq_ok != 6000u)
         fail("startup calibration must skip a failed partial transfer and collect 6000 successful samples");
+    if (bmi088_host_fixture.startup_progress_count != 6000u ||
+        bmi088_host_fixture.startup_progress_last_sequence != 6000u ||
+        bmi088_host_fixture.startup_progress_sequence_errors != 0u)
+        fail("only valid calibration samples may advance the startup progress sequence");
 
     if (fabsf(instance->temperature - 22.875f) > 0.0001f)
         fail("calibration instance temperature must remain Celsius without rescaling");
@@ -65,6 +69,15 @@ int main(void)
         bmi088_host_fixture.calibration_heater_end_count != 2u ||
         !bmi088_host_fixture.calibration_heater_end_success)
         fail("on-demand calibration must close its monitor and heater guards");
+
+    bmi088_host_fixture.startup_progress_fail_at = 3u; // 第三份样本模拟监控拒绝。
+    if (!BMI088CalibRequest() || !BMI088CalibService())
+        fail("a rejected startup sample must complete calibration with failure");
+    if (BMI088CalibGetState() != BMI088_RECALIB_FAIL ||
+        bmi088_host_fixture.startup_progress_last_sequence != 3u ||
+        bmi088_host_fixture.calibration_heater_end_success != 0u)
+        fail("rejected startup progress must stop sampling and keep the heater inhibited");
+    bmi088_host_fixture.startup_progress_fail_at = 0u;
 
     bmi088_host_fixture.calibration_monitor_allow = 0u;
     uint32_t transfers_before_refusal = bmi088_host_fixture.transfer_count;

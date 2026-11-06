@@ -242,6 +242,13 @@ void TaskMonitorTick(void);
 uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id,
                                       TaskMonitor_LongOperation_e operation);
 
+/** @brief 报告启动阶段实际取得的一份有效标定样本。
+ * @param[in] sequence 本次标定内递增的样本计数，从 1 开始，包含重新采样的轮次。
+ * @return OK 表示已接受；NOT_RUNNING 表示不处于延迟放行的启动标定；BUSY 表示期限或故障阻止处理；BAD_ARGUMENT 表示计数不递增。
+ * @note 只由启动协调者在有效样本处理后调用。该接口不刷新周期任务心跳，不延长标定总期限；时钟未前进不会喂狗。
+ */
+TaskMonitor_Result_e TaskMonitorStartupCalibrationSample(uint32_t sequence);
+
 /** @brief 结束对应长操作并检查总耗时及核心任务。
  * @param[in] id 须为先前申请的 INS。
  * @param[in] operation 须为已开始且尚未结束的操作类型。

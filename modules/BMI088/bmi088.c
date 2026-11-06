@@ -469,6 +469,7 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
         float gyroDiff[3] = {INFINITY, INFINITY, INFINITY};
         float gNormDiff = INFINITY;
         uint16_t valid_samples = 0u;
+        uint32_t startup_sample_sequence = 0u; // 三轮尝试共用递增计数，不因重新采样倒退。
 
         BMI088_Data_t raw_data = {0};
         startCycle = PlatformProbeStart();
@@ -524,6 +525,15 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
                     continue;
                 }
                 valid_samples++;
+                ++startup_sample_sequence; // 只有读取和数值检查成功的样本才代表启动进度。
+                const TaskMonitor_Result_e startup_result =
+                    TaskMonitorStartupCalibrationSample(startup_sample_sequence); // 启动标定才根据真实采样维持看门狗。
+                if (startup_result != TASK_MONITOR_RESULT_OK &&
+                    startup_result != TASK_MONITOR_RESULT_NOT_RUNNING)
+                {
+                    timed_out = 1u; // 超期或监控拒绝时本轮结果不能作为标定成功。
+                    break; // 不继续处理已经失去启动许可的样本。
+                }
                 uint32_t acq_us = PlatformProbeElapsedUs(diag_acq);
                 if (acq_us > cali_diag_acq_us_max)
                     cali_diag_acq_us_max = acq_us;
@@ -581,7 +591,8 @@ uint8_t BMI088CalibrateIMU(BMI088Instance *_bmi088)
                 _bmi088->temperature = raw_data.temperature;
             }
             // caliTryOutCount++; 保存已经尝试的标定次数?由你.
-        } while ((valid_samples < CaliTimes ||
+        } while (timed_out == 0u && // 监控拒绝或超时后不再开始下一轮。
+                 (valid_samples < CaliTimes ||
                   gNormDiff > 0.5f ||
                   fabsf(_bmi088->gNorm - 9.8f) > 0.5f ||
                   gyroDiff[0] > 0.15f ||

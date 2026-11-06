@@ -285,6 +285,17 @@ uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOpera
         bmi088_host_fixture.calibration_monitor_begin_count++;
     return bmi088_host_fixture.calibration_monitor_allow;
 }
+TaskMonitor_Result_e TaskMonitorStartupCalibrationSample(uint32_t sequence)
+{
+    if (sequence == 1u) bmi088_host_fixture.startup_progress_last_sequence = 0u; // 新一轮标定重新编号。
+    if (sequence != bmi088_host_fixture.startup_progress_last_sequence + 1u)
+        ++bmi088_host_fixture.startup_progress_sequence_errors; // 不允许失败样本消耗编号或出现倒退。
+    bmi088_host_fixture.startup_progress_last_sequence = sequence; // 保留最后接受的编号。
+    ++bmi088_host_fixture.startup_progress_count; // 统计真正成功的样本报告。
+    if (bmi088_host_fixture.startup_progress_fail_at == sequence)
+        return TASK_MONITOR_RESULT_BUSY; // 模拟启动阶段已经超期或锁存故障。
+    return TASK_MONITOR_RESULT_NOT_RUNNING; // 保持周期任务已有的看门狗策略。
+}
 uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id, TaskMonitor_LongOperation_e operation)
 {
     if (id == TASK_MONITOR_INS && operation == TASK_MONITOR_LONG_OPERATION_CALIBRATION)

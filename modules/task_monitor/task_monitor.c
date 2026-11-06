@@ -75,6 +75,9 @@ static uint8_t core_fault_latched;
 static uint8_t long_operation_timeout_latched;
 static uint8_t long_operation_fault_latched;
 static uint32_t monitor_tick_count;
+#define STARTUP_CALIBRATION_FEED_INTERVAL_MS 100u // 成功采样后最多每 100 ms 重载一次。
+static uint32_t startup_sample_sequence; // 全工程唯一 INS 启动标定的有效样本编号。
+static uint32_t startup_last_feed_ms; // 上次因有效启动样本喂狗的时间。
 static TaskMonitor_LongOperationWindow_t
     long_operation_windows[TASK_MONITOR_MAX_TASKS][TASK_MONITOR_LONG_OPERATION_COUNT];
 
@@ -770,9 +773,16 @@ uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id,
             allowed = 0u;
     }
 
+    if (long_operation_timeout_latched || long_operation_fault_latched || core_fault_latched)
+        allowed = 0u; // 检查其他窗口时可能刚发现超期，不能再开启新操作。
     if (allowed != 0u)
     {
         window->started_ms = now;
+        if (operation == TASK_MONITOR_LONG_OPERATION_CALIBRATION)
+        {
+            startup_sample_sequence = 0u; // 新的标定窗口从第一份有效样本开始计数。
+            startup_last_feed_ms = now; // 首个喂狗间隔从申请时开始。
+        }
         window->active = 1u;
     }
     if (core_fault_latched != 0u || allowed == 0u)
@@ -784,6 +794,49 @@ uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id,
     else if (allowed == 0u)
         RobotSafetySetTaskHealthy(core_healthy);
     return allowed;
+}
+
+TaskMonitor_Result_e TaskMonitorStartupCalibrationSample(uint32_t sequence)
+{
+    if (PlatformIrqIsInHandler()) return TASK_MONITOR_RESULT_CONTEXT; // 中断不能代替协调任务报告采样。
+    if (sequence == 0u) return TASK_MONITOR_RESULT_BAD_ARGUMENT; // 零不能代表已完成的样本。
+    if (!PlatformSchedulerIsRunning()) return TASK_MONITOR_RESULT_NOT_RUNNING; // 调度器启动前不能当作协调任务进度。
+    const uint32_t now = PlatformTimeNowMs(); // 每次只读取一次原有毫秒时基。
+    const uint32_t previous = TaskMonitorEnterCritical(); // 与故障锁存和窗口结束同步。
+    TaskMonitor_LongOperationWindow_t *window =
+        &long_operation_windows[TASK_MONITOR_INS][TASK_MONITOR_LONG_OPERATION_CALIBRATION]; // 只检查启动标定窗口。
+    TaskMonitor_Result_e result = TASK_MONITOR_RESULT_OK; // 先假定该样本可接受。
+    uint8_t expired = 0u; // 记录是否需要在退出临界区后报告超时。
+    if (!monitor_initialized || !monitor_runtime_deferred || !window->active)
+        result = TASK_MONITOR_RESULT_NOT_RUNNING; // 普通运行阶段不改变现有喂狗方式。
+    else if (core_fault_latched || long_operation_fault_latched)
+        result = TASK_MONITOR_RESULT_BUSY; // 已锁存故障不能通过新样本恢复。
+    else if (long_operation_timeout_latched)
+    {
+        expired = 1u; // 其他查询已发现超期时，也要发布尚未处理的故障。
+        result = TASK_MONITOR_RESULT_BUSY; // 不允许超期后借样本喂狗。
+    }
+    else if ((uint32_t)(now - window->started_ms) >=
+             TaskMonitorLongOperationLimitMs(TASK_MONITOR_LONG_OPERATION_CALIBRATION))
+    {
+        long_operation_timeout_latched = 1u; // 标定总时限固定，不因新样本延长。
+        expired = 1u; // 临界区外沿用任务监控的关断和诊断路径。
+        result = TASK_MONITOR_RESULT_BUSY; // 超期样本不能喂狗。
+    }
+    else if (sequence <= startup_sample_sequence)
+        result = TASK_MONITOR_RESULT_BAD_ARGUMENT; // 重复或倒退的计数不能制造进度。
+    else
+    {
+        startup_sample_sequence = sequence; // 保存已接受样本，阻止重复提交。
+        if ((uint32_t)(now - startup_last_feed_ms) >= STARTUP_CALIBRATION_FEED_INTERVAL_MS)
+        {
+            startup_last_feed_ms = now; // 只在时钟前进到间隔后更新时间。
+            PlatformWatchdogFeed(); // 与故障检查原子衔接；底层仅执行有界寄存器写入。
+        }
+    }
+    TaskMonitorExitCritical(previous); // 任何日志和故障回调都在恢复中断后执行。
+    if (expired) TaskMonitorTick(); // 立即按已有核心超期规则记录并关断。
+    return result; // 调用者据此继续标定或停止采样。
 }
 
 uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id,
