@@ -4,7 +4,7 @@
 #include "bsp_init.h"
 
 /** @brief 在主机替身环境调用一次生产启动入口。 */
-void BSPInitCallerB(void)
+uint8_t BSPInitCallerB(void)
 {
-    BSPInit();
+    return BSPInit(); // 第二个调用者也读取同一启动结果。
 }

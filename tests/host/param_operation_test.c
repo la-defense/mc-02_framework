@@ -33,6 +33,8 @@ static HAL_StatusTypeDef erase_status = HAL_OK;
 static HAL_StatusTypeDef program_status = HAL_OK;
 static uint32_t watchdog_timeout_ms = 200u;
 static uint32_t watchdog_feed_count;
+static uint8_t watchdog_set_failure_at; // 第几次配置失败；0 表示均成功。
+static uint8_t watchdog_set_calls; // 统计本次维护窗口内的配置次数。
 static uint32_t tick_ms;
 static uint32_t erase_tick_advance;
 static uint32_t program_tick_advance;
@@ -68,6 +70,8 @@ static void reset_events(void)
     event_count = 0u;
     heater_inhibited = 0u;
     watchdog_feed_count = 0u;
+    watchdog_set_failure_at = 0u; // 每个场景单独设置失败点。
+    watchdog_set_calls = 0u; // 每个场景从第一次配置开始计数。
     tick_ms = 0u;
     erase_tick_advance = 0u;
     program_tick_advance = 0u;
@@ -432,10 +436,13 @@ uint32_t BSP_WatchdogGetTimeout(void)
     return watchdog_timeout_ms;
 }
 
-void BSP_WatchdogSetTimeout(uint32_t timeout_ms)
+uint8_t BSP_WatchdogSetTimeoutChecked(uint32_t timeout_ms)
 {
     event('s');
+    ++watchdog_set_calls; // 检查开始或结束阶段的失败传播。
+    if (watchdog_set_calls == watchdog_set_failure_at) return 0u; // 模拟硬件未确认新时限。
     watchdog_timeout_ms = timeout_ms;
+    return 1u; // 替身只在成功时更新保存的时限。
 }
 
 void BSP_WatchdogFeed(void)
@@ -661,6 +668,14 @@ int main(int argc, char **argv)
     CHECK(event_count == 0u);
     interrupt_context = 0u;
 
+    // 看门狗维护时限未生效时不能开始任何 Flash 擦写。
+    reset_events();
+    monitor_allow = 1u;
+    watchdog_set_failure_at = 1u;
+    CHECK(ParamCommit() == 0u);
+    CHECK(memchr(events, 'E', event_count) == NULL && memchr(events, 'P', event_count) == NULL);
+    CHECK(watchdog_feed_count == 0u && heater_inhibited == 1u);
+
     reset_events();
     monitor_allow = 1u;
     monitor_end_success = 1u;
@@ -677,6 +692,13 @@ int main(int argc, char **argv)
     CHECK(watchdog_timeout_ms == 200u);
     CHECK(watchdog_feed_count == 1u);
     CHECK(param_commit_count == 1u);
+
+    // Flash 已写完但运行时限恢复失败时，结果仍必须报告失败并保持加热关闭。
+    reset_events();
+    watchdog_set_failure_at = 2u;
+    CHECK(ParamCommit() == 0u);
+    CHECK(watchdog_feed_count == 1u && heater_inhibited == 1u);
+    watchdog_timeout_ms = 200u; // 替身重建为下一测试所需的正常初始状态。
 
     reset_events();
     monitor_end_success = 0u;

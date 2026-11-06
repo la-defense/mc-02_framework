@@ -8,6 +8,7 @@
 #include "bsp_log.h"
 #include "bsp_dwt.h"
 #include "../os/platform_startup_wait.h"
+#include "../os/platform_irq.h"
 #include <limits.h>
 #include <stddef.h>
 
@@ -20,11 +21,38 @@
 #define IWDG_LSI_HZ 32000u
 #define IWDG_UPDATE_FLAGS (IWDG_SR_PVU | IWDG_SR_RVU | IWDG_SR_WVU)
 #define IWDG_UPDATE_TIMEOUT_MS 20u
+#define IWDG_MAX_REQUEST_MS 32760u // 按 32 kHz、最大 256 分频和 4095 重载值计算。
 
 // 保存请求值和本次启动的软件状态，供任务及调试器读取。
 static volatile uint32_t watchdog_timeout_ms = 200;
 static volatile uint8_t watchdog_started = 0;
+static uint8_t watchdog_configuring; // 只允许一个调用者配置 IWDG 寄存器。
 static volatile uint8_t iwdg_reset_flag = 0;
+
+// 用短中断屏蔽保护配置状态；等待寄存器期间不保持屏蔽。
+static uint8_t IWDG_BeginConfiguration(uint8_t require_started)
+{
+    const PlatformIrqState_t previous = PlatformIrqSaveAndDisable(); // 与喂狗检查使用同一个保护。
+    if (watchdog_configuring || (require_started && !watchdog_started))
+    {
+        PlatformIrqRestore(previous); // 已有配置或尚未启动时不改变原状态。
+        return 0u; // 拒绝重入，调用者不触碰硬件。
+    }
+    watchdog_configuring = 1u; // 为本次配置保留唯一写入权。
+    watchdog_started = 0u; // 先禁止其他任务在寄存器更新期间喂狗。
+    PlatformIrqRestore(previous); // 之后允许中断，等待不得阻塞中断。
+    return 1u; // 调用者取得配置权。
+}
+
+// 发布完成或失败，只有确认成功时才重新允许喂狗。
+static void IWDG_EndConfiguration(uint32_t timeout_ms, uint8_t success)
+{
+    const PlatformIrqState_t previous = PlatformIrqSaveAndDisable(); // 防止喂狗观察到部分更新。
+    if (success) watchdog_timeout_ms = timeout_ms; // 只发布硬件已接受的请求时限。
+    watchdog_started = success; // 失败时保持禁止喂狗。
+    watchdog_configuring = 0u; // 结束本次配置并允许后续显式重试。
+    PlatformIrqRestore(previous); // 恢复进入前的中断状态。
+}
 
 // 读取看门狗更新标记；清零后才允许下一次寄存器配置。
 static uint8_t IWDG_UpdateReady(void *context)
@@ -56,7 +84,7 @@ static uint8_t IWDG_WaitForUpdateFlags(void)
 }
 
 // 将请求时限换算后写入 PR/RLR，并重载计数；写前、写后各自等待更新。
-static void IWDG_WritePrescalerAndReload(uint32_t timeout_ms)
+static uint8_t IWDG_WritePrescalerAndReload(uint32_t timeout_ms)
 {
     uint32_t reload = 0;
     uint32_t prescaler = 4;
@@ -66,8 +94,8 @@ static void IWDG_WritePrescalerAndReload(uint32_t timeout_ms)
     if (timeout_ms == 0)
         timeout_ms = 1;
 
-    // 从小到大尝试计算所用的分频值，重载值落在 1～4095 时停止。
-    for (pr = 0; pr <= 7; ++pr)
+    // 从小到大尝试受支持的 4～256 分频，重载值落在 1～4095 时停止。
+    for (pr = 0; pr <= 6; ++pr)
     {
         prescaler = 4u << pr;
         reload = (timeout_ms * (IWDG_LSI_HZ / 1000u)) / prescaler;
@@ -75,62 +103,75 @@ static void IWDG_WritePrescalerAndReload(uint32_t timeout_ms)
             break;
     }
 
-    // 计算结果仍太大时，使用重载上限 4095 和 pr=7 继续配置。
+    // 防御性检查：调用前已限制请求，不能写入不支持的分频档位。
     if (reload > 0xFFFu)
-    {
-        reload = 0xFFFu;
-        pr = 7;
-    }
+        return 0u;
     // 计算结果为 0 时写入 1，避免将重载值设为 0。
     if (reload == 0)
         reload = 1;
 
-    // 写前等上一次更新完成；超时只输出错误，仍会执行下面的寄存器写入。
+    // 写前等上一次更新完成；超时后不能写入尚未就绪的寄存器。
     if (!IWDG_WaitForUpdateFlags())
     {
         BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_01);
+        return 0u; // 退出后由调用方禁止继续喂狗。
     }
 
     IWDG1->KR = IWDG_KEY_WRITE_ACCESS_ENABLE;
     IWDG1->PR = pr;
     IWDG1->RLR = reload;
 
-    // 写后再等一次；即使超时，后面仍会执行重载命令。
+    // 写后再次等待，确保新时限已经被硬件接受。
     if (!IWDG_WaitForUpdateFlags())
     {
         BSP_LOG_EVENT_0(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_02);
+        return 0u; // 不重载未经确认的时限。
     }
 
     IWDG1->KR = IWDG_KEY_RELOAD;
+    return 1u; // 两次等待均完成后才报告成功。
 }
 
 void BSP_WatchdogInit(uint32_t timeout_ms)
 {
-    watchdog_timeout_ms = timeout_ms;
+    (void)BSP_WatchdogInitChecked(timeout_ms); // 保留旧入口，关键调用应检查新接口的结果。
+}
 
+uint8_t BSP_WatchdogInitChecked(uint32_t timeout_ms)
+{
+    if (timeout_ms > IWDG_MAX_REQUEST_MS) return 0u; // 超出可表示范围时不触碰现有配置。
+    if (!IWDG_BeginConfiguration(0u)) return 0u; // 重入时不影响正在进行的配置。
     // 先发启动命令，让看门狗时钟开始工作，再配置分频和重载值。
     IWDG1->KR = IWDG_KEY_ENABLE;
-    IWDG_WritePrescalerAndReload(timeout_ms);
-    // 记录本接口已完成初始化；上面的等待超时不会阻止设置这个软件标志。
-    watchdog_started = 1;
-    BSP_WatchdogFeed();
+    const uint8_t configured = IWDG_WritePrescalerAndReload(timeout_ms); // 在中断可运行时等待硬件。
+    IWDG_EndConfiguration(timeout_ms, configured); // 统一发布结果和释放配置权。
+    if (!configured) return 0u; // 等待失败时保持禁止喂狗状态。
 
     BSP_LOG_EVENT_1(EV_BSP_WATCHDOG_BSP_WATCHDOG_C_03, BSP_LOG_FIELD_U32((unsigned)timeout_ms));
+    return 1u; // 成功状态只在完整配置后发布。
 }
 
 void BSP_WatchdogFeed(void)
 {
     // 本次启动尚未完成初始化时，不写喂狗寄存器。
+    const PlatformIrqState_t previous = PlatformIrqSaveAndDisable(); // 与禁止喂狗的状态切换保持原子。
     if (watchdog_started)
         IWDG1->KR = IWDG_KEY_RELOAD;
+    PlatformIrqRestore(previous); // 恢复原有中断状态，不跨越硬件等待。
 }
 
 void BSP_WatchdogSetTimeout(uint32_t timeout_ms)
 {
-    watchdog_timeout_ms = timeout_ms;
-    // 已初始化才改硬件；未初始化时只保留上面的请求值。
-    if (watchdog_started)
-        IWDG_WritePrescalerAndReload(timeout_ms);
+    (void)BSP_WatchdogSetTimeoutChecked(timeout_ms); // 保留旧入口，维护调用应检查结果。
+}
+
+uint8_t BSP_WatchdogSetTimeoutChecked(uint32_t timeout_ms)
+{
+    if (timeout_ms > IWDG_MAX_REQUEST_MS) return 0u; // 先拒绝超范围参数，保留当前配置。
+    if (!IWDG_BeginConfiguration(1u)) return 0u; // 未启动或已有配置时不能修改寄存器。
+    const uint8_t configured = IWDG_WritePrescalerAndReload(timeout_ms); // 等待期间不屏蔽中断。
+    IWDG_EndConfiguration(timeout_ms, configured); // 成功才发布并允许喂狗。
+    return configured; // 向调用方报告硬件更新是否确认。
 }
 
 uint32_t BSP_WatchdogGetTimeout(void)

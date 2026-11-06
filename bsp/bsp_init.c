@@ -11,17 +11,18 @@
 #include "bsp_param.h"
 #include "bsp_can.h"
 
-void BSPInit(void)
+uint8_t BSPInit(void)
 {
     DWT_Init(480);
     CANInitWorkspace();
     BSPLogInit();
     // 启动先等待 4000 ms，任务创建成功后由 RobotInit 改为 200 ms。
-    BSP_WatchdogInit(4000);
+    if (!BSP_WatchdogInitChecked(4000u)) return 0u; // 看门狗未确认时不能继续初始化设备。
     BSP_ADCInit();
     // 复位原因和上次崩溃记录需要通过已初始化的日志输出。
     BSP_WatchdogLogResetReason();
     CrashLogInit();
     // 先载入参数，供后续模块读取；沿用原流程，不在此处处理返回结果。
     ParamInit();
+    return 1u; // 参数读取失败仍沿用既有默认值规则。
 }

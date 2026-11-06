@@ -13,10 +13,11 @@
 #include "bsp_param.h"
 #include <string.h>
 
-void BSPInitCallerA(void);
-void BSPInitCallerB(void);
+uint8_t BSPInitCallerA(void);
+uint8_t BSPInitCallerB(void);
 
 static unsigned step;
+static uint8_t watchdog_failure; // 按场景模拟早期看门狗初始化失败。
 
 void DWT_Init(uint32_t cpu_mhz)
 {
@@ -25,11 +26,12 @@ void DWT_Init(uint32_t cpu_mhz)
     ++step;
 }
 
-void BSP_WatchdogInit(uint32_t timeout_ms)
+uint8_t BSP_WatchdogInitChecked(uint32_t timeout_ms)
 {
     TEST_CHECK(step == 3u);
     TEST_CHECK(timeout_ms == 4000u);
     ++step;
+    return (uint8_t)!watchdog_failure; // 失败时下游资源不应再启动。
 }
 
 void BSPLogInit(void)
@@ -74,13 +76,14 @@ uint8_t ParamInit(void)
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
-    if (strcmp(argv[1], "a") == 0)
-        BSPInitCallerA();
+    watchdog_failure = (uint8_t)(strcmp(argv[1], "watchdog-fail") == 0); // 单独检查失败路径。
+    if (strcmp(argv[1], "a") == 0 || watchdog_failure)
+        TEST_CHECK(BSPInitCallerA() == (uint8_t)!watchdog_failure);
     else
     {
         TEST_CHECK(strcmp(argv[1], "b") == 0);
-        BSPInitCallerB();
+        TEST_CHECK(BSPInitCallerB());
     }
-    TEST_CHECK(step == 8u);
+    TEST_CHECK(step == (watchdog_failure ? 4u : 8u)); // 失败后禁止继续初始化 ADC 和参数。
     return 0;
 }

@@ -4,6 +4,6 @@
 #ifndef BSP_INIT_TEST_WATCHDOG_H
 #define BSP_INIT_TEST_WATCHDOG_H
 #include <stdint.h>
-void BSP_WatchdogInit(uint32_t timeout_ms);
+uint8_t BSP_WatchdogInitChecked(uint32_t timeout_ms);
 void BSP_WatchdogLogResetReason(void);
 #endif

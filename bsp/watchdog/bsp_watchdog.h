@@ -12,11 +12,16 @@
 /**
  * @brief 启动 IWDG1，设置请求时限并重载计数；再次调用会重新配置。
  * @param[in] timeout_ms 请求时限，单位 ms；传 0 时内部按 1ms 换算，软件仍保存原值。
- * @note 先调用 DWT_Init()，确保 CYCCNT 正在计数且频率参数正确。每次等待寄存器更新
- *       分别按 20ms 检查，超时尝试输出错误日志后继续，函数没有成功或失败返回值。
- *       时限按 32kHz 估算，没有完整的参数范围检查；当前工程使用 200、4000 和 8000ms。
+ * @note 兼容入口忽略结果；需要确认配置的调用者应使用 BSP_WatchdogInitChecked()。
  */
 void BSP_WatchdogInit(uint32_t timeout_ms);
+
+/** @brief 启动并确认 IWDG 配置寄存器更新完成。
+ * @param[in] timeout_ms 请求时限，单位 ms；0 按 1 ms 换算，最大 32760 ms。
+ * @return 1 表示寄存器更新完成；0 表示参数非法或等待失败。等待失败时软件禁止后续喂狗。
+ * @note IWDG 启动后无法由软件停止；调用前须准备 DWT，失败时上层应关断并停止启动。
+ */
+uint8_t BSP_WatchdogInitChecked(uint32_t timeout_ms);
 
 /**
  * @brief 初始化完成后重载 IWDG1 计数，未初始化时不写寄存器。
@@ -25,17 +30,23 @@ void BSP_WatchdogInit(uint32_t timeout_ms);
 void BSP_WatchdogFeed(void);
 
 /**
- * @brief 保存新的请求时限，已初始化时同时更新硬件并重载计数。
+ * @brief 兼容入口，尝试更新已初始化看门狗的时限。
  * @param[in] timeout_ms 请求时限，单位 ms；0 的处理及等待条件同 BSP_WatchdogInit()。
- * @note 未初始化时只保存数值；之后仍由 BSP_WatchdogInit() 的实参决定配置。
+ * @note 本入口忽略结果；需要确认维护窗口的调用者应使用检查结果的接口。
  */
 void BSP_WatchdogSetTimeout(uint32_t timeout_ms);
 
+/** @brief 更新已启动 IWDG 的时限并确认寄存器更新。
+ * @param[in] timeout_ms 请求时限，单位 ms；0 按 1 ms 换算，最大 32760 ms。
+ * @return 1 表示更新完成；参数非法、未启动或等待失败返回 0。等待失败时禁止继续喂狗。
+ * @note 参数非法时保留现有配置；任何失败都不发布新请求时限，调用方须处理失败。
+ */
+uint8_t BSP_WatchdogSetTimeoutChecked(uint32_t timeout_ms);
+
 /**
  * @brief 查询软件保存的最近一次请求时限。
- * @return 请求时限，单位 ms；初始为 200，之后为最近传给 BSP_WatchdogInit()
- *         或 BSP_WatchdogSetTimeout() 的原始实参。
- * @note 不读取硬件配置，传 0 后也会返回 0，不能据此确认实际超时或写入是否成功。
+ * @return 请求时限，单位 ms；初始为 200，之后为最近一次确认配置成功的原始实参。
+ * @note 不读取硬件配置；实际时限受 LSI 频率和分频影响。
  */
 uint32_t BSP_WatchdogGetTimeout(void);
 
@@ -54,7 +65,7 @@ uint8_t BSP_WatchdogWasIwdgReset(void);
 
 /**
  * @brief 查询本次启动的软件初始化标志。
- * @return 1 表示已执行完 BSP_WatchdogInit()，0 表示尚未完成；不读取硬件是否正在运行。
+ * @return 1 表示最近一次配置已完成，0 表示未完成或更新失败；不读取硬件是否正在运行。
  */
 uint8_t BSP_WatchdogIsRunning(void);
 

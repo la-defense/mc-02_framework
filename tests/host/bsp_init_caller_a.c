@@ -5,7 +5,7 @@
 #include "bsp_init.h"
 
 /** @brief 在主机替身环境调用一次生产启动入口。 */
-void BSPInitCallerA(void)
+uint8_t BSPInitCallerA(void)
 {
-    BSPInit();
+    return BSPInit(); // 将生产启动结果传给测试入口。
 }

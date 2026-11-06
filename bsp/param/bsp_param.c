@@ -136,12 +136,16 @@ static uint8_t ParamFlashOperationBegin(uint32_t *previous_timeout_ms,
         return 0u;
 
     *previous_timeout_ms = BSP_WatchdogGetTimeout();
-    BSP_WatchdogSetTimeout(BSP_FLASH_MAINTENANCE_TIMEOUT_MS);
+    if (!BSP_WatchdogSetTimeoutChecked(BSP_FLASH_MAINTENANCE_TIMEOUT_MS))
+    {
+        (void)s_long_operation_guard.end(0u); // 新时限未生效，结束维护准备并保持失能。
+        return 0u; // 不能以未知看门狗窗口执行擦写。
+    }
     BSP_WatchdogFeed();
     // 只有 MC02-0036 的加热与任务监控准入完成后，参数层才取得写入令牌。
     if (BSPFlashAuthorizationOpen(authorization, operation_started_at_ms) != BSP_FLASH_OK)
     {
-        BSP_WatchdogSetTimeout(*previous_timeout_ms);
+        (void)BSP_WatchdogSetTimeoutChecked(*previous_timeout_ms); // 即使恢复失败也拒绝维护。
         (void)s_long_operation_guard.end(0u);
         return 0u;
     }
@@ -154,10 +158,11 @@ static uint8_t ParamFlashOperationEnd(uint32_t previous_timeout_ms,
                                       BSPFlashAuthorization_t *authorization)
 {
     const BSPFlashStatus_e authorization_status = BSPFlashAuthorizationClose(authorization);
-    const uint8_t operation_ok = (uint8_t)(flash_success &&
-                                            authorization_status == BSP_FLASH_OK);
-    BSP_WatchdogSetTimeout(previous_timeout_ms);
-    return s_long_operation_guard.end(operation_ok);
+    const uint8_t restored = BSP_WatchdogSetTimeoutChecked(previous_timeout_ms); // 恢复运行时限并检查结果。
+    const uint8_t operation_ok = (uint8_t)(flash_success && restored &&
+                                            authorization_status == BSP_FLASH_OK); // 任一步失败均不能报告维护成功。
+    const uint8_t guard_ok = s_long_operation_guard.end(operation_ok); // 无论结果如何都结束维护保护。
+    return (uint8_t)(operation_ok && guard_ok); // 收尾回调不能把实际故障转换成成功。
 }
 
 volatile uint32_t param_commit_count = 0;

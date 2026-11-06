@@ -31,6 +31,7 @@ typedef enum
     INIT_FAILURE_SCHEDULER_RETURNED,  ///< 启动调度器的调用返回错误
     INIT_FAILURE_ALGORITHM_MEMORY,    ///< 算法初始化所需内存申请失败
     INIT_FAILURE_DEPENDENCY,          ///< 依赖模块未能完成初始化
+    INIT_FAILURE_WATCHDOG_CONFIG,     ///< 看门狗时限未能确认生效
 } InitDiagnosticReason_e;
 
 /** @brief 失败所属模块的编号；0 表示尚未记录模块。 */
@@ -46,6 +47,7 @@ typedef enum
     INIT_MODULE_TASKS,
     INIT_MODULE_FREERTOS,
     INIT_MODULE_BUZZER,
+    INIT_MODULE_WATCHDOG, ///< 硬件看门狗及其配置状态
 } InitDiagnosticModule_e;
 
 /** @brief 任务创建失败时使用的资源编号，便于找到具体任务。 */
@@ -61,6 +63,13 @@ typedef enum
     INIT_RESOURCE_TASK_UART_TX,
     INIT_RESOURCE_TASK_LOG,
 } InitDiagnosticResource_e;
+
+/** @brief 看门狗模块失败时区分启动与正常运行窗口。 */
+typedef enum
+{
+    INIT_RESOURCE_WATCHDOG_STARTUP = 1, ///< 配置启动期间的较长时限失败。
+    INIT_RESOURCE_WATCHDOG_RUNTIME, ///< 切换正常运行时限失败。
+} InitDiagnosticWatchdogResource_e;
 
 /** @brief 本次启动的诊断记录；调试器按这些字段的类型和顺序读取。 */
 typedef struct

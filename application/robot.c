@@ -227,8 +227,15 @@ uint8_t RobotInit(void)
     const PlatformIrqState_t previous_primask = PlatformIrqSaveAndDisable(); // 保留进入前的屏蔽状态。
     InitDiagnosticBegin(INIT_STAGE_BSP);
     
-    BSPInit();
+    const uint8_t bsp_ready = BSPInit(); // 保存基础保护结果，不能将失败当作已准备好。
     RobotSafetyInit();
+    if (!bsp_ready)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_WATCHDOG,
+                                    INIT_FAILURE_WATCHDOG_CONFIG,
+                                    INIT_RESOURCE_WATCHDOG_STARTUP); // 记录启动窗口未就绪。
+        goto init_failed; // 使用整车既有的关断和失能路径。
+    }
     const Robot_Config_s *robot_config = NULL;
     const RobotConfigStatus_t config_status = RobotConfigSelect(
         ROBOT_CONFIG_SUPPORTED_ID, &robot_config);
@@ -352,7 +359,8 @@ uint8_t RobotInit(void)
                      INIT_FAILURE_TASK_CREATE, 0u);
 
     // 所有任务创建完成后再启动IWDG, 由Daemon任务中的TaskMonitorTick统一喂狗
-    BSP_WatchdogInit(200);
+    ROBOT_INIT_CHECK(BSP_WatchdogInitChecked(200u), INIT_STAGE_TASKS, INIT_MODULE_WATCHDOG,
+                     INIT_FAILURE_WATCHDOG_CONFIG, INIT_RESOURCE_WATCHDOG_RUNTIME); // 运行窗口未生效时禁止启动控制。
 
     InitDiagnosticSetStage(INIT_STAGE_FREERTOS);
 #undef ROBOT_INIT_CHECK
