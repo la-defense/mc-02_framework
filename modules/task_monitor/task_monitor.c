@@ -70,6 +70,7 @@ static uint32_t monitor_configured_count;
 static uint32_t monitor_started_ms;
 static uint8_t monitor_initialized;
 static uint8_t monitor_runtime_started;
+static uint8_t monitor_runtime_deferred; // 调度器运行后仍等待协调者放行周期任务。
 static uint8_t core_fault_latched;
 static uint8_t long_operation_timeout_latched;
 static uint8_t long_operation_fault_latched;
@@ -79,7 +80,7 @@ static TaskMonitor_LongOperationWindow_t
 
 static void TaskMonitorNoteRuntimeStartLocked(uint32_t now, uint8_t scheduler_running)
 {
-    if (monitor_runtime_started == 0u && scheduler_running != 0u)
+    if (monitor_runtime_started == 0u && monitor_runtime_deferred == 0u && scheduler_running != 0u)
     {
         // 初始化可能早于调度器很久；启动宽限从任务真正开始运行时计时。
         monitor_started_ms = now;
@@ -165,6 +166,9 @@ static TaskMonitor_FaultReason_e TaskMonitorExpiredReason(const TaskMonitorItem_
     if (item->fault_reason != TASK_MONITOR_FAULT_NONE ||
         TaskMonitorHasActiveLongOperation(item->config.id, now) != 0u)
         return TASK_MONITOR_FAULT_NONE;
+
+    if (monitor_runtime_deferred != 0u)
+        return TASK_MONITOR_FAULT_NONE; // 周期任务尚未放行，不计算其首次运行期限。
 
     if (item->started == 0u)
         return ((uint32_t)(now - monitor_start_ms) > item->config.startup_grace_ms)
@@ -308,6 +312,7 @@ TaskMonitor_Result_e TaskMonitorInitConfigured(const TaskMonitorTaskConfig_t *co
     monitor_started_ms = now;
     core_fault_latched = 0u;
     monitor_runtime_started = 0u;
+    monitor_runtime_deferred = 0u; // 默认沿用原有调度器启动即开始监控的行为。
     long_operation_timeout_latched = 0u;
     long_operation_fault_latched = 0u;
     monitor_tick_count = 0u;
@@ -320,6 +325,49 @@ uint8_t TaskMonitorInit(void)
 {
     return (uint8_t)(TaskMonitorInitConfigured(default_configs, TASK_MONITOR_COUNT) ==
                      TASK_MONITOR_RESULT_OK);
+}
+
+TaskMonitor_Result_e TaskMonitorDeferRuntime(void)
+{
+    if (PlatformIrqIsInHandler() != 0u) return TASK_MONITOR_RESULT_CONTEXT; // 中断中不能变更监控阶段。
+    if (PlatformSchedulerIsRunning() != 0u) return TASK_MONITOR_RESULT_SCHEDULER_RUNNING; // 只能在调度器启动前声明。
+    const uint32_t previous = TaskMonitorEnterCritical(); // 与任务状态更新使用相同短临界区。
+    TaskMonitor_Result_e result = TASK_MONITOR_RESULT_OK; // 先假定可以推迟。
+    if (monitor_initialized == 0u) result = TASK_MONITOR_RESULT_NOT_INITIALIZED; // 未配置不能推迟。
+    else if (monitor_runtime_started != 0u || monitor_runtime_deferred != 0u ||
+             TaskMonitorHasAnyActiveLongOperation() != 0u || core_fault_latched != 0u ||
+             long_operation_timeout_latched != 0u || long_operation_fault_latched != 0u)
+        result = TASK_MONITOR_RESULT_BUSY; // 已开始、已推迟或故障时不重置监控。
+    else
+    {
+        for (uint32_t index = 0u; index < monitor_configured_count; ++index)
+            if (monitor_items[index].started != 0u) result = TASK_MONITOR_RESULT_BUSY; // 已报告的任务不能被重新隐藏。
+        if (result == TASK_MONITOR_RESULT_OK) monitor_runtime_deferred = 1u; // 所有检查通过后才改变状态。
+    }
+    TaskMonitorExitCritical(previous); // 恢复调用前中断状态。
+    return result;
+}
+
+TaskMonitor_Result_e TaskMonitorReleaseRuntime(void)
+{
+    if (PlatformIrqIsInHandler() != 0u) return TASK_MONITOR_RESULT_CONTEXT; // 必须由启动协调任务调用。
+    if (PlatformSchedulerIsRunning() == 0u) return TASK_MONITOR_RESULT_NOT_RUNNING; // 调度器未运行时不能放行。
+    const uint32_t now = PlatformTimeNowMs(); // 一次读取，所有周期任务共用同一放行时刻。
+    const uint32_t previous = TaskMonitorEnterCritical(); // 防止任务同时读取未完成的状态。
+    TaskMonitor_Result_e result = TASK_MONITOR_RESULT_OK; // 先假定可以放行。
+    if (monitor_initialized == 0u) result = TASK_MONITOR_RESULT_NOT_INITIALIZED; // 缺少配置不能放行。
+    else if (monitor_runtime_deferred == 0u) result = TASK_MONITOR_RESULT_NOT_RUNNING; // 不能重复重置宽限。
+    else if (core_fault_latched != 0u || long_operation_timeout_latched != 0u ||
+             long_operation_fault_latched != 0u || TaskMonitorHasAnyActiveLongOperation() != 0u)
+        result = TASK_MONITOR_RESULT_BUSY; // 故障或长操作尚未结束时保持阻止。
+    else
+    {
+        monitor_started_ms = now; // 任务首次运行宽限从真实放行时刻开始。
+        monitor_runtime_started = 1u; // 防止后续调用再次改写起点。
+        monitor_runtime_deferred = 0u; // 最后发布运行阶段，允许任务报告进度。
+    }
+    TaskMonitorExitCritical(previous); // 完整发布后恢复中断。
+    return result;
 }
 
 TaskMonitor_Result_e TaskMonitorBeginWork(TaskMonitor_Id_e id)
@@ -338,6 +386,8 @@ TaskMonitor_Result_e TaskMonitorBeginWork(TaskMonitor_Id_e id)
     TaskMonitorItem_t *item = TaskMonitorFindItem(id);
     if (monitor_initialized == 0u)
         result = TASK_MONITOR_RESULT_NOT_INITIALIZED;
+    else if (monitor_runtime_deferred != 0u)
+        result = TASK_MONITOR_RESULT_NOT_RUNNING; // 协调者尚未放行周期任务。
     else if (item == NULL)
         result = TASK_MONITOR_RESULT_BAD_ARGUMENT;
     else if (core_fault_latched != 0u && item->config.role == TASK_MONITOR_ROLE_CORE)
@@ -424,6 +474,11 @@ TaskMonitor_Result_e TaskMonitorSetWaiting(TaskMonitor_Id_e id,
     const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
+    if (monitor_runtime_deferred != 0u)
+    {
+        TaskMonitorExitCritical(previous); // 启动等待不登记成尚未运行的周期任务。
+        return TASK_MONITOR_RESULT_NOT_RUNNING;
+    }
     TaskMonitorItem_t *item = TaskMonitorFindItem(id);
     if (item == NULL)
     {
@@ -573,7 +628,7 @@ void TaskMonitorFeed(TaskMonitor_Id_e id)
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
     TaskMonitorItem_t *item = TaskMonitorFindItem(id);
-    if (item != NULL && item->fault_reason == TASK_MONITOR_FAULT_NONE)
+    if (monitor_runtime_deferred == 0u && item != NULL && item->fault_reason == TASK_MONITOR_FAULT_NONE)
     {
         item->started = 1u;
         item->last_feed_ms = now;
@@ -618,6 +673,21 @@ void TaskMonitorTick(void)
     if (monitor_initialized == 0u)
     {
         TaskMonitorExitCritical(previous);
+        return;
+    }
+    if (monitor_runtime_deferred != 0u)
+    {
+        (void)TaskMonitorHasActiveLongOperation(TASK_MONITOR_INS, now); // 启动期仍检查长操作固定期限。
+        if (long_operation_timeout_latched != 0u && long_operation_fault_latched == 0u)
+        {
+            TaskMonitorItem_t *ins = TaskMonitorFindItem(TASK_MONITOR_INS); // 找到声明的标定来源。
+            long_operation_fault_latched = 1u; // 超期只记录一次，不能重新申请放行。
+            if (ins != NULL && TaskMonitorLatchFaultLocked(ins, TASK_MONITOR_FAULT_WORK_DEADLINE,
+                                                            &actions[action_count]) != 0u)
+                action_count++; // 退出临界区后执行关断及故障发布。
+        }
+        TaskMonitorExitCritical(previous); // 尚未放行时不检查周期期限，也不喂狗。
+        if (action_count != 0u) TaskMonitorPublishFaultActions(actions, action_count, 0u); // 长操作超期立即失能。
         return;
     }
     monitor_tick_count++;
@@ -732,6 +802,7 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id,
     const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
+    const uint8_t startup_deferred = monitor_runtime_deferred; // 启动标定结束不代表周期任务已健康运行。
     TaskMonitor_LongOperationWindow_t *window = &long_operation_windows[id][operation];
     if (window->active == 0u)
     {
@@ -793,7 +864,7 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id,
 
     if (action_count != 0u)
         TaskMonitorPublishFaultActions(actions, action_count, core_healthy);
-    else
+    else if (startup_deferred == 0u)
         RobotSafetySetTaskHealthy(core_healthy);
     return (uint8_t)(within_limit != 0u && core_healthy != 0u);
 }
@@ -804,7 +875,7 @@ uint8_t TaskMonitorAllAlive(void)
         return 0u;
 
     const uint32_t previous = TaskMonitorEnterCritical();
-    uint8_t alive = (uint8_t)(core_fault_latched == 0u &&
+    uint8_t alive = (uint8_t)(monitor_runtime_deferred == 0u && core_fault_latched == 0u &&
                               long_operation_timeout_latched == 0u &&
                               long_operation_fault_latched == 0u);
     for (uint32_t index = 0u; index < monitor_configured_count; ++index)
@@ -825,7 +896,7 @@ uint8_t TaskMonitorAllCoreHealthyNow(void)
     const uint32_t now = PlatformTimeNowMs();
     const uint32_t previous = TaskMonitorEnterCritical();
     uint8_t has_core_task = 0u;
-    uint8_t healthy = (uint8_t)(core_fault_latched == 0u &&
+    uint8_t healthy = (uint8_t)(monitor_runtime_deferred == 0u && core_fault_latched == 0u &&
                                 long_operation_timeout_latched == 0u &&
                                 long_operation_fault_latched == 0u);
     for (uint32_t index = 0u; index < monitor_configured_count; ++index)

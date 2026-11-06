@@ -379,6 +379,42 @@ int main(void)
     TEST_CHECK(TaskMonitorAllAlive() != 0u);
     TEST_CHECK(TaskMonitorAllCoreHealthyNow() == 0u);
 
+    // 协调任务先完成传感器初始化；周期任务的启动宽限从明确放行时开始。
+    ResetFakes(900u);
+    TEST_CHECK(TaskMonitorInitConfigured(startup_configs, 2u) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorDeferRuntime() == TASK_MONITOR_RESULT_OK); // 调度器启动前声明延迟放行。
+    scheduler_running = 1u; // 模拟默认任务开始运行，但控制任务尚未创建。
+    mc02_test_tick += 1000u; // 启动耗时不能消耗控制任务的首次运行宽限。
+    TaskMonitorTick(); // 即使误调用监控，也不能因未放行任务超时或喂狗。
+    TEST_CHECK(watchdog_feed_count == 0u && TaskMonitorAllAlive() == 0u);
+    TEST_CHECK(TaskMonitorBeginWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_NOT_RUNNING);
+    TaskMonitorDelayMs(TASK_MONITOR_INS, 2u); // 启动协调中的等待不能冒充 INS 心跳。
+    TEST_CHECK(TaskMonitorGetProgressState(TASK_MONITOR_INS, &core_state) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(core_state.started == 0u && core_state.begin_count == 0u && core_state.progress_count == 0u);
+    TEST_CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
+    TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_BUSY); // 标定未结束不得放行。
+    mc02_test_tick += 1000u; // 标定时长属于启动阶段，不计入未运行任务的宽限。
+    TEST_CHECK(TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
+    TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_OK); // 此时固定所有任务的首次期限。
+    TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_NOT_RUNNING); // 放行操作不可再次重设期限。
+    TEST_CHECK(TaskMonitorBeginWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorCompleteWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_OK);
+    mc02_test_tick += 5u; TaskMonitorTick(); // 仍在第二个任务的启动宽限内。
+    TEST_CHECK(TaskMonitorAllAlive() != 0u);
+    mc02_test_tick += 1u; TaskMonitorTick(); // 宽限到期后未启动的核心任务应失效。
+    TEST_CHECK(TaskMonitorAllAlive() == 0u && OutputsAreOff() != 0u);
+
+    ResetFakes(100u); // 另起一次启动，检查延迟放行不会放宽标定自身期限。
+    TEST_CHECK(TaskMonitorInitConfigured(startup_configs, 2u) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorDeferRuntime() == TASK_MONITOR_RESULT_OK);
+    scheduler_running = 1u;
+    TEST_CHECK(TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
+    mc02_test_tick += 15000u; // 标定达到不可续期的总时限。
+    TaskMonitorTick(); // 启动协调过程中仍可检查长操作超期。
+    TEST_CHECK(OutputsAreOff() != 0u && watchdog_feed_count == 0u); // 超时关断且不喂狗。
+    TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_BUSY); // 故障锁存后不能放行。
+    TEST_CHECK(!TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
+
     puts("PASS: configured task progress, fixed deadlines, event idle, and role-specific faults");
     return 0;
 }

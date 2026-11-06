@@ -155,6 +155,18 @@ uint8_t TaskMonitorInit(void);
 TaskMonitor_Result_e TaskMonitorInitConfigured(const TaskMonitorTaskConfig_t *configs,
                                                uint32_t count);
 
+/** @brief 将周期任务监控推迟到启动协调者明确放行。
+ * @return 成功、上下文错误、尚未初始化或监控已经开始／被推迟。
+ * @note 须在调度器启动前、任务开始报告进度前调用；不会清除现有故障。
+ */
+TaskMonitor_Result_e TaskMonitorDeferRuntime(void);
+
+/** @brief 在启动准备完成后开始周期任务的首次运行宽限。
+ * @return 成功、上下文错误、未处于等待放行状态或仍有长操作／锁存故障。
+ * @note 调度器运行时由唯一启动协调者调用一次；此操作不喂看门狗、不清除故障。
+ */
+TaskMonitor_Result_e TaskMonitorReleaseRuntime(void);
+
 /**
  * @brief 开始一轮周期工作或一个事件任务。
  * @param[in] id 已配置任务编号。
