@@ -31,6 +31,20 @@ Single source for choosing a skill. The skill bodies live in [.agents/skills/](.
 
 `implement`, `implement-spec`, `retro`, `handoff`, `claude-handoff`, `grill-me`, `grill-with-docs`, `to-questionnaire`, `wait-what`, and the `writing-*` drafts stay manual: they need a deliberate request, and none of them may run on its own.
 
+## Documentation review gate
+
+Every task that writes or edits documentation ends with a writing pass before delivery. Pick the skill by language and genre:
+
+| Document | Skill |
+|---|---|
+| Chinese prose: notes, TODO entries, workflow docs, comments | `humanizer-zh` |
+| English prose | `no-ai-slop` |
+| Paper, abstract, rebuttal, defence of a claim | `anti-defensive-writing` or `anti-defensive-writing-en` |
+| AGENTS.md, SKILL.md, and other agent-facing documents | `writing-for-agents` |
+| A long article or course note assembled from raw material | `writing-beats`, `writing-fragments`, `writing-shape` |
+
+The pass edits expression only. It adds no number, source, or conclusion, drops no independent information or qualification, and leaves tables, links, task IDs, code blocks, and frontmatter untouched. When it finds nothing, change nothing and do not narrate the check.
+
 ## Boundaries that outrank any skill
 
 - Task state stays in [.Doc/TODO.md](../../.Doc/TODO.md). No skill may keep a second status field, and no skill may create external issues.

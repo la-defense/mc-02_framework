@@ -8,6 +8,11 @@
 
 **==标为黄色高亮的代表紧急程度高。==**
 
+## 2026-11-06：文档写作审查规则
+
+- [x] **MC02-0128** [enhancement] 把文档写作审查定为常驻规则并接入技能路由。验收：`AGENTS.md` 要求任何新增或修改文档的工作在交付前调用写作技能；`docs/agents/skills.md` 给出按文体选择技能的对照表与审查边界；第27篇说明规则来源、覆盖范围与「只改表达不改事实」的边界。
+  验证：本次新增的中文段落按规则执行 `humanizer-zh` 审查，删去一处无信息铺垫；`tools/workflow/check_todo.py` 通过，改动文件的相对链接逐个核对存在；只改文档，未触及源码、构建配置和 `skills-lock.json`。说明见[第27篇](../docs/学习笔记/27-技能按需加载与路由.md#文档交付前的写作审查)。
+
 ## 2026-11-05：技能路由接线
 
 - [x] **MC02-0127** [enhancement] 把技能路由收成单一入口，并接通四个流程技能。验收：`AGENTS.md` 的「本地适配规则」改为分别链接路由与适配文档；新建 `docs/agents/skills.md` 作为唯一路由表；`issue-tracker.md` 与 `skill-overrides.md` 不再重复任务清单；`wayfinder`／`to-spec`／`to-tickets`／`triage` 可由模型目录触发；`research` 与 `diagnosing-bugs` 写明触发条件；同步技能说明与学习笔记索引。

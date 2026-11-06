@@ -10,5 +10,6 @@ This is the MC-02 STM32H723 firmware repository. Start here, then follow the tas
 - Hardware safety boundary: MC-02 bench HIL is bare-board only. Keep all generated vision commands fire-disabled; do not use a workflow that actuates the robot.
 - 普通开发完成验证、教学文档和 TODO 后提交，并简短复盘交付；默认流程取消代码审查、双代理复审、推送及 PR 环节。技能的选择与触发见 [docs/agents/skills.md](docs/agents/skills.md)，与上游的差异见 [skill-overrides.md](docs/workflow/skill-overrides.md)。
 - Git 提交使用 fix、feat、docs、chore 等原文类型前缀；摘要和正文用中文。代码标识符、任务编号、产品名及必要技术术语保留原文。
+- 任何新增或修改文档的工作，交付前用已安装的写作技能审查一遍：中文用 humanizer-zh，英文用 no-ai-slop，论文类用 anti-defensive-writing，面向 agent 的文档用 writing-for-agents。审查只改表达，不新增事实，不删限定条件。
 
 Project skills live in `.agents/skills`; a globally installed skill of the same name never replaces them. When a task touches sp_vision_25, use this repository's workflow and learning references while switching the code worktree to the vision repository.
