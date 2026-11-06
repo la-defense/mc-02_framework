@@ -448,6 +448,32 @@ int main(void)
     TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_BUSY); // 故障锁存后不能放行。
     TEST_CHECK(!TaskMonitorEndLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION));
 
+    // 辅助任务在启动期失败后移除监控，核心任务及其期限保持不变。
+    ResetFakes(300u);
+    TEST_CHECK(TaskMonitorInitConfigured(core_and_event_configs, 3u) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorRemoveDeferredAuxiliary(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_BUSY); // 启动前同样不能移除核心任务。
+    TEST_CHECK(TaskMonitorRemoveDeferredAuxiliary(TASK_MONITOR_OPTIONAL_0) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorGetProgressState(TASK_MONITOR_OPTIONAL_0, &auxiliary_state) == TASK_MONITOR_RESULT_BAD_ARGUMENT);
+    TEST_CHECK(TaskMonitorInitConfigured(core_and_event_configs, 3u) == TASK_MONITOR_RESULT_OK); // 重建配置，继续检查调度器运行后的情况。
+    TEST_CHECK(TaskMonitorDeferRuntime() == TASK_MONITOR_RESULT_OK);
+    scheduler_running = 1u;
+    TEST_CHECK(TaskMonitorRemoveDeferredAuxiliary(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_BUSY); // 核心监控不得移除。
+    mc02_test_ipsr = 1u;
+    TEST_CHECK(TaskMonitorRemoveDeferredAuxiliary(TASK_MONITOR_OPTIONAL_0) == TASK_MONITOR_RESULT_CONTEXT);
+    mc02_test_ipsr = 0u;
+    TEST_CHECK(TaskMonitorRemoveDeferredAuxiliary(TASK_MONITOR_OPTIONAL_0) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorRemoveDeferredAuxiliary(TASK_MONITOR_OPTIONAL_0) == TASK_MONITOR_RESULT_BAD_ARGUMENT);
+    TEST_CHECK(TaskMonitorGetProgressState(TASK_MONITOR_OPTIONAL_0, &auxiliary_state) == TASK_MONITOR_RESULT_BAD_ARGUMENT);
+    TEST_CHECK(TaskMonitorGetProgressState(TASK_MONITOR_INS, &core_state) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorRemoveDeferredAuxiliary(TASK_MONITOR_MOTOR) == TASK_MONITOR_RESULT_NOT_RUNNING);
+    TEST_CHECK(TaskMonitorBeginWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorCompleteWork(TASK_MONITOR_INS) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorBeginWork(TASK_MONITOR_MOTOR) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorCompleteWork(TASK_MONITOR_MOTOR) == TASK_MONITOR_RESULT_OK);
+    TaskMonitorTick();
+    TEST_CHECK(TaskMonitorAllAlive() && watchdog_feed_count == 1u); // 其他核心任务可正常运行和喂狗。
+
     puts("PASS: configured task progress, fixed deadlines, event idle, and role-specific faults");
     return 0;
 }

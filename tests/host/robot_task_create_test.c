@@ -9,11 +9,13 @@
 #include "platform_uart.h"
 #include "bsp_log.h"
 #include "daemon.h"
+#include "task_monitor.h"
 #include <stdint.h>
 #include <string.h>
 
 static const char *failure_name;
-static uint8_t ui_started = 1u, lcd_started = 1u, uart_ready = 1u;
+static uint8_t ui_started = 1u, lcd_started = 1u, imu_started = 1u, uart_ready = 1u;
+static uint8_t remove_monitor_ok = 1u; // 模拟辅助 INS 监控能否安全撤销。
 static RobotModule_t core_failure = ROBOT_MODULE_COUNT;
 static unsigned created, failures, degraded;
 static uint16_t last_failure, last_degraded;
@@ -54,17 +56,24 @@ uint8_t PlatformTaskCreateTracked(const PlatformTaskConfig_t *config, PlatformTa
 }
 
 uint8_t PlatformUartStartTxTask(void) {return uart_ready;}
+TaskMonitor_Result_e TaskMonitorRemoveDeferredAuxiliary(TaskMonitor_Id_e id)
+{
+    TEST_CHECK(id == TASK_MONITOR_INS); // 只允许撤销失败的 INS 监控。
+    return remove_monitor_ok ? TASK_MONITOR_RESULT_OK : TASK_MONITOR_RESULT_BUSY;
+}
 BSPLogStatus_t BSPLogTaskInit(void) {return log_result;}
 DaemonStatus_t DaemonEventTaskInit(void) {return daemon_result;}
 uint8_t RobotBuildModuleStarted(RobotModule_t module)
 {
-    return module == ROBOT_MODULE_UI ? ui_started : module == ROBOT_MODULE_LCD ? lcd_started : 0u;
+    return module == ROBOT_MODULE_UI ? ui_started : module == ROBOT_MODULE_LCD ? lcd_started :
+           module == ROBOT_MODULE_IMU ? imu_started : 0u; // 分别模拟模块启动结果。
 }
 uint8_t RobotBuildMarkFailure(RobotModule_t module) {return (uint8_t)(module == core_failure);}
 void InitDiagnosticReportFailure(InitDiagnosticStage_e stage, uint8_t module,
                                  InitDiagnosticReason_e reason, uint16_t resource)
 {
-    TEST_CHECK((stage == INIT_STAGE_TASKS && module == INIT_MODULE_TASKS && reason == INIT_FAILURE_TASK_CREATE) ||
+    TEST_CHECK((stage == INIT_STAGE_TASKS && module == INIT_MODULE_TASKS &&
+                (reason == INIT_FAILURE_TASK_CREATE || reason == INIT_FAILURE_DEPENDENCY)) ||
                (stage == INIT_STAGE_APPLICATION && module == INIT_MODULE_INS && reason == INIT_FAILURE_RESOURCE));
     ++failures;
     last_failure = resource;
@@ -96,7 +105,11 @@ int main(int argc, char **argv)
         TEST_CHECK(0 && "HT 测试未启用");
 #endif
     }
-    else if (strcmp(argv[1], "core-ins") == 0) failure_name = "instask";
+    else if (strcmp(argv[1], "core-ins") == 0) { failure_name = "instask"; core_failure = ROBOT_MODULE_IMU; }
+    else if (strcmp(argv[1], "aux-ins") == 0) failure_name = "instask";
+    else if (strcmp(argv[1], "aux-ins-monitor-fail") == 0) { failure_name = "instask"; remove_monitor_ok = 0u; }
+    else if (strcmp(argv[1], "disabled-ins") == 0) imu_started = 0u;
+    else if (strcmp(argv[1], "disabled-ins-monitor-fail") == 0) { imu_started = 0u; remove_monitor_ok = 0u; }
     else if (strcmp(argv[1], "core-motor") == 0) failure_name = "motortask";
     else if (strcmp(argv[1], "core-daemon") == 0) failure_name = "daemontask";
     else if (strcmp(argv[1], "core-robot") == 0) failure_name = "robottask";
@@ -116,8 +129,14 @@ int main(int argc, char **argv)
     uint8_t result = OSTaskInit(); // 入口只创建模拟任务，不启动执行器。
     if (strcmp(argv[1], "ht-failure") == 0)
         TEST_CHECK(result == 0u && failures == 1u && last_failure == INIT_RESOURCE_TASK_MOTOR);
-    else if (failure_name != NULL && strcmp(failure_name, "instask") == 0)
+    else if (!imu_started && !remove_monitor_ok)
         TEST_CHECK(result == 0u && failures == 1u && last_failure == INIT_RESOURCE_TASK_INS);
+    else if (core_failure == ROBOT_MODULE_IMU)
+        TEST_CHECK(result == 0u && failures == 1u && last_failure == INIT_RESOURCE_TASK_INS);
+    else if (failure_name != NULL && strcmp(failure_name, "instask") == 0 && !remove_monitor_ok)
+        TEST_CHECK(result == 0u && failures == 1u && last_failure == INIT_RESOURCE_TASK_INS);
+    else if (failure_name != NULL && strcmp(failure_name, "instask") == 0)
+        TEST_CHECK(result == 1u && degraded == 1u && last_degraded == INIT_RESOURCE_TASK_INS);
     else if (failure_name != NULL && strcmp(failure_name, "motortask") == 0)
         TEST_CHECK(result == 0u && failures == 1u && last_failure == INIT_RESOURCE_TASK_MOTOR);
     else if (failure_name != NULL && strcmp(failure_name, "daemontask") == 0)
@@ -142,7 +161,7 @@ int main(int argc, char **argv)
         TEST_CHECK(result == 1u && degraded == 1u && last_degraded == INIT_RESOURCE_TASK_LOG);
     else
         TEST_CHECK(result == 1u && failures == 0u && degraded == 0u);
-    TEST_CHECK(created == 4u + ui_started + lcd_started); // 未启用的辅助模块不创建任务。
+    TEST_CHECK(created == 3u + imu_started + ui_started + lcd_started); // 未启用的模块不创建任务。
 #if defined(TEST_HT_TASK)
     TEST_CHECK(ht_calls == (unsigned)(failure_name == NULL)); // 已有核心任务失败时不启动 HT。
 #endif

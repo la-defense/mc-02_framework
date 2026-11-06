@@ -11,6 +11,7 @@
 #include "platform_uart.h"
 #include "bsp_log.h"
 #include "daemon.h"
+#include "task_monitor.h"
 #include "init_diagnostic.h"
 #include <stddef.h>
 #if !defined(MC02_PROFILE_BENCH_SAFE) && MC02_SELECTED_DRIVER_HT
@@ -57,7 +58,23 @@ uint8_t RobotReportHeaterInitFailure(void)
 
 uint8_t OSTaskInit(void)
 {
-    CreateTask("instask", StartINSTASK, 1024u, PLATFORM_TASK_ABOVE_NORMAL, &insTaskHandle); // 姿态读取需要较高优先级。
+    uint8_t all_created = 1u; // 先假定核心任务均创建成功。
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_IMU)) // 仅为成功启用的姿态模块创建周期任务。
+        CreateTask("instask", StartINSTASK, 1024u, PLATFORM_TASK_ABOVE_NORMAL, &insTaskHandle);
+    else
+    {
+        const TaskMonitor_Result_e removal = TaskMonitorRemoveDeferredAuxiliary(TASK_MONITOR_INS); // 撤销失败的辅助姿态监控。
+        if (removal != TASK_MONITOR_RESULT_OK && removal != TASK_MONITOR_RESULT_BAD_ARGUMENT)
+        {
+            InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                        INIT_FAILURE_DEPENDENCY, INIT_RESOURCE_TASK_INS); // 核心监控不得被跳过。
+            all_created = 0u; // 未能证明安全降级时阻止启动。
+        }
+    }
+#else
+    CreateTask("instask", StartINSTASK, 1024u, PLATFORM_TASK_ABOVE_NORMAL, &insTaskHandle); // 旧配置保持原任务。
+#endif
 
     // 裸板也要消费视觉等通信输入；只在机器人配置中运行电机控制。
 #if MC02_FEATURE_COMM_DISPATCH
@@ -65,7 +82,6 @@ uint8_t OSTaskInit(void)
 #endif
 
     uint8_t uart_tx_created = PlatformUartStartTxTask(); // 尝试创建串口发送任务。
-    uint8_t all_created = 1u; // 先假定核心任务均创建成功。
 
     // 日志是辅助功能时可降级；被核心依赖时创建失败须阻止启动。
     const BSPLogStatus_t log_status = BSPLogTaskInit(); // 获取日志任务创建结果。
@@ -134,12 +150,35 @@ uint8_t OSTaskInit(void)
             INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_UART_TX);
         all_created = 0u; // 核心任务缺失不允许继续启动。
     }
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_IMU) && insTaskHandle == NULL)
+#else
     if (insTaskHandle == NULL)
+#endif
     {
+#if defined(MC02_CONFIG_GENERATED)
+        if (RobotBuildMarkFailure(ROBOT_MODULE_IMU))
+        {
+#endif
         // 姿态任务没有句柄时记录创建失败。
         InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_INS);
         all_created = 0u; // 姿态任务是当前构建的核心任务。
+#if defined(MC02_CONFIG_GENERATED)
+        }
+        else
+        {
+            if (TaskMonitorRemoveDeferredAuxiliary(TASK_MONITOR_INS) != TASK_MONITOR_RESULT_OK)
+            {
+                InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                            INIT_FAILURE_DEPENDENCY, INIT_RESOURCE_TASK_INS); // 无法安全撤销监控时阻止启动。
+                all_created = 0u; // 不让缺失的核心监控被误认为辅助降级。
+            }
+            else
+                InitDiagnosticReportDegraded(INIT_STAGE_TASKS, INIT_MODULE_TASKS,
+                                             INIT_FAILURE_TASK_CREATE, INIT_RESOURCE_TASK_INS); // 辅助姿态任务失败只报告降级。
+        }
+#endif
     }
 #if MC02_FEATURE_COMM_DISPATCH
     if (motorTaskHandle == NULL)

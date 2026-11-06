@@ -37,13 +37,23 @@ add_executable(ins_startup_test ins_startup_test.c ../../application/ins_startup
   ../../application/robot_task_create.c)
 target_include_directories(ins_startup_test BEFORE PRIVATE ins_startup_fakes task_creation_fakes)
 target_include_directories(ins_startup_test PRIVATE . ../../application ../../modules/daemon
-  ../../bsp/os ../../bsp/usart ../../bsp/log)
+  ../../modules/task_monitor ../../bsp/os ../../bsp/usart ../../bsp/log)
 target_compile_definitions(ins_startup_test PRIVATE MC02_CONFIG_GENERATED=1 MC02_PROFILE_BENCH_SAFE=1)
 target_compile_options(ins_startup_test PRIVATE -Wall -Wextra -Werror -ffunction-sections -fdata-sections)
 target_link_options(ins_startup_test PRIVATE -Wl,--gc-sections)
 foreach(scenario success imu-core imu-aux heater-core heater-aux heater-disabled)
   add_test(NAME production_ins_startup_${scenario} COMMAND ins_startup_test ${scenario})
   set_tests_properties(production_ins_startup_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+add_executable(robot_monitor_plan_test robot_monitor_plan_test.c ../../application/robot_monitor_plan.c
+  ../../application/config/module_plan.c)
+target_include_directories(robot_monitor_plan_test BEFORE PRIVATE task_creation_fakes)
+target_include_directories(robot_monitor_plan_test PRIVATE . ../../application ../../modules/task_monitor)
+target_compile_definitions(robot_monitor_plan_test PRIVATE MC02_CONFIG_GENERATED=1)
+target_compile_options(robot_monitor_plan_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario core transitive aux disabled missing cycle)
+  add_test(NAME production_robot_monitor_plan_${scenario} COMMAND robot_monitor_plan_test ${scenario})
+  set_tests_properties(production_robot_monitor_plan_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
 # 直接运行生成代码中的 FDCAN MSP，模拟重复初始化和跨总线退出。
 add_executable(fdcan_msp_test fdcan_msp_test.c ../../Core/Src/fdcan.c)
@@ -89,10 +99,10 @@ set_tests_properties(production_platform_spi_registration PROPERTIES TIMEOUT 10)
 # 使用可控的任务后端验证真实启动计划，失败不启动真实线程。
 add_executable(robot_task_create_test robot_task_create_test.c ../../application/robot_task_create.c)
 target_include_directories(robot_task_create_test PRIVATE task_creation_fakes . ../../application
-  ../../modules/daemon ../../bsp/os ../../bsp/usart ../../bsp/log)
+  ../../modules/daemon ../../modules/task_monitor ../../bsp/os ../../bsp/usart ../../bsp/log)
 target_compile_definitions(robot_task_create_test PRIVATE MC02_CONFIG_GENERATED=1 MC02_PROFILE_BENCH_SAFE=1)
 target_compile_options(robot_task_create_test PRIVATE -Wall -Wextra -Werror)
-foreach(scenario IN ITEMS normal core-ins core-motor core-daemon core-robot aux-ui core-ui disabled-ui
+foreach(scenario IN ITEMS normal core-ins aux-ins aux-ins-monitor-fail disabled-ins disabled-ins-monitor-fail core-motor core-daemon core-robot aux-ui core-ui disabled-ui
     disabled-lcd aux-lcd core-lcd uart event no-event log core-log heater-core heater-aux)
   add_test(NAME production_task_creation_${scenario} COMMAND robot_task_create_test ${scenario})
   set_tests_properties(production_task_creation_${scenario} PROPERTIES TIMEOUT 10)
@@ -100,7 +110,7 @@ endforeach()
 # 使用机器人配置单独检查 HT 独立任务的创建结果如何进入整车故障。
 add_executable(robot_ht_task_create_test robot_task_create_test.c ../../application/robot_task_create.c)
 target_include_directories(robot_ht_task_create_test PRIVATE task_creation_fakes . ../../application
-  ../../modules/daemon ../../bsp/os ../../bsp/usart ../../bsp/log)
+  ../../modules/daemon ../../modules/task_monitor ../../bsp/os ../../bsp/usart ../../bsp/log)
 target_compile_definitions(robot_ht_task_create_test PRIVATE MC02_CONFIG_GENERATED=1
   MC02_SELECTED_DRIVER_HT=1 TEST_HT_TASK=1)
 target_compile_options(robot_ht_task_create_test PRIVATE -Wall -Wextra -Werror)

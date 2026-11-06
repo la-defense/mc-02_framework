@@ -161,6 +161,13 @@ TaskMonitor_Result_e TaskMonitorInitConfigured(const TaskMonitorTaskConfig_t *co
  */
 TaskMonitor_Result_e TaskMonitorDeferRuntime(void);
 
+/** @brief 在周期任务放行前移除启动失败的辅助任务监控。
+ * @param[in] id 已配置的辅助任务编号。
+ * @return OK 表示移除成功；核心任务、正在工作或故障锁存返回 BUSY，其他情况返回对应错误。
+ * @note 仅在调度器启动前或监控已延迟放行的普通启动任务中调用；不清除模块自身的降级记录。
+ */
+TaskMonitor_Result_e TaskMonitorRemoveDeferredAuxiliary(TaskMonitor_Id_e id);
+
 /** @brief 在启动准备完成后开始周期任务的首次运行宽限。
  * @return 成功、上下文错误、未处于等待放行状态或仍有长操作／锁存故障。
  * @note 调度器运行时由唯一启动协调者调用一次；此操作不喂看门狗、不清除故障。

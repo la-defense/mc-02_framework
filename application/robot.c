@@ -12,6 +12,7 @@
 #include "robot_control_tasks.h"
 #include "robot_def.h"
 #include "robot_task_create.h"
+#include "robot_monitor_plan.h"
 #include "robot_safety.h"
 #include "config.h"
 #include "robot_alarm.h"
@@ -55,27 +56,6 @@
 #if MC02_BENCH_REFEREE_DIAGNOSTICS
 #include "referee_bench.h"
 #endif
-
-// 这些期限沿用现有监控间隔；首次任务启动另留100ms，避免调度器刚启动时误报。
-static const TaskMonitorTaskConfig_t robot_task_monitor_config[] = {
-    {.id = TASK_MONITOR_INS, .name = "INS", .mode = TASK_MONITOR_MODE_PERIODIC,
-     .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 5u,
-     .startup_grace_ms = 100u},
-#if MC02_FEATURE_COMM_DISPATCH
-    {.id = TASK_MONITOR_MOTOR, .name = "MOTOR", .mode = TASK_MONITOR_MODE_PERIODIC,
-     .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 5u,
-     .startup_grace_ms = 100u},
-#endif
-    {.id = TASK_MONITOR_ROBOT, .name = "ROBOT", .mode = TASK_MONITOR_MODE_PERIODIC,
-     .role = TASK_MONITOR_ROLE_CORE, .period_ms = 5u, .deadline_ms = 20u,
-     .startup_grace_ms = 100u},
-    {.id = TASK_MONITOR_DAEMON, .name = "DAEMON", .mode = TASK_MONITOR_MODE_PERIODIC,
-     .role = TASK_MONITOR_ROLE_CORE, .period_ms = 10u, .deadline_ms = 30u,
-     .startup_grace_ms = 100u},
-    {.id = TASK_MONITOR_UART_TX, .name = "UART_TX", .mode = TASK_MONITOR_MODE_PERIODIC,
-     .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 30u,
-     .startup_grace_ms = 100u},
-};
 
 // 启用温控时先锁止加热，再申请 INS 的 Flash 等待时间；失败时结束相应长操作。
 static uint8_t RobotParamFlashOperationBegin(void)
@@ -256,10 +236,11 @@ uint8_t RobotInit(void)
         RobotFaultReport(ROBOT_FAULT_RESET_LOCKOUT);
     if (recovery_state_valid != 0u && recovery_state.manual_estop_latched != 0u)
         EstopRequest(ESTOP_REASON_MANUAL);
-    if (TaskMonitorInitConfigured(robot_task_monitor_config,
-                                  (uint32_t)(sizeof(robot_task_monitor_config) /
-                                             sizeof(robot_task_monitor_config[0]))) !=
-        TASK_MONITOR_RESULT_OK)
+    #if defined(MC02_CONFIG_GENERATED)
+    if (RobotConfigureTaskMonitor(RobotBuildGetPlan()) != TASK_MONITOR_RESULT_OK)
+#else
+    if (RobotConfigureTaskMonitor(NULL) != TASK_MONITOR_RESULT_OK)
+#endif
     {
         InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
                                     INIT_FAILURE_DEPENDENCY, 0u);

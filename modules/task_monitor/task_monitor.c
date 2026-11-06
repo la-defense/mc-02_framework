@@ -351,6 +351,42 @@ TaskMonitor_Result_e TaskMonitorDeferRuntime(void)
     return result;
 }
 
+TaskMonitor_Result_e TaskMonitorRemoveDeferredAuxiliary(TaskMonitor_Id_e id)
+{
+    if (PlatformIrqIsInHandler()) return TASK_MONITOR_RESULT_CONTEXT; // 中断不能修改监控配置。
+    if ((uint32_t)id >= TASK_MONITOR_MAX_TASKS) return TASK_MONITOR_RESULT_BAD_ARGUMENT; // 越界编号不访问数组。
+    const uint8_t scheduler_running = PlatformSchedulerIsRunning(); // 区分启动前与协调阶段。
+    const uint32_t previous = TaskMonitorEnterCritical(); // 与放行和故障状态更新同步。
+    TaskMonitor_Result_e result = TASK_MONITOR_RESULT_BAD_ARGUMENT; // 未找到任务时不改变配置。
+    if (!monitor_initialized) result = TASK_MONITOR_RESULT_NOT_INITIALIZED; // 必须先完成配置。
+    else if (monitor_runtime_started || (scheduler_running && !monitor_runtime_deferred))
+        result = TASK_MONITOR_RESULT_NOT_RUNNING; // 运行期不能删除监控。
+    else if (core_fault_latched || long_operation_timeout_latched || long_operation_fault_latched ||
+             TaskMonitorHasAnyActiveLongOperation()) result = TASK_MONITOR_RESULT_BUSY; // 故障或长操作期间不能改表。
+    else
+    {
+        for (uint32_t index = 0u; index < monitor_configured_count; ++index)
+        {
+            if (monitor_items[index].config.id != id) continue; // 跳过其他任务。
+            TaskMonitorItem_t *item = &monitor_items[index]; // 找到要移除的配置。
+            if (item->config.role != TASK_MONITOR_ROLE_AUXILIARY || item->started ||
+                item->work_active || item->fault_reason != TASK_MONITOR_FAULT_NONE)
+                result = TASK_MONITOR_RESULT_BUSY; // 核心任务或已运行任务不能被隐藏。
+            else
+            {
+                for (uint32_t move = index + 1u; move < monitor_configured_count; ++move)
+                    monitor_items[move - 1u] = monitor_items[move]; // 保持其他任务顺序和状态。
+                --monitor_configured_count; // 只删除这一项。
+                memset(&monitor_items[monitor_configured_count], 0, sizeof(monitor_items[0])); // 清除尾部残留。
+                result = TASK_MONITOR_RESULT_OK; // 后续查询将报告该任务未配置。
+            }
+            break; // 任务编号唯一，找到后停止遍历。
+        }
+    }
+    TaskMonitorExitCritical(previous); // 恢复调用前的中断状态。
+    return result; // 由协调者决定是否继续启动。
+}
+
 TaskMonitor_Result_e TaskMonitorReleaseRuntime(void)
 {
     if (PlatformIrqIsInHandler() != 0u) return TASK_MONITOR_RESULT_CONTEXT; // 必须由启动协调任务调用。
