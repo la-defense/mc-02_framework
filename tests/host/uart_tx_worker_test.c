@@ -9,12 +9,13 @@
 #include <setjmp.h>
 static osThreadDef_t captured;
 static unsigned creates, monitor_begins, monitor_completions, monitor_waits, delays, notifications;
-static uint8_t fail_create, kernel_running;
+static uint8_t fail_create, kernel_running, startup_batch_active;
 static jmp_buf finished;
 int32_t osKernelRunning(void)
 {
     return kernel_running;
 }
+uint8_t PlatformTaskBatchIsActive(void) { return startup_batch_active; } // 模拟协调者持有的创建批次。
 osThreadId osThreadCreate(const osThreadDef_t *definition, void *argument)
 {
     TEST_CHECK(argument == NULL);
@@ -76,30 +77,31 @@ int main(void)
     USARTTxRequest_t request = {&data, 1u, USART_TRANSFER_DMA, 50u, done, NULL, NULL};
     kernel_running=1u;
     TEST_CHECK(!USARTTxTaskInit() && creates==0u);
+    startup_batch_active=1u; // 调度器运行但协调者已暂停任务切换。
+    fail_create=1u; // 注入创建失败，确认不会错误发布服务可用。
+    TEST_CHECK(!USARTTxTaskInit() && creates==1u);
+    startup_batch_active=0u;
     kernel_running=0u;
     mc02_test_faultmask=1u;
-    TEST_CHECK(!USARTTxTaskInit() && creates==0u);
+    TEST_CHECK(!USARTTxTaskInit() && creates==1u);
     mc02_test_faultmask=0u;
     mc02_test_ipsr=1u;
-    TEST_CHECK(!USARTTxTaskInit() && creates==0u);
+    TEST_CHECK(!USARTTxTaskInit() && creates==1u);
     mc02_test_ipsr=0u;
     // RobotInit在PRIMASK=1时创建任务；初始化必须保持这一启动状态。
     mc02_test_disable_irq();
     mc02_test_basepri=0x50u; // 真实FreeRTOS在调度前创建前序任务后保持BASEPRI屏蔽。
     fail_create = 1u;
     TEST_CHECK(!USARTTxTaskInit());
-    TEST_CHECK(mc02_test_primask==1u && creates==1u);
+    TEST_CHECK(mc02_test_primask==1u && creates==2u);
     mc02_test_set_primask(0u);
     mc02_test_basepri=0u;
     TEST_CHECK(USARTSubmitTx(instance, &request, &id) == USART_SEND_NOT_READY && id == 77u &&
                uart_model_calls == 0u);
     fail_create = 0u;
-    mc02_test_disable_irq();
-    mc02_test_basepri=0x50u;
-    TEST_CHECK(USARTTxTaskInit() && creates == 2u && USARTTxTaskInit() && creates == 2u);
-    TEST_CHECK(mc02_test_primask==1u && mc02_test_basepri==0x50u);
-    mc02_test_set_primask(0u);
-    mc02_test_basepri=0u;
+    kernel_running=1u; startup_batch_active=1u; // 由协调任务在批次内成功创建。
+    TEST_CHECK(USARTTxTaskInit() && creates == 3u && USARTTxTaskInit() && creates == 3u);
+    startup_batch_active=0u; // 放行后服务仍保持已创建状态。
     TEST_CHECK(captured.stack_size == 512u && captured.priority == osPriorityNormal &&
                uart_model_calls == 0u);
     TEST_CHECK(USARTSubmitTx(instance, &request, &id) == USART_SEND_ACCEPTED);

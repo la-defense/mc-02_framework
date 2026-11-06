@@ -50,6 +50,24 @@ void PlatformTaskDelayMs(uint32_t milliseconds);
  */
 uint8_t PlatformSchedulerIsRunning(void);
 
+/** @brief 在运行中的调度器内开始一段有界的启动任务创建批次。
+ * @return 1 表示已阻止任务切换；中断上下文、调度器未运行／已被暂停或重复开始时返回 0。
+ * @note 只允许唯一启动协调任务调用；不屏蔽中断。批次内不得等待、执行长操作或调用会阻塞的接口。
+ */
+uint8_t PlatformTaskBatchBegin(void);
+
+/** @brief 查询当前是否处于启动任务创建批次。
+ * @return 1 表示协调任务持有批次，0 表示未持有或处于中断上下文。
+ * @note 仅供启动适配器判断创建顺序；不得用作运行许可。
+ */
+uint8_t PlatformTaskBatchIsActive(void);
+
+/** @brief 结束当前启动任务创建批次并恢复调度。
+ * @return 1 表示已恢复；无批次或处于中断上下文时返回 0。
+ * @note 须由开始批次的协调任务调用一次；恢复后新任务可能立即运行。
+ */
+uint8_t PlatformTaskBatchEnd(void);
+
 /** @brief 在调度器启动前沿用平台原有的忙等实现。
  * @param[in] milliseconds 等待时长，单位毫秒。
  * @note 仅用于保留现有启动前行为；调用者须确保时基已初始化，期间不让出 CPU。

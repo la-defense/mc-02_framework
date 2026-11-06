@@ -15,6 +15,12 @@ if(UNIX)
 endif()
 include(../../cmake/mc02_dsp.cmake)
 mc02_add_dsp(mc02_dsp_host TRUE)
+# 使用 FreeRTOS 状态替身运行生产调度批次，检查重复开始和退出。
+add_executable(platform_task_batch_test platform_task_batch_test.c ../../bsp/os/platform_task_batch_freertos.c)
+target_include_directories(platform_task_batch_test BEFORE PRIVATE task_batch_fakes . ../../bsp/os)
+target_compile_options(platform_task_batch_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_platform_task_batch COMMAND platform_task_batch_test)
+set_tests_properties(production_platform_task_batch PROPERTIES TIMEOUT 10)
 # 直接运行生成代码中的 FDCAN MSP，模拟重复初始化和跨总线退出。
 add_executable(fdcan_msp_test fdcan_msp_test.c ../../Core/Src/fdcan.c)
 target_include_directories(fdcan_msp_test BEFORE PRIVATE fdcan_msp_fakes .)

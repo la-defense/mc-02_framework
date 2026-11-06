@@ -5,6 +5,7 @@
 #include "cmsis_os.h"
 #include "task_monitor.h"
 #include "bsp_dwt.h"
+#include "../os/platform_os.h"
 static osThreadId uart_tx_task;
 /* 记录发送任务每轮取队列和提交 HAL 的时间，查询由只读快照完成。 */
 volatile DWT_Probe_t usart_tx_task_probe = {0};
@@ -35,7 +36,8 @@ uint8_t USARTTxTaskInit(void)
         return 0u;
     if (uart_tx_task != NULL)
         return 1u;
-    if (osKernelRunning())
+    /* 调度器运行时只允许协调者在暂停任务切换的短批次内创建，确保句柄先发布。 */
+    if (osKernelRunning() && !PlatformTaskBatchIsActive())
         return 0u;
     osThreadDef(uarttxtask, UARTTxTask, osPriorityNormal, 0, 512);
     uart_tx_task = osThreadCreate(osThread(uarttxtask), NULL);
