@@ -32,6 +32,19 @@ foreach(context before batch)
   add_test(NAME production_log_port_startup_${context} COMMAND log_port_startup_test ${context})
   set_tests_properties(production_log_port_startup_${context} PROPERTIES TIMEOUT 10)
 endforeach()
+# 使用生产 INS 启动步骤和温控故障分类，分别注入核心／辅助故障。
+add_executable(ins_startup_test ins_startup_test.c ../../application/ins_startup.c
+  ../../application/robot_task_create.c)
+target_include_directories(ins_startup_test BEFORE PRIVATE ins_startup_fakes task_creation_fakes)
+target_include_directories(ins_startup_test PRIVATE . ../../application ../../modules/daemon
+  ../../bsp/os ../../bsp/usart ../../bsp/log)
+target_compile_definitions(ins_startup_test PRIVATE MC02_CONFIG_GENERATED=1 MC02_PROFILE_BENCH_SAFE=1)
+target_compile_options(ins_startup_test PRIVATE -Wall -Wextra -Werror -ffunction-sections -fdata-sections)
+target_link_options(ins_startup_test PRIVATE -Wl,--gc-sections)
+foreach(scenario success imu-core imu-aux heater-core heater-aux heater-disabled)
+  add_test(NAME production_ins_startup_${scenario} COMMAND ins_startup_test ${scenario})
+  set_tests_properties(production_ins_startup_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
 # 直接运行生成代码中的 FDCAN MSP，模拟重复初始化和跨总线退出。
 add_executable(fdcan_msp_test fdcan_msp_test.c ../../Core/Src/fdcan.c)
 target_include_directories(fdcan_msp_test BEFORE PRIVATE fdcan_msp_fakes .)

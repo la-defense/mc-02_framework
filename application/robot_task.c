@@ -6,7 +6,7 @@
 #include <stddef.h>
 
 #include "robot.h"
-#include "robot_task_create.h"
+#include "ins_startup.h"
 #include "config/build_selection.h"
 #if defined(MC02_CONFIG_GENERATED)
 #include "config/vehicle_selection.h"
@@ -25,12 +25,7 @@
 #endif
 #include "task_monitor.h"
 #include "bsp_crash.h"
-#include "bsp_safety.h"
-#if MC02_FEATURE_HEATER
-#include "imu_heater.h"
-#endif
 #include "init_diagnostic.h"
-#include "robot_safety.h"
 
 #include "bsp_log.h"
 #include "platform_probe.h"
@@ -50,35 +45,9 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
 {
     static volatile float ins_start;
     TaskMonitorFeed(TASK_MONITOR_INS); // 初始化前登记姿态任务已开始运行。
-    if (INS_Init() == NULL)
+    if (RobotInitializeIns() != ROBOT_INS_STARTUP_READY)
     {
-#if defined(MC02_CONFIG_GENERATED)
-        const uint8_t core_failure = RobotBuildMarkFailure(ROBOT_MODULE_IMU); // 向依赖图传播 IMU 初始化失败。
-        if (core_failure != 0u)
-        {
-            // 依赖链影响核心模块时保留失败原因。
-            InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_INS,
-                                        INIT_FAILURE_RESOURCE, 0u);
-            RobotFaultReport(ROBOT_FAULT_INIT_FAILURE); // 上报整车初始化故障。
-            RobotSafetyRequestDisable(); // 撤销控制许可。
-            BSP_SafetyStartupLatchOutputsOff(); // 立即关闭板级受控输出。
-        }
-        else
-            // 仅辅助模块受影响时记录降级，其他核心功能继续运行。
-            InitDiagnosticReportDegraded(INIT_STAGE_APPLICATION, INIT_MODULE_INS,
-                                         INIT_FAILURE_RESOURCE, 0u);
-#else
-        // 旧配置没有依赖图，沿用核心失败处理。
-        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_INS,
-                                    INIT_FAILURE_RESOURCE, 0u);
-        RobotFaultReport(ROBOT_FAULT_INIT_FAILURE); // 锁存初始化故障。
-        RobotSafetyRequestDisable(); // 撤销运行许可。
-#if MC02_FEATURE_HEATER
-        IMUHeaterForceOff(); // 已启用温控时先关闭加热。
-#endif
-        BSP_SafetyStartupLatchOutputsOff(); // 再关闭板级受控输出。
-#endif
-        // 算法初始化失败后保持输出关闭，但继续更新诊断和本任务记录，供人工读取。
+        // 姿态初始化失败时不执行采样循环；影响范围由启动步骤记录。
         for (;;)
         {
             InitDiagnosticHeartbeat(); // 维持可读取的启动诊断。
@@ -86,22 +55,6 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
             PlatformTaskDelayMs(100u); // 限制失败循环的执行频率。
         }
     }
-#if MC02_FEATURE_HEATER
-#if defined(MC02_CONFIG_GENERATED)
-    if (RobotBuildModuleStarted(ROBOT_MODULE_HEATER) && !IMUHeaterInitSucceeded())
-#else
-    if (!IMUHeaterInitSucceeded())
-#endif
-    {
-        IMUHeaterForceOff(); // 不论影响范围，先保持加热输出为零。
-        if (RobotReportHeaterInitFailure())
-        {
-            RobotFaultReport(ROBOT_FAULT_INIT_FAILURE); // 记录影响核心的启动失败。
-            RobotSafetyRequestDisable(); // 撤销整车运行许可。
-            BSP_SafetyStartupLatchOutputsOff(); // 使用板级直接关断路径锁存输出关闭。
-        }
-    }
-#endif
     InitDiagnosticMarkReady(); // 初始化检查完成后更新诊断阶段。
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_01); // 记录姿态任务进入周期循环。
     for (;;)

@@ -187,6 +187,7 @@ endif()
 
 set(MC02_APPLICATION_COMMON_C_SOURCES
     application/robot_task.c # 常驻任务的周期执行与监控。
+    application/ins_startup.c # 姿态初始化和按车型分类的失败处理。
     application/robot_task_create.c # 使用框架接口创建现有整车任务。
     application/init_diagnostic.c
     application/vehicle_health.c

@@ -127,6 +127,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/alarm/led.c",  # RGB 输出状态和发送推进。
     "application/alarm_startup.c",  # 依据模块计划处理告警降级。
     "application/robot_task.c",  # 常驻任务的周期调用和监控。
+    "application/ins_startup.c",  # 姿态初始化结果及核心／辅助故障处理。
     "application/gimbal/gimbal.c",  # 云台命令和反馈。
     "application/shoot/shoot.c",  # 发射命令和拨弹控制。
     "application/chassis/chassis.c",  # 底盘命令和电机控制。
@@ -477,6 +478,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/config/vehicle_selection.h",
                         source_root / "application/config/module_plan.h",
                         source_root / "application/robot_task_create.h",
+                        source_root / "application/ins_startup.h",  # 姿态启动结果供协调任务使用。
                         source_root / "application/robot_task.h",
                         source_root / "application/robot.h",
                         source_root / "application/robot_control_tasks.h",

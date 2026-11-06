@@ -327,6 +327,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/alarm/led.c # RGB 输出状态转换和任务推进。
     application/alarm_startup.c # 按核心依赖处理告警初始化结果。
     application/robot_task.c # 现有任务循环与周期维护。
+    application/ins_startup.c # 姿态初始化结果和核心／辅助故障处理。
     application/gimbal/gimbal.c # 云台命令、反馈和电机控制。
     application/shoot/shoot.c # 发射命令和拨弹时序。
     application/chassis/chassis.c # 底盘命令、反馈和电机控制。
