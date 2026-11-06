@@ -31,6 +31,11 @@ uint8_t BSPLogPortInInterrupt(void);
 uint8_t BSPLogPortSchedulerRunning(void);
 uint8_t BSPLogPortIsWorker(void);
 uint8_t BSPLogPortInit(void);
+/** @brief 创建唯一的日志静态任务。
+ * @param[in] entry 常驻任务入口，不可为空，调用者须保证入口长期有效。
+ * @return 1 表示创建成功；入口错误、上下文不符、已创建或资源不足返回 0。
+ * @note 只允许调度器启动前或协调者的短任务创建批次中调用；禁止中断调用。
+ */
 uint8_t BSPLogPortStartWorker(BSPLogWorkerEntry_t entry);
 uint8_t BSPLogPortWriteWholeRecord(const char *data, size_t length);
 uint8_t BSPLogPortDiagnosticInit(BSPLogDiagnosticRx_t receive);

@@ -13,6 +13,7 @@
 #include "usart.h"
 #include "bsp_usart.h"
 #include "usart_tx.h"
+#include "../os/platform_os.h"
 
 #include <limits.h>
 #include <string.h>
@@ -101,10 +102,12 @@ uint8_t BSPLogPortInit(void)
 
 uint8_t BSPLogPortStartWorker(BSPLogWorkerEntry_t entry)
 {
-    if (entry == NULL || log_worker_handle != NULL || BSPLogPortSchedulerRunning())
+    // 中断不能创建任务；运行中的调度器只允许协调者在短创建批次内调用。
+    if (entry == NULL || log_worker_handle != NULL || BSPLogPortInInterrupt() ||
+        (BSPLogPortSchedulerRunning() && !PlatformTaskBatchIsActive()))
         return 0u;
 
-    log_worker_entry = entry;
+    log_worker_entry = entry; // 暂停任务切换时先发布入口，再创建静态任务。
     log_worker_handle = xTaskCreateStatic(BSPLogWorkerTask,
                                           "logtask",
                                           BSP_LOG_WORKER_STACK_WORDS,
@@ -114,7 +117,7 @@ uint8_t BSPLogPortStartWorker(BSPLogWorkerEntry_t entry)
                                           &log_worker_tcb);
     if (log_worker_handle == NULL)
     {
-        log_worker_entry = NULL;
+        log_worker_entry = NULL; // 创建失败不保留半成品入口，允许后续重试。
         return 0u;
     }
     return 1u;

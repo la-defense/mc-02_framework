@@ -21,6 +21,17 @@ target_include_directories(platform_task_batch_test BEFORE PRIVATE task_batch_fa
 target_compile_options(platform_task_batch_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_platform_task_batch COMMAND platform_task_batch_test)
 set_tests_properties(production_platform_task_batch PROPERTIES TIMEOUT 10)
+
+# 直接编译日志 STM32 端口，用替身核对启动批次中的静态任务创建。
+add_executable(log_port_startup_test log_port_startup_test.c ../../bsp/log/bsp_log_port_stm32.c)
+target_include_directories(log_port_startup_test BEFORE PRIVATE log_port_fakes)
+target_include_directories(log_port_startup_test PRIVATE . ../../bsp/log ../../bsp/usart)
+target_compile_options(log_port_startup_test PRIVATE -Wall -Wextra -Werror -ffunction-sections -fdata-sections)
+target_link_options(log_port_startup_test PRIVATE -Wl,--gc-sections)
+foreach(context before batch)
+  add_test(NAME production_log_port_startup_${context} COMMAND log_port_startup_test ${context})
+  set_tests_properties(production_log_port_startup_${context} PROPERTIES TIMEOUT 10)
+endforeach()
 # 直接运行生成代码中的 FDCAN MSP，模拟重复初始化和跨总线退出。
 add_executable(fdcan_msp_test fdcan_msp_test.c ../../Core/Src/fdcan.c)
 target_include_directories(fdcan_msp_test BEFORE PRIVATE fdcan_msp_fakes .)
