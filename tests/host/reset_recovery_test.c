@@ -127,11 +127,28 @@ static int TestTornRecordFailsClosed(void)
     return 0;
 }
 
+static int TestClockFailurePersists(void)
+{
+    BSP_ResetRecoveryState_t state;
+    TEST_CHECK(BSP_ResetRecoveryInit(RCC_RSR_PORRSTF | RCC_RSR_BORRSTF)); // 冷上电建立新额度。
+    for (uint32_t attempt = 1u; attempt <= RESET_RECOVERY_MAX_ATTEMPTS + 1u; ++attempt)
+    {
+        BSP_ResetRecoveryMarkFault(RESET_RECOVERY_CAUSE_CLOCK_OSCILLATOR); // 在模拟复位前保存真实时钟故障。
+        TEST_CHECK(BSP_ResetRecoveryInit(RCC_RSR_IWDG1RSTF)); // 模拟复位后仍有看门狗标志。
+        TEST_CHECK(BSP_ResetRecoveryGetState(&state)); // 通过生产接口读取跨复位记录。
+        TEST_CHECK(state.consecutive_attempts == attempt); // 每次失败只消耗一次额度。
+        TEST_CHECK(state.last_cause == RESET_RECOVERY_CAUSE_CLOCK_OSCILLATOR); // 具体原因不被复位标志覆盖。
+        TEST_CHECK(state.locked_out == (attempt > RESET_RECOVERY_MAX_ATTEMPTS)); // 超过额度后保持锁定。
+    }
+    return 0;
+}
+
 int main(void)
 {
     TEST_CHECK(TestBootAndQuota() == 0);
     TEST_CHECK(TestResetCausesAndManualEstop() == 0);
     TEST_CHECK(TestStableWindowAndUnavailableStorage() == 0);
     TEST_CHECK(TestTornRecordFailsClosed() == 0);
+    TEST_CHECK(TestClockFailurePersists() == 0);
     return 0;
 }

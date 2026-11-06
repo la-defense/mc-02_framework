@@ -20,6 +20,7 @@ typedef enum
     INIT_STAGE_TASKS,        ///< 创建机器人任务
     INIT_STAGE_FREERTOS,     ///< 创建默认任务并启动调度器
     INIT_STAGE_READY,        ///< 核心启动步骤已完成，周期任务已放行
+    INIT_STAGE_CLOCK,        ///< 主时钟及电源电压配置
 } InitDiagnosticStage_e;
 
 /** @brief 初始化失败的原因编号。 */
@@ -32,6 +33,7 @@ typedef enum
     INIT_FAILURE_ALGORITHM_MEMORY,    ///< 算法初始化所需内存申请失败
     INIT_FAILURE_DEPENDENCY,          ///< 依赖模块未能完成初始化
     INIT_FAILURE_WATCHDOG_CONFIG,     ///< 看门狗时限未能确认生效
+    INIT_FAILURE_CLOCK,               ///< 主时钟启动未能完成
 } InitDiagnosticReason_e;
 
 /** @brief 失败所属模块的编号；0 表示尚未记录模块。 */
@@ -48,6 +50,7 @@ typedef enum
     INIT_MODULE_FREERTOS,
     INIT_MODULE_BUZZER,
     INIT_MODULE_WATCHDOG, ///< 硬件看门狗及其配置状态
+    INIT_MODULE_CLOCK, ///< 主时钟和电源电压配置
 } InitDiagnosticModule_e;
 
 /** @brief 任务创建失败时使用的资源编号，便于找到具体任务。 */

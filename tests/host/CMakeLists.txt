@@ -73,6 +73,25 @@ target_compile_options(fdcan_msp_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_fdcan_msp_shared_clock COMMAND fdcan_msp_test)
 set_tests_properties(production_fdcan_msp_shared_clock PROPERTIES TIMEOUT 10)
 # 使用可控周期计数检查启动前固定期限和计数停止时的退出。
+add_executable(platform_clock_guard_test platform_clock_guard_test.c ../../bsp/os/platform_clock_guard.c)
+target_include_directories(platform_clock_guard_test PRIVATE . ../../bsp/os)
+target_compile_options(platform_clock_guard_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_platform_clock_guard COMMAND platform_clock_guard_test)
+set_tests_properties(production_platform_clock_guard PROPERTIES TIMEOUT 10)
+# 用 HAL 和复位替身直接运行生产 H723 时钟适配器；测试缩短计数上限。
+add_executable(clock_startup_test clock_startup_test.c ../../bsp/board/platform_clock_startup_stm32.c
+  ../../bsp/os/platform_clock_guard.c ../../bsp/os/platform_startup_wait.c)
+target_include_directories(clock_startup_test BEFORE PRIVATE clock_startup_fakes .
+  ../../bsp/board ../../bsp/os ../../bsp/reset_recovery ../../bsp/safety ../../application)
+target_compile_definitions(clock_startup_test PRIVATE CLOCK_STARTUP_TOTAL_CYCLES=50u
+  CLOCK_STARTUP_TOTAL_POLLS=4u CLOCK_STARTUP_VOS_CYCLES=6u CLOCK_STARTUP_VOS_POLLS=4u
+  CLOCK_STARTUP_TICK_CYCLES=6u CLOCK_STARTUP_TICK_POLLS=4u)
+target_compile_options(clock_startup_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario IN ITEMS success vos-timeout tick-stopped cycle-timeout raw-stopped finish-total-timeout reset expired-reset locked
+    supply-failure vos-failure switch-failure hal-failure hal-before-begin invalid-failure)
+  add_test(NAME production_clock_startup_${scenario} COMMAND clock_startup_test ${scenario})
+  set_tests_properties(production_clock_startup_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
 add_executable(platform_startup_wait_test platform_startup_wait_test.c
   ../../bsp/os/platform_startup_wait.c)
 target_include_directories(platform_startup_wait_test PRIVATE . ../../bsp/os)
@@ -274,6 +293,7 @@ target_compile_options(mc02_numeric_public_headers PRIVATE -Wall -Wextra -Werror
 set(MC02_PLATFORM_PUBLIC_HEADERS
   bsp/board/platform_analog.h # 逻辑 PWM 和 ADC 输入。
   bsp/board/platform_buzzer.h # 板载蜂鸣器输出。
+  bsp/board/platform_clock_startup.h # 主时钟启动与失败处理。
   bsp/board/platform_lcd.h # LCD 平台传输接口。
   bsp/board/platform_numeric_caps.h # 浮点与数学加速能力。
   bsp/board/platform_resources.h # 各类逻辑资源编号。
@@ -281,6 +301,7 @@ set(MC02_PLATFORM_PUBLIC_HEADERS
   bsp/can/platform_can.h # 逻辑 CAN 收发。
   bsp/dwt/platform_probe.h # 短时耗时测量。
   bsp/os/platform_can_diagnostic.h # CAN 诊断入口。
+  bsp/os/platform_clock_guard.h # 主时钟启动的固定期限。
   bsp/os/platform_dispatch.h # 接收和定时派发。
   bsp/os/platform_irq.h # 中断屏蔽状态保存和恢复。
   bsp/os/platform_maintenance.h # 存储等维护期入口。

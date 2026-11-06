@@ -39,6 +39,7 @@
 #include "init_diagnostic.h"
 #include "robot_safety.h"
 #include "bsp_reset_recovery.h"
+#include "platform_clock_startup.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -107,7 +108,9 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+  // 基础 HAL 时基失败时立即关断并记录。
+  if (HAL_Init() != HAL_OK)
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_HAL);
 
   /* USER CODE BEGIN Init */
 
@@ -193,15 +196,22 @@ void SystemClock_Config(void)
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
+  // 为整次时钟配置设置固定总期限。
+  PlatformClockStartupBegin();
+
   /** Supply configuration update enable
   */
-  HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY);
+  // 供电配置失败时不再切换电压。
+  if (HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY) != HAL_OK)
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_SUPPLY);
 
   /** Configure the main internal regulator output voltage
   */
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE0);
 
-  while(!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY)) {}
+  // VOS 计时和查询次数均有上限。
+  if (!PlatformClockStartupWaitVos())
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_VOS);
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
@@ -222,10 +232,9 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_3;
   RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
   RCC_OscInitStruct.PLL.PLLFRACN = 0;
+  // 振荡器或 PLL 配置失败时记录具体阶段。
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_OSCILLATOR);
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
@@ -240,10 +249,12 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV2;
   RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV2;
 
+  // 主时钟或分频切换失败时不进入外设启动。
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_3) != HAL_OK)
-  {
-    Error_Handler();
-  }
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_SWITCH);
+  // 验证 HAL 原始时基仍在前进，且总期限未超时。
+  if (!PlatformClockStartupFinish())
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_DEADLINE);
   HAL_RCC_MCOConfig(RCC_MCO1, RCC_MCO1SOURCE_HSI, RCC_MCODIV_1);
 }
 

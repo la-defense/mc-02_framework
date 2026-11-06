@@ -22,7 +22,13 @@ typedef enum
     RESET_RECOVERY_CAUSE_STACK_OVERFLOW = 4,
     RESET_RECOVERY_CAUSE_FATAL_HANDLER = 5,
     RESET_RECOVERY_CAUSE_WATCHDOG = 6,
-    RESET_RECOVERY_CAUSE_BROWNOUT = 7
+    RESET_RECOVERY_CAUSE_BROWNOUT = 7,
+    RESET_RECOVERY_CAUSE_CLOCK_SUPPLY = 8, /**< 主时钟启动的电源配置失败。 */
+    RESET_RECOVERY_CAUSE_CLOCK_VOS = 9, /**< 主时钟启动的 VOS 等待失败。 */
+    RESET_RECOVERY_CAUSE_CLOCK_OSCILLATOR = 10, /**< 振荡器或 PLL 配置失败。 */
+    RESET_RECOVERY_CAUSE_CLOCK_SWITCH = 11, /**< 主时钟切换失败。 */
+    RESET_RECOVERY_CAUSE_CLOCK_DEADLINE = 12, /**< 主时钟配置达到总期限。 */
+    RESET_RECOVERY_CAUSE_CLOCK_HAL = 13 /**< HAL 基础初始化失败。 */
 } ResetRecoveryCause_e;
 
 enum
@@ -103,7 +109,7 @@ ResetRecoveryStatus_e ResetRecoveryPolicyOnBoot(ResetRecoveryRecord_t *record,
  * @brief 在复位前记录故障类别，供下一次启动累计。
  * @param[in,out] record 有效恢复记录；空指针时不执行操作。
  * @param[in] cause 有效范围为RESET_RECOVERY_CAUSE_CORE_TASK至
- *                  RESET_RECOVERY_CAUSE_BROWNOUT；其他值忽略。
+ *                  RESET_RECOVERY_CAUSE_CLOCK_HAL；其他值忽略。
  * @return 无；有效原因会设置待处理故障并更新序号，函数不访问持久介质。
  */
 void ResetRecoveryPolicyMarkFault(ResetRecoveryRecord_t *record,

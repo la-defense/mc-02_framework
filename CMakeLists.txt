@@ -269,6 +269,7 @@ set_source_files_properties(${MC02_ASM_SOURCES} PROPERTIES COMPILE_FLAGS "-x ass
 # 这些框架文件只依赖自有接口和标准 C；单独编译以阻止继承芯片或 RTOS 头路径。
 set(MC02_PORTABLE_FRAMEWORK_SOURCES
     bsp/os/platform_startup_wait.c # 启动前有界等待，不依赖厂商或 RTOS 头。
+    bsp/os/platform_clock_guard.c # 主时钟配置的固定期限和停表保护。
     application/init_diagnostic.c # 初始化阶段与故障事件记录。
     application/vehicle_health.c # 整车健康信息的采集和发布。
     application/vehicle_health_diag.c # 健康信息的只读诊断应答。

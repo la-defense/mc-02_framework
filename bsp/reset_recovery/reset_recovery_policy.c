@@ -64,14 +64,15 @@ ResetRecoveryStatus_e ResetRecoveryPolicyOnBoot(ResetRecoveryRecord_t *record,
     if ((record->flags & RESET_RECOVERY_FLAG_FAULT_PENDING) != 0u ||
         cause.watchdog != 0u || cause.brownout != 0u)
     {
+        const uint8_t recorded_fault = (uint8_t)((record->flags & RESET_RECOVERY_FLAG_FAULT_PENDING) != 0u); // 已记录的软件故障保留具体原因。
         if (record->consecutive_attempts < UINT32_MAX)
             record->consecutive_attempts++;
         record->flags &= ~RESET_RECOVERY_FLAG_FAULT_PENDING;
         if (record->consecutive_attempts > RESET_RECOVERY_MAX_ATTEMPTS)
             record->flags |= RESET_RECOVERY_FLAG_LOCKOUT;
-        if (cause.watchdog != 0u)
+        if (!recorded_fault && cause.watchdog != 0u)
             record->last_cause = RESET_RECOVERY_CAUSE_WATCHDOG;
-        else if (cause.brownout != 0u)
+        else if (!recorded_fault && cause.brownout != 0u)
             record->last_cause = RESET_RECOVERY_CAUSE_BROWNOUT;
     }
 
@@ -84,7 +85,7 @@ void ResetRecoveryPolicyMarkFault(ResetRecoveryRecord_t *record,
                                   ResetRecoveryCause_e cause)
 {
     if (record == NULL || cause <= RESET_RECOVERY_CAUSE_NONE ||
-        cause > RESET_RECOVERY_CAUSE_BROWNOUT)
+        cause > RESET_RECOVERY_CAUSE_CLOCK_HAL)
         return;
     record->flags |= RESET_RECOVERY_FLAG_FAULT_PENDING;
     record->flags &= ~RESET_RECOVERY_FLAG_STABLE_ACTIVE;

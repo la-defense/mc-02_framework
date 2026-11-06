@@ -29,7 +29,7 @@ uint8_t BSP_ResetRecoveryInit(uint32_t reset_flags);
 /**
  * @brief 在关断输出或等待看门狗前标记一个故障复位原因。
  * @param[in] cause 有效范围为RESET_RECOVERY_CAUSE_CORE_TASK至
- *                  RESET_RECOVERY_CAUSE_BROWNOUT；其他值忽略。
+ *                  RESET_RECOVERY_CAUSE_CLOCK_HAL；其他值忽略。
  * @return 无；存储未初始化或已锁定时不改写记录。
  * @note 异常路径只复制固定记录并更新CRC；不使用HAL、RTOS、日志、分配器或Flash。
  */

@@ -86,10 +86,26 @@ static int TestStableWindowAndManualEstop(void)
     return 0;
 }
 
+static int TestClockFaultCause(void)
+{
+    for (unsigned reason = RESET_RECOVERY_CAUSE_CLOCK_SUPPLY;
+         reason <= RESET_RECOVERY_CAUSE_CLOCK_HAL; ++reason)
+    {
+        ResetRecoveryRecord_t record; // 每种早期失败都从新的恢复记录开始。
+        ResetRecoveryPolicyInitialize(&record); // 模拟首次启动。
+        ResetRecoveryPolicyMarkFault(&record, (ResetRecoveryCause_e)reason); // 跨复位标记具体阶段。
+        const ResetRecoveryResetCause_t stale_watchdog_flag = {0u, 1u, 0u}; // 模拟尚未清除的看门狗标志。
+        TEST_CHECK(ResetRecoveryPolicyOnBoot(&record, stale_watchdog_flag, 1u) == RESET_RECOVERY_STATUS_READY);
+        TEST_CHECK(record.last_cause == reason && record.consecutive_attempts == 1u); // 保留具体原因但仍计入恢复额度。
+    }
+    return 0;
+}
+
 int main(void)
 {
     TEST_CHECK(TestFaultResetLimit() == 0);
     TEST_CHECK(TestResetClassification() == 0);
     TEST_CHECK(TestStableWindowAndManualEstop() == 0);
+    TEST_CHECK(TestClockFaultCause() == 0);
     return 0;
 }

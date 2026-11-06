@@ -68,6 +68,7 @@ set(MC02_PLATFORM_C_SOURCES
 set(MC02_BSP_C_SOURCES
     bsp/board/platform_exti_stm32.c # 逐引脚处理板载 IMU 的共享 EXTI 组。
     bsp/os/platform_startup_wait.c # 启动前固定期限与检查次数。
+    bsp/os/platform_clock_guard.c # 主时钟配置所需的固定上限。
     bsp/os/platform_os_freertos.c # 任务接口的 FreeRTOS 后端。
     bsp/os/platform_task_batch_freertos.c # 协调任务的短暂创建批次。
     bsp/os/platform_signal_freertos.c # 可合并任务信号位的 FreeRTOS 后端。
@@ -100,6 +101,7 @@ set(MC02_BSP_C_SOURCES
     bsp/board/platform_can_diagnostic_stm32.c # 显式启用时才连接板级 CAN 回环诊断。
     bsp/board/platform_context_stm32.c # 查询当前线程或异常处理上下文。
     bsp/board/platform_startup_delay_stm32.c # 保留调度器启动前的 DWT 等待。
+    bsp/board/platform_clock_startup_stm32.c # H723 时钟配置固定期限与失败恢复。
     bsp/board/platform_safety_stm32.c # 核心故障与看门狗绑定到原有安全路径。
     bsp/os/platform_scheduler_freertos.c # 查询调度器的既有运行状态。
     bsp/board/board_uart_stm32.c # MC-02 逻辑 UART 与物理串口绑定。
