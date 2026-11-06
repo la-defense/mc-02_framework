@@ -28,8 +28,11 @@ static void PlatformCanRxDispatch(CANInstance *instance)
 uint8_t PlatformCanRxRegister(PlatformCanRxPort_t *port, const PlatformCanEndpoint_t *endpoint,
                               PlatformCanRxCallback_t callback, void *context)
 {
-    if (port == NULL || port->backend != NULL || endpoint == NULL || callback == NULL ||
-        endpoint->tx_id > 0x7ffu || endpoint->rx_id > 0x7ffu) return 0u;
+    if (port == NULL || port->backend != NULL || endpoint == NULL || callback == NULL) return 0u;
+    if (endpoint->identifier_type != CAN_TX_ID_STANDARD && endpoint->identifier_type != CAN_TX_ID_EXTENDED)
+        return 0u; // 未知标识符类型不能注册。
+    const uint32_t limit = endpoint->identifier_type == CAN_TX_ID_STANDARD ? 0x7ffu : 0x1fffffffu;
+    if (endpoint->tx_id > limit || endpoint->rx_id > limit) return 0u; // 按类型检查 ID 范围。
     CAN_Init_Config_s config = {0}; // 先在局部准备配置，失败不改调用者对象。
     if (!BoardCanPrepareEndpoint(endpoint, &config)) return 0u; // 未绑定时不注册资源。
     config.can_module_callback = PlatformCanRxDispatch; // 底层只进入平台适配器。

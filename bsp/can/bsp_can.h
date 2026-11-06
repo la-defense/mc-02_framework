@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "can_tx.h" // 收发端点共用标准／扩展标识符类型。
 #include "../os/platform_can_diagnostic.h"
 #ifdef FDCAN
 #include "fdcan.h"
@@ -74,6 +75,8 @@ typedef struct _
     uint8_t tx_buff[8];            // 模块编码暂存区；新发送接口提交时复制数据，不保留此指针
     uint8_t rx_buff[8];            // 接收缓存,最大消息长度为8
     uint32_t rx_id;                // 接收id
+    CAN_TxIdType_t identifier_type; // 此端点的标准或扩展标识符类型。
+    uint8_t filter_index;          // 本总线与类型对应的过滤器槽编号。
     uint8_t rx_len;                // 接收长度,可能为0-8
     uint32_t rx_timestamp_ms; // 帧进入接收队列时的 HAL 毫秒时间，用于新鲜度检查。
     uint32_t rx_timestamp_cycles; // 同一时刻的 DWT 周期计数，供需要亚毫秒精度的解析器计算相邻帧间隔。
@@ -99,6 +102,7 @@ typedef struct
     uint32_t rx_id;                             // 接收id
     void (*can_module_callback)(CANInstance *); // 处理接收数据的回调函数
     void *id;                                   // 拥有can实例的模块地址,用于区分不同的模块(如果有需要的话),如果不需要可以不传入
+    CAN_TxIdType_t identifier_type; // 零初始化为标准帧；扩展帧使用 29 位 ID。
 } CAN_Init_Config_s;
 
 typedef enum
@@ -125,8 +129,6 @@ typedef struct
     uint32_t tx_done;             /* 发送完成回调次数，一次通知可能包含多帧。 */
     uint32_t tx_fifo_empty_events;/* TX FIFO 变空事件次数 */
 } CAN_TxStats_t;
-
-#include "can_tx.h"
 
 typedef struct
 {
@@ -179,10 +181,10 @@ typedef struct
     uint32_t status;
 } CAN_ObservationCounters_t;
 
-/** @brief 注册标准 CAN ID，按需启动服务并添加接收过滤规则。
-* @param[in] config 有效总线、非空回调及 0～0x7ff 的收发 ID；id 指向的模块须长期有效。
+/** @brief 注册经典 CAN 端点，按需启动服务并添加标准或扩展接收过滤规则。
+ * @param[in] config 有效总线、非空回调、标识符类型及该类型范围内的收发 ID；id 指向的模块须长期有效。
 * @return 成功返回长期有效实例，参数、重复接收 ID、容量、分配或 HAL 配置失败返回 NULL。
-* @note 启动时注册；回调由派发任务运行，同一总线相同接收 ID 不允许重复注册。
+ * @note 启动时串行注册；回调由派发任务运行，同一总线、类型和接收 ID 不允许重复注册。
  */
 CANInstance *CANRegister(CAN_Init_Config_s *config);
 

@@ -493,7 +493,8 @@ DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
                                          const DJI_Motor_Filter_Config_s *filter_config)
 {
-    if (config == NULL || idx >= DJI_MOTOR_CNT || !FilterConfigValid(filter_config) ||
+    if (config == NULL || idx >= DJI_MOTOR_CNT ||
+        config->can_init_config.identifier_type != CAN_TX_ID_STANDARD || !FilterConfigValid(filter_config) ||
         !DjiConfigValid(config))
         return NULL;
     PlatformCanEndpoint_t can_config = config->can_init_config; // 复制配置，分组不改写车型参数。

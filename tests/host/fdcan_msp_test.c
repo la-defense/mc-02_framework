@@ -50,6 +50,21 @@ void Error_Handler(void) { ++errors; }
 
 int main(void)
 {
+    MX_FDCAN1_Init(); MX_FDCAN2_Init(); MX_FDCAN3_Init(); // 读取生产初始化提供的三份消息 RAM 配置。
+    FDCAN_HandleTypeDef *handles[3] = {&hfdcan1, &hfdcan2, &hfdcan3}; // 按总线顺序检查。
+    const uint32_t offsets[3] = {0u, 0x406u, 0x812u}; // 对应共享消息 RAM 中互不重叠的起点。
+    for (uint32_t index = 0u; index < 3u; ++index)
+    {
+        const FDCAN_InitTypeDef *init = &handles[index]->Init; // 读取该控制器的实际初始化参数。
+        TEST_CHECK(init->MessageRAMOffset == offsets[index]); // 核对各控制器独立的 RAM 起点。
+        TEST_CHECK(init->StdFiltersNbr == 14u && init->ExtFiltersNbr == 16u); // 两类过滤器都有固定容量。
+        TEST_CHECK(init->RxFifo0ElmtsNbr == 4u && init->RxFifo1ElmtsNbr == 4u); // 保持每个 FIFO 四帧。
+        TEST_CHECK(init->RxFifo0ElmtSize == FDCAN_DATA_BYTES_64 && init->RxFifo1ElmtSize == FDCAN_DATA_BYTES_64);
+        TEST_CHECK(init->TxFifoQueueElmtsNbr == 16u && init->TxElmtSize == FDCAN_DATA_BYTES_8); // 发送仍为经典 CAN。
+        const uint32_t words = 14u + 2u * 16u + 8u * 18u + 16u * 4u; // 过滤器、接收和发送区域的字数。
+        const uint32_t end = index < 2u ? offsets[index + 1u] : 0x2800u / 4u; // 最后一段不能越过 SRAMCAN 尾部。
+        TEST_CHECK(init->MessageRAMOffset + words <= end); // 所有控制器的实际区域不得重叠。
+    }
     hfdcan1.Instance = FDCAN1; // 设置第一条总线的真实控制器身份。
     hfdcan2.Instance = FDCAN2; // 设置第二条总线的真实控制器身份。
     hfdcan3.Instance = FDCAN3; // 第三条保持未初始化，用于检查空退出。

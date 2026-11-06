@@ -52,13 +52,13 @@ uint8_t PlatformCanBusIsBound(PlatformCanBus_t bus);
  */
 uint8_t PlatformCanStartBus(PlatformCanBus_t bus);
 
-/** @brief 注册一个标准 ID 接收端点。
+/** @brief 注册一个经典 CAN 接收端点，标识符类型由端点配置指定。
  * @param[in,out] port 调用前清零，成功后长期保存在原地址；失败不修改。
  * @param[in] endpoint 本板逻辑总线和收发 ID，调用期间可读。
  * @param[in] callback 非空处理函数，由接收派发任务调用。
  * @param[in] context 交给回调的上下文，可为 NULL；非空时须长期有效。
  * @return 1 为注册成功，0 为配置、绑定或底层资源错误。
- * @note 仅在调度器启动前串行注册，注册期间不能并发派发接收。
+ * @note 启动阶段串行注册，注册期间不能并发派发接收；零初始化端点使用标准 ID。
  */
 uint8_t PlatformCanRxRegister(PlatformCanRxPort_t *port, const PlatformCanEndpoint_t *endpoint,
                               PlatformCanRxCallback_t callback, void *context);

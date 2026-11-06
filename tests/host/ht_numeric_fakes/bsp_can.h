@@ -23,6 +23,7 @@ typedef struct
     uint32_t tx_id,rx_id;
     void (*can_module_callback)(CANInstance *);
     void *id;
+    uint32_t identifier_type; // 模拟端点的标准／扩展类型。
 } CAN_Init_Config_s;
 /** @brief 保存一份测试配置，最多登记两个实例。
  * @param[in] config 非空配置，回调由测试在构帧后调用。

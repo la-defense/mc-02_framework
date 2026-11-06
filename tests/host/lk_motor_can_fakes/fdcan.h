@@ -41,8 +41,9 @@ typedef uint32_t HAL_StatusTypeDef;
 #define FDCAN_REJECT 0u
 #define FDCAN_REJECT_REMOTE 0u
 #define FDCAN_FILTER_DUAL 0u
-#define FDCAN_FILTER_TO_RXFIFO0 0u
-#define FDCAN_FILTER_TO_RXFIFO1 1u
+#define FDCAN_FILTER_DISABLE 0u
+#define FDCAN_FILTER_TO_RXFIFO0 1u
+#define FDCAN_FILTER_TO_RXFIFO1 2u
 #define FDCAN_STANDARD_ID 0u
 #define FDCAN_EXTENDED_ID 1u
 #define FDCAN_DATA_FRAME 0u
@@ -73,6 +74,7 @@ typedef struct
 typedef struct
 {
     uint32_t StdFiltersNbr;
+    uint32_t ExtFiltersNbr; // 单独模拟扩展过滤器容量。
     uint32_t Mode;
 } FDCAN_InitTypeDef;
 

@@ -38,6 +38,8 @@ static uint32_t bus_start_count[DEVICE_CAN_CNT];
 static uint32_t bus_stop_count[DEVICE_CAN_CNT]; // 记录各总线的独立退出次数。
 static uint32_t filter_count[DEVICE_CAN_CNT];
 static uint32_t filter_rx_id[DEVICE_CAN_CNT];
+static uint32_t filter_last_index[DEVICE_CAN_CNT]; // 记录实际使用的过滤器槽。
+static uint32_t filter_last_type[DEVICE_CAN_CNT]; // 区分标准和扩展过滤器。
 static uint32_t tx_attempt_count[DEVICE_CAN_CNT];
 static uint32_t tx_accept_count[DEVICE_CAN_CNT];
 static uint32_t tx_header_id[DEVICE_CAN_CNT];
@@ -164,6 +166,9 @@ uint32_t HAL_FDCAN_ConfigFilter(FDCAN_HandleTypeDef *handle, FDCAN_FilterTypeDef
     }
     if (bus >= DEVICE_CAN_CNT)
         return HAL_ERROR;
+    filter_last_index[bus] = filter->FilterIndex; // 保存 HAL 实际收到的槽位。
+    filter_last_type[bus] = filter->IdType; // 保存硬件过滤器类型。
+    if (filter->FilterConfig == FDCAN_FILTER_DISABLE) return HAL_OK; // 禁用不计作新增过滤器。
     filter_rx_id[bus] = filter->FilterID1;
     ++filter_count[bus];
     return HAL_OK;
@@ -303,6 +308,81 @@ static void test_rx_failure_and_invalid_frames(void)
     CANProcessRx();
     TEST_CHECK(valid_rx_count == 1u); // 无效帧不能被伪装成零长度数据。
     TEST_CHECK(valid_rx_length == 0u); // 真正的零长度经典数据帧仍可交付。
+}
+
+typedef struct { uint32_t count, time_ms; uint8_t marker; } ExtendedRxState;
+static void extended_rx_callback(void *context, const PlatformCanRxFrame_t *frame)
+{
+    ExtendedRxState *state = context; // 使用端点自身的测试状态。
+    ++state->count; // 按端点分别统计收到的帧。
+    state->time_ms = frame->received_ms; // 保存中断入队时的原始时间。
+    state->marker = frame->length == 0u ? 0u : frame->data[0]; // 读取本帧有效载荷。
+}
+
+static void test_classic_extended_rx_and_filter_reuse(void)
+{
+    hfdcan1.Init.StdFiltersNbr = 1u; // 第一条总线只分配一个标准过滤器。
+    hfdcan1.Init.ExtFiltersNbr = 1u; // 第一条总线只分配一个扩展过滤器。
+    hfdcan2.Init.ExtFiltersNbr = 1u; // 第二条总线独立拥有一个扩展过滤器。
+    PlatformCanRxPort_t standard = {0}, extended = {0}, other = {0}; // 分别保存三个接收端点。
+    ExtendedRxState std_state = {0}, ext_state = {0}, other_state = {0}; // 分别记录三个回调。
+    PlatformCanEndpoint_t endpoint = {.can_bus = PLATFORM_CAN_BUS_1, .tx_id = 0x123u, .rx_id = 0x123u};
+    TEST_CHECK(PlatformCanRxRegister(&standard, &endpoint, extended_rx_callback, &std_state)); // 零初始化类型保持标准帧。
+    endpoint.identifier_type = CAN_TX_ID_EXTENDED; // 相同数值改为扩展类型。
+    TEST_CHECK(PlatformCanRxRegister(&extended, &endpoint, extended_rx_callback, &ext_state)); // 允许同数值的扩展端点。
+    TEST_CHECK(filter_last_type[0] == FDCAN_EXTENDED_ID && filter_last_index[0] == 0u);
+    PlatformCanRxPort_t overflow = {0}; // 额外端点用于验证容量不足。
+    endpoint.rx_id = 0x124u; // 改为不同 ID，避免重复注册检查掩盖容量问题。
+    TEST_CHECK(!PlatformCanRxRegister(&overflow, &endpoint, extended_rx_callback, &ext_state));
+    TEST_CHECK(overflow.backend == NULL); // 容量不足不能发布半成品端点。
+    endpoint.rx_id = 0x123u; // 恢复待检查的相同 ID。
+    endpoint.can_bus = PLATFORM_CAN_BUS_2; // 相同扩展 ID 可用于另一条总线。
+    TEST_CHECK(PlatformCanRxRegister(&other, &endpoint, extended_rx_callback, &other_state));
+    rx_frames[0][0].header.Identifier = 0x123u; // 第一帧为标准帧。
+    rx_frames[0][0].header.DataLength = 1u << 16u;
+    rx_frames[0][0].data[0] = 0x11u;
+    rx_frames[0][1] = rx_frames[0][0]; // 第二帧数值相同，类型不同。
+    rx_frames[0][1].header.IdType = FDCAN_EXTENDED_ID;
+    rx_frames[0][1].data[0] = 0x22u;
+    rx_frames[1][0] = rx_frames[0][1]; // 第三帧来自另一条总线。
+    rx_frames[1][0].data[0] = 0x33u;
+    rx_frame_count[0] = 2u; rx_frame_count[1] = 1u; // 供中断依次读取。
+    now_us = 123000u; // 使用固定接收时间，检查派发不会刷新时间。
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    HAL_FDCAN_RxFifo0Callback(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    now_us = 125000u; CANProcessRx(); // 稍后在任务中派发已入队帧。
+    TEST_CHECK(std_state.count == 1u && std_state.marker == 0x11u && std_state.time_ms == 123u);
+    TEST_CHECK(ext_state.count == 1u && ext_state.marker == 0x22u && ext_state.time_ms == 123u);
+    TEST_CHECK(other_state.count == 1u && other_state.marker == 0x33u && other_state.time_ms == 123u);
+    PlatformCanRxRollback(&extended); // 回退时释放第一条总线的扩展槽。
+    endpoint.can_bus = PLATFORM_CAN_BUS_1; // 转回第一条总线。
+    endpoint.rx_id = 0x1fffffffu; endpoint.tx_id = 0x1fffffffu; // 验证 29 位最大合法 ID。
+    filter_fail_once = 1u; // 注入重新配置硬件过滤器失败。
+    TEST_CHECK(!PlatformCanRxRegister(&extended, &endpoint, extended_rx_callback, &ext_state));
+    TEST_CHECK(extended.backend == NULL); // 失败后端点保持空闲，槽位也可重新申请。
+    TEST_CHECK(PlatformCanRxRegister(&extended, &endpoint, extended_rx_callback, &ext_state));
+    TEST_CHECK(filter_last_index[0] == 0u && filter_last_type[0] == FDCAN_EXTENDED_ID); // 复用释放槽。
+    filter_fail_once = 1u; // 注入关闭硬件过滤器失败。
+    PlatformCanRxRollback(&extended); // 软件端点先撤销，不再接收任何旧数据。
+    TEST_CHECK(!PlatformCanRxRegister(&extended, &endpoint, extended_rx_callback, &ext_state));
+    TEST_CHECK(extended.backend == NULL); // 未确认关闭的槽不得直接复用。
+    CANReapplyFilters(); // 测试专用重建会按剩余端点重新分配过滤器。
+    TEST_CHECK(PlatformCanRxRegister(&extended, &endpoint, extended_rx_callback, &ext_state));
+    rx_frames[1][1] = rx_frames[1][0]; // 重新投递另一条总线上的旧端点帧。
+    rx_frame_count[1] = 2u; // 包含刚添加的一帧。
+    HAL_FDCAN_RxFifo0Callback(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    CANProcessRx(); // 过滤器失败和重建不能破坏其他总线端点。
+    TEST_CHECK(other_state.count == 2u && other_state.marker == 0x33u);
+    PlatformCanRxPort_t invalid = {0}; // 错误配置不能占用端点。
+    endpoint.rx_id = 0x20000000u; // 超过 29 位上限。
+    TEST_CHECK(!PlatformCanRxRegister(&invalid, &endpoint, extended_rx_callback, &ext_state));
+    endpoint.identifier_type = CAN_TX_ID_STANDARD; endpoint.rx_id = 0x800u; endpoint.tx_id = 0u;
+    TEST_CHECK(!PlatformCanRxRegister(&invalid, &endpoint, extended_rx_callback, &ext_state)); // 标准 ID 也要验证范围。
+    endpoint.identifier_type = (CAN_TxIdType_t)-1; endpoint.rx_id = 0u; // 未定义的标识符类型。
+    TEST_CHECK(!PlatformCanRxRegister(&invalid, &endpoint, extended_rx_callback, &ext_state));
+    endpoint.identifier_type = CAN_TX_ID_EXTENDED; endpoint.can_bus = PLATFORM_CAN_BUS_3;
+    TEST_CHECK(!PlatformCanRxRegister(&invalid, &endpoint, extended_rx_callback, &ext_state)); // 第三条总线没有扩展过滤器。
+    TEST_CHECK(bus_stop_count[0] == 0u && bus_stop_count[1] == 0u); // 容量失败不关闭已经运行的总线。
 }
 
 static void burst_rx_callback(CANInstance *instance)
@@ -537,6 +617,22 @@ static void test_production_registration_rollback(void)
     TEST_CHECK(((CANInstance *)motor->can_rx.backend)->tx_id == 0x280u);
     TEST_CHECK(((CANInstance *)motor->can_rx.backend)->txconf.Identifier == 0x280u);
     TEST_CHECK(filter_count[2] == 1u && filter_rx_id[2] == 0x144u);
+}
+
+static void test_standard_motor_rejects_extended_id(void)
+{
+    Motor_Init_Config_s lk = config_for(0u, 1u); // 使用已有的有效 LK 电机配置。
+    lk.can_init_config.identifier_type = CAN_TX_ID_EXTENDED; // 模拟误选扩展帧。
+    TEST_CHECK(LKMotorInit(&lk) == NULL); // LK 当前协议只发送标准帧，必须拒绝不一致配置。
+    Motor_Init_Config_s dji = {0}; // 单独构造 DJI 电机配置。
+    dji.motor_type = M3508; // 选择已支持的标准帧电机。
+    dji.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL};
+    dji.can_init_config.can_bus = PLATFORM_CAN_BUS_1;
+    dji.can_init_config.tx_id = 1u;
+    dji.can_init_config.identifier_type = CAN_TX_ID_EXTENDED; // 模拟同样的类型错误。
+    dji.controller_setting_init_config.close_loop_type = OPEN_LOOP;
+    TEST_CHECK(DJIMotorInit(&dji) == NULL); // 未登记端点也不能创建电机实例。
+    TEST_CHECK(bus_start_count[0] == 0u); // 配置错误不能启动总线。
 }
 
 // 使用生产 CAN 入队和端点派发验证 LK 反馈原始时间及错误长度。
@@ -2076,6 +2172,10 @@ int main(int argc, char **argv)
         test_lk_logical_receive();
     else if (strcmp(argv[1], "bus-isolation") == 0)
         test_bus_start_and_rollback_isolation();
+    else if (strcmp(argv[1], "rx-extended") == 0)
+        test_classic_extended_rx_and_filter_reuse();
+    else if (strcmp(argv[1], "motor-id-type") == 0)
+        test_standard_motor_rejects_extended_id();
     else if (strcmp(argv[1], "rx-invalid") == 0)
         test_rx_failure_and_invalid_frames();
     else if (strcmp(argv[1], "platform-can-status") == 0)

@@ -4,6 +4,7 @@
 #ifndef MC02_PLATFORM_RESOURCES_H
 #define MC02_PLATFORM_RESOURCES_H
 #include <stdint.h>
+#include "../can/can_tx.h" // 共用标准帧／扩展帧的类型定义。
 
 /** @brief 车型使用的经典 CAN 总线编号，由板级适配决定实际控制器。 */
 typedef enum {
@@ -68,7 +69,8 @@ typedef enum {
 /** @brief 业务声明的经典 CAN 端点，不包含芯片句柄和回调指针。 */
 typedef struct {
     PlatformCanBus_t can_bus; /**< 本板逻辑总线编号。 */
-    uint32_t tx_id; /**< 待发送的标准帧 ID；部分驱动按电机编号解释并重新计算。 */
-    uint32_t rx_id; /**< 待接收的标准帧 ID；部分驱动从电机编号计算。 */
+    uint32_t tx_id; /**< 待发送 ID；部分驱动按电机编号解释并重新计算。 */
+    uint32_t rx_id; /**< 待接收 ID；部分驱动从电机编号计算。 */
+    CAN_TxIdType_t identifier_type; /**< 收发标识符类型；零初始化选择标准帧。 */
 } PlatformCanEndpoint_t;
 #endif

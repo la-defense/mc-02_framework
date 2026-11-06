@@ -217,7 +217,8 @@ void HTMotorCalibEncoder(HTMotorInstance *motor)
 
 HTMotorInstance *HTMotorInit(const Motor_Init_Config_s *config)
 {
-    if (config == NULL || !HTControlConfigValid(config))
+    if (config == NULL || config->can_init_config.identifier_type != CAN_TX_ID_STANDARD ||
+        !HTControlConfigValid(config))
         return NULL;
     if (!PlatformCanBusIsBound(config->can_init_config.can_bus)) return NULL; // 总线未绑定时不分配或注册。
 

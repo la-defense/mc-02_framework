@@ -27,6 +27,7 @@ uint8_t BoardCanPrepareEndpoint(const PlatformCanEndpoint_t *endpoint, CAN_Init_
         .can_handle = handle, // 使用板级表绑定的控制器。
         .tx_id = endpoint->tx_id, // 保留车型指定的发送号或电机编号。
         .rx_id = endpoint->rx_id, // 保留车型指定的接收号。
+        .identifier_type = endpoint->identifier_type, // 明确区分标准和扩展标识符。
         .can_module_callback = NULL, // 注册前由驱动填入协议解析函数。
         .id = NULL, // 注册前由驱动填入实例所有者。
     };

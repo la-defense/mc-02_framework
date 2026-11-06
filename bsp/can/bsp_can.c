@@ -150,8 +150,8 @@ static CANBusState_t can_bus[DEVICE_CAN_CNT] CAN_BUS_WORKSPACE;
 static uint8_t can_bus_state_initialized;
 static void CANBusStateEnsureInitialized(void);
 static CANInstance *rx_lookup[DEVICE_CAN_CNT][CAN_RX_LOOKUP_SIZE];
-/* 每条总线已用的标准滤镜下标(自测重装滤镜时需要整体重置) */
-static uint8_t can_filter_idx[DEVICE_CAN_CNT] = {0};
+/* 每条总线的标准与扩展过滤器各自记录已用槽；注册表最多16项。 */
+static uint32_t can_filter_used[DEVICE_CAN_CNT][2];
 
 /* 诊断: 最近一次总线配置的结果(HAL 返回码/状态/中断寄存器), 用于排查"中断不触发" */
 volatile uint32_t can_diag_start_ret = 0;
@@ -161,20 +161,15 @@ volatile uint32_t can_diag_ie = 0;
 volatile uint32_t can_diag_ile = 0;
 volatile uint32_t can_diag_ils = 0;
 
-/* 每条总线允许的标准滤镜数量(来自 CubeMX 配置的 StdFiltersNbr) */
-static uint32_t CANFilterLimit(uint8_t bus_idx)
+/* 查询当前控制器为对应 ID 类型分配的过滤器数量。 */
+static uint32_t CANFilterLimit(uint8_t bus_idx, CAN_TxIdType_t id_type)
 {
-    switch (bus_idx)
-    {
-    case 0:
-        return hfdcan1.Init.StdFiltersNbr;
-    case 1:
-        return hfdcan2.Init.StdFiltersNbr;
-    case 2:
-        return hfdcan3.Init.StdFiltersNbr;
-    default:
-        return 0;
-    }
+    if (bus_idx >= DEVICE_CAN_CNT || (id_type != CAN_TX_ID_STANDARD && id_type != CAN_TX_ID_EXTENDED))
+        return 0u; // 非法总线或类型没有槽位。
+    const FDCAN_HandleTypeDef *handle = can_bus[bus_idx].handle; // 读取该总线自己的硬件配置。
+    const uint32_t configured = id_type == CAN_TX_ID_STANDARD ?
+        handle->Init.StdFiltersNbr : handle->Init.ExtFiltersNbr; // 不混用两类过滤器区域。
+    return configured < CAN_MX_REGISTER_CNT ? configured : CAN_MX_REGISTER_CNT; // 登记表最多允许16项。
 }
 
 /* ---------------- 性能探针(见 docs/学习笔记/03) ---------------- */
@@ -1213,23 +1208,28 @@ static void CANLogDiagnostic(CANBusState_t *bus, const char *tag, uint32_t value
  */
 static uint8_t CANAddFilter(CANInstance *_instance)
 {
-    if (_instance == NULL || _instance->can_handle == NULL || _instance->rx_id > 0x7ffu)
+    if (_instance == NULL || _instance->can_handle == NULL)
         return 0u;
 #ifdef FDCAN
-    uint8_t bus_idx = CANBusIndexFromHandle(_instance->can_handle);
-    if (bus_idx == 0xFFu || can_filter_idx[bus_idx] >= CANFilterLimit(bus_idx))
-        return 0u;
-    FDCAN_FilterTypeDef filter = {0};
-    filter.FilterIndex = can_filter_idx[bus_idx];
-    filter.FilterType = FDCAN_FILTER_DUAL;
+    const uint8_t bus_idx = CANBusIndexFromHandle(_instance->can_handle); // 查找本端点所在总线。
+    const CAN_TxIdType_t id_type = _instance->identifier_type; // 按类型选择独立过滤器区域。
+    if (bus_idx == 0xFFu || (id_type != CAN_TX_ID_STANDARD && id_type != CAN_TX_ID_EXTENDED))
+        return 0u; // 未知总线或类型直接失败。
+    const uint32_t limit = CANFilterLimit(bus_idx, id_type); // 不能超出板级分配的硬件槽位。
+    uint32_t slot = 0u; // 从最低槽位开始查找可复用空间。
+    while (slot < limit && (can_filter_used[bus_idx][id_type] & (1u << slot)) != 0u) ++slot;
+    if (slot >= limit) return 0u; // 没有可用槽时保留已有端点。
+    FDCAN_FilterTypeDef filter = {0}; // 清零全部 HAL 参数。
+    filter.FilterIndex = slot; // 本类型过滤器区域内的槽位。
+    filter.FilterType = FDCAN_FILTER_DUAL; // 两个 ID 相同，相当于精确匹配。
     filter.FilterConfig = (_instance->tx_id & 1u) ? FDCAN_FILTER_TO_RXFIFO0 : FDCAN_FILTER_TO_RXFIFO1;
-    filter.FilterID1 = _instance->rx_id;
-    filter.FilterID2 = _instance->rx_id;
-    filter.IdType = FDCAN_STANDARD_ID;
-    filter.IsCalibrationMsg = 0u;
-    if (HAL_FDCAN_ConfigFilter(_instance->can_handle, &filter) != HAL_OK)
-        return 0u;
-    can_filter_idx[bus_idx]++;
+    filter.FilterID1 = _instance->rx_id; // 只接收声明的完整 ID。
+    filter.FilterID2 = _instance->rx_id; // 第二个匹配值与第一个相同。
+    filter.IdType = id_type == CAN_TX_ID_STANDARD ? FDCAN_STANDARD_ID : FDCAN_EXTENDED_ID;
+    filter.IsCalibrationMsg = 0u; // 不使用专用校准消息。
+    if (HAL_FDCAN_ConfigFilter(_instance->can_handle, &filter) != HAL_OK) return 0u; // 失败不占用槽。
+    can_filter_used[bus_idx][id_type] |= 1u << slot; // HAL 接受后才发布槽位占用。
+    _instance->filter_index = (uint8_t)slot; // 保存位置以便注销时精确关闭。
 #else
     CAN_FilterTypeDef filter = {0};
     uint8_t *filter_idx = NULL;
@@ -1284,7 +1284,7 @@ static void CANServiceStop(uint8_t bus_index)
 #ifdef FDCAN
     if (bus_index >= DEVICE_CAN_CNT) return; // 无效编号不改变任何总线。
     (void)HAL_FDCAN_Stop(can_bus[bus_index].handle); // 只停止本次启动的控制器。
-    can_filter_idx[bus_index] = 0u; // 此总线尚无已发布端点，可清除过滤器计数。
+    memset(can_filter_used[bus_index], 0, sizeof(can_filter_used[bus_index])); // 此总线尚无已发布端点。
 #else
     if (bus_index == 0u) { (void)HAL_CAN_Stop(&hcan1); can1_filter_idx = 0u; }
     else if (bus_index == 1u) { (void)HAL_CAN_Stop(&hcan2); can2_filter_idx = 14u; }
@@ -1394,6 +1394,24 @@ static void CANSelfTestRxCallback(CANInstance *ins)
     selftest_rx_seen = 1;
 }
 
+// 尝试关闭已注销端点的硬件过滤器；失败时保留占用，避免覆盖仍在使用的槽。
+static void CANReleaseFilter(CANInstance *instance, uint8_t bus_index)
+{
+    if (instance == NULL || bus_index >= DEVICE_CAN_CNT) return; // 无效实例不修改槽位表。
+    const CAN_TxIdType_t id_type = instance->identifier_type; // 标准与扩展过滤器分别管理。
+    if (id_type != CAN_TX_ID_STANDARD && id_type != CAN_TX_ID_EXTENDED) return; // 无效类型不能索引表。
+    const uint8_t slot = instance->filter_index; // 使用注册时保存的准确槽位。
+    if (slot >= CAN_MX_REGISTER_CNT || (can_filter_used[bus_index][id_type] & (1u << slot)) == 0u)
+        return; // 未持有槽时不能关闭其他端点。
+    FDCAN_FilterTypeDef filter = {0}; // 清零配置，避免携带未使用字段。
+    filter.FilterIndex = slot; // 只关闭本端点的过滤器。
+    filter.FilterType = FDCAN_FILTER_DUAL; // 与原有精确匹配使用相同类型。
+    filter.IdType = id_type == CAN_TX_ID_STANDARD ? FDCAN_STANDARD_ID : FDCAN_EXTENDED_ID;
+    filter.FilterConfig = FDCAN_FILTER_DISABLE; // 关闭硬件匹配，避免继续接收旧 ID。
+    if (HAL_FDCAN_ConfigFilter(instance->can_handle, &filter) == HAL_OK)
+        can_filter_used[bus_index][id_type] &= ~(1u << slot); // 硬件确认后才允许复用。
+}
+
 /* 仅在接收任务不并发时注销；清除中断已排队的旧指针后再释放。 */
 void CANUnregisterInstance(CANInstance *ins)
 {
@@ -1428,14 +1446,14 @@ void CANUnregisterInstance(CANInstance *ins)
         can_instance[i] = can_instance[i + 1u]; // 压紧注册表，不改变其他实例。
     can_instance[--idx] = NULL; // 清除末尾的重复位置。
     __set_PRIMASK(previous_mask); // 恢复原来的屏蔽状态后再释放内存。
+    CANReleaseFilter(ins, bus_idx); // 撤销硬件过滤并在成功时回收本槽。
     free(ins); // 接收查找表和队列均已不再引用此实例。
 }
 
 /* 重装所有已注册实例的滤镜(重新 Init 之后必须调用) */
 void CANReapplyFilters(void)
 {
-    for (uint8_t i = 0; i < DEVICE_CAN_CNT; ++i)
-        can_filter_idx[i] = 0;
+    memset(can_filter_used, 0, sizeof(can_filter_used)); // 硬件重新初始化后重建槽位使用表。
     for (uint8_t i = 0; i < idx; ++i)
         CANAddFilter(can_instance[i]);
 }
@@ -1578,8 +1596,12 @@ uint8_t CANRunLoopbackSelfTest(void)
 
 CANInstance *CANRegister(CAN_Init_Config_s *config)
 {
-    if (config == NULL || config->can_handle == NULL ||
-        config->can_module_callback == NULL || config->tx_id > 0x7ffu || config->rx_id > 0x7ffu)
+    if (config == NULL || config->can_handle == NULL || config->can_module_callback == NULL)
+        return NULL;
+    if (config->identifier_type != CAN_TX_ID_STANDARD && config->identifier_type != CAN_TX_ID_EXTENDED)
+        return NULL; // 无效类型不能映射到硬件过滤器。
+    const uint32_t id_limit = config->identifier_type == CAN_TX_ID_STANDARD ? 0x7ffu : 0x1fffffffu;
+    if (config->tx_id > id_limit || config->rx_id > id_limit)
         return NULL;
 #ifdef FDCAN
     uint8_t bus_idx = CANBusIndexFromHandle(config->can_handle);
@@ -1596,7 +1618,8 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     for (uint8_t i = 0u; i < idx; ++i)
     {
         if (can_instance[i] != NULL && can_instance[i]->can_handle == config->can_handle &&
-            can_instance[i]->rx_id == config->rx_id)
+            can_instance[i]->rx_id == config->rx_id &&
+            can_instance[i]->identifier_type == config->identifier_type)
             return NULL;
     }
 
@@ -1606,7 +1629,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     memset(instance, 0, sizeof(*instance));
 #ifdef FDCAN
     instance->txconf.Identifier = config->tx_id;
-    instance->txconf.IdType = FDCAN_STANDARD_ID;
+    instance->txconf.IdType = config->identifier_type == CAN_TX_ID_STANDARD ? FDCAN_STANDARD_ID : FDCAN_EXTENDED_ID;
     instance->txconf.TxFrameType = FDCAN_DATA_FRAME;
     instance->txconf.DataLength = FDCAN_DLC_BYTES_8;
     instance->txconf.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
@@ -1623,6 +1646,7 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     instance->can_handle = config->can_handle;
     instance->tx_id = config->tx_id;
     instance->rx_id = config->rx_id;
+    instance->identifier_type = config->identifier_type; // 收发和派发使用相同的 ID 类型。
     instance->can_module_callback = config->can_module_callback;
     instance->id = config->id;
 
@@ -1892,14 +1916,17 @@ static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
         uint32_t data_length = (rxconf.DataLength >> 16u) & 0xFu; // 取 HAL 提供的经典帧 DLC。
         if (data_length > 8u || rxconf.FDFormat != FDCAN_CLASSIC_CAN)
             continue; // 非法长度及 FD 帧不能伪装成零长度经典帧。
-        if(rxconf.RxFrameType==FDCAN_DATA_FRAME && rxconf.IdType==FDCAN_STANDARD_ID)
+        if (rxconf.RxFrameType == FDCAN_DATA_FRAME &&
+            (rxconf.IdType == FDCAN_STANDARD_ID || rxconf.IdType == FDCAN_EXTENDED_ID))
         {
+            const CAN_TxIdType_t id_type = rxconf.IdType == FDCAN_STANDARD_ID ?
+                CAN_TX_ID_STANDARD : CAN_TX_ID_EXTENDED; // 硬件标记转换为框架中的类型。
         	/* 常见路径: 用 rx_id 低 9 位查表, O(1) 找到归属实例 */
         	CANInstance *target = NULL;
         	if (bus_idx != 0xFFu)
         	{
         		CANInstance *cand = rx_lookup[bus_idx][rxconf.Identifier & (CAN_RX_LOOKUP_SIZE - 1u)];
-        		if (cand != NULL && cand->rx_id == rxconf.Identifier)
+                if (cand != NULL && cand->rx_id == rxconf.Identifier && cand->identifier_type == id_type)
         			target = cand;
         	}
         	if (target == NULL)
@@ -1907,7 +1934,8 @@ static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
         		/* 回退路径: 低位别名冲突时退回线性查找(极少发生) */
         		for (size_t i = 0; i < idx; ++i)
         		{
-        			if (_hfdcan == can_instance[i]->can_handle && rxconf.Identifier == can_instance[i]->rx_id)
+                    if (_hfdcan == can_instance[i]->can_handle && rxconf.Identifier == can_instance[i]->rx_id &&
+                    can_instance[i]->identifier_type == id_type)
         			{
         				target = can_instance[i];
         				break;

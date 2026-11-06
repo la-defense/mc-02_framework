@@ -22,6 +22,23 @@
 
 /* USER CODE BEGIN 0 */
 #include <stddef.h> // NULL 用于检查 HAL 传入的控制器句柄。
+// SRAMCAN 以 32 位字计址；接收元素预留64字节，避免 HAL 按异常 DLC 读取相邻元素。
+#define MC02_FDCAN_RAM_WORDS (0x2800u / 4u) // H723 的共享消息 RAM 总字数。
+#define MC02_FDCAN_STD_FILTERS 14u // 每条总线保留14个标准过滤器。
+#define MC02_FDCAN_EXT_FILTERS 16u // 每条总线保留16个扩展过滤器，每项占2字。
+#define MC02_FDCAN_RX_FIFO_ITEMS 4u // 每个接收 FIFO 保持4个元素。
+#define MC02_FDCAN_TX_FIFO_ITEMS 16u // 每个发送 FIFO 保持16个经典 CAN 元素。
+#define MC02_FDCAN_RAM_OFFSET_1 0u // 第一条总线的消息 RAM 起始字偏移。
+#define MC02_FDCAN_RAM_OFFSET_2 0x406u // 第二条总线的消息 RAM 起始字偏移。
+#define MC02_FDCAN_RAM_OFFSET_3 0x812u // 第三条总线的消息 RAM 起始字偏移。
+#define MC02_FDCAN_WORDS_PER_BUS (MC02_FDCAN_STD_FILTERS + 2u * MC02_FDCAN_EXT_FILTERS + \
+  2u * MC02_FDCAN_RX_FIFO_ITEMS * FDCAN_DATA_BYTES_64 + MC02_FDCAN_TX_FIFO_ITEMS * FDCAN_DATA_BYTES_8)
+_Static_assert(MC02_FDCAN_RAM_OFFSET_1 + MC02_FDCAN_WORDS_PER_BUS <= MC02_FDCAN_RAM_OFFSET_2,
+               "FDCAN1 and FDCAN2 message RAM overlaps");
+_Static_assert(MC02_FDCAN_RAM_OFFSET_2 + MC02_FDCAN_WORDS_PER_BUS <= MC02_FDCAN_RAM_OFFSET_3,
+               "FDCAN2 and FDCAN3 message RAM overlaps");
+_Static_assert(MC02_FDCAN_RAM_OFFSET_3 + MC02_FDCAN_WORDS_PER_BUS <= MC02_FDCAN_RAM_WORDS,
+               "FDCAN3 message RAM exceeds SRAMCAN");
 // 三个控制器共用一个时钟；每位记录一个已完成 MSP 初始化的控制器。
 static uint8_t fdcan_clock_users;
 
@@ -112,18 +129,18 @@ void MX_FDCAN1_Init(void)
   hfdcan1.Init.DataSyncJumpWidth = 10;
   hfdcan1.Init.DataTimeSeg1 = 29;
   hfdcan1.Init.DataTimeSeg2 = 10;
-  hfdcan1.Init.MessageRAMOffset = 0;
-  hfdcan1.Init.StdFiltersNbr = 14;
-  hfdcan1.Init.ExtFiltersNbr = 0;
-  hfdcan1.Init.RxFifo0ElmtsNbr = 4;
-  hfdcan1.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_8;
-  hfdcan1.Init.RxFifo1ElmtsNbr = 4;
-  hfdcan1.Init.RxFifo1ElmtSize = FDCAN_DATA_BYTES_8;
+  hfdcan1.Init.MessageRAMOffset = MC02_FDCAN_RAM_OFFSET_1; // 第一条总线的共享 RAM 起点。
+  hfdcan1.Init.StdFiltersNbr = MC02_FDCAN_STD_FILTERS; // 标准 ID 过滤器数量。
+  hfdcan1.Init.ExtFiltersNbr = MC02_FDCAN_EXT_FILTERS; // 扩展 ID 过滤器数量。
+  hfdcan1.Init.RxFifo0ElmtsNbr = MC02_FDCAN_RX_FIFO_ITEMS; // FIFO0 元素数。
+  hfdcan1.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_64; // 容纳 HAL 对异常 DLC 的最大读取。
+  hfdcan1.Init.RxFifo1ElmtsNbr = MC02_FDCAN_RX_FIFO_ITEMS; // FIFO1 元素数。
+  hfdcan1.Init.RxFifo1ElmtSize = FDCAN_DATA_BYTES_64; // FIFO1 与 FIFO0 使用相同边界。
   hfdcan1.Init.RxBuffersNbr = 0;
   hfdcan1.Init.RxBufferSize = FDCAN_DATA_BYTES_8;
   hfdcan1.Init.TxEventsNbr = 0;
   hfdcan1.Init.TxBuffersNbr = 0;
-  hfdcan1.Init.TxFifoQueueElmtsNbr = 16;
+  hfdcan1.Init.TxFifoQueueElmtsNbr = MC02_FDCAN_TX_FIFO_ITEMS; // 经典 CAN 发送队列容量。
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   hfdcan1.Init.TxElmtSize = FDCAN_DATA_BYTES_8;
   if (HAL_FDCAN_Init(&hfdcan1) != HAL_OK)
@@ -160,18 +177,18 @@ void MX_FDCAN2_Init(void)
   hfdcan2.Init.DataSyncJumpWidth = 10;
   hfdcan2.Init.DataTimeSeg1 = 29;
   hfdcan2.Init.DataTimeSeg2 = 10;
-  hfdcan2.Init.MessageRAMOffset = 0x406;
-  hfdcan2.Init.StdFiltersNbr = 14;
-  hfdcan2.Init.ExtFiltersNbr = 0;
-  hfdcan2.Init.RxFifo0ElmtsNbr = 4;
-  hfdcan2.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_8;
-  hfdcan2.Init.RxFifo1ElmtsNbr = 4;
-  hfdcan2.Init.RxFifo1ElmtSize = FDCAN_DATA_BYTES_8;
+  hfdcan2.Init.MessageRAMOffset = MC02_FDCAN_RAM_OFFSET_2; // 第二条总线的共享 RAM 起点。
+  hfdcan2.Init.StdFiltersNbr = MC02_FDCAN_STD_FILTERS; // 标准 ID 过滤器数量。
+  hfdcan2.Init.ExtFiltersNbr = MC02_FDCAN_EXT_FILTERS; // 扩展 ID 过滤器数量。
+  hfdcan2.Init.RxFifo0ElmtsNbr = MC02_FDCAN_RX_FIFO_ITEMS; // FIFO0 元素数。
+  hfdcan2.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_64; // 保证 HAL 最大读取不跨元素。
+  hfdcan2.Init.RxFifo1ElmtsNbr = MC02_FDCAN_RX_FIFO_ITEMS; // FIFO1 元素数。
+  hfdcan2.Init.RxFifo1ElmtSize = FDCAN_DATA_BYTES_64; // FIFO1 使用相同边界。
   hfdcan2.Init.RxBuffersNbr = 0;
   hfdcan2.Init.RxBufferSize = FDCAN_DATA_BYTES_8;
   hfdcan2.Init.TxEventsNbr = 0;
   hfdcan2.Init.TxBuffersNbr = 0;
-  hfdcan2.Init.TxFifoQueueElmtsNbr = 16;
+  hfdcan2.Init.TxFifoQueueElmtsNbr = MC02_FDCAN_TX_FIFO_ITEMS; // 经典 CAN 发送队列容量。
   hfdcan2.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   hfdcan2.Init.TxElmtSize = FDCAN_DATA_BYTES_8;
   if (HAL_FDCAN_Init(&hfdcan2) != HAL_OK)
@@ -208,18 +225,18 @@ void MX_FDCAN3_Init(void)
   hfdcan3.Init.DataSyncJumpWidth = 10;
   hfdcan3.Init.DataTimeSeg1 = 29;
   hfdcan3.Init.DataTimeSeg2 = 10;
-  hfdcan3.Init.MessageRAMOffset = 0x812;
-  hfdcan3.Init.StdFiltersNbr = 14;
-  hfdcan3.Init.ExtFiltersNbr = 0;
-  hfdcan3.Init.RxFifo0ElmtsNbr = 4;
-  hfdcan3.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_8;
-  hfdcan3.Init.RxFifo1ElmtsNbr = 4;
-  hfdcan3.Init.RxFifo1ElmtSize = FDCAN_DATA_BYTES_8;
+  hfdcan3.Init.MessageRAMOffset = MC02_FDCAN_RAM_OFFSET_3; // 第三条总线的共享 RAM 起点。
+  hfdcan3.Init.StdFiltersNbr = MC02_FDCAN_STD_FILTERS; // 标准 ID 过滤器数量。
+  hfdcan3.Init.ExtFiltersNbr = MC02_FDCAN_EXT_FILTERS; // 扩展 ID 过滤器数量。
+  hfdcan3.Init.RxFifo0ElmtsNbr = MC02_FDCAN_RX_FIFO_ITEMS; // FIFO0 元素数。
+  hfdcan3.Init.RxFifo0ElmtSize = FDCAN_DATA_BYTES_64; // 保证 HAL 最大读取不跨元素。
+  hfdcan3.Init.RxFifo1ElmtsNbr = MC02_FDCAN_RX_FIFO_ITEMS; // FIFO1 元素数。
+  hfdcan3.Init.RxFifo1ElmtSize = FDCAN_DATA_BYTES_64; // FIFO1 使用相同边界。
   hfdcan3.Init.RxBuffersNbr = 0;
   hfdcan3.Init.RxBufferSize = FDCAN_DATA_BYTES_8;
   hfdcan3.Init.TxEventsNbr = 0;
   hfdcan3.Init.TxBuffersNbr = 0;
-  hfdcan3.Init.TxFifoQueueElmtsNbr = 16;
+  hfdcan3.Init.TxFifoQueueElmtsNbr = MC02_FDCAN_TX_FIFO_ITEMS; // 经典 CAN 发送队列容量。
   hfdcan3.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   hfdcan3.Init.TxElmtSize = FDCAN_DATA_BYTES_8;
   if (HAL_FDCAN_Init(&hfdcan3) != HAL_OK)

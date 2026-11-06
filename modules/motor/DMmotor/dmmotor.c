@@ -334,7 +334,8 @@ static void DMMotorTask(void const *argument)
 
 DMMotorInstance *DMMotorInit(const Motor_Init_Config_s *config)
 {
-    if (config == NULL || dm_control_started != 0u || dm_registry_quarantined != 0u ||
+    if (config == NULL || config->can_init_config.identifier_type != CAN_TX_ID_STANDARD ||
+        dm_control_started != 0u || dm_registry_quarantined != 0u ||
         dm_instance_count >= DM_MOTOR_CNT)
         return NULL;
 

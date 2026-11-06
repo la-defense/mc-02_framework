@@ -25,6 +25,7 @@ extern FDCAN_GlobalTypeDef fake_fdcan_devices[3];
 #define FDCAN_FRAME_CLASSIC 0u
 #define FDCAN_MODE_NORMAL 0u
 #define FDCAN_DATA_BYTES_8 4u
+#define FDCAN_DATA_BYTES_64 18u
 #define FDCAN_TX_FIFO_OPERATION 0u
 #define ENABLE 1u
 #define DISABLE 0u
@@ -66,4 +67,7 @@ void HAL_NVIC_DisableIRQ(int irq);
 void HAL_NVIC_ClearPendingIRQ(int irq);
 void Error_Handler(void);
 extern FDCAN_HandleTypeDef hfdcan1, hfdcan2, hfdcan3;
+void MX_FDCAN1_Init(void);
+void MX_FDCAN2_Init(void);
+void MX_FDCAN3_Init(void);
 #endif

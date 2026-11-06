@@ -26,6 +26,7 @@ typedef struct
     uint32_t rx_id;
     void (*can_module_callback)(CANInstance *instance);
     void *id;
+    uint32_t identifier_type; // 模拟端点的标准／扩展类型。
 } CAN_Init_Config_s;
 
 extern CAN_HandleTypeDef hcan3;

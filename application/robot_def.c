@@ -25,6 +25,7 @@ static uint8_t IsSupportedDJIMotor(const Motor_Init_Config_s *motor, uint8_t req
 {
     if (motor == NULL || motor->can_init_config.can_bus < PLATFORM_CAN_BUS_1 ||
         motor->can_init_config.can_bus > PLATFORM_CAN_BUS_3 ||
+        motor->can_init_config.identifier_type != CAN_TX_ID_STANDARD ||
         !isfinite(motor->output_axis.gear_ratio) || motor->output_axis.gear_ratio <= 0.0f ||
         (motor->output_axis.direction != MOTOR_AXIS_DIRECTION_NORMAL &&
          motor->output_axis.direction != MOTOR_AXIS_DIRECTION_REVERSE) ||

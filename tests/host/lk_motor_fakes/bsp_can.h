@@ -42,6 +42,7 @@ typedef struct
     uint32_t rx_id;
     void (*can_module_callback)(CANInstance *);
     void *id;
+    uint32_t identifier_type; // 模拟端点的标准／扩展类型。
 } CAN_Init_Config_s;
 
 CANInstance *CANRegister(CAN_Init_Config_s *config);

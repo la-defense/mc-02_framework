@@ -163,7 +163,8 @@ static void LKMotorLostCallback(const DaemonEvent_t *event, void *motor_ptr)
 
 LKMotorInstance *LKMotorInit(const Motor_Init_Config_s *config)
 {
-    if (config == NULL || config->motor_type != LK9025)
+    if (config == NULL || config->motor_type != LK9025 ||
+        config->can_init_config.identifier_type != CAN_TX_ID_STANDARD)
         return NULL;
 
     int8_t bus_index = LKBusIndex(config->can_init_config.can_bus); // 按逻辑总线选择独立发送组。
