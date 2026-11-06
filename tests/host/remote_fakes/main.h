@@ -17,6 +17,12 @@ void HostDataMemoryBarrier(void);
 #define __disable_irq() HostDisableIrq()
 #define __set_PRIMASK(mask) HostSetPrimask(mask)
 #define __DMB() HostDataMemoryBarrier()
+#elif defined(MC02_UART_IRQ_TEST)
+extern uint32_t uart_test_irq_mask, uart_test_irq_sections;
+static inline uint32_t __get_PRIMASK(void) { return uart_test_irq_mask; }
+static inline void __disable_irq(void) { uart_test_irq_mask = 1u; ++uart_test_irq_sections; }
+static inline void __set_PRIMASK(uint32_t mask) { uart_test_irq_mask = mask; }
+static inline void __DMB(void) {}
 #else
 static inline uint32_t __get_PRIMASK(void) { return 0; }
 static inline void __disable_irq(void) {}

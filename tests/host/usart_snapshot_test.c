@@ -17,6 +17,9 @@ static uint8_t start_interrupt;
 static uint32_t now_ms;
 static HAL_StatusTypeDef transmit_status = HAL_OK;
 static unsigned transmit_calls;
+uint32_t uart_test_irq_mask, uart_test_irq_sections;
+static uint8_t verify_start_irq;
+static uint32_t expected_start_irq;
 #if defined(__linux__)
 static long allocation_countdown = -1;
 static unsigned allocation_attempts;
@@ -46,6 +49,7 @@ void __wrap_free(void *pointer) { __real_free(pointer); }
 uint32_t HAL_GetTick(void) { return now_ms; }
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h,uint8_t *p,uint16_t n)
 {
+    if (verify_start_irq) CHECK(uart_test_irq_mask == expected_start_irq); // 启动 DMA 时恢复调用方中断状态。
     ++receive_start_count;
     if (start_interrupt) {
         start_interrupt=0u;
@@ -96,6 +100,22 @@ int main(int argc, char **argv)
     DMA_HandleTypeDef uart_dma={0};
     uart.hdmarx=&uart_dma;
     USART_Init_Config_s config={.recv_buff_size=18,.usart_handle=&uart,.module_callback=callback,.context=&instance};
+
+    if (argc > 1 && strcmp(argv[1], "registration-irq") == 0)
+    {
+        verify_start_irq = 1u; // 检查接收启动不被发布临界区覆盖。
+        expected_start_irq = 0u; // 调用前中断开启。
+        instance = USARTRegister(&config); // 注册第一个串口。
+        CHECK(instance && uart_test_irq_sections > 0u && uart_test_irq_mask == 0u); // 发布后恢复开启。
+        UART_HandleTypeDef next_uart = {0}; // 第二个串口用于验证外层已屏蔽的情况。
+        DMA_HandleTypeDef next_dma = {0}; // 第二个串口使用独立 DMA。
+        next_uart.hdmarx = &next_dma; // 绑定模拟 DMA。
+        config.usart_handle = &next_uart; // 切换注册对象。
+        uart_test_irq_mask = 1u; // 模拟调用方进入前已关闭中断。
+        expected_start_irq = 1u; // 接收启动时仍保持调用方状态。
+        CHECK(USARTRegister(&config) != NULL && uart_test_irq_mask == 1u); // 不意外开启外层中断。
+        return 0;
+    }
 
     if (argc > 1 && strcmp(argv[1], "init-race") == 0)
     {

@@ -28,6 +28,10 @@ FDCAN_HandleTypeDef hfdcan3 = {.Init = {.StdFiltersNbr = 14u}, .Instance = &fdca
 volatile uint32_t dwt_cpu_freq_mhz = 480u;
 volatile uint32_t test_dwt_cycles;
 volatile uint32_t test_ipsr;
+uint32_t can_test_irq_mask, can_test_irq_sections;
+static uint8_t verify_filter_interrupts;
+void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *handle);
+void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *handle, uint32_t flags);
 extern volatile DWT_Probe_t can_prof_rx_dispatch;
 
 static uint64_t now_us;
@@ -58,6 +62,7 @@ typedef struct
 static TestRxFrame_t rx_frames[DEVICE_CAN_CNT][64];
 static uint8_t rx_frame_count[DEVICE_CAN_CNT];
 static uint8_t rx_frame_read[DEVICE_CAN_CNT];
+static uint8_t inject_after_filter, pending_registration_irq;
 static uint8_t rx_read_failures; // 受控注入接收失败，避免测试因错误循环无限运行。
 static uint32_t rx_read_calls; // 记录 HAL 实际读取次数。
 static uint32_t burst_rx_count[DEVICE_CAN_CNT];
@@ -66,6 +71,17 @@ static uint32_t burst_last_cycle[DEVICE_CAN_CNT];
 static uint8_t status_busoff[DEVICE_CAN_CNT]; // 模拟各总线独立的关闭状态。
 static uint8_t status_error[DEVICE_CAN_CNT]; // 模拟各总线独立的错误状态。
 static uint8_t status_read_failure; // 模拟 HAL 查询失败。
+
+void CANTestRestoreIrq(uint32_t value)
+{
+    const uint32_t was_masked = can_test_irq_mask; // 保留恢复前的中断状态。
+    can_test_irq_mask = value; // 先恢复调用方要求的状态。
+    if (was_masked && !value && pending_registration_irq) // 注册发布后模拟等待中的接收中断。
+    {
+        pending_registration_irq = 0u; // 先清除标记，避免中断处理再次触发自身。
+        HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 使用生产中断入口。
+    }
+}
 
 #if defined(LK_TEST_ALLOC_WRAP)
 static unsigned malloc_calls;
@@ -158,6 +174,7 @@ uint32_t HAL_FDCAN_ActivateNotification(FDCAN_HandleTypeDef *handle, uint32_t ma
 }
 uint32_t HAL_FDCAN_ConfigFilter(FDCAN_HandleTypeDef *handle, FDCAN_FilterTypeDef *filter)
 {
+    if (verify_filter_interrupts) TEST_CHECK(can_test_irq_mask == 0u); // 硬件配置不应被登记临界区包围。
     uint8_t bus = bus_for_handle(handle);
     if (filter_fail_once != 0u)
     {
@@ -169,6 +186,7 @@ uint32_t HAL_FDCAN_ConfigFilter(FDCAN_HandleTypeDef *handle, FDCAN_FilterTypeDef
     filter_last_index[bus] = filter->FilterIndex; // 保存 HAL 实际收到的槽位。
     filter_last_type[bus] = filter->IdType; // 保存硬件过滤器类型。
     if (filter->FilterConfig == FDCAN_FILTER_DISABLE) return HAL_OK; // 禁用不计作新增过滤器。
+    if (inject_after_filter) pending_registration_irq = 1u; // 让下一次恢复中断时立刻接收。
     filter_rx_id[bus] = filter->FilterID1;
     ++filter_count[bus];
     return HAL_OK;
@@ -256,6 +274,30 @@ static void validate_rx_callback(CANInstance *instance)
 {
     ++valid_rx_count; // 只统计实际交给模块的合法帧。
     valid_rx_length = instance->rx_len; // 记录零长度等有效边界。
+}
+
+static void test_registration_irq_state(void)
+{
+    CAN_Init_Config_s config = {0}; // 使用默认标准帧类型。
+    config.can_handle = &hfdcan1; // 在第一条总线上登记。
+    config.tx_id = 0x300u; // 选择测试发送 ID。
+    config.rx_id = 0x321u; // 选择测试接收 ID。
+    config.can_module_callback = validate_rx_callback; // 收到测试帧后可派发。
+    can_test_irq_sections = 0u; // 单独统计本次注册的临界区。
+    verify_filter_interrupts = 1u; // 检查硬件过滤器配置发生在中断开启时。
+    inject_after_filter = 1u; // 过滤器配置后安排一次接收中断。
+    rx_frames[0][0].header.Identifier = config.rx_id; // 构造属于新端点的帧。
+    rx_frame_count[0] = 1u; // 中断可读取这一帧。
+    TEST_CHECK(CANRegister(&config) != NULL); // 注册生产端点。
+    TEST_CHECK(can_test_irq_sections > 0u && can_test_irq_mask == 0u); // 发布时使用临界区并恢复中断。
+    CANProcessRx(); // 在普通任务中派发中断接收的数据。
+    TEST_CHECK(valid_rx_count == 1u); // 发布完成时到达的帧必须找到新实例。
+    inject_after_filter = 0u; // 第二次注册不重复注入。
+    verify_filter_interrupts = 0u; // 下一次模拟调用前已关中断，不要求开启硬件配置。
+    can_test_irq_mask = 1u; // 模拟外层已经屏蔽中断。
+    config.rx_id = 0x322u; // 使用另一个端点避免重复登记。
+    TEST_CHECK(CANRegister(&config) != NULL); // 在调用方已屏蔽时仍可登记。
+    TEST_CHECK(can_test_irq_mask == 1u); // 函数不得意外开启外层中断。
 }
 
 static void test_bus_start_and_rollback_isolation(void)
@@ -2167,8 +2209,22 @@ static void test_platform_can_status(void)
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
+    if (strcmp(argv[1], "interrupt-before-init") == 0)
+    {
+        HAL_FDCAN_TxFifoEmptyCallback(&hfdcan1); // 工作区尚未准备时模拟发送中断。
+        HAL_FDCAN_TxBufferCompleteCallback(&hfdcan1, 1u); // 完成中断不能隐式初始化工作区。
+        HAL_FDCAN_TxBufferAbortCallback(&hfdcan1, 1u); // 中止中断也不能操作未发布状态。
+        HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 模拟早期 FIFO0 中断。
+        HAL_FDCAN_RxFifo1Callback(&hfdcan1, FDCAN_IT_RX_FIFO1_NEW_MESSAGE); // 模拟早期 FIFO1 中断。
+        TEST_CHECK(rx_read_calls == 0u); // 早期中断不能读取尚未初始化的队列。
+        CANInitWorkspace(); // 正常启动仍可初始化工作区。
+        test_registration_irq_state(); // 随后注册和接收仍能工作。
+        return 0; // 此场景不执行第二次工作区初始化。
+    }
     CANInitWorkspace();
-    if (strcmp(argv[1], "lk-logical-receive") == 0)
+    if (strcmp(argv[1], "registration-irq") == 0)
+        test_registration_irq_state();
+    else if (strcmp(argv[1], "lk-logical-receive") == 0)
         test_lk_logical_receive();
     else if (strcmp(argv[1], "bus-isolation") == 0)
         test_bus_start_and_rollback_isolation();

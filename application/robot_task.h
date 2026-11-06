@@ -5,7 +5,7 @@
 #define MC02_ROBOT_TASK_H
 #include "config/build_selection.h"
 
-/** @brief 初始化 INS 后约每 1 ms 处理采样和姿态；失败时只维持诊断循环。
+/** @brief INS 由启动协调者初始化后，约每 1 ms 处理采样和姿态。
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartINSTASK(void const *argument);

@@ -95,7 +95,7 @@ uint8_t ChassisInit(void)
 
     // 发布订阅初始化,如果为双板,则需要can comm来传递消息
 #ifdef CHASSIS_BOARD
-    Chassis_IMU_data = INS_GetStorage(); // INS 由调度器启动后的专属任务初始化
+    Chassis_IMU_data = INS_GetStorage(); // INS 在本步骤之后由启动协调任务初始化。
 
 #endif                                          // CHASSIS_BOARD
 

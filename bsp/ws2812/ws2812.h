@@ -13,7 +13,7 @@
 
 /** @brief 配置 SPI6、BDMA 通道0和数据引脚；重复调用保持已初始化状态。
  * @return HAL_OK 表示成功，资源正在使用时返回 HAL_BUSY，其他初始化失败返回 HAL_ERROR。
- * @note 调度器启动前串行调用；要求 DCache 关闭，使用 SRAM4 和 SPI6／BDMA0 中断，不占用 PA5。
+ * @note 启动协调期间串行调用；要求 DCache 关闭，使用 SRAM4 和 SPI6／BDMA0 中断，不占用 PA5。
  */
 HAL_StatusTypeDef WS2812_Init(void);
 /** @brief 复制颜色并尝试启动异步发送；未初始化或通道隔离时返回 HAL_ERROR。

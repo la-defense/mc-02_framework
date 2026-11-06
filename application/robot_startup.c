@@ -7,6 +7,7 @@
 #include "config/vehicle_selection.h"
 #endif
 #include "ins_startup.h"
+#include "robot.h"
 #include "robot_task_create.h"
 #include "platform_os.h"
 #include "task_monitor.h"
@@ -40,6 +41,12 @@ uint8_t RobotStartupRun(void)
         return 0u; // 没有调度器时不访问设备。
     }
     InitDiagnosticSetStage(INIT_STAGE_APPLICATION); // 传感器等待期间显示当前设备初始化阶段。
+    if (!RobotInitializeApplications()) // 在允许中断和任务等待的环境初始化业务模块。
+    {
+        RobotStartupLatchFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                 INIT_FAILURE_DEPENDENCY, 0u); // 保留下层首先记录的原因。
+        return 0u; // 核心业务失败时不初始化姿态或创建周期任务。
+    }
 #if MC02_FEATURE_IMU
 #if defined(MC02_CONFIG_GENERATED)
     if (RobotBuildModuleStarted(ROBOT_MODULE_IMU)) // 只初始化启动计划接受的姿态模块。

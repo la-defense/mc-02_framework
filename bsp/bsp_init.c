@@ -16,7 +16,7 @@ uint8_t BSPInit(void)
     DWT_Init(480);
     CANInitWorkspace();
     BSPLogInit();
-    // 启动先等待 4000 ms，任务创建成功后由 RobotInit 改为 200 ms。
+    // 启动先使用 4000 ms 窗口，任务创建成功后由启动协调者改为 200 ms。
     if (!BSP_WatchdogInitChecked(4000u)) return 0u; // 看门狗未确认时不能继续初始化设备。
     BSP_ADCInit();
     // 复位原因和上次崩溃记录需要通过已初始化的日志输出。

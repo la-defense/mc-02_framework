@@ -2,7 +2,6 @@
 * @brief 启动板级资源、应用和任务，失败时统一关闭输出，并提供整车周期入口。
 */
 #include "bsp_init.h"
-#include "platform_irq.h"
 #include "platform_sync.h"
 #include "config/build_selection.h"
 #if MC02_FEATURE_VISION
@@ -113,7 +112,7 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
     case ROBOT_MODULE_LCD:
         return 1u;
     case ROBOT_MODULE_IMU:
-        return INS_ConfigureSensor(config->imu_sensor); // 先核对板级绑定，实际采样在 INS 任务初始化。
+        return INS_ConfigureSensor(config->imu_sensor); // 先核对板级绑定，实际采样由协调任务初始化。
     case ROBOT_MODULE_HEATER:
 #if MC02_FEATURE_HEATER
         return IMUHeaterConfigure(config->imu_heater_pwm, config->imu_heater_supply); // 缺少资源时交给模块依赖处理。
@@ -201,10 +200,7 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 
 uint8_t RobotInit(void)
 {  
-    // 关闭中断,防止在初始化过程中发生中断
-    // 请不要在初始化过程中使用中断和延时函数！
-    // 若必须,则只允许使用DWT_Delay()
-    const PlatformIrqState_t previous_primask = PlatformIrqSaveAndDisable(); // 保留进入前的屏蔽状态。
+    // 早期步骤允许硬件中断；共享数据各自由短临界区保护。
     InitDiagnosticBegin(INIT_STAGE_BSP);
     
     const uint8_t bsp_ready = BSPInit(); // 保存基础保护结果，不能将失败当作已准备好。
@@ -226,10 +222,6 @@ uint8_t RobotInit(void)
                                     (uint16_t)config_status);
         goto init_failed;
     }
-#if !defined(MC02_CONFIG_GENERATED)
-    // 兼容旧主机测试构建；正式固件由配置启动器按依赖顺序初始化。
-    (void)RobotAlarmInit(robot_config->alarm_config);
-#endif
     BSP_ResetRecoveryState_t recovery_state = {0};
     const uint8_t recovery_state_valid = BSP_ResetRecoveryGetState(&recovery_state);
     if (recovery_state_valid == 0u || recovery_state.locked_out != 0u)
@@ -259,6 +251,34 @@ uint8_t RobotInit(void)
         .end = RobotParamFlashOperationEnd,
     };
     ParamSetLongOperationGuard(&param_guard);
+
+#if defined(MC02_PROFILE_ROBOT)
+    // 日志诊断处理函数须在调度器启动前登记；实际话题仍由后续应用步骤建立。
+    (void)RobotTopicsDiagnosticInit();
+#endif
+    InitDiagnosticSetStage(INIT_STAGE_FREERTOS); // 基础条件已准备，等待调度器启动。
+    return 1u; // 业务设备在默认任务中继续初始化。
+
+init_failed:
+    RobotFaultReport(ROBOT_FAULT_INIT_FAILURE); // 保存早期核心初始化失败。
+    RobotSafetyRequestDisable(); // 撤销业务运行许可。
+    BSP_SafetyStartupLatchOutputsOff(); // 立即关闭受控输出。
+    return 0u; // main 保留已有的失败诊断循环。
+}
+
+uint8_t RobotInitializeApplications(void)
+{
+    const Robot_Config_s *robot_config = NULL; // 只读取启动时确认的车型配置。
+    const RobotConfigStatus_t config_status = RobotConfigSelect(ROBOT_CONFIG_SUPPORTED_ID, &robot_config);
+    if (config_status != ROBOT_CONFIG_OK || robot_config == NULL)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                    INIT_FAILURE_DEPENDENCY, (uint16_t)config_status); // 配置失效时记录原因。
+        goto init_failed; // 不使用缺失或错误的配置。
+    }
+#if !defined(MC02_CONFIG_GENERATED)
+    (void)RobotAlarmInit(robot_config->alarm_config); // 保留旧主机组合的告警初始化。
+#endif
 
 #define ROBOT_INIT_CHECK(condition, stage, module, reason, resource)              \
     do                                                                            \
@@ -337,22 +357,17 @@ uint8_t RobotInit(void)
     ROBOT_INIT_CHECK(RobotCanBridgeInit(&robot_config->can_bridge), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
                      INIT_FAILURE_DEPENDENCY, 2u);
 #endif
-    // 话题统计只用于调试；注册失败不改变控制任务的启动结果。
-    (void)RobotTopicsDiagnosticInit();
 #endif
 
-    InitDiagnosticSetStage(INIT_STAGE_FREERTOS);
 #undef ROBOT_INIT_CHECK
-    PlatformIrqRestore(previous_primask); // 成功后恢复调用前的中断状态。
-    return 1u;
+    return 1u; // 应用配置已检查，协调者继续初始化 INS。
 
-// 保留首次初始化失败，失能并恢复调用前的中断状态，让 main 继续运行诊断。
+// 保留首次初始化失败并立即失能，协调者负责维持诊断。
 init_failed:
 #undef ROBOT_INIT_CHECK
     RobotFaultReport(ROBOT_FAULT_INIT_FAILURE);
     RobotSafetyRequestDisable();
     BSP_SafetyStartupLatchOutputsOff();
-    PlatformIrqRestore(previous_primask); // 输出关断后才恢复原中断状态。
     return 0u;
 }
 

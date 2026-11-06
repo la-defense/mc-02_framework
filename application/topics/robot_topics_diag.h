@@ -1,7 +1,7 @@
 /**
  * @file robot_topics_diag.h
  * @brief 声明通过 USART10 按请求读取消息中心话题统计的启动入口。
- * @note 仅在robot配置中使用；先完成BSPLogInit和RobotTopicsInit，再在调度器启动前注册。
+ * @note 仅在 robot 配置中使用；BSPLogInit 后、调度器启动前注册，话题由启动协调任务随后建立。
  */
 #ifndef MC02_ROBOT_TOPICS_DIAG_H
 #define MC02_ROBOT_TOPICS_DIAG_H

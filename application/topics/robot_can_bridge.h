@@ -10,7 +10,7 @@
 #include "robot_can_bridge_task.h"
 /** @brief 注册本板的CAN和话题端点。
  * @param[in] config 车型提供的板间总线、ID和话题声明；调用时复制必要信息。
- * @return 1为成功，0为资源或配置错误；调度器启动前串行调用一次。
+ * @return 1为成功，0为资源或配置错误；启动协调期间串行调用一次。
  */
 uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config);
 /** @brief 复制最近一次板间对时状态，供其他普通任务查询。

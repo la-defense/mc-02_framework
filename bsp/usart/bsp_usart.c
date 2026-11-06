@@ -143,10 +143,15 @@ USARTInstance *USARTRegister(USART_Init_Config_s *init_config)
         return NULL;
     }
     // 先登记存储，再启动接收；启动阶段串行注册，避免首个中断找不到实例。
-    usart_q[idx].data = &usart_rxq_pool[usart_rxq_used];
-    memset(usart_q[idx].data, 0, need);
+    uint8_t *queue_data = &usart_rxq_pool[usart_rxq_used]; // 保存本次分配的队列位置。
+    memset(queue_data, 0, need); // 清理缓冲不需要屏蔽中断。
+    const uint32_t previous_mask = __get_PRIMASK(); // 保存调用前的中断状态。
+    __disable_irq(); // 避免其他串口中断看到发布一半的登记项。
+    usart_q[idx].data = queue_data; // 先发布已清零的队列。
     usart_rxq_used = (uint16_t)(usart_rxq_used + need);
-    usart_instance[idx++] = instance;
+    usart_instance[idx] = instance; // 先写入完整实例地址。
+    ++idx; // 最后扩大中断可遍历的有效范围。
+    __set_PRIMASK(previous_mask); // 恢复原状态，再执行可能等待的接收启动。
     if (!USARTStartRx(instance))
     {
         instance->module_callback = NULL;

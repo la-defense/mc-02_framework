@@ -147,7 +147,7 @@ typedef struct
 #define CAN_BUS_WORKSPACE
 #endif
 static CANBusState_t can_bus[DEVICE_CAN_CNT] CAN_BUS_WORKSPACE;
-static uint8_t can_bus_state_initialized;
+static volatile uint8_t can_bus_state_initialized; // 中断只在工作区完整发布后访问它。
 static void CANBusStateEnsureInitialized(void);
 static CANInstance *rx_lookup[DEVICE_CAN_CNT][CAN_RX_LOOKUP_SIZE];
 /* 每条总线的标准与扩展过滤器各自记录已用槽；注册表最多16项。 */
@@ -232,6 +232,7 @@ static void CANBusStateEnsureInitialized(void)
         for (uint8_t i = 0u; i < CAN_TX_MAX_HW_BUFFERS; ++i)
             scheduler->hw_result[i] = CAN_TX_INVALID_RESULT_INDEX;
     }
+    __DMB(); // 先完成工作区写入，再允许中断读取。
     can_bus_state_initialized = 1u;
 }
 
@@ -1665,16 +1666,21 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
         return NULL;
     }
 
-    can_instance[idx++] = instance;
+    const uint32_t previous_mask = __get_PRIMASK(); // 保存调用前中断状态。
+    __disable_irq(); // 防止接收中断在登记表发布到一半时读取它。
+    can_instance[idx] = instance; // 先写入完整实例地址。
 #ifdef FDCAN
-    rx_lookup[bus_idx][lookup_idx] = instance;
+    rx_lookup[bus_idx][lookup_idx] = instance; // 快速查找项和登记表一起发布。
 #endif
+    ++idx; // 最后扩大中断可遍历的有效范围。
+    __set_PRIMASK(previous_mask); // 恢复调用前状态，不在关中断时配置硬件。
     return instance;
 }
 
 /* 发送完成相关回调(中断上下文: 只做计数, 不打印不阻塞) */
 void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *hfdcan)
 {
+    if (!can_bus_state_initialized) return; // 早期中断不能重入正在建立的工作区。
     CANBusState_t *bus = CANBusFromHandle(hfdcan);
     if (bus != NULL)
         bus->tx.tx_fifo_empty_events++;
@@ -1682,6 +1688,7 @@ void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *hfdcan)
 
 void HAL_FDCAN_TxBufferCompleteCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t BufferIndexes)
 {
+    if (!can_bus_state_initialized) return; // 工作区未发布时不读取发送状态。
     CANBusState_t *bus = CANBusFromHandle(hfdcan);
     if (bus == NULL)
         return;
@@ -1712,6 +1719,7 @@ void HAL_FDCAN_TxBufferCompleteCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t Bu
 
 void HAL_FDCAN_TxBufferAbortCallback(FDCAN_HandleTypeDef *hfdcan, uint32_t BufferIndexes)
 {
+    if (!can_bus_state_initialized) return; // 工作区未发布时不读取撤销状态。
     CANBusState_t *bus = CANBusFromHandle(hfdcan);
     if (bus == NULL)
         return;
@@ -1959,6 +1967,7 @@ static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
 
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 {
+    if (!can_bus_state_initialized) return; // 工作区未发布时不读取实例表或队列。
 	/* 检查Rx FIFO 0中是否有消息丢失 */
 	if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_MESSAGE_LOST) != 0)
 	{
@@ -1978,6 +1987,7 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 }
 void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs)
 {
+    if (!can_bus_state_initialized) return; // 工作区未发布时不读取实例表或队列。
 	/* 检查Rx FIFO 1中是否有消息丢失 */
 	if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_MESSAGE_LOST) != 0)
 	{

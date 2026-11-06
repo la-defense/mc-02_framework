@@ -1,7 +1,7 @@
 /**
 * @file ins_task.h
 * @brief 声明 IMU 姿态解算任务和姿态数据。
-* StartINSTASK 在 INS 专属任务中调用 INS_Init，随后以1kHz调用 INS_Task。
+* 启动协调任务调用 INS_Init，随后 INS 专属任务以1kHz调用 INS_Task。
 * 角度使用度，角速度使用 rad/s，加速度使用 m/s²。
 * @author Wang Hongxi
 * @author annotation and modification by NeoZeng
@@ -99,7 +99,7 @@ uint8_t INS_ConfigureSensor(PlatformImuPort_t port);
 /**
 * @brief 注册 BMI088 并准备姿态解算所需的滤波器。
 * @return 返回内部姿态数据地址；初始姿态计算或卡尔曼滤波器初始化失败时返回 NULL。
-* @note 先调用 INS_ConfigureSensor，再由 StartINSTASK 在 INS 专属任务中调用。
+* @note 先调用 INS_ConfigureSensor，再由启动协调任务调用。
 *       IMU 注册、姿态初始化或滤波器初始化失败均返回 NULL，重复调用保持失败；
 *       返回 NULL 时关闭加热并撤销 IMU／标定许可，业务不得使用旧姿态。
  */

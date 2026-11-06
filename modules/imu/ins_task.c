@@ -1,7 +1,7 @@
 /**
 * @file ins_task.c
 * @brief 读取 BMI088 样本，更新姿态估计，并向视觉链路提供有效数据。
-* StartINSTASK 在专属任务中初始化本模块；INS_Task 按1kHz运行。
+* 启动协调任务初始化本模块；INS_Task 在专属任务中按1kHz运行。
 * @author Wang Hongxi
 * @author annotation and modificaiton by neozng
  * @version V2.0.0
