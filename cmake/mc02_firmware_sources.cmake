@@ -8,7 +8,6 @@ set(MC02_PLATFORM_C_SOURCES
     Core/Src/dma.c
     Core/Src/fdcan.c
     Core/Src/i2c.c
-    Core/Src/octospi.c
     Core/Src/spi.c
     Core/Src/tim.c
     Core/Src/usart.c
@@ -52,7 +51,6 @@ set(MC02_PLATFORM_C_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_i2c.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_i2c_ex.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_mdma.c
-    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_ospi.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd_ex.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pwr.c

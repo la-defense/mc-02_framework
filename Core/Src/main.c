@@ -24,7 +24,6 @@
 #include "dma.h"
 #include "fdcan.h"
 #include "i2c.h"
-#include "octospi.h"
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
@@ -139,7 +138,7 @@ int main(void)
   MX_FDCAN3_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();
-  MX_OCTOSPI2_Init();
+  /* OCTOSPI 未被使用；重新生成后检查不得恢复初始化。 */
   MX_UART5_Init();
   MX_UART8_Init();
   MX_UART9_Init();
