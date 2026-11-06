@@ -6,6 +6,10 @@
 #include "bsp_dwt.h"
 #include "cmsis_os.h"
 #include "test_check.h"
+#include "task_monitor.h"
+
+static uint8_t runtime_released = 1u; // 大多数控制测试从放行后的状态开始。
+uint8_t TaskMonitorRuntimeReleased(void) { return runtime_released; }
 #include "general_def.h"
 #include "motor_feedback_test_support.h"
 #include "../../bsp/os/platform_sync.h"
@@ -524,10 +528,29 @@ static void test_task_creation_failure(void)
     TEST_CHECK(HTMotorControlInit() == 1u && task_count == 2u); // 重复调用不新增任务。
 }
 
+static void test_startup_wait(void)
+{
+    Motor_Init_Config_s config = config_for(NULL, NULL, NULL, NULL, FEEDFORWARD_NONE);
+    HTMotorInstance *motor = HTMotorInit(&config); // 建立测试电机并保留初始化报文数量。
+    TEST_CHECK(motor != NULL && HTMotorControlInit()); // 捕获真实控制任务入口。
+    const unsigned initial_transmits = transmit_count; // 初始化报文不属于周期控制。
+    uint8_t before[8]; // 保存任务等待前的输出内容。
+    memcpy(before, motor->tx_buff, sizeof(before)); // 后续检查等待期间没有改写输出。
+    runtime_released = 0u; // 模拟协调者尚未放行。
+    run_task(0u, 2u); // 让真实任务连续等待两次。
+    TEST_CHECK(transmit_count == initial_transmits); // 等待期间不能发送控制帧。
+    TEST_CHECK(memcmp(before, motor->tx_buff, sizeof(before)) == 0); // 等待期间不能计算新目标。
+    runtime_released = 1u; // 模拟协调者完成检查并放行。
+    run_task(0u, 1u); // 再次执行任务入口并完成一轮控制。
+    TEST_CHECK(transmit_count == initial_transmits + 1u); // 放行后才允许周期发送。
+}
+
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
-    if (strcmp(argv[1], "task_create_failure") == 0)
+    if (strcmp(argv[1], "startup_wait") == 0)
+        test_startup_wait();
+    else if (strcmp(argv[1], "task_create_failure") == 0)
         test_task_creation_failure();
     else if (strncmp(argv[1], "feedback_", 9u) == 0)
         test_feedback_combination((unsigned)(argv[1][9] - '0'));

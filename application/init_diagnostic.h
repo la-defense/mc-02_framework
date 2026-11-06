@@ -1,7 +1,7 @@
 /**
  * @file init_diagnostic.h
  * @brief 记录启动进度和首次失败，供程序及调试器查询。
- * RobotInit() 更新阶段，各初始化入口报告失败；INS 初始化成功后标记 READY。
+ * RobotInit() 更新阶段，各初始化入口报告失败；启动协调者完成任务放行后标记 READY。
  * 记录在每次启动时从零开始，以下接口不会清除已记录的失败。
  */
 #ifndef MC02_INIT_DIAGNOSTIC_H
@@ -19,7 +19,7 @@ typedef enum
     INIT_STAGE_APPLICATION,  ///< 业务模块初始化
     INIT_STAGE_TASKS,        ///< 创建机器人任务
     INIT_STAGE_FREERTOS,     ///< 创建默认任务并启动调度器
-    INIT_STAGE_READY,        ///< INS 初始化已完成
+    INIT_STAGE_READY,        ///< 核心启动步骤已完成，周期任务已放行
 } InitDiagnosticStage_e;
 
 /** @brief 初始化失败的原因编号。 */

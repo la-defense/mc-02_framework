@@ -27,6 +27,10 @@
 /* USER CODE BEGIN Includes */
 #include "usb_transport.h"
 #include "usb_diagnostic.h"
+#include "robot_startup.h"
+#include "init_diagnostic.h"
+#include "robot_safety.h"
+#include "bsp_watchdog.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,6 +53,9 @@
 // 观测工具从匹配ELF读取总深度，避免将新版任务的余量按旧128word换算。
 const uint32_t mc02_usb_task_stack_words
   __attribute__((used, section(".rodata.mc02_observation_identity"))) = USB_TRANSPORT_TASK_STACK_WORDS;
+/* 协调期间使用较深调用栈；固定存储不占用创建其他任务的 FreeRTOS 堆。 */
+static StackType_t default_task_stack[USB_TRANSPORT_TASK_STACK_WORDS];
+static StaticTask_t default_task_control;
 /* USER CODE END Variables */
 osThreadId defaultTaskHandle;
 
@@ -146,8 +153,9 @@ uint8_t MX_FREERTOS_Init(void) {
 
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
-  // USB生命周期和故障停止路径增加调用深度；运行回归还需检查实际历史最小余量。
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, USB_TRANSPORT_TASK_STACK_WORDS);
+  // 固定分配协调任务的栈；实际最小余量仍需后续裸板测量。
+  osThreadStaticDef(defaultTask, StartDefaultTask, osPriorityNormal, 0,
+                    USB_TRANSPORT_TASK_STACK_WORDS, default_task_stack, &default_task_control);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
   if (defaultTaskHandle == NULL)
     return 0u;
@@ -170,9 +178,16 @@ void StartDefaultTask(void const * argument)
   /* init code for USB_DEVICE */
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
+  const uint8_t startup_ok = RobotStartupRun(); // 初始化设备、创建任务并检查放行结果。
   /* Infinite loop */
   for(;;)
   {
+    if (!startup_ok)
+    {
+      InitDiagnosticHeartbeat(); // 保留初始化失败后的诊断心跳。
+      RobotSafetyRequestDisable(); // 整车保持失能，等待修正后重启。
+      BSP_WatchdogFeed(); // 沿用已有的初始化失败锁存诊断行为。
+    }
     // 唯一USB生命周期推进者；断开／等待主机配置跨多轮处理，不在控制任务内等待。
     (void)USBTransportProcess();
 #if MC02_BENCH_USB_DIAGNOSTICS

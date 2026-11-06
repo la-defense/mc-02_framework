@@ -4,6 +4,9 @@
  */
 #include "HT04.h"
 #include "test_check.h"
+#include "task_monitor.h"
+
+uint8_t TaskMonitorRuntimeReleased(void) { return 1u; } // 反馈测试不运行启动协调过程。
 #include "bsp_dwt.h"
 #include "cmsis_os.h"
 #include "../../bsp/os/platform_sync.h"

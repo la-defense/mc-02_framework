@@ -128,6 +128,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "application/alarm_startup.c",  # 依据模块计划处理告警降级。
     "application/robot_task.c",  # 常驻任务的周期调用和监控。
     "application/ins_startup.c",  # 姿态初始化结果及核心／辅助故障处理。
+    "application/robot_startup.c",  # 调度器运行后的启动协调和任务放行。
     "application/robot_monitor_plan.c",  # 车型依赖到任务监控的映射。
     "application/gimbal/gimbal.c",  # 云台命令和反馈。
     "application/shoot/shoot.c",  # 发射命令和拨弹控制。
@@ -480,6 +481,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/config/module_plan.h",
                         source_root / "application/robot_task_create.h",
                         source_root / "application/ins_startup.h",  # 姿态启动结果供协调任务使用。
+                        source_root / "application/robot_startup.h",  # 启动协调的公开入口。
                         source_root / "application/robot_monitor_plan.h",  # 车型任务监控配置入口。
                         source_root / "application/robot_task.h",
                         source_root / "application/robot.h",

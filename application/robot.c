@@ -246,6 +246,12 @@ uint8_t RobotInit(void)
                                     INIT_FAILURE_DEPENDENCY, 0u);
         goto init_failed;
     }
+    if (TaskMonitorDeferRuntime() != TASK_MONITOR_RESULT_OK)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_DEPENDENCY, 0u); // 无法推迟监控时禁止启动。
+        goto init_failed; // 不让周期任务在设备准备前运行。
+    }
     (void)VehicleHealthInit();
     (void)VehicleHealthDiagnosticInit();
     const ParamLongOperationGuard_t param_guard = {
@@ -334,14 +340,6 @@ uint8_t RobotInit(void)
     // 话题统计只用于调试；注册失败不改变控制任务的启动结果。
     (void)RobotTopicsDiagnosticInit();
 #endif
-
-    InitDiagnosticSetStage(INIT_STAGE_TASKS);
-    ROBOT_INIT_CHECK(OSTaskInit(), INIT_STAGE_TASKS, INIT_MODULE_TASKS,
-                     INIT_FAILURE_TASK_CREATE, 0u);
-
-    // 所有任务创建完成后再启动IWDG, 由Daemon任务中的TaskMonitorTick统一喂狗
-    ROBOT_INIT_CHECK(BSP_WatchdogInitChecked(200u), INIT_STAGE_TASKS, INIT_MODULE_WATCHDOG,
-                     INIT_FAILURE_WATCHDOG_CONFIG, INIT_RESOURCE_WATCHDOG_RUNTIME); // 运行窗口未生效时禁止启动控制。
 
     InitDiagnosticSetStage(INIT_STAGE_FREERTOS);
 #undef ROBOT_INIT_CHECK

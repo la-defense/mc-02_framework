@@ -13,6 +13,7 @@
 #include "../../../bsp/dwt/platform_probe.h" // 保留原反馈周期计算。
 #include "string.h"
 #include "daemon.h"
+#include "task_monitor.h"
 #include "stdlib.h"
 #include "bsp_log.h"
 
@@ -366,6 +367,9 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
     HTMotorInstance *motor = (HTMotorInstance *)argument;
     uint16_t tmp;
 
+    while (!TaskMonitorRuntimeReleased())
+        PlatformTaskDelayMs(1u); // 启动协调完成之前不计算或发送电机目标。
+
     // 持续取目标，依次计算已选角度、速度和当前反馈环；最后停止标记覆盖为零力矩。
     while (1)
     {
@@ -499,7 +503,7 @@ __attribute__((noreturn)) void HTMotorTask(void const *argument)
 
 uint8_t HTMotorControlInit(void)
 {
-    // 在调度器启动前遍历已注册电机，保留先前成功创建的任务。
+    // 在启动任务创建批次内遍历已注册电机，保留先前成功创建的任务。
     for (size_t i = 0; i < idx; i++)
     {
         if (ht_task_handle[i] != NULL)

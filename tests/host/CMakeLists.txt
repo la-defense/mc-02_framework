@@ -32,6 +32,17 @@ foreach(context before batch)
   add_test(NAME production_log_port_startup_${context} COMMAND log_port_startup_test ${context})
   set_tests_properties(production_log_port_startup_${context} PROPERTIES TIMEOUT 10)
 endforeach()
+# 直接执行生产启动协调器，通过独立进程注入设备、任务和放行失败。
+add_executable(robot_startup_test robot_startup_test.c ../../application/robot_startup.c)
+target_include_directories(robot_startup_test BEFORE PRIVATE ins_startup_fakes task_creation_fakes)
+target_include_directories(robot_startup_test PRIVATE . ../../application ../../modules/task_monitor
+  ../../bsp/os ../../bsp/watchdog)
+target_compile_definitions(robot_startup_test PRIVATE MC02_CONFIG_GENERATED=1 MC02_FEATURE_IMU=1)
+target_compile_options(robot_startup_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario IN ITEMS success disabled aux core no-scheduler batch-begin tasks batch-end watchdog release)
+  add_test(NAME production_robot_startup_${scenario} COMMAND robot_startup_test ${scenario})
+  set_tests_properties(production_robot_startup_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
 # 使用生产 INS 启动步骤和温控故障分类，分别注入核心／辅助故障。
 add_executable(ins_startup_test ins_startup_test.c ../../application/ins_startup.c
   ../../application/robot_task_create.c)
@@ -2052,7 +2063,7 @@ add_executable(ht_numeric_test ht_numeric_test.c ${MC02_HOST_HT_SOURCES}
   ../../modules/algorithm/controller.c)
 target_include_directories(ht_numeric_test BEFORE PRIVATE ht_numeric_fakes motor_pid_fakes)
 target_include_directories(ht_numeric_test PRIVATE ../../modules/motor/HTmotor
-  ../../modules/motor ../../modules/daemon)
+  ../../modules/motor ../../modules/daemon ../../modules/task_monitor)
 target_link_libraries(ht_numeric_test PRIVATE mc02_numeric)
 add_test(NAME production_ht_numeric_feedback COMMAND ht_numeric_test)
 set_tests_properties(production_ht_numeric_feedback PROPERTIES TIMEOUT 10)
@@ -2065,11 +2076,11 @@ add_executable(ht_control_test ht_control_test.c ${MC02_HOST_HT_SOURCES}
 target_include_directories(ht_control_test BEFORE PRIVATE ht_control_fakes ht_numeric_fakes
   lk_motor_fakes motor_pid_fakes)
 target_include_directories(ht_control_test PRIVATE ../../modules/motor/HTmotor
-  ../../modules/motor ../../modules/daemon .)
+  ../../modules/motor ../../modules/daemon ../../modules/task_monitor .)
 target_link_libraries(ht_control_test PRIVATE mc02_numeric)
 foreach(scenario IN ITEMS feedback_0 feedback_1 feedback_2 feedback_3
     feedforward_1 feedforward_2 feedforward_3 init_failures runtime_recovery
-    runtime_speed_failure feedforward_overflow task_create_failure)
+    runtime_speed_failure feedforward_overflow task_create_failure startup_wait)
   add_test(NAME production_ht_control_${scenario} COMMAND ht_control_test ${scenario})
   set_tests_properties(production_ht_control_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()

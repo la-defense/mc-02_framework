@@ -6,7 +6,6 @@
 #include <stddef.h>
 
 #include "robot.h"
-#include "ins_startup.h"
 #include "config/build_selection.h"
 #if defined(MC02_CONFIG_GENERATED)
 #include "config/vehicle_selection.h"
@@ -44,18 +43,6 @@ volatile PlatformProbe_t r25_task_robot = {0};
 __attribute__((noreturn)) void StartINSTASK(void const *argument)
 {
     static volatile float ins_start;
-    TaskMonitorFeed(TASK_MONITOR_INS); // 初始化前登记姿态任务已开始运行。
-    if (RobotInitializeIns() != ROBOT_INS_STARTUP_READY)
-    {
-        // 姿态初始化失败时不执行采样循环；影响范围由启动步骤记录。
-        for (;;)
-        {
-            InitDiagnosticHeartbeat(); // 维持可读取的启动诊断。
-            TaskMonitorFeed(TASK_MONITOR_INS); // 表明任务仍在处理失败状态。
-            PlatformTaskDelayMs(100u); // 限制失败循环的执行频率。
-        }
-    }
-    InitDiagnosticMarkReady(); // 初始化检查完成后更新诊断阶段。
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_01); // 记录姿态任务进入周期循环。
     for (;;)
     {
