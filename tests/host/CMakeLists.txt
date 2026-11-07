@@ -161,6 +161,7 @@ foreach(feature_case IN ITEMS none all lcd_diag imu alarm_heater)
   set(feature_lcd_diag 0)
   set(feature_imu 0)
   set(feature_heater 0)
+  set(feature_adc 0)
   if(feature_case STREQUAL "all" OR feature_case STREQUAL "alarm_heater")
     set(feature_alarm 1)
     set(feature_heater 1)
@@ -174,6 +175,9 @@ foreach(feature_case IN ITEMS none all lcd_diag imu alarm_heater)
   if(feature_case STREQUAL "all" OR feature_case STREQUAL "imu")
     set(feature_imu 1)
   endif()
+  if(feature_case STREQUAL "all" OR feature_case STREQUAL "lcd_diag" OR feature_case STREQUAL "alarm_heater")
+    set(feature_adc 1) # LCD 诊断和温控需要 ADC；其他测试组合可以不选择。
+  endif()
   add_executable(feature_startup_${feature_case}_test feature_startup_test.c
     ../../bsp/board/platform_feature_startup.c)
   target_include_directories(feature_startup_${feature_case}_test BEFORE PRIVATE
@@ -181,7 +185,7 @@ foreach(feature_case IN ITEMS none all lcd_diag imu alarm_heater)
   target_compile_definitions(feature_startup_${feature_case}_test PRIVATE
     MC02_FEATURE_ALARM=${feature_alarm} MC02_FEATURE_LCD=${feature_lcd}
     MC02_BENCH_LCD_DIAGNOSTICS=${feature_lcd_diag} MC02_FEATURE_IMU=${feature_imu}
-    MC02_FEATURE_HEATER=${feature_heater})
+    MC02_FEATURE_HEATER=${feature_heater} MC02_FEATURE_ADC=${feature_adc})
   target_compile_options(feature_startup_${feature_case}_test PRIVATE -Wall -Wextra -Werror)
   add_test(NAME production_feature_startup_${feature_case}
     COMMAND feature_startup_${feature_case}_test)
@@ -630,9 +634,37 @@ add_executable(platform_maintenance_test platform_maintenance_test.c
   ../../bsp/board/platform_maintenance_stm32.c)
 target_include_directories(platform_maintenance_test BEFORE PRIVATE platform_maintenance_fakes)
 target_include_directories(platform_maintenance_test PRIVATE ../../bsp/os)
+target_compile_definitions(platform_maintenance_test PRIVATE TEST_ADC_SELECTED=1) # 默认兼容路径继续更新 ADC。
 target_compile_options(platform_maintenance_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_platform_maintenance_dispatch COMMAND platform_maintenance_test)
 set_tests_properties(production_platform_maintenance_dispatch PROPERTIES TIMEOUT 10)
+
+# 分别编译已选和未选 ADC 的生产维护入口，验证未选资源没有周期调用。
+foreach(adc_selected IN ITEMS 0 1)
+  add_executable(platform_maintenance_adc_${adc_selected}_test platform_maintenance_test.c
+    ../../bsp/board/platform_maintenance_stm32.c)
+  target_include_directories(platform_maintenance_adc_${adc_selected}_test BEFORE PRIVATE platform_maintenance_fakes)
+  target_include_directories(platform_maintenance_adc_${adc_selected}_test PRIVATE ../../bsp/os)
+  target_compile_definitions(platform_maintenance_adc_${adc_selected}_test PRIVATE
+    MC02_CONFIG_GENERATED=1 MC02_FEATURE_ADC=${adc_selected} TEST_ADC_SELECTED=${adc_selected})
+  target_compile_options(platform_maintenance_adc_${adc_selected}_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME production_platform_maintenance_adc_${adc_selected}
+    COMMAND platform_maintenance_adc_${adc_selected}_test)
+endforeach()
+
+
+# 对生成配置的 ADC 平台适配器验证绑定与实际读取行为。
+foreach(adc_selected IN ITEMS 0 1)
+  add_executable(platform_adc_selection_${adc_selected}_test platform_adc_selection_test.c
+    ../../bsp/board/platform_adc_stm32.c)
+  target_include_directories(platform_adc_selection_${adc_selected}_test PRIVATE
+    . ../../bsp/board ../../bsp/adc platform_maintenance_fakes)
+  target_compile_definitions(platform_adc_selection_${adc_selected}_test PRIVATE
+    MC02_CONFIG_GENERATED=1 MC02_FEATURE_ADC=${adc_selected} TEST_ADC_SELECTED=${adc_selected})
+  target_compile_options(platform_adc_selection_${adc_selected}_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME production_platform_adc_selection_${adc_selected}
+    COMMAND platform_adc_selection_${adc_selected}_test)
+endforeach()
 
 # 只用替身验证显式启用的回环入口，主机测试不连接 CAN 硬件。
 add_executable(platform_can_diagnostic_test platform_can_diagnostic_test.c
@@ -804,7 +836,7 @@ target_include_directories(bsp_init_link_test BEFORE PRIVATE bsp_init_fakes)
 target_include_directories(bsp_init_link_test PRIVATE ../../bsp)
 target_compile_features(bsp_init_link_test PRIVATE c_std_11)
 target_compile_options(bsp_init_link_test PRIVATE -Wall -Wextra -Werror)
-foreach(caller IN ITEMS a b watchdog-fail adc-board-fail adc-start-fail deadline-enter-fail deadline-leave-fail)
+foreach(caller IN ITEMS a b watchdog-fail adc-disabled adc-board-fail adc-start-fail deadline-enter-fail deadline-leave-fail)
   add_test(NAME production_bsp_init_link_${caller} COMMAND bsp_init_link_test ${caller})
   set_tests_properties(production_bsp_init_link_${caller} PROPERTIES TIMEOUT 10)
 endforeach()

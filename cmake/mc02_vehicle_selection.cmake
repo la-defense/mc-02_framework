@@ -3,6 +3,21 @@ cmake_policy(SET CMP0057 NEW)
 set(MC02_MODULE_NAMES SAFETY IMU COMMUNICATION COMMAND CHASSIS GIMBAL SHOOTER
     REFEREE VISION REMOTE ALARM LCD UI SUPERCAP LOG HEATER)
 
+# 将车型诊断用途和当前板实际启用的功能合并，决定是否使用 ADC1。
+function(mc02_select_adc_resource output profile vin lcd heater lcd_diag)
+    if(NOT "${profile}" MATCHES "^(robot|bench_safe)$")
+        message(FATAL_ERROR "ADC selection: unsupported profile ${profile}")
+    endif()
+    if(NOT "${vin}" MATCHES "^(TRUE|FALSE)$")
+        message(FATAL_ERROR "Vehicle VIN diagnostics must be declared TRUE or FALSE")
+    endif()
+    if("${profile}" STREQUAL "bench_safe" OR vin OR lcd OR heater OR lcd_diag)
+        set(${output} 1 PARENT_SCOPE) # 裸板保留现有采集；任何实际使用者都需要 ADC。
+    else()
+        set(${output} 0 PARENT_SCOPE) # 本板无使用者时不初始化或周期调用 ADC。
+    endif()
+endfunction()
+
 function(mc02_validate_vehicle_identity vehicle platform board rtos chassis)
     if(NOT "${vehicle}" STREQUAL "sentinel")
         message(FATAL_ERROR "Vehicle ${vehicle}: configuration is not implemented; no sentinel fallback")

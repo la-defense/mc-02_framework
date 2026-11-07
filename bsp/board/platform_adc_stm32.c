@@ -5,10 +5,18 @@
 #include "bsp_adc.h"
 #include <math.h>
 #include <stddef.h>
+#if defined(MC02_CONFIG_GENERATED)
+#include "mc02_build_config.h"
+#endif
 
 uint8_t PlatformAdcIsBound(PlatformAdcChannel_t channel)
 {
+#if defined(MC02_CONFIG_GENERATED) && !MC02_FEATURE_ADC
+    (void)channel;
+    return 0u; // 当前板未选择 ADC 时不声明可用输入。
+#else
     return (uint8_t)(channel == PLATFORM_ADC_VCC_IN);
+#endif
 }
 
 uint8_t PlatformAdcReadVolts(PlatformAdcChannel_t channel, float *volts)

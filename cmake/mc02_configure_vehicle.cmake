@@ -111,6 +111,8 @@ foreach(module IN LISTS MC02_MODULE_NAMES)
     mc02_modules_mask(dependency_mask ${MC02_DEP_${module}})
     string(APPEND MC02_DEPENDENCY_INITIALIZER "${dependency_mask}u,")
 endforeach()
+mc02_select_adc_resource(MC02_FEATURE_ADC "${MC02_PROFILE}" "${MC02_VEHICLE_VIN_DIAGNOSTICS}"
+    "${MC02_FEATURE_LCD}" "${MC02_FEATURE_HEATER}" "${MC02_BENCH_LCD_DIAGNOSTICS}")
 set(MC02_SELECTED_DRIVER_DJI 0)
 set(MC02_SELECTED_DRIVER_LK 0)
 set(MC02_SELECTED_DRIVER_HT 0)

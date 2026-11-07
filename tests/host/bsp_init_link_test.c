@@ -22,11 +22,13 @@ uint8_t BSPInitCallerB(void);
 static unsigned step;
 static uint8_t watchdog_failure; // 按场景模拟早期看门狗初始化失败。
 static uint8_t adc_board_failure, adc_start_failure;
+static uint8_t adc_disabled;
 static uint8_t deadline_enter_failure, deadline_leave_failure;
 static unsigned degraded_count;
 static jmp_buf deadline_exit;
 
 uint8_t PlatformFeatureAdcReady(void) { return (uint8_t)!adc_board_failure; }
+uint8_t PlatformFeatureAdcSelected(void) { return (uint8_t)!adc_disabled; }
 uint8_t BSP_ADCIsStarted(void) { return (uint8_t)!adc_start_failure; }
 uint8_t PlatformPeripheralStartupEnter(void) { return (uint8_t)!deadline_enter_failure; }
 uint8_t PlatformPeripheralStartupLeave(void) { return (uint8_t)!deadline_leave_failure; }
@@ -77,6 +79,7 @@ void BSP_ADCInit(void)
 
 void BSP_WatchdogLogResetReason(void)
 {
+    if (adc_disabled) ++step; // 未选择 ADC 时，测试跳过其启动位置。
     TEST_CHECK(step == 5u);
     ++step;
 }
@@ -100,6 +103,7 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
     watchdog_failure = (uint8_t)(strcmp(argv[1], "watchdog-fail") == 0); // 单独检查失败路径。
+    adc_disabled = (uint8_t)(strcmp(argv[1], "adc-disabled") == 0);
     adc_board_failure = (uint8_t)(strcmp(argv[1], "adc-board-fail") == 0);
     adc_start_failure = (uint8_t)(strcmp(argv[1], "adc-start-fail") == 0);
     deadline_enter_failure = (uint8_t)(strcmp(argv[1], "deadline-enter-fail") == 0);
@@ -111,7 +115,7 @@ int main(int argc, char **argv)
         TEST_CHECK(degraded_count == 0u); // 外设总期限失败属于核心故障。
         return 0;
     }
-    if (strcmp(argv[1], "a") == 0 || watchdog_failure || adc_board_failure || adc_start_failure ||
+    if (strcmp(argv[1], "a") == 0 || watchdog_failure || adc_disabled || adc_board_failure || adc_start_failure ||
         deadline_enter_failure || deadline_leave_failure)
         TEST_CHECK(BSPInitCallerA() == (uint8_t)!watchdog_failure);
     else

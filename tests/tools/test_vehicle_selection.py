@@ -158,6 +158,26 @@ class VehicleSelectionTest(unittest.TestCase):
         result = self.run_case('mc02_validate_vehicle_identity(sentinel stm32h723 mc02 freertos omni dji)\n')
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_adc_resource_follows_users(self):
+        # 只要本板需要 VIN、LCD、温控或裸板诊断，就必须准备 ADC。
+        cases = [
+            ("robot", "FALSE", "0", "0", "0", "0"),  # 生产板没有使用者。
+            ("robot", "TRUE", "0", "0", "0", "1"),  # 车型启用 VIN 诊断。
+            ("robot", "FALSE", "1", "0", "0", "1"),  # LCD 按键需要 ADC。
+            ("robot", "FALSE", "0", "1", "0", "1"),  # 温控电压保护需要 ADC。
+            ("robot", "FALSE", "0", "0", "1", "1"),  # 显示诊断请求 ADC。
+            ("bench_safe", "FALSE", "0", "0", "0", "1"),  # 裸板保留现有诊断。
+        ]
+        for profile, vin, lcd, heater, diag, expected in cases:
+            with self.subTest(profile=profile, vin=vin, lcd=lcd, heater=heater, diag=diag):
+                result = self.run_case(
+                    f'mc02_select_adc_resource(actual {profile} {vin} {lcd} {heater} {diag})\n'
+                    f'if(NOT "${{actual}}" STREQUAL "{expected}")\n'
+                    '  message(FATAL_ERROR "unexpected ADC selection")\nendif()\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.run_case('mc02_select_adc_resource(actual robot UNKNOWN 0 0 0)\n')
+        self.assertNotEqual(result.returncode, 0)  # 不接受未声明或含糊的 VIN 选项。
+
     def test_unadapted_dm_is_rejected_before_firmware_selection(self):
         # DM 旧驱动尚未进入框架源码清单，不能被能力检查误认为可用。
         result = self.run_case('mc02_validate_vehicle_identity(sentinel stm32h723 mc02 freertos omni dm)\n')

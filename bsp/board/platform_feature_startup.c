@@ -19,7 +19,9 @@ static uint8_t adc_ready; // 板载 VIN 和 LCD 按键共用 ADC1。
 
 void PlatformFeaturePeripheralsInit(void)
 {
-    adc_ready = MX_ADC1_InitChecked(); // VIN 诊断使用 ADC；失败交由依赖模块处理。
+#if MC02_FEATURE_ADC
+    adc_ready = MX_ADC1_InitChecked(); // 当前板有使用者时准备 ADC。
+#endif
 #if MC02_FEATURE_ALARM
     (void)MX_TIM12_InitChecked(); // 失败时句柄无效，告警模块仍可保留 RGB。
 #endif
@@ -32,6 +34,11 @@ void PlatformFeaturePeripheralsInit(void)
 #if MC02_FEATURE_HEATER
     heater_ready = MX_TIM3_InitChecked(); // 失败时由车型依赖决定是否允许其他模块运行。
 #endif
+}
+
+uint8_t PlatformFeatureAdcSelected(void)
+{
+    return MC02_FEATURE_ADC; // 供 BSP 区分未选择与初始化失败。
 }
 
 uint8_t PlatformFeatureAdcReady(void)

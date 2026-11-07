@@ -14,8 +14,8 @@ int main(void)
     PlatformMaintainSpi();
     TEST_CHECK(calls[0] == 1u && calls[1] == 0u && calls[2] == 0u);
     PlatformMaintainAnalog();
-    TEST_CHECK(calls[0] == 1u && calls[1] == 1u && calls[2] == 0u);
+    TEST_CHECK(calls[0] == 1u && calls[1] == TEST_ADC_SELECTED && calls[2] == 0u);
     PlatformMaintainCan();
-    TEST_CHECK(calls[0] == 1u && calls[1] == 1u && calls[2] == 1u);
+    TEST_CHECK(calls[0] == 1u && calls[1] == TEST_ADC_SELECTED && calls[2] == 1u);
     return 0;
 }

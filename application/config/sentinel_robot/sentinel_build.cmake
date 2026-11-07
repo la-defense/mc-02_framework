@@ -6,6 +6,7 @@ set(MC02_VEHICLE_GIMBAL_IMPLEMENTED FALSE)
 # 已确认的结构是大yaw、小yaw、pitch；当前业务尚不具备完整三轴控制。
 set(MC02_VEHICLE_GIMBAL_AXES 3)
 set(MC02_VEHICLE_CONFIG_VERSION 1)
+set(MC02_VEHICLE_VIN_DIAGNOSTICS TRUE) # 本车型保留板载 VIN 电压诊断。
 
 # 三路受控电源的实际负载尚未确认；只读车型声明不能由命令行覆盖。
 set(MC02_VEHICLE_POWER_24V_1 UNCONFIRMED) # PC14：第一路 24V，负载和开启阶段待确认。

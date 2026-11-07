@@ -5,6 +5,9 @@
 #include "bsp_spi.h"
 #include "bsp_adc.h"
 #include "bsp_can.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "mc02_build_config.h"
+#endif
 
 void PlatformMaintainSpi(void)
 {
@@ -13,7 +16,9 @@ void PlatformMaintainSpi(void)
 
 void PlatformMaintainAnalog(void)
 {
+#if !defined(MC02_CONFIG_GENERATED) || MC02_FEATURE_ADC
     BSP_ADCUpdateDiagnostics(); // 保持原有采样频率和诊断结果。
+#endif
 }
 
 void PlatformMaintainCan(void)

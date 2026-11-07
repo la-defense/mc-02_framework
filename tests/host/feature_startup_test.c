@@ -50,7 +50,8 @@ unsigned char MX_FDCAN3_InitChecked(void) { ++can_calls[3]; return failed_can !=
 int main(void)
 {
     PlatformFeaturePeripheralsInit(); // 使用当前测试组合执行真实选择入口。
-    TEST_CHECK(adc_calls == 1u && PlatformFeatureAdcReady()); // VIN 诊断使用板载 ADC。
+    TEST_CHECK(adc_calls == MC02_FEATURE_ADC && PlatformFeatureAdcSelected() == MC02_FEATURE_ADC);
+    TEST_CHECK(PlatformFeatureAdcReady() == MC02_FEATURE_ADC); // 未选择时不访问 ADC。
     TEST_CHECK(spi1_calls == (MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS));
     TEST_CHECK(PlatformFeatureLcdReady() == (MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS));
     TEST_CHECK(spi2_calls == MC02_FEATURE_IMU);
@@ -58,9 +59,11 @@ int main(void)
     TEST_CHECK(tim12_calls == MC02_FEATURE_ALARM);
     TEST_CHECK(tim3_calls == MC02_FEATURE_HEATER);
     TEST_CHECK(PlatformFeatureHeaterReady() == MC02_FEATURE_HEATER);
+#if MC02_FEATURE_ADC
     fake_adc_success = 0u; // 板级 ADC 失败不影响其他板级入口。
     PlatformFeaturePeripheralsInit();
     TEST_CHECK(!PlatformFeatureAdcReady());
+#endif
 #if MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS
     fake_spi1_success = 0u; // 模拟 LCD 的 SPI1 初始化失败。
     PlatformFeaturePeripheralsInit();

@@ -3,3 +3,4 @@
  */
 #include <stdint.h>
 uint8_t PlatformFeatureAdcReady(void);
+uint8_t PlatformFeatureAdcSelected(void);

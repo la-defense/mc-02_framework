@@ -10,6 +10,10 @@
  * @note LCD、IMU 和加热器的结果通过对应查询接口提供。
  */
 void PlatformFeaturePeripheralsInit(void);
+/** @brief 查询当前板的功能组合是否需要 ADC1。
+ * @return 已选择返回 1，未选择返回 0。
+ */
+uint8_t PlatformFeatureAdcSelected(void);
 /** @brief 查询 VIN 与板载按键使用的 ADC1 是否配置成功。
  * @return 成功返回 1；未准备或失败返回 0。
  */
