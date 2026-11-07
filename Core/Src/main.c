@@ -41,6 +41,7 @@
 #include "bsp_reset_recovery.h"
 #include "platform_clock_startup.h"
 #include "platform_feature_startup.h"
+#include "config.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -129,20 +130,31 @@ int main(void)
   MX_DMA_Init();
   MX_ADC1_Init();
   PlatformFeaturePeripheralsInit();
-  MX_USART1_UART_Init();
-  MX_USART2_UART_Init();
-  MX_USART3_UART_Init();
-  MX_UART7_Init();
-  MX_USART10_UART_Init();
+  // 在设备注册前检查车型配置，避免使用错误的串口编号。
+  const Robot_Config_s *startup_config = NULL;
+  if (RobotConfigSelect(ROBOT_CONFIG_SUPPORTED_ID, &startup_config) != ROBOT_CONFIG_OK ||
+      startup_config == NULL)
+    Error_Handler(); // 配置无效时保持受控输出关闭。
+  PlatformUartPort_t startup_uarts[3]; // 最多包含裁判、遥控与视觉各一项。
+  uint8_t startup_uart_count = 0u;
+#if MC02_FEATURE_REFEREE
+  startup_uarts[startup_uart_count++] = startup_config->referee_uart; // 裁判接收端口。
+#endif
+#if MC02_FEATURE_REMOTE
+  startup_uarts[startup_uart_count++] = startup_config->remote_uart; // 遥控输入端口。
+#endif
+#if MC02_FEATURE_VISION && defined(VISION_USE_UART)
+  startup_uarts[startup_uart_count++] = startup_config->vision_uart; // UART 视觉端口。
+#endif
+  // 板级入口先检查全部编号，再初始化所需端口及诊断串口。
+  if (!PlatformFeatureUartsInit(startup_uarts, startup_uart_count))
+    Error_Handler(); // 端口编号不受支持时停止启动。
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
   MX_FDCAN3_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();
   /* OCTOSPI 未被使用；重新生成后检查不得恢复初始化。 */
-  MX_UART5_Init();
-  MX_UART8_Init();
-  MX_UART9_Init();
   /* PB10/PB11 released from I2C2: used as LCD_BLK/LCD_RES */
   /* USER CODE BEGIN 2 */
   if (!RobotInit())
