@@ -44,6 +44,10 @@ void MX_SPI1_Init(void);
 void MX_SPI2_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+/** @brief 配置板载 LCD 的 SPI1，并向启动协调流程返回结果。
+ * @return 1 表示配置成功；0 表示失败且 SPI1 资源已释放。
+ */
+uint8_t MX_SPI1_InitChecked(void);
 
 /* USER CODE END Prototypes */
 

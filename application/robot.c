@@ -26,6 +26,7 @@
 #include "vehicle_health.h"
 #include "bsp_safety.h"
 #include "bsp_reset_recovery.h"
+#include "platform_feature_startup.h"
 #if defined(MC02_CONFIG_GENERATED)
 #include "config/vehicle_selection.h"
 #include "topics/robot_topics.h"
@@ -109,8 +110,9 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
     {
     case ROBOT_MODULE_SAFETY:
     case ROBOT_MODULE_LOG:
-    case ROBOT_MODULE_LCD:
         return 1u;
+    case ROBOT_MODULE_LCD:
+        return PlatformFeatureLcdReady(); // SPI1 失败时按模块重要性处理，不创建 LCD 任务。
     case ROBOT_MODULE_IMU:
         return INS_ConfigureSensor(config->imu_sensor); // 先核对板级绑定，实际采样由协调任务初始化。
     case ROBOT_MODULE_HEATER:

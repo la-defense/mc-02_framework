@@ -14,18 +14,22 @@ static unsigned check_select_boundary, unexpected_rising_edges, wire_sck, releas
 static uint8_t last_command;
 static uint32_t fake_tick;
 static unsigned tick_leases;
+static unsigned clock_fail, spi_fail, spi_init_calls, gpio_deinit_calls;
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL: %s (line %d)\n", #c, __LINE__); return 1; } } while (0)
 
 HAL_StatusTypeDef HAL_SPI_Init(SPI_HandleTypeDef *handle)
 {
+    ++spi_init_calls; // 记录实际进入 HAL 初始化的次数。
+    HAL_SPI_MspInit(handle); // 模拟首次初始化时 HAL 调用板级 MSP 回调。
+    if (spi_fail != 0u) return HAL_ERROR; // 注入引脚准备后的控制器初始化失败。
     wire_sck = handle->Init.MasterKeepIOState == SPI_MASTER_KEEP_IO_STATE_ENABLE
                    ? handle->Init.CLKPolarity == SPI_POLARITY_HIGH : released_sck_level;
     return HAL_OK;
 }
-HAL_StatusTypeDef HAL_RCCEx_PeriphCLKConfig(RCC_PeriphCLKInitTypeDef *cfg) { (void)cfg; return HAL_OK; }
+HAL_StatusTypeDef HAL_RCCEx_PeriphCLKConfig(RCC_PeriphCLKInitTypeDef *cfg) { (void)cfg; return clock_fail ? HAL_ERROR : HAL_OK; }
 void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *cfg) { (void)port; (void)cfg; }
-void HAL_GPIO_DeInit(GPIO_TypeDef *port, uint32_t pins) { (void)port; (void)pins; }
+void HAL_GPIO_DeInit(GPIO_TypeDef *port, uint32_t pins) { (void)port; (void)pins; ++gpio_deinit_calls; }
 void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32_t pins, uint32_t value)
 {
     if (value) port->ODR |= pins; else port->ODR &= ~pins;
@@ -98,6 +102,14 @@ HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *handle, uint8_t *data, uin
 int main(int argc, char **argv)
 {
     (void)argv;
+    clock_fail = 1u; // 时钟准备失败时不应访问控制器或配置引脚。
+    CHECK(!MX_SPI1_InitChecked());
+    CHECK(spi_init_calls == 0u && gpio_deinit_calls == 0u && hspi1.Instance == NULL);
+    clock_fail = 0u;
+    spi_fail = 1u; // MSP 已配置引脚后失败，应释放 SPI1 资源。
+    CHECK(!MX_SPI1_InitChecked());
+    CHECK(spi_init_calls == 1u && gpio_deinit_calls == 2u && hspi1.Instance == NULL);
+    spi_fail = 0u;
     check_select_boundary = argc > 1;
     for (unsigned repeat = 0; repeat < 2; ++repeat)
     {

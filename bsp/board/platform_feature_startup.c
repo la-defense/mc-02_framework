@@ -9,13 +9,15 @@
 #include "fdcan.h"
 #include <stddef.h>
 
+static uint8_t lcd_ready; // 只由启动阶段写入，供后续模块启动读取。
+
 void PlatformFeaturePeripheralsInit(void)
 {
 #if MC02_FEATURE_ALARM
     MX_TIM12_Init(); // 板载蜂鸣器使用 TIM12；关闭告警时不配置该定时器。
 #endif
 #if MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS
-    MX_SPI1_Init(); // 板载 LCD 使用 SPI1；LCD 诊断也需要该总线。
+    lcd_ready = MX_SPI1_InitChecked(); // 失败时交给模块依赖处理，不启动 LCD。
 #endif
 #if MC02_FEATURE_IMU
     MX_SPI2_Init(); // 当前板载 BMI088 使用 SPI2。
@@ -23,6 +25,11 @@ void PlatformFeaturePeripheralsInit(void)
 #if MC02_FEATURE_HEATER
     MX_TIM3_Init(); // 只有启用 IMU 温控时才配置加热 PWM。
 #endif
+}
+
+uint8_t PlatformFeatureLcdReady(void)
+{
+    return lcd_ready; // 未启用或初始化失败均保持不可用。
 }
 
 uint8_t PlatformFeatureUartsInit(const PlatformUartPort_t *ports, uint8_t count)

@@ -19,8 +19,11 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "spi.h"
+#include <stddef.h>
 
 /* USER CODE BEGIN 0 */
+static uint8_t spi1_clock_prepared; // 标记本次受检查启动已准备 SPI1 时钟。
+static uint8_t spi1_pins_prepared; // 记录 MSP 已取得的 SPI1 引脚和时钟。
 
 /* USER CODE END 0 */
 
@@ -30,6 +33,21 @@ SPI_HandleTypeDef hspi2;
 /* SPI1 init function */
 void MX_SPI1_Init(void)
 {
+  if (!MX_SPI1_InitChecked()) Error_Handler(); // 保留 CubeMX 兼容入口的致命失败行为。
+}
+
+uint8_t MX_SPI1_InitChecked(void)
+{
+  RCC_PeriphCLKInitTypeDef spi1_clock = {0}; // 在 HAL 配置寄存器前检查时钟设置。
+  spi1_clock.PeriphClockSelection = RCC_PERIPHCLK_SPI1; // 指定 LCD 使用的 SPI1。
+  spi1_clock.Spi123ClockSelection = RCC_SPI123CLKSOURCE_PLL; // 沿用 CubeMX 的 PLL 来源。
+  if (HAL_RCCEx_PeriphCLKConfig(&spi1_clock) != HAL_OK)
+  {
+    if (spi1_pins_prepared != 0u) HAL_SPI_MspDeInit(&hspi1); // 若此前已取得资源则释放。
+    hspi1.Instance = NULL; // 不让上层把失败句柄当作可用总线。
+    return 0u; // 时钟失败时不调用 HAL_SPI_Init。
+  }
+  spi1_clock_prepared = 1u; // MSP 回调复用刚刚确认的时钟配置。
 
   /* USER CODE BEGIN SPI1_Init 0 */
 
@@ -72,12 +90,17 @@ void MX_SPI1_Init(void)
   hspi1.Init.IOSwap = SPI_IO_SWAP_DISABLE;
   if (HAL_SPI_Init(&hspi1) != HAL_OK)
   {
-    Error_Handler();
+    if (spi1_pins_prepared != 0u) HAL_SPI_MspDeInit(&hspi1); // 只释放本次已取得的资源。
+    spi1_clock_prepared = 0u; // 不让下次初始化误用旧状态。
+    hspi1.Instance = NULL; // 失败后不能再通过 LCD 就绪检查。
+    return 0u;
   }
+  spi1_clock_prepared = 0u; // HAL 初始化结束后不保留本次标记。
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
 
+  return 1u; // 将实际初始化结果交给启动协调流程。
 }
 /* SPI2 init function */
 void MX_SPI2_Init(void)
@@ -137,7 +160,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
   */
     PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI1;
     PeriphClkInitStruct.Spi123ClockSelection = RCC_SPI123CLKSOURCE_PLL;
-    if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
+    if (spi1_clock_prepared == 0u && HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
       Error_Handler();
     }
@@ -164,6 +187,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF5_SPI1;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    spi1_pins_prepared = 1u; // 之后失败时允许只释放 SPI1 取得的资源。
 
   /* USER CODE BEGIN SPI1_MspInit 1 */
 
@@ -232,6 +256,7 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* spiHandle)
     HAL_GPIO_DeInit(GPIOD, GPIO_PIN_7);
 
     HAL_GPIO_DeInit(GPIOB, GPIO_PIN_3);
+    spi1_pins_prepared = 0u; // 资源释放后避免重复退出。
 
   /* USER CODE BEGIN SPI1_MspDeInit 1 */
 

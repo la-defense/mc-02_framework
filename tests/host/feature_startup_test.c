@@ -8,7 +8,9 @@
 static unsigned spi1_calls, spi2_calls, tim12_calls, tim3_calls;
 static unsigned uart_calls[11];
 static unsigned can_calls[4];
+static unsigned char fake_spi1_success = 1u;
 void MX_SPI1_Init(void) { ++spi1_calls; }
+unsigned char MX_SPI1_InitChecked(void) { ++spi1_calls; return fake_spi1_success; }
 void MX_SPI2_Init(void) { ++spi2_calls; }
 void MX_TIM12_Init(void) { ++tim12_calls; }
 void MX_TIM3_Init(void) { ++tim3_calls; }
@@ -28,9 +30,15 @@ int main(void)
 {
     PlatformFeaturePeripheralsInit(); // 使用当前测试组合执行真实选择入口。
     TEST_CHECK(spi1_calls == (MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS));
+    TEST_CHECK(PlatformFeatureLcdReady() == (MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS));
     TEST_CHECK(spi2_calls == MC02_FEATURE_IMU);
     TEST_CHECK(tim12_calls == MC02_FEATURE_ALARM);
     TEST_CHECK(tim3_calls == MC02_FEATURE_HEATER);
+#if MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS
+    fake_spi1_success = 0u; // 模拟 LCD 的 SPI1 初始化失败。
+    PlatformFeaturePeripheralsInit();
+    TEST_CHECK(!PlatformFeatureLcdReady()); // 模块启动不得报告 LCD 已可用。
+#endif
     const PlatformUartPort_t invalid[] = {PLATFORM_UART_1, PLATFORM_UART_INVALID};
     TEST_CHECK(!PlatformFeatureUartsInit(invalid, 2u)); // 非法编号不能产生部分硬件初始化。
     TEST_CHECK(uart_calls[1] == 0u && uart_calls[10] == 0u);
