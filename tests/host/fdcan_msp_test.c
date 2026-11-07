@@ -44,7 +44,11 @@ void HAL_GPIO_DeInit(void *port, uint32_t pins)
 }
 void HAL_NVIC_SetPriority(int irq, uint32_t priority, uint32_t subpriority)
 { (void)irq; (void)priority; (void)subpriority; }
-void HAL_NVIC_EnableIRQ(int irq) { irq_enabled |= 1u << (unsigned)irq; }
+void HAL_NVIC_EnableIRQ(int irq)
+{
+    TEST_CHECK((irq_cleared & (1u << (unsigned)irq)) != 0u); // 启用前必须清理本线旧事件。
+    irq_enabled |= 1u << (unsigned)irq;
+}
 void HAL_NVIC_DisableIRQ(int irq) { irq_disabled |= 1u << (unsigned)irq; }
 void HAL_NVIC_ClearPendingIRQ(int irq)
 {
@@ -93,6 +97,7 @@ int main(void)
     HAL_FDCAN_MspInit(&hfdcan2); // 第二条使用已有共享时钟。
     TEST_CHECK(clock_config_count == 2u && clock_enable_count == 1u && gpio_init_count == 2u);
     TEST_CHECK((irq_enabled & 0x0fu) == 0x0fu); // 两条总线各自使能两个中断。
+    irq_disabled = irq_cleared = 0u; // 单独记录下面的退出操作。
     HAL_FDCAN_MspDeInit(&hfdcan1); // 停止第一条不能影响第二条时钟。
     TEST_CHECK(clock_disable_count == 0u && gpio_deinit_count == 1u);
     TEST_CHECK((irq_disabled & 0x03u) == 0x03u && (irq_cleared & 0x03u) == 0x03u);
