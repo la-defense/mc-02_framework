@@ -27,6 +27,8 @@ static uint8_t adc_board_failure, adc_start_failure;
 static uint8_t adc_disabled;
 static uint8_t deadline_enter_failure, deadline_leave_failure;
 static unsigned degraded_count;
+static uint8_t log_rtt_failure, log_uart_failure, log_query_failure;
+static unsigned log_degraded_count;
 static jmp_buf deadline_exit;
 
 uint8_t PlatformFeatureAdcReady(void) { return (uint8_t)!adc_board_failure; }
@@ -41,6 +43,15 @@ _Noreturn void PlatformClockStartupFail(PlatformClockFailure_t failure)
 }
 void InitDiagnosticReportDegraded(int stage, uint8_t module, int reason, uint16_t resource_id)
 {
+    if (module == INIT_MODULE_LOG)
+    {
+        TEST_CHECK(stage == INIT_STAGE_BSP && reason == INIT_FAILURE_RESOURCE);
+        TEST_CHECK((resource_id == INIT_RESOURCE_LOG_STATUS && log_query_failure) ||
+                   (resource_id == INIT_RESOURCE_LOG_RTT && log_rtt_failure && !log_query_failure) ||
+                   (resource_id == INIT_RESOURCE_LOG_DIAGNOSTIC_UART && log_uart_failure && !log_query_failure));
+        ++log_degraded_count; // 日志出口降级不终止 ADC 或参数初始化。
+        return;
+    }
     TEST_CHECK(stage == INIT_STAGE_BSP && module == INIT_MODULE_ADC && reason == INIT_FAILURE_RESOURCE && resource_id == 1u);
     ++degraded_count; // 记录辅助 ADC 失败，不终止后续启动。
     if (adc_board_failure) ++step; // 未调用 ADC 时保留测试阶段位置。
@@ -68,6 +79,15 @@ void BSPLogInit(void)
 {
     TEST_CHECK(step == 3u);
     ++step;
+}
+
+BSPLogStatus_t BSPLogGetState(BSPLogState_t *state)
+{
+    TEST_CHECK(step == 4u && state != NULL); // 日志初始化后、ADC 启动前查询。
+    if (log_query_failure) return BSP_LOG_STATUS_NOT_INITIALIZED; // 不能推测无法读取的状态。
+    state->backend_available = (uint8_t)!log_rtt_failure; // RTT 独立于串口。
+    state->diagnostic_uart_available = (uint8_t)!log_uart_failure; // 模拟诊断串口注册结果。
+    return BSP_LOG_STATUS_OK;
 }
 
 void CANInitWorkspace(void)
@@ -108,6 +128,9 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
     watchdog_failure = (uint8_t)(strcmp(argv[1], "watchdog-fail") == 0); // 单独检查失败路径。
+    log_rtt_failure = (uint8_t)(strcmp(argv[1], "log-rtt-fail") == 0 || strcmp(argv[1], "log-both-fail") == 0);
+    log_uart_failure = (uint8_t)(strcmp(argv[1], "log-uart-fail") == 0 || strcmp(argv[1], "log-both-fail") == 0);
+    log_query_failure = (uint8_t)(strcmp(argv[1], "log-query-fail") == 0);
     adc_disabled = (uint8_t)(strcmp(argv[1], "adc-disabled") == 0);
     adc_board_failure = (uint8_t)(strcmp(argv[1], "adc-board-fail") == 0);
     adc_start_failure = (uint8_t)(strcmp(argv[1], "adc-start-fail") == 0);
@@ -128,6 +151,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (strcmp(argv[1], "a") == 0 || watchdog_failure || adc_disabled || adc_board_failure || adc_start_failure ||
+        log_rtt_failure || log_uart_failure || log_query_failure ||
         deadline_enter_failure || deadline_leave_failure)
         TEST_CHECK(BSPInitCallerA() == (uint8_t)!watchdog_failure);
     else
@@ -137,5 +161,6 @@ int main(int argc, char **argv)
     }
     TEST_CHECK(step == 8u); // 所有已选步骤恰好执行一次。
     TEST_CHECK(degraded_count == (unsigned)(adc_board_failure || adc_start_failure)); // 辅助 ADC 失败只报告一次。
+    TEST_CHECK(log_degraded_count == (unsigned)(log_rtt_failure + log_uart_failure + log_query_failure));
     return 0;
 }

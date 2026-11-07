@@ -52,6 +52,7 @@ typedef enum
     INIT_MODULE_WATCHDOG, ///< 硬件看门狗及其配置状态
     INIT_MODULE_CLOCK, ///< 主时钟和电源电压配置
     INIT_MODULE_ADC, ///< 电源和板载按键采样
+    INIT_MODULE_LOG, ///< 日志及独立诊断串口
 } InitDiagnosticModule_e;
 
 /** @brief 任务创建失败时使用的资源编号，便于找到具体任务。 */
@@ -74,6 +75,14 @@ typedef enum
     INIT_RESOURCE_WATCHDOG_STARTUP = 1, ///< 配置启动期间的较长时限失败。
     INIT_RESOURCE_WATCHDOG_RUNTIME, ///< 切换正常运行时限失败。
 } InitDiagnosticWatchdogResource_e;
+
+/** @brief 日志模块启动时区分两个独立输出。 */
+typedef enum
+{
+    INIT_RESOURCE_LOG_RTT = 1, ///< RTT 日志出口初始化失败。
+    INIT_RESOURCE_LOG_DIAGNOSTIC_UART, ///< 独立诊断串口初始化失败。
+    INIT_RESOURCE_LOG_STATUS, ///< 无法读取日志启动状态。
+} InitDiagnosticLogResource_e;
 
 /** @brief 本次启动的诊断记录；调试器按这些字段的类型和顺序读取。 */
 typedef struct

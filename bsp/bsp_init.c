@@ -25,6 +25,19 @@ uint8_t BSPInit(void)
     if (!BSP_WatchdogIsRunning()) return 0u; // 不重新启动看门狗，保留早期阶段的期限。
     CANInitWorkspace();
     BSPLogInit();
+    BSPLogState_t log_state = {0}; // 两个出口相互独立，分别记录启动结果。
+    if (BSPLogGetState(&log_state) != BSP_LOG_STATUS_OK)
+        InitDiagnosticReportDegraded(INIT_STAGE_BSP, INIT_MODULE_LOG, INIT_FAILURE_RESOURCE,
+                                     INIT_RESOURCE_LOG_STATUS); // 不能读取状态时不猜测哪个出口失败。
+    else
+    {
+        if (!log_state.backend_available)
+            InitDiagnosticReportDegraded(INIT_STAGE_BSP, INIT_MODULE_LOG, INIT_FAILURE_RESOURCE,
+                                         INIT_RESOURCE_LOG_RTT); // RTT 失败不妨碍诊断串口。
+        if (!log_state.diagnostic_uart_available)
+            InitDiagnosticReportDegraded(INIT_STAGE_BSP, INIT_MODULE_LOG, INIT_FAILURE_RESOURCE,
+                                         INIT_RESOURCE_LOG_DIAGNOSTIC_UART); // 串口失败不妨碍 RTT。
+    }
     uint8_t adc_started = 0u; // 尚未确认 ADC 启动成功。
     if (PlatformFeatureAdcSelected() && PlatformFeatureAdcReady())
     {
