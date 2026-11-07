@@ -21,6 +21,7 @@
 #include "i2c.h"
 
 /* USER CODE BEGIN 0 */
+static uint8_t i2c2_msp_active; // 只有成功取得资源后才允许退出操作。
 
 /* USER CODE END 0 */
 
@@ -74,12 +75,18 @@ void MX_I2C2_Init(void)
 
 void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 {
+  if (i2cHandle == 0) return; // 空句柄没有可配置的资源。
 
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
   if(i2cHandle->Instance==I2C2)
   {
   /* USER CODE BEGIN I2C2_MspInit 0 */
+    if (i2c2_msp_active) return; // 已经配置的总线不重复取得资源。
+    HAL_NVIC_DisableIRQ(I2C2_EV_IRQn); // 配置资源期间禁止事件中断。
+    HAL_NVIC_DisableIRQ(I2C2_ER_IRQn); // 配置资源期间禁止错误中断。
+    HAL_NVIC_DisableIRQ(DMA1_Stream2_IRQn); // 配置期间禁止接收 DMA 中断。
+    HAL_NVIC_DisableIRQ(DMA1_Stream3_IRQn); // 配置期间禁止发送 DMA 中断。
 
   /* USER CODE END I2C2_MspInit 0 */
 
@@ -146,11 +153,19 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 
     /* I2C2 interrupt Init */
     HAL_NVIC_SetPriority(I2C2_EV_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(I2C2_EV_IRQn);
   /* USER CODE BEGIN I2C2_MspInit 1 */
-
+    HAL_NVIC_ClearPendingIRQ(DMA1_Stream2_IRQn); // 丢弃上次接收残留的中断。
+    HAL_NVIC_ClearPendingIRQ(DMA1_Stream3_IRQn); // 丢弃上次发送残留的中断。
+    HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 5, 0); // 延续工程既有的 RTOS 中断优先级。
+    HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 5, 0); // 接收与发送保持一致优先级。
     HAL_NVIC_SetPriority(I2C2_ER_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(I2C2_ER_IRQn);
+    HAL_NVIC_ClearPendingIRQ(I2C2_EV_IRQn); // 丢弃旧的事件中断。
+    HAL_NVIC_ClearPendingIRQ(I2C2_ER_IRQn); // 丢弃旧的错误中断。
+    i2c2_msp_active = 1u; // 先发布资源状态，再允许中断到达。
+    HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn); // 接收 DMA 准备好后启用。
+    HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn); // 发送 DMA 准备好后启用。
+    HAL_NVIC_EnableIRQ(I2C2_EV_IRQn); // 所有资源准备好后启用事件中断。
+    HAL_NVIC_EnableIRQ(I2C2_ER_IRQn); // 最后启用错误中断。
 
   /* USER CODE END I2C2_MspInit 1 */
   }
@@ -158,15 +173,22 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 
 void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 {
+  if (i2cHandle == 0) return; // 空句柄不能释放资源。
 
   if(i2cHandle->Instance==I2C2)
   {
   /* USER CODE BEGIN I2C2_MspDeInit 0 */
+    if (!i2c2_msp_active) return; // 未初始化或重复退出时不修改其他资源。
+    i2c2_msp_active = 0u; // 先撤销资源状态，防止重复释放。
     // 停用并清除事件和错误中断，避免退出后访问已释放的资源。
     HAL_NVIC_DisableIRQ(I2C2_EV_IRQn);
     HAL_NVIC_DisableIRQ(I2C2_ER_IRQn);
     HAL_NVIC_ClearPendingIRQ(I2C2_EV_IRQn);
     HAL_NVIC_ClearPendingIRQ(I2C2_ER_IRQn);
+    HAL_NVIC_DisableIRQ(DMA1_Stream2_IRQn); // 停止本总线的接收 DMA 中断。
+    HAL_NVIC_DisableIRQ(DMA1_Stream3_IRQn); // 停止本总线的发送 DMA 中断。
+    HAL_NVIC_ClearPendingIRQ(DMA1_Stream2_IRQn); // 丢弃退出前残留的接收事件。
+    HAL_NVIC_ClearPendingIRQ(DMA1_Stream3_IRQn); // 丢弃退出前残留的发送事件。
   /* USER CODE END I2C2_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_I2C2_CLK_DISABLE();

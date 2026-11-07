@@ -52,10 +52,10 @@ void MX_DMA_Init(void)
   /* USART3 初始化完成后启用此中断。 */
   /* DMA1_Stream2_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
+  /* I2C2 初始化完成后启用此中断。 */
   /* DMA1_Stream3_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
+  /* I2C2 初始化完成后启用此中断。 */
   /* DMA1_Stream4_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 5, 0);
   /* UART9 初始化完成后启用此中断。 */
