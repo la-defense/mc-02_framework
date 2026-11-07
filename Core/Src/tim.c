@@ -19,6 +19,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "tim.h"
+#include <stddef.h>
 
 /* USER CODE BEGIN 0 */
 
@@ -149,6 +150,11 @@ void MX_TIM2_Init(void)
 /* TIM3 init function */
 void MX_TIM3_Init(void)
 {
+  if (!MX_TIM3_InitChecked()) Error_Handler(); // 兼容旧入口的失败处理。
+}
+
+uint8_t MX_TIM3_InitChecked(void)
+{
 
   /* USER CODE BEGIN TIM3_Init 0 */
 
@@ -168,13 +174,13 @@ void MX_TIM3_Init(void)
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
-    Error_Handler();
+    goto tim3_failed; // HAL 初始化失败不能配置输出引脚。
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
   {
-    Error_Handler();
+    goto tim3_failed; // 主模式失败时撤销定时器资源。
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
@@ -182,16 +188,25 @@ void MX_TIM3_Init(void)
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
-    Error_Handler();
+    goto tim3_failed; // 通道未准备完成时不能切换加热引脚。
   }
   /* USER CODE BEGIN TIM3_Init 2 */
 
   /* USER CODE END TIM3_Init 2 */
   HAL_TIM_MspPostInit(&htim3);
-
+  return 1u; // 控制器和通道都已准备。
+tim3_failed:
+  HAL_TIM_PWM_MspDeInit(&htim3); // 输出引脚尚未切换，只释放定时器时钟。
+  htim3.Instance = NULL; // 禁止温控注册使用失败句柄。
+  return 0u;
 }
 /* TIM12 init function */
 void MX_TIM12_Init(void)
+{
+  if (!MX_TIM12_InitChecked()) Error_Handler(); // 兼容旧入口的失败处理。
+}
+
+uint8_t MX_TIM12_InitChecked(void)
 {
 
   /* USER CODE BEGIN TIM12_Init 0 */
@@ -212,13 +227,13 @@ void MX_TIM12_Init(void)
   htim12.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim12) != HAL_OK)
   {
-    Error_Handler();
+    goto tim12_failed; // 未完成初始化时不启用蜂鸣器引脚。
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim12, &sMasterConfig) != HAL_OK)
   {
-    Error_Handler();
+    goto tim12_failed; // 主模式失败时撤销定时器资源。
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
@@ -226,13 +241,17 @@ void MX_TIM12_Init(void)
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim12, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
-    Error_Handler();
+    goto tim12_failed; // 通道失败时不能切换输出引脚。
   }
   /* USER CODE BEGIN TIM12_Init 2 */
 
   /* USER CODE END TIM12_Init 2 */
   HAL_TIM_MspPostInit(&htim12);
-
+  return 1u; // 可以交给蜂鸣器模块注册。
+tim12_failed:
+  HAL_TIM_PWM_MspDeInit(&htim12); // 引脚尚未切换，仅释放定时器时钟。
+  htim12.Instance = NULL; // PWM 注册会拒绝失败的句柄。
+  return 0u;
 }
 
 void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef* tim_pwmHandle)

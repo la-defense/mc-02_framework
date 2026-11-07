@@ -564,6 +564,12 @@ if(UNIX AND NOT APPLE)
       target_compile_definitions(${target} PRIVATE MC02_PROFILE_ROBOT=1 MC02_HEATER_ENABLED=0)
     endif()
   endforeach()
+  # 直接运行生产 TIM 初始化，在三个 HAL 步骤注入失败并检查输出引脚。
+  add_executable(tim_checked_test tim_checked_test.c ../../Core/Src/tim.c)
+  target_include_directories(tim_checked_test BEFORE PRIVATE tim_profile_fakes .)
+  target_compile_options(tim_checked_test PRIVATE -ffunction-sections -fdata-sections -Wall -Wextra -Werror)
+  target_link_options(tim_checked_test PRIVATE -Wl,--gc-sections)
+  add_test(NAME production_tim_checked_failures COMMAND tim_checked_test)
 endif()
 
 include(CTest)

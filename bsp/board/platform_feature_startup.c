@@ -11,11 +11,12 @@
 
 static uint8_t lcd_ready; // 只由启动阶段写入，供后续模块启动读取。
 static uint8_t imu_ready; // 保存板载 IMU 的 SPI2 初始化结果。
+static uint8_t heater_ready; // 保存 IMU 加热定时器初始化结果。
 
 void PlatformFeaturePeripheralsInit(void)
 {
 #if MC02_FEATURE_ALARM
-    MX_TIM12_Init(); // 板载蜂鸣器使用 TIM12；关闭告警时不配置该定时器。
+    (void)MX_TIM12_InitChecked(); // 失败时句柄无效，告警模块仍可保留 RGB。
 #endif
 #if MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS
     lcd_ready = MX_SPI1_InitChecked(); // 失败时交给模块依赖处理，不启动 LCD。
@@ -24,7 +25,7 @@ void PlatformFeaturePeripheralsInit(void)
     imu_ready = MX_SPI2_InitChecked(); // 失败时交给车型模块依赖处理。
 #endif
 #if MC02_FEATURE_HEATER
-    MX_TIM3_Init(); // 只有启用 IMU 温控时才配置加热 PWM。
+    heater_ready = MX_TIM3_InitChecked(); // 失败时由车型依赖决定是否允许其他模块运行。
 #endif
 }
 
@@ -36,6 +37,11 @@ uint8_t PlatformFeatureLcdReady(void)
 uint8_t PlatformFeatureImuReady(void)
 {
     return imu_ready; // 未启用或初始化失败均不可注册板载 IMU。
+}
+
+uint8_t PlatformFeatureHeaterReady(void)
+{
+    return heater_ready; // 未启用或初始化失败时不能启动温控。
 }
 
 uint8_t PlatformFeatureUartsInit(const PlatformUartPort_t *ports, uint8_t count)

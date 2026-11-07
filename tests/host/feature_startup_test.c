@@ -10,12 +10,15 @@ static unsigned uart_calls[11];
 static unsigned can_calls[4];
 static unsigned char fake_spi1_success = 1u;
 static unsigned char fake_spi2_success = 1u;
+static unsigned char fake_tim3_success = 1u;
 void MX_SPI1_Init(void) { ++spi1_calls; }
 unsigned char MX_SPI1_InitChecked(void) { ++spi1_calls; return fake_spi1_success; }
 void MX_SPI2_Init(void) { ++spi2_calls; }
 unsigned char MX_SPI2_InitChecked(void) { ++spi2_calls; return fake_spi2_success; }
 void MX_TIM12_Init(void) { ++tim12_calls; }
 void MX_TIM3_Init(void) { ++tim3_calls; }
+unsigned char MX_TIM12_InitChecked(void) { ++tim12_calls; return 1u; }
+unsigned char MX_TIM3_InitChecked(void) { ++tim3_calls; return fake_tim3_success; }
 void MX_USART1_UART_Init(void) { ++uart_calls[1]; }
 void MX_USART2_UART_Init(void) { ++uart_calls[2]; }
 void MX_USART3_UART_Init(void) { ++uart_calls[3]; }
@@ -37,10 +40,16 @@ int main(void)
     TEST_CHECK(PlatformFeatureImuReady() == MC02_FEATURE_IMU);
     TEST_CHECK(tim12_calls == MC02_FEATURE_ALARM);
     TEST_CHECK(tim3_calls == MC02_FEATURE_HEATER);
+    TEST_CHECK(PlatformFeatureHeaterReady() == MC02_FEATURE_HEATER);
 #if MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS
     fake_spi1_success = 0u; // 模拟 LCD 的 SPI1 初始化失败。
     PlatformFeaturePeripheralsInit();
     TEST_CHECK(!PlatformFeatureLcdReady()); // 模块启动不得报告 LCD 已可用。
+#endif
+#if MC02_FEATURE_HEATER
+    fake_tim3_success = 0u; // 模拟加热 PWM 初始化失败。
+    PlatformFeaturePeripheralsInit();
+    TEST_CHECK(!PlatformFeatureHeaterReady()); // 温控不能继续使用失败的定时器。
 #endif
 #if MC02_FEATURE_IMU
     fake_spi2_success = 0u; // 模拟 IMU 所需 SPI2 初始化失败。

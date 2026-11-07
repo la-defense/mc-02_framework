@@ -78,5 +78,8 @@ int HAL_TIMEx_ConfigBreakDeadTime(TIM_HandleTypeDef *, TIM_BreakDeadTimeConfigTy
 void HAL_GPIO_Init(GPIO_TypeDef *, GPIO_InitTypeDef *);
 void HAL_GPIO_WritePin(GPIO_TypeDef *, uint32_t, uint32_t);
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef *);
+void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef *);
+uint8_t MX_TIM3_InitChecked(void);
+uint8_t MX_TIM12_InitChecked(void);
 void Error_Handler(void);
 #endif

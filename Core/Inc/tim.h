@@ -52,6 +52,10 @@ void MX_TIM12_Init(void);
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
 
 /* USER CODE BEGIN Prototypes */
+/** @brief 准备 IMU 加热定时器；失败时释放定时器并返回 0。 */
+uint8_t MX_TIM3_InitChecked(void);
+/** @brief 准备蜂鸣器定时器；失败时释放定时器并返回 0。 */
+uint8_t MX_TIM12_InitChecked(void);
 
 /* USER CODE END Prototypes */
 

@@ -117,7 +117,8 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
         return (uint8_t)(PlatformFeatureImuReady() && INS_ConfigureSensor(config->imu_sensor)); // SPI2 就绪后才允许注册板载 IMU。
     case ROBOT_MODULE_HEATER:
 #if MC02_FEATURE_HEATER
-        return IMUHeaterConfigure(config->imu_heater_pwm, config->imu_heater_supply); // 缺少资源时交给模块依赖处理。
+        return (uint8_t)(PlatformFeatureHeaterReady() &&
+                         IMUHeaterConfigure(config->imu_heater_pwm, config->imu_heater_supply)); // PWM 失败按模块依赖处理。
 #else
         return 0u;
 #endif
