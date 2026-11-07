@@ -5,6 +5,7 @@
  */
 #include "test_check.h"
 #include "bsp_dwt.h"
+#include "bsp_init.h"
 #include "bsp_can.h"
 #include "bsp_watchdog.h"
 #include "bsp_log.h"
@@ -21,6 +22,7 @@ uint8_t BSPInitCallerB(void);
 
 static unsigned step;
 static uint8_t watchdog_failure; // 按场景模拟早期看门狗初始化失败。
+static uint8_t watchdog_running; // 只有早期配置成功后才允许继续 BSP 初始化。
 static uint8_t adc_board_failure, adc_start_failure;
 static uint8_t adc_disabled;
 static uint8_t deadline_enter_failure, deadline_leave_failure;
@@ -53,21 +55,24 @@ void DWT_Init(uint32_t cpu_mhz)
 
 uint8_t BSP_WatchdogInitChecked(uint32_t timeout_ms)
 {
-    TEST_CHECK(step == 3u);
+    TEST_CHECK(step == 1u);
     TEST_CHECK(timeout_ms == 4000u);
     ++step;
-    return (uint8_t)!watchdog_failure; // 失败时下游资源不应再启动。
+    watchdog_running = (uint8_t)!watchdog_failure; // 模拟硬件配置结果。
+    return watchdog_running;
 }
+
+uint8_t BSP_WatchdogIsRunning(void) { return watchdog_running; }
 
 void BSPLogInit(void)
 {
-    TEST_CHECK(step == 2u);
+    TEST_CHECK(step == 3u);
     ++step;
 }
 
 void CANInitWorkspace(void)
 {
-    TEST_CHECK(step == 1u);
+    TEST_CHECK(step == 2u);
     ++step;
 }
 
@@ -108,6 +113,13 @@ int main(int argc, char **argv)
     adc_start_failure = (uint8_t)(strcmp(argv[1], "adc-start-fail") == 0);
     deadline_enter_failure = (uint8_t)(strcmp(argv[1], "deadline-enter-fail") == 0);
     deadline_leave_failure = (uint8_t)(strcmp(argv[1], "deadline-leave-fail") == 0);
+    TEST_CHECK(BSPStartupProtectionInit() == (uint8_t)!watchdog_failure); // 模拟外设之前的早期保护。
+    if (watchdog_failure)
+    {
+        TEST_CHECK(!BSPInitCallerA()); // 保护失败后不得执行其他 BSP 步骤。
+        TEST_CHECK(step == 2u && degraded_count == 0u);
+        return 0;
+    }
     if (deadline_enter_failure || deadline_leave_failure)
     {
         if (setjmp(deadline_exit) == 0) (void)BSPInitCallerA(); // 超期必须进入关断复位入口。
@@ -123,7 +135,7 @@ int main(int argc, char **argv)
         TEST_CHECK(strcmp(argv[1], "b") == 0);
         TEST_CHECK(BSPInitCallerB());
     }
-    TEST_CHECK(step == (watchdog_failure ? 4u : 8u)); // 失败后禁止继续初始化 ADC 和参数。
+    TEST_CHECK(step == 8u); // 所有已选步骤恰好执行一次。
     TEST_CHECK(degraded_count == (unsigned)(adc_board_failure || adc_start_failure)); // 辅助 ADC 失败只报告一次。
     return 0;
 }

@@ -87,7 +87,7 @@ unsigned long getRunTimeCounterValue(void);
    - FreeRTOS 只用相邻两次上下文切换之间的增量, 增量很小, 回绕在无符号减法下正确;
    - 换算成 us 后, 每个任务的累计 ulRunTimeCounter 要 4295s 才回绕(原始周期数 8.9s 就回绕),
      这样"隔几十秒读两次 TCB 统计"才能算出正确的占用率。
-   DWT 由 BSPInit() 里的 DWT_Init(480) 初始化, 且发生在 osKernelStart() 之前。 */
+   DWT 由 BSPStartupProtectionInit() 在系统时钟就绪后初始化，早于 osKernelStart()。 */
 __weak void configureTimerForRunTimeStats(void)
 {
     /* 计时源是 DWT->CYCCNT，无需额外配置 */

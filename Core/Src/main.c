@@ -36,6 +36,7 @@
 #include "robot.h"
 #include "bsp_log.h"
 #include "bsp_watchdog.h"
+#include "bsp_init.h"
 #include "init_diagnostic.h"
 #include "robot_safety.h"
 #include "bsp_reset_recovery.h"
@@ -121,6 +122,13 @@ int main(void)
 
   /* Configure the system clock */
   SystemClock_Config();
+  // 外设初始化之前建立看门狗，失败时执行既有故障恢复。
+  if (!BSPStartupProtectionInit())
+  {
+    InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_WATCHDOG,
+                                INIT_FAILURE_WATCHDOG_CONFIG, INIT_RESOURCE_WATCHDOG_STARTUP); // 记录启动窗口的失败位置。
+    Error_Handler(); // 关断并按现有恢复额度处理。
+  }
 
   /* USER CODE BEGIN SysInit */
 
@@ -200,6 +208,7 @@ int main(void)
   // ADC 采样启动结束后再次检查同一总期限。
   if (!PlatformPeripheralStartupFinish())
     PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE);
+  BSP_WatchdogFeed(); // 仅在外设阶段按总期限完成后续期。
   BSP_LOG_EVENT_0(EV_CORE_SRC_MAIN_C_01);
   /* USER CODE END 2 */
 

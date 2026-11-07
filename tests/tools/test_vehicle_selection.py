@@ -9,6 +9,16 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class VehicleSelectionTest(unittest.TestCase):
+    def test_early_watchdog_precedes_peripheral_setup(self):
+        # 入口保留旧编码注释，按字节检查关键调用，不转换或改写源文件。
+        main = (ROOT / "Core/Src/main.c").read_bytes()
+        body = main.split(b"int main(void)", 1)[1].split(b"void SystemClock_Config(void)", 1)[0]
+        self.assertLess(body.index(b"SystemClock_Config();"), body.index(b"BSPStartupProtectionInit()"))
+        self.assertLess(body.index(b"BSPStartupProtectionInit()"), body.index(b"MX_GPIO_Init();"))
+        self.assertRegex(body, rb"if\s*\(!BSPStartupProtectionInit\(\)\)\s*\{[^}]*"
+                               rb"INIT_FAILURE_WATCHDOG_CONFIG[^}]*Error_Handler\(\);")
+        self.assertLess(body.index(b"PlatformPeripheralStartupFinish()"), body.index(b"BSP_WatchdogFeed();"))
+
     @staticmethod
     def _evaluate_feature_disabled_condition(expression, feature_values):
         # 未知平台条件按可达处理，避免无关宏掩盖未保护调用。

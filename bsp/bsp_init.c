@@ -14,13 +14,17 @@
 #include "init_diagnostic.h"
 #include "platform_clock_startup.h"
 
+uint8_t BSPStartupProtectionInit(void)
+{
+    DWT_Init(480); // 系统时钟已经切换，建立看门狗更新等待使用的周期时基。
+    return BSP_WatchdogInitChecked(4000u); // 外设阶段开始前建立启动保护。
+}
+
 uint8_t BSPInit(void)
 {
-    DWT_Init(480);
+    if (!BSP_WatchdogIsRunning()) return 0u; // 不重新启动看门狗，保留早期阶段的期限。
     CANInitWorkspace();
     BSPLogInit();
-    // 启动先使用 4000 ms 窗口，任务创建成功后由启动协调者改为 200 ms。
-    if (!BSP_WatchdogInitChecked(4000u)) return 0u; // 看门狗未确认时不能继续初始化设备。
     uint8_t adc_started = 0u; // 尚未确认 ADC 启动成功。
     if (PlatformFeatureAdcSelected() && PlatformFeatureAdcReady())
     {
