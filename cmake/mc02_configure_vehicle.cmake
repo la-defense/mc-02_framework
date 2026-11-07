@@ -97,6 +97,13 @@ if(MC02_ENABLE_HEATER)
     list(APPEND MC02_ENABLED_MODULES HEATER)
 endif()
 mc02_validate_module_graph("${MC02_ENABLED_MODULES}" "${MC02_REQUIRED_MODULES}")
+foreach(rail IN ITEMS 24V_1 24V_2 5V)
+    # 只读车型声明同时包含开启阶段和实际供电模块；裸板生成结果始终关闭。
+    mc02_prepare_power_rail(MC02_POWER_${rail}_STAGE MC02_POWER_${rail}_MASK
+        "${MC02_PROFILE}" "${rail}" "${MC02_VEHICLE_POWER_${rail}}"
+        "${MC02_VEHICLE_MODULES}" "${MC02_ENABLED_MODULES}"
+        "${MC02_VEHICLE_POWER_${rail}_MODULES}")
+endforeach()
 mc02_modules_mask(MC02_FEATURE_MASK ${MC02_ENABLED_MODULES})
 mc02_modules_mask(MC02_REQUIRED_MASK ${MC02_REQUIRED_MODULES})
 set(MC02_DEPENDENCY_INITIALIZER "")

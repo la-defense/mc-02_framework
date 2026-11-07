@@ -40,6 +40,44 @@ function(mc02_validate_power_plan profile)
     endforeach()
 endfunction()
 
+# 生成本板实际用到的一路电源及使用它的模块；不为尚未确认的负载填写示例值。
+function(mc02_prepare_power_rail out_stage out_mask profile rail stage declared enabled consumers)
+    if(NOT "${stage}" MATCHES "^(UNCONFIRMED|OFF|BEFORE_DEVICES|AFTER_DEVICES)$")
+        message(FATAL_ERROR "Power ${rail}: invalid stage ${stage}")
+    endif()
+    if("${stage}" STREQUAL "UNCONFIRMED" AND "${profile}" STREQUAL "robot")
+        message(FATAL_ERROR "Power ${rail}: load or stage is unconfirmed")
+    endif()
+    if("${stage}" MATCHES "^(OFF|UNCONFIRMED)$" AND NOT "${consumers}" STREQUAL "")
+        message(FATAL_ERROR "Power ${rail}: disabled or unconfirmed rail has consumers")
+    endif()
+    if("${stage}" MATCHES "^(BEFORE_DEVICES|AFTER_DEVICES)$" AND "${consumers}" STREQUAL "")
+        message(FATAL_ERROR "Power ${rail}: enabled rail requires declared consumers")
+    endif()
+    set(active_consumers "") # 只保留本板实际启用的模块。
+    foreach(module IN LISTS consumers)
+        if(NOT module IN_LIST declared)
+            message(FATAL_ERROR "Power ${rail}: undeclared module ${module}")
+        endif()
+        if(module IN_LIST enabled)
+            list(APPEND active_consumers "${module}")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES active_consumers) # 同一模块重复声明不改变影响范围。
+    set(stage_value 0) # 0 表示保持关闭。
+    set(mask 0) # 没有本板使用者时不申请输出。
+    if("${profile}" STREQUAL "robot" AND active_consumers)
+        mc02_modules_mask(mask ${active_consumers})
+        if("${stage}" STREQUAL "BEFORE_DEVICES")
+            set(stage_value 1) # 1 表示设备初始化前开启。
+        elseif("${stage}" STREQUAL "AFTER_DEVICES")
+            set(stage_value 2) # 2 表示设备初始化后开启。
+        endif()
+    endif()
+    set(${out_stage} "${stage_value}" PARENT_SCOPE)
+    set(${out_mask} "${mask}" PARENT_SCOPE)
+endfunction()
+
 function(mc02_require_production_core profile mechanics gimbal)
     if("${profile}" STREQUAL "robot" AND (NOT mechanics OR NOT gimbal))
         message(FATAL_ERROR "sentinel core configuration is unconfirmed or unavailable: APP-10 mechanical data / MC02-0058 three-axis gimbal; robot firmware is forbidden")

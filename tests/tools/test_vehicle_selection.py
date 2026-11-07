@@ -273,6 +273,38 @@ file(WRITE "${{CMAKE_BINARY_DIR}}/selected-sources.txt" "${{MC02_SELECTED_SOURCE
                 result = self.run_case(f'mc02_validate_power_plan(robot {values})\n')
                 self.assertNotEqual(result.returncode, 0)
 
+    def test_power_consumers_and_board_selection(self):
+        # 人造声明仅用于测试规则；实际哨兵三路负载仍未确认。
+        prefix = 'set(declared "SAFETY;IMU;LCD")\nset(enabled "SAFETY;IMU")\n'
+        check = ('if(NOT stage EQUAL 1 OR NOT mask EQUAL 2)\n'
+                 '  message(FATAL_ERROR "unexpected selected rail")\nendif()\n')
+        call = ('mc02_prepare_power_rail(stage mask robot rail BEFORE_DEVICES '
+                '"${declared}" "${enabled}" "IMU;LCD;IMU")\n')
+        result = self.run_case(prefix + call + check)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        call = ('mc02_prepare_power_rail(stage mask robot rail AFTER_DEVICES '
+                '"${declared}" "${enabled}" "IMU")\n')
+        result = self.run_case(prefix + call +
+                               'if(NOT stage EQUAL 2 OR NOT mask EQUAL 2)\n'
+                               '  message(FATAL_ERROR "unexpected later stage")\nendif()\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # 本板没有使用者，以及所有裸板配置，均不产生开启请求。
+        for profile, consumers in (('robot', 'LCD'), ('bench_safe', 'IMU')):
+            with self.subTest(profile=profile, consumers=consumers):
+                call = (f'mc02_prepare_power_rail(stage mask {profile} rail BEFORE_DEVICES '
+                        f'"${{declared}}" "${{enabled}}" "{consumers}")\n')
+                result = self.run_case(prefix + call +
+                                       'if(NOT stage EQUAL 0 OR NOT mask EQUAL 0)\n'
+                                       '  message(FATAL_ERROR "rail not disabled")\nendif()\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+        # 未声明模块、空负载或关闭电源却声明使用者都要拒绝。
+        for stage, consumers in (('BEFORE_DEVICES', ''), ('OFF', 'IMU'),
+                                 ('UNCONFIRMED', 'IMU'), ('AFTER_DEVICES', 'UNKNOWN')):
+            with self.subTest(stage=stage, consumers=consumers):
+                call = (f'mc02_prepare_power_rail(stage mask robot rail {stage} '
+                        f'"${{declared}}" "${{enabled}}" "{consumers}")\n')
+                self.assertNotEqual(self.run_case(prefix + call).returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
