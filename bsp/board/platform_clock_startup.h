@@ -30,6 +30,11 @@ uint8_t PlatformPeripheralStartupBegin(void);
  * @return 可执行本次操作返回 1；未开始、已到期、嵌套或中断中调用返回 0。
  */
 uint8_t PlatformPeripheralStartupEnter(void);
+/** @brief 在受保护的启动操作中检查原有总期限。
+ * @return 仍在期限内返回 1；未进入、已到期或在中断中调用返回 0。
+ * @note 每次检查计入总次数；不重新开始期限，也不改变真实时基。
+ */
+uint8_t PlatformPeripheralStartupCheck(void);
 /** @brief 退出本次 HAL 等待保护并检查总期限。
  * @return 未到期返回 1；未进入或已到期返回 0。
  */

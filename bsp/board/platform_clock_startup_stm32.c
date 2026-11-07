@@ -126,6 +126,21 @@ uint8_t PlatformPeripheralStartupLeave(void)
     return result;
 }
 
+uint8_t PlatformPeripheralStartupCheck(void)
+{
+    const uint32_t previous = __get_PRIMASK(); // 保存调用者的中断状态。
+    __disable_irq(); // 与 HAL 时间查询共用同一个期限状态。
+    uint8_t result = 0u; // 非法上下文和未进入保护时拒绝继续等待。
+    if (peripheral_guard_started && peripheral_guard_active && __get_IPSR() == 0u)
+    {
+        (void)PlatformClockGuardTickStep(&peripheral_guard, CLOCK_STARTUP_READ_RAW_TICK(), DWT->CYCCNT,
+                                         PERIPHERAL_EXPIRED_STEP_MS); // 累计检查次数并判断周期。
+        result = (uint8_t)!peripheral_guard.expired; // 超期后本次上电不可恢复为有效。
+    }
+    __set_PRIMASK(previous); // 每次轮询后恢复原中断状态。
+    return result;
+}
+
 uint8_t PlatformPeripheralStartupFinish(void)
 {
     const uint32_t previous = __get_PRIMASK(); // 保留外部中断状态。

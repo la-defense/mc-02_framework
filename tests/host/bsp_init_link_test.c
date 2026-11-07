@@ -12,6 +12,8 @@
 #include "bsp_crash.h"
 #include "bsp_param.h"
 #include "init_diagnostic.h"
+#include "platform_clock_startup.h"
+#include <setjmp.h>
 #include <string.h>
 
 uint8_t BSPInitCallerA(void);
@@ -22,16 +24,22 @@ static uint8_t watchdog_failure; // 按场景模拟早期看门狗初始化失�
 static uint8_t adc_board_failure, adc_start_failure;
 static uint8_t deadline_enter_failure, deadline_leave_failure;
 static unsigned degraded_count;
+static jmp_buf deadline_exit;
 
 uint8_t PlatformFeatureAdcReady(void) { return (uint8_t)!adc_board_failure; }
 uint8_t BSP_ADCIsStarted(void) { return (uint8_t)!adc_start_failure; }
 uint8_t PlatformPeripheralStartupEnter(void) { return (uint8_t)!deadline_enter_failure; }
 uint8_t PlatformPeripheralStartupLeave(void) { return (uint8_t)!deadline_leave_failure; }
+_Noreturn void PlatformClockStartupFail(PlatformClockFailure_t failure)
+{
+    TEST_CHECK(failure == PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE); // 保留外设阶段的具体原因。
+    longjmp(deadline_exit, 1); // 模拟关断及复位，不执行后续初始化。
+}
 void InitDiagnosticReportDegraded(int stage, uint8_t module, int reason, uint16_t resource_id)
 {
     TEST_CHECK(stage == INIT_STAGE_BSP && module == INIT_MODULE_ADC && reason == INIT_FAILURE_RESOURCE && resource_id == 1u);
     ++degraded_count; // 记录辅助 ADC 失败，不终止后续启动。
-    if (adc_board_failure || deadline_enter_failure) ++step; // 未调用 ADC 时保留测试阶段位置。
+    if (adc_board_failure) ++step; // 未调用 ADC 时保留测试阶段位置。
 }
 
 void DWT_Init(uint32_t cpu_mhz)
@@ -96,6 +104,13 @@ int main(int argc, char **argv)
     adc_start_failure = (uint8_t)(strcmp(argv[1], "adc-start-fail") == 0);
     deadline_enter_failure = (uint8_t)(strcmp(argv[1], "deadline-enter-fail") == 0);
     deadline_leave_failure = (uint8_t)(strcmp(argv[1], "deadline-leave-fail") == 0);
+    if (deadline_enter_failure || deadline_leave_failure)
+    {
+        if (setjmp(deadline_exit) == 0) (void)BSPInitCallerA(); // 超期必须进入关断复位入口。
+        TEST_CHECK(step == (deadline_enter_failure ? 4u : 5u)); // 不继续记录复位原因或读取参数。
+        TEST_CHECK(degraded_count == 0u); // 外设总期限失败属于核心故障。
+        return 0;
+    }
     if (strcmp(argv[1], "a") == 0 || watchdog_failure || adc_board_failure || adc_start_failure ||
         deadline_enter_failure || deadline_leave_failure)
         TEST_CHECK(BSPInitCallerA() == (uint8_t)!watchdog_failure);
@@ -105,7 +120,6 @@ int main(int argc, char **argv)
         TEST_CHECK(BSPInitCallerB());
     }
     TEST_CHECK(step == (watchdog_failure ? 4u : 8u)); // 失败后禁止继续初始化 ADC 和参数。
-    TEST_CHECK(degraded_count == (unsigned)(adc_board_failure || adc_start_failure ||
-                                             deadline_enter_failure || deadline_leave_failure)); // 所有失败都只报告一次。
+    TEST_CHECK(degraded_count == (unsigned)(adc_board_failure || adc_start_failure)); // 辅助 ADC 失败只报告一次。
     return 0;
 }

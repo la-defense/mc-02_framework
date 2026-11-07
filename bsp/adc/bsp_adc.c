@@ -8,6 +8,8 @@
  * ADC1 依次采集 ADC_CHANNEL_4（PC4，电源）和 ADC_CHANNEL_19（PA5，按键）。
  */
 #include "bsp_adc.h"
+#include "bsp_adc_calibration.h"
+#include "platform_clock_startup.h"
 #include "adc.h"
 #include "main.h"
 #include "bsp_log.h"
@@ -134,8 +136,7 @@ void BSP_ADCInit(void)
 {
     BSP_ADCResetPublishedSample();
 
-    HAL_StatusTypeDef calibration_status =
-        HAL_ADCEx_Calibration_Start(&hadc1, ADC_CALIB_OFFSET, ADC_SINGLE_ENDED);
+    HAL_StatusTypeDef calibration_status = BSP_ADCCalibrate(); // 校准轮询检查同一启动期限。
     // 校准失败时保留错误，不继续启动采集。
     if (calibration_status != HAL_OK)
     {
@@ -148,6 +149,11 @@ void BSP_ADCInit(void)
     SCB_CleanInvalidateDCache_by_Addr((uint32_t *)adc_dma_buffer,
                                      (int32_t)(BSP_ADC_DMA_WORD_COUNT * sizeof(uint16_t)));
 
+    if (!PlatformPeripheralStartupCheck())
+    {
+        BSP_ADCSetError(BSP_ADC_ERROR_DMA_START, (uint32_t)HAL_TIMEOUT); // 期限已到时禁止启动 DMA。
+        return;
+    }
     HAL_StatusTypeDef dma_start_status =
         HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_dma_buffer, BSP_ADC_DMA_WORD_COUNT);
     // 启动失败时保持 adc_started 为 0，读取接口通过错误记录说明原因。

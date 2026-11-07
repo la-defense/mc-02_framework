@@ -11,7 +11,8 @@
 typedef enum
 {
     HAL_OK = 0,
-    HAL_ERROR = 1
+    HAL_ERROR = 1,
+    HAL_TIMEOUT = 3
 } HAL_StatusTypeDef;
 
 uint32_t HAL_GetTick(void);

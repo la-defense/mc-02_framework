@@ -83,6 +83,7 @@ set(MC02_BSP_C_SOURCES
     bsp/board/board_gpio_stm32.c # MC-02 逻辑 GPIO 与板载片选绑定。
     bsp/board/platform_pwm_stm32.c # 板载加热 PWM 的逻辑通道适配。
     bsp/board/platform_adc_stm32.c # 电源电压逻辑模拟输入适配。
+    bsp/adc/bsp_adc_calibration.c # ADC 偏移校准使用启动总期限。
     bsp/board/platform_can_stm32.c # 逻辑 CAN 总线的发送队列适配。
     bsp/board/platform_can_oneshot_stm32.c # 一次性 CAN 命令的逻辑总线适配。
     bsp/board/platform_spi_blocking_stm32.c # 同步 SPI 状态与阻塞模式检查。

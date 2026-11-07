@@ -41,6 +41,7 @@ static uintptr_t last_prepared_address;
 static int32_t last_prepared_size;
 static uint32_t dma_start_cache_order_error_count;
 static uint32_t cache_invalidate_count;
+static uint8_t deadline_valid = 1u; // 各场景控制 DMA 启动前的期限状态。
 static uintptr_t last_invalidated_address;
 static int32_t last_invalidated_size;
 
@@ -48,6 +49,7 @@ uint32_t HAL_GetTick(void) { return now_ms; }
 uint32_t __get_PRIMASK(void) { return primask; }
 void __disable_irq(void) { primask = 1u; }
 void __set_PRIMASK(uint32_t value) { primask = value; }
+uint8_t PlatformPeripheralStartupCheck(void) { return deadline_valid; }
 
 void SCB_CleanInvalidateDCache_by_Addr(uint32_t *address, int32_t size)
 {
@@ -63,12 +65,8 @@ void SCB_InvalidateDCache_by_Addr(uint32_t *address, int32_t size)
     last_invalidated_size = size;
 }
 
-HAL_StatusTypeDef HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef *hadc, uint32_t calibration_mode,
-                                             uint32_t single_diff)
+HAL_StatusTypeDef BSP_ADCCalibrate(void)
 {
-    (void)hadc;
-    (void)calibration_mode;
-    (void)single_diff;
     calibration_call_count++;
     return calibration_status;
 }
@@ -273,6 +271,11 @@ int main(void)
     BSP_ADCInit();
     CHECK(bsp_adc_diagnostic.version == 0u && bsp_adc_diagnostic.layout == 0u);
     CHECK(primask == 1u);
+    const uint32_t before_deadline_dma = dma_start_call_count; // 保存超期前的 DMA 启动次数。
+    deadline_valid = 0u;
+    BSP_ADCInit();
+    CHECK(dma_start_call_count == before_deadline_dma && !BSP_ADCIsStarted()); // 总期限到期后禁止启动 DMA。
+    CHECK(BSP_ADCGetSample(&sample) == BSP_ADC_STATUS_ERROR && sample.hal_error_code == HAL_TIMEOUT);
 
     puts("PASS: ADC snapshots publish complete DMA batches and reject stale/error data");
     return EXIT_SUCCESS;

@@ -61,6 +61,14 @@ int main(int argc, char **argv)
         TEST_CHECK(!PlatformPeripheralStartupBegin()); // 不能重置已经开始的总期限。
         TEST_CHECK(PlatformPeripheralStartupEnter());
         TEST_CHECK(!PlatformPeripheralStartupEnter()); // 不允许嵌套使用保护。
+        if (!strcmp(argv[1], "peripheral-poll-check"))
+        {
+            unsigned checks = 0u; // 两个时钟均不前进时验证主动轮询上限。
+            while (PlatformPeripheralStartupCheck()) ++checks;
+            TEST_CHECK(checks == 4u); // Enter 已占用一次，总检查次数固定为 6。
+            TEST_CHECK(!PlatformPeripheralStartupLeave() && !PlatformPeripheralStartupFinish());
+            return 0;
+        }
         if (!strcmp(argv[1], "peripheral-stopped"))
         {
             const uint32_t first = HAL_GetTick(); // 周期和真实毫秒均保持不动。
@@ -75,6 +83,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[1], "peripheral-cycle"))
         {
             clock_test_dwt.CYCCNT = 40u; // HAL 没查询时间也应在退出时检查期限。
+            TEST_CHECK(!PlatformPeripheralStartupCheck()); // 不依赖 HAL tick 的循环也能主动退出。
             TEST_CHECK(!PlatformPeripheralStartupLeave());
             TEST_CHECK(!PlatformPeripheralStartupFinish());
             return 0;
@@ -85,6 +94,7 @@ int main(int argc, char **argv)
             (void)HAL_GetTick(); // 启动线程先触发临时时间。
             clock_test_ipsr = 1u; // 模拟中断打断启动线程。
             TEST_CHECK(HAL_GetTick() == uwTick); // 中断和其数据时间不能看到临时偏移。
+            TEST_CHECK(!PlatformPeripheralStartupCheck()); // 中断不能消费启动线程的检查额度。
             TEST_CHECK(!PlatformPeripheralStartupLeave()); // 中断不能结束线程的保护。
             clock_test_ipsr = 0u;
             TEST_CHECK(!PlatformPeripheralStartupLeave());
