@@ -17,6 +17,13 @@ static void (*task_entry)(void *); // 捕获生产端口交给 FreeRTOS 的入�
 static TaskHandle_t current_task; // 模拟运行中的任务句柄。
 static TaskHandle_t created_task; // 保存创建成功后返回的控制块地址。
 static jmp_buf task_finished; // 从常驻任务入口返回主机测试。
+static uint32_t irq_mask; // 模拟进入前中断屏蔽状态。
+static unsigned task_enter_count, task_exit_count; // 区分调度前保护和运行期任务临界区。
+
+uint32_t PlatformIrqSaveAndDisable(void) { const uint32_t saved = irq_mask; irq_mask = 1u; return saved; }
+void PlatformIrqRestore(uint32_t saved) { irq_mask = saved; }
+void LogTestEnterTaskCritical(void) { ++task_enter_count; }
+void LogTestExitTaskCritical(void) { ++task_exit_count; }
 
 int32_t osKernelRunning(void) { return scheduler_running; }
 uint8_t PlatformTaskBatchIsActive(void) { return batch_active; }
@@ -48,6 +55,27 @@ static void worker(void const *argument)
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2); // 各场景分别运行，避免静态任务句柄跨场景残留。
+    if (strcmp(argv[1], "critical-open") == 0 || strcmp(argv[1], "critical-masked") == 0)
+    {
+        irq_mask = (uint32_t)(strcmp(argv[1], "critical-masked") == 0); // 分别测试原先开启和屏蔽。
+        const uint32_t original = irq_mask; // 最外层退出后必须恢复此状态。
+        BSPLogPortEnterCritical(); // 首层应屏蔽中断。
+        TEST_CHECK(irq_mask == 1u);
+        BSPLogPortEnterCritical(); // 嵌套时不得丢失原状态。
+        BSPLogPortExitCritical();
+        TEST_CHECK(irq_mask == 1u);
+        BSPLogPortExitCritical();
+        TEST_CHECK(irq_mask == original && task_enter_count == 0u && task_exit_count == 0u);
+        return 0;
+    }
+    if (strcmp(argv[1], "critical-runtime") == 0)
+    {
+        scheduler_running = 1u; // 运行期沿用 FreeRTOS 的任务临界区。
+        BSPLogPortEnterCritical();
+        BSPLogPortExitCritical();
+        TEST_CHECK(task_enter_count == 1u && task_exit_count == 1u && irq_mask == 0u);
+        return 0;
+    }
     TEST_CHECK(!BSPLogPortStartWorker(NULL)); // 空入口不能创建任务。
     if (strcmp(argv[1], "before") == 0)
     {

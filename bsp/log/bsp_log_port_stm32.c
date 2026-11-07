@@ -16,6 +16,7 @@
 #include "bsp_usart.h"
 #include "usart_tx.h"
 #include "../os/platform_os.h"
+#include "../os/platform_irq.h"
 
 #include <limits.h>
 #include <string.h>
@@ -40,6 +41,8 @@ static StackType_t log_worker_stack[BSP_LOG_WORKER_STACK_WORDS] BSP_LOG_STATIC_D
 static StaticTask_t log_worker_tcb BSP_LOG_STATIC_DTCM;
 static TaskHandle_t log_worker_handle;
 static BSPLogWorkerEntry_t log_worker_entry;
+static PlatformIrqState_t log_early_irq_state; // 调度器启动前最外层进入时的中断状态。
+static uint32_t log_early_critical_depth; // 启动代码的嵌套次数；日志接口不允许中断调用。
 static USARTInstance *diagnostic_uart_instance;
 static BSPLogDiagnosticRx_t diagnostic_receive_callback;
 
@@ -159,11 +162,24 @@ uint8_t BSPLogPortWriteWholeRecord(const char *data, size_t length)
 
 void BSPLogPortEnterCritical(void)
 {
+    if (!osKernelRunning())
+    {
+        const PlatformIrqState_t saved = PlatformIrqSaveAndDisable(); // 启动期不能使用 FreeRTOS 的任务嵌套计数。
+        if (log_early_critical_depth == 0u) log_early_irq_state = saved; // 只保存最外层原状态。
+        ++log_early_critical_depth; // 配对退出时保留嵌套期间的屏蔽。
+        return;
+    }
     taskENTER_CRITICAL();
 }
 
 void BSPLogPortExitCritical(void)
 {
+    if (log_early_critical_depth != 0u)
+    {
+        --log_early_critical_depth; // 内层退出不能提前恢复中断。
+        if (log_early_critical_depth == 0u) PlatformIrqRestore(log_early_irq_state); // 恢复原先的屏蔽状态。
+        return;
+    }
     taskEXIT_CRITICAL();
 }
 

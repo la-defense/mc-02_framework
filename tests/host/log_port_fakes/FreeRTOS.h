@@ -9,7 +9,9 @@ typedef struct { uint32_t value; } StaticTask_t; // 模拟静态任务控制块�
 typedef void *TaskHandle_t; // 模拟不透明任务句柄。
 #define tskIDLE_PRIORITY 0u
 #define configMAX_PRIORITIES 8u
-#define taskENTER_CRITICAL() ((void)0)
-#define taskEXIT_CRITICAL() ((void)0)
+void LogTestEnterTaskCritical(void);
+void LogTestExitTaskCritical(void);
+#define taskENTER_CRITICAL() LogTestEnterTaskCritical()
+#define taskEXIT_CRITICAL() LogTestExitTaskCritical()
 #define taskYIELD() ((void)0)
 #endif
