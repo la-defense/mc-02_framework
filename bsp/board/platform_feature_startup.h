@@ -18,4 +18,12 @@ void PlatformFeaturePeripheralsInit(void);
  * @note 仅在启动时调用一次；同次数组内相同端口只初始化一次。生成函数的硬件失败仍由 Error_Handler 处理。
  */
 uint8_t PlatformFeatureUartsInit(const PlatformUartPort_t *ports, uint8_t count);
+
+/** @brief 初始化车型或诊断请求的 CAN 控制器。
+ * @param[in] buses 逻辑总线数组；count 为零时允许 NULL。
+ * @param[in] count 数组元素数，最多为 8。
+ * @return 全部编号有效返回 1；无效时返回 0 且不初始化任何控制器。
+ * @note 仅在启动时调用一次，数组中重复编号只初始化一次；硬件失败仍由 Error_Handler 处理。
+ */
+uint8_t PlatformFeatureCanInit(const PlatformCanBus_t *buses, uint8_t count);
 #endif

@@ -41,6 +41,7 @@
 #include "bsp_reset_recovery.h"
 #include "platform_clock_startup.h"
 #include "platform_feature_startup.h"
+#include "platform_can_diagnostic.h"
 #include "config.h"
 /* USER CODE END Includes */
 
@@ -149,9 +150,33 @@ int main(void)
   // 板级入口先检查全部编号，再初始化所需端口及诊断串口。
   if (!PlatformFeatureUartsInit(startup_uarts, startup_uart_count))
     Error_Handler(); // 端口编号不受支持时停止启动。
-  MX_FDCAN1_Init();
-  MX_FDCAN2_Init();
-  MX_FDCAN3_Init();
+  PlatformCanBus_t startup_can[8]; // 容纳现有电机、板间通信和电容所需总线。
+  uint8_t startup_can_count = 0u;
+#if CAN_SELFTEST_LOOPBACK
+  startup_can[startup_can_count++] = PLATFORM_CAN_BUS_1; // 回环诊断逐一测试三条总线。
+  startup_can[startup_can_count++] = PLATFORM_CAN_BUS_2; // 回环诊断第二条总线。
+  startup_can[startup_can_count++] = PLATFORM_CAN_BUS_3; // 回环诊断第三条总线。
+#else
+#if MC02_FEATURE_CHASSIS
+  startup_can[startup_can_count++] = startup_config->chassis_param.chassis_motor_config.can_init_config.can_bus; // 底盘轮电机总线。
+#endif
+#if MC02_FEATURE_GIMBAL
+  startup_can[startup_can_count++] = startup_config->gimbal_param.yaw_motor_config.can_init_config.can_bus; // 大 yaw 电机总线。
+  startup_can[startup_can_count++] = startup_config->gimbal_param.pitch_motor_config.can_init_config.can_bus; // pitch 电机总线。
+#endif
+#if MC02_FEATURE_SHOOTER
+  startup_can[startup_can_count++] = startup_config->shoot_param.friction_motor_config.can_init_config.can_bus; // 摩擦轮电机总线。
+  startup_can[startup_can_count++] = startup_config->shoot_param.loader_motor_config.can_init_config.can_bus; // 拨弹电机总线。
+#endif
+#if MC02_FEATURE_SUPERCAP
+  startup_can[startup_can_count++] = PLATFORM_CAN_BUS_2; // 旧电容适配固定使用第二条总线。
+#endif
+#if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
+  startup_can[startup_can_count++] = startup_config->can_bridge.can_bus; // 双板话题使用的总线。
+#endif
+#endif
+  if (!PlatformFeatureCanInit(startup_can, startup_can_count))
+    Error_Handler(); // 配置出现未知总线时停止启动。
   MX_TIM1_Init();
   MX_TIM2_Init();
   /* OCTOSPI 未被使用；重新生成后检查不得恢复初始化。 */

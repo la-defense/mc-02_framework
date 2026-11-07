@@ -7,6 +7,7 @@
 
 static unsigned spi1_calls, spi2_calls, tim12_calls, tim3_calls;
 static unsigned uart_calls[11];
+static unsigned can_calls[4];
 void MX_SPI1_Init(void) { ++spi1_calls; }
 void MX_SPI2_Init(void) { ++spi2_calls; }
 void MX_TIM12_Init(void) { ++tim12_calls; }
@@ -19,6 +20,9 @@ void MX_UART7_Init(void) { ++uart_calls[7]; }
 void MX_UART8_Init(void) { ++uart_calls[8]; }
 void MX_UART9_Init(void) { ++uart_calls[9]; }
 void MX_USART10_UART_Init(void) { ++uart_calls[10]; }
+void MX_FDCAN1_Init(void) { ++can_calls[1]; }
+void MX_FDCAN2_Init(void) { ++can_calls[2]; }
+void MX_FDCAN3_Init(void) { ++can_calls[3]; }
 
 int main(void)
 {
@@ -44,5 +48,18 @@ int main(void)
     TEST_CHECK(uart_calls[1] == 1u && uart_calls[2] == 1u && uart_calls[3] == 1u);
     TEST_CHECK(uart_calls[7] == 1u && uart_calls[8] == 1u && uart_calls[9] == 1u);
     TEST_CHECK(uart_calls[10] == 3u); // 每次调用均保留一次诊断初始化。
+    const PlatformCanBus_t invalid_can[] = {PLATFORM_CAN_BUS_1, PLATFORM_CAN_INVALID};
+    TEST_CHECK(!PlatformFeatureCanInit(invalid_can, 2u)); // 无效总线不能导致部分初始化。
+    TEST_CHECK(!PlatformFeatureCanInit(NULL, 1u));
+    TEST_CHECK(!PlatformFeatureCanInit(invalid_can, 9u));
+    TEST_CHECK(can_calls[1] == 0u && can_calls[2] == 0u && can_calls[3] == 0u);
+    TEST_CHECK(PlatformFeatureCanInit(NULL, 0u)); // 没有 CAN 设备时保持全部控制器未初始化。
+    TEST_CHECK(can_calls[1] == 0u && can_calls[2] == 0u && can_calls[3] == 0u);
+    const PlatformCanBus_t buses[] = {PLATFORM_CAN_BUS_2, PLATFORM_CAN_BUS_2, PLATFORM_CAN_BUS_3};
+    TEST_CHECK(PlatformFeatureCanInit(buses, 3u)); // 重复请求的控制器只配置一次。
+    TEST_CHECK(can_calls[1] == 0u && can_calls[2] == 1u && can_calls[3] == 1u);
+    const PlatformCanBus_t first_bus[] = {PLATFORM_CAN_BUS_1};
+    TEST_CHECK(PlatformFeatureCanInit(first_bus, 1u));
+    TEST_CHECK(can_calls[1] == 1u && can_calls[2] == 1u && can_calls[3] == 1u);
     return 0;
 }

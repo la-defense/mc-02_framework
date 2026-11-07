@@ -6,6 +6,7 @@
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
+#include "fdcan.h"
 #include <stddef.h>
 
 void PlatformFeaturePeripheralsInit(void)
@@ -51,4 +52,21 @@ uint8_t PlatformFeatureUartsInit(const PlatformUartPort_t *ports, uint8_t count)
     if ((selected & (UINT32_C(1) << 9u)) != 0u) MX_UART9_Init(); // 逻辑串口 9。
     MX_USART10_UART_Init(); // 固定诊断串口已包含在集合中，始终只初始化一次。
     return 1u; // 所有需要的初始化入口都已调用。
+}
+
+uint8_t PlatformFeatureCanInit(const PlatformCanBus_t *buses, uint8_t count)
+{
+    if (count > 8u || (count != 0u && buses == NULL)) return 0u; // 先检查容量和数组。
+    uint32_t selected = 0u; // 未请求总线时不初始化 CAN 控制器。
+    for (uint8_t index = 0u; index < count; ++index)
+    {
+        const unsigned bus = (unsigned)buses[index]; // 在移位前检查编号范围。
+        if (bus < PLATFORM_CAN_BUS_1 || bus > PLATFORM_CAN_BUS_3)
+            return 0u; // 存在未知总线时不进行任何硬件初始化。
+        selected |= UINT32_C(1) << bus; // 不同设备可以共同使用一条总线。
+    }
+    if ((selected & (UINT32_C(1) << PLATFORM_CAN_BUS_1)) != 0u) MX_FDCAN1_Init(); // 板级总线 1。
+    if ((selected & (UINT32_C(1) << PLATFORM_CAN_BUS_2)) != 0u) MX_FDCAN2_Init(); // 板级总线 2。
+    if ((selected & (UINT32_C(1) << PLATFORM_CAN_BUS_3)) != 0u) MX_FDCAN3_Init(); // 板级总线 3。
+    return 1u; // 已调用所有需要的控制器初始化入口。
 }
