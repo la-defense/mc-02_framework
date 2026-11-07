@@ -104,6 +104,38 @@ target_include_directories(exti_group_test BEFORE PRIVATE exti_fakes .)
 target_compile_options(exti_group_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_exti_group_dispatch COMMAND exti_group_test)
 set_tests_properties(production_exti_group_dispatch PROPERTIES TIMEOUT 10)
+# 编译不同启用组合，验证真实板级入口不会调用关闭功能的初始化函数。
+foreach(feature_case IN ITEMS none all lcd_diag imu alarm_heater)
+  set(feature_alarm 0)
+  set(feature_lcd 0)
+  set(feature_lcd_diag 0)
+  set(feature_imu 0)
+  set(feature_heater 0)
+  if(feature_case STREQUAL "all" OR feature_case STREQUAL "alarm_heater")
+    set(feature_alarm 1)
+    set(feature_heater 1)
+  endif()
+  if(feature_case STREQUAL "all")
+    set(feature_lcd 1)
+  endif()
+  if(feature_case STREQUAL "lcd_diag")
+    set(feature_lcd_diag 1)
+  endif()
+  if(feature_case STREQUAL "all" OR feature_case STREQUAL "imu")
+    set(feature_imu 1)
+  endif()
+  add_executable(feature_startup_${feature_case}_test feature_startup_test.c
+    ../../bsp/board/platform_feature_startup.c)
+  target_include_directories(feature_startup_${feature_case}_test BEFORE PRIVATE
+    feature_startup_fakes . ../../bsp/board)
+  target_compile_definitions(feature_startup_${feature_case}_test PRIVATE
+    MC02_FEATURE_ALARM=${feature_alarm} MC02_FEATURE_LCD=${feature_lcd}
+    MC02_BENCH_LCD_DIAGNOSTICS=${feature_lcd_diag} MC02_FEATURE_IMU=${feature_imu}
+    MC02_FEATURE_HEATER=${feature_heater})
+  target_compile_options(feature_startup_${feature_case}_test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME production_feature_startup_${feature_case}
+    COMMAND feature_startup_${feature_case}_test)
+endforeach()
 # 两种固件宏都联编生产 GPIO 初始化，检查电源先关闭再配置输出。
 foreach(power_profile IN ITEMS bench robot)
   add_executable(power_gpio_${power_profile}_test power_gpio_test.c ../../Core/Src/gpio.c)
@@ -294,6 +326,7 @@ set(MC02_PLATFORM_PUBLIC_HEADERS
   bsp/board/platform_analog.h # 逻辑 PWM 和 ADC 输入。
   bsp/board/platform_buzzer.h # 板载蜂鸣器输出。
   bsp/board/platform_clock_startup.h # 主时钟启动与失败处理。
+  bsp/board/platform_feature_startup.h # 当前板载功能所需外设的启动入口。
   bsp/board/platform_lcd.h # LCD 平台传输接口。
   bsp/board/platform_numeric_caps.h # 浮点与数学加速能力。
   bsp/board/platform_resources.h # 各类逻辑资源编号。

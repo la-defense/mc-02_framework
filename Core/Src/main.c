@@ -40,6 +40,7 @@
 #include "robot_safety.h"
 #include "bsp_reset_recovery.h"
 #include "platform_clock_startup.h"
+#include "platform_feature_startup.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -127,10 +128,7 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_ADC1_Init();
-  MX_TIM12_Init();
-  MX_SPI1_Init();
-  MX_SPI2_Init();
-  MX_TIM3_Init();
+  PlatformFeaturePeripheralsInit();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();

@@ -66,6 +66,7 @@ set(MC02_PLATFORM_C_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c)
 
 set(MC02_BSP_C_SOURCES
+    bsp/board/platform_feature_startup.c # 按启用功能准备当前板载 SPI 与 PWM。
     bsp/board/platform_exti_stm32.c # 逐引脚处理板载 IMU 的共享 EXTI 组。
     bsp/os/platform_startup_wait.c # 启动前固定期限与检查次数。
     bsp/os/platform_clock_guard.c # 主时钟配置所需的固定上限。
