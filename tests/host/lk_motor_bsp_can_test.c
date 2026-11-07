@@ -134,7 +134,8 @@ static uint8_t test_dlc_to_length(uint32_t encoded_dlc)
 
 uint32_t HAL_FDCAN_ConfigRxFifoOverwrite(FDCAN_HandleTypeDef *handle, uint32_t fifo, uint32_t mode)
 {
-    (void)handle; (void)fifo; (void)mode;
+    TEST_CHECK(handle != NULL && handle->Instance != NULL); // HAL 访问寄存器前句柄必须已准备。
+    (void)fifo; (void)mode;
     return HAL_OK;
 }
 uint32_t HAL_FDCAN_ConfigGlobalFilter(FDCAN_HandleTypeDef *handle, uint32_t nonmatching_std,
@@ -310,6 +311,12 @@ static void test_bus_start_and_rollback_isolation(void)
     TEST_CHECK(CANRegister(&config) != NULL); // 第一条总线应成功启动。
     TEST_CHECK(bus_start_count[0] == 1u && bus_start_count[1] == 0u && bus_start_count[2] == 0u);
     config.can_handle = &hfdcan2; // 第二条总线稍后才启用。
+    hfdcan2.Instance = NULL; // 模拟车型未准备或初始化失败的控制器。
+    TEST_CHECK(!CANStartBus(&hfdcan2)); // 不能把空硬件地址交给 HAL。
+    TEST_CHECK(CANRegister(&config) == NULL); // 注册失败不能影响已有总线。
+    TEST_CHECK(bus_start_count[1] == 0u && bus_stop_count[1] == 0u);
+    TEST_CHECK(hfdcan1.State == HAL_FDCAN_STATE_BUSY); // 第一条总线保持运行。
+    hfdcan2.Instance = &fdcan_registers[1]; // 模拟重新准备总线供后续回退场景使用。
     filter_fail_once = 1u; // 注入第二条总线的过滤器失败。
     TEST_CHECK(CANRegister(&config) == NULL); // 本次端点必须回退。
     TEST_CHECK(bus_stop_count[0] == 0u && bus_stop_count[1] == 1u && bus_stop_count[2] == 0u);

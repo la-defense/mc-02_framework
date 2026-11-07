@@ -1257,7 +1257,7 @@ static uint8_t CANAddFilter(CANInstance *_instance)
 // 配置接收与中断并启动一条总线；任一步失败就报告 0，必要时停回去。
 static uint8_t CANBusConfigure(FDCAN_HandleTypeDef *h)
 {
-    if (h == NULL ||
+    if (h == NULL || h->Instance == NULL || // 未准备的控制器不能交给 HAL 访问寄存器。
         HAL_FDCAN_ConfigRxFifoOverwrite(h, FDCAN_RX_FIFO0, FDCAN_RX_FIFO_OVERWRITE) != HAL_OK ||
         HAL_FDCAN_ConfigRxFifoOverwrite(h, FDCAN_RX_FIFO1, FDCAN_RX_FIFO_OVERWRITE) != HAL_OK ||
         HAL_FDCAN_ConfigGlobalFilter(h, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE) != HAL_OK)
