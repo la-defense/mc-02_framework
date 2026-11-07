@@ -4,6 +4,7 @@
  */
 #include "bsp_log_port.h"
 #include "platform_feature_startup.h"
+#include "platform_clock_startup.h"
 #include "bsp_log.h"
 
 #include "FreeRTOS.h"
@@ -69,7 +70,7 @@ static void BSPLogWorkerTask(void *argument)
 
 uint32_t BSPLogPortNowMs(void)
 {
-    return HAL_GetTick();
+    return PlatformClockRawTick(); // 启动等待超期时也不把临时时间写入日志。
 }
 
 uint8_t BSPLogPortInInterrupt(void)

@@ -119,10 +119,12 @@ target_include_directories(clock_startup_test BEFORE PRIVATE clock_startup_fakes
   ../../bsp/board ../../bsp/os ../../bsp/reset_recovery ../../bsp/safety ../../application)
 target_compile_definitions(clock_startup_test PRIVATE CLOCK_STARTUP_TOTAL_CYCLES=50u
   CLOCK_STARTUP_TOTAL_POLLS=4u CLOCK_STARTUP_VOS_CYCLES=6u CLOCK_STARTUP_VOS_POLLS=4u
-  CLOCK_STARTUP_TICK_CYCLES=6u CLOCK_STARTUP_TICK_POLLS=4u)
+  CLOCK_STARTUP_TICK_CYCLES=6u CLOCK_STARTUP_TICK_POLLS=4u
+  PERIPHERAL_STARTUP_TOTAL_CYCLES=40u PERIPHERAL_STARTUP_TOTAL_POLLS=6u)
 target_compile_options(clock_startup_test PRIVATE -Wall -Wextra -Werror)
 foreach(scenario IN ITEMS success vos-timeout tick-stopped cycle-timeout raw-stopped finish-total-timeout reset expired-reset locked
-    supply-failure vos-failure switch-failure hal-failure hal-before-begin invalid-failure)
+    supply-failure vos-failure switch-failure hal-failure hal-before-begin invalid-failure
+    peripheral-success peripheral-stopped peripheral-cycle peripheral-isr peripheral-sequence periph-failure)
   add_test(NAME production_clock_startup_${scenario} COMMAND clock_startup_test ${scenario})
   set_tests_properties(production_clock_startup_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
@@ -788,7 +790,7 @@ target_include_directories(bsp_init_link_test BEFORE PRIVATE bsp_init_fakes)
 target_include_directories(bsp_init_link_test PRIVATE ../../bsp)
 target_compile_features(bsp_init_link_test PRIVATE c_std_11)
 target_compile_options(bsp_init_link_test PRIVATE -Wall -Wextra -Werror)
-foreach(caller IN ITEMS a b watchdog-fail adc-board-fail adc-start-fail)
+foreach(caller IN ITEMS a b watchdog-fail adc-board-fail adc-start-fail deadline-enter-fail deadline-leave-fail)
   add_test(NAME production_bsp_init_link_${caller} COMMAND bsp_init_link_test ${caller})
   set_tests_properties(production_bsp_init_link_${caller} PROPERTIES TIMEOUT 10)
 endforeach()

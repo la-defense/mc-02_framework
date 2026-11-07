@@ -98,6 +98,7 @@ static inline void DWT_ProbeDone(volatile DWT_Probe_t *probe, uint32_t start)
  * @brief 初始化DWT,传入参数为CPU频率,单位MHz
  *
 * @param[in] CPU_Freq_mHz CPU 主频，单位 MHz；MC-02 当前传 480，须大于 0；调用会清累计时间。
+ * @note 保留硬件周期计数，软件累计时间从调用时刻重新开始。
  */
 void DWT_Init(uint32_t CPU_Freq_mHz);
 

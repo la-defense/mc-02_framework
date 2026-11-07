@@ -135,7 +135,12 @@ int main(void)
   if (RobotConfigSelect(ROBOT_CONFIG_SUPPORTED_ID, &startup_config) != ROBOT_CONFIG_OK ||
       startup_config == NULL)
     Error_Handler(); // 配置无效时保持受控输出关闭。
+  // 从固定起点开始检查板载外设，超期时关断并按恢复额度处理。
+  if (!PlatformPeripheralStartupBegin() || !PlatformPeripheralStartupEnter())
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE);
   PlatformFeaturePeripheralsInit();
+  if (!PlatformPeripheralStartupLeave())
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE);
   PlatformUartPort_t startup_uarts[3]; // 最多包含裁判、遥控与视觉各一项。
   uint8_t startup_uart_count = 0u;
 #if MC02_FEATURE_REFEREE
@@ -148,8 +153,13 @@ int main(void)
   startup_uarts[startup_uart_count++] = startup_config->vision_uart; // UART 视觉端口。
 #endif
   // 板级入口先检查全部编号，再初始化所需端口及诊断串口。
+  // 串口沿用同一个期限，不因切换设备而重新计时。
+  if (!PlatformPeripheralStartupEnter())
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE);
   if (!PlatformFeatureUartsInit(startup_uarts, startup_uart_count))
     Error_Handler(); // 端口编号不受支持时停止启动。
+  if (!PlatformPeripheralStartupLeave())
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE);
   PlatformCanBus_t startup_can[8]; // 容纳现有电机、板间通信和电容所需总线。
   uint8_t startup_can_count = 0u;
 #if CAN_SELFTEST_LOOPBACK
@@ -175,13 +185,21 @@ int main(void)
   startup_can[startup_can_count++] = startup_config->can_bridge.can_bus; // 双板话题使用的总线。
 #endif
 #endif
+  // CAN 配置也使用此前的总期限。
+  if (!PlatformPeripheralStartupEnter())
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE);
   if (!PlatformFeatureCanInit(startup_can, startup_can_count))
     Error_Handler(); // 配置出现未知总线时停止启动。
+  if (!PlatformPeripheralStartupLeave())
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE);
   /* OCTOSPI 未被使用；重新生成后检查不得恢复初始化。 */
   /* PB10/PB11 released from I2C2: used as LCD_BLK/LCD_RES */
   /* USER CODE BEGIN 2 */
   if (!RobotInit())
     StartupDiagnosticLoop(); // Ψһ�ĳ�ʼ������
+  // ADC 采样启动结束后再次检查同一总期限。
+  if (!PlatformPeripheralStartupFinish())
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE);
   BSP_LOG_EVENT_0(EV_CORE_SRC_MAIN_C_01);
   /* USER CODE END 2 */
 

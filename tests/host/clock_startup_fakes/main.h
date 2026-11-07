@@ -13,6 +13,7 @@ extern ClockTestDwt_t clock_test_dwt;
 extern ClockTestWatchdog_t clock_test_watchdog;
 extern volatile uint32_t uwTick;
 extern uint32_t clock_test_irq;
+extern uint32_t clock_test_ipsr;
 extern uint8_t clock_test_vos;
 uint32_t ClockTestReadTick(void);
 #define CLOCK_STARTUP_READ_RAW_TICK() ClockTestReadTick()
@@ -25,6 +26,7 @@ uint32_t ClockTestReadTick(void);
 #define __HAL_PWR_GET_FLAG(flag) ((void)(flag), clock_test_vos)
 #define __DMB() ((void)0)
 #define __get_PRIMASK() (clock_test_irq)
+#define __get_IPSR() (clock_test_ipsr)
 #define __disable_irq() (clock_test_irq = 1u)
 #define __set_PRIMASK(value) (clock_test_irq = (value))
 #define CLOCKSWITCH_TIMEOUT_VALUE 5000u
@@ -32,6 +34,7 @@ uint32_t ClockTestReadTick(void);
 #define HSI_TIMEOUT_VALUE 2u
 #define HSI48_TIMEOUT_VALUE 2u
 #define PLL_TIMEOUT_VALUE 2u
+#define HAL_UART_TIMEOUT_VALUE 0x1FFFFFFu
 void NVIC_SystemReset(void);
 void ClockTestNop(void);
 void ClockTestClearResetFlags(void);

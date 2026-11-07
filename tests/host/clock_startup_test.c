@@ -15,6 +15,7 @@ ClockTestDwt_t clock_test_dwt;
 ClockTestWatchdog_t clock_test_watchdog;
 volatile uint32_t uwTick;
 uint32_t clock_test_irq;
+uint32_t clock_test_ipsr;
 uint8_t clock_test_vos;
 static uint8_t locked, outputs_off, reset_requested, flags_cleared;
 static uint8_t advance_raw_tick;
@@ -49,6 +50,61 @@ int main(int argc, char **argv)
     {
         PlatformClockStartupBegin(); // 启动固定期限并启用周期计数。
         TEST_CHECK(clock_test_debug.DEMCR && clock_test_dwt.CTRL); // 本板适配器启用计数来源。
+    }
+    if (strncmp(argv[1], "peripheral-", 11u) == 0)
+    {
+        TEST_CHECK(!PlatformPeripheralStartupBegin()); // 主时钟保护尚未结束时不能重叠。
+        advance_raw_tick = 1u; // 模拟主时钟切换后真实时基正常。
+        TEST_CHECK(PlatformClockStartupFinish());
+        advance_raw_tick = 0u;
+        TEST_CHECK(PlatformPeripheralStartupBegin()); // 记录外设阶段的固定起点。
+        TEST_CHECK(!PlatformPeripheralStartupBegin()); // 不能重置已经开始的总期限。
+        TEST_CHECK(PlatformPeripheralStartupEnter());
+        TEST_CHECK(!PlatformPeripheralStartupEnter()); // 不允许嵌套使用保护。
+        if (!strcmp(argv[1], "peripheral-stopped"))
+        {
+            const uint32_t first = HAL_GetTick(); // 周期和真实毫秒均保持不动。
+            for (unsigned i = 0u; i < 6u; ++i) (void)HAL_GetTick(); // 耗尽总查询次数。
+            TEST_CHECK((uint32_t)(HAL_GetTick() - first) > HAL_UART_TIMEOUT_VALUE); // HAL 的大超时也能退出。
+            TEST_CHECK(PlatformClockRawTick() == uwTick); // 日志读取原始时间，不记录临时偏移。
+            TEST_CHECK(!PlatformPeripheralStartupLeave()); // 临时的 HAL 时间不能变成成功。
+            TEST_CHECK(HAL_GetTick() == uwTick); // 离开后恢复原始时钟。
+            TEST_CHECK(!PlatformPeripheralStartupFinish()); // 总期限已用尽。
+            return 0;
+        }
+        if (!strcmp(argv[1], "peripheral-cycle"))
+        {
+            clock_test_dwt.CYCCNT = 40u; // HAL 没查询时间也应在退出时检查期限。
+            TEST_CHECK(!PlatformPeripheralStartupLeave());
+            TEST_CHECK(!PlatformPeripheralStartupFinish());
+            return 0;
+        }
+        if (!strcmp(argv[1], "peripheral-isr"))
+        {
+            clock_test_dwt.CYCCNT = 40u; // 模拟外设操作已经超期。
+            (void)HAL_GetTick(); // 启动线程先触发临时时间。
+            clock_test_ipsr = 1u; // 模拟中断打断启动线程。
+            TEST_CHECK(HAL_GetTick() == uwTick); // 中断和其数据时间不能看到临时偏移。
+            TEST_CHECK(!PlatformPeripheralStartupLeave()); // 中断不能结束线程的保护。
+            clock_test_ipsr = 0u;
+            TEST_CHECK(!PlatformPeripheralStartupLeave());
+            TEST_CHECK(!PlatformPeripheralStartupFinish());
+            return 0;
+        }
+        TEST_CHECK(PlatformPeripheralStartupLeave()); // 正常操作后回到真实时钟。
+        TEST_CHECK(HAL_GetTick() == uwTick);
+        if (!strcmp(argv[1], "peripheral-sequence"))
+        {
+            clock_test_dwt.CYCCNT = 40u; // 不因下一次操作而刷新总期限。
+            TEST_CHECK(!PlatformPeripheralStartupEnter());
+            TEST_CHECK(!PlatformPeripheralStartupFinish());
+            return 0;
+        }
+        TEST_CHECK(!strcmp(argv[1], "peripheral-success"));
+        TEST_CHECK(PlatformPeripheralStartupFinish());
+        TEST_CHECK(!PlatformPeripheralStartupFinish()); // 已结束的期限不能再次使用。
+        TEST_CHECK(!PlatformPeripheralStartupBegin()); // 结束后也不能刷新本次上电的总期限。
+        return 0;
     }
     if (!strcmp(argv[1], "success"))
     {
@@ -110,6 +166,8 @@ int main(int argc, char **argv)
     { requested_failure = expected_failure = PLATFORM_CLOCK_FAILURE_SWITCH; expected_cause = RESET_RECOVERY_CAUSE_CLOCK_SWITCH; }
     else if (!strcmp(argv[1], "hal-failure") || !strcmp(argv[1], "hal-before-begin"))
     { requested_failure = expected_failure = PLATFORM_CLOCK_FAILURE_HAL; expected_cause = RESET_RECOVERY_CAUSE_CLOCK_HAL; }
+    else if (!strcmp(argv[1], "periph-failure"))
+    { requested_failure = expected_failure = PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE; expected_cause = RESET_RECOVERY_CAUSE_PERIPHERAL_DEADLINE; }
     else if (!strcmp(argv[1], "invalid-failure"))
     { requested_failure = (PlatformClockFailure_t)0; expected_failure = PLATFORM_CLOCK_FAILURE_DEADLINE; expected_cause = RESET_RECOVERY_CAUSE_CLOCK_DEADLINE; }
     else if (!strcmp(argv[1], "expired-reset"))
@@ -123,7 +181,7 @@ int main(int argc, char **argv)
     if (setjmp(failure_exit) == 0)
         PlatformClockStartupFail(requested_failure); // 失败入口不得正常返回。
     TEST_CHECK(outputs_off && clock_test_irq); // 返回测试后确认仍保持关断和中断屏蔽。
-    TEST_CHECK(saved_stage == INIT_STAGE_CLOCK && saved_module == INIT_MODULE_CLOCK &&
+    TEST_CHECK(saved_stage == (expected_failure == PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE ? INIT_STAGE_BSP : INIT_STAGE_CLOCK) && saved_module == INIT_MODULE_CLOCK &&
                saved_reason == INIT_FAILURE_CLOCK && saved_resource == expected_failure);
     TEST_CHECK(saved_cause == expected_cause); // 复位记录保留具体阶段。
     TEST_CHECK(reset_requested == !locked); // 仅有恢复额度时请求复位。

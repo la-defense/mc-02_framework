@@ -37,4 +37,14 @@ uint8_t PlatformClockGuardBegin(PlatformClockGuard_t *guard, uint32_t cycles,
  */
 uint32_t PlatformClockGuardTick(PlatformClockGuard_t *guard, uint32_t raw_tick,
                                 uint32_t cycles);
+/** @brief 以指定步长推进到期后的临时 HAL 时间。
+ * @param[in,out] guard 已初始化的状态；NULL 时原样返回 raw_tick。
+ * @param[in] raw_tick 实际 HAL 毫秒计数。
+ * @param[in] cycles 当前 CPU 周期计数。
+ * @param[in] expired_step 到期后每次查询增加的毫秒数，必须大于调用方所用的 HAL 超时。
+ * @return 到期前返回 raw_tick，到期后返回带临时偏移的时间。
+ * @note 外层仍须检查 expired；本接口不修改真实 HAL 时钟。
+ */
+uint32_t PlatformClockGuardTickStep(PlatformClockGuard_t *guard, uint32_t raw_tick,
+                                    uint32_t cycles, uint32_t expired_step);
 #endif

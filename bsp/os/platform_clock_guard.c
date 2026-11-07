@@ -25,6 +25,12 @@ uint8_t PlatformClockGuardBegin(PlatformClockGuard_t *guard, uint32_t cycles,
 uint32_t PlatformClockGuardTick(PlatformClockGuard_t *guard, uint32_t raw_tick,
                                 uint32_t cycles)
 {
+    return PlatformClockGuardTickStep(guard, raw_tick, cycles, CLOCK_GUARD_EXPIRED_STEP_MS); // 主时钟保留原有步长。
+}
+
+uint32_t PlatformClockGuardTickStep(PlatformClockGuard_t *guard, uint32_t raw_tick,
+                                    uint32_t cycles, uint32_t expired_step)
+{
     if (guard == NULL) return raw_tick; // 空状态不改变调用者提供的时间。
     if (!guard->expired) // 超时一旦发生就不会被新的时间或调用清除。
     {
@@ -34,6 +40,6 @@ uint32_t PlatformClockGuardTick(PlatformClockGuard_t *guard, uint32_t raw_tick,
             guard->expired = 1u; // 周期到期或计数停止时都能终止等待。
     }
     if (guard->expired)
-        guard->forced_offset += CLOCK_GUARD_EXPIRED_STEP_MS; // 连续查询也能终止 HAL 新开始的等待。
+        guard->forced_offset += expired_step; // 连续查询也能终止 HAL 新开始的等待。
     return raw_tick + guard->forced_offset; // 只返回临时值，不修改 HAL 全局计数。
 }

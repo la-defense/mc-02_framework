@@ -48,7 +48,11 @@ static void *ReadTimeline(void *unused)
 
 int main(void)
 {
+    const uint32_t initial_cycles = 120000u; // 模拟启动期限已经使用的周期起点。
+    atomic_store(&DWT->CYCCNT, initial_cycles);
     DWT_Init(480u);
+    TEST_CHECK(atomic_load(&DWT->CYCCNT) == initial_cycles); // 初始化时间轴不能重置外部期限。
+    TEST_CHECK(DWT_GetTimeline_us() == 0u); // 本地累计仍从本次初始化开始。
 
     pthread_t counter;
     pthread_t readers[2];
@@ -60,7 +64,7 @@ int main(void)
     TEST_CHECK(pthread_join(readers[1], NULL) == 0);
     TEST_CHECK(atomic_load(&failed) == 0);
 
-    uint64_t expected_us = atomic_load(&DWT->CYCCNT) / 480u;
+    uint64_t expected_us = (atomic_load(&DWT->CYCCNT) - initial_cycles) / 480u;
     TEST_CHECK(DWT_GetTimeline_us() == expected_us);
     return 0;
 }
