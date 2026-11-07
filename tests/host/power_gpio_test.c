@@ -8,6 +8,7 @@
 static uint32_t power_low_written;
 static unsigned power_configured;
 static unsigned exti_disabled;
+static unsigned imu_exti_configured;
 
 void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32_t pins, uint32_t state)
 {
@@ -21,6 +22,9 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32_t pins, uint32_t state)
 
 void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *config)
 {
+    if (port == GPIOE && (config->Pin & (ACC_INT_Pin | GYRO_INT_Pin)) != 0u &&
+        config->Mode == GPIO_MODE_IT_FALLING)
+        ++imu_exti_configured; // 同步采样不应配置数据就绪中断。
     if (port == GPIOC && (config->Pin & TEST_POWER_MASK) != 0u)
     {
         // 切成输出前，三路低电平必须已经写入。
@@ -42,5 +46,6 @@ int main(void)
     TEST_CHECK(power_low_written == TEST_POWER_MASK);
     TEST_CHECK(power_configured == 1u);
     TEST_CHECK(exti_disabled == 1u);
+    TEST_CHECK(imu_exti_configured == 0u); // 同时检查 IMU 引脚未被配置为 EXTI。
     return 0;
 }

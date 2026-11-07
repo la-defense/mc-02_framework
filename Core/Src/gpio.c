@@ -84,11 +84,7 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PEPin PEPin */
-  GPIO_InitStruct.Pin = ACC_INT_Pin|GYRO_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+  /* 当前只使用同步 IMU 采样，不配置数据就绪引脚的 EXTI。 */
 
   /*Configure GPIO pin : PtPin */
   GPIO_InitStruct.Pin = LCD_CS_Pin;
