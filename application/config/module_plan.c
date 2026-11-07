@@ -43,31 +43,25 @@ RobotModuleStatus_t RobotModulePlanValidate(const RobotModulePlan_t *plan, unsig
     }
     return ROBOT_MODULE_OK;
 }
-RobotModuleStatus_t RobotModuleStart(const RobotModulePlan_t *plan,
-    RobotModuleStartFn_t start, void *context, RobotModuleStartup_t *state)
+// 在已处理的依赖之后启动指定集合；共用状态保留第一阶段结果。
+static RobotModuleStatus_t RobotModuleStartSubset(const RobotModulePlan_t *plan, uint32_t eligible,
+    RobotModuleStartFn_t start, void *context, RobotModuleStartup_t *state, uint32_t *handled)
 {
-    if (state == NULL) return ROBOT_MODULE_ARGUMENT;
-    memset(state, 0, sizeof(*state));
-    state->failed_module = ROBOT_MODULE_COUNT;
-    unsigned bad_module;
-    RobotModuleStatus_t result = RobotModulePlanValidate(plan, &bad_module);
-    if (result != ROBOT_MODULE_OK || start == NULL)
-        return result == ROBOT_MODULE_OK ? ROBOT_MODULE_ARGUMENT : result;
-    const uint32_t core = RobotModuleCoreClosure(plan);
-    uint32_t handled = 0u;
+    const uint32_t core = RobotModuleCoreClosure(plan); // 核心及其依赖失败必须停止。
     // 模块只在依赖已处理后启动；辅助依赖失败时将其下游记为阻塞。
-    for (unsigned pass = 0u; pass < ROBOT_MODULE_COUNT && handled != plan->enabled; ++pass)
+    for (unsigned pass = 0u; pass < ROBOT_MODULE_COUNT && ((*handled & eligible) != eligible); ++pass)
     {
         for (unsigned i = 0u; i < ROBOT_MODULE_COUNT; ++i)
         {
             const uint32_t bit = ROBOT_MODULE_BIT(i), dependencies = plan->dependencies[i];
-            if ((plan->enabled & bit) == 0u || (handled & bit) != 0u ||
-                (dependencies & ~handled) != 0u) continue;
-            handled |= bit;
+            if ((eligible & bit) == 0u || (*handled & bit) != 0u ||
+                (dependencies & ~*handled) != 0u) continue; // 非本阶段或依赖尚未完成时跳过。
+            *handled |= bit; // 确保每个模块最多处理一次。
             if ((dependencies & (state->failed | state->blocked)) != 0u)
-                state->blocked |= bit;
-            else if (start(context, i) != 0u) state->started |= bit;
-            else state->failed |= bit;
+                state->blocked |= bit; // 前置模块失败时不调用该模块。
+            else if ((state->failed & bit) != 0u) { /* 阶段准备已经报告此模块失败。 */ }
+            else if (start(context, i) != 0u) state->started |= bit; // 初始化成功后发布已启动。
+            else state->failed |= bit; // 模块自身失败交由核心闭包判断。
             if (((state->failed | state->blocked) & core) != 0u)
             {
                 state->core_failed = 1u;
@@ -76,7 +70,64 @@ RobotModuleStatus_t RobotModuleStart(const RobotModulePlan_t *plan,
             }
         }
     }
-    return ROBOT_MODULE_OK;
+    return (*handled & eligible) == eligible ? ROBOT_MODULE_OK : ROBOT_MODULE_DEPENDENCY;
+}
+
+RobotModuleStatus_t RobotModuleStart(const RobotModulePlan_t *plan,
+    RobotModuleStartFn_t start, void *context, RobotModuleStartup_t *state)
+{
+    if (state == NULL) return ROBOT_MODULE_ARGUMENT;
+    memset(state, 0, sizeof(*state));
+    state->failed_module = ROBOT_MODULE_COUNT;
+    const RobotModuleStatus_t result = RobotModulePlanValidate(plan, NULL);
+    if (result != ROBOT_MODULE_OK || start == NULL)
+        return result == ROBOT_MODULE_OK ? ROBOT_MODULE_ARGUMENT : result;
+    uint32_t handled = 0u;
+    return RobotModuleStartSubset(plan, plan->enabled, start, context, state, &handled);
+}
+
+RobotModuleStatus_t RobotModuleStartPhased(const RobotModulePlan_t *plan, uint32_t deferred,
+    RobotModuleBarrierFn_t barrier, RobotModuleStartFn_t start, void *context,
+    RobotModuleStartup_t *state)
+{
+    if (state == NULL) return ROBOT_MODULE_ARGUMENT; // 无输出时不能记录任何启动结果。
+    memset(state, 0, sizeof(*state)); // 新启动不沿用上次状态。
+    state->failed_module = ROBOT_MODULE_COUNT; // 默认没有确定的失败模块。
+    const RobotModuleStatus_t validation = RobotModulePlanValidate(plan, NULL); // 先确认依赖完整无环。
+    if (validation != ROBOT_MODULE_OK) return validation;
+    if (start == NULL || barrier == NULL || (deferred & ~plan->enabled) != 0u)
+        return ROBOT_MODULE_ARGUMENT; // 不调用回调处理无效的启动声明。
+    uint32_t delayed = deferred; // 先保存直接依赖阶段资源的模块。
+    for (unsigned pass = 0u; pass < ROBOT_MODULE_COUNT; ++pass)
+        for (unsigned i = 0u; i < ROBOT_MODULE_COUNT; ++i)
+            if ((plan->enabled & ROBOT_MODULE_BIT(i)) != 0u &&
+                (plan->dependencies[i] & delayed) != 0u)
+                delayed |= ROBOT_MODULE_BIT(i); // 依赖延后模块的下游也要延后。
+    uint32_t handled = 0u; // 两个阶段共用已处理集合。
+    RobotModuleStatus_t result = RobotModuleStartSubset(plan, plan->enabled & ~delayed,
+                                                        start, context, state, &handled);
+    if (result != ROBOT_MODULE_OK) return result; // 第一阶段核心失败时不执行资源准备。
+    uint32_t failed = 0u; // 回调只报告真正受资源失败影响的模块。
+    if (!barrier(context, &failed) || (failed & ~deferred) != 0u)
+    {
+        state->core_failed = 1u; // 阶段本身异常或结果越界时保持整体失能。
+        return ROBOT_MODULE_CORE_FAILURE;
+    }
+    state->failed |= failed; // 后续逐项处理失败模块及其下游。
+    const uint32_t failed_core = failed & RobotModuleCoreClosure(plan); // 资源直接影响核心闭包时立即停止。
+    if (failed_core != 0u)
+    {
+        for (unsigned i = 0u; i < ROBOT_MODULE_COUNT; ++i)
+            if ((failed_core & ROBOT_MODULE_BIT(i)) != 0u)
+            {
+                state->failed_module = (uint8_t)i; // 保留实际失败的核心模块。
+                break;
+            }
+        state->core_failed = 1u;
+        return ROBOT_MODULE_CORE_FAILURE; // 不再初始化其他模块。
+    }
+    result = RobotModuleStartSubset(plan, delayed, start, context, state, &handled);
+    return result; // 核心失败或辅助降级均保留在 state 中。
 }
 
 RobotModuleStatus_t RobotModuleStartupMarkFailure(const RobotModulePlan_t *plan,

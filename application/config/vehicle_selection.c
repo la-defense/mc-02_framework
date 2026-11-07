@@ -18,6 +18,12 @@ RobotModuleStatus_t RobotBuildStart(RobotModuleStartFn_t start, void *context)
 {
     return RobotModuleStart(&selected_plan, start, context, &robot_module_startup);
 }
+RobotModuleStatus_t RobotBuildStartPhased(uint32_t deferred, RobotModuleBarrierFn_t barrier,
+    RobotModuleStartFn_t start, void *context)
+{
+    return RobotModuleStartPhased(&selected_plan, deferred, barrier, start, context,
+                                  &robot_module_startup); // 与普通启动共用统一状态。
+}
 uint8_t RobotBuildModuleStarted(RobotModule_t module)
 {
     if ((unsigned)module >= ROBOT_MODULE_COUNT) return 0u;

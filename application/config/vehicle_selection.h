@@ -23,6 +23,15 @@ const RobotModulePlan_t *RobotBuildGetPlan(void);
  * @return 同RobotModuleStart；只允许启动阶段调用一次。
  */
 RobotModuleStatus_t RobotBuildStart(RobotModuleStartFn_t start, void *context);
+/** @brief 使用当前车型计划执行带阶段准备的模块启动。
+ * @param[in] deferred 依赖后续阶段的已启用模块位图。
+ * @param[in] barrier 阶段准备回调。
+ * @param[in] start 模块启动回调。
+ * @param[in] context 原样交给两个回调的上下文。
+ * @return 与 RobotModuleStartPhased 相同，并保存统一启动状态。
+ */
+RobotModuleStatus_t RobotBuildStartPhased(uint32_t deferred, RobotModuleBarrierFn_t barrier,
+    RobotModuleStartFn_t start, void *context);
 /** @brief 查询模块启动是否已接受；越界、禁用或已失败时返回0。
  * @param[in] module 模块编号。
  * @return 非0只表示启动已接受；运行数据有效性由模块自身报告。

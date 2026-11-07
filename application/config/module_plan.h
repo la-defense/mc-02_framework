@@ -34,6 +34,12 @@ typedef struct {
  * @return 非零表示模块已接受启动，0表示启动失败。
  */
 typedef uint8_t (*RobotModuleStartFn_t)(void *context, unsigned module);
+/** @brief 两阶段启动之间执行资源准备，并报告受影响模块。
+ * @param[in] context 原样传给回调的上下文。
+ * @param[out] failed_modules 失败资源影响的模块位图，须只包含延后模块。
+ * @return 成功返回非零；不能取得可信结果返回 0。
+ */
+typedef uint8_t (*RobotModuleBarrierFn_t)(void *context, uint32_t *failed_modules);
 /** @brief 检查启用项、必需项、依赖完整性和循环。
  * @param[in] plan 启动声明，不可为NULL。
  * @param[out] module 非NULL时接收错误模块，成功时为ROBOT_MODULE_COUNT。
@@ -49,6 +55,18 @@ RobotModuleStatus_t RobotModulePlanValidate(const RobotModulePlan_t *plan, unsig
  */
 RobotModuleStatus_t RobotModuleStart(const RobotModulePlan_t *plan,
     RobotModuleStartFn_t start, void *context, RobotModuleStartup_t *state);
+/** @brief 先启动独立模块，再执行阶段准备，最后启动受其影响的模块及下游依赖。
+ * @param[in] plan 已声明的模块计划。
+ * @param[in] deferred 需等阶段准备完成的模块位图，必须属于启用集合。
+ * @param[in] barrier 阶段准备回调，不可为 NULL；只调用一次。
+ * @param[in] start 单个模块启动回调，不可为 NULL。
+ * @param[in] context 同时传给两个回调的上下文。
+ * @param[out] state 启动和失败结果，不可为 NULL。
+ * @return OK、ARGUMENT、依赖错误或 CORE_FAILURE；核心失败时停止后续步骤。
+ */
+RobotModuleStatus_t RobotModuleStartPhased(const RobotModulePlan_t *plan, uint32_t deferred,
+    RobotModuleBarrierFn_t barrier, RobotModuleStartFn_t start, void *context,
+    RobotModuleStartup_t *state);
 /** @brief 记录已启动模块后续失败，并阻止它的下游模块继续运行。
  * @param[in] plan 已验证的固定模块计划。
  * @param[in,out] state 当前启动结果。
