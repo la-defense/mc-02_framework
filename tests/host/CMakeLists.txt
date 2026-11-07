@@ -1251,6 +1251,17 @@ target_include_directories(ins_filter_test PRIVATE ../../application ../../modul
 target_compile_definitions(ins_filter_test PRIVATE MC02_VISION_PROTOCOL_V2=1
   MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=0)
 target_link_libraries(ins_filter_test PRIVATE mc02_kf mc02_numeric)
+# 使用同一生产姿态路径，模拟车型计划中辅助温控已失败。
+get_target_property(ins_filter_sources ins_filter_test SOURCES)
+add_executable(ins_heater_degraded_test ${ins_filter_sources})
+target_include_directories(ins_heater_degraded_test BEFORE PRIVATE ins_heater_degraded_fakes ins_filter_fakes)
+target_include_directories(ins_heater_degraded_test PRIVATE ../../application ../../modules/imu ../../modules/BMI088
+  ../../Middlewares/Third_Party/Fusion ../../bsp/os ../../bsp/dwt ../../bsp/board)
+target_compile_definitions(ins_heater_degraded_test PRIVATE MC02_CONFIG_GENERATED=1 INS_TEST_HEATER_DEGRADED=1
+  MC02_VISION_PROTOCOL_V2=1 MC02_ATTITUDE_FILTER_ENABLE_BOTH_BACKENDS=1 MC02_IMU_BACKEND_FUSION=0)
+target_link_libraries(ins_heater_degraded_test PRIVATE mc02_kf mc02_numeric)
+add_test(NAME production_ins_auxiliary_heater_degraded COMMAND ins_heater_degraded_test)
+set_tests_properties(production_ins_auxiliary_heater_degraded PROPERTIES TIMEOUT 10)
 add_test(NAME production_ins_filter_validity_and_recovery COMMAND ins_filter_test)
 add_test(NAME production_ins_bmi088_registration_failure COMMAND ins_filter_test --bmi-registration-failure)
 add_test(NAME production_ins_unconfigured_sensor COMMAND ins_filter_test --unconfigured)

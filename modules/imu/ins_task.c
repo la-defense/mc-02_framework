@@ -25,6 +25,9 @@
 #include "robot_safety.h"
 #if MC02_FEATURE_HEATER
 #include "imu_heater.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "../../application/config/vehicle_selection.h"
+#endif
 #endif
 #include "task_monitor.h"
 #include <math.h>
@@ -74,6 +77,18 @@ static float dt = 0, t = 0;
 static void IMU_Param_Correction(IMU_Param_t *param, float gyro[3], float accel[3]);
 static void INSInvalidateControlSnapshot(void);
 static void INSPublishControlSnapshot(void);
+
+#if MC02_FEATURE_HEATER
+// 失效或依赖受阻的辅助温控不再初始化或周期更新。
+static uint8_t INSHeaterAvailable(void)
+{
+#if defined(MC02_CONFIG_GENERATED)
+    return RobotBuildModuleStarted(ROBOT_MODULE_HEATER); // 读取车型启动计划的当前结果。
+#else
+    return 1u; // 保持未生成车型配置的历史主机测试组合。
+#endif
+}
+#endif
 
 // 用初始加速度估计倾斜角；静止时加速度能表示重力方向，偏航角仍从0开始。
 static MathStatus_t InitQuaternion(float *init_q4)
@@ -182,7 +197,7 @@ attitude_t *INS_Init(void)
 #if MC02_FEATURE_HEATER
     // 初始化传感器或读取参数前先关闭加热输出。
     IMUHeaterForceOff();
-    IMUHeaterInit();
+    if (INSHeaterAvailable()) IMUHeaterInit(); // 只有模块启动成功才申请温控资源。
 #endif
     bmi088_sample_sequence_diag = 0u;
     bmi088_sample_timestamp_ms_diag = 0u;
@@ -355,7 +370,7 @@ void INS_Task(void)
 #if MC02_FEATURE_HEATER
             Robot_Status_e state = RobotSafetyGetState();
             uint8_t force_off = (state == ROBOT_ESTOP || state == ROBOT_FAULT) ? 1u : 0u;
-            IMUHeaterUpdate(NULL, force_off);
+            if (INSHeaterAvailable()) IMUHeaterUpdate(NULL, force_off); // 降级后不再周期调用温控。
 #endif
             goto ins_sample_processed;
         }
@@ -404,7 +419,7 @@ void INS_Task(void)
             VisionUpdateTx(0u,0,0,0,0,0,0,0,0,VISION_BULLET_SPEED_DEFAULT,0u);
 #endif
 #if MC02_FEATURE_HEATER
-            IMUHeaterUpdate(NULL,1u);
+            if (INSHeaterAvailable()) IMUHeaterUpdate(NULL,1u); // 降级后不再更新失效模块。
 #endif
             goto ins_sample_processed;
         }
@@ -459,7 +474,7 @@ void INS_Task(void)
 
 #if MC02_FEATURE_HEATER
     // 每两次任务调用更新一次温控；急停或故障时强制关闭加热。
-    if ((count % 2) == 0)
+    if ((count % 2) == 0 && INSHeaterAvailable())
     {
         probe_seg = PlatformProbeStart();
         Robot_Status_e state = RobotSafetyGetState();

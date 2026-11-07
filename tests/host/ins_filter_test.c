@@ -13,6 +13,15 @@
 #include "vector3.h"
 #include <math.h>
 #include <string.h>
+#ifdef INS_TEST_HEATER_DEGRADED
+#include "config/vehicle_selection.h"
+static unsigned heater_init_calls, heater_update_calls;
+uint8_t RobotBuildModuleStarted(RobotModule_t module)
+{
+    TEST_CHECK(module == ROBOT_MODULE_HEATER); // 本场景只查询辅助温控。
+    return 0u; // 模拟温控启动失败，姿态链路仍可运行。
+}
+#endif
 static uint32_t now,seq;
 static int scenario,valid,mode,force_off,calib_valid=1;
 static int fail_bmi_registration;
@@ -89,8 +98,17 @@ VisionIMUSampleUpdateStatus_t VisionUpdateIMUSample(const VisionIMUSample_t *sam
 }
 void TaskMonitorDelayMs(int task,uint32_t ms){(void)task;now+=ms;}
 void IMUHeaterForceOff(void){force_off=1;}
-void IMUHeaterInit(void){}
-void IMUHeaterUpdate(const BMI088_Data_t *s,uint8_t off){force_off=off || !s || !s->valid;}
+void IMUHeaterInit(void){
+#ifdef INS_TEST_HEATER_DEGRADED
+    ++heater_init_calls;
+#endif
+}
+void IMUHeaterUpdate(const BMI088_Data_t *s,uint8_t off){
+#ifdef INS_TEST_HEATER_DEGRADED
+    ++heater_update_calls;
+#endif
+    force_off=off || !s || !s->valid;
+}
 static void tick(void){now+=(uint32_t)lroundf(period_s*1000);INS_Task();}
 static void invalid(void){TEST_CHECK(!valid && mode==0);for(int i=0;i<4;i++)TEST_CHECK(frame[i]==0);}
 int main(int argc,char **argv)
@@ -127,6 +145,15 @@ int main(int argc,char **argv)
         return 0;
     }
     TEST_CHECK(INS_ConfigureSensor(PLATFORM_IMU_BOARD_1)); // 所有场景均使用显式板载选择。
+#ifdef INS_TEST_HEATER_DEGRADED
+    TEST_CHECK(INS_Init() != NULL); // 辅助温控失败不阻止姿态初始化。
+    for (unsigned index = 0u; index < 4u; ++index) tick(); // 正常样本走周期处理。
+    TEST_CHECK(valid && heater_init_calls == 0u && heater_update_calls == 0u);
+    scenario = 3; // 样本失败也不能重新调用已降级的温控更新。
+    tick();
+    TEST_CHECK(!valid && heater_update_calls == 0u);
+    return 0;
+#endif
     TEST_CHECK(!INS_ConfigureSensor(PLATFORM_IMU_INVALID)); // 无效选择不能覆盖已确认的编号。
     if(argc>1 && strcmp(argv[1],"--bmi-registration-failure")==0)
     {
