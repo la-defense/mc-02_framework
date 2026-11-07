@@ -330,6 +330,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     application/robot_task.c # 现有任务循环与周期维护。
     application/ins_startup.c # 姿态初始化结果和核心／辅助故障处理。
     application/robot_startup.c # 调度器运行后的设备初始化和任务放行。
+    application/robot_param_guard.c # 参数维护的任务监控与温控保护。
     application/robot_monitor_plan.c # 车型依赖到任务监控的映射。
     application/gimbal/gimbal.c # 云台命令、反馈和电机控制。
     application/shoot/shoot.c # 发射命令和拨弹时序。

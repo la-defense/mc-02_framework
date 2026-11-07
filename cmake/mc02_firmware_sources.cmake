@@ -199,6 +199,7 @@ set(MC02_APPLICATION_COMMON_C_SOURCES
     application/vehicle_health_diag.c
     application/vehicle_health_port_stm32.c
     application/robot.c
+    application/robot_param_guard.c # Flash 维护与可选温控保护的配对。
     application/robot_def.c
     application/config/module_plan.c
     application/config/vehicle_selection.c

@@ -8,6 +8,7 @@
 #include "master_process.h"
 #endif
 #include "robot.h"
+#include "robot_param_guard.h"
 #include "robot_control_tasks.h"
 #include "robot_def.h"
 #include "robot_task_create.h"
@@ -56,35 +57,6 @@
 #if MC02_BENCH_REFEREE_DIAGNOSTICS
 #include "referee_bench.h"
 #endif
-
-// 启用温控时先锁止加热，再申请 INS 的 Flash 等待时间；失败时结束相应长操作。
-static uint8_t RobotParamFlashOperationBegin(void)
-{
-#if MC02_FEATURE_HEATER
-    if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_FLASH))
-        return 0u;
-#endif
-    if (!TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_FLASH))
-    {
-#if MC02_FEATURE_HEATER
-        IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_FLASH, 0u);
-#endif
-        return 0u;
-    }
-    return 1u;
-}
-
-// Flash 自身成功还不够，任务监控也必须按时结束；启用温控时结果还用于加热恢复判定。
-static uint8_t RobotParamFlashOperationEnd(uint8_t success)
-{
-    uint8_t within_window = TaskMonitorEndLongOperation(TASK_MONITOR_INS,
-                                                        TASK_MONITOR_LONG_OPERATION_FLASH);
-    uint8_t operation_success = (uint8_t)(success && within_window);
-#if MC02_FEATURE_HEATER
-    IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_FLASH, operation_success);
-#endif
-    return operation_success;
-}
 
 // 编译warning,提醒开发者修改机器人参数
 #ifndef ROBOT_DEF_PARAM_WARNING
