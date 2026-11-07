@@ -127,6 +127,9 @@ static void Arguments(void)
     previous = State();
     TEST_CHECK(USBTransportInit(NULL) == USB_ALREADY_INITIALIZED);
     output = State(); TEST_CHECK(memcmp(&output,&previous,sizeof(output)) == 0);
+    const uint8_t probe = 0x52u; // 空配置兜底不得覆盖已登记的业务接收回调。
+    USBTransportOnReceive(&probe, 1u); // 模拟已连接后的一个字节。
+    TEST_CHECK(USBTransportProcessRx() == USB_OK && received == 1u && first_bytes[0] == probe);
     uint8_t data[129] = {0}; uint32_t id = 91u;
     TEST_CHECK(USBTransportSubmit(NULL,1u,&id) == USB_BAD_ARGUMENT);
     TEST_CHECK(USBTransportSubmit(data,0u,&id) == USB_BAD_ARGUMENT);

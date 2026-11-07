@@ -9,6 +9,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class VehicleSelectionTest(unittest.TestCase):
+    def test_usb_fallback_follows_application_registration(self):
+        # 默认任务必须先让业务注册回调，空配置只能作为未选业务时的兜底。
+        source = (ROOT / "Core/Src/freertos.c").read_bytes()
+        body = source.split(b"void StartDefaultTask(void const * argument)", 1)[1]
+        self.assertLess(body.index(b"RobotStartupRun()"), body.index(b"MX_USB_DEVICE_Init()"))
+        self.assertLess(body.index(b"MX_USB_DEVICE_Init()"), body.index(b"USBTransportProcess()"))
+
     def test_early_watchdog_precedes_peripheral_setup(self):
         # 入口保留旧编码注释，按字节检查关键调用，不转换或改写源文件。
         main = (ROOT / "Core/Src/main.c").read_bytes()

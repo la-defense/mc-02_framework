@@ -175,10 +175,9 @@ uint8_t MX_FREERTOS_Init(void) {
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void const * argument)
 {
-  /* init code for USB_DEVICE */
-  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
   const uint8_t startup_ok = RobotStartupRun(); // 初始化设备、创建任务并检查放行结果。
+  MX_USB_DEVICE_Init(); // 业务先登记回调；没有业务时创建空回调传输用于诊断。
   /* Infinite loop */
   for(;;)
   {

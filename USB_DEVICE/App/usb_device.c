@@ -64,7 +64,7 @@ USBD_HandleTypeDef hUsbDeviceHS;
 void MX_USB_DEVICE_Init(void)
 {
   /* USER CODE BEGIN USB_DEVICE_Init_PreTreatment */
-  // 业务回调已在调度前注册；未选视觉业务时登记无回调配置。
+  // 启动协调者先登记已选业务回调；未选视觉业务时登记无回调配置。
   // 所有实际启动／重建统一由defaultTask内的USBTransportProcess执行。
   (void)USBTransportInit(NULL);
   /* USER CODE END USB_DEVICE_Init_PreTreatment */
