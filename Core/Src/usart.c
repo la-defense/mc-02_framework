@@ -21,6 +21,7 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
+#include "platform_uart_irq_stm32.h" // 串口和 DMA 中断由板级映射统一启停。
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart5;
@@ -458,9 +459,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
     /* UART5 interrupt Init */
     HAL_NVIC_SetPriority(UART5_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(UART5_IRQn);
   /* USER CODE BEGIN UART5_MspInit 1 */
-
+    (void)PlatformUartInterruptEnable(PLATFORM_UART_5); // DMA 就绪后启用本串口的中断。
   /* USER CODE END UART5_MspInit 1 */
   }
   else if(uartHandle->Instance==UART7)
@@ -495,9 +495,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
     /* UART7 interrupt Init */
     HAL_NVIC_SetPriority(UART7_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(UART7_IRQn);
   /* USER CODE BEGIN UART7_MspInit 1 */
-
+    (void)PlatformUartInterruptEnable(PLATFORM_UART_7); // 只启用本串口中断。
   /* USER CODE END UART7_MspInit 1 */
   }
   else if(uartHandle->Instance==UART8)
@@ -570,7 +569,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
   /* USER CODE BEGIN UART8_MspInit 1 */
 
     HAL_NVIC_SetPriority(UART8_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(UART8_IRQn);
+    (void)PlatformUartInterruptEnable(PLATFORM_UART_8); // DMA 就绪后启用对应中断。
 
   /* USER CODE END UART8_MspInit 1 */
   }
@@ -644,7 +643,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
   /* USER CODE BEGIN UART9_MspInit 1 */
 
     HAL_NVIC_SetPriority(UART9_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(UART9_IRQn);
+    (void)PlatformUartInterruptEnable(PLATFORM_UART_9); // DMA 就绪后启用对应中断。
 
   /* USER CODE END UART9_MspInit 1 */
   }
@@ -717,9 +716,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
     /* USART1 interrupt Init */
     HAL_NVIC_SetPriority(USART1_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(USART1_IRQn);
   /* USER CODE BEGIN USART1_MspInit 1 */
-
+    (void)PlatformUartInterruptEnable(PLATFORM_UART_1); // DMA 就绪后启用对应中断。
   /* USER CODE END USART1_MspInit 1 */
   }
   else if(uartHandle->Instance==USART2)
@@ -792,9 +790,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
     /* USART2 interrupt Init */
     HAL_NVIC_SetPriority(USART2_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(USART2_IRQn);
   /* USER CODE BEGIN USART2_MspInit 1 */
-
+    (void)PlatformUartInterruptEnable(PLATFORM_UART_2); // DMA 就绪后启用对应中断。
   /* USER CODE END USART2_MspInit 1 */
   }
   else if(uartHandle->Instance==USART3)
@@ -875,9 +872,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
     /* USART3 interrupt Init */
     HAL_NVIC_SetPriority(USART3_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(USART3_IRQn);
   /* USER CODE BEGIN USART3_MspInit 1 */
-
+    (void)PlatformUartInterruptEnable(PLATFORM_UART_3); // DMA 就绪后启用对应中断。
   /* USER CODE END USART3_MspInit 1 */
   }
   else if(uartHandle->Instance==USART10)
@@ -956,9 +952,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
     /* USART10 interrupt Init */
     HAL_NVIC_SetPriority(USART10_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(USART10_IRQn);
   /* USER CODE BEGIN USART10_MspInit 1 */
-
+    (void)PlatformUartInterruptEnable(PLATFORM_UART_10); // DMA 就绪后启用对应中断。
   /* USER CODE END USART10_MspInit 1 */
   }
 }
@@ -969,7 +964,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   if(uartHandle->Instance==UART5)
   {
   /* USER CODE BEGIN UART5_MspDeInit 0 */
-
+    (void)PlatformUartInterruptDisable(PLATFORM_UART_5); // 先停用本串口及 DMA 中断。
   /* USER CODE END UART5_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_UART5_CLK_DISABLE();
@@ -994,7 +989,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   else if(uartHandle->Instance==UART7)
   {
   /* USER CODE BEGIN UART7_MspDeInit 0 */
-
+    (void)PlatformUartInterruptDisable(PLATFORM_UART_7); // 先停用本串口中断。
   /* USER CODE END UART7_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_UART7_CLK_DISABLE();
@@ -1015,8 +1010,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   {
   /* USER CODE BEGIN UART8_MspDeInit 0 */
     // 先停止并清除 UART 中断，再释放 DMA 和外设资源。
-    HAL_NVIC_DisableIRQ(UART8_IRQn);
-    HAL_NVIC_ClearPendingIRQ(UART8_IRQn);
+    (void)PlatformUartInterruptDisable(PLATFORM_UART_8); // 同时停用该串口的 DMA 中断。
   /* USER CODE END UART8_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_UART8_CLK_DISABLE();
@@ -1038,8 +1032,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   {
   /* USER CODE BEGIN UART9_MspDeInit 0 */
     // 先停止并清除 UART 中断，再释放 DMA 和外设资源。
-    HAL_NVIC_DisableIRQ(UART9_IRQn);
-    HAL_NVIC_ClearPendingIRQ(UART9_IRQn);
+    (void)PlatformUartInterruptDisable(PLATFORM_UART_9); // 同时停用该串口的 DMA 中断。
   /* USER CODE END UART9_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_UART9_CLK_DISABLE();
@@ -1060,7 +1053,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   else if(uartHandle->Instance==USART1)
   {
   /* USER CODE BEGIN USART1_MspDeInit 0 */
-
+    (void)PlatformUartInterruptDisable(PLATFORM_UART_1); // 先停用本串口及 DMA 中断。
   /* USER CODE END USART1_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_USART1_CLK_DISABLE();
@@ -1084,7 +1077,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   else if(uartHandle->Instance==USART2)
   {
   /* USER CODE BEGIN USART2_MspDeInit 0 */
-
+    (void)PlatformUartInterruptDisable(PLATFORM_UART_2); // 先停用本串口及 DMA 中断。
   /* USER CODE END USART2_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_USART2_CLK_DISABLE();
@@ -1109,7 +1102,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   else if(uartHandle->Instance==USART3)
   {
   /* USER CODE BEGIN USART3_MspDeInit 0 */
-
+    (void)PlatformUartInterruptDisable(PLATFORM_UART_3); // 先停用本串口及 DMA 中断。
   /* USER CODE END USART3_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_USART3_CLK_DISABLE();
@@ -1136,7 +1129,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   else if(uartHandle->Instance==USART10)
   {
   /* USER CODE BEGIN USART10_MspDeInit 0 */
-
+    (void)PlatformUartInterruptDisable(PLATFORM_UART_10); // 先停用本串口及 DMA 中断。
   /* USER CODE END USART10_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_USART10_CLK_DISABLE();
