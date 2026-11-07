@@ -10,6 +10,7 @@ static uint32_t clock_config_count, clock_enable_count, clock_disable_count;
 static uint32_t gpio_init_count, gpio_deinit_count, errors;
 static uint32_t irq_enabled, irq_disabled, irq_cleared;
 static uint8_t config_fails;
+static FDCAN_GlobalTypeDef *init_failure;
 
 void FakeFdcanClockEnable(void) { ++clock_enable_count; }
 void FakeFdcanClockDisable(void)
@@ -25,7 +26,11 @@ uint32_t HAL_RCCEx_PeriphCLKConfig(RCC_PeriphCLKInitTypeDef *config)
     ++clock_config_count; // 记录共享时钟源实际配置次数。
     return config_fails ? HAL_ERROR : HAL_OK; // 可注入时钟源配置失败。
 }
-uint32_t HAL_FDCAN_Init(FDCAN_HandleTypeDef *handle) { (void)handle; return HAL_OK; }
+uint32_t HAL_FDCAN_Init(FDCAN_HandleTypeDef *handle)
+{
+    HAL_FDCAN_MspInit(handle); // 模拟 HAL 再次调用 MSP，不应重复取得资源。
+    return handle->Instance == init_failure ? HAL_ERROR : HAL_OK;
+}
 void HAL_GPIO_Init(void *port, GPIO_InitTypeDef *config)
 { TEST_CHECK(port != NULL && config != NULL); ++gpio_init_count; }
 void HAL_GPIO_DeInit(void *port, uint32_t pins)
@@ -65,10 +70,20 @@ int main(void)
         const uint32_t end = index < 2u ? offsets[index + 1u] : 0x2800u / 4u; // 最后一段不能越过 SRAMCAN 尾部。
         TEST_CHECK(init->MessageRAMOffset + words <= end); // 所有控制器的实际区域不得重叠。
     }
+    HAL_FDCAN_MspDeInit(&hfdcan1); // 释放配置检查所用的三个控制器。
+    HAL_FDCAN_MspDeInit(&hfdcan2);
+    HAL_FDCAN_MspDeInit(&hfdcan3);
+    clock_config_count = clock_enable_count = clock_disable_count = 0u;
+    gpio_init_count = gpio_deinit_count = errors = 0u;
+    irq_enabled = irq_disabled = irq_cleared = 0u; // 以下独立验证重复注册和共享时钟。
     hfdcan1.Instance = FDCAN1; // 设置第一条总线的真实控制器身份。
     hfdcan2.Instance = FDCAN2; // 设置第二条总线的真实控制器身份。
     hfdcan3.Instance = FDCAN3; // 第三条保持未初始化，用于检查空退出。
     config_fails = 1u; // 首次时钟配置失败不能占用资源。
+    TEST_CHECK(!MX_FDCAN1_InitChecked() && hfdcan1.Instance == NULL);
+    TEST_CHECK(errors == 0u && clock_enable_count == 0u && gpio_init_count == 0u); // 受检查入口报告失败，不进入致命处理。
+    clock_config_count = 0u; // 以下分别检查历史 MSP 直接调用。
+    hfdcan1.Instance = FDCAN1;
     HAL_FDCAN_MspInit(&hfdcan1);
     TEST_CHECK(errors == 1u && clock_enable_count == 0u && gpio_init_count == 0u);
     config_fails = 0u; // 修复后重新初始化第一条总线。
@@ -90,5 +105,10 @@ int main(void)
     TEST_CHECK((irq_cleared & 0x0cu) == 0x0cu); // 中断退出时也清除待处理状态。
     HAL_FDCAN_MspInit(&hfdcan1); // 所有使用者退出后允许重新打开。
     TEST_CHECK(clock_config_count == 3u && clock_enable_count == 2u);
+    init_failure = FDCAN3; // 在另一条总线已运行时注入第三条控制器初始化失败。
+    TEST_CHECK(!MX_FDCAN3_InitChecked() && hfdcan3.Instance == NULL);
+    TEST_CHECK(clock_disable_count == 1u); // 第三条失败不关闭第一条的共享时钟。
+    TEST_CHECK((irq_disabled & 0x30u) == 0x30u && (irq_cleared & 0x30u) == 0x30u);
+    TEST_CHECK(hfdcan1.Instance == FDCAN1); // 已准备的第一条总线仍有效。
     return 0;
 }

@@ -70,4 +70,7 @@ extern FDCAN_HandleTypeDef hfdcan1, hfdcan2, hfdcan3;
 void MX_FDCAN1_Init(void);
 void MX_FDCAN2_Init(void);
 void MX_FDCAN3_Init(void);
+uint8_t MX_FDCAN1_InitChecked(void);
+uint8_t MX_FDCAN2_InitChecked(void);
+uint8_t MX_FDCAN3_InitChecked(void);
 #endif

@@ -47,6 +47,10 @@ void MX_FDCAN2_Init(void);
 void MX_FDCAN3_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+/** @brief 准备对应 FDCAN，失败返回 0 且不释放其他控制器资源。 */
+uint8_t MX_FDCAN1_InitChecked(void);
+uint8_t MX_FDCAN2_InitChecked(void);
+uint8_t MX_FDCAN3_InitChecked(void);
 
 /* USER CODE END Prototypes */
 

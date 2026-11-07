@@ -12,6 +12,7 @@
 static uint8_t lcd_ready; // 只由启动阶段写入，供后续模块启动读取。
 static uint8_t imu_ready; // 保存板载 IMU 的 SPI2 初始化结果。
 static uint8_t heater_ready; // 保存 IMU 加热定时器初始化结果。
+static uint8_t can_ready; // 每位记录一条已完成板级初始化的 CAN 总线。
 
 void PlatformFeaturePeripheralsInit(void)
 {
@@ -84,8 +85,17 @@ uint8_t PlatformFeatureCanInit(const PlatformCanBus_t *buses, uint8_t count)
             return 0u; // 存在未知总线时不进行任何硬件初始化。
         selected |= UINT32_C(1) << bus; // 不同设备可以共同使用一条总线。
     }
-    if ((selected & (UINT32_C(1) << PLATFORM_CAN_BUS_1)) != 0u) MX_FDCAN1_Init(); // 板级总线 1。
-    if ((selected & (UINT32_C(1) << PLATFORM_CAN_BUS_2)) != 0u) MX_FDCAN2_Init(); // 板级总线 2。
-    if ((selected & (UINT32_C(1) << PLATFORM_CAN_BUS_3)) != 0u) MX_FDCAN3_Init(); // 板级总线 3。
-    return 1u; // 已调用所有需要的控制器初始化入口。
+    if ((selected & (UINT32_C(1) << PLATFORM_CAN_BUS_1)) != 0u && MX_FDCAN1_InitChecked())
+        can_ready |= (uint8_t)(1u << PLATFORM_CAN_BUS_1); // 保存总线 1 的实际结果。
+    if ((selected & (UINT32_C(1) << PLATFORM_CAN_BUS_2)) != 0u && MX_FDCAN2_InitChecked())
+        can_ready |= (uint8_t)(1u << PLATFORM_CAN_BUS_2); // 单条失败不妨碍其他总线。
+    if ((selected & (UINT32_C(1) << PLATFORM_CAN_BUS_3)) != 0u && MX_FDCAN3_InitChecked())
+        can_ready |= (uint8_t)(1u << PLATFORM_CAN_BUS_3); // 记录总线 3 的结果。
+    return 1u; // 编号有效；各控制器失败由使用该总线的模块处理。
+}
+
+uint8_t PlatformFeatureCanReady(PlatformCanBus_t bus)
+{
+    if (bus < PLATFORM_CAN_BUS_1 || bus > PLATFORM_CAN_BUS_3) return 0u; // 越界编号没有可用控制器。
+    return (uint8_t)((can_ready & (1u << (unsigned)bus)) != 0u); // 未选择或准备失败均不可用。
 }

@@ -8,6 +8,7 @@
 static unsigned spi1_calls, spi2_calls, tim12_calls, tim3_calls;
 static unsigned uart_calls[11];
 static unsigned can_calls[4];
+static unsigned failed_can;
 static unsigned char fake_spi1_success = 1u;
 static unsigned char fake_spi2_success = 1u;
 static unsigned char fake_tim3_success = 1u;
@@ -30,6 +31,9 @@ void MX_USART10_UART_Init(void) { ++uart_calls[10]; }
 void MX_FDCAN1_Init(void) { ++can_calls[1]; }
 void MX_FDCAN2_Init(void) { ++can_calls[2]; }
 void MX_FDCAN3_Init(void) { ++can_calls[3]; }
+unsigned char MX_FDCAN1_InitChecked(void) { ++can_calls[1]; return failed_can != 1u; }
+unsigned char MX_FDCAN2_InitChecked(void) { ++can_calls[2]; return failed_can != 2u; }
+unsigned char MX_FDCAN3_InitChecked(void) { ++can_calls[3]; return failed_can != 3u; }
 
 int main(void)
 {
@@ -81,10 +85,15 @@ int main(void)
     TEST_CHECK(PlatformFeatureCanInit(NULL, 0u)); // 没有 CAN 设备时保持全部控制器未初始化。
     TEST_CHECK(can_calls[1] == 0u && can_calls[2] == 0u && can_calls[3] == 0u);
     const PlatformCanBus_t buses[] = {PLATFORM_CAN_BUS_2, PLATFORM_CAN_BUS_2, PLATFORM_CAN_BUS_3};
+    failed_can = 3u; // 第三条初始化失败不能阻止第二条准备。
     TEST_CHECK(PlatformFeatureCanInit(buses, 3u)); // 重复请求的控制器只配置一次。
     TEST_CHECK(can_calls[1] == 0u && can_calls[2] == 1u && can_calls[3] == 1u);
+    TEST_CHECK(PlatformFeatureCanReady(PLATFORM_CAN_BUS_2));
+    TEST_CHECK(!PlatformFeatureCanReady(PLATFORM_CAN_BUS_3));
     const PlatformCanBus_t first_bus[] = {PLATFORM_CAN_BUS_1};
+    failed_can = 0u;
     TEST_CHECK(PlatformFeatureCanInit(first_bus, 1u));
     TEST_CHECK(can_calls[1] == 1u && can_calls[2] == 1u && can_calls[3] == 1u);
+    TEST_CHECK(PlatformFeatureCanReady(PLATFORM_CAN_BUS_1));
     return 0;
 }

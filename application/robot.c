@@ -96,6 +96,9 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 #endif
     case ROBOT_MODULE_COMMUNICATION:
 #if defined(MC02_PROFILE_ROBOT)
+#if defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD)
+        if (!PlatformFeatureCanReady(config->can_bridge.can_bus)) return 0u; // 双板桥接必须先有可用总线。
+#endif
         return RobotTopicsInit();
 #else
         return 1u;
@@ -108,18 +111,29 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 #endif
     case ROBOT_MODULE_CHASSIS:
 #if MC02_FEATURE_CHASSIS
+        if (!PlatformFeatureCanReady(config->chassis_param.chassis_motor_config.can_init_config.can_bus))
+            return 0u; // 轮电机总线失败时不分配任何电机实例。
+#if MC02_FEATURE_SUPERCAP
+        if (!PlatformFeatureCanReady(PLATFORM_CAN_BUS_2)) return 0u; // 旧电容绑定的总线必须可用。
+#endif
         return ChassisInit();
 #else
         return 0u;
 #endif
     case ROBOT_MODULE_GIMBAL:
 #if MC02_FEATURE_GIMBAL
+        if (!PlatformFeatureCanReady(config->gimbal_param.yaw_motor_config.can_init_config.can_bus) ||
+            !PlatformFeatureCanReady(config->gimbal_param.pitch_motor_config.can_init_config.can_bus))
+            return 0u; // 任一电机总线不可用时不部分注册云台。
         return GimbalInit();
 #else
         return 0u;
 #endif
     case ROBOT_MODULE_SHOOTER:
 #if MC02_FEATURE_SHOOTER
+        if (!PlatformFeatureCanReady(config->shoot_param.friction_motor_config.can_init_config.can_bus) ||
+            !PlatformFeatureCanReady(config->shoot_param.loader_motor_config.can_init_config.can_bus))
+            return 0u; // 任一电机总线不可用时不部分注册发射机构。
         return ShootInit();
 #else
         return 0u;

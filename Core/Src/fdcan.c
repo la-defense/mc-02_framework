@@ -41,6 +41,7 @@ _Static_assert(MC02_FDCAN_RAM_OFFSET_3 + MC02_FDCAN_WORDS_PER_BUS <= MC02_FDCAN_
                "FDCAN3 message RAM exceeds SRAMCAN");
 // 三个控制器共用一个时钟；每位记录一个已完成 MSP 初始化的控制器。
 static uint8_t fdcan_clock_users;
+static uint8_t fdcan_checked_attempt; // 受检查入口自行处理时钟失败，不进入致命处理。
 
 // 只接受本板声明的三个控制器，未知地址不能改变共享时钟。
 static uint8_t FdcanClockUserBit(const FDCAN_GlobalTypeDef *instance)
@@ -84,10 +85,21 @@ static uint8_t FdcanMspBegin(FDCAN_HandleTypeDef *handle)
   if (bit == 0u || (fdcan_clock_users & bit) != 0u) return 0u; // 无效或重复初始化不改状态。
   if (FdcanClockAcquire(bit) == 0u)
   {
-    Error_Handler(); // 当前生成入口仍使用统一错误处理，协调器接入后改为报告结果。
+    if (!fdcan_checked_attempt) Error_Handler(); // 其他旧入口仍保留原有致命处理。
     return 0u; // 测试替身返回时不能继续配置 GPIO。
   }
   return 1u; // 已获得共享时钟，可以配置本控制器的引脚和中断。
+}
+
+// 在 HAL 访问寄存器前准备时钟和引脚，拒绝重复取得已使用的控制器。
+static uint8_t FdcanPrepareChecked(FDCAN_HandleTypeDef *handle)
+{
+  const uint8_t bit = FdcanClockUserBit(handle->Instance); // 确定本控制器的资源位。
+  if (bit == 0u || (fdcan_clock_users & bit) != 0u) return 0u; // 不覆盖已有使用者。
+  fdcan_checked_attempt = 1u; // 此次时钟错误应返回给启动计划。
+  HAL_FDCAN_MspInit(handle); // 先准备共享时钟和本控制器引脚。
+  fdcan_checked_attempt = 0u; // 离开受检查入口后恢复原行为。
+  return (uint8_t)((fdcan_clock_users & bit) != 0u); // 取得资源后才能进入 HAL 初始化。
 }
 
 // 只允许退出持有共享时钟的控制器。
@@ -107,6 +119,12 @@ FDCAN_HandleTypeDef hfdcan3;
 /* FDCAN1 init function */
 void MX_FDCAN1_Init(void)
 {
+  if (!MX_FDCAN1_InitChecked()) Error_Handler(); // 兼容旧入口的失败处理。
+}
+
+uint8_t MX_FDCAN1_InitChecked(void)
+{
+  if (fdcan_clock_users & (1u << 0)) return 0u; // 已在使用的控制器不重新配置。
 
   /* USER CODE BEGIN FDCAN1_Init 0 */
 
@@ -143,18 +161,32 @@ void MX_FDCAN1_Init(void)
   hfdcan1.Init.TxFifoQueueElmtsNbr = MC02_FDCAN_TX_FIFO_ITEMS; // 经典 CAN 发送队列容量。
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   hfdcan1.Init.TxElmtSize = FDCAN_DATA_BYTES_8;
+  if (!FdcanPrepareChecked(&hfdcan1))
+  {
+    hfdcan1.Instance = NULL; // 没取得时钟时不能继续访问硬件。
+    return 0u;
+  }
   if (HAL_FDCAN_Init(&hfdcan1) != HAL_OK)
   {
-    Error_Handler();
+    HAL_FDCAN_MspDeInit(&hfdcan1); // 仅撤销本控制器取得的资源。
+    hfdcan1.Instance = NULL;
+    return 0u;
   }
   /* USER CODE BEGIN FDCAN1_Init 2 */
 
   /* USER CODE END FDCAN1_Init 2 */
 
+  return 1u; // 此控制器已准备，业务注册时才启动收发。
 }
 /* FDCAN2 init function */
 void MX_FDCAN2_Init(void)
 {
+  if (!MX_FDCAN2_InitChecked()) Error_Handler(); // 兼容旧入口的失败处理。
+}
+
+uint8_t MX_FDCAN2_InitChecked(void)
+{
+  if (fdcan_clock_users & (1u << 1)) return 0u; // 不覆盖已有总线状态。
 
   /* USER CODE BEGIN FDCAN2_Init 0 */
 
@@ -191,18 +223,32 @@ void MX_FDCAN2_Init(void)
   hfdcan2.Init.TxFifoQueueElmtsNbr = MC02_FDCAN_TX_FIFO_ITEMS; // 经典 CAN 发送队列容量。
   hfdcan2.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   hfdcan2.Init.TxElmtSize = FDCAN_DATA_BYTES_8;
+  if (!FdcanPrepareChecked(&hfdcan2))
+  {
+    hfdcan2.Instance = NULL; // 没取得时钟时不能继续访问硬件。
+    return 0u;
+  }
   if (HAL_FDCAN_Init(&hfdcan2) != HAL_OK)
   {
-    Error_Handler();
+    HAL_FDCAN_MspDeInit(&hfdcan2); // 不停止其他控制器的共享时钟。
+    hfdcan2.Instance = NULL;
+    return 0u;
   }
   /* USER CODE BEGIN FDCAN2_Init 2 */
 
   /* USER CODE END FDCAN2_Init 2 */
 
+  return 1u;
 }
 /* FDCAN3 init function */
 void MX_FDCAN3_Init(void)
 {
+  if (!MX_FDCAN3_InitChecked()) Error_Handler(); // 兼容旧入口的失败处理。
+}
+
+uint8_t MX_FDCAN3_InitChecked(void)
+{
+  if (fdcan_clock_users & (1u << 2)) return 0u; // 不覆盖已有总线状态。
 
   /* USER CODE BEGIN FDCAN3_Init 0 */
 
@@ -239,14 +285,22 @@ void MX_FDCAN3_Init(void)
   hfdcan3.Init.TxFifoQueueElmtsNbr = MC02_FDCAN_TX_FIFO_ITEMS; // 经典 CAN 发送队列容量。
   hfdcan3.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   hfdcan3.Init.TxElmtSize = FDCAN_DATA_BYTES_8;
+  if (!FdcanPrepareChecked(&hfdcan3))
+  {
+    hfdcan3.Instance = NULL; // 没取得时钟时不能继续访问硬件。
+    return 0u;
+  }
   if (HAL_FDCAN_Init(&hfdcan3) != HAL_OK)
   {
-    Error_Handler();
+    HAL_FDCAN_MspDeInit(&hfdcan3); // 清理本控制器，不改动其他控制器。
+    hfdcan3.Instance = NULL;
+    return 0u;
   }
   /* USER CODE BEGIN FDCAN3_Init 2 */
 
   /* USER CODE END FDCAN3_Init 2 */
 
+  return 1u;
 }
 
 void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef* fdcanHandle)

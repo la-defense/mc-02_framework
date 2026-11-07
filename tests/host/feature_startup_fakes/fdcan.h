@@ -4,3 +4,6 @@
 void MX_FDCAN1_Init(void);
 void MX_FDCAN2_Init(void);
 void MX_FDCAN3_Init(void);
+unsigned char MX_FDCAN1_InitChecked(void);
+unsigned char MX_FDCAN2_InitChecked(void);
+unsigned char MX_FDCAN3_InitChecked(void);
