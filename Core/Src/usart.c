@@ -22,6 +22,40 @@
 
 /* USER CODE BEGIN 0 */
 #include "platform_uart_irq_stm32.h" // 串口和 DMA 中断由板级映射统一启停。
+#include <stddef.h>
+
+static uint8_t uart_checked_attempt; // 仅启动协调器的受检查入口使用非致命失败。
+static uint8_t uart_msp_failed; // MSP 时钟或 DMA 初始化失败时置位。
+static uint8_t uart_msp_acquired; // 时钟成功后，本次尝试需要在失败时释放资源。
+static UART_HandleTypeDef *uart_prepared; // HAL 重入 MSP 时跳过已经准备的资源。
+
+// 启动阶段串行调用；先运行可检查的板级准备，再允许 HAL 配置寄存器。
+static uint8_t UartPrepareChecked(UART_HandleTypeDef *handle)
+{
+  if (handle == NULL || handle->gState != HAL_UART_STATE_RESET) return 0u; // 不能覆盖已使用的设备。
+  uart_msp_failed = 0u; // 本次独立记录时钟和 DMA 结果。
+  uart_msp_acquired = 0u; // 尚未取得任何板级资源。
+  uart_checked_attempt = 1u; // MSP 错误交回调用者而不触发致命处理。
+  HAL_UART_MspInit(handle); // 先准备引脚、时钟、DMA 和中断。
+  uart_checked_attempt = 0u; // 结束本次受检查调用。
+  if (uart_msp_failed)
+  {
+    if (uart_msp_acquired) HAL_UART_MspDeInit(handle); // 只清理已取得的本串口资源。
+    return 0u; // 资源失败时不进入 HAL 寄存器配置。
+  }
+  uart_prepared = handle; // HAL 内部第二次调用 MSP 时不重复分配。
+  return 1u;
+}
+
+// 配置完成或失败时都清除临时标记；失败后释放该串口并使句柄不可用。
+static uint8_t UartFinishChecked(UART_HandleTypeDef *handle, uint8_t success)
+{
+  uart_prepared = NULL; // 后续串口不得复用本次准备状态。
+  if (success) return 1u; // HAL 及 FIFO 均成功时保留本串口资源。
+  (void)HAL_UART_DeInit(handle); // HAL 会先关闭设备，再调用 MSP 释放资源。
+  handle->Instance = NULL; // 失败句柄不能被上层当成可用设备。
+  return 0u;
+}
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart5;
@@ -49,6 +83,12 @@ DMA_HandleTypeDef hdma_usart10_tx;
 /* UART5 init function */
 void MX_UART5_Init(void)
 {
+  if (!MX_UART5_InitChecked()) Error_Handler(); // 旧入口保持致命失败行为。
+}
+
+uint8_t MX_UART5_InitChecked(void)
+{
+  if (huart5.gState != HAL_UART_STATE_RESET) return 0u; // 不修改已使用的串口。
 
   /* USER CODE BEGIN UART5_Init 0 */
 
@@ -68,30 +108,41 @@ void MX_UART5_Init(void)
   huart5.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart5.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart5.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (!UartPrepareChecked(&huart5))
+  {
+    huart5.Instance = NULL; // 时钟或 DMA 失败时不访问串口寄存器。
+    return 0u;
+  }
   if (HAL_UART_Init(&huart5) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart5, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetTxFifoThreshold(&huart5, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart5, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetRxFifoThreshold(&huart5, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart5, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_DisableFifoMode(&huart5) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart5, 0u); // 配置失败后释放本串口资源。
   }
   /* USER CODE BEGIN UART5_Init 2 */
 
   /* USER CODE END UART5_Init 2 */
-
+  return UartFinishChecked(&huart5, 1u); // 将实际结果交给启动协调器。
 }
 /* UART7 init function */
 void MX_UART7_Init(void)
 {
+  if (!MX_UART7_InitChecked()) Error_Handler(); // 旧入口保持致命失败行为。
+}
+
+uint8_t MX_UART7_InitChecked(void)
+{
+  if (huart7.gState != HAL_UART_STATE_RESET) return 0u; // 不修改已使用的串口。
 
   /* USER CODE BEGIN UART7_Init 0 */
 
@@ -111,30 +162,41 @@ void MX_UART7_Init(void)
   huart7.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart7.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart7.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (!UartPrepareChecked(&huart7))
+  {
+    huart7.Instance = NULL; // 时钟或 DMA 失败时不访问串口寄存器。
+    return 0u;
+  }
   if (HAL_UART_Init(&huart7) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart7, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetTxFifoThreshold(&huart7, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart7, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetRxFifoThreshold(&huart7, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart7, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_DisableFifoMode(&huart7) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart7, 0u); // 配置失败后释放本串口资源。
   }
   /* USER CODE BEGIN UART7_Init 2 */
 
   /* USER CODE END UART7_Init 2 */
-
+  return UartFinishChecked(&huart7, 1u); // 将实际结果交给启动协调器。
 }
 /* UART8 init function */
 void MX_UART8_Init(void)
 {
+  if (!MX_UART8_InitChecked()) Error_Handler(); // 旧入口保持致命失败行为。
+}
+
+uint8_t MX_UART8_InitChecked(void)
+{
+  if (huart8.gState != HAL_UART_STATE_RESET) return 0u; // 不修改已使用的串口。
 
   /* USER CODE BEGIN UART8_Init 0 */
 
@@ -154,30 +216,41 @@ void MX_UART8_Init(void)
   huart8.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart8.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart8.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (!UartPrepareChecked(&huart8))
+  {
+    huart8.Instance = NULL; // 时钟或 DMA 失败时不访问串口寄存器。
+    return 0u;
+  }
   if (HAL_UART_Init(&huart8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart8, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetTxFifoThreshold(&huart8, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart8, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetRxFifoThreshold(&huart8, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart8, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_DisableFifoMode(&huart8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart8, 0u); // 配置失败后释放本串口资源。
   }
   /* USER CODE BEGIN UART8_Init 2 */
 
   /* USER CODE END UART8_Init 2 */
-
+  return UartFinishChecked(&huart8, 1u); // 将实际结果交给启动协调器。
 }
 /* UART9 init function */
 void MX_UART9_Init(void)
 {
+  if (!MX_UART9_InitChecked()) Error_Handler(); // 旧入口保持致命失败行为。
+}
+
+uint8_t MX_UART9_InitChecked(void)
+{
+  if (huart9.gState != HAL_UART_STATE_RESET) return 0u; // 不修改已使用的串口。
 
   /* USER CODE BEGIN UART9_Init 0 */
 
@@ -197,31 +270,42 @@ void MX_UART9_Init(void)
   huart9.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart9.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart9.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (!UartPrepareChecked(&huart9))
+  {
+    huart9.Instance = NULL; // 时钟或 DMA 失败时不访问串口寄存器。
+    return 0u;
+  }
   if (HAL_UART_Init(&huart9) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart9, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetTxFifoThreshold(&huart9, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart9, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetRxFifoThreshold(&huart9, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart9, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_DisableFifoMode(&huart9) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart9, 0u); // 配置失败后释放本串口资源。
   }
   /* USER CODE BEGIN UART9_Init 2 */
 
   /* USER CODE END UART9_Init 2 */
-
+  return UartFinishChecked(&huart9, 1u); // 将实际结果交给启动协调器。
 }
 /* USART1 init function */
 
 void MX_USART1_UART_Init(void)
 {
+  if (!MX_USART1_UART_InitChecked()) Error_Handler(); // 旧入口保持致命失败行为。
+}
+
+uint8_t MX_USART1_UART_InitChecked(void)
+{
+  if (huart1.gState != HAL_UART_STATE_RESET) return 0u; // 不修改已使用的串口。
 
   /* USER CODE BEGIN USART1_Init 0 */
 
@@ -241,31 +325,42 @@ void MX_USART1_UART_Init(void)
   huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (!UartPrepareChecked(&huart1))
+  {
+    huart1.Instance = NULL; // 时钟或 DMA 失败时不访问串口寄存器。
+    return 0u;
+  }
   if (HAL_UART_Init(&huart1) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart1, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart1, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart1, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart1, 0u); // 配置失败后释放本串口资源。
   }
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
-
+  return UartFinishChecked(&huart1, 1u); // 将实际结果交给启动协调器。
 }
 /* USART2 init function */
 
 void MX_USART2_UART_Init(void)
 {
+  if (!MX_USART2_UART_InitChecked()) Error_Handler(); // 旧入口保持致命失败行为。
+}
+
+uint8_t MX_USART2_UART_InitChecked(void)
+{
+  if (huart2.gState != HAL_UART_STATE_RESET) return 0u; // 不修改已使用的串口。
 
   /* USER CODE BEGIN USART2_Init 0 */
 
@@ -285,31 +380,42 @@ void MX_USART2_UART_Init(void)
   huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (!UartPrepareChecked(&huart2))
+  {
+    huart2.Instance = NULL; // 时钟或 DMA 失败时不访问串口寄存器。
+    return 0u;
+  }
   if (HAL_RS485Ex_Init(&huart2, UART_DE_POLARITY_HIGH, 0, 0) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart2, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetTxFifoThreshold(&huart2, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart2, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetRxFifoThreshold(&huart2, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart2, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_DisableFifoMode(&huart2) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart2, 0u); // 配置失败后释放本串口资源。
   }
   /* USER CODE BEGIN USART2_Init 2 */
 
   /* USER CODE END USART2_Init 2 */
-
+  return UartFinishChecked(&huart2, 1u); // 将实际结果交给启动协调器。
 }
 /* USART3 init function */
 
 void MX_USART3_UART_Init(void)
 {
+  if (!MX_USART3_UART_InitChecked()) Error_Handler(); // 旧入口保持致命失败行为。
+}
+
+uint8_t MX_USART3_UART_InitChecked(void)
+{
+  if (huart3.gState != HAL_UART_STATE_RESET) return 0u; // 不修改已使用的串口。
 
   /* USER CODE BEGIN USART3_Init 0 */
 
@@ -329,31 +435,42 @@ void MX_USART3_UART_Init(void)
   huart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart3.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (!UartPrepareChecked(&huart3))
+  {
+    huart3.Instance = NULL; // 时钟或 DMA 失败时不访问串口寄存器。
+    return 0u;
+  }
   if (HAL_RS485Ex_Init(&huart3, UART_DE_POLARITY_HIGH, 0, 0) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart3, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetTxFifoThreshold(&huart3, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart3, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetRxFifoThreshold(&huart3, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart3, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_DisableFifoMode(&huart3) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart3, 0u); // 配置失败后释放本串口资源。
   }
   /* USER CODE BEGIN USART3_Init 2 */
 
   /* USER CODE END USART3_Init 2 */
-
+  return UartFinishChecked(&huart3, 1u); // 将实际结果交给启动协调器。
 }
 /* USART10 init function */
 
 void MX_USART10_UART_Init(void)
 {
+  if (!MX_USART10_UART_InitChecked()) Error_Handler(); // 旧入口保持致命失败行为。
+}
+
+uint8_t MX_USART10_UART_InitChecked(void)
+{
+  if (huart10.gState != HAL_UART_STATE_RESET) return 0u; // 不修改已使用的串口。
 
   /* USER CODE BEGIN USART10_Init 0 */
 
@@ -373,31 +490,37 @@ void MX_USART10_UART_Init(void)
   huart10.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart10.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart10.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (!UartPrepareChecked(&huart10))
+  {
+    huart10.Instance = NULL; // 时钟或 DMA 失败时不访问串口寄存器。
+    return 0u;
+  }
   if (HAL_UART_Init(&huart10) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart10, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetTxFifoThreshold(&huart10, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart10, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_SetRxFifoThreshold(&huart10, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart10, 0u); // 配置失败后释放本串口资源。
   }
   if (HAL_UARTEx_DisableFifoMode(&huart10) != HAL_OK)
   {
-    Error_Handler();
+    return UartFinishChecked(&huart10, 0u); // 配置失败后释放本串口资源。
   }
   /* USER CODE BEGIN USART10_Init 2 */
 
   /* USER CODE END USART10_Init 2 */
-
+  return UartFinishChecked(&huart10, 1u); // 将实际结果交给启动协调器。
 }
 
 void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 {
 
+  if (uart_prepared == uartHandle) return; // HAL 再次进入时不重复准备资源。
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
   if(uartHandle->Instance==UART5)
@@ -412,8 +535,10 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     PeriphClkInitStruct.Usart234578ClockSelection = RCC_USART234578CLKSOURCE_D2PCLK1;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
+    if (uart_checked_attempt) uart_msp_acquired = 1u; // 后续失败需要释放本串口资源。
 
     /* UART5 clock enable */
     __HAL_RCC_UART5_CLK_ENABLE();
@@ -450,12 +575,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_uart5_rx.Init.Mode = DMA_NORMAL;
     hdma_uart5_rx.Init.Priority = DMA_PRIORITY_VERY_HIGH;
     hdma_uart5_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmarx,hdma_uart5_rx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_uart5_rx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmarx,hdma_uart5_rx);
 
     /* UART5 interrupt Init */
     HAL_NVIC_SetPriority(UART5_IRQn, 5, 0);
@@ -475,8 +601,10 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     PeriphClkInitStruct.Usart234578ClockSelection = RCC_USART234578CLKSOURCE_D2PCLK1;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
+    if (uart_checked_attempt) uart_msp_acquired = 1u; // 后续失败需要释放本串口资源。
 
     /* UART7 clock enable */
     __HAL_RCC_UART7_CLK_ENABLE();
@@ -511,8 +639,10 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     PeriphClkInitStruct.Usart234578ClockSelection = RCC_USART234578CLKSOURCE_D2PCLK1;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
+    if (uart_checked_attempt) uart_msp_acquired = 1u; // 后续失败需要释放本串口资源。
 
     /* UART8 clock enable */
     __HAL_RCC_UART8_CLK_ENABLE();
@@ -541,12 +671,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_uart8_tx.Init.Mode = DMA_NORMAL;
     hdma_uart8_tx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_uart8_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmatx,hdma_uart8_tx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_uart8_tx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmatx,hdma_uart8_tx);
 
     /* UART8_RX Init */
     hdma_uart8_rx.Instance = DMA2_Stream7;
@@ -559,12 +690,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_uart8_rx.Init.Mode = DMA_NORMAL;
     hdma_uart8_rx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_uart8_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmarx,hdma_uart8_rx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_uart8_rx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmarx,hdma_uart8_rx);
 
   /* USER CODE BEGIN UART8_MspInit 1 */
 
@@ -585,8 +717,10 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     PeriphClkInitStruct.Usart16ClockSelection = RCC_USART16910CLKSOURCE_D2PCLK2;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
+    if (uart_checked_attempt) uart_msp_acquired = 1u; // 后续失败需要释放本串口资源。
 
     /* UART9 clock enable */
     __HAL_RCC_UART9_CLK_ENABLE();
@@ -615,12 +749,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_uart9_rx.Init.Mode = DMA_NORMAL;
     hdma_uart9_rx.Init.Priority = DMA_PRIORITY_HIGH;
     hdma_uart9_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmarx,hdma_uart9_rx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_uart9_rx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmarx,hdma_uart9_rx);
 
     /* UART9_TX Init */
     hdma_uart9_tx.Instance = DMA1_Stream5;
@@ -633,12 +768,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_uart9_tx.Init.Mode = DMA_NORMAL;
     hdma_uart9_tx.Init.Priority = DMA_PRIORITY_HIGH;
     hdma_uart9_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmatx,hdma_uart9_tx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_uart9_tx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmatx,hdma_uart9_tx);
 
   /* USER CODE BEGIN UART9_MspInit 1 */
 
@@ -659,8 +795,10 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     PeriphClkInitStruct.Usart16ClockSelection = RCC_USART16910CLKSOURCE_D2PCLK2;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
+    if (uart_checked_attempt) uart_msp_acquired = 1u; // 后续失败需要释放本串口资源。
 
     /* USART1 clock enable */
     __HAL_RCC_USART1_CLK_ENABLE();
@@ -689,12 +827,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_usart1_tx.Init.Mode = DMA_NORMAL;
     hdma_usart1_tx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_usart1_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmatx,hdma_usart1_tx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_usart1_tx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmatx,hdma_usart1_tx);
 
     /* USART1_RX Init */
     hdma_usart1_rx.Instance = DMA2_Stream3;
@@ -707,12 +846,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_usart1_rx.Init.Mode = DMA_NORMAL;
     hdma_usart1_rx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_usart1_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmarx,hdma_usart1_rx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_usart1_rx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmarx,hdma_usart1_rx);
 
     /* USART1 interrupt Init */
     HAL_NVIC_SetPriority(USART1_IRQn, 5, 0);
@@ -732,8 +872,10 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     PeriphClkInitStruct.Usart234578ClockSelection = RCC_USART234578CLKSOURCE_D2PCLK1;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
+    if (uart_checked_attempt) uart_msp_acquired = 1u; // 后续失败需要释放本串口资源。
 
     /* USART2 clock enable */
     __HAL_RCC_USART2_CLK_ENABLE();
@@ -763,12 +905,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_usart2_rx.Init.Mode = DMA_NORMAL;
     hdma_usart2_rx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_usart2_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmarx,hdma_usart2_rx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_usart2_rx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmarx,hdma_usart2_rx);
 
     /* USART2_TX Init */
     hdma_usart2_tx.Instance = DMA2_Stream1;
@@ -781,12 +924,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_usart2_tx.Init.Mode = DMA_NORMAL;
     hdma_usart2_tx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_usart2_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmatx,hdma_usart2_tx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_usart2_tx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmatx,hdma_usart2_tx);
 
     /* USART2 interrupt Init */
     HAL_NVIC_SetPriority(USART2_IRQn, 5, 0);
@@ -806,8 +950,10 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     PeriphClkInitStruct.Usart234578ClockSelection = RCC_USART234578CLKSOURCE_D2PCLK1;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
+    if (uart_checked_attempt) uart_msp_acquired = 1u; // 后续失败需要释放本串口资源。
 
     /* USART3 clock enable */
     __HAL_RCC_USART3_CLK_ENABLE();
@@ -845,12 +991,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_usart3_rx.Init.Mode = DMA_NORMAL;
     hdma_usart3_rx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_usart3_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmarx,hdma_usart3_rx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_usart3_rx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmarx,hdma_usart3_rx);
 
     /* USART3_TX Init */
     hdma_usart3_tx.Instance = DMA1_Stream1;
@@ -863,12 +1010,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_usart3_tx.Init.Mode = DMA_NORMAL;
     hdma_usart3_tx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_usart3_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmatx,hdma_usart3_tx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_usart3_tx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmatx,hdma_usart3_tx);
 
     /* USART3 interrupt Init */
     HAL_NVIC_SetPriority(USART3_IRQn, 5, 0);
@@ -888,8 +1036,10 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     PeriphClkInitStruct.Usart16ClockSelection = RCC_USART16910CLKSOURCE_D2PCLK2;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
+    if (uart_checked_attempt) uart_msp_acquired = 1u; // 后续失败需要释放本串口资源。
 
     /* USART10 clock enable */
     __HAL_RCC_USART10_CLK_ENABLE();
@@ -925,12 +1075,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_usart10_rx.Init.Mode = DMA_NORMAL;
     hdma_usart10_rx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_usart10_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmarx,hdma_usart10_rx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_usart10_rx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmarx,hdma_usart10_rx);
 
     /* USART10_TX Init */
     hdma_usart10_tx.Instance = DMA2_Stream5;
@@ -943,12 +1094,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     hdma_usart10_tx.Init.Mode = DMA_NORMAL;
     hdma_usart10_tx.Init.Priority = DMA_PRIORITY_LOW;
     hdma_usart10_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    __HAL_LINKDMA(uartHandle,hdmatx,hdma_usart10_tx); // 先绑定句柄，失败时也能释放本 DMA。
     if (HAL_DMA_Init(&hdma_usart10_tx) != HAL_OK)
     {
-      Error_Handler();
+      if (uart_checked_attempt) { uart_msp_failed = 1u; return; } // 受检查入口直接报告资源失败。
+      Error_Handler(); // 旧入口沿用致命处理。
     }
 
-    __HAL_LINKDMA(uartHandle,hdmatx,hdma_usart10_tx);
 
     /* USART10 interrupt Init */
     HAL_NVIC_SetPriority(USART10_IRQn, 5, 0);

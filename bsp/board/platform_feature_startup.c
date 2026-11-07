@@ -13,6 +13,7 @@ static uint8_t lcd_ready; // 只由启动阶段写入，供后续模块启动读
 static uint8_t imu_ready; // 保存板载 IMU 的 SPI2 初始化结果。
 static uint8_t heater_ready; // 保存 IMU 加热定时器初始化结果。
 static uint8_t can_ready; // 每位记录一条已完成板级初始化的 CAN 总线。
+static uint32_t uart_ready; // 每位记录对应逻辑串口是否完成初始化。
 
 void PlatformFeaturePeripheralsInit(void)
 {
@@ -63,15 +64,22 @@ uint8_t PlatformFeatureUartsInit(const PlatformUartPort_t *ports, uint8_t count)
             return 0u; // 无板级绑定的编号不启动任何串口。
         }
     }
-    if ((selected & (UINT32_C(1) << 1u)) != 0u) MX_USART1_UART_Init(); // 逻辑串口 1。
-    if ((selected & (UINT32_C(1) << 2u)) != 0u) MX_USART2_UART_Init(); // 逻辑串口 2。
-    if ((selected & (UINT32_C(1) << 3u)) != 0u) MX_USART3_UART_Init(); // 逻辑串口 3。
-    if ((selected & (UINT32_C(1) << 5u)) != 0u) MX_UART5_Init(); // 逻辑串口 5。
-    if ((selected & (UINT32_C(1) << 7u)) != 0u) MX_UART7_Init(); // 逻辑串口 7。
-    if ((selected & (UINT32_C(1) << 8u)) != 0u) MX_UART8_Init(); // 逻辑串口 8。
-    if ((selected & (UINT32_C(1) << 9u)) != 0u) MX_UART9_Init(); // 逻辑串口 9。
-    MX_USART10_UART_Init(); // 固定诊断串口已包含在集合中，始终只初始化一次。
-    return 1u; // 所有需要的初始化入口都已调用。
+    if ((selected & (UINT32_C(1) << 1u)) && MX_USART1_UART_InitChecked()) uart_ready |= UINT32_C(1) << 1u; // USART1。
+    if ((selected & (UINT32_C(1) << 2u)) && MX_USART2_UART_InitChecked()) uart_ready |= UINT32_C(1) << 2u; // USART2。
+    if ((selected & (UINT32_C(1) << 3u)) && MX_USART3_UART_InitChecked()) uart_ready |= UINT32_C(1) << 3u; // USART3。
+    if ((selected & (UINT32_C(1) << 5u)) && MX_UART5_InitChecked()) uart_ready |= UINT32_C(1) << 5u; // UART5。
+    if ((selected & (UINT32_C(1) << 7u)) && MX_UART7_InitChecked()) uart_ready |= UINT32_C(1) << 7u; // UART7。
+    if ((selected & (UINT32_C(1) << 8u)) && MX_UART8_InitChecked()) uart_ready |= UINT32_C(1) << 8u; // UART8。
+    if ((selected & (UINT32_C(1) << 9u)) && MX_UART9_InitChecked()) uart_ready |= UINT32_C(1) << 9u; // UART9。
+    if (MX_USART10_UART_InitChecked()) uart_ready |= UINT32_C(1) << 10u; // 诊断串口仅初始化一次。
+    return 1u; // 编号有效；各端口失败由依赖它的模块处理。
+}
+
+uint8_t PlatformFeatureUartReady(PlatformUartPort_t port)
+{
+    const unsigned value = (unsigned)port; // 检查范围后才能移位。
+    if (value > 10u) return 0u; // 未绑定或非法编号不可能就绪。
+    return (uint8_t)((uart_ready & (UINT32_C(1) << value)) != 0u); // 未选择或失败均不可用。
 }
 
 uint8_t PlatformFeatureCanInit(const PlatformCanBus_t *buses, uint8_t count)

@@ -3,6 +3,7 @@
  * @note 日志任务、栈和控制块使用静态 DTCM 存储；RTT 缓冲仅在关闭 DCache 时启用。
  */
 #include "bsp_log_port.h"
+#include "platform_feature_startup.h"
 #include "bsp_log.h"
 
 #include "FreeRTOS.h"
@@ -174,6 +175,8 @@ uint8_t BSPLogPortDiagnosticInit(BSPLogDiagnosticRx_t receive)
 {
     if (receive == NULL)
         return 0u;
+    if (!PlatformFeatureUartReady(PLATFORM_UART_10))
+        return 0u; // 诊断串口失败时继续使用其他日志出口。
     diagnostic_receive_callback = receive;
     if (diagnostic_uart_instance != NULL)
         return 1u;

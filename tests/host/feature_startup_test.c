@@ -7,6 +7,7 @@
 
 static unsigned spi1_calls, spi2_calls, tim12_calls, tim3_calls;
 static unsigned uart_calls[11];
+static unsigned failed_uart; // 选定一个端口模拟硬件失败。
 static unsigned can_calls[4];
 static unsigned failed_can;
 static unsigned char fake_spi1_success = 1u;
@@ -28,6 +29,14 @@ void MX_UART7_Init(void) { ++uart_calls[7]; }
 void MX_UART8_Init(void) { ++uart_calls[8]; }
 void MX_UART9_Init(void) { ++uart_calls[9]; }
 void MX_USART10_UART_Init(void) { ++uart_calls[10]; }
+unsigned char MX_USART1_UART_InitChecked(void) { ++uart_calls[1]; return failed_uart != 1u; }
+unsigned char MX_USART2_UART_InitChecked(void) { ++uart_calls[2]; return failed_uart != 2u; }
+unsigned char MX_USART3_UART_InitChecked(void) { ++uart_calls[3]; return failed_uart != 3u; }
+unsigned char MX_UART5_InitChecked(void) { ++uart_calls[5]; return failed_uart != 5u; }
+unsigned char MX_UART7_InitChecked(void) { ++uart_calls[7]; return failed_uart != 7u; }
+unsigned char MX_UART8_InitChecked(void) { ++uart_calls[8]; return failed_uart != 8u; }
+unsigned char MX_UART9_InitChecked(void) { ++uart_calls[9]; return failed_uart != 9u; }
+unsigned char MX_USART10_UART_InitChecked(void) { ++uart_calls[10]; return failed_uart != 10u; }
 void MX_FDCAN1_Init(void) { ++can_calls[1]; }
 void MX_FDCAN2_Init(void) { ++can_calls[2]; }
 void MX_FDCAN3_Init(void) { ++can_calls[3]; }
@@ -66,12 +75,17 @@ int main(void)
     TEST_CHECK(!PlatformFeatureUartsInit(NULL, 1u)); // 数组缺失时立即拒绝。
     TEST_CHECK(!PlatformFeatureUartsInit(invalid, 4u)); // 超过固定容量时不读取数组。
     const PlatformUartPort_t ports[] = {PLATFORM_UART_5, PLATFORM_UART_5, PLATFORM_UART_10};
+    failed_uart = 5u; // 一路业务串口失败时仍准备诊断串口。
     TEST_CHECK(PlatformFeatureUartsInit(ports, 3u)); // 重复声明只启动一次。
     TEST_CHECK(uart_calls[5] == 1u && uart_calls[10] == 1u);
+    TEST_CHECK(!PlatformFeatureUartReady(PLATFORM_UART_5)); // 失败端口不能供模块注册。
+    TEST_CHECK(PlatformFeatureUartReady(PLATFORM_UART_10)); // 其他端口保持可用。
+    TEST_CHECK(!PlatformFeatureUartReady(PLATFORM_UART_INVALID)); // 未绑定编号不能就绪。
     TEST_CHECK(uart_calls[1] == 0u && uart_calls[2] == 0u && uart_calls[3] == 0u);
     TEST_CHECK(uart_calls[7] == 0u && uart_calls[8] == 0u && uart_calls[9] == 0u);
     const PlatformUartPort_t first[] = {PLATFORM_UART_1, PLATFORM_UART_2, PLATFORM_UART_3};
     const PlatformUartPort_t second[] = {PLATFORM_UART_7, PLATFORM_UART_8, PLATFORM_UART_9};
+    failed_uart = 0u; // 后续选择其他端口应继续成功。
     TEST_CHECK(PlatformFeatureUartsInit(first, 3u)); // 覆盖板级表中的其他编号。
     TEST_CHECK(PlatformFeatureUartsInit(second, 3u));
     TEST_CHECK(uart_calls[1] == 1u && uart_calls[2] == 1u && uart_calls[3] == 1u);

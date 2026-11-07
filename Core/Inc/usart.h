@@ -62,6 +62,18 @@ void MX_USART3_UART_Init(void);
 void MX_USART10_UART_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+/** @brief 受检查的串口启动入口，仅供启动阶段串行调用。
+ * @return 成功返回 1；资源或外设初始化失败、或设备已在使用时返回 0。
+ * @note 失败会释放本次取得的资源；重新生成 CubeMX 代码后须保留这些声明和实现。
+ */
+uint8_t MX_UART5_InitChecked(void); // UART5 初始化失败时返回 0。
+uint8_t MX_UART7_InitChecked(void); // UART7 初始化失败时返回 0。
+uint8_t MX_UART8_InitChecked(void); // UART8 初始化失败时返回 0。
+uint8_t MX_UART9_InitChecked(void); // UART9 初始化失败时返回 0。
+uint8_t MX_USART1_UART_InitChecked(void); // USART1 初始化失败时返回 0。
+uint8_t MX_USART2_UART_InitChecked(void); // USART2 初始化失败时返回 0。
+uint8_t MX_USART3_UART_InitChecked(void); // USART3 初始化失败时返回 0。
+uint8_t MX_USART10_UART_InitChecked(void); // USART10 初始化失败时返回 0。
 
 /* USER CODE END Prototypes */
 

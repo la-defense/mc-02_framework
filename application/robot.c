@@ -143,6 +143,7 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 #endif
     case ROBOT_MODULE_REFEREE:
 #if MC02_FEATURE_REFEREE
+        if (!PlatformFeatureUartReady(config->referee_uart)) return 0u; // 端口失败时不注册裁判接收。
 #if MC02_BENCH_REFEREE_DIAGNOSTICS
         return RefereeBenchInit(config->referee_uart);
 #else
@@ -153,12 +154,16 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 #endif
     case ROBOT_MODULE_VISION:
 #if MC02_FEATURE_VISION
+#if defined(VISION_USE_UART)
+        if (!PlatformFeatureUartReady(config->vision_uart)) return 0u; // UART 视觉需要所选串口。
+#endif
         return (uint8_t)(VisionInit(config->vision_uart) != NULL);
 #else
         return 0u;
 #endif
     case ROBOT_MODULE_REMOTE:
 #if MC02_FEATURE_REMOTE
+        if (!PlatformFeatureUartReady(config->remote_uart)) return 0u; // 端口失败时不注册遥控接收。
 #if MC02_BENCH_RC_DIAGNOSTICS
         return RemoteBenchInit(config->remote_uart);
 #else
