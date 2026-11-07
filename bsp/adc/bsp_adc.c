@@ -162,6 +162,15 @@ void BSP_ADCInit(void)
     BSP_LOG_EVENT_0(EV_BSP_ADC_BSP_ADC_C_03);
 }
 
+uint8_t BSP_ADCIsStarted(void)
+{
+    const uint32_t previous_primask = __get_PRIMASK(); // 保存调用者的中断状态。
+    __disable_irq(); // 同时读取启动状态与错误位。
+    const uint8_t available = (uint8_t)(adc_started && adc_error_flags == BSP_ADC_ERROR_NONE);
+    __set_PRIMASK(previous_primask); // 查询结束后恢复原状态。
+    return available; // 首批采样的新鲜度仍由 BSP_ADCGetSample 判断。
+}
+
 BSP_ADC_Status_e BSP_ADCGetSample(BSP_ADC_Sample_t *sample)
 {
     // 没有输出位置时直接报参数错误，不读取或改写采样记录。

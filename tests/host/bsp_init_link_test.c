@@ -11,6 +11,7 @@
 #include "bsp_adc.h"
 #include "bsp_crash.h"
 #include "bsp_param.h"
+#include "init_diagnostic.h"
 #include <string.h>
 
 uint8_t BSPInitCallerA(void);
@@ -18,6 +19,17 @@ uint8_t BSPInitCallerB(void);
 
 static unsigned step;
 static uint8_t watchdog_failure; // 按场景模拟早期看门狗初始化失败。
+static uint8_t adc_board_failure, adc_start_failure;
+static unsigned degraded_count;
+
+uint8_t PlatformFeatureAdcReady(void) { return (uint8_t)!adc_board_failure; }
+uint8_t BSP_ADCIsStarted(void) { return (uint8_t)!adc_start_failure; }
+void InitDiagnosticReportDegraded(int stage, uint8_t module, int reason, uint16_t resource_id)
+{
+    TEST_CHECK(stage == INIT_STAGE_BSP && module == INIT_MODULE_ADC && reason == INIT_FAILURE_RESOURCE && resource_id == 1u);
+    ++degraded_count; // 记录辅助 ADC 失败，不终止后续启动。
+    if (adc_board_failure) ++step; // 未调用 ADC 时保留测试阶段位置。
+}
 
 void DWT_Init(uint32_t cpu_mhz)
 {
@@ -77,7 +89,9 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
     watchdog_failure = (uint8_t)(strcmp(argv[1], "watchdog-fail") == 0); // 单独检查失败路径。
-    if (strcmp(argv[1], "a") == 0 || watchdog_failure)
+    adc_board_failure = (uint8_t)(strcmp(argv[1], "adc-board-fail") == 0);
+    adc_start_failure = (uint8_t)(strcmp(argv[1], "adc-start-fail") == 0);
+    if (strcmp(argv[1], "a") == 0 || watchdog_failure || adc_board_failure || adc_start_failure)
         TEST_CHECK(BSPInitCallerA() == (uint8_t)!watchdog_failure);
     else
     {
@@ -85,5 +99,6 @@ int main(int argc, char **argv)
         TEST_CHECK(BSPInitCallerB());
     }
     TEST_CHECK(step == (watchdog_failure ? 4u : 8u)); // 失败后禁止继续初始化 ADC 和参数。
+    TEST_CHECK(degraded_count == (unsigned)(adc_board_failure || adc_start_failure)); // 两类 ADC 失败都只报告一次。
     return 0;
 }

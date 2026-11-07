@@ -8,12 +8,15 @@
 static unsigned spi1_calls, spi2_calls, tim12_calls, tim3_calls;
 static unsigned uart_calls[11];
 static unsigned failed_uart; // 选定一个端口模拟硬件失败。
+static unsigned adc_calls;
+static unsigned char fake_adc_success = 1u;
 static unsigned can_calls[4];
 static unsigned failed_can;
 static unsigned char fake_spi1_success = 1u;
 static unsigned char fake_spi2_success = 1u;
 static unsigned char fake_tim3_success = 1u;
 void MX_SPI1_Init(void) { ++spi1_calls; }
+unsigned char MX_ADC1_InitChecked(void) { ++adc_calls; return fake_adc_success; }
 unsigned char MX_SPI1_InitChecked(void) { ++spi1_calls; return fake_spi1_success; }
 void MX_SPI2_Init(void) { ++spi2_calls; }
 unsigned char MX_SPI2_InitChecked(void) { ++spi2_calls; return fake_spi2_success; }
@@ -47,6 +50,7 @@ unsigned char MX_FDCAN3_InitChecked(void) { ++can_calls[3]; return failed_can !=
 int main(void)
 {
     PlatformFeaturePeripheralsInit(); // 使用当前测试组合执行真实选择入口。
+    TEST_CHECK(adc_calls == 1u && PlatformFeatureAdcReady()); // VIN 诊断使用板载 ADC。
     TEST_CHECK(spi1_calls == (MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS));
     TEST_CHECK(PlatformFeatureLcdReady() == (MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS));
     TEST_CHECK(spi2_calls == MC02_FEATURE_IMU);
@@ -54,6 +58,9 @@ int main(void)
     TEST_CHECK(tim12_calls == MC02_FEATURE_ALARM);
     TEST_CHECK(tim3_calls == MC02_FEATURE_HEATER);
     TEST_CHECK(PlatformFeatureHeaterReady() == MC02_FEATURE_HEATER);
+    fake_adc_success = 0u; // 板级 ADC 失败不影响其他板级入口。
+    PlatformFeaturePeripheralsInit();
+    TEST_CHECK(!PlatformFeatureAdcReady());
 #if MC02_FEATURE_LCD || MC02_BENCH_LCD_DIAGNOSTICS
     fake_spi1_success = 0u; // 模拟 LCD 的 SPI1 初始化失败。
     PlatformFeaturePeripheralsInit();

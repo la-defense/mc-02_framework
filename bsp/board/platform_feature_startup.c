@@ -7,6 +7,7 @@
 #include "tim.h"
 #include "usart.h"
 #include "fdcan.h"
+#include "adc.h"
 #include <stddef.h>
 
 static uint8_t lcd_ready; // 只由启动阶段写入，供后续模块启动读取。
@@ -14,9 +15,11 @@ static uint8_t imu_ready; // 保存板载 IMU 的 SPI2 初始化结果。
 static uint8_t heater_ready; // 保存 IMU 加热定时器初始化结果。
 static uint8_t can_ready; // 每位记录一条已完成板级初始化的 CAN 总线。
 static uint32_t uart_ready; // 每位记录对应逻辑串口是否完成初始化。
+static uint8_t adc_ready; // 板载 VIN 和 LCD 按键共用 ADC1。
 
 void PlatformFeaturePeripheralsInit(void)
 {
+    adc_ready = MX_ADC1_InitChecked(); // VIN 诊断使用 ADC；失败交由依赖模块处理。
 #if MC02_FEATURE_ALARM
     (void)MX_TIM12_InitChecked(); // 失败时句柄无效，告警模块仍可保留 RGB。
 #endif
@@ -29,6 +32,11 @@ void PlatformFeaturePeripheralsInit(void)
 #if MC02_FEATURE_HEATER
     heater_ready = MX_TIM3_InitChecked(); // 失败时由车型依赖决定是否允许其他模块运行。
 #endif
+}
+
+uint8_t PlatformFeatureAdcReady(void)
+{
+    return adc_ready; // 未准备或失败时不能进入采样启动。
 }
 
 uint8_t PlatformFeatureLcdReady(void)

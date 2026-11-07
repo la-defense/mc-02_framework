@@ -51,6 +51,7 @@ typedef enum
     INIT_MODULE_BUZZER,
     INIT_MODULE_WATCHDOG, ///< 硬件看门狗及其配置状态
     INIT_MODULE_CLOCK, ///< 主时钟和电源电压配置
+    INIT_MODULE_ADC, ///< 电源和板载按键采样
 } InitDiagnosticModule_e;
 
 /** @brief 任务创建失败时使用的资源编号，便于找到具体任务。 */

@@ -4,4 +4,5 @@
 #ifndef BSP_INIT_TEST_ADC_H
 #define BSP_INIT_TEST_ADC_H
 void BSP_ADCInit(void);
+uint8_t BSP_ADCIsStarted(void);
 #endif

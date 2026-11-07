@@ -23,6 +23,7 @@
 #include "bsp_param.h"
 #if MC02_FEATURE_HEATER
 #include "imu_heater.h"
+#include "bsp_adc.h"
 #endif
 #include "init_diagnostic.h"
 #include "vehicle_health.h"
@@ -92,7 +93,7 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
         return (uint8_t)(PlatformFeatureImuReady() && INS_ConfigureSensor(config->imu_sensor)); // SPI2 就绪后才允许注册板载 IMU。
     case ROBOT_MODULE_HEATER:
 #if MC02_FEATURE_HEATER
-        return (uint8_t)(PlatformFeatureHeaterReady() &&
+        return (uint8_t)(PlatformFeatureHeaterReady() && BSP_ADCIsStarted() &&
                          IMUHeaterConfigure(config->imu_heater_pwm, config->imu_heater_supply)); // PWM 失败按模块依赖处理。
 #else
         return 0u;

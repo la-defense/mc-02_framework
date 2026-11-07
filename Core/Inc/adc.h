@@ -41,6 +41,11 @@ extern ADC_HandleTypeDef hadc1;
 void MX_ADC1_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+/** @brief 在启动阶段检查 ADC1 的时钟、DMA 和通道配置。
+ * @return 成功返回 1；失败或 ADC 已在使用时返回 0。
+ * @note 失败释放本次取得的资源；重新生成后须核对实现。
+ */
+uint8_t MX_ADC1_InitChecked(void);
 
 /* USER CODE END Prototypes */
 

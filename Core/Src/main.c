@@ -129,7 +129,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_ADC1_Init();
+
   // 在设备注册前检查车型配置，避免使用错误的串口编号。
   const Robot_Config_s *startup_config = NULL;
   if (RobotConfigSelect(ROBOT_CONFIG_SUPPORTED_ID, &startup_config) != ROBOT_CONFIG_OK ||

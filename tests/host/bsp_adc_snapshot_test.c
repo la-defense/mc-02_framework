@@ -125,6 +125,7 @@ int main(void)
 {
     BSP_ADC_Sample_t sample = {0};
     CHECK(BSP_ADCGetSample(NULL) == BSP_ADC_STATUS_INVALID_ARGUMENT);
+    CHECK(!BSP_ADCIsStarted()); // 未启动时不可声明采集可用。
     CHECK(BSP_ADCGetSample(&sample) == BSP_ADC_STATUS_NOT_READY);
     BSP_ADCUpdateDiagnostics();
     CHECK(bsp_adc_diagnostic.version == 2u);
@@ -132,6 +133,7 @@ int main(void)
 
     calibration_status = HAL_ERROR;
     BSP_ADCInit();
+    CHECK(!BSP_ADCIsStarted()); // 校准失败不能启用依赖 ADC 的功能。
     CHECK(bsp_adc_diagnostic.version == 0u);
     CHECK(calibration_call_count == 1u);
     CHECK(dma_start_call_count == 0u);
@@ -147,6 +149,7 @@ int main(void)
     calibration_status = HAL_OK;
     dma_start_status = HAL_ERROR;
     BSP_ADCInit();
+    CHECK(!BSP_ADCIsStarted()); // DMA 启动失败同样不可用。
     CHECK(bsp_adc_diagnostic.version == 0u);
     CHECK(dma_start_call_count == 1u);
     CHECK(dma_start_cache_order_error_count == 0u);
@@ -159,6 +162,7 @@ int main(void)
     dma_start_status = HAL_OK;
     now_ms = 100u;
     BSP_ADCInit();
+    CHECK(BSP_ADCIsStarted()); // DMA 已启动，但首批样本仍需单独等待。
     CHECK(dma_word_count == EXPECTED_DMA_WORD_COUNT);
     CHECK(cache_prepare_count == 2u);
     CHECK(dma_start_cache_order_error_count == 0u);
@@ -199,6 +203,7 @@ int main(void)
 
     hadc1.ErrorCode = 0x35u;
     HAL_ADC_ErrorCallback(&hadc1);
+    CHECK(!BSP_ADCIsStarted()); // 运行期 ADC 故障后不再报告采集可用。
     CHECK(BSP_ADCGetSample(&sample) == BSP_ADC_STATUS_ERROR);
     CHECK((sample.error_flags & BSP_ADC_ERROR_RUNTIME) != 0u);
     CHECK(sample.hal_error_code == 0x35u);

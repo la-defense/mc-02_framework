@@ -68,6 +68,10 @@ typedef struct
  *       启动成功后也要等第一批采样完成，才能读取可用数据。
  */
 void BSP_ADCInit(void);
+/** @brief 查询 ADC 校准及 DMA 启动是否成功。
+ * @return 采集已启动且无错误返回 1，否则返回 0；不表示首批样本已到达。
+ */
+uint8_t BSP_ADCIsStarted(void);
 
 /**
  * @brief 复制最近一批采样，并检查 ADC 错误和采样过去的时间。

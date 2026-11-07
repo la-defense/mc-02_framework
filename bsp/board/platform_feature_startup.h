@@ -10,6 +10,10 @@
  * @note LCD、IMU 和加热器的结果通过对应查询接口提供。
  */
 void PlatformFeaturePeripheralsInit(void);
+/** @brief 查询 VIN 与板载按键使用的 ADC1 是否配置成功。
+ * @return 成功返回 1；未准备或失败返回 0。
+ */
+uint8_t PlatformFeatureAdcReady(void);
 /** @brief 查询板载 LCD 所需 SPI1 是否在启动时配置成功。
  * @return 成功返回 1；未启用或初始化失败返回 0。
  */
