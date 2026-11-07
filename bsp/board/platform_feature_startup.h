@@ -14,6 +14,10 @@ void PlatformFeaturePeripheralsInit(void);
  * @return 成功返回 1；未启用或初始化失败返回 0。
  */
 uint8_t PlatformFeatureLcdReady(void);
+/** @brief 查询板载 IMU 所需 SPI2 是否在启动时配置成功。
+ * @return 成功返回 1；未启用或初始化失败返回 0。
+ */
+uint8_t PlatformFeatureImuReady(void);
 
 /** @brief 按需初始化业务串口，同时保留本板 USART10 诊断串口。
  * @param[in] ports 待启用的逻辑串口数组；count 为零时允许 NULL。

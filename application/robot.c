@@ -114,7 +114,7 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
     case ROBOT_MODULE_LCD:
         return PlatformFeatureLcdReady(); // SPI1 失败时按模块重要性处理，不创建 LCD 任务。
     case ROBOT_MODULE_IMU:
-        return INS_ConfigureSensor(config->imu_sensor); // 先核对板级绑定，实际采样由协调任务初始化。
+        return (uint8_t)(PlatformFeatureImuReady() && INS_ConfigureSensor(config->imu_sensor)); // SPI2 就绪后才允许注册板载 IMU。
     case ROBOT_MODULE_HEATER:
 #if MC02_FEATURE_HEATER
         return IMUHeaterConfigure(config->imu_heater_pwm, config->imu_heater_supply); // 缺少资源时交给模块依赖处理。

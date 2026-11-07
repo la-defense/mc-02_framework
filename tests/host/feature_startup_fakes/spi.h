@@ -4,3 +4,4 @@
 void MX_SPI1_Init(void);
 unsigned char MX_SPI1_InitChecked(void);
 void MX_SPI2_Init(void);
+unsigned char MX_SPI2_InitChecked(void);

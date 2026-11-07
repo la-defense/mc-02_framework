@@ -85,6 +85,7 @@ void HAL_Delay(uint32_t);
 void Error_Handler(void);
 void MX_SPI1_Init(void);
 uint8_t MX_SPI1_InitChecked(void);
+uint8_t MX_SPI2_InitChecked(void);
 void HAL_SPI_MspDeInit(SPI_HandleTypeDef *);
 void HAL_SPI_MspInit(SPI_HandleTypeDef *);
 void MX_SPI2_Init(void);

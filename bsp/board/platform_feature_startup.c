@@ -10,6 +10,7 @@
 #include <stddef.h>
 
 static uint8_t lcd_ready; // 只由启动阶段写入，供后续模块启动读取。
+static uint8_t imu_ready; // 保存板载 IMU 的 SPI2 初始化结果。
 
 void PlatformFeaturePeripheralsInit(void)
 {
@@ -20,7 +21,7 @@ void PlatformFeaturePeripheralsInit(void)
     lcd_ready = MX_SPI1_InitChecked(); // 失败时交给模块依赖处理，不启动 LCD。
 #endif
 #if MC02_FEATURE_IMU
-    MX_SPI2_Init(); // 当前板载 BMI088 使用 SPI2。
+    imu_ready = MX_SPI2_InitChecked(); // 失败时交给车型模块依赖处理。
 #endif
 #if MC02_FEATURE_HEATER
     MX_TIM3_Init(); // 只有启用 IMU 温控时才配置加热 PWM。
@@ -30,6 +31,11 @@ void PlatformFeaturePeripheralsInit(void)
 uint8_t PlatformFeatureLcdReady(void)
 {
     return lcd_ready; // 未启用或初始化失败均保持不可用。
+}
+
+uint8_t PlatformFeatureImuReady(void)
+{
+    return imu_ready; // 未启用或初始化失败均不可注册板载 IMU。
 }
 
 uint8_t PlatformFeatureUartsInit(const PlatformUartPort_t *ports, uint8_t count)

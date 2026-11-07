@@ -24,6 +24,8 @@
 /* USER CODE BEGIN 0 */
 static uint8_t spi1_clock_prepared; // 标记本次受检查启动已准备 SPI1 时钟。
 static uint8_t spi1_pins_prepared; // 记录 MSP 已取得的 SPI1 引脚和时钟。
+static uint8_t spi2_clock_prepared; // 标记本次受检查启动已准备 SPI2 时钟。
+static uint8_t spi2_pins_prepared; // 记录 MSP 已取得的 SPI2 引脚和时钟。
 
 /* USER CODE END 0 */
 
@@ -105,6 +107,21 @@ uint8_t MX_SPI1_InitChecked(void)
 /* SPI2 init function */
 void MX_SPI2_Init(void)
 {
+  if (!MX_SPI2_InitChecked()) Error_Handler(); // 保留原入口的致命失败行为。
+}
+
+uint8_t MX_SPI2_InitChecked(void)
+{
+  RCC_PeriphCLKInitTypeDef spi2_clock = {0}; // 在访问 SPI2 寄存器前检查时钟。
+  spi2_clock.PeriphClockSelection = RCC_PERIPHCLK_SPI2; // 指定板载 IMU 使用的 SPI2。
+  spi2_clock.Spi123ClockSelection = RCC_SPI123CLKSOURCE_PLL; // 保持 CubeMX 的 PLL 来源。
+  if (HAL_RCCEx_PeriphCLKConfig(&spi2_clock) != HAL_OK)
+  {
+    if (spi2_pins_prepared != 0u) HAL_SPI_MspDeInit(&hspi2); // 释放本控制器之前取得的资源。
+    hspi2.Instance = NULL; // 无效句柄不能用于 IMU 注册。
+    return 0u; // 时钟失败时不访问 SPI2 控制器。
+  }
+  spi2_clock_prepared = 1u; // MSP 回调使用本次已确认的时钟配置。
 
   /* USER CODE BEGIN SPI2_Init 0 */
 
@@ -137,12 +154,17 @@ void MX_SPI2_Init(void)
   hspi2.Init.IOSwap = SPI_IO_SWAP_DISABLE;
   if (HAL_SPI_Init(&hspi2) != HAL_OK)
   {
-    Error_Handler();
+    if (spi2_pins_prepared != 0u) HAL_SPI_MspDeInit(&hspi2); // 只释放 SPI2 的资源。
+    spi2_clock_prepared = 0u; // 不让后续操作误用本次时钟状态。
+    hspi2.Instance = NULL; // 初始化失败不能作为已就绪设备。
+    return 0u;
   }
+  spi2_clock_prepared = 0u; // 结束本次检查，后续独立调用仍检查时钟。
   /* USER CODE BEGIN SPI2_Init 2 */
 
   /* USER CODE END SPI2_Init 2 */
 
+  return 1u; // 向启动计划报告 SPI2 已准备。
 }
 
 void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
@@ -203,7 +225,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
   */
     PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SPI2;
     PeriphClkInitStruct.Spi123ClockSelection = RCC_SPI123CLKSOURCE_PLL;
-    if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
+    if (spi2_clock_prepared == 0u && HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
       Error_Handler();
     }
@@ -231,6 +253,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    spi2_pins_prepared = 1u; // 标记 SPI2 引脚已经完成配置。
 
   /* USER CODE BEGIN SPI2_MspInit 1 */
 
@@ -278,6 +301,7 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* spiHandle)
     HAL_GPIO_DeInit(GPIOC, GPIO_PIN_1|GPIO_PIN_2);
 
     HAL_GPIO_DeInit(GPIOB, GPIO_PIN_13);
+    spi2_pins_prepared = 0u; // 清除已释放的 SPI2 资源标记。
 
   /* USER CODE BEGIN SPI2_MspDeInit 1 */
 

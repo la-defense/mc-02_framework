@@ -110,6 +110,15 @@ int main(int argc, char **argv)
     CHECK(!MX_SPI1_InitChecked());
     CHECK(spi_init_calls == 1u && gpio_deinit_calls == 2u && hspi1.Instance == NULL);
     spi_fail = 0u;
+    CHECK(MX_SPI1_InitChecked()); // 保留已运行的 SPI1，检查 SPI2 失败不会释放它。
+    clock_fail = 1u;
+    CHECK(!MX_SPI2_InitChecked()); // SPI2 时钟失败时不触及已就绪的 SPI1。
+    CHECK(hspi2.Instance == NULL && hspi1.Instance == SPI1 && gpio_deinit_calls == 2u);
+    clock_fail = 0u;
+    spi_fail = 1u;
+    CHECK(!MX_SPI2_InitChecked()); // SPI2 引脚配置后失败时只释放其引脚。
+    CHECK(hspi2.Instance == NULL && hspi1.Instance == SPI1 && gpio_deinit_calls == 4u);
+    spi_fail = 0u;
     check_select_boundary = argc > 1;
     for (unsigned repeat = 0; repeat < 2; ++repeat)
     {
