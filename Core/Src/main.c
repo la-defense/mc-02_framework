@@ -130,12 +130,12 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_ADC1_Init();
-  PlatformFeaturePeripheralsInit();
   // 在设备注册前检查车型配置，避免使用错误的串口编号。
   const Robot_Config_s *startup_config = NULL;
   if (RobotConfigSelect(ROBOT_CONFIG_SUPPORTED_ID, &startup_config) != ROBOT_CONFIG_OK ||
       startup_config == NULL)
     Error_Handler(); // 配置无效时保持受控输出关闭。
+  PlatformFeaturePeripheralsInit();
   PlatformUartPort_t startup_uarts[3]; // 最多包含裁判、遥控与视觉各一项。
   uint8_t startup_uart_count = 0u;
 #if MC02_FEATURE_REFEREE
@@ -177,8 +177,6 @@ int main(void)
 #endif
   if (!PlatformFeatureCanInit(startup_can, startup_can_count))
     Error_Handler(); // 配置出现未知总线时停止启动。
-  MX_TIM1_Init();
-  MX_TIM2_Init();
   /* OCTOSPI 未被使用；重新生成后检查不得恢复初始化。 */
   /* PB10/PB11 released from I2C2: used as LCD_BLK/LCD_RES */
   /* USER CODE BEGIN 2 */
