@@ -17,6 +17,9 @@
 #include "config/build_selection.h"
 #if MC02_FEATURE_HEATER
 #include "imu_heater.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "config/vehicle_selection.h"
+#endif
 #endif
 #include "../../bsp/os/platform_os.h" // 标定让出调度器的框架接口。
 #include "../../bsp/os/platform_sync.h" // 使用原有毫秒计数。
@@ -654,6 +657,19 @@ static BMI088Instance *s_calib_instance = NULL; /* 由 BMI088Register 设置 */
 static volatile uint8_t s_calib_ok = 0;         /* 当前 gyro_offset/gNorm 是否可信 */
 static volatile uint8_t s_recalib_state = BMI088_RECALIB_IDLE;
 static volatile uint8_t s_recalib_request = 0;
+#if MC02_FEATURE_HEATER
+static uint8_t calibration_heater_held; // 记录本次标定是否成功取得温控保护。
+
+// 未通过启动计划或后来失效的辅助温控不再接收新的保护请求。
+static uint8_t BMI088HeaterAvailable(void)
+{
+#if defined(MC02_CONFIG_GENERATED)
+    return RobotBuildModuleStarted(ROBOT_MODULE_HEATER); // 使用当前模块状态。
+#else
+    return 1u; // 历史独立驱动测试仍提供温控替身。
+#endif
+}
+#endif
 
 /**
  * @brief 把一组标定值写进实例(顺带把 acc_coef / 陀螺灵敏度一起算好, 防止漏设)
@@ -670,13 +686,22 @@ static void BMI088ApplyCalib(BMI088Instance *b, const float *off, float gNorm)
 static uint8_t BMI088CalibrationOperationBegin(void)
 {
 #if MC02_FEATURE_HEATER
-    if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION))
-        return 0u;
+    if (calibration_heater_held) return 0u; // 不能覆盖尚未结束的保护。
+    if (BMI088HeaterAvailable())
+    {
+        if (!IMUHeaterBeginLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION))
+            return 0u; // 可用温控拒绝保护时不能开始标定。
+        calibration_heater_held = 1u; // 后续必须结束已经取得的保护。
+    }
 #endif
     if (!TaskMonitorBeginLongOperation(TASK_MONITOR_INS, TASK_MONITOR_LONG_OPERATION_CALIBRATION))
     {
 #if MC02_FEATURE_HEATER
-        IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION, 0u);
+        if (calibration_heater_held)
+        {
+            IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION, 0u);
+            calibration_heater_held = 0u; // 监控拒绝后释放本次已取得的保护。
+        }
 #endif
         return 0u;
     }
@@ -688,8 +713,12 @@ static uint8_t BMI088CalibrationOperationEnd(uint8_t success)
     uint8_t within_limit = TaskMonitorEndLongOperation(TASK_MONITOR_INS,
                                                        TASK_MONITOR_LONG_OPERATION_CALIBRATION);
 #if MC02_FEATURE_HEATER
-    IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION,
-                              (uint8_t)(success && within_limit));
+    if (calibration_heater_held)
+    {
+        IMUHeaterEndLongOperation(IMU_HEATER_LONG_OPERATION_CALIBRATION,
+                                  (uint8_t)(success && within_limit)); // 已取得的保护即使中途降级也需结束。
+        calibration_heater_held = 0u; // 不影响下一次合法标定。
+    }
 #endif
     return within_limit;
 }

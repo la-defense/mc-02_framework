@@ -1995,6 +1995,20 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   target_link_libraries(bmi088_calibration_temperature_test PRIVATE m)
   add_test(NAME bmi088_calibration_preserves_celsius COMMAND bmi088_calibration_temperature_test)
 
+  # 使用生产 BMI088 标定和同一传感器替身，检查温控降级后的长操作。
+  add_executable(bmi088_heater_degraded_test bmi088_heater_degraded_test.c bmi088_host_fixture.c
+    ../../modules/BMI088/bmi088.c ../../bsp/board/platform_spi_blocking_stm32.c
+    ../../bsp/board/platform_pwm_legacy_stm32.c)
+  target_include_directories(bmi088_heater_degraded_test BEFORE PRIVATE ins_heater_degraded_fakes bmi088_fakes .)
+  target_include_directories(bmi088_heater_degraded_test PRIVATE ../../application ../../modules/BMI088)
+  target_compile_definitions(bmi088_heater_degraded_test PRIVATE MC02_CONFIG_GENERATED=1)
+  target_compile_options(bmi088_heater_degraded_test PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(bmi088_heater_degraded_test PRIVATE -Wl,--gc-sections)
+  target_link_libraries(bmi088_heater_degraded_test PRIVATE m)
+  add_test(NAME production_bmi088_calibration_heater_degraded COMMAND bmi088_heater_degraded_test)
+  add_test(NAME production_bmi088_calibration_heater_lost_during_operation
+    COMMAND bmi088_heater_degraded_test --lost-during-operation)
+
   add_executable(
     bmi088_init_failure_test
     bmi088_init_failure_test.c
@@ -2197,7 +2211,7 @@ if(UNIX AND NOT APPLE)
   endforeach()
 endif()
 # BMI088只替换传输等硬件，其标定使用真实向量算法。
-foreach(target IN ITEMS bmi088_calibration_temperature_test bmi088_init_failure_test
+foreach(target IN ITEMS bmi088_calibration_temperature_test bmi088_heater_degraded_test bmi088_init_failure_test
     bmi088_post_reset_dummy_read_test bmi088_init_write_error_test bmi088_sample_status_test
     bmi088_numeric_test)
   if(TARGET ${target})
