@@ -89,7 +89,7 @@ static int TestStableWindowAndManualEstop(void)
 static int TestClockFaultCause(void)
 {
     for (unsigned reason = RESET_RECOVERY_CAUSE_CLOCK_SUPPLY;
-         reason <= RESET_RECOVERY_CAUSE_PERIPHERAL_DEADLINE; ++reason)
+         reason <= RESET_RECOVERY_CAUSE_STARTUP_WATCHDOG; ++reason)
     {
         ResetRecoveryRecord_t record; // 每种早期失败都从新的恢复记录开始。
         ResetRecoveryPolicyInitialize(&record); // 模拟首次启动。

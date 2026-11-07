@@ -61,6 +61,9 @@ _Static_assert((RESET_RECOVERY_CAUSE_CLOCK_HAL - RESET_RECOVERY_CAUSE_CLOCK_SUPP
 _Static_assert((RESET_RECOVERY_CAUSE_PERIPHERAL_DEADLINE - RESET_RECOVERY_CAUSE_CLOCK_SUPPLY) ==
                (PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE - PLATFORM_CLOCK_FAILURE_SUPPLY),
                "peripheral deadline recovery cause must match");
+_Static_assert((RESET_RECOVERY_CAUSE_STARTUP_WATCHDOG - RESET_RECOVERY_CAUSE_CLOCK_SUPPLY) ==
+               (PLATFORM_CLOCK_FAILURE_WATCHDOG - PLATFORM_CLOCK_FAILURE_SUPPLY),
+               "startup watchdog recovery cause must match");
 _Static_assert(CLOCK_STARTUP_TOTAL_CYCLES > 0u && CLOCK_STARTUP_TOTAL_CYCLES <= INT32_MAX &&
                CLOCK_STARTUP_VOS_CYCLES > 0u && CLOCK_STARTUP_VOS_CYCLES <= INT32_MAX &&
                CLOCK_STARTUP_TICK_CYCLES > 0u && CLOCK_STARTUP_TICK_CYCLES <= INT32_MAX &&
@@ -239,17 +242,19 @@ uint8_t PlatformClockStartupFinish(void)
 
 void PlatformClockStartupFail(PlatformClockFailure_t failure)
 {
-    if (failure < PLATFORM_CLOCK_FAILURE_SUPPLY || failure > PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE)
+    if (failure < PLATFORM_CLOCK_FAILURE_SUPPLY || failure > PLATFORM_CLOCK_FAILURE_WATCHDOG)
         failure = PLATFORM_CLOCK_FAILURE_DEADLINE; // 无效原因映射为通用期限失败，不写越界编号。
     if (clock_guard_active && clock_guard.expired)
         failure = PLATFORM_CLOCK_FAILURE_DEADLINE; // HAL 因总期限退出时保留停表或超期原因。
     clock_guard_active = 0u; // 诊断使用原始 HAL tick，不继续产生临时偏移。
     __disable_irq(); // 关断和复位记录不得被普通中断打断。
     BSP_SafetyStartupLatchOutputsOff(); // 不依赖 HAL 或任务，立即关闭受控输出。
-    const InitDiagnosticStage_e stage = failure == PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE
+    const uint8_t watchdog_failure = (uint8_t)(failure == PLATFORM_CLOCK_FAILURE_WATCHDOG); // 区分看门狗与时钟故障。
+    const InitDiagnosticStage_e stage = (failure == PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE || watchdog_failure)
                                             ? INIT_STAGE_BSP : INIT_STAGE_CLOCK; // 区分外设和主时钟期限。
-    InitDiagnosticReportFailure(stage, INIT_MODULE_CLOCK,
-                                INIT_FAILURE_CLOCK, (uint16_t)failure); // 保存本次失败阶段与原因。
+    InitDiagnosticReportFailure(stage, watchdog_failure ? INIT_MODULE_WATCHDOG : INIT_MODULE_CLOCK,
+                                watchdog_failure ? INIT_FAILURE_WATCHDOG_CONFIG : INIT_FAILURE_CLOCK,
+                                watchdog_failure ? INIT_RESOURCE_WATCHDOG_STARTUP : (uint16_t)failure); // 保存具体失败位置。
     BSP_ResetRecoveryMarkFault((ResetRecoveryCause_e)(RESET_RECOVERY_CAUSE_CLOCK_SUPPLY +
                                                      (uint32_t)failure - 1u)); // 跨复位保存具体原因。
     if (!BSP_ResetRecoveryIsLockedOut()) // 恢复额度未用尽时才允许自动复位。

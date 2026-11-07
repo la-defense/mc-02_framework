@@ -85,7 +85,7 @@ void ResetRecoveryPolicyMarkFault(ResetRecoveryRecord_t *record,
                                   ResetRecoveryCause_e cause)
 {
     if (record == NULL || cause <= RESET_RECOVERY_CAUSE_NONE ||
-        cause > RESET_RECOVERY_CAUSE_PERIPHERAL_DEADLINE)
+        cause > RESET_RECOVERY_CAUSE_STARTUP_WATCHDOG)
         return;
     record->flags |= RESET_RECOVERY_FLAG_FAULT_PENDING;
     record->flags &= ~RESET_RECOVERY_FLAG_STABLE_ACTIVE;

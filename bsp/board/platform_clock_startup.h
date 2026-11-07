@@ -14,6 +14,7 @@ typedef enum {
     PLATFORM_CLOCK_FAILURE_DEADLINE, /**< 周期期限或查询次数已用尽。 */
     PLATFORM_CLOCK_FAILURE_HAL, /**< HAL 基础初始化失败。 */
     PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE, /**< 早期外设准备达到总期限。 */
+    PLATFORM_CLOCK_FAILURE_WATCHDOG, /**< 系统时钟就绪后启动看门狗失败。 */
 } PlatformClockFailure_t;
 
 /** @brief 初始化启动期限并启用周期计数；只能在调度器启动前调用。 */

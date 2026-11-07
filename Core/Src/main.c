@@ -124,11 +124,7 @@ int main(void)
   SystemClock_Config();
   // 外设初始化之前建立看门狗，失败时执行既有故障恢复。
   if (!BSPStartupProtectionInit())
-  {
-    InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_WATCHDOG,
-                                INIT_FAILURE_WATCHDOG_CONFIG, INIT_RESOURCE_WATCHDOG_STARTUP); // 记录启动窗口的失败位置。
-    Error_Handler(); // 关断并按现有恢复额度处理。
-  }
+    PlatformClockStartupFail(PLATFORM_CLOCK_FAILURE_WATCHDOG); // 关断并跨复位保存看门狗配置失败。
 
   /* USER CODE BEGIN SysInit */
 

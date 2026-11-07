@@ -138,7 +138,7 @@ target_compile_definitions(clock_startup_test PRIVATE CLOCK_STARTUP_TOTAL_CYCLES
 target_compile_options(clock_startup_test PRIVATE -Wall -Wextra -Werror)
 foreach(scenario IN ITEMS success vos-timeout tick-stopped cycle-timeout raw-stopped finish-total-timeout reset expired-reset locked
     supply-failure vos-failure switch-failure hal-failure hal-before-begin invalid-failure
-    peripheral-success peripheral-stopped peripheral-cycle peripheral-isr peripheral-sequence peripheral-poll-check periph-failure)
+    peripheral-success peripheral-stopped peripheral-cycle peripheral-isr peripheral-sequence peripheral-poll-check periph-failure watchdog-failure)
   add_test(NAME production_clock_startup_${scenario} COMMAND clock_startup_test ${scenario})
   set_tests_properties(production_clock_startup_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()

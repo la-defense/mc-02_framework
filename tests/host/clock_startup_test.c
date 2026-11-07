@@ -178,6 +178,8 @@ int main(int argc, char **argv)
     { requested_failure = expected_failure = PLATFORM_CLOCK_FAILURE_HAL; expected_cause = RESET_RECOVERY_CAUSE_CLOCK_HAL; }
     else if (!strcmp(argv[1], "periph-failure"))
     { requested_failure = expected_failure = PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE; expected_cause = RESET_RECOVERY_CAUSE_PERIPHERAL_DEADLINE; }
+    else if (!strcmp(argv[1], "watchdog-failure"))
+    { requested_failure = expected_failure = PLATFORM_CLOCK_FAILURE_WATCHDOG; expected_cause = RESET_RECOVERY_CAUSE_STARTUP_WATCHDOG; }
     else if (!strcmp(argv[1], "invalid-failure"))
     { requested_failure = (PlatformClockFailure_t)0; expected_failure = PLATFORM_CLOCK_FAILURE_DEADLINE; expected_cause = RESET_RECOVERY_CAUSE_CLOCK_DEADLINE; }
     else if (!strcmp(argv[1], "expired-reset"))
@@ -191,8 +193,11 @@ int main(int argc, char **argv)
     if (setjmp(failure_exit) == 0)
         PlatformClockStartupFail(requested_failure); // 失败入口不得正常返回。
     TEST_CHECK(outputs_off && clock_test_irq); // 返回测试后确认仍保持关断和中断屏蔽。
-    TEST_CHECK(saved_stage == (expected_failure == PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE ? INIT_STAGE_BSP : INIT_STAGE_CLOCK) && saved_module == INIT_MODULE_CLOCK &&
-               saved_reason == INIT_FAILURE_CLOCK && saved_resource == expected_failure);
+    const uint8_t watchdog_failure = (uint8_t)(expected_failure == PLATFORM_CLOCK_FAILURE_WATCHDOG);
+    TEST_CHECK(saved_stage == ((expected_failure == PLATFORM_CLOCK_FAILURE_PERIPHERAL_DEADLINE || watchdog_failure) ? INIT_STAGE_BSP : INIT_STAGE_CLOCK));
+    TEST_CHECK(saved_module == (watchdog_failure ? INIT_MODULE_WATCHDOG : INIT_MODULE_CLOCK));
+    TEST_CHECK(saved_reason == (watchdog_failure ? INIT_FAILURE_WATCHDOG_CONFIG : INIT_FAILURE_CLOCK));
+    TEST_CHECK(saved_resource == (watchdog_failure ? INIT_RESOURCE_WATCHDOG_STARTUP : expected_failure));
     TEST_CHECK(saved_cause == expected_cause); // 复位记录保留具体阶段。
     TEST_CHECK(reset_requested == !locked); // 仅有恢复额度时请求复位。
     TEST_CHECK(flags_cleared == !locked); // 已锁定时不重启，也不清除现场标志。

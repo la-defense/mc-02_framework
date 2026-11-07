@@ -15,8 +15,8 @@ class VehicleSelectionTest(unittest.TestCase):
         body = main.split(b"int main(void)", 1)[1].split(b"void SystemClock_Config(void)", 1)[0]
         self.assertLess(body.index(b"SystemClock_Config();"), body.index(b"BSPStartupProtectionInit()"))
         self.assertLess(body.index(b"BSPStartupProtectionInit()"), body.index(b"MX_GPIO_Init();"))
-        self.assertRegex(body, rb"if\s*\(!BSPStartupProtectionInit\(\)\)\s*\{[^}]*"
-                               rb"INIT_FAILURE_WATCHDOG_CONFIG[^}]*Error_Handler\(\);")
+        self.assertRegex(body, rb"if\s*\(!BSPStartupProtectionInit\(\)\)\s*"
+                               rb"PlatformClockStartupFail\(PLATFORM_CLOCK_FAILURE_WATCHDOG\);")
         self.assertLess(body.index(b"PlatformPeripheralStartupFinish()"), body.index(b"BSP_WatchdogFeed();"))
 
     @staticmethod
