@@ -18,6 +18,7 @@
 #include "config.h"
 #include "robot_alarm.h"
 #include "alarm_startup.h"
+#include "log_startup.h"
 #include "task_monitor.h"
 #include "bsp_watchdog.h"
 #include "bsp_param.h"
@@ -85,8 +86,9 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
     switch (module)
     {
     case ROBOT_MODULE_SAFETY:
-    case ROBOT_MODULE_LOG:
         return 1u;
+    case ROBOT_MODULE_LOG:
+        return RobotStartLogConfigured(RobotBuildGetPlan()); // RTT 失败按核心依赖决定是否继续。
     case ROBOT_MODULE_LCD:
         return PlatformFeatureLcdReady(); // SPI1 失败时按模块重要性处理，不创建 LCD 任务。
     case ROBOT_MODULE_IMU:

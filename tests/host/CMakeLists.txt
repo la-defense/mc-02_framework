@@ -745,6 +745,14 @@ target_compile_options(alarm_startup_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_alarm_startup_core_and_degraded COMMAND alarm_startup_test)
 set_tests_properties(production_alarm_startup_core_and_degraded PROPERTIES TIMEOUT 10)
 
+# 用生产依赖计划检查 RTT 失败时核心与辅助模块的不同结果。
+add_executable(log_startup_test log_startup_test.c ../../application/log_startup.c
+  ../../application/config/module_plan.c)
+target_include_directories(log_startup_test PRIVATE . ../../application ../../application/config ../../bsp/log)
+target_compile_options(log_startup_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_log_startup_core_and_degraded COMMAND log_startup_test)
+set_tests_properties(production_log_startup_core_and_degraded PROPERTIES TIMEOUT 10)
+
 add_executable(robot_alarm_adapter_test robot_alarm_adapter_test.c
   ../../modules/alarm/robot_alarm.c ../../modules/alarm/robot_alarm_policy.c)
 target_include_directories(robot_alarm_adapter_test BEFORE PRIVATE robot_alarm_adapter_fakes)
