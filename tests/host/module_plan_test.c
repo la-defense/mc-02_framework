@@ -11,9 +11,10 @@ static uint8_t start(void *context, unsigned module)
     fixture->calls |= ROBOT_MODULE_BIT(module);
     return (fixture->fail & ROBOT_MODULE_BIT(module)) == 0u;
 }
-static uint8_t barrier(void *context, uint32_t *failed)
+static uint8_t barrier(void *context, const RobotModuleStartup_t *prior_state, uint32_t *failed)
 {
     Fixture *fixture = context;
+    TEST_CHECK(prior_state != NULL && prior_state->started == fixture->calls);
     fixture->at_barrier = fixture->calls; // 保存阶段切换时已经启动的模块。
     ++fixture->barriers;
     *failed = fixture->resource_failure; // 模拟电源准备的具体失败范围。

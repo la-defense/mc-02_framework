@@ -33,6 +33,20 @@ foreach(context before batch)
   set_tests_properties(production_log_port_startup_${context} PROPERTIES TIMEOUT 10)
 endforeach()
 # 直接执行生产启动协调器，通过独立进程注入设备、任务和放行失败。
+add_executable(robot_power_test robot_power_test.c ../../application/robot_power.c
+  ../../application/config/module_plan.c ../../bsp/board/platform_power_stm32.c)
+target_include_directories(robot_power_test BEFORE PRIVATE power_stage_fakes .)
+target_include_directories(robot_power_test PRIVATE ../../application ../../bsp/board ../../bsp/os ../../bsp/safety ../../modules/safety)
+target_compile_definitions(robot_power_test PRIVATE MC02_PROFILE_ROBOT=1)
+target_compile_options(robot_power_test PRIVATE -Wall -Wextra -Werror)
+foreach(scenario IN ITEMS all-off success before-aux-failure before-core-failure readback-failure after-aux-failure after-core-failure prior-aux-failure shutdown-before-module estop fault invalid-plan)
+  add_test(NAME production_robot_power_${scenario} COMMAND robot_power_test ${scenario})
+endforeach()
+add_executable(platform_power_bench_test platform_power_bench_test.c ../../bsp/board/platform_power_stm32.c)
+target_include_directories(platform_power_bench_test BEFORE PRIVATE power_stage_fakes . ../../bsp/board)
+target_compile_definitions(platform_power_bench_test PRIVATE MC02_PROFILE_BENCH_SAFE=1)
+target_compile_options(platform_power_bench_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_platform_power_bench_disabled COMMAND platform_power_bench_test)
 add_executable(robot_param_guard_test robot_param_guard_test.c ../../application/robot_param_guard.c)
 target_include_directories(robot_param_guard_test BEFORE PRIVATE param_guard_fakes ins_heater_degraded_fakes .)
 target_include_directories(robot_param_guard_test PRIVATE ../../application ../../bsp/os)
@@ -337,6 +351,7 @@ set(MC02_PLATFORM_PUBLIC_HEADERS
   bsp/board/platform_feature_startup.h # 当前板载功能所需外设的启动入口。
   bsp/board/platform_lcd.h # LCD 平台传输接口。
   bsp/board/platform_numeric_caps.h # 浮点与数学加速能力。
+  bsp/board/platform_power.h # 板级受控电源逻辑接口。
   bsp/board/platform_resources.h # 各类逻辑资源编号。
   bsp/board/platform_rgb.h # 板载 RGB 输出。
   bsp/can/platform_can.h # 逻辑 CAN 收发。
@@ -595,7 +610,7 @@ set_tests_properties(production_platform_maintenance_dispatch PROPERTIES TIMEOUT
 add_executable(platform_can_diagnostic_test platform_can_diagnostic_test.c
   ../../bsp/board/platform_can_diagnostic_stm32.c)
 target_include_directories(platform_can_diagnostic_test BEFORE PRIVATE platform_maintenance_fakes)
-target_include_directories(platform_can_diagnostic_test PRIVATE ../../bsp/os)
+target_include_directories(platform_can_diagnostic_test PRIVATE ../../bsp/os ../../bsp/board)
 target_compile_definitions(platform_can_diagnostic_test PRIVATE CAN_SELFTEST_LOOPBACK=1)
 target_compile_options(platform_can_diagnostic_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_platform_can_diagnostic COMMAND platform_can_diagnostic_test)

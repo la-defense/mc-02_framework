@@ -20,11 +20,6 @@ mc02_require_production_core("${MC02_PROFILE}" "${MC02_VEHICLE_MECHANICS_CONFIRM
     "${MC02_VEHICLE_GIMBAL_IMPLEMENTED}")
 mc02_validate_power_plan("${MC02_PROFILE}" "${MC02_VEHICLE_POWER_24V_1}"
     "${MC02_VEHICLE_POWER_24V_2}" "${MC02_VEHICLE_POWER_5V}")
-# 板级电源阶段执行器完成前，即使声明已确认也不得生成生产固件。
-if(MC02_PROFILE STREQUAL "robot")
-    message(FATAL_ERROR "Vehicle power stage execution is not implemented; see MC02-0087")
-endif()
-
 option(MC02_ENABLE_LCD "启用板载LCD辅助显示" ON)
 option(MC02_ENABLE_ALARM "启用RGB和蜂鸣器辅助提示" ON)
 

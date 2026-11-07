@@ -66,6 +66,7 @@ set(MC02_PLATFORM_C_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c)
 
 set(MC02_BSP_C_SOURCES
+    bsp/board/platform_power_stm32.c # MC-02 电源使能映射，裸板固件禁止开启。
     bsp/board/platform_feature_startup.c # 按启用功能准备当前板载 SPI 与 PWM。
     bsp/board/platform_exti_stm32.c # 逐引脚处理板载 IMU 的共享 EXTI 组。
     bsp/os/platform_startup_wait.c # 启动前固定期限与检查次数。
@@ -199,6 +200,7 @@ set(MC02_APPLICATION_COMMON_C_SOURCES
     application/vehicle_health_diag.c
     application/vehicle_health_port_stm32.c
     application/robot.c
+    application/robot_power.c # 车型电源阶段及模块依赖协调。
     application/robot_param_guard.c # Flash 维护与可选温控保护的配对。
     application/robot_def.c
     application/config/module_plan.c

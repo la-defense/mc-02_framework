@@ -36,10 +36,12 @@ typedef struct {
 typedef uint8_t (*RobotModuleStartFn_t)(void *context, unsigned module);
 /** @brief 两阶段启动之间执行资源准备，并报告受影响模块。
  * @param[in] context 原样传给回调的上下文。
+ * @param[in] prior_state 第一阶段已完成的模块状态，只读且仅在回调期间有效。
  * @param[out] failed_modules 失败资源影响的模块位图，须只包含延后模块。
  * @return 成功返回非零；不能取得可信结果返回 0。
  */
-typedef uint8_t (*RobotModuleBarrierFn_t)(void *context, uint32_t *failed_modules);
+typedef uint8_t (*RobotModuleBarrierFn_t)(void *context, const RobotModuleStartup_t *prior_state,
+                                          uint32_t *failed_modules);
 /** @brief 检查启用项、必需项、依赖完整性和循环。
  * @param[in] plan 启动声明，不可为NULL。
  * @param[out] module 非NULL时接收错误模块，成功时为ROBOT_MODULE_COUNT。

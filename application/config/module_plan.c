@@ -108,7 +108,7 @@ RobotModuleStatus_t RobotModuleStartPhased(const RobotModulePlan_t *plan, uint32
                                                         start, context, state, &handled);
     if (result != ROBOT_MODULE_OK) return result; // 第一阶段核心失败时不执行资源准备。
     uint32_t failed = 0u; // 回调只报告真正受资源失败影响的模块。
-    if (!barrier(context, &failed) || (failed & ~deferred) != 0u)
+    if (!barrier(context, state, &failed) || (failed & ~deferred) != 0u)
     {
         state->core_failed = 1u; // 阶段本身异常或结果越界时保持整体失能。
         return ROBOT_MODULE_CORE_FAILURE;

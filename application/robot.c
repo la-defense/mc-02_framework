@@ -9,6 +9,7 @@
 #endif
 #include "robot.h"
 #include "robot_param_guard.h"
+#include "robot_power.h"
 #include "robot_control_tasks.h"
 #include "robot_def.h"
 #include "robot_task_create.h"
@@ -78,6 +79,8 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
     const Robot_Config_s *config = (const Robot_Config_s *)context;
     if (config == NULL)
         return 0u;
+    if (!RobotPowerModuleReady(module))
+        return 0u; // 所需电源未准备时不注册该模块的设备。
     switch (module)
     {
     case ROBOT_MODULE_SAFETY:
@@ -282,8 +285,16 @@ uint8_t RobotInitializeApplications(void)
 
 #if defined(MC02_CONFIG_GENERATED)
     InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
-    const RobotModuleStatus_t module_status = RobotBuildStart(
-        RobotStartConfiguredModule, (void *)robot_config);
+    const RobotPowerRailConfig_t power_rails[PLATFORM_POWER_COUNT] = {
+        {MC02_POWER_24V_1_STAGE, MC02_POWER_24V_1_MASK}, // PC14：第一路 24V 的阶段及使用模块。
+        {MC02_POWER_24V_2_STAGE, MC02_POWER_24V_2_MASK}, // PC13：第二路 24V 的阶段及使用模块。
+        {MC02_POWER_5V_STAGE, MC02_POWER_5V_MASK}, // PC15：5V 的阶段及使用模块。
+    };
+    ROBOT_INIT_CHECK(RobotPowerBegin(power_rails, RobotBuildGetPlan()), INIT_STAGE_APPLICATION,
+                     INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, 0u); // 先校验计划并准备设备前电源。
+    const RobotModuleStatus_t module_status = RobotBuildStartPhased(
+        RobotPowerDeferredModules(), RobotPowerAfterDevices,
+        RobotStartConfiguredModule, (void *)robot_config); // 独立模块完成后再准备设备后电源。
     if (module_status != ROBOT_MODULE_OK)
     {
         InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
