@@ -1324,6 +1324,13 @@ uint8_t CANStartBus(FDCAN_HandleTypeDef *hcan)
     return CANServiceInit(bus_index); // 串行启动指定总线或复用现有服务。
 }
 
+uint8_t CANBusIsQuarantined(FDCAN_HandleTypeDef *hcan)
+{
+    const uint8_t index = CANBusIndexFromHandle(hcan); // 根据硬件句柄查询固定总线编号。
+    if (index >= DEVICE_CAN_CNT) return 1u; // 未知总线不能被当作可用。
+    return (uint8_t)((can_filter_quarantined & (uint8_t)(1u << index)) != 0u);
+}
+
 /* ----------------------- two extern callable function -----------------------*/
 
 // 逐条总线执行：切换 CAN_SELFTEST_MODE、注册测试接收者、发送并派发确认、注销、恢复普通模式。

@@ -87,7 +87,7 @@ target_include_directories(robot_startup_test PRIVATE . ../../application ../../
   ../../bsp/os ../../bsp/watchdog)
 target_compile_definitions(robot_startup_test PRIVATE MC02_CONFIG_GENERATED=1 MC02_FEATURE_IMU=1)
 target_compile_options(robot_startup_test PRIVATE -Wall -Wextra -Werror)
-foreach(scenario IN ITEMS success disabled aux core application no-scheduler batch-begin tasks batch-end watchdog release)
+foreach(scenario IN ITEMS success disabled aux core application no-scheduler can-core batch-begin tasks batch-end watchdog release)
   add_test(NAME production_robot_startup_${scenario} COMMAND robot_startup_test ${scenario})
   set_tests_properties(production_robot_startup_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
@@ -752,6 +752,15 @@ target_include_directories(log_startup_test PRIVATE . ../../application ../../ap
 target_compile_options(log_startup_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_log_startup_core_and_degraded COMMAND log_startup_test)
 set_tests_properties(production_log_startup_core_and_degraded PROPERTIES TIMEOUT 10)
+
+# 使用生产模块依赖传播检查诊断后的 CAN 隔离。
+add_executable(robot_can_guard_test robot_can_guard_test.c ../../application/robot_can_guard.c
+  ../../application/config/module_plan.c)
+target_include_directories(robot_can_guard_test PRIVATE . ../../application ../../application/config
+  ../../bsp/can ../../bsp/board)
+target_compile_options(robot_can_guard_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_robot_can_guard_core_and_aux COMMAND robot_can_guard_test)
+set_tests_properties(production_robot_can_guard_core_and_aux PROPERTIES TIMEOUT 10)
 
 add_executable(robot_alarm_adapter_test robot_alarm_adapter_test.c
   ../../modules/alarm/robot_alarm.c ../../modules/alarm/robot_alarm_policy.c)

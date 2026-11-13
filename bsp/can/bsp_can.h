@@ -199,6 +199,11 @@ void CANInitWorkspace(void);
  * @note 启动协调者串行调用；不得与注册、回退或模式切换并发。
  */
 uint8_t CANStartBus(FDCAN_HandleTypeDef *hcan);
+/** @brief 查询指定总线是否因诊断恢复失败而被隔离。
+ * @param[in] hcan 板级总线句柄；未知句柄按不可用处理。
+ * @return 1 表示被隔离或句柄无效；0 表示没有该隔离标记。
+ */
+uint8_t CANBusIsQuarantined(FDCAN_HandleTypeDef *hcan);
 
 /** @brief 配置一条 FDCAN 总线的发送容量和周期利用率预算。
 * @param[in] hcan 已支持的 FDCAN 句柄；必须在首次 CANRegister() 前调用。

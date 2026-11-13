@@ -11,3 +11,9 @@ uint8_t PlatformCanStartBus(PlatformCanBus_t bus)
     if (handle == NULL) return 0u; // 没有绑定时不启动任何硬件。
     return CANStartBus(handle); // 使用底层按总线独立的启动与失败处理。
 }
+
+uint8_t PlatformCanBusIsQuarantined(PlatformCanBus_t bus)
+{
+    FDCAN_HandleTypeDef *handle = BoardCanResolve(bus); // 通过板级表解析逻辑总线。
+    return handle == NULL ? 1u : CANBusIsQuarantined(handle); // 未绑定也不能放行依赖模块。
+}

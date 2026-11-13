@@ -458,6 +458,9 @@ static void test_filter_restore_failure_isolates_one_bus(void)
     HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 先排入旧反馈。
     filter_fail_once = 1u; // 第一条总线的重装失败。
     TEST_CHECK(!CANReapplyFilters(&hfdcan1));
+    TEST_CHECK(PlatformCanBusIsQuarantined(PLATFORM_CAN_BUS_1)); // 板级接口暴露真实隔离状态。
+    TEST_CHECK(!PlatformCanBusIsQuarantined(PLATFORM_CAN_BUS_2)); // 其他总线没有被标记隔离。
+    TEST_CHECK(PlatformCanBusIsQuarantined(PLATFORM_CAN_INVALID)); // 未绑定编号按不可用处理。
     TEST_CHECK(bus_stop_count[0] == 1u && bus_stop_count[1] == 0u && filter_count[1] == other_filters);
     TEST_CHECK(hfdcan1.Instance->IE == 0u && hfdcan2.Instance->IE == other_interrupts);
     CAN_TxResult_t result = {0};

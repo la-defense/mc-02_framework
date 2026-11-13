@@ -52,6 +52,12 @@ uint8_t PlatformCanBusIsBound(PlatformCanBus_t bus);
  */
 uint8_t PlatformCanStartBus(PlatformCanBus_t bus);
 
+/** @brief 查询逻辑总线是否因诊断恢复失败而被隔离。
+ * @param[in] bus 车型使用的逻辑总线。
+ * @return 1 表示隔离或未绑定，0 表示没有诊断隔离标记；不代表设备在线。
+ */
+uint8_t PlatformCanBusIsQuarantined(PlatformCanBus_t bus);
+
 /** @brief 注册一个经典 CAN 接收端点，标识符类型由端点配置指定。
  * @param[in,out] port 调用前清零，成功后长期保存在原地址；失败不修改。
  * @param[in] endpoint 本板逻辑总线和收发 ID，调用期间可读。

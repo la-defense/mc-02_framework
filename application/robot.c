@@ -10,6 +10,7 @@
 #include "robot.h"
 #include "robot_param_guard.h"
 #include "robot_power.h"
+#include "robot_can_guard.h"
 #include "robot_control_tasks.h"
 #include "robot_def.h"
 #include "robot_task_create.h"
@@ -197,6 +198,37 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 }
 #endif
 
+
+uint8_t RobotRecheckCanAfterDiagnostics(void)
+{
+#if defined(MC02_CONFIG_GENERATED)
+    const Robot_Config_s *config = NULL; // 重新读取启动时的只读车型配置。
+    if (RobotConfigSelect(ROBOT_CONFIG_SUPPORTED_ID, &config) != ROBOT_CONFIG_OK || config == NULL)
+        return 0u; // 配置不可用时不能判断总线依赖。
+    RobotCanDependency_t dependencies[8] = {0}; // 当前底盘、云台、发射和双板桥接最多七项。
+    uint8_t count = 0u;
+#if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
+    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_COMMUNICATION, config->can_bridge.can_bus}; // 板间桥接。
+#endif
+#if MC02_FEATURE_CHASSIS
+    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_CHASSIS, config->chassis_param.chassis_motor_config.can_init_config.can_bus}; // 底盘轮电机。
+#if MC02_FEATURE_SUPERCAP
+    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_CHASSIS, PLATFORM_CAN_BUS_2}; // 当前电容适配由底盘使用。
+#endif
+#endif
+#if MC02_FEATURE_GIMBAL
+    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_GIMBAL, config->gimbal_param.yaw_motor_config.can_init_config.can_bus}; // 大 yaw。
+    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_GIMBAL, config->gimbal_param.pitch_motor_config.can_init_config.can_bus}; // pitch。
+#endif
+#if MC02_FEATURE_SHOOTER
+    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_SHOOTER, config->shoot_param.friction_motor_config.can_init_config.can_bus}; // 摩擦轮。
+    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_SHOOTER, config->shoot_param.loader_motor_config.can_init_config.can_bus}; // 拨弹。
+#endif
+    return RobotCanGuardCheck(dependencies, count); // 传播隔离并检查核心闭包。
+#else
+    return 1u; // 旧主机组合没有车型生成的依赖计划。
+#endif
+}
 
 uint8_t RobotInit(void)
 {  

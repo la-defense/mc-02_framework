@@ -19,6 +19,12 @@ uint8_t RobotInit(void);
  */
 uint8_t RobotInitializeApplications(void);
 
+/** @brief 在启动诊断后复核已启用模块的 CAN 总线依赖。
+ * @return 1 表示核心依赖未受隔离影响；0 表示不得继续放行。
+ * @note 由启动协调者在创建周期任务前调用，不以设备是否在线作为判据。
+ */
+uint8_t RobotRecheckCanAfterDiagnostics(void);
+
 /** @brief 执行一轮所选应用，由 ROBOT 任务约每 5 ms 调用。
 * @note 初始化失败时只更新诊断及失能状态；裸板配置只运行状态和视觉回传路径。
  */
