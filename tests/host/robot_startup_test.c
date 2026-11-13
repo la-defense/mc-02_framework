@@ -23,6 +23,7 @@ static uint16_t failure_resource;
 static void Record(char value) { TEST_CHECK(count + 1u < sizeof(calls)); calls[count++] = value; }
 uint8_t PlatformSchedulerIsRunning(void) { return scheduler; }
 uint8_t RobotInitializeApplications(void) { Record('A'); return application_ok; }
+void RobotRunStartupDiagnostics(void) { Record('K'); } // 诊断必须位于设备之后、任务创建之前。
 uint8_t RobotBuildModuleStarted(RobotModule_t module) { TEST_CHECK(module == ROBOT_MODULE_IMU); return enabled; }
 RobotInsStartupResult_e RobotInitializeIns(void) { Record('I'); return ins_result; }
 uint8_t PlatformTaskBatchBegin(void) { Record('B'); return begin_ok; }
@@ -55,18 +56,18 @@ void BSP_SafetyStartupLatchOutputsOff(void) { ++shutdowns; Record('O'); }
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2); // 每个场景单独运行，保留生产代码的一次性状态。
-    const char *expected = "AIBTEWRY"; // 正常路径依次初始化、创建、切换并放行。
+    const char *expected = "AIKBTEWRY"; // 正常路径先运行诊断，再创建并放行任务。
     uint8_t success = 1u; // 只有成功与允许降级的场景应完成启动。
-    if (!strcmp(argv[1], "disabled")) { enabled = 0u; expected = "ABTEWRY"; }
+    if (!strcmp(argv[1], "disabled")) { enabled = 0u; expected = "AKBTEWRY"; }
     else if (!strcmp(argv[1], "aux")) ins_result = ROBOT_INS_STARTUP_AUXILIARY_FAILURE;
     else if (!strcmp(argv[1], "core")) { ins_result = ROBOT_INS_STARTUP_CORE_FAILURE; expected = "AIFXDO"; success = 0u; }
     else if (!strcmp(argv[1], "application")) { application_ok = 0u; expected = "AFXDO"; success = 0u; }
     else if (!strcmp(argv[1], "no-scheduler")) { scheduler = 0u; expected = "FXDO"; success = 0u; }
-    else if (!strcmp(argv[1], "batch-begin")) { begin_ok = 0u; expected = "AIBFXDO"; success = 0u; }
-    else if (!strcmp(argv[1], "tasks")) { tasks_ok = 0u; expected = "AIBTFXDOE"; success = 0u; }
-    else if (!strcmp(argv[1], "batch-end")) { end_ok = 0u; expected = "AIBTEFXDO"; success = 0u; }
-    else if (!strcmp(argv[1], "watchdog")) { watchdog_ok = 0u; expected = "AIBTEWFXDO"; success = 0u; }
-    else if (!strcmp(argv[1], "release")) { release_ok = 0u; expected = "AIBTEWRFXDO"; success = 0u; }
+    else if (!strcmp(argv[1], "batch-begin")) { begin_ok = 0u; expected = "AIKBFXDO"; success = 0u; }
+    else if (!strcmp(argv[1], "tasks")) { tasks_ok = 0u; expected = "AIKBTFXDOE"; success = 0u; }
+    else if (!strcmp(argv[1], "batch-end")) { end_ok = 0u; expected = "AIKBTEFXDO"; success = 0u; }
+    else if (!strcmp(argv[1], "watchdog")) { watchdog_ok = 0u; expected = "AIKBTEWFXDO"; success = 0u; }
+    else if (!strcmp(argv[1], "release")) { release_ok = 0u; expected = "AIKBTEWRFXDO"; success = 0u; }
     else TEST_CHECK(!strcmp(argv[1], "success"));
     TEST_CHECK(RobotStartupRun() == success); // 返回值应反映本次核心步骤是否成功。
     TEST_CHECK(!strcmp(calls, expected)); // 创建失败必须在恢复调度前关断。

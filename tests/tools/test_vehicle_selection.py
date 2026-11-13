@@ -9,6 +9,19 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class VehicleSelectionTest(unittest.TestCase):
+    def test_can_diagnostics_run_before_periodic_tasks(self):
+        # 一次性模式切换必须先于任务创建，诊断结束后才可能出现并发派发。
+        startup = (ROOT / "application/robot_startup.c").read_text(encoding="utf-8")
+        task = (ROOT / "application/robot_task.c").read_text(encoding="utf-8")
+        self.assertLess(startup.index("RobotInitializeApplications()"), startup.index("RobotRunStartupDiagnostics()"))
+        self.assertLess(startup.index("RobotRunStartupDiagnostics()"), startup.index("PlatformTaskBatchBegin()"))
+        diagnostic = task.split("void RobotRunStartupDiagnostics(void)", 1)[1].split("StartDAEMONTASK", 1)[0]
+        self.assertIn("PlatformCanRunLoopbackDiagnostic()", diagnostic)
+        self.assertIn("CANRunDjiFeedbackInjectTest()", diagnostic)
+        daemon = task.split("void StartDAEMONTASK(void const *argument)", 1)[1]
+        self.assertNotIn("PlatformCanRunLoopbackDiagnostic()", daemon)
+        self.assertNotIn("CANRunDjiFeedbackInjectTest()", daemon)
+
     def test_usb_fallback_follows_application_registration(self):
         # 默认任务必须先让业务注册回调，空配置只能作为未选业务时的兜底。
         source = (ROOT / "Core/Src/freertos.c").read_bytes()

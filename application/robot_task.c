@@ -98,6 +98,16 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 }
 #endif
 
+void RobotRunStartupDiagnostics(void)
+{
+#if CAN_SELFTEST_LOOPBACK
+    (void)PlatformCanRunLoopbackDiagnostic(); // 所有设备已注册，周期收发任务尚未创建。
+#endif
+#if CAN_DJI_INJECT_TEST >= 1
+    (void)CANRunDjiFeedbackInjectTest(); // 诊断自行推进收发，避免与电机任务并发。
+#endif
+}
+
 __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 {
     while (!TaskMonitorRuntimeReleased())
@@ -107,18 +117,9 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
     /* 类型化日志自测默认关闭；普通事件也需在bench_safe显式开启诊断输出。 */
     LogSelfTest();
 #endif
-#if CAN_SELFTEST_LOOPBACK
-    /* FDCAN 回环自测(默认关闭): 必须在所有设备注册完成之后跑(否则 CANRegister 会重新
-       配置总线把自测配置覆盖掉), 放在任务上下文里也便于用 HAL_GetTick 做超时 */
-    (void)PlatformCanRunLoopbackDiagnostic();
-#endif
 #if MC02_BENCH_CRASH_DIAGNOSTICS
     /* 专用固件启动稳定后才检查许可；许可本身须由匹配Build ID的工具写入。 */
     static uint32_t s_crash_test_wait = 0u;
-#endif
-#if CAN_DJI_INJECT_TEST >= 1
-    /* DJI 假反馈注入自测(默认关闭): 验证"中断入队 → CANProcessRx 派发 → 解码 → 多圈累加" */
-    (void)CANRunDjiFeedbackInjectTest();
 #endif
     for (;;)
     {

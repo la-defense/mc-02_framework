@@ -9,6 +9,7 @@
 #include "ins_startup.h"
 #include "robot.h"
 #include "robot_task_create.h"
+#include "robot_task.h"
 #include "platform_os.h"
 #include "task_monitor.h"
 #include "init_diagnostic.h"
@@ -61,6 +62,7 @@ uint8_t RobotStartupRun(void)
         }
     }
 #endif
+    RobotRunStartupDiagnostics(); // 设备注册完成，且周期收发任务尚未创建。
     InitDiagnosticSetStage(INIT_STAGE_TASKS); // 后续失败属于任务创建阶段。
     if (!PlatformTaskBatchBegin()) // 暂停调度，保证句柄在任务运行前发布。
     {

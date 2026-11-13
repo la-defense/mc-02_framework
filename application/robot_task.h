@@ -5,6 +5,11 @@
 #define MC02_ROBOT_TASK_H
 #include "config/build_selection.h"
 
+/** @brief 在设备注册完成后运行显式启用的一次性 CAN 诊断。
+ * @note 仅由启动协调者在创建周期任务之前调用；需要裸板且不连接执行器。
+ */
+void RobotRunStartupDiagnostics(void);
+
 /** @brief INS 由启动协调者初始化后，约每 1 ms 处理采样和姿态。
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
