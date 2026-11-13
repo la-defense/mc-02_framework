@@ -330,6 +330,26 @@ static void test_bus_start_and_rollback_isolation(void)
     TEST_CHECK(valid_rx_count == 1u); // 失败回退后原端点仍可正常接收。
 }
 
+static void test_platform_filter_capacity(void)
+{
+    PlatformCanFilterCapacity_t result = {.standard = 0xa5u, .extended = 0x5au}; // 失败时检查输出未被改写。
+    TEST_CHECK(PlatformCanEndpointCapacity() == CAN_MX_REGISTER_CNT); // 平台上限与驱动登记表一致。
+    TEST_CHECK(!PlatformCanGetFilterCapacity(PLATFORM_CAN_INVALID, &result));
+    TEST_CHECK(result.standard == 0xa5u && result.extended == 0x5au);
+    TEST_CHECK(!PlatformCanGetFilterCapacity(PLATFORM_CAN_BUS_1, NULL));
+    hfdcan1.Instance = NULL; // 模拟板级初始化失败。
+    TEST_CHECK(!PlatformCanGetFilterCapacity(PLATFORM_CAN_BUS_1, &result));
+    TEST_CHECK(result.standard == 0xa5u && result.extended == 0x5au);
+    hfdcan1.Instance = &fdcan_registers[0]; // 恢复已准备控制器。
+    hfdcan1.Init.StdFiltersNbr = 7u; hfdcan1.Init.ExtFiltersNbr = 3u;
+    TEST_CHECK(PlatformCanGetFilterCapacity(PLATFORM_CAN_BUS_1, &result));
+    TEST_CHECK(result.standard == 7u && result.extended == 3u); // 两类槽分别读取。
+    hfdcan1.Init.StdFiltersNbr = 100u; hfdcan1.Init.ExtFiltersNbr = 100u;
+    TEST_CHECK(PlatformCanGetFilterCapacity(PLATFORM_CAN_BUS_1, &result));
+    TEST_CHECK(result.standard == CAN_MX_REGISTER_CNT && result.extended == CAN_MX_REGISTER_CNT); // 不超过全局登记上限。
+    TEST_CHECK(bus_start_count[0] == 0u && filter_count[0] == 0u); // 查询不启动总线或配置过滤器。
+}
+
 static void test_rx_failure_and_invalid_frames(void)
 {
     CAN_Init_Config_s config = {0}; // 默认标准 ID，与现有调用保持兼容。
@@ -2282,6 +2302,8 @@ int main(int argc, char **argv)
         test_lk_logical_receive();
     else if (strcmp(argv[1], "bus-isolation") == 0)
         test_bus_start_and_rollback_isolation();
+    else if (strcmp(argv[1], "filter-capacity") == 0)
+        test_platform_filter_capacity();
     else if (strcmp(argv[1], "rx-extended") == 0)
         test_classic_extended_rx_and_filter_reuse();
     else if (strcmp(argv[1], "filter-restore-failure") == 0)

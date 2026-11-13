@@ -45,6 +45,23 @@ typedef struct {
  */
 uint8_t PlatformCanBusIsBound(PlatformCanBus_t bus);
 
+/** @brief 板级控制器实际配置的两类接收过滤器容量。 */
+typedef struct {
+    uint8_t standard; /**< 可用于标准 ID 的端点数量。 */
+    uint8_t extended; /**< 可用于扩展 ID 的端点数量。 */
+} PlatformCanFilterCapacity_t;
+
+/** @brief 查询已完成板级初始化的控制器可用过滤器槽数。
+ * @param[in] bus 逻辑总线编号。
+ * @param[out] capacity 成功时写入；空指针或查询失败时保持原值。
+ * @return 1 表示容量可查询，0 表示未绑定或板级初始化未完成。
+ * @note 不启动总线、不注册端点；每类容量不超过全局端点登记上限。
+ */
+uint8_t PlatformCanGetFilterCapacity(PlatformCanBus_t bus, PlatformCanFilterCapacity_t *capacity);
+
+/** @brief 查询所有总线共享的端点登记上限。 */
+uint8_t PlatformCanEndpointCapacity(void);
+
 /** @brief 启动已完成板级初始化的一条逻辑 CAN 总线。
  * @param[in] bus 已绑定的逻辑总线。
  * @return 1 表示已启动或已经处于启动状态；无绑定或启动失败返回 0。
