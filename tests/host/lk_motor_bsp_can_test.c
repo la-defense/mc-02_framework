@@ -415,7 +415,9 @@ static void test_classic_extended_rx_and_filter_reuse(void)
     PlatformCanRxRollback(&extended); // 软件端点先撤销，不再接收任何旧数据。
     TEST_CHECK(!PlatformCanRxRegister(&extended, &endpoint, extended_rx_callback, &ext_state));
     TEST_CHECK(extended.backend == NULL); // 未确认关闭的槽不得直接复用。
-    CANReapplyFilters(); // 测试专用重建会按剩余端点重新分配过滤器。
+    const uint32_t other_filter_count = filter_count[1]; // 第二条总线的硬件不应被重新配置。
+    TEST_CHECK(CANReapplyFilters(&hfdcan1)); // 只按第一条总线的剩余端点重建过滤器。
+    TEST_CHECK(filter_count[1] == other_filter_count); // 重建没有修改其他控制器。
     TEST_CHECK(PlatformCanRxRegister(&extended, &endpoint, extended_rx_callback, &ext_state));
     rx_frames[1][1] = rx_frames[1][0]; // 重新投递另一条总线上的旧端点帧。
     rx_frame_count[1] = 2u; // 包含刚添加的一帧。
@@ -432,6 +434,48 @@ static void test_classic_extended_rx_and_filter_reuse(void)
     endpoint.identifier_type = CAN_TX_ID_EXTENDED; endpoint.can_bus = PLATFORM_CAN_BUS_3;
     TEST_CHECK(!PlatformCanRxRegister(&invalid, &endpoint, extended_rx_callback, &ext_state)); // 第三条总线没有扩展过滤器。
     TEST_CHECK(bus_stop_count[0] == 0u && bus_stop_count[1] == 0u); // 容量失败不关闭已经运行的总线。
+}
+
+static void test_filter_restore_failure_isolates_one_bus(void)
+{
+    PlatformCanRxPort_t first = {0}, second = {0}, extra = {0}; // 三个独立接收端点。
+    ExtendedRxState first_state = {0}, second_state = {0}; // 分别观察两条总线。
+    PlatformCanEndpoint_t endpoint = {.can_bus = PLATFORM_CAN_BUS_1, .tx_id = 0x101u, .rx_id = 0x101u};
+    TEST_CHECK(PlatformCanRxRegister(&first, &endpoint, extended_rx_callback, &first_state));
+    endpoint.can_bus = PLATFORM_CAN_BUS_2; endpoint.rx_id = 0x102u; endpoint.tx_id = 0x102u;
+    TEST_CHECK(PlatformCanRxRegister(&second, &endpoint, extended_rx_callback, &second_state));
+    const uint32_t other_filters = filter_count[1]; // 重装不能触碰第二条总线。
+    const uint32_t other_interrupts = hfdcan2.Instance->IE; // 隔离不能关闭其他控制器的中断。
+    const uint8_t payload = 0x42u;
+    const CAN_TxFrame_t frame = {.identifier = 0x101u, .identifier_type = CAN_TX_ID_STANDARD,
+                                 .data = &payload, .length = 1u};
+    uint32_t request = 0u, in_flight = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL, 20u, &in_flight) == CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTx(); // 第一帧交给模拟硬件，尚未报告完成。
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL, 20u, &request) == CAN_TX_SUBMIT_ACCEPTED);
+    rx_frames[0][0].header.Identifier = 0x101u; rx_frames[0][0].header.DataLength = 1u << 16u;
+    rx_frames[0][0].data[0] = payload; rx_frame_count[0] = 1u;
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 先排入旧反馈。
+    filter_fail_once = 1u; // 第一条总线的重装失败。
+    TEST_CHECK(!CANReapplyFilters(&hfdcan1));
+    TEST_CHECK(bus_stop_count[0] == 1u && bus_stop_count[1] == 0u && filter_count[1] == other_filters);
+    TEST_CHECK(hfdcan1.Instance->IE == 0u && hfdcan2.Instance->IE == other_interrupts);
+    CAN_TxResult_t result = {0};
+    TEST_CHECK(CANGetTxRequestState(request, &result) && result.state == CAN_TX_RESULT_CANCELLED);
+    TEST_CHECK(CANGetTxRequestState(in_flight, &result) && result.state == CAN_TX_RESULT_CANCELLED && result.pending_frames == 1u);
+    CAN_TxSchedulerStats_t stats = {0};
+    TEST_CHECK(CANGetTxSchedulerStats(&hfdcan1, &stats) && stats.cancelled == 2u); // 未使用的结果槽不能计入取消。
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL, 20u, &request) == CAN_TX_SUBMIT_NOT_READY);
+    TEST_CHECK(!CANForceMode(&hfdcan1, FDCAN_MODE_NORMAL, 0u)); // 诊断模式切换不能绕过隔离。
+    CANProcessRx();
+    TEST_CHECK(first_state.count == 0u); // 故障前排队的反馈不再交付。
+    endpoint.can_bus = PLATFORM_CAN_BUS_1; endpoint.rx_id = 0x103u; endpoint.tx_id = 0x103u;
+    TEST_CHECK(!PlatformCanRxRegister(&extra, &endpoint, extended_rx_callback, &first_state)); // 隔离后不能隐式重启。
+    rx_frames[1][0].header.Identifier = 0x102u; rx_frames[1][0].header.DataLength = 1u << 16u;
+    rx_frames[1][0].data[0] = payload; rx_frame_count[1] = 1u;
+    HAL_FDCAN_RxFifo0Callback(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    CANProcessRx();
+    TEST_CHECK(second_state.count == 1u && second_state.marker == payload); // 第二条总线仍正常派发。
 }
 
 static void burst_rx_callback(CANInstance *instance)
@@ -2237,6 +2281,8 @@ int main(int argc, char **argv)
         test_bus_start_and_rollback_isolation();
     else if (strcmp(argv[1], "rx-extended") == 0)
         test_classic_extended_rx_and_filter_reuse();
+    else if (strcmp(argv[1], "filter-restore-failure") == 0)
+        test_filter_restore_failure_isolates_one_bus();
     else if (strcmp(argv[1], "motor-id-type") == 0)
         test_standard_motor_rejects_extended_id();
     else if (strcmp(argv[1], "rx-invalid") == 0)

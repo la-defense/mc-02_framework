@@ -92,13 +92,18 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
     {
         BSP_LOG_EVENT_0(EV_MODULES_MOTOR_DJIMOTOR_DJI_MOTOR_C_06); // 记录切换回环失败。
         // 模式切换失败时总线可能已停止，先尝试恢复模式和滤镜。
-        (void)CANForceMode(s_inject_h, FDCAN_MODE_NORMAL, 0u); // 尝试恢复正常总线模式。
-        CANReapplyFilters(); // 重装切换过程中可能清除的滤镜。
+        if (!CANForceMode(s_inject_h, FDCAN_MODE_NORMAL, 0u)) CANQuarantineBus(s_inject_h); // 恢复模式失败时隔离。
+        else (void)CANReapplyFilters(s_inject_h); // 过滤器失败由该入口隔离总线。
+        s_inject_h = NULL; // 失败后不再保留本次测试句柄。
         return 0u; // 回环不可用时结束诊断。
     }
 
     // 模式切换会重配消息 RAM 并清除接收滤镜，必须重新安装才能接收注入帧。
-    CANReapplyFilters(); // 为回环反馈重装电机接收滤镜。
+    if (!CANReapplyFilters(s_inject_h))
+    {
+        s_inject_h = NULL; // 滤镜失败后撤销本次测试句柄。
+        return 0u; // 不继续注入。
+    }
 
     // 使用已运行总线提交复制帧，不额外注册无接收用途的实例。
     (void)target_rx_id; // 发送时直接从电机端点读取该 ID。
@@ -161,8 +166,12 @@ uint8_t CANRunDjiFeedbackInjectTest(void)
 #else
     // 还原反馈、恢复正常模式并重装滤镜。
     s_inject_target->measure = s_inject_backup; // 恢复测试前的电机反馈。
-    (void)CANForceMode(s_inject_h, FDCAN_MODE_NORMAL, 0u); // 尝试切回正常总线模式。
-    CANReapplyFilters(); // 重装模式切换可能清除的接收滤镜。
+    if (!CANForceMode(s_inject_h, FDCAN_MODE_NORMAL, 0u))
+    {
+        CANQuarantineBus(s_inject_h); // 无法恢复正常模式时停止使用总线。
+        can_dji_inject_fail++; // 诊断结果必须反映恢复失败。
+    }
+    else if (!CANReapplyFilters(s_inject_h)) can_dji_inject_fail++; // 重装失败已经隔离总线。
     s_inject_h = NULL; // 结束后不再允许继续注入。
 #endif
 

@@ -17,7 +17,8 @@
 // 注册表用于 ID 查找、过滤规则重装及注销；中断不直接运行模块解析。
 static CANInstance *can_instance[CAN_MX_REGISTER_CNT] = {NULL};
 static uint8_t idx;
-static uint8_t can_service_started; // 每一位表示对应总线已启动，互不影响。
+static volatile uint8_t can_service_started; // 任务与中断读取每条总线的启动状态。
+static uint8_t can_filter_quarantined; // 模式恢复失败后锁定该总线，直到系统重启。
 // 只查询有效总线的启动位；未配置的总线不能调用 HAL 收发。
 static uint8_t CANBusIsActive(uint8_t bus_index)
 {
@@ -1149,7 +1150,7 @@ void CANProcessRx(void)
         {
             CANRxItem_t *it = &bus->rxq[bus->rxq_tail];
             CANInstance *ins = it->instance;
-            if (ins != NULL && ins->can_module_callback != NULL &&
+            if (CANBusIsActive(i) && ins != NULL && ins->can_module_callback != NULL &&
                 (uint32_t)(HAL_GetTick() - it->timestamp_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS)
             {
                 ins->rx_len = it->len;
@@ -1299,6 +1300,7 @@ static uint8_t CANServiceInit(uint8_t bus_index)
 {
     CANBusStateEnsureInitialized();
     if (bus_index >= DEVICE_CAN_CNT) return 0u; // 越界编号不能访问总线表。
+    if ((can_filter_quarantined & (uint8_t)(1u << bus_index)) != 0u) return 0u; // 过滤器未恢复时禁止重新启动。
     if (CANBusIsActive(bus_index)) return 1u; // 已启动的总线不重复配置。
 #ifdef FDCAN
     if (!CANBusConfigure(can_bus[bus_index].handle)) return 0u; // 本总线失败不停止其他总线。
@@ -1357,8 +1359,9 @@ volatile uint32_t can_selftest_rxf0c = 0;
      否则直接返回错误什么都不做), 所以这里先对齐 State, 启动后再回读 CCCR.INIT 校验。 */
 uint8_t CANForceMode(FDCAN_HandleTypeDef *h, uint32_t mode, uint8_t accept_all)
 {
-    if (h == NULL)
-        return 0u;
+    const uint8_t bus_index = CANBusIndexFromHandle(h); // 模式切换只接受已知控制器。
+    if (bus_index >= DEVICE_CAN_CNT || (can_filter_quarantined & (uint8_t)(1u << bus_index)) != 0u)
+        return 0u; // 不允许通过诊断入口绕过总线隔离。
     if (h->State == HAL_FDCAN_STATE_BUSY)
         (void)HAL_FDCAN_Stop(h);
     h->State = HAL_FDCAN_STATE_READY;
@@ -1451,12 +1454,47 @@ void CANUnregisterInstance(CANInstance *ins)
     free(ins); // 接收查找表和队列均已不再引用此实例。
 }
 
-/* 重装所有已注册实例的滤镜(重新 Init 之后必须调用) */
-void CANReapplyFilters(void)
+void CANQuarantineBus(FDCAN_HandleTypeDef *handle)
 {
-    memset(can_filter_used, 0, sizeof(can_filter_used)); // 硬件重新初始化后重建槽位使用表。
-    for (uint8_t i = 0; i < idx; ++i)
-        CANAddFilter(can_instance[i]);
+    const uint8_t bus_index = CANBusIndexFromHandle(handle); // 只隔离指定控制器。
+    if (bus_index >= DEVICE_CAN_CNT) return; // 未知句柄不能影响其他总线。
+    const uint32_t saved = __get_PRIMASK(); // 保留调用前的中断状态。
+    __disable_irq(); // 先撤销服务状态及待派发的旧反馈。
+    can_filter_quarantined |= (uint8_t)(1u << bus_index); // 禁止后续注册隐式重启。
+    can_service_started &= (uint8_t)~(1u << bus_index); // 新提交和调度不再使用此总线。
+    // 保留单消费者队列指针；派发任务会丢弃隔离总线的旧反馈。
+    if (handle->Instance != NULL) handle->Instance->IE = 0u; // 即使停止失败也禁止此控制器继续触发中断。
+    __set_PRIMASK(saved); // 恢复原中断状态后再调用 HAL。
+    if (handle->Instance != NULL) (void)HAL_FDCAN_Stop(handle); // 尽力停止硬件；失败时软件仍保持隔离。
+    taskENTER_CRITICAL(); // 与发送任务对队列和结果的访问互斥。
+    CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler; // 仅处理受影响的调度器。
+    for (uint8_t i = 0u; i < CAN_TX_MAX_QUEUE_ITEMS; ++i)
+        if (scheduler->queue[i].used != 0u)
+        {
+            CANTxSetTerminal(scheduler, scheduler->queue[i].result_index, CAN_TX_RESULT_CANCELLED); // 撤销旧请求。
+            CANTxReleaseQueueSlot(scheduler, i); // 释放尚未提交的队列项。
+        }
+    for (uint8_t i = 0u; i < CAN_TX_RESULT_HISTORY; ++i)
+        if (scheduler->results[i].used != 0u &&
+            (scheduler->results[i].state == CAN_TX_RESULT_QUEUED ||
+             scheduler->results[i].state == CAN_TX_RESULT_ACTIVE ||
+             scheduler->results[i].state == CAN_TX_RESULT_IN_FLIGHT))
+            CANTxSetTerminal(scheduler, i, CAN_TX_RESULT_CANCELLED); // 已交给硬件的结果也撤销，但保留未完成帧计数。
+    taskEXIT_CRITICAL(); // 其他总线的队列和结果保持不变。
+}
+
+uint8_t CANReapplyFilters(FDCAN_HandleTypeDef *handle)
+{
+    const uint8_t bus_index = CANBusIndexFromHandle(handle); // 获取待恢复的单条总线。
+    if (bus_index >= DEVICE_CAN_CNT || !CANBusIsActive(bus_index)) return 0u; // 无效或隔离中的总线不能重建。
+    memset(can_filter_used[bus_index], 0, sizeof(can_filter_used[bus_index])); // 仅重建已经重新初始化的控制器。
+    for (uint8_t i = 0u; i < idx; ++i)
+        if (can_instance[i]->can_handle == handle && !CANAddFilter(can_instance[i]))
+        {
+            CANQuarantineBus(handle); // 任何重装失败都阻止本总线继续运行。
+            return 0u; // 调用方必须上报失败。
+        }
+    return 1u;
 }
 
 uint8_t CANRunLoopbackSelfTest(void)
@@ -1484,8 +1522,8 @@ uint8_t CANRunLoopbackSelfTest(void)
         if (CANForceMode(h, CAN_SELFTEST_MODE, 1u) == 0u)
         {
             can_selftest_state_err++;
-            (void)CANForceMode(h, FDCAN_MODE_NORMAL, 0u);
-            CANReapplyFilters();
+            if (!CANForceMode(h, FDCAN_MODE_NORMAL, 0u)) CANQuarantineBus(h); // 无法恢复模式时保持隔离。
+            else if (!CANReapplyFilters(h)) can_selftest_state_err++; // 恢复过滤器失败也需报告。
             continue;
         }
 
@@ -1502,8 +1540,8 @@ uint8_t CANRunLoopbackSelfTest(void)
         if (selftest_instance == NULL)
         {
             can_selftest_tx_fail++;
-            (void)CANForceMode(h, FDCAN_MODE_NORMAL, 0u);
-            CANReapplyFilters();
+            if (!CANForceMode(h, FDCAN_MODE_NORMAL, 0u)) CANQuarantineBus(h); // 模式失败不得继续使用。
+            else if (!CANReapplyFilters(h)) can_selftest_state_err++; // 单总线过滤器失败单独记录。
             continue;
         }
 
@@ -1580,9 +1618,15 @@ uint8_t CANRunLoopbackSelfTest(void)
         if (CANForceMode(h, FDCAN_MODE_NORMAL, 0u) == 0u)
         {
             can_selftest_state_err++;
+            can_selftest_pass_mask &= (uint8_t)~(1u << bus); // 恢复失败不能算自测成功。
+            CANQuarantineBus(h); // 停止使用恢复失败的总线。
             BSP_LOG_EVENT_1(EV_BSP_CAN_BSP_CAN_C_02, BSP_LOG_FIELD_U32((unsigned)(bus + 1)));
         }
-        CANReapplyFilters();
+        else if (!CANReapplyFilters(h))
+        {
+            can_selftest_state_err++; // 保留过滤器重装失败。
+            can_selftest_pass_mask &= (uint8_t)~(1u << bus); // 失败不能报告该总线通过。
+        }
     }
 
     can_selftest_done = 1;
@@ -1913,6 +1957,7 @@ static void FDCANFIFOxCallback(FDCAN_HandleTypeDef *_hfdcan, uint32_t fifox)
     uint32_t probe_start = DWT_ProbeStart();
     CANBusState_t *bus = CANBusFromHandle(_hfdcan);
     uint8_t bus_idx = CANBusIndexFromHandle(_hfdcan);
+    if (!CANBusIsActive(bus_idx)) return; // 隔离后不再接收或派发该总线的旧帧。
 
     while (HAL_FDCAN_GetRxFifoFillLevel(_hfdcan, fifox)) // FIFO不为空,有可能在其他中断时有多帧数据进入
     {

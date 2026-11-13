@@ -393,8 +393,17 @@ extern volatile uint16_t can_rxq_peak_max;
 * @return 1 为配置后已离开初始化状态，0 为失败；后续仍须重装原过滤规则。
  */
 uint8_t CANForceMode(FDCAN_HandleTypeDef *h, uint32_t mode, uint8_t accept_all);
-/** @brief 按当前注册表重装过滤规则；仅供切换模式后使用，不报告单项失败。 */
-void CANReapplyFilters(void);
+/** @brief 重装指定总线的过滤规则；失败时隔离该总线。
+ * @param[in] h 已启动且刚重新初始化的总线；不能为 NULL。
+ * @return 全部重装成功返回 1，否则返回 0；不修改其他总线。
+ * @note 仅供诊断模式切换后、接收派发不并发时调用；失败需重启系统恢复。
+ */
+uint8_t CANReapplyFilters(FDCAN_HandleTypeDef *h);
+/** @brief 停止并锁定过滤器或模式恢复失败的总线，撤销待处理的旧请求。
+ * @param[in] h 要隔离的总线；未知句柄不产生操作。
+ * @note 在任务上下文执行，诊断结束前不得与接收派发并发；隔离持续到系统重启。
+ */
+void CANQuarantineBus(FDCAN_HandleTypeDef *h);
 
 /** @brief 移出注册表、接收查找表及排队帧对实例的引用并释放实例。
 * @param[in] ins 待释放实例；NULL 或不在表中时不处理，成功后不可再使用。
