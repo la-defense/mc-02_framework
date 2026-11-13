@@ -314,6 +314,16 @@ MessageStatus_t MessageEndpointPairRegister(MessageTopicId_t publisher_topic,
     return MESSAGE_OK;
 }
 
+MessageStatus_t MessageTopicGetDescriptor(MessageTopicId_t topic_id, MessageTopicDescriptor_t *output)
+{
+    if (output == NULL) return MESSAGE_ERR_ARGUMENT; // 无输出时不读取目录。
+    if (!directory_ready) return MESSAGE_ERR_NOT_INITIALIZED; // 未建立目录时没有声明可查询。
+    const int index = FindTopicIndex(topic_id); // 目录建立后保持不变。
+    if (index < 0) return MESSAGE_ERR_TOPIC; // 未声明话题不能返回默认值。
+    *output = topics[index].descriptor; // 返回调用者持有的只读副本。
+    return MESSAGE_OK;
+}
+
 MessageStatus_t MessagePublisherGetDescriptor(const MessagePublisher_t *publisher, MessageTopicDescriptor_t *output)
 {
     if (publisher == NULL || output == NULL || publisher->storage_index >= MESSAGE_CENTER_MAX_SUBSCRIBERS)

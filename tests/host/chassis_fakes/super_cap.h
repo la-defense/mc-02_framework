@@ -4,4 +4,5 @@
 typedef struct { int unused; } SuperCapInstance;
 typedef struct { struct { CAN_HandleTypeDef *can_handle; uint32_t tx_id, rx_id; } can_config; } SuperCap_Init_Config_s;
 SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config);
+uint8_t SuperCapRollbackStartup(SuperCapInstance *instance);
 #endif

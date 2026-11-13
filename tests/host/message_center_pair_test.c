@@ -24,6 +24,9 @@ int main(int argc, char **argv)
         .diagnostics_enabled = 1u, // 通过只读诊断确认实际登记数。
     };
     TEST_CHECK(MessageCenterInit(&descriptor, 1u) == MESSAGE_OK);
+    MessageTopicDescriptor_t copied = {0}; // 在申请任何端点前读取固定声明。
+    TEST_CHECK(MessageTopicGetDescriptor(77u, &copied) == MESSAGE_OK && copied.max_age_ms == 100u);
+    TEST_CHECK(MessageTopicGetDescriptor(99u, &copied) == MESSAGE_ERR_TOPIC && copied.topic_id == 77u); // 失败不修改原输出。
     MessagePublisher_t *pub = NULL; // 初始化输出，用来检查失败不写入。
     MessageSubscriber_t *sub = NULL; // 订阅输出同样由调用者持有。
     if (!strcmp(argv[1], "payload"))

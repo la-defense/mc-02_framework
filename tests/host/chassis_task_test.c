@@ -63,10 +63,28 @@ const Chassis_Config_s *ChassisConfigFeed(void) { return &chassis_configuration;
 static DJIMotorInstance motors[4];
 static Motor_Init_Config_s motor_configs[4];
 static unsigned motor_count;
+static unsigned rollback_count; // 保存测试期间已撤销的电机数。
+static uint8_t rollback_failed; // 用于注入电机回退失败。
+static unsigned fail_motor_attempt; // 非零时在指定电机申请处注入失败。
+static unsigned motor_attempt; // 记录电机申请次数。
+static uint8_t motor_rolled_back[4]; // 记录各电机是否已撤销。
 static unsigned operation_order;
 static SuperCapInstance cap;
 static int fail_cap, fail_motor;
 static unsigned supercap_init_calls;
+static unsigned supercap_rollback_calls; // 记录旧电容回退次数。
+static uint8_t fail_cap_rollback; // 注入电容不能回退的情况。
+#if defined(MC02_TEST_WRAP_CHASSIS_PAIR)
+static uint8_t fail_topic_pair; // 注入底盘话题成对登记失败。
+MessageStatus_t __real_MessageEndpointPairRegister(MessageTopicId_t, MessageTopicId_t, MessageEndpointId_t,
+                                                     MessagePublisher_t **, MessageSubscriber_t **);
+MessageStatus_t __wrap_MessageEndpointPairRegister(MessageTopicId_t pub, MessageTopicId_t sub,
+    MessageEndpointId_t endpoint, MessagePublisher_t **publisher, MessageSubscriber_t **subscriber)
+{
+    if (fail_topic_pair) return MESSAGE_ERR_CAPACITY; // 测试中拒绝话题申请。
+    return __real_MessageEndpointPairRegister(pub, sub, endpoint, publisher, subscriber); // 普通路径使用生产实现。
+}
+#endif
 #ifdef CHASSIS_BOARD
 static attitude_t chassis_attitude;
 attitude_t *INS_GetStorage(void) { return &chassis_attitude; }
@@ -74,11 +92,25 @@ attitude_t *INS_GetStorage(void) { return &chassis_attitude; }
 
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {
+    ++motor_attempt; // 失败的申请也要计数。
+    if (motor_attempt == fail_motor_attempt) return NULL; // 注入指定位置的注册失败。
     if (fail_motor) return NULL;
     if (motor_count >= 4)
         return NULL;
     motor_configs[motor_count] = *config;
     return &motors[motor_count++];
+}
+uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor)
+{
+    if (rollback_failed) return 0u; // 注入不能安全释放的情况。
+    for (unsigned i = 0u; i < 4u; ++i)
+        if (motor == &motors[i] && !motor_rolled_back[i])
+        {
+            motor_rolled_back[i] = 1u; // 标记指定实例被撤销。
+            ++rollback_count; // 统计全部成功撤销的电机。
+            return 1u;
+        }
+    return 0u; // 重复或未知实例不能视为成功。
 }
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 { if (motor) { motor->ref = ref; motor->set_ref_order = ++operation_order; } }
@@ -100,6 +132,12 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uin
     return MOTOR_FEEDBACK_OK;
 }
 SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config) { (void)config; ++supercap_init_calls; return fail_cap ? NULL : &cap; }
+uint8_t SuperCapRollbackStartup(SuperCapInstance *instance)
+{
+    if (instance != &cap) return 0u; // 测试替身只允许释放自身实例。
+    ++supercap_rollback_calls; // 记录底盘尝试撤销电容实例。
+    return (uint8_t)!fail_cap_rollback; // 测试可模拟底层拒绝回退。
+}
 RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *config)
 { (void)port; (void)config; return REFEREE_OK; }
 void MC02ChassisTestLogError(void) {}
@@ -302,11 +340,41 @@ static int test_bridge_to_chassis(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strncmp(argv[1], "motor-at-", 9u) == 0)
+        fail_motor_attempt = (unsigned)(argv[1][9] - '0'); // 注入指定轮电机注册失败。
+    if (argc == 2 && strcmp(argv[1], "rollback-failure") == 0)
+    {
+        fail_motor_attempt = 2u; // 第二台电机失败前已有一台注册成功。
+        rollback_failed = 1u; // 让已注册电机无法撤销。
+    }
+#if defined(MC02_TEST_WRAP_CHASSIS_PAIR)
+    if (argc == 2 && strcmp(argv[1], "topic-failure") == 0) fail_topic_pair = 1u; // 在设备全部注册后拒绝话题。
+    if (argc == 2 && strcmp(argv[1], "cap-rollback-failure") == 0)
+    {
+        fail_topic_pair = 1u; // 触发电容与轮电机回退。
+        fail_cap_rollback = 1u; // 让电容回退失败。
+    }
+#endif
     if (argc == 2 && strcmp(argv[1], "cap-failure") == 0) fail_cap = 1;
     if (argc == 2 && strcmp(argv[1], "motor-failure") == 0) fail_motor = 1;
     uint8_t initialized = ChassisInit();
+    if (fail_motor_attempt != 0u)
+    {
+        CHECK(initialized == 0u && ChassisInitRollbackFailed() == rollback_failed); // 失败及回退故障均需明确返回。
+        if (!rollback_failed) CHECK(rollback_count == fail_motor_attempt - 1u); // 成功注册的轮电机均已撤销。
+        CHECK(supercap_init_calls == 0u); // 电机申请失败后不应继续注册电容。
+        return 0;
+    }
+#if defined(MC02_TEST_WRAP_CHASSIS_PAIR)
+    if (fail_topic_pair)
+    {
+        CHECK(initialized == 0u && ChassisInitRollbackFailed() == fail_cap_rollback); // 回退故障必须上报。
+        CHECK(rollback_count == 4u && supercap_rollback_calls == 1u); // 四台电机和电容全部撤销。
+        return 0;
+    }
+#endif
 #if defined(MC02_CONFIG_GENERATED)
-    if (fail_cap) { CHECK(initialized == 0u && supercap_init_calls == 1u); return 0; }
+    if (fail_cap) { CHECK(initialized == 0u && supercap_init_calls == 1u && rollback_count == 4u); return 0; }
 #endif
     // 未实现普通功率回退前，电容注册或核心电机失败都保留原失败结果。
     if (fail_cap || fail_motor) { CHECK(initialized == 0u); return 0; }

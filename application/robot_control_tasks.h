@@ -10,6 +10,11 @@
  * @note 由启动协调任务在调度器运行后调用一次。
  */
 uint8_t ChassisInit(void);
+/** @brief 查询最近一次底盘初始化是否发生资源回退失败。
+ * @return 非零表示有资源无法安全撤销，启动协调者必须整体失能。
+ * @note 在启动协调任务中串行读取；每次 ChassisInit 开始时清除上一结果。
+ */
+uint8_t ChassisInitRollbackFailed(void);
 /** @brief 在成功初始化后执行一轮底盘控制；超过 50 ms 的命令失效并停止相应输出。 */
 void ChassisTask(void);
 /** @brief 初始化云台资源。

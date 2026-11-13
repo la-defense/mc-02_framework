@@ -47,6 +47,12 @@ static Chassis_Upload_Data_s chassis_feedback_data; // 底盘回传的反馈数�
 
 static const Chassis_Config_s *chassis_config;
 static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left right forward back
+static uint8_t chassis_rollback_failed; // 记录启动时无法撤销的设备资源。
+
+uint8_t ChassisInitRollbackFailed(void)
+{
+    return chassis_rollback_failed; // 启动协调任务读取最近一次回退结果。
+}
 #ifdef CHASSIS_BOARD
 static uint8_t chassis_command_rearm_required = 1u;
 static uint8_t chassis_rearm_sequence_valid = 0u;
@@ -60,23 +66,23 @@ static uint32_t chassis_command_max_age_ms = 0u;
 
 uint8_t ChassisInit(void)
 {
+    chassis_rollback_failed = 0u; // 本次初始化从无回退故障开始。
     chassis_config = ChassisConfigFeed();
     if (chassis_config == NULL)
         return 0u;
     if (!RobotTopicsInit())
         return 0u;
-    Motor_Init_Config_s chassis_motor_config = chassis_config->chassis_motor_config;
-    chassis_motor_config.can_init_config.tx_id = chassis_config->chassis_motor_id[MOTOR_LF];
-    motor_lf = DJIMotorInit(&chassis_motor_config);
-
-    chassis_motor_config.can_init_config.tx_id = chassis_config->chassis_motor_id[MOTOR_RF];
-    motor_rf = DJIMotorInit(&chassis_motor_config);
-
-    chassis_motor_config.can_init_config.tx_id = chassis_config->chassis_motor_id[MOTOR_LB];
-    motor_lb = DJIMotorInit(&chassis_motor_config);
-
-    chassis_motor_config.can_init_config.tx_id = chassis_config->chassis_motor_id[MOTOR_RB];
-    motor_rb = DJIMotorInit(&chassis_motor_config);
+    DJIMotorInstance *pending[4] = {NULL}; // 申请完成之前不发布轮电机实例。
+#if MC02_FEATURE_SUPERCAP
+    uint8_t pending_cap = 0u; // 标记本次底盘启动是否取得旧电容实例。
+#endif
+#ifdef CHASSIS_BOARD
+    attitude_t *pending_imu = INS_GetStorage(); // 双板底盘需要预先取得姿态存储。
+    if (pending_imu == NULL) return 0u; // 没有存储时不注册设备。
+    MessageTopicDescriptor_t descriptor = {0}; // 在登记端点之前核对命令话题期限。
+    if (MessageTopicGetDescriptor(ROBOT_TOPIC_CHASSIS_COMMAND, &descriptor) != MESSAGE_OK ||
+        descriptor.max_age_ms == 0u) return 0u; // 无效话题不能开始申请电机。
+#endif
 
 #if defined(MC02_CONFIG_GENERATED)
     RefereeStatus_t referee_status = REFEREE_OK;
@@ -89,43 +95,53 @@ uint8_t ChassisInit(void)
 #endif
 #endif
 
+    if (referee_status != REFEREE_OK) return 0u; // 旧主机组合的裁判初始化失败时不申请电机。
+    Motor_Init_Config_s chassis_motor_config = chassis_config->chassis_motor_config; // 复制公共电机参数。
+    const uint8_t motor_ids[4] = {
+        chassis_config->chassis_motor_id[MOTOR_LF], // 左前轮的设备编号。
+        chassis_config->chassis_motor_id[MOTOR_RF], // 右前轮的设备编号。
+        chassis_config->chassis_motor_id[MOTOR_LB], // 左后轮的设备编号。
+        chassis_config->chassis_motor_id[MOTOR_RB], // 右后轮的设备编号。
+    };
+    for (uint8_t i = 0u; i < 4u; ++i)
+    {
+        chassis_motor_config.can_init_config.tx_id = motor_ids[i]; // 每轮使用对应配置编号。
+        pending[i] = DJIMotorInit(&chassis_motor_config); // 暂存本次取得的实例。
+        if (pending[i] == NULL) goto rollback; // 任意轮电机失败时撤销此前实例。
+    }
 #if MC02_FEATURE_SUPERCAP
-    const uint8_t cap_available = ChassisLegacySuperCapInit(); // 普通供电限制未实现前，保留原启动检查。
+    pending_cap = ChassisLegacySuperCapInit(); // 普通供电回退未实现前仍需检查旧电容。
+    if (!pending_cap) goto rollback; // 电容失败时撤销四台轮电机。
 #endif
-
-    // 发布订阅初始化,如果为双板,则需要can comm来传递消息
-#ifdef CHASSIS_BOARD
-    Chassis_IMU_data = INS_GetStorage(); // INS 在本步骤之后由启动协调任务初始化。
-
-#endif                                          // CHASSIS_BOARD
 
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
-    chassis_sub = MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,
-                                            ROBOT_TOPIC_ENDPOINT_CHASSIS);
-    chassis_pub = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_FEEDBACK,
-                                           ROBOT_TOPIC_ENDPOINT_CHASSIS);
-#endif
-    if (motor_lf == NULL || motor_rf == NULL || motor_lb == NULL || motor_rb == NULL ||
-        referee_status != REFEREE_OK
-#if MC02_FEATURE_SUPERCAP
-        || cap_available == 0u
-#endif
-        )
-        return 0u;
-#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
-    if (chassis_sub == NULL || chassis_pub == NULL)
-        return 0u;
+    MessageSubscriber_t *pending_sub = NULL; // 暂存底盘命令订阅句柄。
+    MessagePublisher_t *pending_pub = NULL; // 暂存底盘反馈发布句柄。
+    if (MessageEndpointPairRegister(ROBOT_TOPIC_CHASSIS_FEEDBACK, ROBOT_TOPIC_CHASSIS_COMMAND,
+                                    ROBOT_TOPIC_ENDPOINT_CHASSIS, &pending_pub, &pending_sub) != MESSAGE_OK)
+        goto rollback; // 两个话题任一不足时不新增端点。
+    chassis_sub = pending_sub; // 成功后发布命令订阅句柄。
+    chassis_pub = pending_pub; // 同时发布反馈句柄。
 #endif
 #ifdef CHASSIS_BOARD
-    MessageTopicDescriptor_t chassis_command_descriptor = {0};
-    if (MessageSubscriberGetDescriptor(chassis_sub, &chassis_command_descriptor) != MESSAGE_OK ||
-        chassis_command_descriptor.max_age_ms == 0u)
-        return 0u;
-    chassis_command_max_age_ms = chassis_command_descriptor.max_age_ms;
-    if (Chassis_IMU_data == NULL)
-        return 0u;
+    chassis_command_max_age_ms = descriptor.max_age_ms; // 使用事先检查的命令期限。
+    Chassis_IMU_data = pending_imu; // 发布已经确认存在的姿态存储。
 #endif
-    return 1u;
+    motor_lf = pending[0]; // 全部成功后发布左前轮。
+    motor_rf = pending[1]; // 发布右前轮。
+    motor_lb = pending[2]; // 发布左后轮。
+    motor_rb = pending[3]; // 发布右后轮。
+    return 1u; // 启动计划可接受底盘模块。
+
+rollback:
+#if MC02_FEATURE_SUPERCAP
+    if (pending_cap && !ChassisLegacySuperCapRollbackStartup())
+        chassis_rollback_failed = 1u; // 电容无法撤销时必须升级为整车故障。
+#endif
+    for (uint8_t i = 4u; i > 0u; --i)
+        if (pending[i - 1u] != NULL && !DJIMotorRollbackStartup(pending[i - 1u]))
+            chassis_rollback_failed = 1u; // 按申请逆序尽力撤销所有电机。
+    return 0u; // 失败时不交付底盘模块。
 }
 
 /**

@@ -137,7 +137,13 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 #if MC02_FEATURE_SUPERCAP
         if (!PlatformFeatureCanReady(PLATFORM_CAN_BUS_2)) return 0u; // 旧电容绑定的总线必须可用。
 #endif
-        return ChassisInit();
+        if (ChassisInit()) return 1u; // 完整注册后才接受底盘模块。
+        if (ChassisInitRollbackFailed())
+        {
+            start->rollback_failed = 1u; // 无法安全清理时禁止后续模块注册。
+            RobotStartupRollbackFailure(INIT_MODULE_CHASSIS); // 立即锁存故障并关断输出。
+        }
+        return 0u; // 正常回退时由模块计划判断故障影响。
 #else
         return 0u;
 #endif

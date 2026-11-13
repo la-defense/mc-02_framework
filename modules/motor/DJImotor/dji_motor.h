@@ -166,7 +166,8 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
 * @param[in] motor 注册成功的实例；NULL 或未登记实例不做处理。
 * @return 1 表示已撤销；实例不存在或守护监控已运行时返回 0，原实例保持有效。
 * @note 仅在启动协调者创建接收派发、电机控制和守护任务之前串行调用；
-*       调用者须确保没有其他任务或回调访问实例。成功后指针失效，不得再次使用。
+*       调用者须确保没有其他任务或回调访问实例。成功后指针失效，不得再次使用；
+*       当前底层不报告硬件过滤器关闭错误，返回 1 不保证硬件槽已释放。
 */
 uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor);
 

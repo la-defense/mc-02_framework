@@ -5,6 +5,7 @@
  */
 #include "LK9025.h"
 #include "dji_motor.h"
+#include "super_cap.h"
 #include "bsp_can.h"
 #include "../../bsp/can/platform_can.h"
 #include "can_topic_transport.h"
@@ -745,6 +746,39 @@ static void test_dji_startup_rollback_keeps_group(void)
     DJIMotorControl(); // 让保留实例生成组帧。
     CANProcessTx(); // 提交至第一条总线。
     TEST_CHECK(tx_accept_count[0] == 1u && tx_id_history[0][0] == 0x200u); // 同组电机仍能发送。
+}
+
+// 使用生产电容和 CAN 驱动检查启动回退及旧队列帧。
+static void test_supercap_startup_rollback(void)
+{
+    Motor_Init_Config_s motor_config = {0}; // 同一总线保留一台无关电机。
+    motor_config.motor_type = M3508; // 使用常见 DJI 电调。
+    motor_config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL}; // 不改变输出轴比例。
+    motor_config.can_init_config.can_bus = PLATFORM_CAN_BUS_1; // 与电容共用第一条总线。
+    motor_config.can_init_config.tx_id = 1u; // 电机使用独立的反馈编号。
+    motor_config.controller_setting_init_config.close_loop_type = OPEN_LOOP; // 测试不依赖 PID。
+    DJIMotorInstance *motor = DJIMotorInit(&motor_config); // 登记需要保留的端点。
+    TEST_CHECK(motor != NULL);
+    SuperCap_Init_Config_s config = {.can_config = {.can_handle = &hfdcan1, .tx_id = 0x302u, .rx_id = 0x301u}}; // 使用旧电容的两个标准 ID。
+    SuperCapInstance *cap = SuperCapInit(&config); // 登记生产电容实例。
+    TEST_CHECK(cap != NULL);
+    rx_frames[0][0].header.Identifier = 0x301u; // 构造将要过期的电容反馈。
+    rx_frames[0][0].header.DataLength = 6u << 16u; // 旧协议至少需要六字节。
+    rx_frames[0][0].data[0] = 0x12u; // 写入可识别的旧帧内容。
+    rx_frame_count[0] = 1u; // 让模拟硬件提供一帧。
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 先把旧帧排入生产队列。
+    TEST_CHECK(SuperCapRollbackStartup(cap)); // 在接收任务启动前撤销电容。
+    TEST_CHECK(PlatformCanRxIsRegistered(&motor->motor_can_port)); // 同总线的电机端点保持有效。
+    cap = SuperCapInit(&config); // 使用相同 ID 重新注册电容。
+    TEST_CHECK(cap != NULL);
+    CANProcessRx(); // 派发之前排队的旧帧。
+    SuperCapFeedback_t feedback = {0}; // 查询新实例的数据状态。
+    TEST_CHECK(SuperCapGet(cap, 0u, 100u, &feedback) == SUPERCAP_OK && feedback.state == SUPERCAP_FEEDBACK_UNSEEN); // 旧帧不能转交新实例。
+    rx_frame_read[0] = 0u; // 重新提供一帧当前反馈。
+    rx_frames[0][0].data[0] = 0x34u; // 新帧使用不同内容。
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 接收新帧。
+    CANProcessRx(); // 按普通任务路径派发。
+    TEST_CHECK(SuperCapGet(cap, 0u, 100u, &feedback) == SUPERCAP_OK && feedback.state == SUPERCAP_FEEDBACK_FRESH && feedback.value.vol == 0x3400u); // 新端点只接受新数据。
 }
 
 // 真实队列验证三条总线上三类 DJI 分组均使用对应的标准帧 ID。
@@ -2391,6 +2425,8 @@ int main(int argc, char **argv)
         test_dji_startup_rollback_after_daemon();
     else if (strcmp(argv[1], "dji-startup-rollback-group") == 0)
         test_dji_startup_rollback_keeps_group();
+    else if (strcmp(argv[1], "supercap-startup-rollback") == 0)
+        test_supercap_startup_rollback();
     else if (strcmp(argv[1], "dji-send-groups") == 0)
         test_dji_logical_send_groups();
     else if (strcmp(argv[1], "platform-can") == 0)

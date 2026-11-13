@@ -43,9 +43,18 @@ typedef struct
 /** @brief 注册唯一超级电容对象及其 CAN 接收回调。
 * @param[in] supercap_config 非空配置，CAN句柄必须长期有效；内部复制配置并填写对象地址与回调。
 * @return 成功返回长期有效对象；参数无效、重复初始化或分配、CAN注册失败返回NULL。
-* @note 须在接收派发任务运行前串行初始化；成功对象由模块长期保存，无注销入口。
+* @note 须在接收派发任务运行前串行初始化；成功对象由模块长期保存。
  */
 SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *supercap_config);
+
+/** @brief 撤销启动期间已注册但尚未投入运行的超级电容实例。
+* @param[in] instance 当前唯一实例；NULL 或不匹配时不做处理。
+* @return 1 表示软件端点和实例已撤销，0 表示实例无效。
+* @note 调用方须保证 CAN 接收派发、发送和业务任务尚未运行且不并发访问实例；
+*       成功后实例指针失效。当前底层不报告硬件过滤器关闭错误，1 不保证硬件槽已释放；
+*       仅用于启动失败回退，不是运行期停机接口。
+ */
+uint8_t SuperCapRollbackStartup(SuperCapInstance *instance);
 
 /** @brief 提交八字节控制内容，CAN调度器在提交期间复制。
 * @param[in] instance 初始化成功的长期有效对象，不能为 NULL。

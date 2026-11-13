@@ -15,6 +15,7 @@ static uint8_t sent[8];
 static unsigned submissions;
 static CAN_TxSubmitStatus_t submit_result = CAN_TX_SUBMIT_ACCEPTED;
 static unsigned allocations, frees;
+static unsigned unregisters; // 记录启动回退撤销的 CAN 端点。
 static uint8_t fail_allocation, fail_registration;
 static atomic_int writer_done;
 static atomic_uint reader_errors;
@@ -53,6 +54,14 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     can.can_module_callback = config->can_module_callback;
     can.id = config->id;
     return &can;
+}
+
+void CANUnregisterInstance(CANInstance *instance)
+{
+    TEST_CHECK(instance == &can); // 只能撤销该测试电容的端点。
+    ++unregisters; // 保存释放次数。
+    can.can_module_callback = NULL; // 模拟底层停止派发旧回调。
+    can.id = NULL; // 不再保留已释放实例的引用。
 }
 
 CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *handle, const void *source,
@@ -119,6 +128,15 @@ int main(int argc, char **argv)
     }
     SuperCapInstance *instance = SuperCapInit(&config);
     TEST_CHECK(instance != NULL && SuperCapInit(&config) == NULL);
+    if (strcmp(argv[1], "rollback") == 0)
+    {
+        TEST_CHECK(!SuperCapRollbackStartup(NULL)); // 无效实例不能移除当前设备。
+        const unsigned freed_before = frees; // 保存调用前的释放计数。
+        TEST_CHECK(SuperCapRollbackStartup(instance)); // 撤销本次启动申请。
+        TEST_CHECK(unregisters == 1u && frees == freed_before + 1u && can.id == NULL); // 端点与对象均已释放。
+        TEST_CHECK(SuperCapInit(&config) != NULL); // 唯一实例槽和 CAN 端点可以重用。
+        return 0;
+    }
     if (strcmp(argv[1], "threads") == 0) {
         pthread_t producer, consumer;
         TEST_CHECK(pthread_create(&producer, NULL, writer, NULL) == 0);

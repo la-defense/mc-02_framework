@@ -901,6 +901,7 @@ endforeach()
 # 这组回归链接生产 BSP CAN 注册与发送实现，仅替换 HAL、时间和日志。
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
+  ../../modules/super_cap/super_cap.c # 联合生产电容和 CAN 驱动验证启动回退。
   ../../bsp/board/platform_can_stm32.c # 通过生产适配复用真实 CAN 队列。
   ../../bsp/board/platform_can_oneshot_stm32.c # 一次性命令使用生产板级适配。
   ../../bsp/board/platform_can_status_stm32.c # 通过生产适配查询逻辑总线状态。
@@ -917,6 +918,7 @@ add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
 target_include_directories(lk_motor_bsp_can_test BEFORE PRIVATE ../../bsp/can lk_motor_can_fakes
   lk_motor_fakes . ../../modules/motor/LKmotor ../../modules/motor ../../modules
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/message_center ../../modules/can_comm ../../modules/time_sync)
+target_include_directories(lk_motor_bsp_can_test PRIVATE ../../modules/super_cap) # 引入生产电容接口。
 target_compile_options(lk_motor_bsp_can_test PRIVATE -Wall -Wextra -Werror
   -Wno-type-limits -ffunction-sections -fdata-sections -fno-builtin-malloc -fno-builtin-free)
 target_link_libraries(lk_motor_bsp_can_test PRIVATE mc02_numeric mc02_software_crc)
@@ -949,6 +951,7 @@ add_test(NAME production_dji_receive_registration_rollback COMMAND lk_motor_bsp_
 add_test(NAME production_dji_startup_rollback COMMAND lk_motor_bsp_can_test dji-startup-rollback)
 add_test(NAME production_dji_startup_rollback_after_daemon COMMAND lk_motor_bsp_can_test dji-startup-rollback-late)
 add_test(NAME production_dji_startup_rollback_keeps_group COMMAND lk_motor_bsp_can_test dji-startup-rollback-group)
+add_test(NAME production_super_cap_can_startup_rollback COMMAND lk_motor_bsp_can_test supercap-startup-rollback) # 检查真实 CAN 端点和队列回退。
 add_test(NAME production_dji_logical_send_groups COMMAND lk_motor_bsp_can_test dji-send-groups)
 add_test(NAME production_lk_motor_bsp_can_routing COMMAND lk_motor_bsp_can_test routing)
 add_test(NAME production_lk_motor_bsp_can_closed_loops COMMAND lk_motor_bsp_can_test closed_loops)
@@ -1658,6 +1661,16 @@ target_compile_definitions(chassis_generated_cap_test PRIVATE MC02_CONFIG_GENERA
   CHASSIS_MAX_WZ_DEG_S=10.0f CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
 target_link_libraries(chassis_generated_cap_test PRIVATE mc02_dsp_host m)
 add_test(NAME production_chassis_cap_missing_fail_closed COMMAND chassis_generated_cap_test cap-failure)
+foreach(index IN ITEMS 1 2 3 4)
+  add_test(NAME production_chassis_startup_motor_failure_${index} COMMAND chassis_generated_cap_test motor-at-${index}) # 逐轮注入注册失败。
+endforeach()
+add_test(NAME production_chassis_startup_rollback_failure COMMAND chassis_generated_cap_test rollback-failure) # 检查回退故障上报。
+if(UNIX AND NOT APPLE)
+  target_compile_definitions(chassis_generated_cap_test PRIVATE MC02_TEST_WRAP_CHASSIS_PAIR=1) # 允许注入话题申请错误。
+  target_link_options(chassis_generated_cap_test PRIVATE -Wl,--wrap=MessageEndpointPairRegister) # 正常调用仍使用生产消息中心。
+  add_test(NAME production_chassis_startup_topic_failure COMMAND chassis_generated_cap_test topic-failure) # 检查电机和电容整体回退。
+  add_test(NAME production_chassis_startup_cap_rollback_failure COMMAND chassis_generated_cap_test cap-rollback-failure) # 回退失败时仍尽力撤销轮电机。
+endif()
 set_tests_properties(production_chassis_cap_missing_fail_closed PROPERTIES TIMEOUT 10)
 add_executable(robot_cmd_task_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c
@@ -2406,7 +2419,7 @@ target_include_directories(super_cap_test BEFORE PRIVATE super_cap_fakes ../../m
 target_compile_options(super_cap_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(super_cap_test PRIVATE Threads::Threads)
 target_link_options(super_cap_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
-foreach(scenario normal allocation registration threads)
+foreach(scenario normal allocation registration threads rollback)
   add_test(NAME production_super_cap_${scenario} COMMAND super_cap_test ${scenario})
   set_tests_properties(production_super_cap_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()

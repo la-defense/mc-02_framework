@@ -5,6 +5,8 @@
 #include "super_cap.h"
 #include <stddef.h>
 
+static SuperCapInstance *legacy_cap; // 仅保存本适配器创建的实例，避免撤销其他使用者。
+
 uint8_t ChassisLegacySuperCapInit(void)
 {
     SuperCap_Init_Config_s config = {
@@ -14,5 +16,15 @@ uint8_t ChassisLegacySuperCapInit(void)
             .rx_id = 0x301, // 原有接收标识，设备协议尚待确认。
         },
     };
-    return (uint8_t)(SuperCapInit(&config) != NULL); // 未取得设备实例则拒绝底盘启动。
+    if (legacy_cap != NULL) return 0u; // 不覆盖此前已经登记的实例。
+    legacy_cap = SuperCapInit(&config); // 保存本次成功申请的实例。
+    return (uint8_t)(legacy_cap != NULL); // 未取得设备实例则拒绝底盘启动。
+}
+
+uint8_t ChassisLegacySuperCapRollbackStartup(void)
+{
+    if (legacy_cap == NULL) return 1u; // 未创建实例时没有资源需要撤销。
+    if (!SuperCapRollbackStartup(legacy_cap)) return 0u; // 失败时保留指针供整车锁存故障。
+    legacy_cap = NULL; // 已释放实例不能继续使用。
+    return 1u;
 }

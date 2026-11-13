@@ -157,6 +157,13 @@ MessageStatus_t MessageEndpointPairRegister(MessageTopicId_t publisher_topic,
     MessageTopicId_t subscriber_topic, MessageEndpointId_t endpoint_id,
     MessagePublisher_t **publisher, MessageSubscriber_t **subscriber);
 
+/** @brief 复制固定目录中一个话题的声明，不注册任何端点。
+ * @param[in] topic_id 已声明的话题编号。
+ * @param[out] output 成功时接收声明；失败时保持原值。
+ * @return 成功、参数错误、目录未初始化或话题不存在。
+ */
+MessageStatus_t MessageTopicGetDescriptor(MessageTopicId_t topic_id, MessageTopicDescriptor_t *output);
+
 /** @brief 发布复制数据并保留源、接收、发布时间。
  * @param[in] publisher 有效发布句柄。
  * @param[in] data 至少可读目录声明的payload_size字节，返回后可立即复用。

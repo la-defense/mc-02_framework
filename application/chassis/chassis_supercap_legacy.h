@@ -9,4 +9,9 @@
  * @note 设备未选型，不能据此认为普通供电功率限制已实现。
  */
 uint8_t ChassisLegacySuperCapInit(void);
+/** @brief 回退底盘在启动阶段创建的旧电容实例。
+ * @return 已回退或没有实例返回 1；底层拒绝回退返回 0。
+ * @note 仅在接收派发、发送及业务任务启动之前调用。
+ */
+uint8_t ChassisLegacySuperCapRollbackStartup(void);
 #endif
