@@ -50,9 +50,10 @@ uint8_t PlatformCanRxIsRegistered(const PlatformCanRxPort_t *port)
     return (uint8_t)(port != NULL && port->backend != NULL);
 }
 
-void PlatformCanRxRollback(PlatformCanRxPort_t *port)
+uint8_t PlatformCanRxRollback(PlatformCanRxPort_t *port)
 {
-    if (port == NULL || port->backend == NULL) return; // 无注册时不访问底层。
-    CANUnregisterInstance((CANInstance *)port->backend); // 启动回退时释放本次注册。
+    if (port == NULL || port->backend == NULL) return 0u; // 无注册时不访问底层。
+    const uint8_t closed = CANUnregisterInstance((CANInstance *)port->backend); // 软件端点无论硬件结果均已撤销。
     memset(port, 0, sizeof(*port)); // 释放后清除回调及旧句柄，允许重新配置。
+    return closed; // 调用者据此处理硬件过滤器关闭失败。
 }

@@ -49,9 +49,9 @@ SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *supercap_config);
 
 /** @brief 撤销启动期间已注册但尚未投入运行的超级电容实例。
 * @param[in] instance 当前唯一实例；NULL 或不匹配时不做处理。
-* @return 1 表示软件端点和实例已撤销，0 表示实例无效。
+* @return 1 表示软件端点和硬件过滤器均已撤销，0 表示实例无效或硬件关闭失败。
 * @note 调用方须保证 CAN 接收派发、发送和业务任务尚未运行且不并发访问实例；
-*       成功后实例指针失效。当前底层不报告硬件过滤器关闭错误，1 不保证硬件槽已释放；
+*       已注册实例即使硬件关闭失败也会释放，原指针失效；
 *       仅用于启动失败回退，不是运行期停机接口。
  */
 uint8_t SuperCapRollbackStartup(SuperCapInstance *instance);

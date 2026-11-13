@@ -3,7 +3,8 @@
  */
 #include "bsp_can.h"
 
-void CANUnregisterInstance(CANInstance *instance)
+uint8_t CANUnregisterInstance(CANInstance *instance)
 {
     (void)instance; // 这些测试的实例由固定数组提供。
+    return 1u; // 静态替身没有硬件过滤器等待关闭。
 }

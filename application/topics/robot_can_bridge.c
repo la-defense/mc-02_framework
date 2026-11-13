@@ -19,6 +19,12 @@ static TimeMappingState_t published_sync;
 static uint32_t published_sync_ms;
 static uint8_t published_sync_ready;
 static PlatformCanBus_t robot_bridge_bus; // 初始化成功后固定，供发送任务选择本板总线。
+static uint8_t robot_bridge_rollback_failed; // 记录启动回退中的硬件过滤器错误。
+
+uint8_t RobotCanBridgeInitRollbackFailed(void)
+{
+    return robot_bridge_rollback_failed; // 返回最近一次启动回退的结果。
+}
 
 #if defined(CHASSIS_BOARD)
 static void RobotCanBridgeCommandInvalidated(void *context)
@@ -47,6 +53,7 @@ static void RobotCanBridgeBeforeCommandPublish(void *context, const void *payloa
 
 uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
 {
+    robot_bridge_rollback_failed = 0u; // 本次初始化重新记录回退结果。
     // 当前编解码只认识底盘命令和反馈；不支持的车型话题必须明确拒绝。
     if (config==NULL || config->tx_id>0x7ffu ||
         config->rx_id>0x7ffu || config->tx_id==config->rx_id ||
@@ -77,7 +84,7 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
             RobotCanBridgeCommandInvalidated,NULL)!=CAN_BRIDGE_OK ||
         CanTopicBridgeSetBeforePublishCallback(&robot_link.bridge,
             RobotCanBridgeBeforeCommandPublish,NULL)!=CAN_BRIDGE_OK) {
-        PlatformCanRxRollback(&robot_link.port);
+        if (!PlatformCanRxRollback(&robot_link.port)) robot_bridge_rollback_failed = 1u; // 硬件关闭失败不能当作普通辅助故障。
         memset(&robot_link,0,sizeof(robot_link));
         return 0u;
     }
@@ -85,7 +92,7 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config)
     // 对时使用同一个接收端点；失败时释放本次注册，不能启动无映射的双板控制。
     if (!CanTimeSyncInit(&robot_time_sync,config->can_bus,config->tx_id,&robot_link.port) ||
         !CanTopicLinkAttachTimeSync(&robot_link,&robot_time_sync)) {
-        PlatformCanRxRollback(&robot_link.port);
+        if (!PlatformCanRxRollback(&robot_link.port)) robot_bridge_rollback_failed = 1u; // 同步失败后的回退也需要确认硬件结果。
         memset(&robot_link,0,sizeof(robot_link));
         memset(&robot_time_sync,0,sizeof(robot_time_sync));
         return 0u;

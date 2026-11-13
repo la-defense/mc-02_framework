@@ -164,10 +164,10 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
 
 /** @brief 撤销启动阶段已注册但尚未投入运行的 DJI 电机。
 * @param[in] motor 注册成功的实例；NULL 或未登记实例不做处理。
-* @return 1 表示已撤销；实例不存在或守护监控已运行时返回 0，原实例保持有效。
+* @return 1 表示软件与硬件过滤器均已撤销；实例不存在、守护监控已运行或硬件关闭失败返回 0。
 * @note 仅在启动协调者创建接收派发、电机控制和守护任务之前串行调用；
-*       调用者须确保没有其他任务或回调访问实例。成功后指针失效，不得再次使用；
-*       当前底层不报告硬件过滤器关闭错误，返回 1 不保证硬件槽已释放。
+*       调用者须确保没有其他任务或回调访问实例。守护监控已运行时原实例保持有效；
+*       开始撤销后即使硬件过滤器关闭失败，软件实例也被释放，旧指针不得再使用。
 */
 uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor);
 

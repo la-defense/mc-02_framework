@@ -14,7 +14,8 @@ uint8_t BoardCanPrepareEndpoint(const PlatformCanEndpoint_t *endpoint, CAN_Init_
     return 1u;
 }
 
-void CANUnregisterInstance(CANInstance *instance)
+uint8_t CANUnregisterInstance(CANInstance *instance)
 {
     (void)instance; // 测试使用静态实例，没有可释放的硬件或内存。
+    return 1u; // 该替身始终确认释放成功。
 }

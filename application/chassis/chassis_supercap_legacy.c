@@ -24,7 +24,7 @@ uint8_t ChassisLegacySuperCapInit(void)
 uint8_t ChassisLegacySuperCapRollbackStartup(void)
 {
     if (legacy_cap == NULL) return 1u; // 未创建实例时没有资源需要撤销。
-    if (!SuperCapRollbackStartup(legacy_cap)) return 0u; // 失败时保留指针供整车锁存故障。
-    legacy_cap = NULL; // 已释放实例不能继续使用。
-    return 1u;
+    const uint8_t closed = SuperCapRollbackStartup(legacy_cap); // 软件实例无论硬件结果均会释放。
+    legacy_cap = NULL; // 丢弃可能已经失效的实例指针。
+    return closed; // 硬件失败交由整车锁存故障。
 }

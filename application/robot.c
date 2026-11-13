@@ -441,6 +441,11 @@ uint8_t RobotInitializeApplications(void)
 #if defined(MC02_CONFIG_GENERATED)
     if (RobotBuildModuleStarted(ROBOT_MODULE_COMMUNICATION) && !RobotCanBridgeInit(&robot_config->can_bridge))
     {
+        if (RobotCanBridgeInitRollbackFailed())
+        {
+            RobotStartupRollbackFailure(INIT_MODULE_ROBOT); // 板间端点未能安全回退时整体失能。
+            goto init_failed; // 不创建或放行业务任务。
+        }
         if (RobotBuildMarkFailure(ROBOT_MODULE_COMMUNICATION)) // 桥接失败可能影响核心依赖。
         {
             InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, 2u); // 保存核心桥接失败。

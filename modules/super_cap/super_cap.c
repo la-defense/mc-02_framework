@@ -68,10 +68,10 @@ SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *supercap_config)
 uint8_t SuperCapRollbackStartup(SuperCapInstance *instance)
 {
     if (instance == NULL || instance != super_cap_instance) return 0u; // 未登记实例不能影响当前设备。
-    CANUnregisterInstance(instance->can_ins); // 撤销接收查找和待处理的旧数据。
+    const uint8_t filter_closed = CANUnregisterInstance(instance->can_ins); // 撤销软件端点并取得硬件关闭结果。
     super_cap_instance = NULL; // 唯一实例槽可供后续重新登记。
     free(instance); // 接收回调不再引用该对象后释放内存。
-    return 1u; // 调用者必须放弃旧指针。
+    return filter_closed; // 关闭失败仍释放软件实例并上报，旧指针不得使用。
 }
 
 CAN_TxSubmitStatus_t SuperCapSend(SuperCapInstance *instance, const uint8_t *data, size_t length)

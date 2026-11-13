@@ -1406,36 +1406,38 @@ static void CANSelfTestRxCallback(CANInstance *ins)
 }
 
 // 尝试关闭已注销端点的硬件过滤器；失败时保留占用，避免覆盖仍在使用的槽。
-static void CANReleaseFilter(CANInstance *instance, uint8_t bus_index)
+static uint8_t CANReleaseFilter(CANInstance *instance, uint8_t bus_index)
 {
-    if (instance == NULL || bus_index >= DEVICE_CAN_CNT) return; // 无效实例不修改槽位表。
+    if (instance == NULL || bus_index >= DEVICE_CAN_CNT) return 0u; // 无效实例不修改槽位表。
     const CAN_TxIdType_t id_type = instance->identifier_type; // 标准与扩展过滤器分别管理。
-    if (id_type != CAN_TX_ID_STANDARD && id_type != CAN_TX_ID_EXTENDED) return; // 无效类型不能索引表。
+    if (id_type != CAN_TX_ID_STANDARD && id_type != CAN_TX_ID_EXTENDED) return 0u; // 无效类型不能索引表。
     const uint8_t slot = instance->filter_index; // 使用注册时保存的准确槽位。
     if (slot >= CAN_MX_REGISTER_CNT || (can_filter_used[bus_index][id_type] & (1u << slot)) == 0u)
-        return; // 未持有槽时不能关闭其他端点。
+        return 0u; // 未持有槽时不能关闭其他端点。
     FDCAN_FilterTypeDef filter = {0}; // 清零配置，避免携带未使用字段。
     filter.FilterIndex = slot; // 只关闭本端点的过滤器。
     filter.FilterType = FDCAN_FILTER_DUAL; // 与原有精确匹配使用相同类型。
     filter.IdType = id_type == CAN_TX_ID_STANDARD ? FDCAN_STANDARD_ID : FDCAN_EXTENDED_ID;
     filter.FilterConfig = FDCAN_FILTER_DISABLE; // 关闭硬件匹配，避免继续接收旧 ID。
-    if (HAL_FDCAN_ConfigFilter(instance->can_handle, &filter) == HAL_OK)
-        can_filter_used[bus_index][id_type] &= ~(1u << slot); // 硬件确认后才允许复用。
+    if (HAL_FDCAN_ConfigFilter(instance->can_handle, &filter) != HAL_OK)
+        return 0u; // 硬件未确认关闭时保留占用并上报失败。
+    can_filter_used[bus_index][id_type] &= ~(1u << slot); // 硬件确认后才允许复用。
+    return 1u;
 }
 
 /* 仅在接收任务不并发时注销；清除中断已排队的旧指针后再释放。 */
-void CANUnregisterInstance(CANInstance *ins)
+uint8_t CANUnregisterInstance(CANInstance *ins)
 {
     uint8_t i;
     if (ins == NULL)
-        return;
+        return 0u;
     for (i = 0; i < idx; ++i)
     {
         if (can_instance[i] == ins)
             break;
     }
     if (i >= idx)
-        return;
+        return 0u;
 
     const uint32_t previous_mask = __get_PRIMASK(); // 保存调用前中断屏蔽状态。
     __disable_irq(); // 防止摘除查找表时接收中断继续写入旧实例。
@@ -1457,8 +1459,9 @@ void CANUnregisterInstance(CANInstance *ins)
         can_instance[i] = can_instance[i + 1u]; // 压紧注册表，不改变其他实例。
     can_instance[--idx] = NULL; // 清除末尾的重复位置。
     __set_PRIMASK(previous_mask); // 恢复原来的屏蔽状态后再释放内存。
-    CANReleaseFilter(ins, bus_idx); // 撤销硬件过滤并在成功时回收本槽。
+    const uint8_t filter_closed = CANReleaseFilter(ins, bus_idx); // 只有硬件确认后才回收槽位。
     free(ins); // 接收查找表和队列均已不再引用此实例。
+    return filter_closed; // 即使关闭失败，软件实例也已释放。
 }
 
 void CANQuarantineBus(FDCAN_HandleTypeDef *handle)
@@ -1620,7 +1623,11 @@ uint8_t CANRunLoopbackSelfTest(void)
             can_selftest_pass_mask |= (uint8_t)(1u << bus);
 
         /* 4. 恢复 NORMAL 模式并重装滤镜 */
-        CANUnregisterInstance(selftest_instance);
+        if (!CANUnregisterInstance(selftest_instance))
+        {
+            ++can_selftest_state_err; // 记录自测过滤器未能确认关闭。
+            can_selftest_pass_mask &= (uint8_t)~(1u << bus); // 本次自测不能报告成功。
+        }
         selftest_instance = NULL;
         if (CANForceMode(h, FDCAN_MODE_NORMAL, 0u) == 0u)
         {

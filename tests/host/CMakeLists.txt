@@ -952,6 +952,7 @@ add_test(NAME production_dji_startup_rollback COMMAND lk_motor_bsp_can_test dji-
 add_test(NAME production_dji_startup_rollback_after_daemon COMMAND lk_motor_bsp_can_test dji-startup-rollback-late)
 add_test(NAME production_dji_startup_rollback_keeps_group COMMAND lk_motor_bsp_can_test dji-startup-rollback-group)
 add_test(NAME production_super_cap_can_startup_rollback COMMAND lk_motor_bsp_can_test supercap-startup-rollback) # 检查真实 CAN 端点和队列回退。
+add_test(NAME production_can_device_filter_close_failure COMMAND lk_motor_bsp_can_test device-filter-close-failure) # 设备回退时向上报告硬件过滤器错误。
 add_test(NAME production_dji_logical_send_groups COMMAND lk_motor_bsp_can_test dji-send-groups)
 add_test(NAME production_lk_motor_bsp_can_routing COMMAND lk_motor_bsp_can_test routing)
 add_test(NAME production_lk_motor_bsp_can_closed_loops COMMAND lk_motor_bsp_can_test closed_loops)
@@ -1298,6 +1299,12 @@ foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
   target_link_libraries(robot_can_bridge_${role_name}_test PRIVATE mc02_software_crc)
   target_compile_options(robot_can_bridge_${role_name}_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
   add_test(NAME production_robot_can_bridge_${role_name} COMMAND robot_can_bridge_${role_name}_test)
+  if(UNIX AND NOT APPLE)
+    target_compile_definitions(robot_can_bridge_${role_name}_test PRIVATE MC02_TEST_WRAP_TIME_SYNC=1) # 对时失败注入只用于主机验证。
+    target_link_options(robot_can_bridge_${role_name}_test PRIVATE -Wl,--wrap=CanTimeSyncInit) # 保留正常路径的生产对时实现。
+    add_test(NAME production_robot_can_bridge_${role_name}_rollback_ok COMMAND robot_can_bridge_${role_name}_test close-success) # 普通失败正确撤销。
+    add_test(NAME production_robot_can_bridge_${role_name}_rollback_fault COMMAND robot_can_bridge_${role_name}_test close-failure) # 硬件关闭失败必须上报。
+  endif()
   set_tests_properties(production_robot_can_bridge_${role_name} PROPERTIES TIMEOUT 10)
 endforeach()
 add_executable(chassis_topic_codec_test chassis_topic_codec_test.c ../../application/topics/chassis_topic_codec.c)

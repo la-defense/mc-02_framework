@@ -410,11 +410,13 @@ uint8_t CANReapplyFilters(FDCAN_HandleTypeDef *h);
  */
 void CANQuarantineBus(FDCAN_HandleTypeDef *h);
 
-/** @brief 移出注册表、接收查找表及排队帧对实例的引用并释放实例。
-* @param[in] ins 待释放实例；NULL 或不在表中时不处理，成功后不可再使用。
-* @note 仅在接收派发和回调不并发的启动回退或自测收尾调用；已排队的其他实例帧保留。
+/** @brief 移出软件接收注册并尝试关闭硬件过滤器。
+* @param[in] ins 待释放实例；NULL 或不在表中时不处理。
+* @return 硬件过滤器确认关闭返回 1；实例无效或硬件关闭失败返回 0。
+* @note 已注册实例无论硬件关闭是否成功，软件端点均已移除且指针失效；失败时硬件槽保留占用。
+*       仅在接收派发和回调不并发的启动回退或自测收尾调用；其他实例的排队帧保留。
  */
-void CANUnregisterInstance(CANInstance *ins);
+uint8_t CANUnregisterInstance(CANInstance *ins);
 
 /**
  * @brief CAN 总线健康检查与 BusOff 恢复; 建议以 10Hz 在任务上下文调用

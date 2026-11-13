@@ -106,10 +106,11 @@ CAN_TxSubmitStatus_t PlatformCanSubmitOneShot(PlatformCanBus_t bus, const void *
 
 /** @brief 撤销启动期间尚未投入运行的接收注册。
  * @param[in,out] port 已注册端点；NULL 或未注册时不做处理。
+ * @return 1 为硬件过滤器确认关闭；0 为无注册或硬件关闭失败。
  * @note 仅供启动失败回退；不得与接收派发、发送请求或运行中的回调并发。
- * 已排队的本端点帧会被丢弃，其他端点的帧保持原有顺序。
+ * 已注册端点即使硬件关闭失败也会清除软件句柄；排队的本端点帧被丢弃，其他帧保持顺序。
  */
-void PlatformCanRxRollback(PlatformCanRxPort_t *port);
+uint8_t PlatformCanRxRollback(PlatformCanRxPort_t *port);
 
 /** @brief 登记周期帧，必要时在交给硬件前重新检查并修改队列副本。
  * @param[in] bus 板级声明的逻辑总线。

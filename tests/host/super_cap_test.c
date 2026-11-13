@@ -56,12 +56,13 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     return &can;
 }
 
-void CANUnregisterInstance(CANInstance *instance)
+uint8_t CANUnregisterInstance(CANInstance *instance)
 {
     TEST_CHECK(instance == &can); // 只能撤销该测试电容的端点。
     ++unregisters; // 保存释放次数。
     can.can_module_callback = NULL; // 模拟底层停止派发旧回调。
     can.id = NULL; // 不再保留已释放实例的引用。
+    return 1u; // 默认模拟硬件过滤器成功关闭。
 }
 
 CAN_TxSubmitStatus_t CANSubmitPeriodic(FDCAN_HandleTypeDef *handle, const void *source,

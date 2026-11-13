@@ -13,6 +13,11 @@
  * @return 1为成功，0为资源或配置错误；启动协调期间串行调用一次。
  */
 uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config);
+/** @brief 查询最近一次桥接初始化是否无法关闭已注册的过滤器。
+ * @return 非零表示回退不完整，启动协调者须锁存整车失能。
+ * @note 仅在启动协调任务中读取；每次初始化开始清除上一结果。
+ */
+uint8_t RobotCanBridgeInitRollbackFailed(void);
 /** @brief 复制最近一次板间对时状态，供其他普通任务查询。
  * @param[out] output 偏差、样本数及同步标记；失败保持原值。
  * @param[out] updated_ms 此副本的本机更新时间；失败保持原值。

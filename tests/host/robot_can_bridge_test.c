@@ -27,6 +27,16 @@ static uint32_t next_id;
 static FDCAN_HandleTypeDef *expected_handle;
 static FDCAN_HandleTypeDef *serviced_handle;
 static uint16_t expected_tx, expected_rx;
+static uint8_t fake_filter_close_failure; // 测试回退时硬件过滤器拒绝关闭。
+#if defined(MC02_TEST_WRAP_TIME_SYNC)
+static uint8_t fake_time_sync_failure; // 在 CAN 端点登记后注入对时初始化失败。
+uint8_t __real_CanTimeSyncInit(CanTimeSync_t *, PlatformCanBus_t, uint32_t, const void *);
+uint8_t __wrap_CanTimeSyncInit(CanTimeSync_t *sync, PlatformCanBus_t bus, uint32_t id, const void *endpoint)
+{
+    if (fake_time_sync_failure) return 0u; // 注入失败，触发桥接回退。
+    return __real_CanTimeSyncInit(sync, bus, id, endpoint); // 普通场景仍使用生产对时实现。
+}
+#endif
 
 uint32_t HAL_GetTick(void) { return now_ms; }
 
@@ -42,10 +52,14 @@ CANInstance *CANRegister(CAN_Init_Config_s *config)
     return &registered_can;
 }
 
-void CANUnregisterInstance(CANInstance *instance)
+uint8_t CANUnregisterInstance(CANInstance *instance)
 {
     if (instance == &registered_can)
+    {
         receive_callback = NULL;
+        return (uint8_t)!fake_filter_close_failure; // 软件端点撤销后报告硬件结果。
+    }
+    return 0u; // 其他实例没有登记。
 }
 
 void CANProcessTxBus(FDCAN_HandleTypeDef *handle) { serviced_handle=handle; }
@@ -101,7 +115,7 @@ static void receive_topic_message(const CanTopicMessage_t *message, uint8_t sequ
 }
 #endif
 
-int main(void)
+int main(int argc, char **argv)
 {
     TimeMappingState_t state = {.accepted_samples = 123u};
     uint32_t updated_ms = 456u;
@@ -111,6 +125,19 @@ int main(void)
         .can_bus=PLATFORM_CAN_BUS_2, .tx_id=0x421u, .rx_id=0x422u,
         .command_topic=ROBOT_TOPIC_CHASSIS_COMMAND, .feedback_topic=ROBOT_TOPIC_CHASSIS_FEEDBACK};
     expected_handle=&hcan2; expected_tx=config.tx_id; expected_rx=config.rx_id;
+#if defined(MC02_TEST_WRAP_TIME_SYNC)
+    if (argc == 2)
+    {
+        fake_time_sync_failure = 1u; // 让端点登记成功后，对时初始化失败。
+        fake_filter_close_failure = (uint8_t)(strcmp(argv[1], "close-failure") == 0); // 可选注入硬件回退错误。
+        TEST_CHECK(fake_filter_close_failure || strcmp(argv[1], "close-success") == 0);
+        TEST_CHECK(!RobotCanBridgeInit(&config) && receive_callback == NULL); // 启动失败时软件端点已撤销。
+        TEST_CHECK(RobotCanBridgeInitRollbackFailed() == fake_filter_close_failure); // 向整车区分普通失败和不完整回退。
+        return 0;
+    }
+#else
+    (void)argc; (void)argv; // 其他平台只运行常规场景。
+#endif
     TEST_CHECK(!RobotCanBridgeInit(NULL));
     TEST_CHECK(BoardCanResolve(PLATFORM_CAN_BUS_1) == &hcan1); // 第一条逻辑总线绑定本板 CAN1。
     TEST_CHECK(BoardCanResolve(PLATFORM_CAN_BUS_2) == &hcan2); // 第二条逻辑总线绑定本板 CAN2。

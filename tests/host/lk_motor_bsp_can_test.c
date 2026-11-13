@@ -424,7 +424,7 @@ static void test_classic_extended_rx_and_filter_reuse(void)
     TEST_CHECK(std_state.count == 1u && std_state.marker == 0x11u && std_state.time_ms == 123u);
     TEST_CHECK(ext_state.count == 1u && ext_state.marker == 0x22u && ext_state.time_ms == 123u);
     TEST_CHECK(other_state.count == 1u && other_state.marker == 0x33u && other_state.time_ms == 123u);
-    PlatformCanRxRollback(&extended); // 回退时释放第一条总线的扩展槽。
+    TEST_CHECK(PlatformCanRxRollback(&extended)); // 回退时确认第一条总线的扩展槽关闭。
     endpoint.can_bus = PLATFORM_CAN_BUS_1; // 转回第一条总线。
     endpoint.rx_id = 0x1fffffffu; endpoint.tx_id = 0x1fffffffu; // 验证 29 位最大合法 ID。
     filter_fail_once = 1u; // 注入重新配置硬件过滤器失败。
@@ -433,7 +433,8 @@ static void test_classic_extended_rx_and_filter_reuse(void)
     TEST_CHECK(PlatformCanRxRegister(&extended, &endpoint, extended_rx_callback, &ext_state));
     TEST_CHECK(filter_last_index[0] == 0u && filter_last_type[0] == FDCAN_EXTENDED_ID); // 复用释放槽。
     filter_fail_once = 1u; // 注入关闭硬件过滤器失败。
-    PlatformCanRxRollback(&extended); // 软件端点先撤销，不再接收任何旧数据。
+    TEST_CHECK(!PlatformCanRxRollback(&extended)); // 硬件关闭失败必须向调用者报告。
+    TEST_CHECK(extended.backend == NULL); // 即使硬件失败也撤销软件端点与旧队列引用。
     TEST_CHECK(!PlatformCanRxRegister(&extended, &endpoint, extended_rx_callback, &ext_state));
     TEST_CHECK(extended.backend == NULL); // 未确认关闭的槽不得直接复用。
     const uint32_t other_filter_count = filter_count[1]; // 第二条总线的硬件不应被重新配置。
@@ -779,6 +780,29 @@ static void test_supercap_startup_rollback(void)
     HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 接收新帧。
     CANProcessRx(); // 按普通任务路径派发。
     TEST_CHECK(SuperCapGet(cap, 0u, 100u, &feedback) == SUPERCAP_OK && feedback.state == SUPERCAP_FEEDBACK_FRESH && feedback.value.vol == 0x3400u); // 新端点只接受新数据。
+}
+
+// 电机和电容必须把硬件过滤器关闭失败传给启动协调者。
+static void test_device_filter_close_failure(void)
+{
+    Motor_Init_Config_s motor_config = {0}; // 准备使用第一条总线的电机。
+    motor_config.motor_type = M3508; // 使用 DJI 电调。
+    motor_config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL}; // 不改变轴比例。
+    motor_config.can_init_config.can_bus = PLATFORM_CAN_BUS_1; // 选择第一条总线。
+    motor_config.can_init_config.tx_id = 1u; // 电机反馈使用独立 ID。
+    motor_config.controller_setting_init_config.close_loop_type = OPEN_LOOP; // 不启用闭环。
+    DJIMotorInstance *motor = DJIMotorInit(&motor_config); // 注册待回退电机。
+    TEST_CHECK(motor != NULL);
+    filter_fail_once = 1u; // 模拟硬件拒绝关闭电机过滤器。
+    TEST_CHECK(!DJIMotorRollbackStartup(motor)); // 软件已撤销，但返回失败供整车失能。
+    TEST_CHECK(CANReapplyFilters(&hfdcan1)); // 恢复硬件过滤表以继续测试。
+    SuperCap_Init_Config_s config = {.can_config = {.can_handle = &hfdcan1, .tx_id = 0x302u, .rx_id = 0x301u}}; // 电容使用独立的标准 ID。
+    SuperCapInstance *cap = SuperCapInit(&config); // 注册待回退电容。
+    TEST_CHECK(cap != NULL);
+    filter_fail_once = 1u; // 模拟硬件拒绝关闭电容过滤器。
+    TEST_CHECK(!SuperCapRollbackStartup(cap)); // 软件实例释放后仍必须报告失败。
+    TEST_CHECK(CANReapplyFilters(&hfdcan1)); // 恢复后槽位才能重新使用。
+    TEST_CHECK(SuperCapInit(&config) != NULL); // 恢复后允许再次登记同一电容。
 }
 
 // 真实队列验证三条总线上三类 DJI 分组均使用对应的标准帧 ID。
@@ -2427,6 +2451,8 @@ int main(int argc, char **argv)
         test_dji_startup_rollback_keeps_group();
     else if (strcmp(argv[1], "supercap-startup-rollback") == 0)
         test_supercap_startup_rollback();
+    else if (strcmp(argv[1], "device-filter-close-failure") == 0)
+        test_device_filter_close_failure();
     else if (strcmp(argv[1], "dji-send-groups") == 0)
         test_dji_logical_send_groups();
     else if (strcmp(argv[1], "platform-can") == 0)
