@@ -17,6 +17,11 @@ void ChassisTask(void);
  * @note 由启动协调任务调用一次；INS 随后由协调任务初始化。
  */
 uint8_t GimbalInit(void);
+/** @brief 查询最近一次云台初始化是否发生资源回退失败。
+ * @return 非零表示有资源无法安全撤销，启动协调者必须整体失能。
+ * @note 在启动协调任务中串行读取；每次 GimbalInit 开始时清除上一结果。
+ */
+uint8_t GimbalInitRollbackFailed(void);
 /** @brief 在成功初始化后执行一轮云台控制；超过 50 ms 的命令失效并停止相应输出。 */
 void GimbalTask(void);
 /** @brief 初始化发射机构资源。

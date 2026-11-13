@@ -80,15 +80,23 @@ static MessagePublisher_t *gimbal_pub;             // 云台应用消息发布�
 static MessageSubscriber_t *gimbal_sub;            // cmd控制消息订阅者
 static Gimbal_Upload_Data_s gimbal_feedback_data; // 回传给cmd的云台状态信息
 static Gimbal_Ctrl_Cmd_s gimbal_cmd_recv;         // 来自cmd的控制信息
+static uint8_t gimbal_rollback_failed; // 记录启动资源无法撤销的故障。
+
+uint8_t GimbalInitRollbackFailed(void)
+{
+    return gimbal_rollback_failed; // 启动协调任务读取最近一次回退结果。
+}
 
 uint8_t GimbalInit(void)
 {   
+    gimbal_rollback_failed = 0u; // 每次初始化从无回退故障开始。
     if (!RobotTopicsInit())
         return 0u;
     gimbal_config = GimbalConfigFeed();
     if (gimbal_config == NULL || gimbal_config->gimbal_type != SINGLE_GIMBAL)
         return 0u;
-    gimba_IMU_data = INS_GetStorage(); // INS 由调度器启动后的专属任务初始化
+    attitude_t *pending_imu = INS_GetStorage(); // INS 存储必须存在，姿态初始化由协调任务继续执行。
+    if (pending_imu == NULL) return 0u; // 未取得存储时不注册任何电机。
     Motor_Init_Config_s yaw_config = gimbal_config->yaw_motor_config;
     Motor_Init_Config_s pitch_config = gimbal_config->pitch_motor_config;
     yaw_config.controller_param_init_config.other_angle_feedback =
@@ -108,15 +116,28 @@ uint8_t GimbalInit(void)
     pitch_config.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
     pitch_config.controller_setting_init_config.speed_feedback_source = OTHER_FEED;
     // 这里只注册电机；实际是否运行由周期命令中的模式决定。
-    yaw_motor = DJIMotorInit(&yaw_config);
-    pitch_motor = DJIMotorInit(&pitch_config);
+    DJIMotorInstance *pending_yaw = DJIMotorInit(&yaw_config); // 先暂存大 yaw 实例。
+    if (pending_yaw == NULL) return 0u; // 第一台失败时没有已取得的电机。
+    DJIMotorInstance *pending_pitch = DJIMotorInit(&pitch_config); // 再申请 pitch 实例。
+    if (pending_pitch == NULL) goto rollback; // 第二台失败时撤销第一台。
+    MessagePublisher_t *pending_pub = NULL; // 准备一次提交的发布句柄。
+    MessageSubscriber_t *pending_sub = NULL; // 准备一次提交的订阅句柄。
+    if (MessageEndpointPairRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_GIMBAL_COMMAND,
+                                    ROBOT_TOPIC_ENDPOINT_GIMBAL, &pending_pub, &pending_sub) != MESSAGE_OK)
+        goto rollback; // 任一话题不足时两个端点均未新增。
+    gimba_IMU_data = pending_imu; // 全部成功后发布姿态存储。
+    yaw_motor = pending_yaw; // 发布 yaw 电机。
+    pitch_motor = pending_pitch; // 发布 pitch 电机。
+    gimbal_pub = pending_pub; // 发布反馈话题句柄。
+    gimbal_sub = pending_sub; // 发布控制话题句柄。
+    return 1u; // 启动计划可接受云台模块。
 
-    gimbal_pub = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK,
-                                          ROBOT_TOPIC_ENDPOINT_GIMBAL);
-    gimbal_sub = MessageSubscriberRegister(ROBOT_TOPIC_GIMBAL_COMMAND,
-                                           ROBOT_TOPIC_ENDPOINT_GIMBAL);
-    return (uint8_t)(gimba_IMU_data != NULL && yaw_motor != NULL && pitch_motor != NULL &&
-                     gimbal_pub != NULL && gimbal_sub != NULL);
+rollback:
+    if (pending_pitch != NULL && !DJIMotorRollbackStartup(pending_pitch))
+        gimbal_rollback_failed = 1u; // pitch 无法撤销时必须通知整车。
+    if (!DJIMotorRollbackStartup(pending_yaw))
+        gimbal_rollback_failed = 1u; // 即使前一步失败也尽力撤销 yaw。
+    return 0u; // 不交付未完成的云台模块。
 }
 
 /* 机器人云台控制核心任务,后续考虑只保留IMU控制,不再需要电机的反馈 */

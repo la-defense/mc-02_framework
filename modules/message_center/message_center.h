@@ -144,6 +144,19 @@ MessagePublisher_t *MessagePublisherRegister(MessageTopicId_t topic_id,
 MessageSubscriber_t *MessageSubscriberRegister(MessageTopicId_t topic_id,
                                                MessageEndpointId_t endpoint_id);
 
+/** @brief 在启动阶段一次登记同一模块的发布与订阅端点。
+ * @param[in] publisher_topic 发布的话题编号。
+ * @param[in] subscriber_topic 订阅的话题编号。
+ * @param[in] endpoint_id 两个话题中均已声明的模块端点。
+ * @param[out] publisher 成功时接收长期发布句柄；失败保持原值。
+ * @param[out] subscriber 成功时接收长期订阅句柄；失败保持原值。
+ * @return 成功返回 MESSAGE_OK；目录、关系或容量不足时返回错误，不新增任何端点。
+ * @note 仅在启动阶段调用；已登记的相同端点会复用，不删除其他调用者的句柄。
+ */
+MessageStatus_t MessageEndpointPairRegister(MessageTopicId_t publisher_topic,
+    MessageTopicId_t subscriber_topic, MessageEndpointId_t endpoint_id,
+    MessagePublisher_t **publisher, MessageSubscriber_t **subscriber);
+
 /** @brief 发布复制数据并保留源、接收、发布时间。
  * @param[in] publisher 有效发布句柄。
  * @param[in] data 至少可读目录声明的payload_size字节，返回后可立即复用。

@@ -1185,6 +1185,11 @@ target_include_directories(message_center_capacity_test BEFORE PRIVATE init_reso
 target_include_directories(message_center_capacity_test PRIVATE ../../modules/message_center)
 add_test(NAME production_message_center_payload_storage_capacity COMMAND message_center_capacity_test)
 set_tests_properties(production_message_center_payload_storage_capacity PROPERTIES TIMEOUT 10)
+add_executable(message_center_pair_test message_center_pair_test.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}) # 使用生产消息中心测试成对登记。
+target_include_directories(message_center_pair_test BEFORE PRIVATE init_resource_fakes) # 复用主机锁替身。
+target_include_directories(message_center_pair_test PRIVATE . ../../modules/message_center) # 引入测试断言和公共接口。
+add_test(NAME production_message_center_pair_payload_capacity COMMAND message_center_pair_test payload) # 订阅负载不足。
+add_test(NAME production_message_center_pair_publisher_capacity COMMAND message_center_pair_test publishers) # 发布槽不足。
 if(UNIX AND NOT APPLE)
   find_package(Threads REQUIRED)
   add_executable(message_center_thread_test message_center_thread_test.c
@@ -1720,6 +1725,9 @@ target_compile_definitions(gimbal_mode_test PRIVATE MC02_PROFILE_BENCH_SAFE=1)
 target_compile_options(gimbal_mode_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
 target_link_libraries(gimbal_mode_test PRIVATE m)
 add_test(NAME production_gimbal_mode_state_transitions COMMAND gimbal_mode_test)
+foreach(scenario IN ITEMS 1 2 3 4 5)
+  add_test(NAME production_gimbal_startup_failure_${scenario} COMMAND gimbal_mode_test ${scenario}) # 注入电机、话题、回退及姿态存储失败。
+endforeach()
 set_tests_properties(production_gimbal_mode_state_transitions PROPERTIES TIMEOUT 10)
 # Linux 基准使用 CPU 亲和设置和 GNU ld 包装；输入为生产 RobotCMD 路径，分别统计复制量和线程 CPU 时间。
 # 两项目标隔离计数插桩；构建或 CTest 失败时由对应命令返回非零状态。

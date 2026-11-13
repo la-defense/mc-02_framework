@@ -146,7 +146,13 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
         if (!PlatformFeatureCanReady(config->gimbal_param.yaw_motor_config.can_init_config.can_bus) ||
             !PlatformFeatureCanReady(config->gimbal_param.pitch_motor_config.can_init_config.can_bus))
             return 0u; // 任一电机总线不可用时不部分注册云台。
-        return GimbalInit();
+        if (GimbalInit()) return 1u; // 完整注册后才接受云台模块。
+        if (GimbalInitRollbackFailed())
+        {
+            start->rollback_failed = 1u; // 回退失败不能作为普通辅助故障处理。
+            RobotStartupRollbackFailure(INIT_MODULE_GIMBAL); // 立即记录故障并失能、关断。
+        }
+        return 0u; // 正常回退后由模块计划决定故障影响。
 #else
         return 0u;
 #endif

@@ -94,6 +94,8 @@ static INS_Control_Snapshot_s ins_snapshot = {
 static DJIMotorInstance motors[2];
 static Motor_Init_Config_s motor_configs[2];
 static unsigned motor_init_count;
+static unsigned startup_scenario, motor_attempt, rollback_count; // 记录启动失败注入与清理次数。
+static uint8_t rolled_back[2]; // 检查两台电机分别被撤销。
 static MotorAction_s actions[16];
 static size_t action_count;
 static Gimbal_Ctrl_Cmd_s incoming_command;
@@ -119,6 +121,7 @@ static void RecordMotorAction(MotorAction_s action)
 
 attitude_t *INS_GetStorage(void)
 {
+    if (startup_scenario == 5u) return NULL; // 模拟姿态存储不可用。
     return &imu_storage;
 }
 
@@ -143,6 +146,8 @@ uint8_t RobotTopicsInit(void)
 
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {
+    ++motor_attempt; // 每次电机申请均记录，包括失败的申请。
+    if (startup_scenario == motor_attempt && startup_scenario <= 2u) return NULL; // 分别注入第一、二台失败。
     TEST_CHECK(config != NULL);
     TEST_CHECK(motor_init_count < 2u);
     TEST_CHECK(config->can_init_config.can_bus == PLATFORM_CAN_BUS_3);
@@ -151,6 +156,19 @@ DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
     motors[motor_init_count].measure.angle_single_round =
         motor_init_count == 0u ? 42.0f : 17.0f;
     return &motors[motor_init_count++];
+}
+
+uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor)
+{
+    if (startup_scenario == 4u) return 0u; // 模拟启动资源无法安全释放。
+    for (unsigned i = 0u; i < 2u; ++i)
+        if (motor == &motors[i] && !rolled_back[i])
+        {
+            rolled_back[i] = 1u; // 记录已释放的指定实例。
+            ++rollback_count; // 检查无遗漏和重复释放。
+            return 1u;
+        }
+    return 0u; // 未登记或重复回退均视为失败。
 }
 
 void DJIMotorStop(DJIMotorInstance *motor)
@@ -201,6 +219,17 @@ MessageSubscriber_t *MessageSubscriberRegister(MessageTopicId_t topic_id,
     TEST_CHECK(topic_id == ROBOT_TOPIC_GIMBAL_COMMAND);
     TEST_CHECK(endpoint_id == ROBOT_TOPIC_ENDPOINT_GIMBAL);
     return &subscriber_storage;
+}
+
+MessageStatus_t MessageEndpointPairRegister(MessageTopicId_t pub_topic, MessageTopicId_t sub_topic,
+    MessageEndpointId_t endpoint, MessagePublisher_t **publisher, MessageSubscriber_t **subscriber)
+{
+    TEST_CHECK(pub_topic == ROBOT_TOPIC_GIMBAL_FEEDBACK && sub_topic == ROBOT_TOPIC_GIMBAL_COMMAND);
+    TEST_CHECK(endpoint == ROBOT_TOPIC_ENDPOINT_GIMBAL && publisher != NULL && subscriber != NULL);
+    if (startup_scenario == 3u || startup_scenario == 4u) return MESSAGE_ERR_CAPACITY; // 注入成对登记失败。
+    *publisher = &publisher_storage; // 成功时同时交付发布句柄。
+    *subscriber = &subscriber_storage; // 成功时同时交付订阅句柄。
+    return MESSAGE_OK;
 }
 
 MessageStatus_t MessageReadSnapshot(MessageSubscriber_t *subscriber, void *output,
@@ -322,8 +351,23 @@ static void TestFeedbackConfiguration(void)
     }
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc == 2)
+    {
+        startup_scenario = (unsigned)(argv[1][0] - '0'); // 独立进程选择失败场景。
+        TEST_CHECK(startup_scenario >= 1u && startup_scenario <= 5u);
+        TEST_CHECK(GimbalInit() == 0u); // 任何依赖失败都不能启动模块。
+        if (startup_scenario == 4u)
+            TEST_CHECK(GimbalInitRollbackFailed() != 0u); // 无法回退需升级为整车故障。
+        else
+        {
+            const unsigned expected = startup_scenario == 3u ? 2u : (startup_scenario == 2u ? 1u : 0u); // 先前成功的电机都应撤销。
+            TEST_CHECK(!GimbalInitRollbackFailed() && rollback_count == expected);
+            for (unsigned i = 0u; i < expected; ++i) TEST_CHECK(rolled_back[i]); // 每台已注册电机均已回退。
+        }
+        return 0;
+    }
     TEST_CHECK(GimbalInit() == 1u);
     TEST_CHECK(topics_init_count == 1u && motor_init_count == 2u);
     TEST_CHECK(motor_configs[0].controller_param_init_config.angle_PID.Kp == 3.25f &&

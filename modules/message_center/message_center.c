@@ -255,6 +255,65 @@ MessageSubscriber_t *MessageSubscriberRegister(MessageTopicId_t topic_id,
     return NULL;
 }
 
+MessageStatus_t MessageEndpointPairRegister(MessageTopicId_t publisher_topic,
+    MessageTopicId_t subscriber_topic, MessageEndpointId_t endpoint_id,
+    MessagePublisher_t **publisher, MessageSubscriber_t **subscriber)
+{
+    if (publisher == NULL || subscriber == NULL || !IsEndpointValid(endpoint_id))
+        return MESSAGE_ERR_ARGUMENT; // 无效输出或端点不会改变目录。
+    if (!directory_ready) return MESSAGE_ERR_NOT_INITIALIZED; // 先建立固定话题目录。
+    const int pub_topic = FindTopicIndex(publisher_topic); // 查询发布话题。
+    const int sub_topic = FindTopicIndex(subscriber_topic); // 查询订阅话题。
+    if (pub_topic < 0 || sub_topic < 0) return MESSAGE_ERR_TOPIC; // 不存在的话题不能分配句柄。
+    const uint32_t endpoint_bit = 1u << (endpoint_id - 1u); // 目录位号从端点编号减一得到。
+    if ((topics[pub_topic].descriptor.publisher_mask & endpoint_bit) == 0u ||
+        (topics[sub_topic].descriptor.subscriber_mask & endpoint_bit) == 0u)
+        return MESSAGE_ERR_RELATION; // 两个方向都必须由目录允许。
+    PlatformTaskCriticalEnter(); // 同时检查和分配两个句柄，避免其他注册插入。
+    size_t pub = MESSAGE_CENTER_MAX_SUBSCRIBERS, sub = MESSAGE_CENTER_MAX_SUBSCRIBERS; // 未找到的标记。
+    size_t free_pub = MESSAGE_CENTER_MAX_SUBSCRIBERS, free_sub = MESSAGE_CENTER_MAX_SUBSCRIBERS; // 首个空闲槽。
+    for (size_t i = 0u; i < MESSAGE_CENTER_MAX_SUBSCRIBERS; ++i)
+    {
+        if (publisher_storage[i].active && publisher_storage[i].topic_id == publisher_topic &&
+            publisher_storage[i].endpoint_id == endpoint_id) pub = i; // 复用相同发布端点。
+        else if (!publisher_storage[i].active && free_pub == MESSAGE_CENTER_MAX_SUBSCRIBERS) free_pub = i; // 记录首个空发布槽。
+        if (subscribers[i].active && subscribers[i].topic_index == (uint8_t)sub_topic &&
+            subscribers[i].endpoint_id == endpoint_id) sub = i; // 复用相同订阅端点。
+        else if (!subscribers[i].active && free_sub == MESSAGE_CENTER_MAX_SUBSCRIBERS) free_sub = i; // 记录首个空订阅槽。
+    }
+    const size_t bytes = (size_t)topics[sub_topic].descriptor.payload_size * topics[sub_topic].descriptor.capacity; // 新订阅者需要的固定存储。
+    if ((pub == MESSAGE_CENTER_MAX_SUBSCRIBERS && free_pub == MESSAGE_CENTER_MAX_SUBSCRIBERS) ||
+        (sub == MESSAGE_CENTER_MAX_SUBSCRIBERS && (free_sub == MESSAGE_CENTER_MAX_SUBSCRIBERS ||
+         bytes > MESSAGE_CENTER_MAX_PAYLOAD_STORAGE_BYTES - payload_storage_used)))
+    {
+        PlatformTaskCriticalExit(); // 未修改资源，先恢复其他任务访问。
+        return MESSAGE_ERR_CAPACITY; // 任一端点容量不足时两个都不新增。
+    }
+    if (pub == MESSAGE_CENTER_MAX_SUBSCRIBERS)
+    {
+        pub = free_pub; // 选用检查过的发布槽。
+        publisher_storage[pub].active = 1u; // 声明该槽已占用。
+        publisher_storage[pub].topic_id = publisher_topic; // 保存发布话题。
+        publisher_storage[pub].endpoint_id = endpoint_id; // 保存模块端点。
+        publishers[pub].storage_index = (uint8_t)pub; // 句柄指向对应存储。
+    }
+    if (sub == MESSAGE_CENTER_MAX_SUBSCRIBERS)
+    {
+        sub = free_sub; // 选用检查过的订阅槽。
+        memset(&subscribers[sub], 0, sizeof(subscribers[sub])); // 清除此前未使用的槽数据。
+        subscribers[sub].topic_index = (uint8_t)sub_topic; // 保存订阅话题在目录中的位置。
+        subscribers[sub].endpoint_id = endpoint_id; // 保存模块端点。
+        subscribers[sub].storage_index = (uint8_t)sub; // 句柄与槽位保持一致。
+        subscribers[sub].payload_offset = (uint16_t)payload_storage_used; // 指向本次分配的数据区。
+        payload_storage_used += bytes; // 固定数据区在启动阶段只递增。
+        subscribers[sub].active = 1u; // 数据区和字段就绪后发布订阅槽。
+    }
+    *publisher = &publishers[pub]; // 两个端点均就绪时才写出发布句柄。
+    *subscriber = &subscribers[sub]; // 同时交付订阅句柄。
+    PlatformTaskCriticalExit(); // 两个句柄已经一致发布。
+    return MESSAGE_OK;
+}
+
 MessageStatus_t MessagePublisherGetDescriptor(const MessagePublisher_t *publisher, MessageTopicDescriptor_t *output)
 {
     if (publisher == NULL || output == NULL || publisher->storage_index >= MESSAGE_CENTER_MAX_SUBSCRIBERS)
