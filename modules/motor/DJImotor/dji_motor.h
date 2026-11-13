@@ -162,6 +162,14 @@ DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config);
 DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
                                          const DJI_Motor_Filter_Config_s *filter_config);
 
+/** @brief 撤销启动阶段已注册但尚未投入运行的 DJI 电机。
+* @param[in] motor 注册成功的实例；NULL 或未登记实例不做处理。
+* @return 1 表示已撤销；实例不存在或守护监控已运行时返回 0，原实例保持有效。
+* @note 仅在启动协调者创建接收派发、电机控制和守护任务之前串行调用；
+*       调用者须确保没有其他任务或回调访问实例。成功后指针失效，不得再次使用。
+*/
+uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor);
+
 /** @brief 保存目标，供下一轮 DJIMotorControl() 计算，不直接发送。
 * @param[in,out] motor 有效实例，不能为 NULL。
 * @param[in] ref 有限参考；角度外环使用输出轴rad，速度外环使用输出轴rad/s，直接输出仍为电调设备数值。

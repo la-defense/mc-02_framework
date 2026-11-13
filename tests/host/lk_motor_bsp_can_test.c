@@ -680,6 +680,73 @@ static void test_dji_receive_registration_rollback(void)
     TEST_CHECK(DJIMotorInit(&config) != NULL); // 不同总线允许同一反馈 ID。
 }
 
+// 启动失败时只撤销指定电机，保留同组及其他总线的电机。
+static void test_dji_startup_rollback(void)
+{
+    Motor_Init_Config_s config = {0}; // 使用不依赖 PID 的测试电机配置。
+    config.motor_type = M3508; // 选择常用底盘电调。
+    config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL}; // 保持输出轴比例和方向。
+    config.controller_setting_init_config.close_loop_type = OPEN_LOOP; // 不需要闭环参数。
+    config.can_init_config.can_bus = PLATFORM_CAN_BUS_1; // 前两个电机共享总线和发送组。
+    config.can_init_config.tx_id = 1u; // 注册第一台电机。
+    DJIMotorInstance *first = DJIMotorInit(&config); // 记录稍后需要回退的实例。
+    config.can_init_config.tx_id = 2u; // 注册相同发送组的第二台电机。
+    DJIMotorInstance *second = DJIMotorInit(&config); // 保留实例验证同组隔离。
+    config.can_init_config.can_bus = PLATFORM_CAN_BUS_2; // 第三台放到另一条总线。
+    config.can_init_config.tx_id = 1u; // 不同总线允许重复编号。
+    DJIMotorInstance *other = DJIMotorInit(&config); // 用于验证跨总线隔离。
+    TEST_CHECK(first != NULL && second != NULL && other != NULL);
+    TEST_CHECK(!DJIMotorRollbackStartup(NULL)); // 空指针不能影响现有实例。
+    TEST_CHECK(DJIMotorRollbackStartup(first)); // 回退第一台电机。
+    TEST_CHECK(PlatformCanRxIsRegistered(&second->motor_can_port)); // 同组电机的接收端点仍有效。
+    TEST_CHECK(PlatformCanRxIsRegistered(&other->motor_can_port)); // 其他总线的接收端点仍有效。
+    config.can_init_config.can_bus = PLATFORM_CAN_BUS_1; // 重新使用已释放的设备编号。
+    DJIMotorInstance *replacement = DJIMotorInit(&config); // 证明电机表、监控及接收端点均可复用。
+    TEST_CHECK(replacement != NULL);
+    TEST_CHECK(DJIMotorRollbackStartup(second)); // 继续撤销同组剩余电机。
+    TEST_CHECK(DJIMotorRollbackStartup(replacement)); // 撤销替代电机，释放整个发送组。
+    DJIMotorControl(); // 只有另一条总线的电机仍在发送组内。
+    CANProcessTx(); // 处理测试产生的周期帧。
+    TEST_CHECK(tx_accept_count[0] == 0u && tx_accept_count[1] == 1u); // 空组不发送，其他组不受影响。
+    TEST_CHECK(DJIMotorInit(&config) != NULL); // 已释放的第一条总线仍允许注册。
+}
+
+// 守护任务开始后不能用仅适用于启动阶段的回退接口释放电机。
+static void test_dji_startup_rollback_after_daemon(void)
+{
+    Motor_Init_Config_s config = {0}; // 构造有效的单电机配置。
+    config.motor_type = M3508; // 使用 DJI 底盘电调。
+    config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL}; // 输出轴比例和方向。
+    config.controller_setting_init_config.close_loop_type = OPEN_LOOP; // 不启用闭环。
+    config.can_init_config.can_bus = PLATFORM_CAN_BUS_1; // 电机位于第一条总线。
+    config.can_init_config.tx_id = 1u; // 使用第一个电调编号。
+    DJIMotorInstance *motor = DJIMotorInit(&config); // 先完成初始化。
+    TEST_CHECK(motor != NULL);
+    DaemonTask(); // 模拟守护监控已经开始运行。
+    TEST_CHECK(!DJIMotorRollbackStartup(motor)); // 越过启动阶段时必须拒绝回退。
+    TEST_CHECK(PlatformCanRxIsRegistered(&motor->motor_can_port)); // 失败后电机端点仍然有效。
+    TEST_CHECK(DJIMotorInit(&config) == NULL); // 同一地址仍被原电机占用。
+}
+
+// 删除同组电机时，剩余电机的发送组仍须保留。
+static void test_dji_startup_rollback_keeps_group(void)
+{
+    Motor_Init_Config_s config = {0}; // 配置两台共用发送帧的电机。
+    config.motor_type = M3508; // 两台电调使用相同型号。
+    config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL}; // 输出轴不减速。
+    config.controller_setting_init_config.close_loop_type = OPEN_LOOP; // 保持默认停止输出。
+    config.can_init_config.can_bus = PLATFORM_CAN_BUS_1; // 两台电机都在第一条总线。
+    config.can_init_config.tx_id = 1u; // 第一台占帧内第一组字节。
+    DJIMotorInstance *first = DJIMotorInit(&config); // 登记将被回退的实例。
+    config.can_init_config.tx_id = 2u; // 第二台占同一帧的第二组字节。
+    DJIMotorInstance *second = DJIMotorInit(&config); // 保留该实例。
+    TEST_CHECK(first != NULL && second != NULL);
+    TEST_CHECK(DJIMotorRollbackStartup(first)); // 只回退第一台电机。
+    DJIMotorControl(); // 让保留实例生成组帧。
+    CANProcessTx(); // 提交至第一条总线。
+    TEST_CHECK(tx_accept_count[0] == 1u && tx_id_history[0][0] == 0x200u); // 同组电机仍能发送。
+}
+
 // 真实队列验证三条总线上三类 DJI 分组均使用对应的标准帧 ID。
 static void test_dji_logical_send_groups(void)
 {
@@ -2318,6 +2385,12 @@ int main(int argc, char **argv)
         test_platform_can_receive();
     else if (strcmp(argv[1], "dji-rx-rollback") == 0)
         test_dji_receive_registration_rollback();
+    else if (strcmp(argv[1], "dji-startup-rollback") == 0)
+        test_dji_startup_rollback();
+    else if (strcmp(argv[1], "dji-startup-rollback-late") == 0)
+        test_dji_startup_rollback_after_daemon();
+    else if (strcmp(argv[1], "dji-startup-rollback-group") == 0)
+        test_dji_startup_rollback_keeps_group();
     else if (strcmp(argv[1], "dji-send-groups") == 0)
         test_dji_logical_send_groups();
     else if (strcmp(argv[1], "platform-can") == 0)

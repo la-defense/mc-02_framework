@@ -584,6 +584,29 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
     return instance;
 }
 
+uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor)
+{
+    if (motor == NULL) return 0u; // 空指针不能对应已登记实例。
+    size_t position = 0u; // 从登记表查找指针，不解引用未知地址。
+    while (position < idx && dji_motor_instance[position] != motor)
+        ++position; // 找到实例或遍历完整张表。
+    if (position == idx) return 0u; // 未登记实例不能撤销其他资源。
+    if (!DaemonUnregister(motor->daemon)) return 0u; // 监控已运行时保留实例和端点，禁止部分释放。
+    const uint8_t group = motor->sender_group; // 保存该实例使用的发送组。
+    const uint8_t number = motor->message_num; // 保存它在组内占用的两字节位置。
+    PlatformCanRxRollback(&motor->motor_can_port); // 撤销端点和待派发的旧接收数据。
+    memset(&sender_assignment[group].tx_buff[2u * number], 0, 2u); // 清除该电机留下的输出字节。
+    for (size_t i = position + 1u; i < idx; ++i)
+        dji_motor_instance[i - 1u] = dji_motor_instance[i]; // 压紧登记表并保留其他实例。
+    dji_motor_instance[--idx] = NULL; // 释放最后一个重复表项。
+    sender_enable_flag[group] = 0u; // 先假定该组已无其他电机。
+    for (size_t i = 0u; i < idx; ++i)
+        if (dji_motor_instance[i]->sender_group == group)
+            sender_enable_flag[group] = 1u; // 同组仍有实例时继续发送该组。
+    free(motor); // 回调和登记表均不再引用实例后释放内存。
+    return 1u; // 调用者必须放弃旧指针。
+}
+
 /* 电流只能通过电机自带传感器监测,后续考虑加入力矩传感器应变片等 */
 void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback_Source_e type)
 {
