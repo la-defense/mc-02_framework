@@ -196,6 +196,8 @@ set(MC02_APPLICATION_COMMON_C_SOURCES
     application/ins_startup.c # 姿态初始化和按车型分类的失败处理。
     application/log_startup.c # 按车型核心依赖检查日志出口。
     application/robot_can_guard.c # 诊断后传播总线隔离与依赖失败。
+    application/robot_can_capacity.c # 启动前检查 CAN 端点容量。
+    application/robot_can_requirements.c # 汇总车型实际 CAN 端点需求。
     application/robot_startup.c # 启动协调者按顺序完成设备与任务准备。
     application/robot_monitor_plan.c # 按车型依赖选择姿态任务监控角色。
     application/robot_task_create.c # 使用框架接口创建现有整车任务。

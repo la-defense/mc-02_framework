@@ -11,6 +11,9 @@
 #include "robot_param_guard.h"
 #include "robot_power.h"
 #include "robot_can_guard.h"
+#include "robot_can_capacity.h"
+#include "robot_can_requirements.h"
+#include "platform_can.h"
 #include "robot_control_tasks.h"
 #include "robot_def.h"
 #include "robot_task_create.h"
@@ -76,12 +79,20 @@
 #endif
 
 #if defined(MC02_CONFIG_GENERATED)
+typedef struct {
+    const Robot_Config_s *config; // 启动时只读的车型配置。
+    uint32_t can_rejected; // 容量不足而拒绝的辅助模块位图。
+} RobotStartContext_t;
+
 // 仅执行车型计划列出的模块初始化，并返回各模块实际启动结果。
 static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 {
-    const Robot_Config_s *config = (const Robot_Config_s *)context;
-    if (config == NULL)
-        return 0u;
+    const RobotStartContext_t *start = (const RobotStartContext_t *)context; // 同时读取车型与预检结果。
+    if (start == NULL || start->config == NULL)
+        return 0u; // 缺少配置不能启动设备。
+    const Robot_Config_s *config = start->config; // 模块继续使用只读配置。
+    if ((start->can_rejected & ROBOT_MODULE_BIT(module)) != 0u)
+        return 0u; // 被拒绝的辅助模块不得部分注册设备。
     if (!RobotPowerModuleReady(module))
         return 0u; // 所需电源未准备时不注册该模块的设备。
     switch (module)
@@ -205,25 +216,11 @@ uint8_t RobotRecheckCanAfterDiagnostics(void)
     const Robot_Config_s *config = NULL; // 重新读取启动时的只读车型配置。
     if (RobotConfigSelect(ROBOT_CONFIG_SUPPORTED_ID, &config) != ROBOT_CONFIG_OK || config == NULL)
         return 0u; // 配置不可用时不能判断总线依赖。
-    RobotCanDependency_t dependencies[8] = {0}; // 当前底盘、云台、发射和双板桥接最多七项。
-    uint8_t count = 0u;
-#if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
-    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_COMMUNICATION, config->can_bridge.can_bus}; // 板间桥接。
-#endif
-#if MC02_FEATURE_CHASSIS
-    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_CHASSIS, config->chassis_param.chassis_motor_config.can_init_config.can_bus}; // 底盘轮电机。
-#if MC02_FEATURE_SUPERCAP
-    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_CHASSIS, PLATFORM_CAN_BUS_2}; // 当前电容适配由底盘使用。
-#endif
-#endif
-#if MC02_FEATURE_GIMBAL
-    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_GIMBAL, config->gimbal_param.yaw_motor_config.can_init_config.can_bus}; // 大 yaw。
-    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_GIMBAL, config->gimbal_param.pitch_motor_config.can_init_config.can_bus}; // pitch。
-#endif
-#if MC02_FEATURE_SHOOTER
-    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_SHOOTER, config->shoot_param.friction_motor_config.can_init_config.can_bus}; // 摩擦轮。
-    dependencies[count++] = (RobotCanDependency_t){ROBOT_MODULE_SHOOTER, config->shoot_param.loader_motor_config.can_init_config.can_bus}; // 拨弹。
-#endif
+    RobotCanFilterDemand_t demands[8] = {0}; // 复用启动预检中的设备清单。
+    const uint8_t count = RobotCollectCanDemands(config, demands); // 只包含当前启用设备。
+    RobotCanDependency_t dependencies[8] = {0}; // 隔离检查只需要模块和总线。
+    for (uint8_t i = 0u; i < count; ++i)
+        dependencies[i] = (RobotCanDependency_t){demands[i].module, demands[i].bus}; // 不重复维护绑定。
     return RobotCanGuardCheck(dependencies, count); // 传播隔离并检查核心闭包。
 #else
     return 1u; // 旧主机组合没有车型生成的依赖计划。
@@ -325,6 +322,31 @@ uint8_t RobotInitializeApplications(void)
 
 #if defined(MC02_CONFIG_GENERATED)
     InitDiagnosticSetStage(INIT_STAGE_APPLICATION);
+    RobotCanFilterDemand_t can_demands[8] = {0}; // 预检不注册设备。
+    const uint8_t can_count = RobotCollectCanDemands(robot_config, can_demands); // 汇总车型端点。
+    RobotCanFilterCapacity_t can_capacity = {.endpoints = PlatformCanEndpointCapacity()}; // 全局端点上限。
+    for (uint8_t i = 0u; i < can_count; ++i)
+    {
+        const PlatformCanBus_t bus = can_demands[i].bus; // 查询需求所属控制器。
+        PlatformCanFilterCapacity_t actual = {0}; // 失败时容量保持为零。
+        if (bus >= PLATFORM_CAN_BUS_1 && bus <= PLATFORM_CAN_BUS_3 &&
+            PlatformCanGetFilterCapacity(bus, &actual))
+        {
+            const unsigned index = (unsigned)bus - (unsigned)PLATFORM_CAN_BUS_1; // 转成数组下标。
+            can_capacity.standard[index] = actual.standard; // 记录标准 ID 槽数。
+            can_capacity.extended[index] = actual.extended; // 扩展 ID 独立计数。
+        }
+    }
+    RobotCanCapacityResult_t can_result = {0}; // 只有合法预检结果才可使用。
+    const RobotModuleStatus_t can_status = RobotCanCapacityPlan(RobotBuildGetPlan(), can_demands,
+                                                                 can_count, &can_capacity, &can_result);
+    if (can_status != ROBOT_MODULE_OK)
+    {
+        const uint16_t resource = can_status == ROBOT_MODULE_CORE_FAILURE ? can_result.failed_core_module : (uint16_t)can_status; // 区分核心模块和无效计划。
+        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, resource); // 记录预检失败。
+        goto init_failed; // 核心资源不足时不注册业务设备。
+    }
+    RobotStartContext_t start_context = {robot_config, can_result.rejected_modules}; // 辅助失败由启动流程登记。
     const RobotPowerRailConfig_t power_rails[PLATFORM_POWER_COUNT] = {
         {MC02_POWER_24V_1_STAGE, MC02_POWER_24V_1_MASK}, // PC14：第一路 24V 的阶段及使用模块。
         {MC02_POWER_24V_2_STAGE, MC02_POWER_24V_2_MASK}, // PC13：第二路 24V 的阶段及使用模块。
@@ -334,7 +356,7 @@ uint8_t RobotInitializeApplications(void)
                      INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, 0u); // 先校验计划并准备设备前电源。
     const RobotModuleStatus_t module_status = RobotBuildStartPhased(
         RobotPowerDeferredModules(), RobotPowerAfterDevices,
-        RobotStartConfiguredModule, (void *)robot_config); // 独立模块完成后再准备设备后电源。
+        RobotStartConfiguredModule, &start_context); // 独立模块完成后再准备设备后电源。
     if (module_status != ROBOT_MODULE_OK)
     {
         InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
@@ -394,8 +416,20 @@ uint8_t RobotInitializeApplications(void)
 
 #if defined(MC02_PROFILE_ROBOT)
 #if defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD)
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_COMMUNICATION) && !RobotCanBridgeInit(&robot_config->can_bridge))
+    {
+        if (RobotBuildMarkFailure(ROBOT_MODULE_COMMUNICATION)) // 桥接失败可能影响核心依赖。
+        {
+            InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, 2u); // 保存核心桥接失败。
+            goto init_failed; // 不能放行核心通信缺失的车型。
+        }
+        InitDiagnosticReportDegraded(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, 2u); // 辅助通信失败只降级其依赖者。
+    }
+#else
     ROBOT_INIT_CHECK(RobotCanBridgeInit(&robot_config->can_bridge), INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
-                     INIT_FAILURE_DEPENDENCY, 2u);
+                     INIT_FAILURE_DEPENDENCY, 2u); // 保留旧主机组合的启动行为。
+#endif
 #endif
 #endif
 

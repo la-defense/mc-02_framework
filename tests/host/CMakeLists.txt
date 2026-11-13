@@ -770,6 +770,14 @@ target_compile_options(robot_can_capacity_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_robot_can_capacity_core_and_aux COMMAND robot_can_capacity_test)
 set_tests_properties(production_robot_can_capacity_core_and_aux PROPERTIES TIMEOUT 10)
 
+add_executable(robot_can_requirements_test robot_can_requirements_test.c ../../application/robot_can_requirements.c
+  ../../application/robot_can_capacity.c ../../application/config/module_plan.c)
+target_include_directories(robot_can_requirements_test BEFORE PRIVATE robot_def_role_fakes)
+target_include_directories(robot_can_requirements_test PRIVATE . ../../application ../../application/config ../../application/chassis ../../bsp/board)
+target_compile_definitions(robot_can_requirements_test PRIVATE MC02_PROFILE_ROBOT=1 CHASSIS_BOARD=1)
+target_compile_options(robot_can_requirements_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_robot_can_requirements_mapping COMMAND robot_can_requirements_test)
+
 add_executable(robot_alarm_adapter_test robot_alarm_adapter_test.c
   ../../modules/alarm/robot_alarm.c ../../modules/alarm/robot_alarm_policy.c)
 target_include_directories(robot_alarm_adapter_test BEFORE PRIVATE robot_alarm_adapter_fakes)

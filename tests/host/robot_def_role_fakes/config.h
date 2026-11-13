@@ -61,6 +61,7 @@ typedef struct {
     Chassis_Config_s chassis_param;
     Gimbal_Config_s gimbal_param;
     Shoot_Config_s shoot_param;
+    struct { PlatformCanBus_t can_bus; } can_bridge; // 双板 CAN 需求测试使用的逻辑总线。
     const RobotAlarmConfig_t *alarm_config;
     const RefereeUIConfig_t *referee_ui_config;
 } Robot_Config_s;
