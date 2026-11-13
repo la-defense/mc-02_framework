@@ -18,6 +18,7 @@ typedef struct {
     uint8_t temperature;
 } DJIMotorSummary_t;
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config);
+uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor);
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
 void DJIMotorStop(DJIMotorInstance *motor);
 void DJIMotorEnable(DJIMotorInstance *motor);

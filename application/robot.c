@@ -8,6 +8,7 @@
 #include "master_process.h"
 #endif
 #include "robot.h"
+#include "robot_startup.h"
 #include "robot_param_guard.h"
 #include "robot_power.h"
 #include "robot_can_guard.h"
@@ -82,15 +83,17 @@
 typedef struct {
     const Robot_Config_s *config; // 启动时只读的车型配置。
     uint32_t can_rejected; // 容量不足而拒绝的辅助模块位图。
+    uint8_t rollback_failed; // 已发生不能安全清理的资源故障。
 } RobotStartContext_t;
 
 // 仅执行车型计划列出的模块初始化，并返回各模块实际启动结果。
 static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
 {
-    const RobotStartContext_t *start = (const RobotStartContext_t *)context; // 同时读取车型与预检结果。
+    RobotStartContext_t *start = (RobotStartContext_t *)context; // 同时读取车型、预检及回退结果。
     if (start == NULL || start->config == NULL)
         return 0u; // 缺少配置不能启动设备。
     const Robot_Config_s *config = start->config; // 模块继续使用只读配置。
+    if (start->rollback_failed) return 0u; // 回退异常后不再注册其他业务设备。
     if ((start->can_rejected & ROBOT_MODULE_BIT(module)) != 0u)
         return 0u; // 被拒绝的辅助模块不得部分注册设备。
     if (!RobotPowerModuleReady(module))
@@ -152,7 +155,13 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
         if (!PlatformFeatureCanReady(config->shoot_param.friction_motor_config.can_init_config.can_bus) ||
             !PlatformFeatureCanReady(config->shoot_param.loader_motor_config.can_init_config.can_bus))
             return 0u; // 任一电机总线不可用时不部分注册发射机构。
-        return ShootInit();
+        if (ShootInit()) return 1u; // 完整注册后才接受模块。
+        if (ShootInitRollbackFailed())
+        {
+            start->rollback_failed = 1u; // 无法清理时不能按普通辅助故障继续。
+            RobotStartupRollbackFailure(INIT_MODULE_SHOOTER); // 记录故障并立即失能、关断。
+        }
+        return 0u; // 普通失败可由模块计划按依赖决定降级。
 #else
         return 0u;
 #endif
@@ -346,7 +355,7 @@ uint8_t RobotInitializeApplications(void)
         InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, resource); // 记录预检失败。
         goto init_failed; // 核心资源不足时不注册业务设备。
     }
-    RobotStartContext_t start_context = {robot_config, can_result.rejected_modules}; // 辅助失败由启动流程登记。
+    RobotStartContext_t start_context = {.config = robot_config, .can_rejected = can_result.rejected_modules}; // 辅助失败由启动流程登记。
     const RobotPowerRailConfig_t power_rails[PLATFORM_POWER_COUNT] = {
         {MC02_POWER_24V_1_STAGE, MC02_POWER_24V_1_MASK}, // PC14：第一路 24V 的阶段及使用模块。
         {MC02_POWER_24V_2_STAGE, MC02_POWER_24V_2_MASK}, // PC13：第二路 24V 的阶段及使用模块。
@@ -357,11 +366,12 @@ uint8_t RobotInitializeApplications(void)
     const RobotModuleStatus_t module_status = RobotBuildStartPhased(
         RobotPowerDeferredModules(), RobotPowerAfterDevices,
         RobotStartConfiguredModule, &start_context); // 独立模块完成后再准备设备后电源。
-    if (module_status != ROBOT_MODULE_OK)
+    if (module_status != ROBOT_MODULE_OK || start_context.rollback_failed)
     {
-        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
-                                    INIT_FAILURE_DEPENDENCY,
-                                    robot_module_startup.failed_module);
+        if (!InitDiagnosticIsFailed()) // 不覆盖回退失败时已保存的具体原因。
+            InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                        INIT_FAILURE_DEPENDENCY,
+                                        robot_module_startup.failed_module);
         goto init_failed;
     }
     for (unsigned module = 0u; module < ROBOT_MODULE_COUNT; ++module)

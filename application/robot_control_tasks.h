@@ -24,6 +24,11 @@ void GimbalTask(void);
  * @note 由启动协调任务调用一次，须先准备车型发射配置。
  */
 uint8_t ShootInit(void);
+/** @brief 查询最近一次发射初始化是否发生资源回退失败。
+ * @return 非零表示仍有资源无法安全撤销，启动协调者必须整体失能。
+ * @note 在启动协调任务中串行读取；每次 ShootInit 开始时清除上一结果。
+ */
+uint8_t ShootInitRollbackFailed(void);
 /** @brief 在成功初始化后执行一轮发射控制；超过 50 ms 的命令失效并停止相应输出。 */
 void ShootTask(void);
 #endif

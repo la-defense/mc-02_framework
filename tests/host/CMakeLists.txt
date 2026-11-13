@@ -82,6 +82,7 @@ foreach(scenario IN ITEMS success degraded heater-refused monitor-refused deadli
   add_test(NAME production_robot_param_guard_${scenario} COMMAND robot_param_guard_test ${scenario})
 endforeach()
 add_executable(robot_startup_test robot_startup_test.c ../../application/robot_startup.c)
+add_test(NAME production_robot_startup_rollback_failure COMMAND robot_startup_test rollback-failure) # 验证资源回退失败时立即关断。
 target_include_directories(robot_startup_test BEFORE PRIVATE ins_startup_fakes task_creation_fakes)
 target_include_directories(robot_startup_test PRIVATE . ../../application ../../modules/task_monitor
   ../../bsp/os ../../bsp/watchdog)
@@ -1775,6 +1776,14 @@ target_include_directories(shoot_freshness_test PRIVATE ../../application ../../
   ../../Middlewares/Third_Party/CMSIS-DSP-1.7.0/Include ../../Drivers/CMSIS/Include
   ../../Drivers/CMSIS/Device/ST/STM32H7xx/Include ../../bsp/usart ../../bsp/os ../../bsp/dwt)
 add_test(NAME production_shoot_init_and_expired_command_rearm COMMAND shoot_freshness_test)
+foreach(failure IN ITEMS 1 2 3 4 5 6 7 8 9)
+  add_test(NAME production_shoot_startup_motor_failure_${failure} COMMAND shoot_freshness_test ${failure}) # 分别注入电机或回退失败。
+endforeach()
+if(UNIX AND NOT APPLE)
+  target_compile_definitions(shoot_freshness_test PRIVATE MC02_TEST_WRAP_SUBSCRIBER=1) # 支持注入最后一步话题登记错误。
+  target_link_options(shoot_freshness_test PRIVATE -Wl,--wrap=MessageSubscriberRegister) # 保留正常场景使用生产话题实现。
+  add_test(NAME production_shoot_startup_subscriber_failure COMMAND shoot_freshness_test 10) # 核对话题失败时全部电机回退。
+endif()
 if(UNIX AND NOT APPLE)
   foreach(profile IN ITEMS bench_safe robot robot_chassis)
     set(target motor_profile_${profile})

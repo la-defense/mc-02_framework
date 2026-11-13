@@ -15,6 +15,20 @@
 CAN_HandleTypeDef hcan2;
 DJIMotorInstance shoot_fake_motors[5];
 uint32_t shoot_fake_motor_init_count;
+static uint32_t fake_init_attempt; // 记录电机申请次数，供失败注入使用。
+static uint32_t fake_fail_attempt; // 非零时在指定申请次数返回失败。
+static uint32_t fake_rollback_count; // 记录已撤销的电机数量。
+static uint8_t fake_rollback_failure; // 注入回退无法完成的情况。
+static uint8_t fake_rolled_back[5]; // 记录各实例是否已撤销。
+#if defined(MC02_TEST_WRAP_SUBSCRIBER)
+static uint8_t fake_subscriber_failure; // 注入最后一步话题申请失败。
+MessageSubscriber_t *__real_MessageSubscriberRegister(MessageTopicId_t topic_id, MessageEndpointId_t endpoint_id);
+MessageSubscriber_t *__wrap_MessageSubscriberRegister(MessageTopicId_t topic_id, MessageEndpointId_t endpoint_id)
+{
+    if (fake_subscriber_failure) return NULL; // 测试中拒绝发射话题登记。
+    return __real_MessageSubscriberRegister(topic_id, endpoint_id); // 其他场景调用生产实现。
+}
+#endif
 static uint32_t now_ms;
 static float timeline_ms;
 static Shoot_Config_s shoot_config = {
@@ -45,6 +59,8 @@ float PlatformProbeTimelineMs(void) { return timeline_ms; }
 const Shoot_Config_s *ShootConfigFeed(void) { return &shoot_config; }
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
 {
+    ++fake_init_attempt; // 每次申请均计数，包括失败的申请。
+    if (fake_fail_attempt == fake_init_attempt) return NULL; // 按测试配置注入设备注册失败。
     if (config == NULL || shoot_fake_motor_init_count >= 5u)
         return NULL;
     DJIMotorInstance *motor = &shoot_fake_motors[shoot_fake_motor_init_count];
@@ -54,6 +70,18 @@ DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config)
     motor->measure.total_angle = 100.0f + (float)shoot_fake_motor_init_count;
     shoot_fake_motor_init_count++;
     return motor;
+}
+uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor)
+{
+    if (fake_rollback_failure) return 0u; // 模拟无法安全释放资源。
+    for (unsigned i = 0u; i < 5u; ++i)
+        if (motor == &shoot_fake_motors[i] && !fake_rolled_back[i])
+        {
+            fake_rolled_back[i] = 1u; // 标记指定实例已释放。
+            ++fake_rollback_count; // 验证没有漏回退或重复回退。
+            return 1u;
+        }
+    return 0u; // 非测试实例或重复回退均视为失败。
 }
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref) { if (motor != NULL) motor->ref = ref; }
 void DJIMotorStop(DJIMotorInstance *motor) { if (motor != NULL) motor->enabled = 0u; }
@@ -84,8 +112,47 @@ static MessageStatus_t publish(MessagePublisher_t *publisher,
                             MESSAGE_CLOCK_LOCAL);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc == 2) // 独立进程执行启动失败场景，避免复用已经注册的资源。
+    {
+        const uint32_t scenario = (uint32_t)strtoul(argv[1], NULL, 10); // 参数选择失败场景。
+        fake_fail_attempt = scenario; // 默认直接作为申请序号。
+        if (scenario >= 5u && scenario <= 9u) // 验证四摩擦轮机构的每个电机申请阶段。
+        {
+            fake_fail_attempt -= 4u; // 场景 5～9 对应申请序号 1～5。
+            shoot_config.shoot_type = FOUR_SHOOT; // 启用全部四个摩擦轮。
+            shoot_config.friction_motor_id[2] = 5u; // 第三个电机使用独立编号。
+            shoot_config.friction_motor_id[3] = 6u; // 第四个电机使用独立编号。
+            shoot_config.friction_motor_reverse_flag[2] = MOTOR_DIRECTION_NORMAL; // 第三个电机按正向安装。
+            shoot_config.friction_motor_reverse_flag[3] = MOTOR_DIRECTION_NORMAL; // 第四个电机按正向安装。
+        }
+        if (scenario == 4u) { fake_fail_attempt = 3u; fake_rollback_failure = 1u; } // 第四种场景让回退自身失败。
+#if defined(MC02_TEST_WRAP_SUBSCRIBER)
+        if (scenario == 10u) { fake_fail_attempt = 0u; fake_subscriber_failure = 1u; } // 所有电机注册后拒绝话题。
+#endif
+        CHECK(ShootInit() == 0u); // 申请失败不得发布完整发射模块。
+        if (fake_rollback_failure)
+        {
+            CHECK(ShootInitRollbackFailed() != 0u); // 无法回退必须升级为启动故障。
+        }
+        else
+        {
+            CHECK(ShootInitRollbackFailed() == 0u); // 成功清理后允许按模块重要性降级。
+            const uint32_t expected = scenario == 10u ? 3u : fake_fail_attempt - 1u; // 话题失败时需要撤销全部三台电机。
+            CHECK(fake_rollback_count == expected); // 所有先前成功电机均被撤销。
+            for (uint32_t i = 0u; i < fake_rollback_count; ++i) CHECK(fake_rolled_back[i]); // 逐个核对已申请实例。
+            fake_fail_attempt = 0u; // 后续测试不再注入注册错误。
+#if defined(MC02_TEST_WRAP_SUBSCRIBER)
+            fake_subscriber_failure = 0u; // 恢复正常话题登记。
+#endif
+            fake_init_attempt = 0u; // 从第一次申请重新开始计数。
+            shoot_fake_motor_init_count = 0u; // 替身允许复用先前撤销的实例槽。
+            memset(fake_rolled_back, 0, sizeof(fake_rolled_back)); // 清除替身的旧释放记录。
+            CHECK(ShootInit() == 1u); // 清理后相同配置可再次完成初始化。
+        }
+        return 0;
+    }
     CHECK(ShootFrictionWheelCount(DUAL_SHOOT) == 2u);
     CHECK(ShootFrictionWheelCount(THREE_SHOOT) == 3u);
     CHECK(ShootFrictionWheelCount(FOUR_SHOOT) == 4u);

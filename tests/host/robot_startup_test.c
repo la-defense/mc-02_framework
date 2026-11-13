@@ -58,6 +58,15 @@ void BSP_SafetyStartupLatchOutputsOff(void) { ++shutdowns; Record('O'); }
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2); // 每个场景单独运行，保留生产代码的一次性状态。
+    if (!strcmp(argv[1], "rollback-failure"))
+    {
+        RobotStartupRollbackFailure(INIT_MODULE_SHOOTER); // 业务模块发现资源不能撤销。
+        TEST_CHECK(!strcmp(calls, "FXDO")); // 先记录错误，再锁存故障、失能和关断。
+        TEST_CHECK(failure_stage == INIT_STAGE_APPLICATION && failure_module == INIT_MODULE_SHOOTER &&
+                   failure_reason == INIT_FAILURE_RESOURCE); // 故障位置保持为发射资源。
+        TEST_CHECK(faults == 1u && disabled == 1u && shutdowns == 1u); // 所有直接保护均已执行。
+        return 0;
+    }
     const char *expected = "AIKQBTEWRY"; // 正常路径先诊断和复核，再创建并放行任务。
     uint8_t success = 1u; // 只有成功与允许降级的场景应完成启动。
     if (!strcmp(argv[1], "disabled")) { enabled = 0u; expected = "AKQBTEWRY"; }

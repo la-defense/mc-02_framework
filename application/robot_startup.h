@@ -10,4 +10,10 @@
  * @note 由唯一默认任务调用一次；调用前已配置任务监控并延迟放行。
  */
 uint8_t RobotStartupRun(void);
+
+/** @brief 记录无法撤销的启动资源，并立即锁存整车失能和板级关断。
+ * @param[in] module 使用 InitDiagnosticModule_e 中的故障模块编号。
+ * @note 仅在启动协调任务中调用；保留之前已记录的首次故障。
+ */
+void RobotStartupRollbackFailure(uint8_t module);
 #endif

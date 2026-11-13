@@ -31,6 +31,11 @@ static void RobotStartupLatchFailure(InitDiagnosticStage_e stage, uint8_t module
     BSP_SafetyStartupLatchOutputsOff(); // 立即关闭受控输出。
 }
 
+void RobotStartupRollbackFailure(uint8_t module)
+{
+    RobotStartupLatchFailure(INIT_STAGE_APPLICATION, module, INIT_FAILURE_RESOURCE, 0u); // 无法安全释放时立即锁存故障。
+}
+
 uint8_t RobotStartupRun(void)
 {
     if (startup_started) return 0u; // 不允许重复运行或重试失败的启动。

@@ -27,12 +27,19 @@ static uint8_t require_load_stop = 1u; // 数据中断后先等一次停止供�
 
 static Shoot_Ctrl_Cmd_s shoot_cmd_recv; // 来自cmd的发射控制信息
 static MessageSubscriber_t *shoot_sub;
+static uint8_t shoot_rollback_failed; // 标记启动期资源无法撤销，需要整车失能。
+
+uint8_t ShootInitRollbackFailed(void)
+{
+    return shoot_rollback_failed; // 由同一启动协调任务读取最近一次结果。
+}
 
 // 使用平台保留的浮点毫秒时基计算拨弹冷却，单位与原 DWT 接口一致。
 static float hibernate_time = 0, dead_time = 0;
 
 uint8_t ShootInit(void)
 {
+    shoot_rollback_failed = 0u; // 本次初始化重新记录回退结果。
     if (!RobotTopicsInit())
         return 0u;
 
@@ -63,6 +70,8 @@ uint8_t ShootInit(void)
         shoot_config->loader_motor_config.motor_type == MOTOR_TYPE_NONE)
         return 0u;
 
+    DJIMotorInstance *pending_friction[4] = {NULL}; // 未完成前不向周期任务发布实例。
+    DJIMotorInstance *pending_loader = NULL; // 拨弹实例也先由本次初始化持有。
     for (uint8_t index = 0u; index < friction_count; ++index)
     {
         if (shoot_config->friction_motor_id[index] == 0u ||
@@ -89,18 +98,31 @@ uint8_t ShootInit(void)
         friction_config.output_axis.direction =
             shoot_config->friction_motor_reverse_flag[index] == MOTOR_DIRECTION_REVERSE ?
                 MOTOR_AXIS_DIRECTION_REVERSE : MOTOR_AXIS_DIRECTION_NORMAL;
-        friction_motors[index] = DJIMotorInit(&friction_config);
-        if (friction_motors[index] == NULL)
-            return 0u;
+        pending_friction[index] = DJIMotorInit(&friction_config); // 只保存成功注册的实例。
+        if (pending_friction[index] == NULL)
+            goto rollback; // 后续申请失败时撤销此前的实例。
     }
 
     Motor_Init_Config_s loader_config = shoot_config->loader_motor_config;
     loader_config.output_axis.gear_ratio = loader_ratio;
-    loader = DJIMotorInit(&loader_config);
+    pending_loader = DJIMotorInit(&loader_config); // 拨弹盘成功前不发布任何电机。
+    if (pending_loader == NULL) goto rollback; // 撤销已经取得的摩擦轮。
 
-    shoot_sub = MessageSubscriberRegister(ROBOT_TOPIC_SHOOT_COMMAND,
-                                          ROBOT_TOPIC_ENDPOINT_SHOOT);
-    return (uint8_t)(loader != NULL && shoot_sub != NULL);
+    MessageSubscriber_t *pending_sub = MessageSubscriberRegister(ROBOT_TOPIC_SHOOT_COMMAND,
+                                                                  ROBOT_TOPIC_ENDPOINT_SHOOT); // 最后申请输入话题。
+    if (pending_sub == NULL) goto rollback; // 话题申请失败也撤销电机。
+    memcpy(friction_motors, pending_friction, sizeof(friction_motors)); // 全部成功后一次发布摩擦轮。
+    loader = pending_loader; // 发布拨弹盘实例。
+    shoot_sub = pending_sub; // 发布已注册的控制输入。
+    return 1u; // 初始化完成，模块可被启动计划接受。
+
+rollback:
+    if (pending_loader != NULL && !DJIMotorRollbackStartup(pending_loader))
+        shoot_rollback_failed = 1u; // 回退失败时保留故障供整车升级处理。
+    for (uint8_t index = friction_count; index > 0u; --index)
+        if (pending_friction[index - 1u] != NULL && !DJIMotorRollbackStartup(pending_friction[index - 1u]))
+            shoot_rollback_failed = 1u; // 倒序尽力撤销所有已申请的摩擦轮。
+    return 0u; // 不发布失败的发射模块。
 }
 
 /* 机器人发射机构控制核心任务 */
