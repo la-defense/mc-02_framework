@@ -1339,6 +1339,8 @@ uint8_t CANBusIsQuarantined(FDCAN_HandleTypeDef *hcan)
 /* 自测 ID: 发送 ID 必须等于接收 ID, 否则测的帧会被自己的滤镜挡掉(踩过这个坑) */
 #define CAN_SELFTEST_ID 0x123u
 #define CAN_SELFTEST_WAIT_MS 20u
+#define CAN_SELFTEST_STALL_POLLS 4096u // 连续多次计数不变时，停止依赖 DWT 的等待。
+#define CAN_SELFTEST_MAX_POLLS 1000000u // 即使计数异常缓慢，轮询次数也有上限。
 // 默认外部回环会发到总线并自行确认接收；此功能专用于测试，平时保持关闭。
 #ifndef CAN_SELFTEST_MODE
 #define CAN_SELFTEST_MODE FDCAN_MODE_EXTERNAL_LOOPBACK
@@ -1349,6 +1351,7 @@ volatile uint32_t can_selftest_tx_fail = 0;
 volatile uint32_t can_selftest_rx_ok = 0;
 volatile uint32_t can_selftest_rx_bad = 0;
 volatile uint8_t can_selftest_pass_mask = 0;
+volatile uint8_t can_selftest_skip_mask = 0; // 标记因端点资源不足而跳过的总线。
 volatile uint8_t can_selftest_done = 0;
 volatile uint8_t can_selftest_stage = 0;   /* 调试用: 卡住时能看出走到哪一步 */
 volatile uint32_t can_selftest_state_err = 0; /* 自测里模式切换/启动未生效的次数 */
@@ -1403,6 +1406,23 @@ static void CANSelfTestRxCallback(CANInstance *ins)
     else
         can_selftest_rx_bad++;
     selftest_rx_seen = 1;
+}
+
+// 回环会临时注册标准 ID；资源不够时不能先重置已有总线。
+static uint8_t CANSelfTestEndpointAvailable(uint8_t bus)
+{
+    if (bus >= DEVICE_CAN_CNT || !CANBusIsActive(bus) || idx >= CAN_MX_REGISTER_CNT)
+        return 0u; // 仅已启动总线且有全局端点名额时可进入诊断。
+    const FDCAN_HandleTypeDef *handle = can_bus[bus].handle; // 本条总线使用自己的登记表。
+    for (uint8_t i = 0u; i < idx; ++i)
+        if (can_instance[i]->can_handle == handle && can_instance[i]->identifier_type == CAN_TX_ID_STANDARD &&
+            can_instance[i]->rx_id == CAN_SELFTEST_ID)
+            return 0u; // 测试 ID 已被业务端点使用时不能覆盖。
+    const uint32_t limit = CANFilterLimit(bus, CAN_TX_ID_STANDARD); // 查询本控制器的标准过滤器容量。
+    for (uint32_t slot = 0u; slot < limit; ++slot)
+        if ((can_filter_used[bus][CAN_TX_ID_STANDARD] & (1u << slot)) == 0u)
+            return 1u; // 至少有一个确认空闲的标准槽。
+    return 0u; // 标准槽全部占用，保留现有总线状态。
 }
 
 // 尝试关闭已注销端点的硬件过滤器；失败时保留占用，避免覆盖仍在使用的槽。
@@ -1517,6 +1537,7 @@ uint8_t CANRunLoopbackSelfTest(void)
     can_selftest_rx_ok = 0;
     can_selftest_rx_bad = 0;
     can_selftest_pass_mask = 0;
+    can_selftest_skip_mask = 0u; // 清除上次自测的资源跳过记录。
     can_selftest_done = 0;
     can_selftest_stage = 0;
     can_selftest_test = can_selftest_psr = can_selftest_ecr = 0;
@@ -1526,6 +1547,14 @@ uint8_t CANRunLoopbackSelfTest(void)
     {
         FDCAN_HandleTypeDef *h = can_bus[bus].handle;
         uint8_t bus_ok = 1;
+        uint8_t tx_uncertain = 0u; // 测试帧仍可能在硬件中时禁止重新启用该总线。
+
+        if (!CANSelfTestEndpointAvailable(bus))
+        {
+            can_selftest_skip_mask |= (uint8_t)(1u << bus); // 保存本条总线没有临时端点资源。
+            ++can_selftest_tx_fail; // 诊断未发送，不能被当作通过。
+            continue; // 不切换模式、不改变已注册设备或其他总线。
+        }
 
         /* 1. 切到回环模式 */
         can_selftest_stage = (uint8_t)(10u * (bus + 1u) + 1u);
@@ -1585,12 +1614,17 @@ uint8_t CANRunLoopbackSelfTest(void)
                所以这里必须用 DWT 周期计数器计时, 否则会死等(TIM23 的 uwTick 停住)。 */
             uint32_t t0 = DWT_ProbeStart();
             uint8_t counted_accept = 0u;
-            while (!selftest_rx_seen &&
+            uint8_t tx_complete = 0u; // 接收回环帧后仍需等待硬件发送完成通知。
+            uint32_t previous_cycle = t0; // 上一次 DWT 计数，用于发现时基停止。
+            uint32_t stagnant_polls = 0u; // 统计连续未前进的读取次数。
+            uint32_t total_polls = 0u; // 限制偶发前进但不可靠的时基造成的等待。
+            uint8_t clock_failed = 0u; // 保存本帧是否因时基异常提前结束。
+            while (!(selftest_rx_seen && tx_complete) &&
                    DWT_ProbeElapsedUs(t0) < (uint32_t)CAN_SELFTEST_WAIT_MS * 1000u)
             {
                 /* 接收改成"中断入队 + 任务派发"之后, 回调不再在中断里执行,
                    这里必须主动消费队列, 否则永远等不到 selftest_rx_seen。 */
-                CANProcessTx();
+                CANProcessTxBus(h); // 只推进本条诊断总线，避免改动其他总线的发送队列。
                 CANProcessRx();
                 CAN_TxResult_t tx_result;
                 memset(&tx_result, 0, sizeof(tx_result));
@@ -1600,11 +1634,43 @@ uint8_t CANRunLoopbackSelfTest(void)
                     can_selftest_tx_ok++;
                     counted_accept = 1u;
                 }
+                if (tx_result.state == CAN_TX_RESULT_COMPLETE && tx_result.pending_frames == 0u)
+                    tx_complete = 1u; // 收到硬件完成通知才允许安全切换模式。
                 if (tx_result.state == CAN_TX_RESULT_FAILED ||
                     tx_result.state == CAN_TX_RESULT_EXPIRED)
                     break;
+                const uint32_t cycle = DWT_ProbeStart(); // 每轮读取原始周期数，允许自然回绕。
+                if (cycle == previous_cycle) ++stagnant_polls; // 连续相等说明时基可能停止。
+                else stagnant_polls = 0u; // 确实前进后重新累计停滞次数。
+                previous_cycle = cycle; // 保存本轮读数供下次比较。
+                ++total_polls; // 无论时基是否前进都计入总上限。
+                if (stagnant_polls >= CAN_SELFTEST_STALL_POLLS || total_polls >= CAN_SELFTEST_MAX_POLLS)
+                {
+                    clock_failed = 1u; // 时基不可信时不能继续依赖它等待。
+                    break; // 留给本总线的恢复路径处理。
+                }
             }
-            if (!selftest_rx_seen)
+            CAN_TxResult_t final_tx = {0}; // 离开等待后重新检查本次请求的最终状态。
+            if (!CANGetTxRequestState(request_id, &final_tx))
+                tx_uncertain = 1u; // 无法确认请求状态时不能安全重启控制器。
+            else if (final_tx.pending_frames != 0u || final_tx.state == CAN_TX_RESULT_IN_FLIGHT)
+                tx_uncertain = 1u; // 已交给硬件的帧尚未确认完成或中止。
+            else if ((final_tx.state == CAN_TX_RESULT_QUEUED || final_tx.state == CAN_TX_RESULT_ACTIVE) &&
+                     !CANCancelTxRequest(request_id))
+                tx_uncertain = 1u; // 未送出的请求必须确认从软件队列撤销。
+            if (tx_uncertain)
+            {
+                ++can_selftest_state_err; // 保留发送状态不确定的诊断结果。
+                bus_ok = 0u; // 不把该总线视为通过。
+                break; // 立即停止产生更多测试帧。
+            }
+            if (clock_failed)
+            {
+                ++can_selftest_state_err; // 保留时基异常造成的自测失败。
+                bus_ok = 0u; // 本条总线不能报告自测通过。
+                break; // 不再发送剩余测试帧，立即恢复正常模式。
+            }
+            if (!selftest_rx_seen || !tx_complete)
                 bus_ok = 0;
 
             // 保存第一条总线的模式及错误寄存器，供测试结束后读取。
@@ -1623,12 +1689,14 @@ uint8_t CANRunLoopbackSelfTest(void)
             can_selftest_pass_mask |= (uint8_t)(1u << bus);
 
         /* 4. 恢复 NORMAL 模式并重装滤镜 */
+        if (tx_uncertain) CANQuarantineBus(h); // 先禁止本总线服务，避免重启后重用未确认的硬件发送状态。
         if (!CANUnregisterInstance(selftest_instance))
         {
             ++can_selftest_state_err; // 记录自测过滤器未能确认关闭。
             can_selftest_pass_mask &= (uint8_t)~(1u << bus); // 本次自测不能报告成功。
         }
         selftest_instance = NULL;
+        if (tx_uncertain) continue; // 隔离状态交给整车依赖检查，不尝试隐式恢复。
         if (CANForceMode(h, FDCAN_MODE_NORMAL, 0u) == 0u)
         {
             can_selftest_state_err++;

@@ -53,6 +53,7 @@ typedef enum
     INIT_MODULE_CLOCK, ///< 主时钟和电源电压配置
     INIT_MODULE_ADC, ///< 电源和板载按键采样
     INIT_MODULE_LOG, ///< 日志及独立诊断串口
+    INIT_MODULE_CAN_DIAGNOSTIC, ///< 显式启用的 CAN 回环诊断
 } InitDiagnosticModule_e;
 
 /** @brief 任务创建失败时使用的资源编号，便于找到具体任务。 */

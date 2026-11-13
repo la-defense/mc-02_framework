@@ -435,6 +435,7 @@ extern volatile uint32_t can_selftest_tx_fail;  /* 发送被拒绝的帧数 */
 extern volatile uint32_t can_selftest_rx_ok;    /* 接收回调里数据完全正确的帧数 */
 extern volatile uint32_t can_selftest_rx_bad;   /* 收到但数据不对的帧数 */
 extern volatile uint8_t can_selftest_pass_mask; /* bit0/1/2 = CAN1/2/3 通过 */
+extern volatile uint8_t can_selftest_skip_mask; /* bit0/1/2 = 所需端点或槽不可用，未切换该总线 */
 extern volatile uint8_t can_selftest_done;      /* 1 = 已跑过 */
 
 #endif

@@ -20,6 +20,10 @@ int main(void)
     result = 0u;
     TEST_CHECK(PlatformCanRunLoopbackDiagnostic() == 0u && calls == 1u);
     result = 1u;
-    TEST_CHECK(PlatformCanRunLoopbackDiagnostic() == 1u && calls == 2u);
+    TEST_CHECK(PlatformCanRunLoopbackDiagnostic() == 0u && calls == 2u); // 仅一条通过不是整体通过。
+    result = 2u;
+    TEST_CHECK(PlatformCanRunLoopbackDiagnostic() == 0u && calls == 3u); // 两条通过仍须报告失败。
+    result = 3u;
+    TEST_CHECK(PlatformCanRunLoopbackDiagnostic() == 1u && calls == 4u); // 三条都通过后才返回成功。
     return 0;
 }

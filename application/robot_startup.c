@@ -36,6 +36,13 @@ void RobotStartupRollbackFailure(uint8_t module)
     RobotStartupLatchFailure(INIT_STAGE_APPLICATION, module, INIT_FAILURE_RESOURCE, 0u); // 无法安全释放时立即锁存故障。
 }
 
+void RobotStartupRecordCanDiagnostic(uint8_t passed)
+{
+    if (!passed) // 未通过或跳过时不能默默标记诊断正常。
+        InitDiagnosticReportDegraded(INIT_STAGE_APPLICATION, INIT_MODULE_CAN_DIAGNOSTIC,
+                                     INIT_FAILURE_RESOURCE, 0u); // 诊断事件不直接改变整车许可。
+}
+
 uint8_t RobotStartupRun(void)
 {
     if (startup_started) return 0u; // 不允许重复运行或重试失败的启动。

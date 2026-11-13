@@ -16,4 +16,10 @@ uint8_t RobotStartupRun(void);
  * @note 仅在启动协调任务中调用；保留之前已记录的首次故障。
  */
 void RobotStartupRollbackFailure(uint8_t module);
+
+/** @brief 记录显式启用的 CAN 回环自测是否完整通过。
+ * @param[in] passed 非零表示全部所需总线通过；0 表示失败或跳过。
+ * @note 只报告辅助诊断降级；受隔离的核心总线由后续依赖检查处理。
+ */
+void RobotStartupRecordCanDiagnostic(uint8_t passed);
 #endif

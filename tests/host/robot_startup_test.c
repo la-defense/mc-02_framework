@@ -20,6 +20,7 @@ static InitDiagnosticStage_e failure_stage;
 static InitDiagnosticReason_e failure_reason;
 static uint8_t failure_module;
 static uint16_t failure_resource;
+static unsigned degraded_events; // 记录辅助诊断事件，不将其当作核心故障。
 
 static void Record(char value) { TEST_CHECK(count + 1u < sizeof(calls)); calls[count++] = value; }
 uint8_t PlatformSchedulerIsRunning(void) { return scheduler; }
@@ -51,6 +52,13 @@ void InitDiagnosticReportFailure(InitDiagnosticStage_e stage, uint8_t module,
     Record('F'); // 检查诊断与关断的相对顺序。
 }
 void InitDiagnosticMarkReady(void) { ++ready; Record('Y'); }
+void InitDiagnosticReportDegraded(InitDiagnosticStage_e stage, uint8_t module,
+                                  InitDiagnosticReason_e reason, uint16_t resource)
+{
+    TEST_CHECK(stage == INIT_STAGE_APPLICATION && module == INIT_MODULE_CAN_DIAGNOSTIC &&
+               reason == INIT_FAILURE_RESOURCE && resource == 0u); // 保留诊断的阶段与故障类别。
+    ++degraded_events; // 只记录辅助事件，不触发核心失能。
+}
 void RobotFaultReport(unsigned fault) { TEST_CHECK(fault == 1u); ++faults; Record('X'); }
 void RobotSafetyRequestDisable(void) { ++disabled; Record('D'); }
 void BSP_SafetyStartupLatchOutputsOff(void) { ++shutdowns; Record('O'); }
@@ -58,6 +66,14 @@ void BSP_SafetyStartupLatchOutputsOff(void) { ++shutdowns; Record('O'); }
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2); // 每个场景单独运行，保留生产代码的一次性状态。
+    if (!strcmp(argv[1], "can-diagnostic"))
+    {
+        RobotStartupRecordCanDiagnostic(1u); // 全部总线通过时不报告降级。
+        TEST_CHECK(degraded_events == 0u);
+        RobotStartupRecordCanDiagnostic(0u); // 部分通过或跳过时报告辅助诊断失败。
+        TEST_CHECK(degraded_events == 1u && faults == 0u && disabled == 0u && shutdowns == 0u);
+        return 0;
+    }
     if (!strcmp(argv[1], "rollback-failure"))
     {
         RobotStartupRollbackFailure(INIT_MODULE_SHOOTER); // 业务模块发现资源不能撤销。

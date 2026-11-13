@@ -83,6 +83,7 @@ foreach(scenario IN ITEMS success degraded heater-refused monitor-refused deadli
 endforeach()
 add_executable(robot_startup_test robot_startup_test.c ../../application/robot_startup.c)
 add_test(NAME production_robot_startup_rollback_failure COMMAND robot_startup_test rollback-failure) # 验证资源回退失败时立即关断。
+add_test(NAME production_robot_startup_can_diagnostic COMMAND robot_startup_test can-diagnostic) # 诊断失败产生辅助事件。
 target_include_directories(robot_startup_test BEFORE PRIVATE ins_startup_fakes task_creation_fakes)
 target_include_directories(robot_startup_test PRIVATE . ../../application ../../modules/task_monitor
   ../../bsp/os ../../bsp/watchdog)
@@ -921,6 +922,7 @@ target_include_directories(lk_motor_bsp_can_test BEFORE PRIVATE ../../bsp/can lk
 target_include_directories(lk_motor_bsp_can_test PRIVATE ../../modules/super_cap) # 引入生产电容接口。
 target_compile_options(lk_motor_bsp_can_test PRIVATE -Wall -Wextra -Werror
   -Wno-type-limits -ffunction-sections -fdata-sections -fno-builtin-malloc -fno-builtin-free)
+target_compile_definitions(lk_motor_bsp_can_test PRIVATE MC02_CAN_SELFTEST_FAKE_HOOK=1) # 可在探针间模拟回环中断。
 target_link_libraries(lk_motor_bsp_can_test PRIVATE mc02_numeric mc02_software_crc)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
    (CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT APPLE))
@@ -953,6 +955,13 @@ add_test(NAME production_dji_startup_rollback_after_daemon COMMAND lk_motor_bsp_
 add_test(NAME production_dji_startup_rollback_keeps_group COMMAND lk_motor_bsp_can_test dji-startup-rollback-group)
 add_test(NAME production_super_cap_can_startup_rollback COMMAND lk_motor_bsp_can_test supercap-startup-rollback) # 检查真实 CAN 端点和队列回退。
 add_test(NAME production_can_device_filter_close_failure COMMAND lk_motor_bsp_can_test device-filter-close-failure) # 设备回退时向上报告硬件过滤器错误。
+add_test(NAME production_can_selftest_global_full COMMAND lk_motor_bsp_can_test selftest-global-full) # 全局注册表无临时端点。
+add_test(NAME production_can_selftest_filter_full COMMAND lk_motor_bsp_can_test selftest-filter-full) # 硬件过滤器无空槽。
+add_test(NAME production_can_selftest_id_conflict COMMAND lk_motor_bsp_can_test selftest-id-conflict) # 回环 ID 已被业务使用。
+add_test(NAME production_can_selftest_stopped_clock COMMAND lk_motor_bsp_can_test selftest-stopped-clock) # 固定时基不能导致无限等待。
+add_test(NAME production_can_selftest_loopback_complete COMMAND lk_motor_bsp_can_test selftest-loopback-complete) # 接收及硬件完成均确认后恢复。
+add_test(NAME production_can_selftest_stopped_clock_queued COMMAND lk_motor_bsp_can_test selftest-stopped-clock-queued) # 撤销未进入硬件的测试帧。
+set_tests_properties(production_can_selftest_stopped_clock PROPERTIES TIMEOUT 10) # 回归失败时避免长时间挂住测试。
 add_test(NAME production_dji_logical_send_groups COMMAND lk_motor_bsp_can_test dji-send-groups)
 add_test(NAME production_lk_motor_bsp_can_routing COMMAND lk_motor_bsp_can_test routing)
 add_test(NAME production_lk_motor_bsp_can_closed_loops COMMAND lk_motor_bsp_can_test closed_loops)

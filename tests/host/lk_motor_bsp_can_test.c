@@ -41,6 +41,7 @@ static uint32_t tx_busy_mask;
 static uint32_t tx_error_mask;
 static uint32_t bus_start_count[DEVICE_CAN_CNT];
 static uint32_t bus_stop_count[DEVICE_CAN_CNT]; // 记录各总线的独立退出次数。
+static uint32_t bus_init_count[DEVICE_CAN_CNT]; // 记录是否切换过控制器模式。
 static uint32_t filter_count[DEVICE_CAN_CNT];
 static uint32_t filter_rx_id[DEVICE_CAN_CNT];
 static uint32_t filter_last_index[DEVICE_CAN_CNT]; // 记录实际使用的过滤器槽。
@@ -72,6 +73,29 @@ static uint32_t burst_last_cycle[DEVICE_CAN_CNT];
 static uint8_t status_busoff[DEVICE_CAN_CNT]; // 模拟各总线独立的关闭状态。
 static uint8_t status_error[DEVICE_CAN_CNT]; // 模拟各总线独立的错误状态。
 static uint8_t status_read_failure; // 模拟 HAL 查询失败。
+static uint8_t selftest_loopback_enabled, selftest_hook_busy; // 只在指定自测场景模拟中断。
+static uint32_t selftest_completed[DEVICE_CAN_CNT]; // 记录每条总线上已模拟完成的测试帧数。
+
+void CANTestProbeHook(void)
+{
+    if (!selftest_loopback_enabled || selftest_hook_busy) return; // 普通测试及中断重入不触发模拟。
+    selftest_hook_busy = 1u; // 防止接收中断中的探针再次进入本钩子。
+    FDCAN_HandleTypeDef *handles[DEVICE_CAN_CNT] = {&hfdcan1, &hfdcan2, &hfdcan3}; // 三条总线的测试句柄。
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+    {
+        if (selftest_completed[bus] >= tx_accept_count[bus]) continue; // 本总线没有新提交帧。
+        const uint32_t index = selftest_completed[bus]++; // 先标记完成，避免中断递归重复处理。
+        TEST_CHECK(index < 64u && tx_id_history[bus][index] == 0x123u); // 仅接受本测试的回环帧。
+        HAL_FDCAN_TxBufferCompleteCallback(handles[bus], tx_latest_buffer[bus]); // 模拟硬件发送完成。
+        TEST_CHECK(rx_frame_count[bus] < 64u); // 模拟 FIFO 保持在固定容量内。
+        TestRxFrame_t *frame = &rx_frames[bus][rx_frame_count[bus]++]; // 添加同一帧的回环接收。
+        frame->header.Identifier = tx_id_history[bus][index]; // 接收 ID 与发送 ID 一致。
+        frame->header.DataLength = 8u << 16u; // 回环测试使用八字节经典帧。
+        memcpy(frame->data, tx_data_history[bus][index], 8u); // 保留本次发送内容。
+        HAL_FDCAN_RxFifo0Callback(handles[bus], FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 模拟硬件接收中断。
+    }
+    selftest_hook_busy = 0u; // 本轮中断模拟完成。
+}
 
 void CANTestRestoreIrq(uint32_t value)
 {
@@ -164,6 +188,8 @@ uint32_t HAL_FDCAN_Stop(FDCAN_HandleTypeDef *handle)
 }
 uint32_t HAL_FDCAN_Init(FDCAN_HandleTypeDef *handle)
 {
+    const uint8_t bus = bus_for_handle(handle); // 确认本次初始化所属总线。
+    if (bus < DEVICE_CAN_CNT) ++bus_init_count[bus]; // 记录诊断是否触及控制器。
     handle->Instance->CCCR |= FDCAN_CCCR_INIT;
     handle->State = 1u;
     return HAL_OK;
@@ -747,6 +773,109 @@ static void test_dji_startup_rollback_keeps_group(void)
     DJIMotorControl(); // 让保留实例生成组帧。
     CANProcessTx(); // 提交至第一条总线。
     TEST_CHECK(tx_accept_count[0] == 1u && tx_id_history[0][0] == 0x200u); // 同组电机仍能发送。
+}
+
+// 临时诊断资源不足时，回环不能先切换已有总线模式。
+static void test_selftest_capacity_skip(uint8_t scenario)
+{
+    CAN_Init_Config_s config = {.can_handle = &hfdcan1, .tx_id = 1u,
+                                .rx_id = 0x301u, .can_module_callback = validate_rx_callback}; // 默认端点属于第一条总线。
+    if (scenario == 1u) // 测试全局注册表全部占用。
+    {
+        for (uint8_t i = 0u; i < 16u; ++i)
+        {
+            config.can_handle = i < 8u ? &hfdcan1 : &hfdcan2; // 两条总线分别使用八个端点。
+            config.rx_id = 0x300u + (uint32_t)(i % 8u); // 各总线内保持 ID 唯一。
+            TEST_CHECK(CANRegister(&config) != NULL);
+        }
+        TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_3)); // 第三条总线也满足基础启动条件。
+    }
+    else
+    {
+        hfdcan1.Init.StdFiltersNbr = scenario == 2u ? 1u : 14u; // 场景二只提供一个标准槽。
+        hfdcan2.Init.StdFiltersNbr = 0u; // 第二条总线没有临时标准槽。
+        hfdcan3.Init.StdFiltersNbr = 0u; // 第三条总线没有临时标准槽。
+        if (scenario == 3u) config.rx_id = 0x123u; // 场景三让业务占用回环测试 ID。
+        TEST_CHECK(CANRegister(&config) != NULL); // 记录本总线的业务端点。
+        TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_2)); // 其余总线处于启动状态。
+        TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_3));
+    }
+    uint32_t started[DEVICE_CAN_CNT], stopped[DEVICE_CAN_CNT], initialized[DEVICE_CAN_CNT]; // 记录进入诊断前的硬件调用数。
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+    {
+        started[bus] = bus_start_count[bus]; // 保存启动次数。
+        stopped[bus] = bus_stop_count[bus]; // 保存停止次数。
+        initialized[bus] = bus_init_count[bus]; // 保存控制器初始化次数。
+    }
+    TEST_CHECK(CANRunLoopbackSelfTest() == 0u); // 没有资源的三条总线均不能报告通过。
+    TEST_CHECK(can_selftest_skip_mask == 7u && can_selftest_pass_mask == 0u); // 分别报告全部跳过。
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+    {
+        TEST_CHECK(bus_start_count[bus] == started[bus] && bus_stop_count[bus] == stopped[bus] &&
+                   bus_init_count[bus] == initialized[bus]); // 跳过时不得停止、重启或重新初始化。
+        TEST_CHECK(tx_accept_count[bus] == 0u); // 不能发出诊断帧。
+    }
+}
+
+// DWT 计数停止且回环没有反馈时，诊断必须有限退出并恢复控制器。
+static void test_selftest_stopped_clock(void)
+{
+    hfdcan2.Init.StdFiltersNbr = 0u; // 后两条总线不申请诊断端点。
+    hfdcan3.Init.StdFiltersNbr = 0u; // 防止无关总线进入回环。
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_1)); // 第一条总线用于验证有限等待。
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_2)); // 其余总线保持已准备状态。
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_3));
+    const uint8_t payload[1] = {0x5au}; // 另一条总线的独立业务数据。
+    const CAN_TxFrame_t other_frame = {.identifier = 0x321u, .identifier_type = CAN_TX_ID_STANDARD,
+                                       .data = payload, .length = 1u}; // 测试帧仅在主机模型中排队。
+    uint32_t other_id = 0u; // 记录第二条总线请求以检查队列状态。
+    TEST_CHECK(CANSubmitOneShot(&hfdcan2, &hfdcan2, &other_frame, CAN_TX_PRIORITY_NORMAL, 100u, &other_id) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANRunLoopbackSelfTest() == 0u); // 固定 DWT 替身且无反馈时不可能通过。
+    TEST_CHECK(can_selftest_done && can_selftest_skip_mask == 6u && can_selftest_pass_mask == 0u); // 一条失败，两条因容量跳过。
+    TEST_CHECK(bus_init_count[0] == 1u && CANBusIsQuarantined(&hfdcan1)); // 未确认完成的发送使本总线隔离，不再重启。
+    TEST_CHECK(bus_init_count[1] == 0u && bus_init_count[2] == 0u); // 跳过的总线未切换。
+    TEST_CHECK(tx_accept_count[0] <= 1u); // 时基异常后不得继续发送剩余测试帧。
+    CAN_TxResult_t other_result = {0}; // 查询其他总线的业务请求。
+    TEST_CHECK(CANGetTxRequestState(other_id, &other_result) && other_result.state == CAN_TX_RESULT_QUEUED && tx_accept_count[1] == 0u); // 回环不能推进另一条总线。
+}
+
+// 模拟发送完成和接收中断，验证正常回环后恢复已有业务端点。
+static void test_selftest_loopback_complete(void)
+{
+    CAN_Init_Config_s config = {.can_handle = &hfdcan1, .tx_id = 1u,
+                                .rx_id = 0x301u, .can_module_callback = validate_rx_callback}; // 保留第一条总线的业务端点。
+    CANInstance *business = CANRegister(&config); // 诊断前先注册业务接收。
+    TEST_CHECK(business != NULL);
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_2)); // 启动第二条诊断总线。
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_3)); // 启动第三条诊断总线。
+    selftest_loopback_enabled = 1u; // 只在本场景产生模拟收发完成中断。
+    TEST_CHECK(CANRunLoopbackSelfTest() == 3u); // 三条总线均应完成回环和恢复。
+    selftest_loopback_enabled = 0u; // 之后业务帧不再由测试钩子处理。
+    TEST_CHECK(can_selftest_done && can_selftest_pass_mask == 7u && can_selftest_skip_mask == 0u); // 通过和跳过状态必须一致。
+    for (uint8_t bus = 0u; bus < DEVICE_CAN_CNT; ++bus)
+        TEST_CHECK(tx_accept_count[bus] == 8u && !CANBusIsQuarantined(bus == 0u ? &hfdcan1 : bus == 1u ? &hfdcan2 : &hfdcan3)); // 每条总线发送八帧并保持可用。
+    rx_frames[0][rx_frame_count[0]].header.Identifier = config.rx_id; // 诊断后投递业务反馈。
+    rx_frames[0][rx_frame_count[0]].header.DataLength = 1u << 16u; // 单字节反馈用于测试派发。
+    rx_frames[0][rx_frame_count[0]++].data[0] = 0x42u; // 写入测试数据并增加 FIFO 数量。
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 进入生产接收中断。
+    CANProcessRx(); // 在任务上下文派发业务帧。
+    TEST_CHECK(valid_rx_count == 1u && valid_rx_length == 1u); // 已注册端点在恢复后仍接收反馈。
+}
+
+// 发送尚未进入硬件时，时基停滞应撤销排队请求并恢复该总线。
+static void test_selftest_stopped_clock_queued(void)
+{
+    hfdcan2.Init.StdFiltersNbr = 0u; // 后两条总线没有诊断过滤器名额。
+    hfdcan3.Init.StdFiltersNbr = 0u; // 仅测试第一条总线的排队路径。
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_1)); // 启动回环目标总线。
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_2)); // 其他总线按资源不足跳过。
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_3));
+    tx_busy_mask = 1u; // 第一条总线硬件始终忙，请求保持软件排队。
+    TEST_CHECK(CANRunLoopbackSelfTest() == 0u); // 时基不前进时诊断必须失败并退出。
+    CAN_TxSchedulerStats_t stats = {0}; // 查询该总线发送队列。
+    TEST_CHECK(CANGetTxSchedulerStats(&hfdcan1, &stats) && stats.queued == 0u); // 测试请求已从软件队列撤销。
+    TEST_CHECK(!CANBusIsQuarantined(&hfdcan1) && bus_init_count[0] == 2u); // 未进入硬件的请求撤销后可恢复正常模式。
+    TEST_CHECK(tx_accept_count[0] == 0u && can_selftest_skip_mask == 6u); // 没有测试帧进入硬件，其他两条总线跳过。
 }
 
 // 使用生产电容和 CAN 驱动检查启动回退及旧队列帧。
@@ -2453,6 +2582,18 @@ int main(int argc, char **argv)
         test_supercap_startup_rollback();
     else if (strcmp(argv[1], "device-filter-close-failure") == 0)
         test_device_filter_close_failure();
+    else if (strcmp(argv[1], "selftest-global-full") == 0)
+        test_selftest_capacity_skip(1u);
+    else if (strcmp(argv[1], "selftest-filter-full") == 0)
+        test_selftest_capacity_skip(2u);
+    else if (strcmp(argv[1], "selftest-id-conflict") == 0)
+        test_selftest_capacity_skip(3u);
+    else if (strcmp(argv[1], "selftest-stopped-clock") == 0)
+        test_selftest_stopped_clock();
+    else if (strcmp(argv[1], "selftest-loopback-complete") == 0)
+        test_selftest_loopback_complete();
+    else if (strcmp(argv[1], "selftest-stopped-clock-queued") == 0)
+        test_selftest_stopped_clock_queued();
     else if (strcmp(argv[1], "dji-send-groups") == 0)
         test_dji_logical_send_groups();
     else if (strcmp(argv[1], "platform-can") == 0)

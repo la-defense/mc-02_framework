@@ -6,6 +6,7 @@
 #include <stddef.h>
 
 #include "robot.h"
+#include "robot_startup.h"
 #include "config/build_selection.h"
 #if defined(MC02_CONFIG_GENERATED)
 #include "config/vehicle_selection.h"
@@ -101,7 +102,7 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 void RobotRunStartupDiagnostics(void)
 {
 #if CAN_SELFTEST_LOOPBACK
-    (void)PlatformCanRunLoopbackDiagnostic(); // 所有设备已注册，周期收发任务尚未创建。
+    RobotStartupRecordCanDiagnostic(PlatformCanRunLoopbackDiagnostic()); // 报告诊断结果；核心隔离由后续检查处理。
 #endif
 #if CAN_DJI_INJECT_TEST >= 1
     (void)CANRunDjiFeedbackInjectTest(); // 诊断自行推进收发，避免与电机任务并发。
