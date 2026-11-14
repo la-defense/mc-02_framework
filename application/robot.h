@@ -19,9 +19,9 @@ uint8_t RobotInit(void);
  */
 uint8_t RobotInitializeApplications(void);
 
-/** @brief 在启动诊断后复核已启用模块的 CAN 总线依赖。
- * @return 1 表示核心依赖未受隔离影响；0 表示不得继续放行。
- * @note 由启动协调者在创建周期任务前调用，不以设备是否在线作为判据。
+/** @brief 启动诊断后复核 CAN 依赖，撤销已降级模块的桥接和电机资源。
+ * @return 核心依赖有效且清理成功返回 1；否则返回 0，不得继续放行。
+ * @note 仅由启动协调者在创建周期任务前串行调用；不检查设备在线状态。
  */
 uint8_t RobotRecheckCanAfterDiagnostics(void);
 
