@@ -780,6 +780,14 @@ target_compile_definitions(robot_can_requirements_test PRIVATE MC02_PROFILE_ROBO
 target_compile_options(robot_can_requirements_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_robot_can_requirements_mapping COMMAND robot_can_requirements_test)
 
+add_executable(robot_can_requirements_disabled_test robot_can_requirements_disabled_test.c
+  ../../application/robot_can_requirements.c) # 使用关闭业务模块的生成配置检查双板需求。
+target_include_directories(robot_can_requirements_disabled_test BEFORE PRIVATE motor_profile_fakes robot_def_role_fakes)
+target_include_directories(robot_can_requirements_disabled_test PRIVATE . ../../application ../../application/config ../../application/chassis ../../bsp/board)
+target_compile_definitions(robot_can_requirements_disabled_test PRIVATE MC02_CONFIG_GENERATED=1 MC02_PROFILE_ROBOT=1 CHASSIS_BOARD=1)
+target_compile_options(robot_can_requirements_disabled_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_robot_can_requirements_disabled COMMAND robot_can_requirements_disabled_test)
+
 add_executable(robot_alarm_adapter_test robot_alarm_adapter_test.c
   ../../modules/alarm/robot_alarm.c ../../modules/alarm/robot_alarm_policy.c)
 target_include_directories(robot_alarm_adapter_test BEFORE PRIVATE robot_alarm_adapter_fakes)

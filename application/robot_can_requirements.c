@@ -10,7 +10,7 @@ uint8_t RobotCollectCanDemands(const Robot_Config_s *config, RobotCanFilterDeman
     uint8_t count = 0u; // 固定容量足以覆盖当前设备组合。
     (void)config; // 无 CAN 设备的车型不读取这些字段。
     (void)demands; // 无 CAN 设备时不会写入数组。
-#if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
+#if MC02_FEATURE_COMMUNICATION && defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
     demands[count++] = (RobotCanFilterDemand_t){ROBOT_MODULE_COMMUNICATION, config->can_bridge.can_bus, 1u, 0u}; // 双板桥接。
 #endif
 #if MC02_FEATURE_CHASSIS
