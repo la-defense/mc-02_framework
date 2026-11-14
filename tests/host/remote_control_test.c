@@ -200,6 +200,36 @@ int main(int argc, char **argv)
     const RC_ctrl_t *rc = RemoteControlInit(PLATFORM_UART_5);
     CHECK(rc != NULL && dma_buffer != NULL);
     CHECK(!RemoteControlIsOnline());
+    if (argc > 1 && !strcmp(argv[1], "snapshot-metadata")) {
+        RemoteControlSnapshot_s value;
+        RemoteControlGetSnapshot(&value); // 首帧前没有可用来源或编号。
+        CHECK(!value.remote_online && !value.pc_valid && value.radio_sequence == 0u && value.pc_sample_sequence == 0u);
+        now = 10u; pc_frame(1u, 0u); // 第一份全松开输入只建立恢复计数。
+        RemoteControlGetSnapshot(&value);
+        CHECK(value.radio_sequence == 1u && value.pc_sample_sequence == 1u && !value.pc_valid);
+        now = 11u; pc_frame(2u, 0u); // 第二份全松开数据使键鼠可用。
+        RemoteControlGetSnapshot(&value);
+        CHECK(value.pc_valid && value.radio_source_time_ms == 11u && value.pc_source_time_ms == 11u);
+        CHECK(value.radio_sequence == 2u && value.pc_sample_sequence == 2u);
+        now = 15u; RemoteControlGetSnapshot(&value); // 查询不能替输入增加序号或续期。
+        CHECK(value.radio_source_time_ms == 11u && value.pc_source_time_ms == 11u && value.pc_sample_sequence == 2u);
+        now = 20u; pc_frame(2u, 1u); // 重复键鼠心跳仍是合法无线帧，但键鼠输入不更新。
+        RemoteControlGetSnapshot(&value);
+        CHECK(value.radio_sequence == 3u && value.radio_source_time_ms == 20u);
+        CHECK(value.pc_sample_sequence == 2u && value.pc_source_time_ms == 11u && value.input.key[0].keys == 0u);
+        uint8_t frame[18]; const uint16_t ch[5] = {1024,1024,1024,1024,1024};
+        encode(frame, ch, 1u, 3u); set_heartbeat(frame, 3u); frame[14] = 1u;
+        now = 30u; memcpy(dma_buffer, frame, sizeof(frame));
+        HAL_UARTEx_RxEventCallback(&huart5, sizeof(frame)); // 先记录接收，再推迟任务派发。
+        now = 35u; USARTProcessRx();
+        RemoteControlGetSnapshot(&value);
+        CHECK(value.radio_sequence == 4u && value.pc_sample_sequence == 3u && value.input.key[0].w);
+        CHECK(value.radio_source_time_ms == 30u && value.pc_source_time_ms == 30u);
+        frame[12] = 2u; now = 40u; receive(frame, sizeof(frame)); // 非法鼠标字段不得更新任何来源信息。
+        RemoteControlGetSnapshot(&value);
+        CHECK(value.radio_sequence == 4u && value.pc_sample_sequence == 3u && value.radio_source_time_ms == 30u);
+        return 0;
+    }
 #ifdef MC02_REMOTE_THREAD_TEST
     if (argc > 1 && !strcmp(argv[1], "threads")) return ConcurrentRemoteSnapshots();
 #endif

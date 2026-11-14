@@ -19,6 +19,15 @@ static DaemonInstance *rc_daemon_instance;
 static RemoteControlDiagnostics_s remote_control_diag;
 static uint16_t pc_sequence;
 static uint8_t pc_have_sequence, pc_authorized;
+static uint32_t radio_sample_sequence; // 每份合法无线输入递增，独立于诊断累计数。
+static uint32_t pc_sample_sequence; // 只有键鼠心跳向前并接受时递增，超时不清去重历史。
+
+// 保留0为未收到；32位自然回绕时跳过0，保证使用方能识别首份有效输入。
+static uint32_t NextSampleSequence(uint32_t previous)
+{
+    const uint32_t next = previous + 1u; // 无符号加法允许从最大值回到0。
+    return next == 0u ? 1u : next; // 0不交付为合法样本编号。
+}
 
 // 只清键鼠和按下次数，保留摇杆与开关；调用前地址必须有效。
 static void ClearPC(RC_ctrl_t *input)
@@ -71,6 +80,7 @@ static uint8_t AcceptPC(const RC_ctrl_t *candidate, uint16_t heartbeat, uint32_t
     const uint16_t advance = (uint16_t)(heartbeat - pc_sequence);
     if (pc_have_sequence && (advance == 0u || advance >= 0x8000u)) return 0u;
     pc_sequence = heartbeat; pc_have_sequence = 1u;
+    pc_sample_sequence = NextSampleSequence(pc_sample_sequence); // 只给这次接受的新键鼠数据分配本机编号。
     remote_control_diag.pc_heartbeat = heartbeat;
     remote_control_diag.pc_last_advance_tick = source_ms;
     if (!pc_authorized)
@@ -177,6 +187,7 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
     controls[TEMP] = candidate;
     controls[LAST] = candidate;
     remote_control_diag.accepted_frames++;
+    radio_sample_sequence = NextSampleSequence(radio_sample_sequence); // 整帧检查通过后才推进无线样本号。
     remote_control_diag.last_valid_tick = block->received_ms;
     remote_control_diag.has_valid_frame = 1u;
     (void)DaemonReportAt(rc_daemon_instance, block->received_ms,
@@ -231,6 +242,8 @@ const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port)
     memset(rc_ctrl, 0, sizeof(rc_ctrl));
     memset((void *)&remote_control_diag, 0, sizeof(remote_control_diag));
     pc_authorized = 0u;
+    radio_sample_sequence = 0u; // 启动注册建立新的无线读取记录。
+    pc_sample_sequence = 0u; // 本机键鼠样本号只在模块初始化时归零。
     RevokePC(PlatformTimeNowMs(), REMOTE_PC_REVOKE_NONE);
     Daemon_Init_Config_s daemon_conf = {
         .transport_timeout_ms = 100u,
@@ -290,6 +303,10 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
         remote_control_diag.has_valid_frame != 0u && rc_init_flag != 0u);
     snapshot->input = rc_ctrl[TEMP];
     snapshot->pc_valid = (uint8_t)(snapshot->remote_online && pc_authorized);
+    snapshot->radio_source_time_ms = remote_control_diag.last_valid_tick; // 继承接收事件时间，不使用本次查询时刻。
+    snapshot->radio_sequence = radio_sample_sequence; // 与当前无线输入一起交付。
+    snapshot->pc_source_time_ms = remote_control_diag.pc_last_advance_tick; // 键鼠使用自己的期限起点。
+    snapshot->pc_sample_sequence = pc_sample_sequence; // 重复心跳和重复查询都保留已有编号。
     PlatformIrqRestore(primask);
 }
 

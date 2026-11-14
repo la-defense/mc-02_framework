@@ -1531,6 +1531,8 @@ target_include_directories(remote_control_test BEFORE PRIVATE remote_fakes robot
 target_include_directories(remote_control_test PRIVATE ../../bsp/usart ../../modules/remote
   ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../modules/message_center ../../application)
 add_test(NAME production_remote_startup_offline COMMAND remote_control_test)
+add_test(NAME production_remote_snapshot_source_metadata COMMAND remote_control_test snapshot-metadata) # 验证数据和原始时间一致交付。
+set_tests_properties(production_remote_snapshot_source_metadata PROPERTIES TIMEOUT 10)
 add_test(NAME production_remote_complete_frame COMMAND remote_control_test length)
 add_test(NAME production_remote_fields_and_lease COMMAND remote_control_test fields)
 add_test(NAME production_remote_queue_and_key_history COMMAND remote_control_test queue-keys)

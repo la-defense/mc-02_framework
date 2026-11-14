@@ -144,11 +144,16 @@ typedef struct
     RC_ctrl_t input;
     uint8_t remote_online;
     uint8_t pc_valid;
+    uint32_t radio_source_time_ms; // 最近合法无线帧的原接收时刻，0也可以是有效时间。
+    uint32_t radio_sequence; // 合法无线帧的本机序号，初始0；重复读取不递增。
+    uint32_t pc_source_time_ms; // 最近向前键鼠心跳的原接收时刻，无线重复帧不能刷新。
+    uint32_t pc_sample_sequence; // 本机记录的键鼠样本号，区别于线上的16位心跳号。
 } RemoteControlSnapshot_s;
 /** @brief 一次复制当前输入及可用标记，并检查键鼠是否已超过 150 ms 未更新。
 * @param[out] snapshot 调用方的输出对象，NULL 时直接返回；读取期间暂时关闭普通中断并恢复原状态。
 * @note 每个命令周期调用，即使没有新串口帧；摇杆在线与键鼠可用分别由 remote_online、pc_valid 表示。
 *       键鼠失效时清零；恢复要求连续两帧所有键鼠松开，且心跳编号向前变化。等于 150 ms 仍允许。
+*       数据、有效标记、原接收时间及样本号在同一临界区复制；标记无效时不可使用相应数据和时间。
  */
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot);
 
