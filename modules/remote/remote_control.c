@@ -225,7 +225,7 @@ static void RCLostCallback(const DaemonEvent_t *event, void *id)
     memset(rc_ctrl, 0, sizeof(rc_ctrl));
     RobotSafetySetRcOnline(0u);
     PlatformIrqRestore(primask);
-    EstopRequest(ESTOP_REASON_RC_OFFLINE);
+    if (!RobotSafetyIsFormalAutonomous()) EstopRequest(ESTOP_REASON_RC_OFFLINE); // 正式自主按比赛与核心条件运行，其他模式离线急停。
     PlatformUartRestartReceive(rc_usart_instance);
     BSP_LOG_EVENT_0(EV_MODULES_REMOTE_REMOTE_CONTROL_C_01);
 }

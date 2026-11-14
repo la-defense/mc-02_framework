@@ -200,6 +200,26 @@ int main(int argc, char **argv)
     const RC_ctrl_t *rc = RemoteControlInit(PLATFORM_UART_5);
     CHECK(rc != NULL && dma_buffer != NULL);
     CHECK(!RemoteControlIsOnline());
+    if (argc > 1 && !strcmp(argv[1], "formal-autonomous-offline")) {
+        RobotSafetySetImuValid(1u); RobotSafetySetCalibValid(1u); // 真实安全接口报告已检查的核心条件。
+        const RobotControlPolicy_t policy = {ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL, 1u, 1u, 0u};
+        CHECK(RobotSafetyConfigureControl(&policy)); RobotSafetyUpdate();
+        now = 1u;
+        const RobotSafetyControlInputs_t inputs = {
+            .mode = ROBOT_CONTROL_AUTONOMOUS, // 场景明确使用正式自主。
+            .match = {1u, 5000u, 1u}, // 后续无线离线期间比赛阶段仍有效。
+            .feedback_valid_functions = ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL, // 由测试模拟已检查的反馈。
+            .match_running = 1u, // 正在比赛；没有人工连续目标或击发请求。
+        };
+        CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate(); CHECK(RobotSafetyIsReady());
+        now = 2u; pc_frame(1u, 0u); now = 3u; pc_frame(2u, 0u); // 先建立真实无线接收记录。
+        now = 104u; daemon_cycle(); // 真实来源监控和离线回调处理超过100ms的无线间隔。
+        RemoteControlSnapshot_s value; RemoteControlGetSnapshot(&value);
+        RobotSafetyUpdate();
+        CHECK(!value.remote_online && !value.pc_valid && !EstopIsLatched());
+        CHECK(RobotSafetyIsReady()); // 正式自主继续按比赛阶段与核心状态运行。
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "snapshot-metadata")) {
         RemoteControlSnapshot_s value;
         RemoteControlGetSnapshot(&value); // 首帧前没有可用来源或编号。

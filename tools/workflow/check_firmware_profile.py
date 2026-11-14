@@ -59,6 +59,7 @@ ATTITUDE_ADAPTER_SOURCE = "modules/algorithm/attitude_filter.c"
 FUSION_SOURCE = "Middlewares/Third_Party/Fusion/FusionAhrs.c"
 # 这些源文件编入无芯片／RTOS 头路径的框架对象目标，仍属于车型源码清单。
 PORTABLE_FRAMEWORK_SOURCES = {
+    "modules/safety/robot_control_policy.c",  # 整车安全管理共用的三模式策略。
     "bsp/os/platform_startup_wait.c",  # 启动前的固定期限和检查次数。
     "bsp/os/platform_clock_guard.c",  # 主时钟配置的固定期限和停表兜底。
     "application/init_diagnostic.c",  # 初始化结果及事件记录。

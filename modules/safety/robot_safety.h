@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include "robot_state.h"
+#include "robot_control_policy.h"
 
 /* 机器人故障位, 可同时置位多个 */
 typedef enum
@@ -46,7 +47,43 @@ typedef struct
     uint8_t remote_chassis_permit;
     uint32_t chassis_inhibit_generation;
     Estop_Reason_e estop_reason;
+    uint32_t control_generation; // 相关禁止条件每次发生时递增，防止周期之间的短故障被漏过。
 } RobotSafetySnapshot_t;
+
+/** @brief 唯一命令仲裁者提交的来源事实；核心、急停和人工使能仍由原安全状态管理。 */
+typedef struct {
+    RobotControlMode_t mode; // 本轮选择的控制模式。
+    RobotControlLease_t manual; // 已选人工来源，保留其原接收时间。
+    RobotControlLease_t aim; // 瞄准来源自己的期限。
+    RobotControlLease_t navigation; // 导航来源自己的期限。
+    RobotControlLease_t match; // 裁判阶段自己的期限。
+    uint32_t feedback_valid_functions; // 本轮必需反馈有效的功能位。
+    uint32_t blocked_functions; // 按已确认故障影响范围禁止的功能位。
+    uint8_t match_running; // 有效裁判阶段是否允许运行。
+    uint8_t manual_fire_requested; // 当前人工请求，不重放旧事件。
+    uint8_t vision_fire_requested; // 当前视觉请求，不替代辅助模式的人工请求。
+} RobotSafetyControlInputs_t;
+
+/** @brief 启动时配置单板／云台侧模式策略；原默认路径在未配置时保持兼容。
+ * @param[in] policy 已确认的车型策略，函数复制；只能在初始SAFE、无使能／标定／急停时配置一次。
+ * @return 1为成功；0为非法配置、错误阶段、重复配置或底盘板角色。失败须由启动者报告初始化失败。
+ */
+uint8_t RobotSafetyConfigureControl(const RobotControlPolicy_t *policy);
+/** @brief 由唯一命令仲裁者提交同一轮来源事实，不改变原始来源时刻。
+ * @param[in] inputs 非空来源数据，内部复制；错误时撤销旧来源，保持原模式等待新数据。
+ * @return 1为接受；0为未配置或输入错误。提交不代替RobotSafetyUpdate推进状态。
+ */
+uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs);
+/** @brief 同时读取分功能许可；当前来源过期或立即禁止会在查询时再次撤销。
+ * @param[in] now_ms 本机毫秒时刻。
+ * @param[out] output 非空，仅返回1时整份改写；未进入READY时返回成功的全零许可。
+ * @return 1为已配置并完成计算，0为未配置或参数错误；返回0时调用方必须禁止执行。
+ */
+uint8_t RobotSafetyGetFunctionPermitsAt(uint32_t now_ms, RobotControlPermits_t *output);
+/** @brief 查询当前是否选择了车型允许的正式自主；仅用于决定遥控离线是否请求急停。
+ * @return 1不代表取得运行许可；比赛阶段、核心条件和急停仍由安全管理检查。
+ */
+uint8_t RobotSafetyIsFormalAutonomous(void);
 
 /** @brief 清空故障、急停和请求，进入 SAFE；只在系统初始化时调用。 */
 void RobotSafetyInit(void);
@@ -106,8 +143,8 @@ void RobotFaultClear(Robot_Fault_e fault);
 /** @brief 保存急停和原因并清除使能请求；运行状态在 Update 中转为 ESTOP。
 * @param[in] reason 急停原因，重复相同原因不重复报告。 */
 void EstopRequest(Estop_Reason_e reason);
-/** @brief 尝试清除急停；遥控离线、任务超时或初始化失败未清除时拒绝。
-* @return 1 为已清除或原本未急停，0 为仍有上述故障；实际清除时进入 SAFE，须重新请求使能。 */
+/** @brief 尝试清除急停；任务超时、初始化失败和恢复额度锁定时拒绝，非正式自主还要求遥控在线。
+* @return 1 为已清除或原本未急停，0 为仍有上述故障；实际清除进入SAFE，人工模式须重新使能，正式自主重新检查比赛与核心条件。 */
 uint8_t EstopClear(void);
 /** @brief 读取当前是否仍保留急停。
 * @return 1 为急停未清除，0 为无急停。 */

@@ -1504,6 +1504,12 @@ if(UNIX AND NOT APPLE)
   target_link_options(kalman_filter_init_test PRIVATE -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
 endif()
 add_executable(robot_safety_test robot_safety_test.c ../../modules/safety/robot_safety.c)
+add_executable(robot_safety_control_test robot_safety_control_test.c ../../modules/safety/robot_safety.c)
+target_include_directories(robot_safety_control_test BEFORE PRIVATE robot_cmd_fakes)
+target_include_directories(robot_safety_control_test PRIVATE ../../modules/safety)
+target_compile_options(robot_safety_control_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_safety_control_manager COMMAND robot_safety_control_test)
+set_tests_properties(production_safety_control_manager PROPERTIES TIMEOUT 10)
 target_include_directories(robot_safety_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_safety_test PRIVATE ../../application ../../modules/imu
   ../../modules/master_machine ../../modules/safety ../../bsp/usart)
@@ -1539,7 +1545,9 @@ target_include_directories(remote_control_test PRIVATE ../../bsp/usart ../../mod
   ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../modules/message_center ../../application)
 add_test(NAME production_remote_startup_offline COMMAND remote_control_test)
 add_test(NAME production_remote_snapshot_source_metadata COMMAND remote_control_test snapshot-metadata) # 验证数据和原始时间一致交付。
+add_test(NAME production_remote_formal_autonomous_offline COMMAND remote_control_test formal-autonomous-offline) # 真实离线回调不能绕过模式规则。
 set_tests_properties(production_remote_snapshot_source_metadata PROPERTIES TIMEOUT 10)
+set_tests_properties(production_remote_formal_autonomous_offline PROPERTIES TIMEOUT 10)
 add_test(NAME production_remote_complete_frame COMMAND remote_control_test length)
 add_test(NAME production_remote_fields_and_lease COMMAND remote_control_test fields)
 add_test(NAME production_remote_queue_and_key_history COMMAND remote_control_test queue-keys)
@@ -2725,6 +2733,7 @@ foreach(target IN LISTS host_targets)
   get_target_property(type ${target} TYPE)
   get_target_property(target_sources ${target} SOURCES)
   if(type STREQUAL "EXECUTABLE" AND "${target_sources}" MATCHES "robot_safety[.]c")
+    target_sources(${target} PRIVATE ../../modules/safety/robot_control_policy.c) # 安全管理在任务和查询中复用同一纯C策略。
     # 编译生产平台适配器，继续使用每个目标自己的中断和时钟替身。
     if(NOT "${target_sources}" MATCHES "platform_irq_stm32[.]c")
       target_sources(${target} PRIVATE ../../bsp/os/platform_irq_stm32.c)

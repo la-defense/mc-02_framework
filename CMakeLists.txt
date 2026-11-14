@@ -284,7 +284,8 @@ set(MC02_PORTABLE_FRAMEWORK_SOURCES
     modules/daemon/daemon.c # 来源期限、状态和事件队列。
     modules/daemon/daemon_event_task.c # 来源事件处理任务的框架入口。
     modules/message_center/message_center.c # 有界消息与话题目录。
-    modules/safety/robot_safety.c) # 整车许可、故障与急停状态。
+    modules/safety/robot_safety.c # 整车许可、故障与急停状态。
+    modules/safety/robot_control_policy.c) # 三模式来源与分功能许可计算。
 # 板间通信和时间映射仅在车型选择时进入独立目标。
 set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/algorithm/QuaternionEKF.c # 四元数姿态估计，矩阵调用经框架接口。
