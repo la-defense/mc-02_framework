@@ -1764,6 +1764,11 @@ target_compile_definitions(gimbal_mode_test PRIVATE MC02_PROFILE_BENCH_SAFE=1)
 target_compile_options(gimbal_mode_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
 target_link_libraries(gimbal_mode_test PRIVATE m)
 add_test(NAME production_gimbal_mode_state_transitions COMMAND gimbal_mode_test)
+foreach(release_result IN ITEMS success failure)
+  add_test(NAME production_gimbal_release_${release_result} COMMAND gimbal_mode_test release-${release_result}) # 成功注册后再撤销。
+  add_test(NAME production_chassis_release_${release_result} COMMAND chassis_task_configured_test release-${release_result}) # 保留其他模块的登记。
+  add_test(NAME production_shoot_release_${release_result} COMMAND shoot_freshness_test release-${release_result}) # 发射电机全部撤销或上报失败。
+endforeach()
 foreach(scenario IN ITEMS 1 2 3 4 5)
   add_test(NAME production_gimbal_startup_failure_${scenario} COMMAND gimbal_mode_test ${scenario}) # 注入电机、话题、回退及姿态存储失败。
 endforeach()

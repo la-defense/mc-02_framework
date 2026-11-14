@@ -144,6 +144,21 @@ rollback:
     return 0u; // 失败时不交付底盘模块。
 }
 
+uint8_t ChassisReleaseStartupDevices(void)
+{
+    uint8_t released = 1u; // 汇总所有设备的撤销结果。
+#if MC02_FEATURE_SUPERCAP
+    if (!ChassisLegacySuperCapRollbackStartup()) released = 0u; // 旧电容由底盘持有，先撤销它。
+#endif
+    DJIMotorInstance **motors[] = {&motor_rb, &motor_lb, &motor_rf, &motor_lf}; // 按登记逆序处理四个轮电机。
+    for (unsigned index = 0u; index < 4u; ++index) // 只访问本底盘持有的实例。
+    {
+        if (*motors[index] != NULL && !DJIMotorRollbackStartup(*motors[index])) released = 0u; // 单个失败后仍继续清理。
+        *motors[index] = NULL; // 撤销失败也可能已释放软件实例，不再保留旧地址。
+    }
+    return released; // 底层无法安全清理时禁止启动后续任务。
+}
+
 /**
  * @brief 停止四个底盘电机并清除可能遗留的速度参考值
  */

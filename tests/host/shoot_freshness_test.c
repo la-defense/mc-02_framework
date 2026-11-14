@@ -114,6 +114,15 @@ static MessageStatus_t publish(MessagePublisher_t *publisher,
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strncmp(argv[1], "release-", 8u) == 0)
+    {
+        CHECK(ShootInit() == 1u); // 清理对象必须是已经完成初始化的机构。
+        fake_rollback_failure = (uint8_t)(strcmp(argv[1], "release-failure") == 0); // 随后模拟底层清理失败。
+        CHECK(ShootReleaseStartupDevices() == (uint8_t)!fake_rollback_failure);
+        CHECK(fake_rollback_count == (fake_rollback_failure ? 0u : 3u)); // 两个摩擦轮加一个拨弹盘。
+        CHECK(ShootReleaseStartupDevices() == 1u); // 不再次释放旧实例。
+        return 0;
+    }
     if (argc == 2) // 独立进程执行启动失败场景，避免复用已经注册的资源。
     {
         const uint32_t scenario = (uint32_t)strtoul(argv[1], NULL, 10); // 参数选择失败场景。

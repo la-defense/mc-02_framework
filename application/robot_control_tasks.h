@@ -15,6 +15,11 @@ uint8_t ChassisInit(void);
  * @note 在启动协调任务中串行读取；每次 ChassisInit 开始时清除上一结果。
  */
 uint8_t ChassisInitRollbackFailed(void);
+/** @brief 在创建周期任务前撤销底盘电机及旧电容；重复调用不重复释放。
+ * @return 全部撤销或没有实例返回 1，底层回退失败返回 0。
+ * @note 仅供启动协调任务串行调用；调用后不能运行 ChassisTask。
+ */
+uint8_t ChassisReleaseStartupDevices(void);
 /** @brief 在成功初始化后执行一轮底盘控制；超过 50 ms 的命令失效并停止相应输出。 */
 void ChassisTask(void);
 /** @brief 初始化云台资源。
@@ -27,6 +32,11 @@ uint8_t GimbalInit(void);
  * @note 在启动协调任务中串行读取；每次 GimbalInit 开始时清除上一结果。
  */
 uint8_t GimbalInitRollbackFailed(void);
+/** @brief 在创建周期任务前撤销云台电机；重复调用不重复释放。
+ * @return 全部撤销或没有实例返回 1，底层回退失败返回 0。
+ * @note 仅供启动协调任务串行调用；调用后不能运行 GimbalTask。
+ */
+uint8_t GimbalReleaseStartupDevices(void);
 /** @brief 在成功初始化后执行一轮云台控制；超过 50 ms 的命令失效并停止相应输出。 */
 void GimbalTask(void);
 /** @brief 初始化发射机构资源。
@@ -39,6 +49,11 @@ uint8_t ShootInit(void);
  * @note 在启动协调任务中串行读取；每次 ShootInit 开始时清除上一结果。
  */
 uint8_t ShootInitRollbackFailed(void);
+/** @brief 在创建周期任务前撤销发射电机；重复调用不重复释放。
+ * @return 全部撤销或没有实例返回 1，底层回退失败返回 0。
+ * @note 仅供启动协调任务串行调用；调用后不能运行 ShootTask。
+ */
+uint8_t ShootReleaseStartupDevices(void);
 /** @brief 在成功初始化后执行一轮发射控制；超过 50 ms 的命令失效并停止相应输出。 */
 void ShootTask(void);
 #endif

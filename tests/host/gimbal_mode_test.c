@@ -353,6 +353,16 @@ static void TestFeedbackConfiguration(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strncmp(argv[1], "release-", 8u) == 0)
+    {
+        TEST_CHECK(GimbalInit() == 1u); // 先取得两台已登记电机。
+        const uint8_t fail = (uint8_t)(strcmp(argv[1], "release-failure") == 0); // 在成功初始化后注入回退失败。
+        if (fail) startup_scenario = 4u;
+        TEST_CHECK(GimbalReleaseStartupDevices() == (uint8_t)!fail);
+        TEST_CHECK(rollback_count == (fail ? 0u : 2u)); // 成功路径必须撤销所有实例。
+        TEST_CHECK(GimbalReleaseStartupDevices() == 1u); // 不得再次传递已交还的指针。
+        return 0;
+    }
     if (argc == 2)
     {
         startup_scenario = (unsigned)(argv[1][0] - '0'); // 独立进程选择失败场景。

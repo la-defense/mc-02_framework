@@ -140,6 +140,16 @@ rollback:
     return 0u; // 不交付未完成的云台模块。
 }
 
+uint8_t GimbalReleaseStartupDevices(void)
+{
+    uint8_t released = 1u; // 即使一个撤销失败，也继续处理另一个实例。
+    if (pitch_motor != NULL && !DJIMotorRollbackStartup(pitch_motor)) released = 0u; // 先撤销后登记的 pitch。
+    pitch_motor = NULL; // 底层失败时也可能已释放软件实例，不保留旧指针。
+    if (yaw_motor != NULL && !DJIMotorRollbackStartup(yaw_motor)) released = 0u; // 再撤销 yaw。
+    yaw_motor = NULL; // 后续诊断不能再解引用原实例。
+    return released; // 无法撤销时由协调者禁止任务放行。
+}
+
 /* 机器人云台控制核心任务,后续考虑只保留IMU控制,不再需要电机的反馈 */
 void GimbalTask()
 {

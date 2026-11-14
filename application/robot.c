@@ -251,7 +251,20 @@ uint8_t RobotRecheckCanAfterDiagnostics(void)
         return 0u; // 接收端点清理异常时不能放行任务。
     }
 #endif
-    return 1u; // 资源状态和核心依赖均已检查。
+    uint8_t released = 1u; // 所有辅助清理都要尝试，不能被短路条件跳过。
+#if MC02_FEATURE_SHOOTER
+    if (!RobotBuildModuleStarted(ROBOT_MODULE_SHOOTER) && !ShootReleaseStartupDevices()) released = 0u; // 清除已降级发射机构的电机登记。
+#endif
+#if MC02_FEATURE_GIMBAL
+    if (!RobotBuildModuleStarted(ROBOT_MODULE_GIMBAL) && !GimbalReleaseStartupDevices()) released = 0u; // 姿态或总线失败也可能阻止云台。
+#endif
+#if MC02_FEATURE_CHASSIS
+    if (!RobotBuildModuleStarted(ROBOT_MODULE_CHASSIS) && !ChassisReleaseStartupDevices()) released = 0u; // 保留其他成功模块的实例。
+#endif
+    if (!released)
+        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                    INIT_FAILURE_RESOURCE, 3u); // 清理失败不能作为普通辅助降级继续。
+    return released; // 成功清理后才允许创建周期任务。
 #else
     return 1u; // 旧主机组合没有车型生成的依赖计划。
 #endif

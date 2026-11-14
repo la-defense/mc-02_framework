@@ -380,6 +380,14 @@ int main(int argc, char **argv)
     if (fail_cap || fail_motor) { CHECK(initialized == 0u); return 0; }
     CHECK(initialized != 0u);
     CHECK(motor_count == 4);
+    if (argc == 2 && strncmp(argv[1], "release-", 8u) == 0)
+    {
+        rollback_failed = (uint8_t)(strcmp(argv[1], "release-failure") == 0); // 初始化完成后再拒绝电机回退。
+        CHECK(ChassisReleaseStartupDevices() == (uint8_t)!rollback_failed);
+        CHECK(rollback_count == (rollback_failed ? 0u : 4u)); // 检查四台已登记轮电机。
+        CHECK(ChassisReleaseStartupDevices() == 1u); // 重复清理不重复释放实例。
+        return 0;
+    }
 #if defined(CHASSIS_BRIDGE_INTEGRATION)
     return test_bridge_to_chassis();
 #endif

@@ -125,6 +125,20 @@ rollback:
     return 0u; // 不发布失败的发射模块。
 }
 
+uint8_t ShootReleaseStartupDevices(void)
+{
+    uint8_t released = 1u; // 汇总全部设备的撤销结果。
+    if (loader != NULL && !DJIMotorRollbackStartup(loader)) released = 0u; // 按登记逆序先处理拨弹盘。
+    loader = NULL; // 不再保留可能已释放的实例。
+    for (uint8_t index = friction_count; index > 0u; --index) // 依次撤销本机构的摩擦轮。
+    {
+        if (friction_motors[index - 1u] != NULL && !DJIMotorRollbackStartup(friction_motors[index - 1u])) released = 0u; // 单个失败不妨碍其他实例清理。
+        friction_motors[index - 1u] = NULL; // 重复调用不能再次释放原实例。
+    }
+    friction_count = 0u; // 诊断不再显示已撤销的摩擦轮。
+    return released; // 协调者根据失败结果决定是否关断整车。
+}
+
 /* 机器人发射机构控制核心任务 */
 void ShootTask()
 {
