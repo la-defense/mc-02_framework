@@ -986,6 +986,7 @@ add_test(NAME production_lk_motor_logical_receive COMMAND lk_motor_bsp_can_test 
 add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platform-can)
 add_test(NAME production_platform_can_status COMMAND lk_motor_bsp_can_test platform-can-status)
 add_test(NAME production_can_busoff_cancels_queued COMMAND lk_motor_bsp_can_test busoff-cancel-queued) # 只撤销故障总线的软件旧帧。
+add_test(NAME production_can_busoff_rx_generation COMMAND lk_motor_bsp_can_test busoff-rx-generation) # 丢弃故障前入队的本总线反馈。
 add_test(NAME production_can_busoff_stop_fails COMMAND lk_motor_bsp_can_test busoff-stop-fails) # 停止失败不得恢复。
 add_test(NAME production_can_busoff_start_fails COMMAND lk_motor_bsp_can_test busoff-start-fails) # 启动失败不得恢复。
 add_test(NAME production_can_busoff_inflight_quarantine COMMAND lk_motor_bsp_can_test busoff-inflight) # 硬件帧未确认不能重启。

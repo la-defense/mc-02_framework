@@ -49,6 +49,7 @@ typedef struct
     uint8_t data[8];       /* 帧数据 */
     uint32_t timestamp_ms;
     uint32_t timestamp_cycles;
+    uint32_t generation;   /* 入队时的总线代际，用于丢弃故障前的旧反馈。 */
 } CANRxItem_t;
 
 /* 接收中断只保留"有新帧"和"丢帧诊断"两种:
@@ -134,6 +135,7 @@ typedef struct
     CAN_TxStats_t tx;
     CAN_BusStats_t bus;
     uint8_t tx_ownership_uncertain; /* HAL 已接受但无法关联硬件槽，重启前必须隔离。 */
+    volatile uint32_t rx_generation; /* 本总线故障时递增，其他总线不受影响。 */
     CANTxScheduler_t tx_scheduler;
     /* ---- 接收队列(SPSC): 中断入队, 任务用 CANProcessRx() 消费 ---- */
     CANRxItem_t rxq[CAN_RXQ_DEPTH];
@@ -1150,6 +1152,7 @@ static void CANRxQueuePush(CANBusState_t *bus, CANInstance *ins, uint8_t len, co
     memcpy(it->data, data, len);
     it->timestamp_ms = timestamp_ms;
     it->timestamp_cycles = timestamp_cycles;
+    it->generation = bus->rx_generation; // 保存入队时的总线代际，不改变原始接收时间。
 
     __DMB();
     bus->rxq_head = next;
@@ -1185,7 +1188,8 @@ void CANProcessRx(void)
         {
             CANRxItem_t *it = &bus->rxq[bus->rxq_tail];
             CANInstance *ins = it->instance;
-            if (CANBusIsActive(i) && ins != NULL && ins->can_module_callback != NULL &&
+            if (CANBusIsActive(i) && it->generation == bus->rx_generation &&
+                ins != NULL && ins->can_module_callback != NULL &&
                 (uint32_t)(HAL_GetTick() - it->timestamp_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS)
             {
                 ins->rx_len = it->len;
@@ -1993,6 +1997,7 @@ void CANHealthMonitor(void)
                 bus->bus.busoff++;
             taskENTER_CRITICAL(); // 与发送队列提交和推进互斥。
             can_recovering |= (uint8_t)(1u << i); // 先暂停本总线，禁止恢复期间接收新请求。
+            ++bus->rx_generation; // 恢复后丢弃故障前已经进入软件队列的反馈。
             CANTxCancelQueued(&bus->tx_scheduler); // 控制器重启前撤销已经排队但未提交的旧帧。
             uint8_t hardware_pending = bus->tx_ownership_uncertain; // 无法关联槽位时同样视为有未确认帧。
             for (uint8_t slot = 0u; slot < CAN_TX_MAX_HW_BUFFERS; ++slot)

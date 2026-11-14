@@ -2667,6 +2667,37 @@ static void test_busoff_cancels_queued(void)
     TEST_CHECK(tx_accept_count[0] == 0u && tx_accept_count[1] == 1u);
 }
 
+static void test_busoff_discards_queued_feedback(void)
+{
+    PlatformCanRxPort_t first = {0}, other = {0}; // 两条总线分别保存接收端点。
+    ExtendedRxState first_state = {0}, other_state = {0}; // 独立记录两路派发。
+    PlatformCanEndpoint_t endpoint = {.can_bus = PLATFORM_CAN_BUS_1, .tx_id = 0x321u, .rx_id = 0x123u};
+    TEST_CHECK(PlatformCanRxRegister(&first, &endpoint, extended_rx_callback, &first_state));
+    endpoint.can_bus = PLATFORM_CAN_BUS_2; // 相同 ID 属于不同总线。
+    TEST_CHECK(PlatformCanRxRegister(&other, &endpoint, extended_rx_callback, &other_state));
+    for (uint8_t bus = 0u; bus < 2u; ++bus)
+    {
+        rx_frames[bus][0].header.Identifier = 0x123u; // 两帧在故障前入队。
+        rx_frames[bus][0].header.DataLength = 1u << 16u; // 每帧包含一个标记字节。
+        rx_frames[bus][0].data[0] = (uint8_t)(0x10u + bus); // 区分两条总线的数据。
+        rx_frame_count[bus] = 1u; // 模拟各控制器各收到一帧。
+    }
+    now_us = 99000u; // 两帧在故障前 1 ms 到达，尚未因时间过期。
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    HAL_FDCAN_RxFifo0Callback(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    status_busoff[0] = 1u; // 只有第一条总线发生 BusOff。
+    now_us = 100000u;
+    CANHealthMonitor(); // 清除旧代际并尝试重启。
+    status_busoff[0] = 0u; // 模拟该次重启后总线恢复。
+    rx_frames[0][1] = rx_frames[0][0]; // 在故障总线上排入恢复后的新帧。
+    rx_frames[0][1].data[0] = 0x55u;
+    rx_frame_count[0] = 2u;
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    CANProcessRx(); // 故障前第一条总线的帧不能交给设备。
+    TEST_CHECK(first_state.count == 1u && first_state.marker == 0x55u);
+    TEST_CHECK(other_state.count == 1u && other_state.marker == 0x11u); // 其他总线的旧队列不变。
+}
+
 static void test_busoff_recovery_failure(uint8_t stop_failure)
 {
     TEST_CHECK(CANStartBus(&hfdcan1)); // 在启用故障注入前启动总线。
@@ -2743,6 +2774,8 @@ int main(int argc, char **argv)
         test_platform_can_status();
     else if (strcmp(argv[1], "busoff-cancel-queued") == 0)
         test_busoff_cancels_queued();
+    else if (strcmp(argv[1], "busoff-rx-generation") == 0)
+        test_busoff_discards_queued_feedback();
     else if (strcmp(argv[1], "busoff-stop-fails") == 0)
         test_busoff_recovery_failure(1u);
     else if (strcmp(argv[1], "busoff-start-fails") == 0)
