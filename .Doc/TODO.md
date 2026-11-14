@@ -8,6 +8,25 @@
 
 **==标为黄色高亮的代表紧急程度高。==**
 
+## 2026-11-14：分支成果选择性整合
+
+- [ ] **MC02-0142** [bug] [needs-triage] 修复 FreeRTOS 运行时统计计时源的 DWT 回绕处理。验收：任务切换时间差不受 `DWT->CYCCNT` 约 8.94 秒回绕影响；主机测试覆盖跨回绕增量和计时源异常，目标验证确认统计连续。范围只限 FreeRTOS 运行时统计，不扩展通用时基接口或其他暂缓主题。
+
+## 2026-11-08：可移植性能模板
+
+- 调研文档：[MC-02 可移植性能模板调研](../docs/workflow/specs/performance-portability-research.md)
+
+以下 8 项来自该文档，已于 2026-11-08 审核通过，依赖满足后启动。原始测量来自 2026-11-06 的旧固件状态，不作为当前性能基线；MC02-0130 先按匹配 Build ID 复测。MC02-0129 已被文档审查任务占用，故从 0130 开始编号。
+
+- [ ] **MC02-0130** [enhancement] [ready-for-agent] 性能基线与可移植内存区域描述。验收：按匹配 Build ID 的 `bench_safe` Debug/RelWithDebInfo 固件复测 Flash/RAM 分区、链接预留、任务栈、任务周期与抖动；先核对 STM32H723 实际内存区、总线和 DMA 可达性，再提出各段放置方案。平台/板级描述内存区域能力，生成配置头，保留板级 linker 为布局单一来源，并用链接符号核对；经约束检查后再迁移段，加入预算与 CI 报告。现有测试和 ARM 构建通过，控制行为不变。依赖 MC02-0087。详见[调研文档第 4 节](../docs/workflow/specs/performance-portability-research.md)。
+- [ ] **MC02-0131** [enhancement] [ready-for-agent] 启用 I-Cache 并测量收益。验收：启动阶段使能 I-Cache；在相同构建标识和负载下对比开/关时的函数耗时及任务指标；DMA 数据路径保持一致；记录 ITCM 候选函数但不迁移。先通过主机测试和 ARM 构建，再按裸板只读流程测量。依赖 MC02-0130。详见[调研文档第 5 节](../docs/workflow/specs/performance-portability-research.md)。
+- [ ] **MC02-0132** [enhancement] [ready-for-agent] D-Cache、MPU 与 DMA 缓冲审计。验收：按确认的芯片内存图和外设访问能力建立静态 MPU 区域表；逐个核对固定及调用者 DMA 缓冲的可达性、对齐、Cache API 或 bounce buffer 生命周期。裸板压力覆盖只包含实际接入的设备；检查 CRC、丢帧、复位和任务耗时。D-Cache 默认关闭，仅在配置允许且主机、构建和裸板验证通过后开启。依赖 MC02-0131。详见[调研文档第 5 节](../docs/workflow/specs/performance-portability-research.md)。
+- [ ] **MC02-0133** [enhancement] [ready-for-agent] 验收已配置任务周期与超时行为。验收：复用 MC02-0055／0088 提供的固定周期、任务唤醒和超期处理接口，不新增重复调度接口；按车型配置测量实际周期、抖动、执行耗时及超期计数，核对跳拍与 TaskMonitor 行为。周期值来自已确认的车型配置，不在本项另设通用频率。依赖 MC02-0055／0088／0130。详见[调研文档第 6 节](../docs/workflow/specs/performance-portability-research.md)。
+- [ ] **MC02-0134** [enhancement] [ready-for-agent] 任务静态分配与堆使用审计。验收：按每个固件实际启用的任务和注册容量，逐项核对栈/TCB 分配、回调容量和失败处理；只迁移已实现且启用的模块，不为 XM／DM 占位驱动创建任务或固定池。明确 FreeRTOS 与 newlib 的堆所有权、锁保护和禁用条件；栈水位、容量边界、主机回归及 ARM 构建通过。依赖 MC02-0133。详见[调研文档第 6 节](../docs/workflow/specs/performance-portability-research.md)。
+- [ ] **MC02-0135** [enhancement] [ready-for-agent] 测量后优化浮点热路径并评估 opt-in LTO。验收：先以实际配置和测量确定热点，再选择可迁移的浮点路径；与 double 参考对照最大绝对/相对误差并记录阈值。F407 仅按其硬件能力选择浮点类型；增加 opt-in LTO 预设并记录 Flash/RAM、耗时、调试与崩溃解析影响，默认优化等级保持 `-O2`。依赖 MC02-0131／0133。详见[调研文档第 7 节](../docs/workflow/specs/performance-portability-research.md)。
+- [ ] **MC02-0136** [enhancement] [ready-for-agent] F407 C 型平台描述与 compile-only 验证。验收：新增 `stm32f407/rm-c` 平台/板级描述并声明 CPU/FPU/Cache/SRAM/CCM 与编译参数；先完成所选业务的 compile-only 检查，不连接 H723 HAL。只有模拟器存在匹配的 MCU／外设模型时才做启动冒烟，并明确模拟器不能证明实时性能。依赖 MC02-0130／0134。详见[调研文档第 3、9 节](../docs/workflow/specs/performance-portability-research.md)。
+- [ ] **MC02-0137** [enhancement] [ready-for-agent] `bsp/param` 受限 C++17 试点。验收：限定 C++17 子集，以 RAII 封装参数事务并保留 C API；容器、异常、RTTI、动态分配及全局构造策略均经用户确认后再选型。使用当前完整主机回归与新增 C++ 行为用例；Flash/RAM/任务耗时变化满足实施前确定的预算。依赖 MC02-0134／0135。详见[调研文档第 8 节](../docs/workflow/specs/performance-portability-research.md)。
+
 ## 2026-11-06：文档写作审查规则
 
 - [x] **MC02-0129** [enhancement] 把文档写作审查定为常驻规则并接入技能路由。验收：`AGENTS.md` 要求任何新增或修改文档的工作在交付前调用写作技能；`docs/agents/skills.md` 给出按文体选择技能的对照表与审查边界；第27篇说明规则来源、覆盖范围与「只改表达不改事实」的边界。
