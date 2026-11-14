@@ -25,6 +25,13 @@ target_compile_options(std_cmd_test PRIVATE -Wall -Wextra -Werror -fno-fast-math
 target_link_libraries(std_cmd_test PRIVATE m)
 add_test(NAME production_standard_cmd_manual_and_events COMMAND std_cmd_test)
 set_tests_properties(production_standard_cmd_manual_and_events PROPERTIES TIMEOUT 10)
+# 三模式许可直接使用生产策略函数，测试不接入任务、总线或执行器。
+add_executable(robot_control_policy_test robot_control_policy_test.c ../../modules/safety/robot_control_policy.c)
+target_include_directories(robot_control_policy_test PRIVATE ../../modules/safety)
+target_compile_features(robot_control_policy_test PRIVATE c_std_11)
+target_compile_options(robot_control_policy_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_robot_control_policy COMMAND robot_control_policy_test)
+set_tests_properties(production_robot_control_policy PROPERTIES TIMEOUT 10)
 # 使用 FreeRTOS 状态替身运行生产调度批次，检查重复开始和退出。
 add_executable(platform_task_batch_test platform_task_batch_test.c ../../bsp/os/platform_task_batch_freertos.c)
 target_include_directories(platform_task_batch_test BEFORE PRIVATE task_batch_fakes . ../../bsp/os)
