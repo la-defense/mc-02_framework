@@ -79,6 +79,9 @@ static uint32_t burst_last_cycle[DEVICE_CAN_CNT];
 static uint8_t status_busoff[DEVICE_CAN_CNT]; // 模拟各总线独立的关闭状态。
 static uint8_t status_error[DEVICE_CAN_CNT]; // 模拟各总线独立的错误状态。
 static uint8_t status_read_failure; // 模拟 HAL 查询失败。
+static uint8_t inject_submit_on_stop; // 在控制器停止期间模拟其他任务提交。
+static CAN_TxSubmitStatus_t stop_submit_status; // 记录并发提交结果。
+static uint8_t fail_recovery_stop, fail_recovery_start; // 注入停止或重新启动失败。
 static uint8_t selftest_loopback_enabled, selftest_hook_busy; // 只在指定自测场景模拟中断。
 static uint32_t selftest_completed[DEVICE_CAN_CNT]; // 记录每条总线上已模拟完成的测试帧数。
 
@@ -180,6 +183,7 @@ uint32_t HAL_FDCAN_Start(FDCAN_HandleTypeDef *handle)
     uint8_t bus = bus_for_handle(handle);
     if (bus < DEVICE_CAN_CNT)
         ++bus_start_count[bus];
+    if (fail_recovery_start != 0u) return HAL_ERROR; // 模拟恢复期间启动失败。
     handle->State = 2u;
     handle->Instance->CCCR &= ~FDCAN_CCCR_INIT;
     return HAL_OK;
@@ -188,6 +192,16 @@ uint32_t HAL_FDCAN_Stop(FDCAN_HandleTypeDef *handle)
 {
     const uint8_t bus = bus_for_handle(handle); // 找出本次停止的总线。
     if (bus < DEVICE_CAN_CNT) ++bus_stop_count[bus]; // 检查故障回退是否影响其他总线。
+    if (fail_recovery_stop != 0u) return HAL_ERROR; // 停止失败时控制器状态保持不变。
+    if (inject_submit_on_stop != 0u)
+    {
+        static const uint8_t data = 0x77u; // 模拟故障期间试图提交的旧目标。
+        const CAN_TxFrame_t frame = {.identifier = 0x321u, .identifier_type = CAN_TX_ID_STANDARD,
+                                     .length = 1u, .data = &data};
+        uint32_t request = 0u; // 故障期间不能分配请求编号。
+        stop_submit_status = CANSubmitOneShot(handle, &data, &frame, CAN_TX_PRIORITY_NORMAL, 500u, &request);
+        TEST_CHECK(request == 0u); // 被拒绝的请求不能进入队列。
+    }
     handle->State = 1u;
     handle->Instance->CCCR |= FDCAN_CCCR_INIT;
     return HAL_OK;
@@ -2629,6 +2643,42 @@ static void test_platform_can_status(void)
     TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_UNKNOWN);
 }
 
+// 故障恢复前仅撤销该总线尚在软件队列的请求；另一条总线继续调度。
+static void test_busoff_cancels_queued(void)
+{
+    TEST_CHECK(CANStartBus(&hfdcan1)); // 启动故障注入总线。
+    TEST_CHECK(CANStartBus(&hfdcan2)); // 启动不受影响的总线。
+    const uint8_t payload = 0x42u; // 两条总线使用相同的测试数据。
+    const CAN_TxFrame_t frame = scheduler_frame(0x321u, CAN_TX_ID_STANDARD, &payload, 1u);
+    uint32_t fault_id = 0u, other_id = 0u; // 分别记录两个请求。
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, &payload, &frame, CAN_TX_PRIORITY_NORMAL, 500u, &fault_id) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan2, &payload, &frame, CAN_TX_PRIORITY_NORMAL, 500u, &other_id) == CAN_TX_SUBMIT_ACCEPTED);
+    status_busoff[0] = 1u; // 在发送任务推进前让第一条总线发生 BusOff。
+    inject_submit_on_stop = 1u; // 在 HAL 停止操作中插入一次并发提交。
+    now_us = 100000u; // 到达健康检查周期，两个请求均尚未过期。
+    CANHealthMonitor(); // 使用生产故障检查和软件队列撤销入口。
+    TEST_CHECK(stop_submit_status == CAN_TX_SUBMIT_NOT_READY); // 恢复期间不能提交新帧。
+    CAN_TxResult_t result = {0};
+    TEST_CHECK(CANGetTxRequestState(fault_id, &result) && result.state == CAN_TX_RESULT_CANCELLED);
+    TEST_CHECK(CANGetTxRequestState(other_id, &result) && result.state == CAN_TX_RESULT_QUEUED);
+    CANProcessTx(); // 恢复后的本轮只能提交另一条总线的请求。
+    TEST_CHECK(tx_accept_count[0] == 0u && tx_accept_count[1] == 1u);
+}
+
+static void test_busoff_recovery_failure(uint8_t stop_failure)
+{
+    TEST_CHECK(CANStartBus(&hfdcan1)); // 在启用故障注入前启动总线。
+    TEST_CHECK(CANStartBus(&hfdcan2)); // 第二条总线检查隔离范围。
+    fail_recovery_stop = stop_failure; // 按场景选择停止失败。
+    fail_recovery_start = (uint8_t)!stop_failure; // 另一场景选择重新启动失败。
+    status_busoff[0] = 1u; // 第一条总线进入 BusOff。
+    now_us = 100000u; // 推进到健康检查时刻。
+    CANHealthMonitor(); // 恢复失败应隔离本总线。
+    TEST_CHECK(CANBusIsQuarantined(&hfdcan1));
+    TEST_CHECK(!CANBusIsQuarantined(&hfdcan2));
+    TEST_CHECK(!CANStartBus(&hfdcan1)); // 不能靠重新注册绕过隔离。
+}
+
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
@@ -2663,6 +2713,12 @@ int main(int argc, char **argv)
         test_rx_failure_and_invalid_frames();
     else if (strcmp(argv[1], "platform-can-status") == 0)
         test_platform_can_status();
+    else if (strcmp(argv[1], "busoff-cancel-queued") == 0)
+        test_busoff_cancels_queued();
+    else if (strcmp(argv[1], "busoff-stop-fails") == 0)
+        test_busoff_recovery_failure(1u);
+    else if (strcmp(argv[1], "busoff-start-fails") == 0)
+        test_busoff_recovery_failure(0u);
     else if (strcmp(argv[1], "platform-can-rx") == 0)
         test_platform_can_receive();
     else if (strcmp(argv[1], "dji-rx-rollback") == 0)

@@ -18,12 +18,14 @@
 static CANInstance *can_instance[CAN_MX_REGISTER_CNT] = {NULL};
 static uint8_t idx;
 static volatile uint8_t can_service_started; // 任务与中断读取每条总线的启动状态。
+static volatile uint8_t can_recovering; // 失败总线重新启动期间禁止提交、发送和接收派发。
 static uint8_t can_filter_quarantined; // 模式恢复失败后锁定该总线，直到系统重启。
 // 只查询有效总线的启动位；未配置的总线不能调用 HAL 收发。
 static uint8_t CANBusIsActive(uint8_t bus_index)
 {
     return (uint8_t)(bus_index < DEVICE_CAN_CNT &&
-                     (can_service_started & (uint8_t)(1u << bus_index)) != 0u);
+                     (can_service_started & (uint8_t)(1u << bus_index)) != 0u &&
+                     (can_recovering & (uint8_t)(1u << bus_index)) == 0u);
 }
 #ifdef BXCAN
 static uint8_t can1_filter_idx;
@@ -443,11 +445,16 @@ CAN_TxSubmitStatus_t CANConfigureTxBus(FDCAN_HandleTypeDef *hcan,
     const uint8_t bus_index = CANBusIndexFromHandle(hcan);
     if (bus_index == 0xffu || !CANTxConfigValid(config))
         return CAN_TX_SUBMIT_INVALID;
-    if (CANBusIsActive(bus_index))
+    if ((can_service_started & (uint8_t)(1u << bus_index)) != 0u)
         return CAN_TX_SUBMIT_NOT_READY;
 
     CANTxSchedulerEnsureInitialized(bus_index);
     taskENTER_CRITICAL();
+    if ((can_service_started & (uint8_t)(1u << bus_index)) != 0u)
+    {
+        taskEXIT_CRITICAL(); // 配置与总线启动竞争时，启动后不能修改发送预算。
+        return CAN_TX_SUBMIT_NOT_READY;
+    }
     CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler;
     if (scheduler->queued_count != 0u || scheduler->periodic_reserved_permille != 0u)
     {
@@ -510,6 +517,11 @@ CAN_TxSubmitStatus_t CANSubmitPeriodicPrepared(FDCAN_HandleTypeDef *hcan, const 
 
     CANTxSchedulerEnsureInitialized(bus_index);
     taskENTER_CRITICAL();
+    if (!CANBusIsActive(bus_index))
+    {
+        taskEXIT_CRITICAL(); // 总线可能在进入临界区前被故障处理暂停。
+        return CAN_TX_SUBMIT_NOT_READY;
+    }
     CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler;
     const uint32_t now = HAL_GetTick();
     CANTxExpireQueue(scheduler, now);
@@ -628,6 +640,11 @@ static CAN_TxSubmitStatus_t CANSubmitBatchInternal(FDCAN_HandleTypeDef *hcan, co
 
     CANTxSchedulerEnsureInitialized(bus_index);
     taskENTER_CRITICAL();
+    if (!CANBusIsActive(bus_index))
+    {
+        taskEXIT_CRITICAL(); // 进入临界区前若已暂停，不能把旧命令放入队列。
+        return CAN_TX_SUBMIT_NOT_READY;
+    }
     CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler;
     const uint32_t now = HAL_GetTick();
     if (absolute && !CANTxRequestDeadlineValid(deadline_ms-now))
@@ -721,6 +738,17 @@ static void CANTxReleaseQueueSlot(CANTxScheduler_t *scheduler, uint8_t queue_ind
     if (scheduler->active_queue_index == queue_index)
         scheduler->active_queue_index = CAN_TX_INVALID_RESULT_INDEX;
     CANTxUpdateQueueStats(scheduler);
+}
+
+// 调用方持有发送临界区；只撤销尚在软件队列的部分，硬件已接收的帧另行处理。
+static void CANTxCancelQueued(CANTxScheduler_t *scheduler)
+{
+    for (uint8_t index = 0u; index < CAN_TX_MAX_QUEUE_ITEMS; ++index)
+    {
+        if (scheduler->queue[index].used == 0u) continue; // 空槽不影响计数和请求状态。
+        CANTxSetTerminal(scheduler, scheduler->queue[index].result_index, CAN_TX_RESULT_CANCELLED); // 告诉请求者剩余部分已取消。
+        CANTxReleaseQueueSlot(scheduler, index); // 删除软件副本，不能在重启后继续提交。
+    }
 }
 
 static void CANTxFailBeforeAcceptance(CANBusState_t *bus, uint8_t queue_index,
@@ -853,6 +881,11 @@ static void CANProcessTxSelected(uint8_t selected_bus)
         const uint32_t probe_start = DWT_ProbeStart();
 
         taskENTER_CRITICAL();
+        if (!CANBusIsActive(bus_index))
+        {
+            taskEXIT_CRITICAL(); // 在获取临界区前发生故障时，本轮不再接触控制器。
+            continue;
+        }
         uint32_t now = HAL_GetTick();
         CANTxExpireQueue(scheduler, now);
         uint8_t queue_index = scheduler->active_queue_index;
@@ -1498,12 +1531,7 @@ void CANQuarantineBus(FDCAN_HandleTypeDef *handle)
     if (handle->Instance != NULL) (void)HAL_FDCAN_Stop(handle); // 尽力停止硬件；失败时软件仍保持隔离。
     taskENTER_CRITICAL(); // 与发送任务对队列和结果的访问互斥。
     CANTxScheduler_t *scheduler = &can_bus[bus_index].tx_scheduler; // 仅处理受影响的调度器。
-    for (uint8_t i = 0u; i < CAN_TX_MAX_QUEUE_ITEMS; ++i)
-        if (scheduler->queue[i].used != 0u)
-        {
-            CANTxSetTerminal(scheduler, scheduler->queue[i].result_index, CAN_TX_RESULT_CANCELLED); // 撤销旧请求。
-            CANTxReleaseQueueSlot(scheduler, i); // 释放尚未提交的队列项。
-        }
+    CANTxCancelQueued(scheduler); // 撤销尚在软件队列中的旧请求。
     for (uint8_t i = 0u; i < CAN_TX_RESULT_HISTORY; ++i)
         if (scheduler->results[i].used != 0u &&
             (scheduler->results[i].state == CAN_TX_RESULT_QUEUED ||
@@ -1961,12 +1989,27 @@ void CANHealthMonitor(void)
         {
             if (ps.BusOff)
                 bus->bus.busoff++;
+            taskENTER_CRITICAL(); // 与发送队列提交和推进互斥。
+            can_recovering |= (uint8_t)(1u << i); // 先暂停本总线，禁止恢复期间接收新请求。
+            CANTxCancelQueued(&bus->tx_scheduler); // 控制器重启前撤销已经排队但未提交的旧帧。
+            taskEXIT_CRITICAL(); // 保留其他总线的队列；已交给硬件的帧仍需单独处置。
             /* 对齐 HAL 的 State(它可能与真实硬件不一致), 否则 Start 会直接返回错误 */
-            if (bus->handle->State == HAL_FDCAN_STATE_BUSY)
-                (void)HAL_FDCAN_Stop(bus->handle);
+            if (bus->handle->State == HAL_FDCAN_STATE_BUSY && HAL_FDCAN_Stop(bus->handle) != HAL_OK)
+            {
+                CANQuarantineBus(bus->handle); // 停止失败后不能重新放行。
+                continue;
+            }
             bus->handle->State = HAL_FDCAN_STATE_READY;
-            (void)HAL_FDCAN_Start(bus->handle);  /* 清 INIT, 重新上线 */
-            HAL_FDCAN_ActivateNotification(bus->handle, FDCAN_RX_ACTIVE_ITS, 0);
+            if (HAL_FDCAN_Start(bus->handle) != HAL_OK ||
+                HAL_FDCAN_ActivateNotification(bus->handle, FDCAN_RX_ACTIVE_ITS | FDCAN_TX_ACTIVE_ITS,
+                                               FDCAN_TX_BUFFER_IT_MASK) != HAL_OK)
+            {
+                CANQuarantineBus(bus->handle); // 重启或中断恢复失败时保持隔离。
+                continue;
+            }
+            taskENTER_CRITICAL(); // 与提交和发送的复核使用同一保护。
+            can_recovering &= (uint8_t)~(1u << i); // 控制器启动后允许新请求；整车许可仍未接入。
+            taskEXIT_CRITICAL();
             bus->bus.busoff_recover++;
             CANLogDiagnostic(bus, "CAN总线恢复尝试", bus->bus.busoff);
         }
