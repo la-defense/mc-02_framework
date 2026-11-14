@@ -14,6 +14,7 @@ Completed implementation uses [x]. A rejected item uses [x] [wontfix] and a shor
 
 - Specs: docs/workflow/specs/<feature>.md
 - Ticket details: docs/workflow/tickets/<ID>.md
+- Task evidence: docs/workflow/tickets/<ID>-evidence/README.md
 - Decision maps: docs/workflow/maps/<effort>.md
 - Triage inbox and rejected requests: docs/workflow/inbox/ and docs/workflow/out-of-scope/
 
@@ -34,6 +35,8 @@ These files hold rationale, dependencies, evidence, and acceptance detail. They 
 ## 统一验证阶段
 
 - 将测试先行、构建、回归和必要的上板调试作为同一个验证阶段，按改动选择验证方式。验证可以与实现交替进行。
+- 本地入口统一使用 `python3 tools/workflow/verify.py --fast`（TODO 契约、文档链接、工具回归）；受影响时再运行 `--host`、`--firmware` 或 `--all`。Windows 会自动转交 WSL；构建目录可放在 WSL ext4，例如 `--build-root ~/mc02-build`。
+- 结论、命令、通过数、失败原因和未覆盖范围写进 `docs/workflow/tickets/<ID>-evidence/README.md`；`build/` 和 `/tmp` 只放原始日志、ELF、map 和 ZIP。TODO 条目只保留一句结论和票据链接。
 - 本仓库本机软件验收使用 WSL 主机测试和 ARM 固件构建；Windows 原生构建不作为验收要求。安全逻辑、协议和复杂故障在生产接口上增加必要的行为回归，适用时用 TDD；简单重构复用现有测试，不为字段布局或实现写法新增测试。
 - 只有验收涉及板上行为、确实需要上板调试时才连接硬件。沿用用户已授权的操作范围，确认供电、连接与准确固件 SHA；烧录前备份并校验。
 - MC-02 上板验证保持裸板、禁止开火和执行器动作。主机测试与寄存器观察不能代替电平、VIN 精度或温升等物理验收。

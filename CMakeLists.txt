@@ -3,6 +3,9 @@ cmake_minimum_required(VERSION 3.21)
 # 固件只通过本目录的 ARM 工具链和显式源码清单构建；主机测试使用 tests/host 工程。
 project(Basic_Framework_MC02 C ASM)
 
+include(cmake/mc02_ccache.cmake)
+mc02_enable_ccache()
+
 include(cmake/mc02_format_diagnostics.cmake)
 mc02_check_format_diagnostics()
 include(cmake/mc02_dsp.cmake)

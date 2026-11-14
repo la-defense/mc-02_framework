@@ -196,9 +196,9 @@ MC02-0079迁移后，六个旧CRC文件的链接指向当前统一入口；原�
 | 085 | [modules/algorithm/crc8.h:8（现统一CRC入口）](../../../modules/algorithm/crc.h) | 原有沿用；位置 `6c2f74b` | 一般 | CRC8 两个公开入口无注释，未说明起始值、长度单位及空指针返回结果。 | 补简短中文接口说明与连续更新用法。 |
 | 090 | [modules/bluetooth/HC05.c:1](../../../modules/bluetooth/HC05.c#L1) | 原有沿用；位置 `6c2f74b` | 一般 | 无文件职责说明；接收只接受固定帧头帧尾、发送添加帧头帧尾的结构未在文件开头说明。 | 补蓝牙固定帧用途，重要循环说明复制哪些数据，接口注意事项归头文件。 |
 | 091 | [modules/bluetooth/HC05.h:18](../../../modules/bluetooth/HC05.h#L18) | 原有沿用；位置 `6c2f74b` | 一般 | 入口仅普通一句话，缺参数、初始化结果、长度单位和异步发送期间再次调用的条件。 | 补简短中文 Doxygen 及固定数据长度说明。 |
-| 097 | [modules/imu/BMI088Middleware.c:1](../../../modules/imu/BMI088Middleware.c#L1) | 原有沿用；位置 `6c2f74b` | 一般 | 旧 BMI088 适配文件没有用途或历史保留说明，无法区分它和 modules/BMI088 的现行驱动；单字节收发前提未说明。 | 补旧适配层用途及 SPI 指针需先设置的前提，暂不删除或改实现。 |
-| 098 | [modules/imu/BMI088Middleware.h:18](../../../modules/imu/BMI088Middleware.h#L18) | 原有沿用；位置 `6c2f74b` | 一般 | 公开片选与字节交换入口无注释，BMI088_SPI 由谁设置、输入输出和等待方式不清楚。 | 说明旧接口用途、先设置 SPI 地址和字节交换结果。 |
-| 099 | [modules/imu/BMI088reg.h:1](../../../modules/imu/BMI088reg.h#L1) | 原有沿用；位置 `6c2f74b` | 一般 | 旧寄存器表无文件职责和使用范围，部分分组仅英文，与现行 bmi088_regNdef.h 容易混淆。 | 补保留用途及对应驱动提示，不逐个宏扩写。 |
+| 097 | `modules/imu/BMI088Middleware.c:1`（已删除，见 MC02-0054） | 原有沿用；位置 `6c2f74b` | 一般 | 旧 BMI088 适配文件没有用途或历史保留说明，无法区分它和 modules/BMI088 的现行驱动；单字节收发前提未说明。 | 当时建议补旧适配层用途及 SPI 指针前提；后续按 MC02-0054 决定删除旧适配层，Git 历史保留来源。 |
+| 098 | `modules/imu/BMI088Middleware.h:18`（已删除，见 MC02-0054） | 原有沿用；位置 `6c2f74b` | 一般 | 公开片选与字节交换入口无注释，BMI088_SPI 由谁设置、输入输出和等待方式不清楚。 | 当时建议说明旧接口用途；后续按 MC02-0054 删除第二套接口。 |
+| 099 | `modules/imu/BMI088reg.h:1`（已删除，见 MC02-0054） | 原有沿用；位置 `6c2f74b` | 一般 | 旧寄存器表无文件职责和使用范围，部分分组仅英文，与现行 bmi088_regNdef.h 容易混淆。 | 当时建议补保留用途；后续按 MC02-0054 删除重复定义。 |
 | 121 | [docs/history/seasky/seasky_protocol.c:122](../../../docs/history/seasky/seasky_protocol.c#L122) | 原有沿用；位置 `6c2f74b` | 一般 | 解析中帧头/整帧检查失败后的返回及输出保留缺说明；文件用途未提示它与 SP 视觉协议的关系。 | 说明保留的协议用途和两次检查的作用，接口条件归头文件。 |
 | 122 | [docs/history/seasky/seasky_protocol.h:24](../../../docs/history/seasky/seasky_protocol.h#L24) | 原有沿用；位置 `6c2f74b` | 重点 | 参数只有行尾短注释，float_length 的个数单位、缓冲区容量、解析失败返回0和输出保留未解释。 | 补中文 Doxygen、调用方准备的数据空间和失败结果。 |
 | 132 | [modules/motor/DMmotor/dmmotor.c:129](../../../modules/motor/DMmotor/dmmotor.c#L129) | 原有沿用；位置 `6c2f74b` | 一般 | 无文件职责，单电机持续发送循环和停止时只发送零力矩的选择缺少说明；部分内部函数无用途说明。 | 说明当前只实现力矩控制及每轮收发目的，保留停止后仍收反馈的原因。 |
@@ -220,7 +220,7 @@ MC02-0079迁移后，六个旧CRC文件的链接指向当前统一入口；原�
 
 | 序号 | 文件 | 来源依据 | 当前情况 | 建议 |
 |---|---|---|---|---|
-| 001 | [application/chassis/balance.h（空）](../../../application/chassis/balance.h) | 原有沿用；基线已存在 | 空文件，无法从文件内了解预留用途。 | 确认是否继续保留；保留时补一句用途。 |
+| 001 | `application/chassis/balance.h`（已由底盘类型接口拆分替代） | 原有沿用；基线已存在 | 空文件，无法从文件内了解预留用途。 | 当时建议确认是否保留；后续底盘类型拆分时已由独立类型接口替代。 |
 | 006 | [application/chassis/mecanum.h（空）](../../../application/chassis/mecanum.h) | 原有沿用；基线已存在 | 空文件，未说明麦轮底盘预留内容。 | 确认保留用途后补简短占位说明。 |
 | 007 | [application/chassis/steering.h（空）](../../../application/chassis/steering.h) | 原有沿用；基线已存在 | 空文件，未说明舵轮底盘预留内容。 | 确认保留用途后补简短占位说明。 |
 | 147 | [modules/motor/step_motor/step_motor.c（空）](../../../modules/motor/step_motor/step_motor.c) | 原有沿用；基线已存在 | 空文件，未说明步进电机预留内容。 | 确认保留用途后补一句占位说明。 |

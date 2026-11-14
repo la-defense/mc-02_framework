@@ -53,14 +53,22 @@ def cases() -> list[tuple[str, str, bool, bool]]:
 def audit_commands(path: Path) -> None:
     """逐条检查自有C源确实有全部选项，厂商C源没有被附加这组策略。"""
     flags = policy_flags()
-    own_count, vendor_count = 0, 0
+    own_count, vendor_count, generated_header_count = 0, 0, 0
     for entry in json.loads(path.read_text(encoding="utf-8")):
         source = Path(entry["file"])
         if not source.is_absolute():
             source = Path(entry["directory"]) / source
         if source.suffix.lower() != ".c":
             continue
-        relative = source.resolve().relative_to(ROOT).as_posix()
+        # 公开头检查会在构建目录生成 public-header-*.c，目录可能位于仓库外。
+        resolved_source = source.resolve()
+        try:
+            relative = resolved_source.relative_to(ROOT).as_posix()
+        except ValueError as error:
+            if source.name.startswith("public-header-"):
+                generated_header_count += 1
+                continue
+            raise RuntimeError(f"unexpected C source outside repository: {source}") from error
         own = relative.startswith(("bsp/", "modules/", "application/", "Core/Src/", "USB_DEVICE/", "tests/",
                                    "docs/history/seasky/"))
         command = entry.get("arguments") or shlex.split(entry["command"], posix=os.name != "nt")
@@ -74,7 +82,8 @@ def audit_commands(path: Path) -> None:
             vendor_count += 1
     if not own_count or not vendor_count:
         raise RuntimeError("compile commands must include both owned and vendor C sources")
-    print(f"Format compile commands: own={own_count}, vendor={vendor_count}; policy verified")
+    print(f"Format compile commands: own={own_count}, vendor={vendor_count}, "
+          f"generated_headers={generated_header_count}; policy verified")
 
 
 def main() -> int:

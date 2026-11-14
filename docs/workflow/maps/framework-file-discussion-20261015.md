@@ -63,7 +63,7 @@ modules/        安全管理、任务监控、消息、来源监控、电机、�
 | 16 | [application/chassis/chassis_motion.c](../../../application/chassis/chassis_motion.c) | 底盘运动换算、轮速限制与运动分配 | 平移、自旋分配策略可配置；哨兵收到移动指令时可减缓自旋，优先实现平移，并受轮速与功率限制。 |
 | 17 | [application/chassis/chassis_motion.h](../../../application/chassis/chassis_motion.h) | 底盘运动计算与参考系接口 | 命令明确底盘、大 yaw、枪口或场地参考系；框架统一转换，车型声明允许范围，反馈缺失或过期撤销依赖命令。 |
 | 18 | [application/chassis/chassis.md](../../../application/chassis/chassis.md) | 底盘模式和运动策略说明 | 自旋可选择带偏置的同向正弦转速；策略是否启用、幅值、周期、偏置、变化限制和移动降速均配置。 |
-| 19 | [application/chassis/balance.h](../../../application/chassis/balance.h) | 当前为空的平衡／轮腿底盘占位 | 预留麦轮、舵轮、全向轮、轮腿、半舵五种类型；统一接口，并按配置选择源文件进入编译。轮腿具体实现范围仍需细化。 |
+| 19 | `application/chassis/balance.h`（已由底盘类型接口拆分替代） | 当时为空的平衡／轮腿底盘占位 | 预留麦轮、舵轮、全向轮、轮腿、半舵五种类型；统一接口，并按配置选择源文件进入编译。后续 MC02-0054 将类型拆分为独立接口文件。 |
 | 20 | [application/chassis/mecanum.h](../../../application/chassis/mecanum.h) | 当前为空的麦轮底盘占位 | 统一运动接口使用 m/s、rad/s 和前左上坐标；旧配置、电机单位和安装差异显式转换。 |
 | 21 | [application/chassis/steering.h](../../../application/chassis/steering.h) | 当前为空的舵轮底盘占位 | 舵轮接统一类型接口；半舵构型尚未确定，本轮只预留文件。 |
 | 22 | [application/gimbal/gimbal.c](../../../application/gimbal/gimbal.c) | 云台控制、姿态反馈和电机协同 | 三轴搜索：底盘自旋，大 yaw 补偿实际自旋并缓扫，小 yaw 左右扫、pitch 点头；锁定后持续协同回中。丢目标先局部重捕获后全局扫描；饱和时可按配置请求底盘降自旋，哨兵默认启用。 |
@@ -291,9 +291,9 @@ modules/        安全管理、任务监控、消息、来源监控、电机、�
 |---:|---|---|---|---|
 | 181 | [modules/imu/imu_heater.c](../../../modules/imu/imu_heater.c) | IMU加热控制、温度/供电质量检查、输出限制、故障锁存及维护长操作保护。 | 首台哨兵在姿态/标定和其他核心检查可信、无温控故障时允许未温稳使能；温稳只作提示，其他车型可配置要求等待。是否启用温控由配置决定，保留现有输出硬限制/输入质量/锁存/长操作及禁热保护，不重新打开已完成温控修复。 | [MC02-0056](../../../.Doc/TODO.md)、[MC02-0065](../../../.Doc/TODO.md) |
 | 182 | [modules/imu/imu_heater.h](../../../modules/imu/imu_heater.h) | 温控状态、目标设置、强制关断、故障恢复与长操作保护接口。 | 沿用统一参数校验和只读健康快照，区分温度有效/加热启用与实际输出/温稳/具体故障；目标在已有硬限制内校验。第181项决定温稳默认仅提示；保留现有锁存恢复与新样本保护，不引入多IMU扩展。 | [MC02-0065](../../../.Doc/TODO.md)、[MC02-0064](../../../.Doc/TODO.md) |
-| 183 | [modules/imu/BMI088Middleware.c](../../../modules/imu/BMI088Middleware.c) | 未被当前业务调用的旧BMI088固定GPIO、全局SPI逐字节HAL适配。 | 删除旧.c并清理构建/文档引用，配套旧.h与BMI088reg.h一并删除，Git历史保留来源；保留当前modules/BMI088生产路径和既有验证，不扩大R27。 | [MC02-0054](../../../.Doc/TODO.md) |
-| 184 | [modules/imu/BMI088Middleware.h](../../../modules/imu/BMI088Middleware.h) | 旧BMI088中间层函数与全局SPI句柄声明。 | 随183删除，清理引用，保留Git来源；不再维护第二套BMI088接口。 | [MC02-0054](../../../.Doc/TODO.md) |
-| 185 | [modules/imu/BMI088reg.h](../../../modules/imu/BMI088reg.h) | 未被当前采样路径引用的旧BMI088寄存器常量。 | 随183删除重复旧定义，保留现行bmi088_regNdef.h及既有固定档位；不把清理等同于恢复R27档位扩展。 | [MC02-0054](../../../.Doc/TODO.md) |
+| 183 | `modules/imu/BMI088Middleware.c`（已删除） | 未被当前业务调用的旧BMI088固定GPIO、全局SPI逐字节HAL适配。 | 删除旧.c并清理构建/文档引用，配套旧.h与BMI088reg.h一并删除，Git历史保留来源；保留当前modules/BMI088生产路径和既有验证，不扩大R27。 | [MC02-0054](../../../.Doc/TODO.md) |
+| 184 | `modules/imu/BMI088Middleware.h`（已删除） | 旧BMI088中间层函数与全局SPI句柄声明。 | 随183删除，清理引用，保留Git来源；不再维护第二套BMI088接口。 | [MC02-0054](../../../.Doc/TODO.md) |
+| 185 | `modules/imu/BMI088reg.h`（已删除） | 未被当前采样路径引用的旧BMI088寄存器常量。 | 随183删除重复旧定义，保留现行bmi088_regNdef.h及既有固定档位；不把清理等同于恢复R27档位扩展。 | [MC02-0054](../../../.Doc/TODO.md) |
 | 186 | [modules/ist8310/ist8310.c](../../../modules/ist8310/ist8310.c) | IST8310磁力计注册、配置、数据就绪与三轴磁场采样驱动。 | 用户指定先核验MC-02板载情况，若板载则完善；已据V1.1手册与V1.0完整原理图确认该版本板载BMI088六轴，无IST8310/其他磁力计，当前工程亦无接入配置或调用。本轮不因板载条件启动IST8310适配，保留外接扩展，未来实际选用前需补驱动可靠性与验收。 | [MC02-0051](../../../.Doc/TODO.md)、[MC02-0085](../../../.Doc/TODO.md) |
 | 187 | [modules/ist8310/ist8310.h](../../../modules/ist8310/ist8310.h) | 磁场原始反馈、I2C/复位/数据就绪配置及初始化接口声明。 | 随186不作为当前MC-02板载必需模块；保留外接扩展，未来接入先明确硬件/安装与协议，补带时间/有效性的只读磁场快照和错误结果，不默认取得姿态融合控制来源。 | [MC02-0085](../../../.Doc/TODO.md) |
 | 188 | [modules/TFminiPlus/tfminiplus.c](../../../modules/TFminiPlus/tfminiplus.c) | TFminiPlus外接测距模块的I2C注册、取数命令及距离/信号强度解码。 | 用户选择暂缓实际接入，保留代码并明确未验证，待有设备需求再完善；已知9字节缓冲/11字节接收及注册/帧检查问题保留MISC-03、MC02-0051跟踪，不当作可用驱动或自动关闭任务。 | [MISC-03](../../../.Doc/TODO.md)、[MC02-0051](../../../.Doc/TODO.md) |
@@ -520,7 +520,7 @@ modules/        安全管理、任务监控、消息、来源监控、电机、�
 | [task_monitor_shutdown_test.c](../../../tests/host/task_monitor_shutdown_test.c) | 任务失效先关断、喂狗停止、有限维护窗口与等待 |
 | [tim_profile_test.c](../../../tests/host/tim_profile_test.c) | TIM引脚/加热配置及重初始化隔离 |
 | [usart_snapshot_test.c](../../../tests/host/usart_snapshot_test.c) | UART注册失败回滚、不可变派发快照与原始时间 |
-| [vcp_queue_freshness_test.c](../../../tests/host/vcp_queue_freshness_test.c) | USB队列不可变快照与过期；CDC发送为替身 |
+| `vcp_queue_freshness_test.c` | USB队列不可变快照与过期；CDC发送为替身（该文件已由 usb_transport_test 等替代，不再保留） |
 | [vision_limits_test.c](../../../tests/host/vision_limits_test.c) | 机械范围、非有限值、单位转换、输入/输出失败 |
 | [vision_protocol_test.c](../../../tests/host/vision_protocol_test.c) | SP帧解析与真实CRC向量、视觉期限及发射来源选择 |
 | [watchdog_debug_safety_test.c](../../../tests/host/watchdog_debug_safety_test.c) | 看门狗调试配置、独立于HAL tick的有界等待 |

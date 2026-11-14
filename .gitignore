@@ -1,5 +1,11 @@
 # Build output
 /build/
+# 编译缓存（本机或 CI）
+/.ccache/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
 
 # Prerequisites
 *.d

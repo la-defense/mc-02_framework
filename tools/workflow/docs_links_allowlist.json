@@ -1,0 +1,16 @@
+{
+  "prefixes": [
+    {
+      "prefix": "tools/referee_sim/",
+      "reason": "独立仓库，按 .gitignore 不随本仓库提供"
+    },
+    {
+      "prefix": ".Doc/资料/",
+      "reason": "厂商资料体积大且有版权，不入库"
+    },
+    {
+      "prefix": "资料/",
+      "reason": "厂商资料体积大且有版权，不入库"
+    }
+  ]
+}
