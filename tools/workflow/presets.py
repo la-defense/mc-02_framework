@@ -35,7 +35,7 @@ class Preset:
     diagnostics: str = ""
 
 
-# 与 CI 当前构建的十种正式配置保持一致；新增预设时先改这里再改工作流。
+# 保留十种命名配置；robot 的实物参数尚未确认，只用于检查配置被拒绝。
 OFFICIAL: tuple[Preset, ...] = (
     Preset("bench-debug", "bench_safe", "single", "Debug"),
     Preset("bench-rel", "bench_safe", "single", "RelWithDebInfo"),
@@ -48,6 +48,9 @@ OFFICIAL: tuple[Preset, ...] = (
     Preset("robot-gimbal-debug", "robot", "gimbal", "Debug"),
     Preset("robot-gimbal-rel", "robot", "gimbal", "RelWithDebInfo"),
 )
+
+# 默认只构建当前允许生成的裸板固件；不能用测试值绕过生产配置检查。
+BUILDABLE = tuple(preset for preset in OFFICIAL if preset.profile == "bench_safe")
 
 
 def artifact_name(preset: Preset) -> str:
@@ -79,7 +82,7 @@ def profile_arguments(preset: Preset, build_dir: Path, elf: Path) -> list[str]:
 def github_matrix() -> list[dict[str, str]]:
     """输出 GitHub Actions 的 include 矩阵。"""
     matrix: list[dict[str, str]] = []
-    for preset in OFFICIAL:
+    for preset in BUILDABLE:
         row = asdict(preset)
         row["artifact"] = artifact_name(preset)
         matrix.append(row)
@@ -131,7 +134,7 @@ def check_cmake(path: Path | None = None) -> list[str]:
 def selected(names: str | None) -> list[Preset]:
     """按逗号分隔的名称筛选预设；未知名称抛 ValueError。"""
     if not names:
-        return list(OFFICIAL)
+        return list(BUILDABLE)
     wanted = [item.strip() for item in names.split(",") if item.strip()]
     lookup = {preset.name: preset for preset in OFFICIAL}
     unknown = [name for name in wanted if name not in lookup]
@@ -145,7 +148,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true", help="按行列出预设与产物")
     parser.add_argument("--github-matrix", action="store_true", help="输出 GitHub Actions 矩阵")
     parser.add_argument("--check-cmake", action="store_true", help="核对 CMakePresets")
+    parser.add_argument("--buildable-list", action="store_true", help="列出当前允许构建的预设名")
     args = parser.parse_args(argv)
+    if args.buildable_list:
+        print("\n".join(preset.name for preset in BUILDABLE))
+        return 0
     if args.check_cmake:
         errors = check_cmake()
         if errors:

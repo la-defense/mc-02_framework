@@ -66,12 +66,9 @@ jobs:
       - name: Check GCC format diagnostics
         run: python3 tools/workflow/check_format_diagnostics.py --compiler arm-none-eabi-gcc --output build/format-probes
 
-      - name: Build the ten supported profile and role combinations
+      - name: Build the currently available bench configurations
         run: |
-          for preset in bench-debug bench-rel rcdiag-debug rcdiag-rel \
-                        robot-single-debug robot-single-rel \
-                        robot-chassis-debug robot-chassis-rel \
-                        robot-gimbal-debug robot-gimbal-rel; do
+          for preset in $(python3 tools/workflow/presets.py --buildable-list); do
             cmake --preset "$preset"
             cmake --build --preset "$preset" --parallel 2
           done
@@ -82,21 +79,10 @@ jobs:
             python3 tools/workflow/check_firmware_profile.py --profile bench_safe --role single --build-dir "build/wsl/bench-${level}" "build/wsl/bench-${level}/Basic_Framework_MC02_bench_safe.elf"
             python3 tools/workflow/check_firmware_profile.py --profile bench_safe --role single --rc-diagnostics --build-dir "build/wsl/rcdiag-${level}" "build/wsl/rcdiag-${level}/Basic_Framework_MC02_rcdiag_bench_safe.elf"
           done
-          for role in single chassis gimbal; do
-            for level in debug rel; do
-              artifact="Basic_Framework_MC02_robot.elf"
-              if [ "$role" = chassis ]; then artifact="Basic_Framework_MC02_chassis_robot.elf"; fi
-              if [ "$role" = gimbal ]; then artifact="Basic_Framework_MC02_gimbal_robot.elf"; fi
-              python3 tools/workflow/check_firmware_profile.py --profile robot --role "$role" --build-dir "build/wsl/robot-${role}-${level}" "build/wsl/robot-${role}-${level}/$artifact"
-            done
-          done
 
       - name: Create downloadable firmware archives
         run: |
-          for preset in bench-debug bench-rel rcdiag-debug rcdiag-rel \
-                        robot-single-debug robot-single-rel \
-                        robot-chassis-debug robot-chassis-rel \
-                        robot-gimbal-debug robot-gimbal-rel; do
+          for preset in $(python3 tools/workflow/presets.py --buildable-list); do
             python3 tools/workflow/archive_firmware.py --preset "$preset" --output-dir build/firmware-archives
           done
 
@@ -107,6 +93,9 @@ jobs:
           path: build/firmware-archives/*.zip
           if-no-files-found: error
           retention-days: 90
+
+      - name: Check unconfirmed production configurations are rejected
+        run: python3 tools/workflow/check_production_rejection.py
 
       - name: Reject unsafe and conflicting configurations
         shell: bash
@@ -136,15 +125,5 @@ jobs:
               -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=Debug "$@"
             cmake --build "build/wsl/${directory}" --parallel 2
           }
-          configure_build robot-single-ui-off -DMC02_PROFILE=robot -DMC02_BOARD_ROLE=single -DMC02_VISION_TRANSPORT=usb -DMC02_ENABLE_REFEREE_UI=OFF
-          configure_build robot-chassis-ui-off -DMC02_PROFILE=robot -DMC02_BOARD_ROLE=chassis -DMC02_VISION_TRANSPORT=usb -DMC02_ENABLE_REFEREE_UI=OFF
-          configure_build robot-single-uart -DMC02_PROFILE=robot -DMC02_BOARD_ROLE=single -DMC02_VISION_TRANSPORT=uart -DMC02_ENABLE_REFEREE_UI=ON
           configure_build rcdiag-log-test -DMC02_PROFILE=bench_safe -DMC02_BOARD_ROLE=single -DMC02_VISION_TRANSPORT=usb -DMC02_BENCH_RC_DIAGNOSTICS=ON -DMC02_LOG_COMPILED_MAX_LEVEL=VERBOSE -DMC02_LOG_TEST=ON -DMC02_ENABLE_REFEREE_UI=OFF
           configure_build refdiag -DMC02_PROFILE=bench_safe -DMC02_BOARD_ROLE=single -DMC02_VISION_TRANSPORT=usb -DMC02_BENCH_REFEREE_DIAGNOSTICS=ON -DMC02_ENABLE_REFEREE_UI=OFF
-          ! grep -q 'modules/referee/referee_UI.c' build/wsl/robot-single-ui-off/mc02-selected-sources.txt
-          ! grep -q 'modules/referee/referee_UI.c' build/wsl/robot-chassis-ui-off/mc02-selected-sources.txt
-          ! grep -q 'VISION_USE_VCP' build/wsl/robot-single-uart/compile_commands.json
-          grep -q 'VISION_USE_UART' build/wsl/robot-single-uart/compile_commands.json
-          python3 tools/workflow/check_firmware_profile.py --profile robot --role single --ui-disabled --build-dir build/wsl/robot-single-ui-off build/wsl/robot-single-ui-off/Basic_Framework_MC02_robot.elf
-          python3 tools/workflow/check_firmware_profile.py --profile robot --role chassis --ui-disabled --build-dir build/wsl/robot-chassis-ui-off build/wsl/robot-chassis-ui-off/Basic_Framework_MC02_chassis_robot.elf
-          python3 tools/workflow/check_firmware_profile.py --profile robot --role single --vision-transport uart --build-dir build/wsl/robot-single-uart build/wsl/robot-single-uart/Basic_Framework_MC02_robot.elf

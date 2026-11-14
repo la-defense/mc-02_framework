@@ -6,7 +6,7 @@
 - docs：Markdown 相对链接；
 - tools：`tests/tools` 下的 Python 工具回归；
 - host：主机 Debug／Release 的 CMake 构建和 CTest；
-- firmware：十种正式 ARM 预设的构建与源码隔离检查；
+- firmware：当前允许生成的裸板 ARM 预设构建与源码隔离检查；
 - archive：为已构建预设生成可校验 ZIP。
 
 在 Windows 上默认转交 WSL 执行，因为固件验收使用 WSL 工具链。构建目录可用
@@ -16,7 +16,7 @@
 用法：
     python3 tools/workflow/verify.py --fast
     python3 tools/workflow/verify.py --host
-    python3 tools/workflow/verify.py --firmware --presets bench-debug,robot-single-debug
+    python3 tools/workflow/verify.py --firmware --presets bench-debug,rcdiag-debug
     python3 tools/workflow/verify.py --all --build-root ~/mc02-build
 
 退出状态：任一阶段失败返回 1；参数错误返回 2。
@@ -97,7 +97,9 @@ def host_commands(options: Options) -> list[list[str]]:
 
 def firmware_commands(options: Options) -> list[list[str]]:
     """构建选中的 ARM 预设并检查源码隔离。"""
-    commands: list[list[str]] = []
+    commands: list[list[str]] = [python_command(
+        options.root, "check_production_rejection.py", "--build-root", str(options.build_root)
+    )]
     for preset in options.selected:
         build_dir = options.build_root / preset.name
         elf = build_dir / presets.artifact_name(preset)
@@ -193,7 +195,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--firmware", action="store_true", help="ARM 预设构建与源码隔离检查")
     parser.add_argument("--archive", action="store_true", help="为选中的预设生成归档")
     parser.add_argument("--all", action="store_true", help="运行全部阶段")
-    parser.add_argument("--presets", help="逗号分隔的预设名，默认全部十种")
+    parser.add_argument("--presets", help="逗号分隔的预设名，默认四种可构建的裸板配置")
     parser.add_argument("--build-root", type=Path, default=ROOT / "build" / "wsl",
                         help="构建目录根；建议放在 WSL ext4，例如 ~/mc02-build")
     parser.add_argument("--parallel", type=int, default=os.cpu_count() or 2,

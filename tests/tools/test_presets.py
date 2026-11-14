@@ -49,11 +49,13 @@ class PresetTests(unittest.TestCase):
         )
         self.assertNotIn("--rc-diagnostics", plain)
 
-    def test_github_matrix_has_ten_entries_with_artifacts(self) -> None:
+    def test_default_builds_exclude_unconfirmed_robot(self) -> None:
         matrix = presets.github_matrix()
-        self.assertEqual(len(matrix), 10)
+        self.assertEqual(len(matrix), 4)
+        self.assertEqual(presets.selected(None), list(presets.BUILDABLE))
         for row in matrix:
             self.assertTrue(row["artifact"].endswith(".elf"))
+            self.assertEqual(row["profile"], "bench_safe")
 
     def test_repository_cmake_matches_official_list(self) -> None:
         self.assertEqual(presets.check_cmake(), [])
