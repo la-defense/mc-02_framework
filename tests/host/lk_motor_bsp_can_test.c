@@ -14,6 +14,12 @@
 #include "general_def.h"
 #include "test_check.h"
 #include "motor_feedback_test_support.h"
+#include "module_plan.h"
+#include "robot_startup.h"
+#include "ins_startup.h"
+#include "task_monitor.h"
+#include "init_diagnostic.h"
+#include "robot_safety.h"
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
@@ -709,6 +715,95 @@ static void test_dji_receive_registration_rollback(void)
 }
 
 // 启动失败时只撤销指定电机，保留同组及其他总线的电机。
+static uint8_t start_module_with_topic_failure(void *context, unsigned module)
+{
+    (void)context; // 本用例使用进程内固定状态，不需要外部对象。
+    Motor_Init_Config_s config = {0}; // 明确标记为主机测试用电机参数。
+    config.motor_type = M3508; // 使用生产 DJI 编码和分组逻辑。
+    config.output_axis = (Motor_Output_Axis_Config_s){1.0f, MOTOR_AXIS_DIRECTION_NORMAL}; // 测试输出轴没有减速。
+    config.controller_setting_init_config.close_loop_type = OPEN_LOOP; // 不依赖 PID 参数。
+    config.can_init_config.tx_id = 1u; // 两条总线允许相同设备编号。
+    config.can_init_config.can_bus = module == ROBOT_MODULE_CHASSIS ? PLATFORM_CAN_BUS_2 : PLATFORM_CAN_BUS_1; // 核心实例与待回退实例使用不同总线。
+    DJIMotorInstance *motor = DJIMotorInit(&config); // 真实登记电机、来源监控和 CAN 端点。
+    TEST_CHECK(motor != NULL);
+    if (module == ROBOT_MODULE_CHASSIS) return 1u; // 保留另一条总线的成功实例。
+    TEST_CHECK(module == ROBOT_MODULE_GIMBAL); // 下游模块不能越过失败依赖执行。
+    MessagePublisher_t *publisher = NULL; // 成对登记失败不得发布半个端点。
+    MessageSubscriber_t *subscriber = NULL; // 输出句柄在失败时保持为空。
+    TEST_CHECK(MessageEndpointPairRegister(77u, 77u, 9u, &publisher, &subscriber) == MESSAGE_ERR_CAPACITY);
+    TEST_CHECK(publisher == NULL && subscriber == NULL);
+    TEST_CHECK(DJIMotorRollbackStartup(motor)); // 话题失败后撤销已取得的真实驱动资源。
+    return 0u; // 交由生产依赖计划判断核心或辅助失败。
+}
+
+static RobotModulePlan_t integration_plan;
+static RobotModuleStartup_t integration_state;
+static unsigned integration_tasks, integration_ready, integration_faults, integration_disabled, integration_shutdowns;
+static uint8_t integration_failed;
+uint8_t PlatformSchedulerIsRunning(void) { return 1u; } // 模拟协调任务运行条件。
+uint8_t RobotInitializeApplications(void)
+{
+    return (uint8_t)(RobotModuleStart(&integration_plan, start_module_with_topic_failure, NULL,
+                                    &integration_state) == ROBOT_MODULE_OK); // 运行生产依赖计划与真实驱动。
+}
+RobotInsStartupResult_e RobotInitializeIns(void) { return ROBOT_INS_STARTUP_READY; } // 本用例不验证姿态设备。
+void RobotRunStartupDiagnostics(void) {} // 不启动硬件自测。
+uint8_t RobotRecheckCanAfterDiagnostics(void) { return 1u; } // CAN 隔离另有生产专项。
+uint8_t PlatformTaskBatchBegin(void) { return 1u; } // 任务调度由计数替身观察。
+uint8_t PlatformTaskBatchEnd(void) { return 1u; }
+uint8_t OSTaskInit(void) { ++integration_tasks; return 1u; } // 记录是否允许进入任务创建。
+uint8_t BSP_WatchdogInitChecked(uint32_t ms) { TEST_CHECK(ms == 200u); return 1u; }
+TaskMonitor_Result_e TaskMonitorReleaseRuntime(void) { return TASK_MONITOR_RESULT_OK; }
+void InitDiagnosticSetStage(InitDiagnosticStage_e stage) { (void)stage; }
+uint8_t InitDiagnosticIsFailed(void) { return integration_failed; }
+void InitDiagnosticReportFailure(InitDiagnosticStage_e stage, uint8_t module, InitDiagnosticReason_e reason, uint16_t resource)
+{ (void)stage; (void)module; (void)reason; (void)resource; integration_failed = 1u; }
+void InitDiagnosticReportDegraded(InitDiagnosticStage_e stage, uint8_t module, InitDiagnosticReason_e reason, uint16_t resource)
+{ (void)stage; (void)module; (void)reason; (void)resource; }
+void InitDiagnosticMarkReady(void) { ++integration_ready; }
+void RobotFaultReport(Robot_Fault_e fault) { TEST_CHECK(fault == ROBOT_FAULT_INIT_FAILURE); ++integration_faults; }
+void RobotSafetyRequestDisable(void) { ++integration_disabled; }
+void BSP_SafetyStartupLatchOutputsOff(void) { ++integration_shutdowns; } // 主机记录关断调用，不驱动引脚。
+
+static void test_module_driver_topic_failure(uint8_t core)
+{
+    const MessageTopicDescriptor_t descriptor = {
+        .topic_id = 77u, // 本联合测试独占的话题编号。
+        .payload_size = MESSAGE_CENTER_MAX_PAYLOAD_BYTES, // 每个订阅使用最大负载。
+        .max_age_ms = 100u, // 使用合法的固定有效时间。
+        .capacity = MESSAGE_CENTER_MAX_QUEUE_DEPTH, // 每个订阅需要四个存储槽。
+        .delivery = MESSAGE_DELIVERY_EVENT_FIFO, // 有序队列消耗完整存储区。
+        .overflow = MESSAGE_OVERFLOW_REJECT_NEWEST, // 满容量时明确拒绝。
+        .source_clock = MESSAGE_CLOCK_LOCAL, // 使用主机模拟的本地时钟。
+        .publisher_mask = 0x1ffu, // 允许测试中的九个端点身份发布。
+        .subscriber_mask = 0x1ffu, // 第九个身份合法，失败原因应为容量不足。
+    };
+    TEST_CHECK(MessageCenterInit(&descriptor, 1u) == MESSAGE_OK);
+    for (uint8_t endpoint = 1u; endpoint <= 8u; ++endpoint) // 耗尽生产消息中心的订阅数据区。
+        TEST_CHECK(MessageSubscriberRegister(77u, endpoint) != NULL);
+    RobotModulePlan_t plan = {
+        .enabled = ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS) | ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL) | ROBOT_MODULE_BIT(ROBOT_MODULE_SHOOTER), // 只运行本测试声明的三个模块。
+        .required = ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS), // 底盘始终是核心。
+    };
+    plan.dependencies[ROBOT_MODULE_SHOOTER] = ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL); // 发射依赖失败云台，不得调用其初始化。
+    if (core) plan.required |= ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL); // 同样的资源失败按不同车型分类。
+    integration_plan = plan; // 将本次配置交给协调器的设备入口。
+    TEST_CHECK(RobotStartupRun() == (uint8_t)!core); // 真实协调器决定是否创建和放行任务。
+    const RobotModuleStartup_t state = integration_state; // 检查同一次依赖启动结果。
+    TEST_CHECK(integration_tasks == (unsigned)!core && integration_ready == (unsigned)!core);
+    TEST_CHECK(integration_faults == core && integration_disabled == core && integration_shutdowns == core); // 核心失败必须调用全部保护。
+    TEST_CHECK(state.started == ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS)); // 成功实例保留，失败实例未发布。
+    TEST_CHECK(state.failed == ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL) && state.core_failed == core);
+    if (!core) TEST_CHECK(state.blocked == ROBOT_MODULE_BIT(ROBOT_MODULE_SHOOTER)); // 辅助失败只阻塞下游。
+    if (!core) // 只有辅助失败的计划允许进入后续周期处理。
+    {
+        DJIMotorControl(); // 统一电机循环只应遍历保留实例。
+        CANProcessTx(); // 使用生产发送队列推进硬件替身。
+        TEST_CHECK(tx_accept_count[0] == 0u && tx_accept_count[1] == 1u); // 回退总线不发送，另一条总线保留。
+    }
+    else TEST_CHECK(tx_accept_count[0] == 0u && tx_accept_count[1] == 0u); // 初始化流程本身不得发送控制帧。
+}
+
 static void test_dji_startup_rollback(void)
 {
     Motor_Init_Config_s config = {0}; // 使用不依赖 PID 的测试电机配置。
@@ -2572,6 +2667,10 @@ int main(int argc, char **argv)
         test_platform_can_receive();
     else if (strcmp(argv[1], "dji-rx-rollback") == 0)
         test_dji_receive_registration_rollback();
+    else if (strcmp(argv[1], "module-topic-aux") == 0)
+        test_module_driver_topic_failure(0u);
+    else if (strcmp(argv[1], "module-topic-core") == 0)
+        test_module_driver_topic_failure(1u);
     else if (strcmp(argv[1], "dji-startup-rollback") == 0)
         test_dji_startup_rollback();
     else if (strcmp(argv[1], "dji-startup-rollback-late") == 0)

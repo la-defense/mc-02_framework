@@ -909,6 +909,8 @@ endforeach()
 
 # 这组回归链接生产 BSP CAN 注册与发送实现，仅替换 HAL、时间和日志。
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
+  ../../application/config/module_plan.c # 联合依赖计划、真实消息中心与电机注册回退。
+  ../../application/robot_startup.c # 联合启动协调器检查核心失败不创建任务。
   ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
   ../../modules/super_cap/super_cap.c # 联合生产电容和 CAN 驱动验证启动回退。
   ../../bsp/board/platform_can_stm32.c # 通过生产适配复用真实 CAN 队列。
@@ -927,7 +929,8 @@ add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
 target_include_directories(lk_motor_bsp_can_test BEFORE PRIVATE ../../bsp/can lk_motor_can_fakes
   lk_motor_fakes . ../../modules/motor/LKmotor ../../modules/motor ../../modules
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/message_center ../../modules/can_comm ../../modules/time_sync)
-target_include_directories(lk_motor_bsp_can_test PRIVATE ../../modules/super_cap) # 引入生产电容接口。
+target_include_directories(lk_motor_bsp_can_test PRIVATE ../../modules/super_cap ../../application/config) # 引入生产电容和模块计划接口。
+target_include_directories(lk_motor_bsp_can_test PRIVATE ../../application ../../modules/task_monitor ../../modules/safety ../../bsp/os ../../bsp/watchdog ../../bsp/safety) # 协调器只使用框架接口。
 target_compile_options(lk_motor_bsp_can_test PRIVATE -Wall -Wextra -Werror
   -Wno-type-limits -ffunction-sections -fdata-sections -fno-builtin-malloc -fno-builtin-free)
 target_compile_definitions(lk_motor_bsp_can_test PRIVATE MC02_CAN_SELFTEST_FAKE_HOOK=1) # 可在探针间模拟回环中断。
@@ -939,6 +942,8 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
     -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free -Wl,--gc-sections)
 endif()
 add_test(NAME production_lk_motor_bsp_can_rollback COMMAND lk_motor_bsp_can_test rollback)
+add_test(NAME production_module_driver_topic_aux_failure COMMAND lk_motor_bsp_can_test module-topic-aux) # 辅助失败保留其他总线设备。
+add_test(NAME production_module_driver_topic_core_failure COMMAND lk_motor_bsp_can_test module-topic-core) # 核心失败停止后续模块。
 add_test(NAME production_can_registration_irq_state COMMAND lk_motor_bsp_can_test registration-irq)
 add_test(NAME production_can_interrupt_before_workspace COMMAND lk_motor_bsp_can_test interrupt-before-init)
 add_test(NAME production_can_rx_invalid COMMAND lk_motor_bsp_can_test rx-invalid)
