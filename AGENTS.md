@@ -3,6 +3,7 @@
 This is the MC-02 STM32H723 firmware repository. Start here, then follow the task-specific references below.
 
 - Task state lives only in [.Doc/TODO.md](.Doc/TODO.md). Each open item has one stable ID, one category, one triage state, an acceptance condition, and optionally a linked specification or ticket detail.
+- 继续“哨兵近期软件交付”目标时，先读[交付路线](docs/workflow/specs/sentinel-software-delivery.md)，按依赖推进本机软件切片；现场条件只在确认后验收，任务状态仍只在 TODO 维护。
 - 开发流程、TODO 状态、相关改动共用分支、统一验证阶段及跨仓库交付，以 [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) 为准。
 - 本地验证入口是 `python3 tools/workflow/verify.py --fast`；受影响时再用 `--host`、`--firmware`。证据摘要放 `docs/workflow/tickets/<ID>-evidence/`，`build/` 只放原始日志。
 - Firmware vocabulary and design decisions live in [GLOSSARY.md](GLOSSARY.md) and [docs/adr/](docs/adr/).
