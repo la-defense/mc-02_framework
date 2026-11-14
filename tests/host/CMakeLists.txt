@@ -31,6 +31,11 @@ target_include_directories(robot_control_policy_test PRIVATE ../../modules/safet
 target_compile_features(robot_control_policy_test PRIVATE c_std_11)
 target_compile_options(robot_control_policy_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_robot_control_policy COMMAND robot_control_policy_test)
+add_executable(can_recovery_test can_recovery_test.c ../../modules/safety/can_recovery.c) # 使用生产恢复计算。
+target_include_directories(can_recovery_test PRIVATE ../../modules/safety) # 只依赖框架公开头。
+target_compile_features(can_recovery_test PRIVATE c_std_11) # 按项目 C 接口编译。
+target_compile_options(can_recovery_test PRIVATE -Wall -Wextra -Werror) # 测试也拒绝编译警告。
+add_test(NAME production_can_recovery_policy COMMAND can_recovery_test) # 覆盖反馈、故障及序号回绕。
 set_tests_properties(production_robot_control_policy PROPERTIES TIMEOUT 10)
 # 使用 FreeRTOS 状态替身运行生产调度批次，检查重复开始和退出。
 add_executable(platform_task_batch_test platform_task_batch_test.c ../../bsp/os/platform_task_batch_freertos.c)
