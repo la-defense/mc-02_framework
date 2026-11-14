@@ -126,7 +126,7 @@ int main(int argc, char **argv)
         .command_topic=ROBOT_TOPIC_CHASSIS_COMMAND, .feedback_topic=ROBOT_TOPIC_CHASSIS_FEEDBACK};
     expected_handle=&hcan2; expected_tx=config.tx_id; expected_rx=config.rx_id;
 #if defined(MC02_TEST_WRAP_TIME_SYNC)
-    if (argc == 2)
+    if (argc == 2 && strncmp(argv[1], "close-", 6u) == 0)
     {
         fake_time_sync_failure = 1u; // 让端点登记成功后，对时初始化失败。
         fake_filter_close_failure = (uint8_t)(strcmp(argv[1], "close-failure") == 0); // 可选注入硬件回退错误。
@@ -161,6 +161,20 @@ int main(int argc, char **argv)
     invalid=config; invalid.rx_id=0x800u;
     TEST_CHECK(!RobotCanBridgeInit(&invalid) && receive_callback==NULL);
     TEST_CHECK(RobotCanBridgeInit(&config));
+#if defined(MC02_TEST_WRAP_TIME_SYNC)
+    if (argc == 2 && strncmp(argv[1], "stop-", 5u) == 0)
+    {
+        fake_filter_close_failure = (uint8_t)(strcmp(argv[1], "stop-failure") == 0); // 可选注入过滤器关闭失败。
+        TEST_CHECK(fake_filter_close_failure || strcmp(argv[1], "stop-success") == 0);
+        TEST_CHECK(RobotCanBridgeStopStartup() == (uint8_t)!fake_filter_close_failure);
+        TEST_CHECK(receive_callback == NULL); // 硬件关闭失败也不能保留软件接收回调。
+        RobotCanBridgeService(); // 停止后调用服务不能重新提交数据。
+        RobotCanBridgeServiceTx();
+        TEST_CHECK(frame_count == 0u && serviced_handle == NULL);
+        TEST_CHECK(!RobotCanBridgeGetTimeSyncState(&state, &updated_ms));
+        return 0;
+    }
+#endif
     RobotCanBridgeServiceTx();
     TEST_CHECK(serviced_handle==expected_handle);
     TEST_CHECK(!RobotCanBridgeGetTimeSyncState(&state, &updated_ms));

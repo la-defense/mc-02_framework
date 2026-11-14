@@ -18,6 +18,11 @@ uint8_t RobotCanBridgeInit(const RobotCanBridgeConfig_t *config);
  * @note 仅在启动协调任务中读取；每次初始化开始清除上一结果。
  */
 uint8_t RobotCanBridgeInitRollbackFailed(void);
+/** @brief 在周期任务创建前撤销已降级桥接的接收端点及旧话题。
+ * @return 未启动或成功撤销返回 1；话题失效或硬件过滤器关闭失败返回 0。
+ * @note 仅供启动协调者串行调用；失败后仍尽力撤销软件接收端点。
+ */
+uint8_t RobotCanBridgeStopStartup(void);
 /** @brief 复制最近一次板间对时状态，供其他普通任务查询。
  * @param[out] output 偏差、样本数及同步标记；失败保持原值。
  * @param[out] updated_ms 此副本的本机更新时间；失败保持原值。

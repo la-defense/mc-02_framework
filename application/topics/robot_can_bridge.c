@@ -26,6 +26,17 @@ uint8_t RobotCanBridgeInitRollbackFailed(void)
     return robot_bridge_rollback_failed; // 返回最近一次启动回退的结果。
 }
 
+uint8_t RobotCanBridgeStopStartup(void)
+{
+    if (!robot_link.ready) return 1u; // 未成功启动时没有活动接收端点。
+    const uint8_t invalidated = (uint8_t)(CanTopicBridgeResetPeer(&robot_link.bridge) == CAN_BRIDGE_OK); // 先撤销旧话题与安全许可。
+    robot_link.ready = 0u; // 在释放端点前禁止新的接收和周期处理。
+    const uint8_t closed = PlatformCanRxRollback(&robot_link.port); // 软件端点总会撤销，硬件结果单独报告。
+    memset(&robot_time_sync, 0, sizeof(robot_time_sync)); // 撤销旧对时状态。
+    published_sync_ready = 0u; // 后续查询不能继续读取旧的同步结果。
+    return (uint8_t)(invalidated && closed); // 两项都完成才允许其他任务继续启动。
+}
+
 #if defined(CHASSIS_BOARD)
 static void RobotCanBridgeCommandInvalidated(void *context)
 {

@@ -1321,6 +1321,8 @@ foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
     target_link_options(robot_can_bridge_${role_name}_test PRIVATE -Wl,--wrap=CanTimeSyncInit) # 保留正常路径的生产对时实现。
     add_test(NAME production_robot_can_bridge_${role_name}_rollback_ok COMMAND robot_can_bridge_${role_name}_test close-success) # 普通失败正确撤销。
     add_test(NAME production_robot_can_bridge_${role_name}_rollback_fault COMMAND robot_can_bridge_${role_name}_test close-failure) # 硬件关闭失败必须上报。
+    add_test(NAME production_robot_can_bridge_${role_name}_stop_ok COMMAND robot_can_bridge_${role_name}_test stop-success) # 降级后撤销端点。
+    add_test(NAME production_robot_can_bridge_${role_name}_stop_fault COMMAND robot_can_bridge_${role_name}_test stop-failure) # 硬件失败也撤销软件回调。
   endif()
   set_tests_properties(production_robot_can_bridge_${role_name} PROPERTIES TIMEOUT 10)
 endforeach()

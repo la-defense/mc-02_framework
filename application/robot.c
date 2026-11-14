@@ -242,7 +242,16 @@ uint8_t RobotRecheckCanAfterDiagnostics(void)
     RobotCanDependency_t dependencies[8] = {0}; // 隔离检查只需要模块和总线。
     for (uint8_t i = 0u; i < count; ++i)
         dependencies[i] = (RobotCanDependency_t){demands[i].module, demands[i].bus}; // 不重复维护绑定。
-    return RobotCanGuardCheck(dependencies, count); // 传播隔离并检查核心闭包。
+    if (!RobotCanGuardCheck(dependencies, count)) return 0u; // 核心依赖失败时禁止后续任务。
+#if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
+    if (!RobotBuildModuleStarted(ROBOT_MODULE_COMMUNICATION) && !RobotCanBridgeStopStartup())
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                    INIT_FAILURE_RESOURCE, 2u); // 端点无法安全关闭，保留核心失败原因。
+        return 0u; // 接收端点清理异常时不能放行任务。
+    }
+#endif
+    return 1u; // 资源状态和核心依赖均已检查。
 #else
     return 1u; // 旧主机组合没有车型生成的依赖计划。
 #endif
