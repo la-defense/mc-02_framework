@@ -1,6 +1,8 @@
 # 主机行为回归入口：CMake 配置后构建，再用 CTest 执行；硬件操作不在此处运行。
 cmake_minimum_required(VERSION 3.16)
 project(mc02_host_tests C)
+include(../../cmake/mc02_ccache.cmake)
+mc02_enable_ccache()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(../../cmake/mc02_format_diagnostics.cmake)
 mc02_check_format_diagnostics()
@@ -1364,10 +1366,12 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
     -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free)
 endif()
 add_test(NAME production_iic_registration_contract COMMAND iic_registration_test register)
+add_test(NAME production_iic_registration_ten_bit COMMAND iic_registration_test ten-bit)
 add_test(NAME production_iic_registration_capacity COMMAND iic_registration_test capacity)
 add_test(NAME production_iic_callers_handle_registration_failure COMMAND iic_registration_test callers)
 add_test(NAME production_tfmini_fixed_frame_bounds COMMAND iic_registration_test tfmini-frame)
-set_tests_properties(production_iic_registration_contract production_iic_registration_capacity
+set_tests_properties(production_iic_registration_contract production_iic_registration_ten_bit
+  production_iic_registration_capacity
   production_iic_callers_handle_registration_failure production_tfmini_fixed_frame_bounds
   PROPERTIES TIMEOUT 10)
 add_executable(init_diagnostic_test init_diagnostic_test.c ../../application/init_diagnostic.c)

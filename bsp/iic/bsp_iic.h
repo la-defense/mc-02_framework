@@ -21,6 +21,13 @@ typedef enum
 
 } IIC_Work_Mode_e;
 
+/* 设备地址宽度；10 位地址不能只靠数值大小和 7 位地址区分。 */
+typedef enum
+{
+    IIC_ADDRESS_7BIT = 0, // 数据手册地址 0x00～0x7F
+    IIC_ADDRESS_10BIT,    // 数据手册地址 0x000～0x3FF
+} IIC_Address_Mode_e;
+
 /* I2C MEM工作模式枚举,这两种方法都是阻塞 */
 typedef enum
 {
@@ -40,7 +47,8 @@ typedef enum
 typedef struct iic_temp_s
 {
     I2C_HandleTypeDef *handle; // i2c handle
-    uint8_t dev_address;       // 暂时只支持7位地址(还有一位是读写位)
+    uint16_t dev_address;      // 按 HAL 约定保存：7 位地址左移一位，10 位地址保持原值
+    IIC_Address_Mode_e address_mode; // 设备使用 7 位还是 10 位地址
 
     IIC_Work_Mode_e work_mode;             // 工作模式
     uint8_t *rx_buffer;                    // 接收缓冲区指针
@@ -54,7 +62,8 @@ typedef struct iic_temp_s
 typedef struct
 {
     I2C_HandleTypeDef *handle;       // i2c handle
-    uint8_t dev_address;             // 暂时只支持7位地址(还有一位是读写位),注意不需要左移
+    uint16_t dev_address;            // 数据手册地址，不需要左移；7 位填 0x00～0x7F，10 位填 0x000～0x3FF
+    IIC_Address_Mode_e address_mode; // 地址宽度必须与 handle 的 AddressingMode 一致
     IIC_Work_Mode_e work_mode;       // 工作模式
     void (*callback)(IICInstance *); // 接收完成后的回调函数
     void *id;                        // 用于标识i2c instance
@@ -62,12 +71,15 @@ typedef struct
 
 /**
  * @brief 检查配置并登记一个 I²C 设备，不配置底层外设。
- * @param[in] conf 配置地址；handle 非空，dev_address 为未左移的 0x00～0x7F 地址，
+ * @param[in] conf 配置地址；handle 非空，dev_address 为未左移的 7 位或 10 位地址，
+ *                 address_mode 与 handle 的 AddressingMode 一致，
  *                 work_mode 必须是阻塞、中断或 DMA 模式；callback 和 id 可为空。
- * @return 登记成功返回长期有效的实例；空配置、非法字段、重复设备、容量满或分配失败返回 NULL。
- * @note 同一 HAL 句柄和同一 7 位地址只能登记一次；相同地址可用于不同句柄，不同地址可共用句柄。
- *       成功实例由登记表持有，调用方不得释放；配置可在返回后释放，HAL 句柄须持续有效。
- *       只允许启动阶段串行调用。登记失败不占用容量，也不更改已有实例。
+ * @return 登记成功返回长期有效的实例；空配置、非法字段、地址模式不匹配、
+ *         重复设备、容量满或分配失败返回 NULL。
+ * @note 同一 HAL 句柄和同一编码后地址只能登记一次；相同地址可用于不同句柄，
+ *       不同地址可共用句柄。成功实例由登记表持有，调用方不得释放；配置可在返回后
+ *       释放，HAL 句柄须持续有效。只允许启动阶段串行调用。
+ *       登记失败不占用容量，也不更改已有实例。
  */
 IICInstance *IICRegister(const IIC_Init_Config_s *conf);
 

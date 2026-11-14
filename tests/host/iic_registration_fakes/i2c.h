@@ -17,8 +17,16 @@ typedef enum {
 } HAL_StatusTypeDef;
 
 typedef struct {
+    uint32_t AddressingMode;
+} I2C_InitTypeDef;
+
+typedef struct {
     uint16_t Devaddress;
+    I2C_InitTypeDef Init;
 } I2C_HandleTypeDef;
+
+#define I2C_ADDRESSINGMODE_7BIT 0x00000000u
+#define I2C_ADDRESSINGMODE_10BIT 0x00008000u
 
 #define I2C_OTHER_AND_LAST_FRAME 0u
 #define I2C_OTHER_FRAME 1u

@@ -15,6 +15,7 @@ TFMiniInstance *TFMiniRegister(I2C_HandleTypeDef *hi2c)
 	IIC_Init_Config_s conf = {
 		.handle = hi2c,
 		.dev_address = 0x10,
+		.address_mode = IIC_ADDRESS_7BIT,
 		.id = tfmini,
 		.work_mode = IIC_BLOCK_MODE,
 	};

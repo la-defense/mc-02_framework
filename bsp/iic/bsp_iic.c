@@ -10,16 +10,37 @@ static IICInstance *iic_instance[MX_IIC_SLAVE_CNT] = {NULL};
 
 IICInstance *IICRegister(const IIC_Init_Config_s *conf)
 {
-    if (conf == NULL || conf->handle == NULL || conf->dev_address > 0x7Fu ||
+    if (conf == NULL || conf->handle == NULL ||
         (conf->work_mode != IIC_BLOCK_MODE && conf->work_mode != IIC_IT_MODE &&
          conf->work_mode != IIC_DMA_MODE))
         return NULL;
+
+    // 7 位和 10 位地址的数值范围有重叠，必须按配置区分，并核对 HAL 句柄的地址模式。
+    uint16_t hal_address;
+    if (conf->address_mode == IIC_ADDRESS_7BIT)
+    {
+        if (conf->dev_address > 0x7Fu ||
+            conf->handle->Init.AddressingMode != I2C_ADDRESSINGMODE_7BIT)
+            return NULL;
+        hal_address = (uint16_t)(conf->dev_address << 1u); // 7 位地址最低位留给读写方向。
+    }
+    else if (conf->address_mode == IIC_ADDRESS_10BIT)
+    {
+        if (conf->dev_address > 0x3FFu ||
+            conf->handle->Init.AddressingMode != I2C_ADDRESSINGMODE_10BIT)
+            return NULL;
+        hal_address = conf->dev_address; // 10 位地址直接交给 HAL，不再左移。
+    }
+    else
+    {
+        return NULL;
+    }
 
     // 同一总线地址只能有一个回调所有者，避免新配置替换已在用的实例。
     for (uint8_t i = 0u; i < idx; ++i)
     {
         if (iic_instance[i]->handle == conf->handle &&
-            iic_instance[i]->dev_address == (uint8_t)(conf->dev_address << 1u))
+            iic_instance[i]->dev_address == hal_address)
             return NULL;
     }
 
@@ -33,7 +54,8 @@ IICInstance *IICRegister(const IIC_Init_Config_s *conf)
 
     memset(instance, 0, sizeof(IICInstance));
 
-    instance->dev_address = (uint8_t)(conf->dev_address << 1u); // HAL 地址最低位留给读写方向。
+    instance->dev_address = hal_address;
+    instance->address_mode = conf->address_mode;
     instance->callback = conf->callback;
     instance->work_mode = conf->work_mode;
     instance->handle = conf->handle;

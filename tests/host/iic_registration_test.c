@@ -25,6 +25,7 @@ static uint32_t irq_disable_count;
 static uint32_t irq_restore_count;
 static uint32_t dmb_count;
 static uint32_t hal_transfer_count;
+static uint16_t last_iic_transfer_address;
 static uint16_t last_iic_tx_size;
 static uint16_t last_iic_rx_size;
 static uint8_t last_iic_tx_data[5];
@@ -118,7 +119,8 @@ static HAL_StatusTypeDef record_transfer(void)
 HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *handle, uint16_t address,
                                          uint8_t *data, uint16_t size, uint32_t timeout)
 {
-    (void)handle; (void)address; (void)timeout;
+    (void)handle; (void)timeout;
+    last_iic_transfer_address = address;
     last_iic_tx_size = size;
     if (size == sizeof(last_iic_tx_data))
         memcpy(last_iic_tx_data, data, sizeof(last_iic_tx_data));
@@ -228,13 +230,14 @@ static void count_receive(IICInstance *instance)
     ++(*count);
 }
 
-static IIC_Init_Config_s make_config(I2C_HandleTypeDef *handle, uint8_t address,
+static IIC_Init_Config_s make_config(I2C_HandleTypeDef *handle, uint16_t address,
                                      IIC_Work_Mode_e mode, void *id,
                                      void (*callback)(IICInstance *))
 {
     IIC_Init_Config_s config = {
         .handle = handle,
         .dev_address = address,
+        .address_mode = IIC_ADDRESS_7BIT,
         .work_mode = mode,
         .callback = callback,
         .id = id,
@@ -577,6 +580,61 @@ static void check_ist8310_failure_and_recovery(void)
     TEST_CHECK(mem_read_count == reads_before && mem_write_count == writes_before);
 }
 
+static void check_ten_bit_addressing(void)
+{
+    static I2C_HandleTypeDef ten_bit_handle;
+    static I2C_HandleTypeDef seven_bit_handle;
+    ten_bit_handle.Init.AddressingMode = I2C_ADDRESSINGMODE_10BIT;
+    seven_bit_handle.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+
+    // 地址宽度和 HAL 句柄模式必须一致；只改地址数值无法区分两种模式。
+    IIC_Init_Config_s config = make_config(&seven_bit_handle, 0x20u, IIC_BLOCK_MODE, NULL, NULL);
+    config.address_mode = IIC_ADDRESS_10BIT;
+    TEST_CHECK(IICRegister(&config) == NULL);
+
+    config = make_config(&ten_bit_handle, 0x20u, IIC_BLOCK_MODE, NULL, NULL);
+    TEST_CHECK(IICRegister(&config) == NULL);
+
+    // 7 位地址传给 HAL 时左移一位，HAL 保留最低位作为读写方向。
+    IIC_Init_Config_s seven_bit_config = make_config(&seven_bit_handle, 0x10u,
+                                                      IIC_BLOCK_MODE, NULL, NULL);
+    IICInstance *seven_bit_instance = IICRegister(&seven_bit_config);
+    TEST_CHECK(seven_bit_instance != NULL && seven_bit_instance->dev_address == 0x20u);
+    uint8_t transfer_byte = 0x5Au;
+    IICTransmit(seven_bit_instance, &transfer_byte, 1u, IIC_SEQ_RELEASE);
+    TEST_CHECK(last_iic_transfer_address == 0x20u);
+
+    // 合法 10 位地址按原值保存，不再左移；0x2A5 超出 7 位范围。
+    uint32_t receive_count = 0u;
+    config = make_config(&ten_bit_handle, 0x2A5u, IIC_BLOCK_MODE, &receive_count, count_receive);
+    config.address_mode = IIC_ADDRESS_10BIT;
+    IICInstance *instance = IICRegister(&config);
+    TEST_CHECK(instance != NULL);
+    TEST_CHECK(instance->dev_address == 0x2A5u);
+    TEST_CHECK(instance->address_mode == IIC_ADDRESS_10BIT);
+    IICTransmit(instance, &transfer_byte, 1u, IIC_SEQ_RELEASE);
+    TEST_CHECK(last_iic_transfer_address == 0x2A5u);
+
+    // 10 位地址 0x020 与 7 位地址 0x10 的编码值不同，不能按是否大于 0x7F 猜测模式。
+    IIC_Init_Config_s overlapping = make_config(&ten_bit_handle, 0x020u, IIC_BLOCK_MODE, NULL, NULL);
+    overlapping.address_mode = IIC_ADDRESS_10BIT;
+    IICInstance *overlap_instance = IICRegister(&overlapping);
+    TEST_CHECK(overlap_instance != NULL && overlap_instance->dev_address == 0x020u);
+
+    // 超出 0x3FF 或同句柄同地址重复登记都拒绝。
+    IIC_Init_Config_s out_of_range = make_config(&ten_bit_handle, 0x400u, IIC_BLOCK_MODE, NULL, NULL);
+    out_of_range.address_mode = IIC_ADDRESS_10BIT;
+    TEST_CHECK(IICRegister(&out_of_range) == NULL);
+    config = make_config(&ten_bit_handle, 0x2A5u, IIC_BLOCK_MODE, NULL, NULL);
+    config.address_mode = IIC_ADDRESS_10BIT;
+    TEST_CHECK(IICRegister(&config) == NULL);
+
+    // 接收完成回调按 HAL 保存的 10 位地址找到唯一实例。
+    ten_bit_handle.Devaddress = 0x2A5u;
+    HAL_I2C_MasterRxCpltCallback(&ten_bit_handle);
+    TEST_CHECK(receive_count == 1u);
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2)
@@ -586,6 +644,11 @@ int main(int argc, char **argv)
     {
         check_invalid_and_allocation_failure();
         check_duplicate_and_callback_routing();
+        return 0;
+    }
+    if (strcmp(argv[1], "ten-bit") == 0)
+    {
+        check_ten_bit_addressing();
         return 0;
     }
     if (strcmp(argv[1], "capacity") == 0)
