@@ -33,13 +33,13 @@ foreach(context before batch critical-open critical-masked critical-runtime)
   set_tests_properties(production_log_port_startup_${context} PROPERTIES TIMEOUT 10)
 endforeach()
 # 直接执行生产启动协调器，通过独立进程注入设备、任务和放行失败。
-add_executable(robot_power_test robot_power_test.c ../../application/robot_power.c
+add_executable(robot_power_test robot_power_test.c ../../application/robot_power.c ../../application/robot_can_capacity.c
   ../../application/config/module_plan.c ../../bsp/board/platform_power_stm32.c)
 target_include_directories(robot_power_test BEFORE PRIVATE power_stage_fakes .)
-target_include_directories(robot_power_test PRIVATE ../../application ../../bsp/board ../../bsp/os ../../bsp/safety ../../modules/safety)
+target_include_directories(robot_power_test PRIVATE ../../application ../../application/config ../../bsp/board ../../bsp/os ../../bsp/safety ../../modules/safety)
 target_compile_definitions(robot_power_test PRIVATE MC02_PROFILE_ROBOT=1)
 target_compile_options(robot_power_test PRIVATE -Wall -Wextra -Werror)
-foreach(scenario IN ITEMS all-off success before-aux-failure before-core-failure readback-failure after-aux-failure after-core-failure prior-aux-failure shutdown-before-module estop fault invalid-plan)
+foreach(scenario IN ITEMS all-off success before-aux-failure before-core-failure readback-failure after-aux-failure after-core-failure prior-aux-failure shutdown-before-module estop fault invalid-plan preflight-rejected preflight-shared preflight-invalid before-dependent-failure)
   add_test(NAME production_robot_power_${scenario} COMMAND robot_power_test ${scenario})
 endforeach()
 add_executable(platform_power_bench_test platform_power_bench_test.c ../../bsp/board/platform_power_stm32.c)

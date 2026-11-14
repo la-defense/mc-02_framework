@@ -373,7 +373,7 @@ uint8_t RobotInitializeApplications(void)
         {MC02_POWER_24V_2_STAGE, MC02_POWER_24V_2_MASK}, // PC13：第二路 24V 的阶段及使用模块。
         {MC02_POWER_5V_STAGE, MC02_POWER_5V_MASK}, // PC15：5V 的阶段及使用模块。
     };
-    ROBOT_INIT_CHECK(RobotPowerBegin(power_rails, RobotBuildGetPlan()), INIT_STAGE_APPLICATION,
+    ROBOT_INIT_CHECK(RobotPowerBeginWithUnavailable(power_rails, RobotBuildGetPlan(), can_result.rejected_modules), INIT_STAGE_APPLICATION,
                      INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, 0u); // 先校验计划并准备设备前电源。
     const RobotModuleStatus_t module_status = RobotBuildStartPhased(
         RobotPowerDeferredModules(), RobotPowerAfterDevices,

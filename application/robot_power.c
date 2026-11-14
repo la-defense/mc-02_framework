@@ -36,8 +36,7 @@ static uint32_t RobotPowerApply(RobotPowerStage_t stage)
     for (unsigned rail = 0u; rail < PLATFORM_POWER_COUNT; ++rail)
     {
         if (selected[rail].stage != stage) continue; // 只处理本阶段声明的电源。
-        if (stage == ROBOT_POWER_AFTER_DEVICES &&
-            (selected[rail].modules & ~before_failed) == 0u)
+        if ((selected[rail].modules & ~before_failed) == 0u)
         {
             // 所有使用者已因前置模块失败而受阻，不需要再开启此路电源。
             continue;
@@ -61,6 +60,7 @@ static uint32_t RobotPowerApply(RobotPowerStage_t stage)
             continue;
         }
         failed |= selected[rail].modules; // 记录该路影响的全部使用者。
+        before_failed |= RobotPowerAffectedModules(selected[rail].modules); // 后续电源不再供给已受阻的下游。
         if (core_failure)
         {
             InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
@@ -76,8 +76,17 @@ static uint32_t RobotPowerApply(RobotPowerStage_t stage)
 uint8_t RobotPowerBegin(const RobotPowerRailConfig_t rails[PLATFORM_POWER_COUNT],
                         const RobotModulePlan_t *modules)
 {
+    return RobotPowerBeginWithUnavailable(rails, modules, 0u); // 兼容没有预检拒绝项的调用。
+}
+
+uint8_t RobotPowerBeginWithUnavailable(const RobotPowerRailConfig_t rails[PLATFORM_POWER_COUNT],
+                                       const RobotModulePlan_t *modules, uint32_t unavailable)
+{
     if (initialized || rails == NULL || RobotModulePlanValidate(modules, NULL) != ROBOT_MODULE_OK)
         return 0u; // 禁止重复执行或使用无效模块计划。
+    if ((unavailable & ~modules->enabled) != 0u ||
+        (unavailable & RobotModuleCoreClosure(modules)) != 0u)
+        return 0u; // 非法位或核心依赖被拒绝时，不改变电源状态。
     for (unsigned rail = 0u; rail < PLATFORM_POWER_COUNT; ++rail)
     {
         const RobotPowerRailConfig_t item = rails[rail]; // 先检查全部电源，再操作任何输出。
@@ -92,7 +101,9 @@ uint8_t RobotPowerBegin(const RobotPowerRailConfig_t rails[PLATFORM_POWER_COUNT]
     enabled_modules = modules->enabled; // 保存本车型启用的模块范围。
     module_plan = *modules; // 阶段回调需要相同的依赖关系。
     initialized = 1u; // 从这里开始禁止重复计划或自动重试。
-    before_failed = RobotPowerApply(ROBOT_POWER_BEFORE_DEVICES); // 记录设备前阶段的所有失败使用者。
+    before_failed = RobotPowerAffectedModules(unavailable); // 预检失败及其下游不能独占电源。
+    const uint32_t power_failed = RobotPowerApply(ROBOT_POWER_BEFORE_DEVICES); // 执行时同时传播失败依赖。
+    before_failed |= power_failed; // 合并直接受电源故障影响的使用者。
     before_failed = RobotPowerAffectedModules(before_failed); // 设备前电源失败的下游也受阻。
     return (uint8_t)((before_failed & core_modules) == 0u);
 }
@@ -124,6 +135,7 @@ uint8_t RobotPowerModuleReady(unsigned module)
     if (!initialized || module >= ROBOT_MODULE_COUNT) return 0u; // 未完成计划或编号无效均不可用。
     const uint32_t bit = ROBOT_MODULE_BIT(module); // 将模块编号换成依赖位。
     if ((enabled_modules & bit) == 0u) return 0u; // 未启用模块不作为可运行功能。
+    if ((before_failed & bit) != 0u) return 0u; // 共享电源开启也不能让已拒绝模块就绪。
     const PlatformIrqState_t saved = PlatformIrqSaveAndDisable(); // 检查时不与普通关断中断交错。
     uint8_t ready = 1u;
     for (unsigned rail = 0u; rail < PLATFORM_POWER_COUNT; ++rail)

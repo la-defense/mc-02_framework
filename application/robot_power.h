@@ -25,6 +25,14 @@ typedef struct {
  */
 uint8_t RobotPowerBegin(const RobotPowerRailConfig_t rails[PLATFORM_POWER_COUNT],
                         const RobotModulePlan_t *modules);
+/** @brief 执行电源计划，跳过预检已拒绝模块及其下游独占的电源。
+ * @param[in] rails 固定容量的电源配置。
+ * @param[in] modules 已验证的模块依赖计划。
+ * @param[in] unavailable 预检拒绝的辅助模块位图；不得包含核心或未启用模块。
+ * @return 计划有效且核心电源可用返回 1，否则返回 0。
+ */
+uint8_t RobotPowerBeginWithUnavailable(const RobotPowerRailConfig_t rails[PLATFORM_POWER_COUNT],
+                                       const RobotModulePlan_t *modules, uint32_t unavailable);
 /** @brief 查询必须延迟到设备后电源准备完成的模块。
  * @return 直接使用后阶段电源的模块位图；未初始化返回 0。
  */

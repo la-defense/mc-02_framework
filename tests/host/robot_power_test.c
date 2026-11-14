@@ -2,6 +2,7 @@
  * @brief 使用生产电源和模块计划，测试阶段、故障影响和安全检查。
  */
 #include "robot_power.h"
+#include "robot_can_capacity.h"
 #include "platform_irq.h"
 #include "robot_safety.h"
 #include "init_diagnostic.h"
@@ -64,6 +65,44 @@ int main(int argc, char **argv)
         {ROBOT_POWER_AFTER_DEVICES, ROBOT_MODULE_BIT(ROBOT_MODULE_IMU)}, // 第二条供核心依赖。
         {ROBOT_POWER_OFF, 0u}, // 第三条保持关闭。
     };
+    if (!strcmp(argv[1], "preflight-rejected") || !strcmp(argv[1], "preflight-shared"))
+    {
+        const RobotCanFilterDemand_t demand = {ROBOT_MODULE_COMMAND, PLATFORM_CAN_BUS_1, 1u, 0u}; // 辅助模块需要一个标准帧端点。
+        const RobotCanFilterCapacity_t capacity = {0}; // 模拟没有剩余过滤器容量。
+        RobotCanCapacityResult_t capacity_result;
+        TEST_CHECK(RobotCanCapacityPlan(&plan, &demand, 1u, &capacity, &capacity_result) == ROBOT_MODULE_OK);
+        const uint32_t rejected = capacity_result.rejected_modules; // 使用实际容量计划的拒绝结果。
+        TEST_CHECK(rejected == ROBOT_MODULE_BIT(ROBOT_MODULE_COMMAND));
+        if (!strcmp(argv[1], "preflight-shared"))
+            rails[0].modules |= ROBOT_MODULE_BIT(ROBOT_MODULE_IMU); // 核心依赖与辅助模块共享电源。
+        TEST_CHECK(RobotPowerBeginWithUnavailable(rails, &plan, rejected));
+        TEST_CHECK(!RobotPowerModuleReady(ROBOT_MODULE_COMMAND)); // 共享电源也不能让被拒绝模块就绪。
+        TEST_CHECK((writes & POWER_24V_1_Pin) ==
+                   (!strcmp(argv[1], "preflight-shared") ? POWER_24V_1_Pin : 0u));
+        RobotModuleStartup_t state;
+        TEST_CHECK(RobotModuleStartPhased(&plan, RobotPowerDeferredModules(), barrier, start, NULL,
+                                          &state) == ROBOT_MODULE_OK);
+        TEST_CHECK((state.failed & rejected) && (state.started & ROBOT_MODULE_BIT(ROBOT_MODULE_SAFETY)));
+        return 0;
+    }
+    if (!strcmp(argv[1], "preflight-invalid"))
+    {
+        TEST_CHECK(!RobotPowerBeginWithUnavailable(rails, &plan, ROBOT_MODULE_BIT(ROBOT_MODULE_IMU)));
+        TEST_CHECK(!RobotPowerBeginWithUnavailable(rails, &plan, 1u << 30u));
+        TEST_CHECK(writes == 0u && RobotPowerBegin(rails, &plan)); // 无效请求不能写输出或占用计划。
+        return 0;
+    }
+    if (!strcmp(argv[1], "before-dependent-failure"))
+    {
+        plan.dependencies[ROBOT_MODULE_COMMUNICATION] = ROBOT_MODULE_BIT(ROBOT_MODULE_COMMAND);
+        rails[1] = (RobotPowerRailConfig_t){ROBOT_POWER_BEFORE_DEVICES,
+                                          ROBOT_MODULE_BIT(ROBOT_MODULE_COMMUNICATION)};
+        power_test_gpio.MODER &= ~(3u << 28u); // 第一条辅助电源不可用。
+        TEST_CHECK(RobotPowerBegin(rails, &plan));
+        TEST_CHECK(writes == 0u && degraded_reports == 1u); // 下游独占电源不得开启。
+        TEST_CHECK(!RobotPowerModuleReady(ROBOT_MODULE_COMMUNICATION));
+        return 0;
+    }
     if (!strcmp(argv[1], "all-off"))
     {
         memset(rails, 0, sizeof(rails)); // 模拟裸板生成的三路关闭计划。
