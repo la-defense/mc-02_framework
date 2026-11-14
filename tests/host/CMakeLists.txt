@@ -844,6 +844,8 @@ mc02_add_vehicle_health_test(chassis MC02_PROFILE_ROBOT=1 CHASSIS_BOARD=1 MC02_H
 mc02_add_vehicle_health_test(gimbal MC02_PROFILE_ROBOT=1 GIMBAL_BOARD=1 MC02_HEATER_ENABLED=1 VISION_USE_VCP=1)
 mc02_add_vehicle_health_test(generated MC02_CONFIG_GENERATED=1 MC02_PROFILE_BENCH_SAFE=1 VISION_USE_VCP=1)
 target_include_directories(vehicle_health_generated_test BEFORE PRIVATE vehicle_health_generated_fakes)
+mc02_add_vehicle_health_test(commissioning MC02_CONFIG_GENERATED=1 MC02_PROFILE_BENCH_SAFE=1 MC02_TEST_COMMISSIONING=1 VISION_USE_VCP=1) # 验证调试身份与裸板身份不同。
+target_include_directories(vehicle_health_commissioning_test BEFORE PRIVATE vehicle_health_generated_fakes) # 复用可控的生成配置输入。
 # 三位小数入口独立于日志硬件；Python Decimal提供不同实现的数值参考。
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_executable(

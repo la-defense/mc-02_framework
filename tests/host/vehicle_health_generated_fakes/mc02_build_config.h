@@ -3,7 +3,11 @@
  */
 #ifndef MC02_GENERATED_BUILD_CONFIG_H
 #define MC02_GENERATED_BUILD_CONFIG_H
-#define MC02_BUILD_ROLE_NAME "bench"
+#if defined(MC02_TEST_COMMISSIONING)
+#define MC02_BUILD_ROLE_NAME "commissioning" /* 模拟独立调试配置的构建身份。 */
+#else
+#define MC02_BUILD_ROLE_NAME "bench" /* 保留原有裸板测试输入。 */
+#endif
 #define MC02_FEATURE_SAFETY 1
 #define MC02_FEATURE_IMU 1
 #define MC02_FEATURE_COMMUNICATION 1

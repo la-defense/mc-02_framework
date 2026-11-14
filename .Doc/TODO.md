@@ -12,7 +12,7 @@
 
 按[近期／中期路线](../docs/workflow/specs/sentinel-software-delivery.md)依赖推进本机软件切片，原任务的硬件条件仍保留；本段不复制各任务状态。
 
-- [ ] **MC02-0144** [enhancement] [ready-for-agent] 建立独立受限上车调试配置的软件入口。验收：与bench_safe及robot区分构建身份，按确认模块选择依赖，默认失能、仅人工新鲜输入显式使能、发射关闭；缺少对应机械／输出限制时拒绝运动配置，主机故障及ARM构建验证通过。现场验收另行确认，详见[交付路线](../docs/workflow/specs/sentinel-software-delivery.md)。
+- [ ] **MC02-0144** [enhancement] [ready-for-agent] 建立独立受限上车调试配置的软件入口。验收：与bench_safe及robot区分构建身份，按确认模块选择依赖，默认失能、仅人工新鲜输入显式使能、发射关闭；缺少对应机械／输出限制时拒绝运动配置，主机故障及ARM构建验证通过。现场验收另行确认，详见[交付路线](../docs/workflow/specs/sentinel-software-delivery.md)与[实施记录](../docs/workflow/tickets/MC02-0144.md)。
 
 ## 2026-11-14：分支成果选择性整合
 

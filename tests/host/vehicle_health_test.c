@@ -239,7 +239,11 @@ static void TestBuildProfile(void)
                         VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_LOG);
     TEST_CHECK(VehicleHealthGetBuildProfile(&profile) == VEHICLE_HEALTH_OK);
 #if defined(MC02_PROFILE_BENCH_SAFE)
+#if defined(MC02_TEST_COMMISSIONING)
+    TEST_CHECK(profile.role == VEHICLE_HEALTH_ROLE_COMMISSIONING);
+#else
     TEST_CHECK(profile.role == VEHICLE_HEALTH_ROLE_BENCH);
+#endif
     expected |= VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_VISION);
     expected |= VEHICLE_HEALTH_MODULE_BIT(VEHICLE_HEALTH_MODULE_USB);
 #if defined(MC02_CONFIG_GENERATED)

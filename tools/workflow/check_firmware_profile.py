@@ -161,7 +161,7 @@ STARTUP_DIAGNOSTICS = {
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("elf", type=Path)
-    parser.add_argument("--profile", choices=("bench_safe", "robot"), required=True)
+    parser.add_argument("--profile", choices=("bench_safe", "commissioning", "robot"), required=True)
     parser.add_argument("--role", choices=("single", "chassis", "gimbal"), default="single")
     parser.add_argument("--vision-transport", choices=("usb", "uart"), default="usb")
     parser.add_argument("--ui-disabled", action="store_true", help="确认裁判UI源码未进入本配置")
@@ -177,12 +177,14 @@ def main():
         parser.error("USB diagnostics require the separate named bench_safe/single/usb artifact")
     if args.referee_diagnostics and (args.profile != "bench_safe" or "_refdiag_" not in args.elf.name or args.rc_diagnostics):
         parser.error("referee diagnostics require the separate named bench_safe artifact")
-    if args.rc_diagnostics and (args.profile != "bench_safe" or "_rcdiag_" not in args.elf.name):
-        parser.error("remote diagnostics require the named bench_safe diagnostic artifact")
-    if not args.elf.name.endswith("_" + args.profile + ".elf"):
+    if args.rc_diagnostics and (args.profile not in ("bench_safe", "commissioning") or "rcdiag" not in args.elf.name):
+        parser.error("remote diagnostics require the named non-actuating diagnostic artifact")
+    expected_suffix = ("_commissioning_observe_rcdiag.elf" if args.rc_diagnostics
+                       else "_commissioning_observe.elf") if args.profile == "commissioning" else "_" + args.profile + ".elf"
+    if not args.elf.name.endswith(expected_suffix):
         parser.error("ELF output name does not match the requested profile")
-    if args.profile == "bench_safe" and args.role != "single":
-        parser.error("bench_safe only supports the single board role")
+    if args.profile in ("bench_safe", "commissioning") and args.role != "single":
+        parser.error("non-actuating profiles only support the single board role")
     result = subprocess.run([args.nm, "-C", str(args.elf)], capture_output=True, text=True, check=True, timeout=15)
     symbols = {line.split()[-1] for line in result.stdout.splitlines() if len(line.split()) >= 3}
     functions = {line.split()[-1] for line in result.stdout.splitlines() if len(line.split()) >= 3 and line.split()[-2] in ("T", "t")}
@@ -206,7 +208,7 @@ def main():
         missing |= {"RefereeBenchInit", "RefereeBenchTask", "RefereeInit", "RefereeSubmit", "referee_bench_diag"} - symbols
     elif "referee_bench_diag" in symbols:
         raise SystemExit("normal profile contains automatic referee diagnostic traffic")
-    forbidden = ACTUATORS & functions if args.profile == "bench_safe" else ROLE_FORBIDDEN[args.role] & functions
+    forbidden = ACTUATORS & functions if args.profile in ("bench_safe", "commissioning") else ROLE_FORBIDDEN[args.role] & functions
     if missing or forbidden:
         raise SystemExit(f"profile check failed: missing={sorted(missing)}, forbidden={sorted(forbidden)}")
 
@@ -227,6 +229,17 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
     if (f"profile={profile}" not in lines or f"role={role}" not in lines
             or f"vision={vision_transport}" not in lines):
         raise SystemExit("selected-source report does not match the requested profile and role")
+    if profile == "commissioning":
+        # 同时检查生成身份与禁止输出的模块，不能只凭产物名称判断用途。
+        config = (build_dir / "generated" / "mc02_build_config.h").read_text(encoding="utf-8")
+        if '#define MC02_BUILD_ROLE_NAME "commissioning"' not in config:
+            raise SystemExit("commissioning build identity is missing")
+        for feature in ("COMMAND", "CHASSIS", "GIMBAL", "SHOOTER", "HEATER", "MOTOR_CONTROL"):
+            if f"#define MC02_FEATURE_{feature} 0" not in config:
+                raise SystemExit(f"commissioning observation unexpectedly enables {feature}")
+        for rail in ("24V_1", "24V_2", "5V"):
+            if f"#define MC02_POWER_{rail}_STAGE 0u" not in config:
+                raise SystemExit(f"commissioning observation unexpectedly enables {rail}")
     selected = {line for line in lines if line.endswith(".c")}
     if not PORTABLE_FRAMEWORK_SOURCES <= selected:
         raise SystemExit("selected-source report is missing a portable framework source")
@@ -263,7 +276,7 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         "chassis": {"application/gimbal/gimbal.c", "application/shoot/shoot.c", "application/cmd/robot_cmd.c"},
         "gimbal": {"application/chassis/chassis.c", "application/chassis/chassis_motion.c"},
     }
-    if profile == "bench_safe":
+    if profile in ("bench_safe", "commissioning"):
         unexpected |= {"application/chassis/chassis.c", "application/chassis/chassis_motion.c",
                        "application/gimbal/gimbal.c", "application/shoot/shoot.c",
                        "application/cmd/robot_cmd.c"} & compiled

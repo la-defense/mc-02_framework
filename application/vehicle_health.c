@@ -33,6 +33,8 @@ VehicleHealthStatus_t VehicleHealthGetBuildProfile(VehicleHealthBuildProfile_t *
 #if defined(MC02_CONFIG_GENERATED)
     if (strcmp(MC02_BUILD_ROLE_NAME, "bench") == 0)
         candidate.role = VEHICLE_HEALTH_ROLE_BENCH;
+    else if (strcmp(MC02_BUILD_ROLE_NAME, "commissioning") == 0)
+        candidate.role = VEHICLE_HEALTH_ROLE_COMMISSIONING;
     else if (strcmp(MC02_BUILD_ROLE_NAME, "chassis") == 0)
         candidate.role = VEHICLE_HEALTH_ROLE_CHASSIS;
     else if (strcmp(MC02_BUILD_ROLE_NAME, "gimbal") == 0)
@@ -67,7 +69,7 @@ VehicleHealthStatus_t VehicleHealthGetBuildProfile(VehicleHealthBuildProfile_t *
 #if defined(MC02_BENCH_USB_DIAGNOSTICS) && MC02_BENCH_USB_DIAGNOSTICS
     AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_USB);
 #endif
-    if (candidate.role != VEHICLE_HEALTH_ROLE_BENCH)
+    if (candidate.role != VEHICLE_HEALTH_ROLE_BENCH && candidate.role != VEHICLE_HEALTH_ROLE_COMMISSIONING)
     {
         AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_CAN1);
         AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_CAN2);
