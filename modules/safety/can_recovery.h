@@ -34,6 +34,7 @@ typedef struct {
 typedef struct {
     CanRecoveryConfig_t config; /**< 初始化时复制，运行中保持不变。 */
     uint32_t baseline[CAN_RECOVERY_MAX_FEEDBACK]; /**< 每路禁止时刻的反馈序号。 */
+    uint32_t last_feedback[CAN_RECOVERY_MAX_FEEDBACK]; /**< 最近观察到的各路非零反馈序号。 */
     uint32_t seen_mask; /**< 禁止后已经更新过的反馈位图。 */
     uint32_t stable_start_ms; /**< 所有反馈连续有效的开始时刻。 */
     uint32_t command_baseline; /**< 反馈稳定时的命令序号。 */

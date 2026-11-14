@@ -19,22 +19,29 @@ uint8_t CanRecoveryInit(CanRecovery_t *state, const CanRecoveryConfig_t *config)
     return 1u;
 }
 
-static void CaptureBaseline(CanRecovery_t *state, const CanRecoveryInput_t *input)
-{
-    for (uint32_t index = 0u; index < CAN_RECOVERY_MAX_FEEDBACK; ++index)
-        state->baseline[index] = input->feedback_sequence[index]; // 保存禁止时可见的每路反馈。
-    state->seen_mask = 0u; // 每次禁止后都要求重新收到反馈。
-    state->command_baseline = input->command_sequence; // 同时放弃此前的命令。
-    state->inhibit_generation = input->inhibit_generation; // 记录当前已见的禁止事件代际。
-    state->baseline_captured = 1u; // 后续可与新的反馈比较。
-}
-
 static uint8_t SequenceIsNewer(uint32_t current, uint32_t previous)
 {
     if (current == 0u) return 0u; // 零保留给尚无样本或命令。
     if (previous == 0u) return 1u; // 之前尚无数据时，首个非零序号有效。
     const uint32_t distance = current - previous; // 按无符号差值处理序号回绕。
     return (uint8_t)(distance != 0u && distance <= INT32_MAX); // 相同、倒退或无法判断的序号均不能接管。
+}
+
+static void CaptureBaseline(CanRecovery_t *state, const CanRecoveryInput_t *input)
+{
+    for (uint32_t index = 0u; index < CAN_RECOVERY_MAX_FEEDBACK; ++index)
+    {
+        if (SequenceIsNewer(state->last_feedback[index], state->baseline[index]))
+            state->baseline[index] = state->last_feedback[index]; // 缺样时仍保留上一次收到的序号。
+        if (SequenceIsNewer(input->feedback_sequence[index], state->baseline[index]))
+            state->baseline[index] = input->feedback_sequence[index]; // 只前移基准，缺样或旧值不能抹掉已经观察到的序号。
+        state->last_feedback[index] = state->baseline[index]; // 后续比较从故障时最新序号开始。
+    }
+    state->seen_mask = 0u; // 每次禁止后都要求重新收到反馈。
+    if (SequenceIsNewer(input->command_sequence, state->command_baseline))
+        state->command_baseline = input->command_sequence; // 记录最近命令；无效输入不能把旧基准清零。
+    state->inhibit_generation = input->inhibit_generation; // 记录当前已见的禁止事件代际。
+    state->baseline_captured = 1u; // 后续可与新的反馈比较。
 }
 
 uint8_t CanRecoveryStep(CanRecovery_t *state, const CanRecoveryInput_t *input)
@@ -70,6 +77,22 @@ uint8_t CanRecoveryStep(CanRecovery_t *state, const CanRecoveryInput_t *input)
         state->phase = CAN_RECOVERY_WAIT_FEEDBACK; // 失效后要求各路重新更新。
         return 0u;
     }
+    for (uint32_t index = 0u; index < CAN_RECOVERY_MAX_FEEDBACK; ++index)
+    {
+        const uint32_t bit = UINT32_C(1) << index; // 只检查车型要求的反馈。
+        if ((required & bit) == 0u) continue; // 未使用的序号不参与恢复。
+        const uint32_t sequence = input->feedback_sequence[index]; // 读取本轮这一路的序号。
+        if (sequence != state->last_feedback[index] && !SequenceIsNewer(sequence, state->last_feedback[index]))
+        {
+            CaptureBaseline(state, input); // 序号倒退可能是旧帧；不得撤销已观察到的较新基准。
+            state->phase = CAN_RECOVERY_WAIT_FEEDBACK; // 重新等待全部必需反馈。
+            return 0u;
+        }
+        state->last_feedback[index] = sequence; // 相同样本可继续读取，更新样本则推进记录。
+    }
+    if (state->phase != CAN_RECOVERY_WAIT_COMMAND && state->phase != CAN_RECOVERY_READY &&
+        SequenceIsNewer(input->command_sequence, state->command_baseline))
+        state->command_baseline = input->command_sequence; // 恢复期间出现的新命令同样不能在恢复后重放。
     if (state->phase == CAN_RECOVERY_WAIT_BUS)
         state->phase = CAN_RECOVERY_WAIT_FEEDBACK; // 总线恢复不直接授权运动。
     if (state->phase == CAN_RECOVERY_WAIT_FEEDBACK)
@@ -77,8 +100,13 @@ uint8_t CanRecoveryStep(CanRecovery_t *state, const CanRecoveryInput_t *input)
         for (uint32_t index = 0u; index < CAN_RECOVERY_MAX_FEEDBACK; ++index)
         {
             const uint32_t bit = UINT32_C(1) << index; // 每一位对应同序号的必需反馈。
-            if ((required & bit) != 0u && SequenceIsNewer(input->feedback_sequence[index], state->baseline[index]))
-                state->seen_mask |= bit; // 只记录禁止后更新过的有效样本。
+            if ((required & bit) != 0u)
+            {
+                if (SequenceIsNewer(input->feedback_sequence[index], state->baseline[index]))
+                    state->seen_mask |= bit; // 当前样本必须比禁止时的新。
+                else
+                    state->seen_mask &= ~bit; // 回退到旧样本时撤销该路已更新标记。
+            }
         }
         if ((state->seen_mask & required) != required)
             return 0u; // 尚有反馈没有更新，继续等待。
@@ -97,7 +125,8 @@ uint8_t CanRecoveryStep(CanRecovery_t *state, const CanRecoveryInput_t *input)
         }
         if (elapsed < state->config.stable_ms)
             return 0u; // 未达到配置时间时保持禁止。
-        state->command_baseline = input->command_sequence; // 稳定前的命令不能恢复后重放。
+        if (SequenceIsNewer(input->command_sequence, state->command_baseline))
+            state->command_baseline = input->command_sequence; // 稳定前的命令不能恢复后重放。
         state->phase = CAN_RECOVERY_WAIT_COMMAND; // 只接受之后到达的新命令。
         return 0u;
     }

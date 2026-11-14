@@ -85,8 +85,46 @@ static int TestWrapAndInvalid(void)
     return 0;
 }
 
+static int TestLostAndReplayedValues(void)
+{
+    CanRecovery_t state = {0};
+    const CanRecoveryConfig_t config = {1u, 10u};
+    CanRecoveryInput_t input = {.now_ms = 100u, .valid_feedback_mask = 1u,
+        .feedback_sequence = {10u}, .command_sequence = 5u, .bus_ok = 1u, .permit_ok = 1u};
+    CHECK(CanRecoveryInit(&state, &config));
+    CHECK(!CanRecoveryStep(&state, &input));
+    input.feedback_sequence[0] = 11u;
+    CHECK(!CanRecoveryStep(&state, &input) && state.phase == CAN_RECOVERY_STABILIZING);
+    input.feedback_sequence[0] = 10u; // 收到旧帧时即使有效位误置也不能继续计时。
+    CHECK(!CanRecoveryStep(&state, &input) && state.phase == CAN_RECOVERY_WAIT_FEEDBACK);
+    input.feedback_sequence[0] = 11u;
+    CHECK(!CanRecoveryStep(&state, &input) && state.phase == CAN_RECOVERY_WAIT_FEEDBACK);
+    input.feedback_sequence[0] = 12u;
+    CHECK(!CanRecoveryStep(&state, &input) && state.phase == CAN_RECOVERY_STABILIZING);
+    input.command_sequence = 6u; // 恢复期间的新命令也必须成为禁止重放的基准。
+    input.now_ms = 105u;
+    CHECK(!CanRecoveryStep(&state, &input));
+    input.command_sequence = 0u; // 到计时结束时来源可能已过期。
+    input.now_ms = 110u;
+    CHECK(!CanRecoveryStep(&state, &input) && state.phase == CAN_RECOVERY_WAIT_COMMAND);
+    input.command_sequence = 6u;
+    CHECK(!CanRecoveryStep(&state, &input)); // 不能因为过期时填零就重新接受旧命令。
+    input.command_sequence = 7u;
+    CHECK(CanRecoveryStep(&state, &input));
+    input.feedback_sequence[0] = 0u; // 缺少反馈时保留最后一次观察到的序号。
+    CHECK(!CanRecoveryStep(&state, &input) && state.phase == CAN_RECOVERY_WAIT_FEEDBACK);
+    input.feedback_sequence[0] = 11u;
+    CHECK(!CanRecoveryStep(&state, &input) && state.phase == CAN_RECOVERY_WAIT_FEEDBACK);
+    input.feedback_sequence[0] = 12u;
+    CHECK(!CanRecoveryStep(&state, &input) && state.phase == CAN_RECOVERY_WAIT_FEEDBACK);
+    input.feedback_sequence[0] = 13u;
+    CHECK(!CanRecoveryStep(&state, &input) && state.phase == CAN_RECOVERY_STABILIZING);
+    return 0;
+}
+
 int main(void)
 {
     if (TestRecovery() != 0) return 1;
-    return TestWrapAndInvalid();
+    if (TestWrapAndInvalid() != 0) return 1;
+    return TestLostAndReplayedValues();
 }
