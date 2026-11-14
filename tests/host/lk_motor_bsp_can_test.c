@@ -56,6 +56,7 @@ static uint32_t tx_attempt_count[DEVICE_CAN_CNT];
 static uint32_t tx_accept_count[DEVICE_CAN_CNT];
 static uint32_t tx_header_id[DEVICE_CAN_CNT];
 static uint32_t tx_latest_buffer[DEVICE_CAN_CNT];
+static uint8_t tx_latest_unknown; // 模拟 HAL 已接受但未返回可用槽位。
 static uint8_t tx_next_buffer_index[DEVICE_CAN_CNT];
 static uint8_t tx_frame[DEVICE_CAN_CNT][8];
 static uint32_t tx_id_history[DEVICE_CAN_CNT][64];
@@ -271,6 +272,7 @@ uint32_t HAL_FDCAN_AddMessageToTxFifoQ(FDCAN_HandleTypeDef *handle,
 uint32_t HAL_FDCAN_GetLatestTxFifoQRequestBuffer(FDCAN_HandleTypeDef *handle)
 {
     const uint8_t bus = bus_for_handle(handle);
+    if (tx_latest_unknown != 0u) return 0u; // 保留硬件可能持有帧的不确定状态。
     return bus < DEVICE_CAN_CNT ? tx_latest_buffer[bus] : 0u;
 }
 uint32_t HAL_FDCAN_GetProtocolStatus(FDCAN_HandleTypeDef *handle, FDCAN_ProtocolStatusTypeDef *status)
@@ -2679,6 +2681,32 @@ static void test_busoff_recovery_failure(uint8_t stop_failure)
     TEST_CHECK(!CANStartBus(&hfdcan1)); // 不能靠重新注册绕过隔离。
 }
 
+static void test_busoff_inflight_quarantine(uint8_t unknown_slot)
+{
+    TEST_CHECK(CANStartBus(&hfdcan1)); // 启动待注入故障的总线。
+    TEST_CHECK(CANStartBus(&hfdcan2)); // 第二条总线用于检查隔离范围。
+    const uint8_t payload = 0x34u; // 使用固定负载检查已提交帧。
+    const CAN_TxFrame_t frame = scheduler_frame(0x321u, CAN_TX_ID_STANDARD, &payload, 1u);
+    uint32_t request = 0u; // 保存硬件已接受的请求编号。
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, &payload, &frame, CAN_TX_PRIORITY_NORMAL, 500u, &request) == CAN_TX_SUBMIT_ACCEPTED);
+    tx_latest_unknown = unknown_slot; // 两个场景分别覆盖已知和无法关联的硬件槽。
+    CANProcessTxBus(&hfdcan1); // 模拟 HAL 已接受但尚未报告完成。
+    TEST_CHECK(tx_accept_count[0] == 1u);
+    const uint32_t starts_before = bus_start_count[0]; // 对比故障后是否再次启动。
+    status_busoff[0] = 1u; // 发送结果尚不明确时发生 BusOff。
+    now_us = 100000u;
+    CANHealthMonitor(); // 不能把硬件仍持有的旧帧当作已取消。
+    TEST_CHECK(CANBusIsQuarantined(&hfdcan1));
+    TEST_CHECK(!CANBusIsQuarantined(&hfdcan2));
+    TEST_CHECK(bus_start_count[0] == starts_before); // 故障总线不能自动重启。
+    CAN_TxResult_t result = {0};
+    TEST_CHECK(CANGetTxRequestState(request, &result));
+    TEST_CHECK(result.state == (unknown_slot != 0u ? CAN_TX_RESULT_FAILED : CAN_TX_RESULT_CANCELLED));
+    if (unknown_slot == 0u)
+        TEST_CHECK(result.pending_frames == 1u); // 状态取消不等于硬件确认帧已撤销。
+    TEST_CHECK(!CANStartBus(&hfdcan1)); // 重复启动不能绕过隔离。
+}
+
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
@@ -2719,6 +2747,10 @@ int main(int argc, char **argv)
         test_busoff_recovery_failure(1u);
     else if (strcmp(argv[1], "busoff-start-fails") == 0)
         test_busoff_recovery_failure(0u);
+    else if (strcmp(argv[1], "busoff-inflight") == 0)
+        test_busoff_inflight_quarantine(0u);
+    else if (strcmp(argv[1], "busoff-unknown-slot") == 0)
+        test_busoff_inflight_quarantine(1u);
     else if (strcmp(argv[1], "platform-can-rx") == 0)
         test_platform_can_receive();
     else if (strcmp(argv[1], "dji-rx-rollback") == 0)

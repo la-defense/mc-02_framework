@@ -133,6 +133,7 @@ typedef struct
     FDCAN_HandleTypeDef *handle;
     CAN_TxStats_t tx;
     CAN_BusStats_t bus;
+    uint8_t tx_ownership_uncertain; /* HAL 已接受但无法关联硬件槽，重启前必须隔离。 */
     CANTxScheduler_t tx_scheduler;
     /* ---- 接收队列(SPSC): 中断入队, 任务用 CANProcessRx() 消费 ---- */
     CANRxItem_t rxq[CAN_RXQ_DEPTH];
@@ -1002,6 +1003,7 @@ static void CANProcessTxSelected(uint8_t selected_bus)
             scheduler->hw_result[hardware_index] != CAN_TX_INVALID_RESULT_INDEX)
         {
             // HAL已经接受但没有可关联的槽位时绝不重发，避免重复发送同一命令。
+            bus->tx_ownership_uncertain = 1u; // 无法确认该硬件帧结束，后续故障不能直接重启。
             if (result->pending_hw > 0u)
                 result->pending_hw--;
             CANTxSetTerminal(scheduler, result_index, CAN_TX_RESULT_FAILED);
@@ -1992,7 +1994,16 @@ void CANHealthMonitor(void)
             taskENTER_CRITICAL(); // 与发送队列提交和推进互斥。
             can_recovering |= (uint8_t)(1u << i); // 先暂停本总线，禁止恢复期间接收新请求。
             CANTxCancelQueued(&bus->tx_scheduler); // 控制器重启前撤销已经排队但未提交的旧帧。
+            uint8_t hardware_pending = bus->tx_ownership_uncertain; // 无法关联槽位时同样视为有未确认帧。
+            for (uint8_t slot = 0u; slot < CAN_TX_MAX_HW_BUFFERS; ++slot)
+                if (bus->tx_scheduler.hw_result[slot] != CAN_TX_INVALID_RESULT_INDEX)
+                    hardware_pending = 1u; // 任一已交给 HAL 的槽尚未报告完成或中止。
             taskEXIT_CRITICAL(); // 保留其他总线的队列；已交给硬件的帧仍需单独处置。
+            if (hardware_pending != 0u)
+            {
+                CANQuarantineBus(bus->handle); // 尚不能确认硬件帧已取消，不能重新启动总线。
+                continue;
+            }
             /* 对齐 HAL 的 State(它可能与真实硬件不一致), 否则 Start 会直接返回错误 */
             if (bus->handle->State == HAL_FDCAN_STATE_BUSY && HAL_FDCAN_Stop(bus->handle) != HAL_OK)
             {

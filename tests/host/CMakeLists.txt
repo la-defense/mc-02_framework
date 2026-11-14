@@ -988,6 +988,8 @@ add_test(NAME production_platform_can_status COMMAND lk_motor_bsp_can_test platf
 add_test(NAME production_can_busoff_cancels_queued COMMAND lk_motor_bsp_can_test busoff-cancel-queued) # 只撤销故障总线的软件旧帧。
 add_test(NAME production_can_busoff_stop_fails COMMAND lk_motor_bsp_can_test busoff-stop-fails) # 停止失败不得恢复。
 add_test(NAME production_can_busoff_start_fails COMMAND lk_motor_bsp_can_test busoff-start-fails) # 启动失败不得恢复。
+add_test(NAME production_can_busoff_inflight_quarantine COMMAND lk_motor_bsp_can_test busoff-inflight) # 硬件帧未确认不能重启。
+add_test(NAME production_can_busoff_unknown_slot COMMAND lk_motor_bsp_can_test busoff-unknown-slot) # 槽位不明也要保持隔离。
 add_test(NAME production_platform_can_receive COMMAND lk_motor_bsp_can_test platform-can-rx)
 add_test(NAME production_dji_receive_registration_rollback COMMAND lk_motor_bsp_can_test dji-rx-rollback)
 add_test(NAME production_dji_startup_rollback COMMAND lk_motor_bsp_can_test dji-startup-rollback)
