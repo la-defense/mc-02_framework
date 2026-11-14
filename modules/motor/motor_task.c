@@ -21,6 +21,9 @@ volatile PlatformProbe_t motor_prof_lk = {0};
 
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
 #include "../../application/topics/robot_can_bridge_task.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "../../application/config/vehicle_selection.h"
+#endif
 #endif
 
 void MotorControlTask()
@@ -35,7 +38,10 @@ void MotorControlTask()
     PlatformDispatchCanRx();
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
     // 收发和同步检查由同一任务串行执行，避免接收状态被并发改写。
-    RobotCanBridgeService();
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_COMMUNICATION)) // 辅助通信降级后不再运行桥接。
+#endif
+        RobotCanBridgeService();
 #endif
     // UART 和 USB 也在这里运行模块解析，避免将协议计算放在中断里；排队过时的数据由 BSP 跳过。
     PlatformDispatchUartRx();
@@ -75,7 +81,10 @@ void MotorControlTask()
 #if MC02_FEATURE_MOTOR_CONTROL
     PlatformDispatchCanTx();
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
-    RobotCanBridgeServiceTx();
+#if defined(MC02_CONFIG_GENERATED)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_COMMUNICATION)) // 同一启动状态也约束额外发送机会。
+#endif
+        RobotCanBridgeServiceTx();
 #endif
 #endif
     PlatformProbeDone(&motor_prof_all, probe_all);

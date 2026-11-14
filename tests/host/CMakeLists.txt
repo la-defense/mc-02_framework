@@ -1822,7 +1822,7 @@ if(UNIX AND NOT APPLE)
   add_test(NAME production_shoot_startup_subscriber_failure COMMAND shoot_freshness_test 10) # 核对话题失败时全部电机回退。
 endif()
 if(UNIX AND NOT APPLE)
-  foreach(profile IN ITEMS bench_safe robot robot_chassis)
+  foreach(profile IN ITEMS bench_safe robot robot_chassis robot_chassis_generated)
     set(target motor_profile_${profile})
     add_executable(${target} motor_profile_test.c ../../modules/motor/motor_task.c
       ../../bsp/board/platform_dispatch_stm32.c) # 使用真实派发适配器及测试队列。
@@ -1832,8 +1832,11 @@ if(UNIX AND NOT APPLE)
       target_compile_definitions(${target} PRIVATE MC02_PROFILE_BENCH_SAFE=1)
     else()
       target_compile_definitions(${target} PRIVATE MC02_PROFILE_ROBOT=1)
-      if(profile STREQUAL "robot_chassis")
+      if(profile MATCHES "^robot_chassis")
         target_compile_definitions(${target} PRIVATE CHASSIS_BOARD=1) # 检查桥接服务的插入位置。
+      endif()
+      if(profile STREQUAL "robot_chassis_generated")
+        target_compile_definitions(${target} PRIVATE MC02_CONFIG_GENERATED=1) # 验证车型启动状态的运行期约束。
       endif()
     endif()
     add_test(NAME production_motor_task_profile_${profile} COMMAND ${target})

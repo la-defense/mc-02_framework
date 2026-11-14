@@ -9,6 +9,14 @@
 #include "daemon.h"
 #include "usb_transport.h"
 #include "../../bsp/dwt/platform_probe.h"
+#if defined(MC02_CONFIG_GENERATED)
+#include "../../application/config/vehicle_selection.h"
+static uint8_t communication_started = 1u; // 模拟启动协调器发布的模块状态。
+uint8_t RobotBuildModuleStarted(RobotModule_t module)
+{
+    return (uint8_t)(module == ROBOT_MODULE_COMMUNICATION && communication_started);
+}
+#endif
 static unsigned can_pending, can_tx_pumps, uart_pending, usb_pending, dji_outputs, lk_outputs;
 static unsigned daemon_dispatches;
 static char order[32]; // 保存两轮实际派发顺序，便于发现接收与控制的先后变化。
@@ -50,6 +58,12 @@ int main(void)
     CHECK(dji_outputs == 2 && lk_outputs == 2);
 #if defined(CHASSIS_BOARD)
     CHECK(order_count == 18u && memcmp(order, "CSUBEDLTXCSUBEDLTX", 18u) == 0); // 双板服务保持原有位置。
+#if defined(MC02_CONFIG_GENERATED)
+    communication_started = 0u; // 模拟启动诊断后辅助通信被标记失败。
+    order_count = 0u; // 单独核对降级后的调用顺序。
+    MotorControlTask();
+    CHECK(order_count == 7u && memcmp(order, "CUBEDLT", 7u) == 0); // 接收与电机处理继续，桥接不再调用。
+#endif
 #else
     CHECK(order_count == 14u && memcmp(order, "CUBEDLTCUBEDLT", 14u) == 0); // 每轮先接收再控制和发送。
 #endif
