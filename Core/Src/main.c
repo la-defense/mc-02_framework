@@ -43,6 +43,7 @@
 #include "platform_clock_startup.h"
 #include "platform_feature_startup.h"
 #include "platform_can_diagnostic.h"
+#include "robot_can_requirements.h"
 #include "config.h"
 /* USER CODE END Includes */
 
@@ -171,23 +172,10 @@ int main(void)
   startup_can[startup_can_count++] = PLATFORM_CAN_BUS_2; // 回环诊断第二条总线。
   startup_can[startup_can_count++] = PLATFORM_CAN_BUS_3; // 回环诊断第三条总线。
 #else
-#if MC02_FEATURE_CHASSIS
-  startup_can[startup_can_count++] = startup_config->chassis_param.chassis_motor_config.can_init_config.can_bus; // 底盘轮电机总线。
-#endif
-#if MC02_FEATURE_GIMBAL
-  startup_can[startup_can_count++] = startup_config->gimbal_param.yaw_motor_config.can_init_config.can_bus; // 大 yaw 电机总线。
-  startup_can[startup_can_count++] = startup_config->gimbal_param.pitch_motor_config.can_init_config.can_bus; // pitch 电机总线。
-#endif
-#if MC02_FEATURE_SHOOTER
-  startup_can[startup_can_count++] = startup_config->shoot_param.friction_motor_config.can_init_config.can_bus; // 摩擦轮电机总线。
-  startup_can[startup_can_count++] = startup_config->shoot_param.loader_motor_config.can_init_config.can_bus; // 拨弹电机总线。
-#endif
-#if MC02_FEATURE_SUPERCAP
-  startup_can[startup_can_count++] = PLATFORM_CAN_BUS_2; // 旧电容适配固定使用第二条总线。
-#endif
-#if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
-  startup_can[startup_can_count++] = startup_config->can_bridge.can_bus; // 双板话题使用的总线。
-#endif
+  RobotCanFilterDemand_t startup_demands[8] = {0}; // 与容量预检使用同一固定容量设备清单。
+  const uint8_t demand_count = RobotCollectCanDemands(startup_config, startup_demands); // 未启用模块不产生需求。
+  for (uint8_t index = 0u; index < demand_count; ++index) // 控制器入口会合并同一总线的重复需求。
+    startup_can[startup_can_count++] = startup_demands[index].bus; // 这里只准备控制器，不注册端点。
 #endif
   // CAN 配置也使用此前的总期限。
   if (!PlatformPeripheralStartupEnter())

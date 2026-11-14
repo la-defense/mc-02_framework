@@ -127,6 +127,12 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/alarm/buzzer.c",  # 音符到频率的转换。
     "modules/alarm/led.c",  # RGB 输出状态和发送推进。
     "application/alarm_startup.c",  # 依据模块计划处理告警降级。
+    "application/log_startup.c",  # 日志出口的核心／辅助分类。
+    "application/robot_can_capacity.c",  # 注册前检查 CAN 过滤器容量。
+    "application/robot_can_guard.c",  # 诊断后传播总线隔离影响。
+    "application/robot_can_requirements.c",  # 统计车型声明的设备需求。
+    "application/robot_param_guard.c",  # 参数维护与温控、监控的配合。
+    "application/robot_power.c",  # 受控电源阶段及模块失败传播。
     "application/robot_task.c",  # 常驻任务的周期调用和监控。
     "application/ins_startup.c",  # 姿态初始化结果及核心／辅助故障处理。
     "application/robot_startup.c",  # 调度器运行后的启动协调和任务放行。
@@ -503,6 +509,12 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/topics/robot_can_bridge_config.h",
                         source_root / "application/init_diagnostic.h",
                         source_root / "application/alarm_startup.h",
+                        source_root / "application/log_startup.h",  # 无 HAL 类型的日志启动结果。
+                        source_root / "application/robot_can_capacity.h",  # 纯计算容量计划。
+                        source_root / "application/robot_can_guard.h",  # 模块与逻辑总线依赖。
+                        source_root / "application/robot_can_requirements.h",  # 车型设备需求入口。
+                        source_root / "application/robot_param_guard.h",  # 维护操作公开回调。
+                        source_root / "application/robot_power.h",  # 模块电源阶段声明。
                         source_root / "application/vehicle_health.h",
                         source_root / "application/vehicle_health_source.h",
                         source_root / "modules/motor/HTmotor/ht_motor_task.h",
@@ -513,6 +525,9 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "modules/BMI088/bmi088_calibration.h",
                         source_root / "modules/BMI088/bmi088.h",  # 传感器接口不包含板级类型。
                         source_root / "bsp/spi/platform_spi_blocking.h",  # 同步 SPI 设备接口。
+                        source_root / "bsp/board/platform_power.h",  # 只含逻辑电源编号与框架函数。
+                        source_root / "bsp/board/platform_feature_startup.h",  # 已选外设的启动结果接口。
+                        source_root / "bsp/board/platform_clock_startup.h",  # 早期固定期限和时钟失败接口。
                         source_root / "bsp/pwm/platform_pwm_legacy.h",  # 旧 PWM 的不透明设备接口。
                         source_root / "bsp/adc/bsp_adc.h",
                         source_root / "bsp/observation/bsp_observation.h",
