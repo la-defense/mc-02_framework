@@ -6,6 +6,7 @@
 // PID 参数复用生产声明，替身只记录电机调用。
 #include "../../../modules/motor/motor_pid.h"
 #include "../../../bsp/board/platform_resources.h"
+#include "../../../modules/motor/motor_output_role.h"
 typedef PID_Init_Config_s ChassisPidConfig_s;
 typedef struct { ChassisPidConfig_s speed_PID, current_PID; } ChassisControllerParam_s;
 typedef struct {
@@ -21,6 +22,7 @@ typedef struct {
     ChassisControllerSetting_s controller_setting_init_config;
     Motor_Output_Axis_Config_s output_axis;
     int motor_type;
+    MotorOutputRole_t output_role; // 保留生产配置中的机构身份。
 } Motor_Init_Config_s;
 typedef struct {
     float ref;

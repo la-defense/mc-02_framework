@@ -99,6 +99,8 @@ uint8_t GimbalInit(void)
     if (pending_imu == NULL) return 0u; // 未取得存储时不注册任何电机。
     Motor_Init_Config_s yaw_config = gimbal_config->yaw_motor_config;
     Motor_Init_Config_s pitch_config = gimbal_config->pitch_motor_config;
+    yaw_config.output_role = MOTOR_OUTPUT_GIMBAL; // 大 yaw 使用云台功能许可。
+    pitch_config.output_role = MOTOR_OUTPUT_GIMBAL; // pitch 同样使用云台许可。
     yaw_config.controller_param_init_config.other_angle_feedback =
         (Motor_Signal_Source_s){ReadGimbalSignal, &yaw_position_context,
                                 5u, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL};

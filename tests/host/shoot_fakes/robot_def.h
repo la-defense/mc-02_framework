@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "main.h"
 #include "../../../modules/motor/motor_feedback.h"
+#include "../../../modules/motor/motor_output_role.h"
 #include "../../../bsp/board/platform_resources.h"
 #include "../../../application/config/shoot_config_types.h"
 
@@ -27,6 +28,7 @@ typedef struct {
     Shoot_Controller_Setting_s controller_setting_init_config;
     Motor_Output_Axis_Config_s output_axis;
     Motor_Type_e motor_type;
+    MotorOutputRole_t output_role; // 保留生产配置中的机构身份。
 } Motor_Init_Config_s;
 typedef struct {
     Shoot_Type_e shoot_type;

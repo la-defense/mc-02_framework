@@ -497,6 +497,7 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
                                          const DJI_Motor_Filter_Config_s *filter_config)
 {
     if (config == NULL || idx >= DJI_MOTOR_CNT ||
+        (unsigned)config->output_role > (unsigned)MOTOR_OUTPUT_LOADER ||
         config->can_init_config.identifier_type != CAN_TX_ID_STANDARD || !FilterConfigValid(filter_config) ||
         !DjiConfigValid(config))
         return NULL;
@@ -519,6 +520,7 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
 
     // motor basic setting 电机基本设置
     instance->motor_type = config->motor_type;                         // 6020 or 2006 or 3508
+    instance->output_role = config->output_role; // 记录本电机所属机构，后续对共享帧逐项检查。
     instance->motor_can_endpoint = config->can_init_config; // 保存车型逻辑总线和电机编号。
     instance->output_axis = config->output_axis;
     instance->motor_settings = config->controller_setting_init_config; // 正反转,闭环类型等
@@ -829,19 +831,44 @@ static void DJIMotorPrepareSingleOutput(const void *source, uint32_t now_ms,
                                         uint8_t *payload, uint8_t length)
 {
     uint8_t found = 0u; // 只有已登记的发送组才能使用代际信息。
+    size_t group = 0u; // 保存当前 CAN 帧所属分组。
     uint32_t generation = 0u; // 保存该组已排队目标的代际。
     for (size_t index = 0u; index < sizeof(sender_assignment) / sizeof(sender_assignment[0]); ++index)
         if (source == &sender_assignment[index])
         {
             generation = sender_safety_generation[index]; // 读取成功入队时保存的代际。
+            group = index; // 后续只处理属于此帧的电机。
             found = 1u; // 标记来源属于本驱动。
             break;
         }
+    RobotControlPermits_t permits = {0}; // 查询失败或未获许可时保持禁止。
+    uint8_t policy_active = 0u; // 区分旧整车路径与新分功能策略。
     if (payload == NULL || length != 8u || found == 0u ||
-        RobotSafetyIsReadyForGeneration(now_ms, generation) == 0u)
+        RobotSafetyGetOutputPermitsForGeneration(now_ms, generation, &permits, &policy_active) == 0u)
     {
         if (payload != NULL)
             memset(payload, 0, length); // 等待期间失能时撤销队列副本中的电流目标。
+        return;
+    }
+    if (policy_active == 0u && permits.functions != 0u) return; // 旧路径没有机构分类信息，维持原整车许可。
+    uint8_t requested[8]; // 保存待复核目标，再以全零构造最终报文。
+    memcpy(requested, payload, sizeof(requested)); // 只读取本次队列副本中的目标。
+    memset(payload, 0, length); // 未注册或未获许可的槽位保持零输出。
+    for (size_t index = 0u; index < idx; ++index)
+    {
+        const DJIMotorInstance *motor = dji_motor_instance[index]; // 逐电机核对当前帧中的输出。
+        if (motor == NULL || motor->sender_group != group || motor->message_num >= 4u) continue; // 忽略其他帧及非法槽位。
+        uint32_t function = 0u; // 未声明机构时保持禁止。
+        switch (motor->output_role)
+        {
+        case MOTOR_OUTPUT_CHASSIS: function = ROBOT_CONTROL_CHASSIS; break; // 底盘轮组。
+        case MOTOR_OUTPUT_GIMBAL: function = ROBOT_CONTROL_GIMBAL; break; // 云台轴。
+        case MOTOR_OUTPUT_FRICTION:
+        case MOTOR_OUTPUT_LOADER: function = ROBOT_CONTROL_SHOOTER; break; // 发射机构；按次击发由发射模块处理。
+        default: break; // 未知或未声明的机构不得输出。
+        }
+        if (function != 0u && (permits.functions & function) != 0u)
+            memcpy(payload + 2u * motor->message_num, requested + 2u * motor->message_num, 2u); // 恢复已许可电机的目标。
     }
 }
 #endif

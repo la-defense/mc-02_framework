@@ -172,6 +172,16 @@ uint8_t RobotSafetyIsReadyAt(uint32_t now_ms);
  * @note 两项检查在同一保护内完成，不提供单个功能的许可。
  */
 uint8_t RobotSafetyIsReadyForGeneration(uint32_t now_ms, uint32_t expected_generation);
+/** @brief 同一安全代际下的功能及击发许可。
+ * @param[in] now_ms 本机毫秒时刻，检查来源期限。
+ * @param[in] expected_generation 目标计算前读取的安全代际。
+ * @param[out] permits 非空；有效查询时写入当前功能及击发许可，否则保持原值。
+ * @param[out] policy_active 非空；1 表示使用分功能策略，0 表示使用旧整车兼容路径。
+ * @return 1 表示查询成功；参数错误或代际变化时返回 0，调用者必须禁止输出。
+ * @note 旧路径只提供整车许可，不能证明单个功能或击发条件。
+ */
+uint8_t RobotSafetyGetOutputPermitsForGeneration(uint32_t now_ms, uint32_t expected_generation,
+                                                  RobotControlPermits_t *permits, uint8_t *policy_active);
 /** @brief 读取已设置的全部故障位。
 * @return Robot_Fault_e 各位的组合。 */
 uint32_t RobotSafetyGetFaults(void);

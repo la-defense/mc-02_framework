@@ -97,6 +97,7 @@ uint8_t ChassisInit(void)
 
     if (referee_status != REFEREE_OK) return 0u; // 旧主机组合的裁判初始化失败时不申请电机。
     Motor_Init_Config_s chassis_motor_config = chassis_config->chassis_motor_config; // 复制公共电机参数。
+    chassis_motor_config.output_role = MOTOR_OUTPUT_CHASSIS; // 四个轮电机使用底盘功能许可。
     const uint8_t motor_ids[4] = {
         chassis_config->chassis_motor_id[MOTOR_LF], // 左前轮的设备编号。
         chassis_config->chassis_motor_id[MOTOR_RF], // 右前轮的设备编号。

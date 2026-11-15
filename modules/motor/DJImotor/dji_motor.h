@@ -95,6 +95,7 @@ typedef struct
     uint8_t message_num;
 
     Motor_Type_e motor_type;        // 电机类型
+    MotorOutputRole_t output_role; // 本电机所属功能，用于共享帧的逐电机许可检查。
     Motor_Working_Type_e stop_flag; // 启停标志
     Motor_Online_Flag_e online_flag; // 在线标志
 

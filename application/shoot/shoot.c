@@ -92,6 +92,7 @@ uint8_t ShootInit(void)
     for (uint8_t index = 0u; index < friction_count; ++index)
     {
         Motor_Init_Config_s friction_config = shoot_config->friction_motor_config;
+        friction_config.output_role = MOTOR_OUTPUT_FRICTION; // 摩擦轮使用发射机构许可。
         friction_config.can_init_config.tx_id = shoot_config->friction_motor_id[index];
         // 每个摩擦轮的安装方向来自当前车型配置。
         friction_config.controller_setting_init_config.motor_reverse_flag = MOTOR_DIRECTION_NORMAL;
@@ -104,6 +105,7 @@ uint8_t ShootInit(void)
     }
 
     Motor_Init_Config_s loader_config = shoot_config->loader_motor_config;
+    loader_config.output_role = MOTOR_OUTPUT_LOADER; // 拨弹使用发射机构许可；击发级许可仍待接入。
     loader_config.output_axis.gear_ratio = loader_ratio;
     pending_loader = DJIMotorInit(&loader_config); // 拨弹盘成功前不发布任何电机。
     if (pending_loader == NULL) goto rollback; // 撤销已经取得的摩擦轮。

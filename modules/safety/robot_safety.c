@@ -651,6 +651,34 @@ uint8_t RobotSafetyIsReadyForGeneration(uint32_t now_ms, uint32_t expected_gener
     return ready;
 }
 
+uint8_t RobotSafetyGetOutputPermitsForGeneration(uint32_t now_ms, uint32_t expected_generation,
+                                                  RobotControlPermits_t *permits, uint8_t *policy_active)
+{
+    if (permits == NULL || policy_active == NULL) return 0u; // 无法完整交付时禁止调用者使用旧结果。
+    const uint32_t previous = RobotSafetyEnterCritical(); // 配置、代际和许可必须来自同一受保护状态。
+    RobotControlPermits_t candidate = {0}; // 默认所有机构和击发均禁止。
+    const uint8_t active = control_configured; // 标记是否启用了分功能策略。
+    uint8_t valid = 1u; // 记录计算是否成功，禁止动作本身不是错误。
+    if (active != 0u)
+    {
+        valid = ControlEvaluateLocked(now_ms, &candidate); // 根据当前来源和反馈重新计算。
+        if (robot_state != ROBOT_READY) memset(&candidate, 0, sizeof(candidate)); // 管理者未放行时禁止全部功能。
+    }
+    else if (RobotSafetyIsReadyAt(now_ms) != 0u)
+    {
+        candidate.functions = ROBOT_CONTROL_ALL; // 旧整车路径不具备分功能信息，保留原有行为。
+        candidate.fire_allowed = 1u; // 旧发射条件仍由发射模块判断。
+    }
+    if (control_generation != expected_generation) valid = 0u; // 计算过程中发生禁止变化时拒绝旧目标。
+    if (valid != 0u)
+    {
+        *permits = candidate; // 同时交付许可和策略类型。
+        *policy_active = active;
+    }
+    RobotSafetyExitCritical(previous); // 恢复调用者进入前的中断状态。
+    return valid;
+}
+
 uint32_t RobotSafetyGetFaults(void)
 {
     const uint32_t previous = RobotSafetyEnterCritical();

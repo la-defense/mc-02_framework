@@ -16,6 +16,7 @@
 #include "motor_pid.h"
 #include "../../bsp/board/platform_resources.h"
 #include "motor_feedback.h"
+#include "motor_output_role.h"
 #include "stdint.h"
 
 #define LIMIT_MIN_MAX(x, min, max) (x) = (((x) <= (min)) ? (min) : (((x) >= (max)) ? (max) : (x)))
@@ -141,6 +142,7 @@ typedef struct
     Motor_Control_Setting_s controller_setting_init_config;
     Motor_Output_Axis_Config_s output_axis; // 减速比为转子／输出轴，角度／速度闭环映射到输出轴坐标。
     Motor_Type_e motor_type;
+    MotorOutputRole_t output_role; // 电机所属机构；新许可策略启用时未声明的电机禁止输出。
     PlatformCanEndpoint_t can_init_config; // 逻辑总线及协议 ID，硬件句柄由板级适配绑定。
 } Motor_Init_Config_s;
 

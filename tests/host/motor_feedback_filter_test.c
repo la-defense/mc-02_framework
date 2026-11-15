@@ -211,6 +211,60 @@ static int single_safety_output_gate(void)
     for (size_t i = 0u; i < sizeof(sent); ++i) TEST_CHECK(sent[i] == 0u); // 后续计算仍不能输出旧目标。
     return EXIT_SUCCESS;
 }
+
+static int single_shared_frame_permissions(uint8_t include_unassigned)
+{
+    now_us = 1000u; // 先建立本机时刻和核心健康状态。
+    RobotSafetyInit();
+    RobotSafetySetRcOnline(1u);
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    const RobotControlPolicy_t policy = {ROBOT_CONTROL_ALL, 1u, 0u, 0u};
+    TEST_CHECK(RobotSafetyConfigureControl(&policy)); // 启用真实分功能策略。
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate(); // 建立恢复起点，不能使用之前的来源。
+    RobotSafetyControlInputs_t input = {0};
+    input.mode = ROBOT_CONTROL_MANUAL;
+    input.manual = (RobotControlLease_t){2u, 100u, 1u}; // 恢复后新鲜的人工来源。
+    input.feedback_valid_functions = ROBOT_CONTROL_ALL;
+    input.manual_fire_requested = 1u;
+    now_us = 2000u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input));
+    RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReady());
+    const MotorOutputRole_t roles[4] = {MOTOR_OUTPUT_CHASSIS, MOTOR_OUTPUT_GIMBAL,
+                                        MOTOR_OUTPUT_FRICTION, MOTOR_OUTPUT_LOADER};
+    for (uint8_t i = 0u; i < 4u; ++i)
+    {
+        Motor_Init_Config_s config = motor_config((uint8_t)(i + 1u));
+        config.output_role = (include_unassigned != 0u && i == 3u) ? MOTOR_OUTPUT_UNASSIGNED : roles[i]; // 可注入未声明的电机。
+        DJIMotorInstance *motor = DJIMotorInit(&config);
+        TEST_CHECK(motor != NULL);
+        receive(motor, 2000u, 2u, 0, 0);
+        DJIMotorSetRef(motor, 10.0f);
+        DJIMotorEnable(motor);
+    }
+    control_at(3000u);
+    control_at(4000u); // 首个控制周期建立 PID 计时，下一周期才有可检查输出。
+    for (uint8_t i = 0u; i < 3u; ++i)
+        TEST_CHECK(sent[2u * i] != 0u || sent[2u * i + 1u] != 0u); // 四个机构均有许可。
+    if (include_unassigned != 0u)
+        TEST_CHECK(sent[6] == 0u && sent[7] == 0u); // 新策略启用时未声明的电机不能运行。
+    else
+        TEST_CHECK(sent[6] != 0u || sent[7] != 0u); // 已声明的拨弹机构取得机构许可。
+    input.feedback_valid_functions &= ~(uint32_t)ROBOT_CONTROL_SHOOTER; // 发射局部故障。
+    now_us = 5000u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input));
+    RobotSafetyUpdate();
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    for (uint8_t i = 0u; i < 8u; ++i) TEST_CHECK(deferred_payload[i] == 0u); // 旧代际的整帧不能重放。
+    control_at(6000u);
+    TEST_CHECK(sent[0] != 0u || sent[1] != 0u); // 底盘继续工作。
+    TEST_CHECK(sent[2] != 0u || sent[3] != 0u); // 云台继续工作。
+    for (uint8_t i = 4u; i < 8u; ++i) TEST_CHECK(sent[i] == 0u); // 摩擦轮和拨弹被单独禁止。
+    return EXIT_SUCCESS;
+}
 #endif
 
 #if defined(CHASSIS_BOARD)
@@ -536,6 +590,10 @@ int main(int argc, char **argv)
 #if defined(ONE_BOARD)
     if (strcmp(argv[1], "single-safety-output") == 0)
         return single_safety_output_gate();
+    if (strcmp(argv[1], "single-shared-frame") == 0)
+        return single_shared_frame_permissions(0u);
+    if (strcmp(argv[1], "single-unassigned") == 0)
+        return single_shared_frame_permissions(1u);
 #endif
 #if defined(CHASSIS_BOARD)
     if (strcmp(argv[1], "feedback-after-observed-tick") == 0)
