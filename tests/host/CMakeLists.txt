@@ -1189,6 +1189,28 @@ endif()
 target_link_libraries(motor_chassis_safety_test PRIVATE mc02_numeric)
 add_test(NAME production_dji_chassis_safety_output_gate
   COMMAND motor_chassis_safety_test chassis-safety-output)
+add_executable(motor_single_safety_test motor_feedback_filter_test.c
+  ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
+  ../../bsp/board/platform_can_periodic_stm32.c dji_can_unregister_fake.c
+  ../../modules/motor/motor_feedback.c ../../modules/algorithm/controller.c
+  ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c
+  ../../modules/safety/robot_safety.c) # 单板使用真实安全管理与电机发送实现。
+target_include_directories(motor_single_safety_test BEFORE PRIVATE motor_safety_fakes motor_pid_fakes)
+target_include_directories(motor_single_safety_test PRIVATE ../../modules/motor
+  ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/safety
+  ../../modules/imu ../../modules/master_machine ../../application ../../bsp/usart)
+target_compile_definitions(motor_single_safety_test PRIVATE ONE_BOARD=1) # 选择单板发送路径。
+if(MSVC)
+  target_compile_options(motor_single_safety_test PRIVATE /FIstm32h7xx_hal.h)
+else()
+  target_compile_options(motor_single_safety_test PRIVATE -include stm32h7xx_hal.h)
+endif()
+target_link_libraries(motor_single_safety_test PRIVATE mc02_numeric)
+if(UNIX)
+  target_link_libraries(motor_single_safety_test PRIVATE m) # 主机数值函数由系统数学库提供。
+endif()
+add_test(NAME production_dji_single_safety_output_gate COMMAND motor_single_safety_test single-safety-output)
+set_tests_properties(production_dji_single_safety_output_gate PROPERTIES TIMEOUT 10)
 set_tests_properties(production_dji_chassis_safety_output_gate PROPERTIES TIMEOUT 10)
 add_test(NAME production_dji_feedback_after_observed_tick
   COMMAND motor_chassis_safety_test feedback-after-observed-tick)

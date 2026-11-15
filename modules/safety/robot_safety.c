@@ -43,11 +43,11 @@ static uint8_t ControlFormalLocked(void)
         !control_policy.commissioning && control_inputs.mode == ROBOT_CONTROL_AUTONOMOUS);
 }
 
-// 保存禁止事件，并要求来源在恢复后重新接管；只在模式策略已配置时处理。
+// 保存禁止事件；模式策略启用时还要求来源在恢复后重新接管。
 static void ControlRevokeLocked(void)
 {
-    if (!control_configured) return; // 不改变旧角色的未迁移路径。
     control_generation++; // 记录周期之间也不能漏掉的禁止变化。
+    if (!control_configured) return; // 旧角色也记录代际，但不启用新来源屏障。
     control_barrier_ms = PlatformTimeNowMs(); // 保存实际禁止时刻，不替来源续期。
     control_barrier_valid = 1u; // 0ms同样需要阻止先前数据。
     control_was_healthy = 0u; // 恢复时再次建立接管起点。
@@ -638,6 +638,16 @@ uint8_t RobotSafetyIsReadyAt(uint32_t now_ms)
                            calib_requested == 0u && estop_latched == 0u) ? 1u : 0u;
 #endif
     RobotSafetyExitCritical(previous);
+    return ready;
+}
+
+uint8_t RobotSafetyIsReadyForGeneration(uint32_t now_ms, uint32_t expected_generation)
+{
+    const uint32_t previous = RobotSafetyEnterCritical(); // 故障事件不能插入代际和许可之间。
+    const uint8_t currently_ready = RobotSafetyIsReadyAt(now_ms); // 来源过期检查可能本身推进安全代际。
+    const uint8_t ready = (uint8_t)(currently_ready != 0u &&
+                                     control_generation == expected_generation); // 完成许可计算后再核对代际。
+    RobotSafetyExitCritical(previous); // 恢复进入前的中断状态。
     return ready;
 }
 

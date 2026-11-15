@@ -165,6 +165,13 @@ uint8_t RobotSafetyIsReady(void);
  * @return 状态、输入、远程许可和租约均有效时返回1。
  */
 uint8_t RobotSafetyIsReadyAt(uint32_t now_ms);
+/** @brief 同时检查当前整车许可和计算目标时的安全代际。
+ * @param[in] now_ms 本机毫秒时刻，用于检查来源期限。
+ * @param[in] expected_generation 目标计算前读取的安全代际。
+ * @return 1 表示当前许可有效且代际未变化，否则返回 0。
+ * @note 两项检查在同一保护内完成，不提供单个功能的许可。
+ */
+uint8_t RobotSafetyIsReadyForGeneration(uint32_t now_ms, uint32_t expected_generation);
 /** @brief 读取已设置的全部故障位。
 * @return Robot_Fault_e 各位的组合。 */
 uint32_t RobotSafetyGetFaults(void);

@@ -11,7 +11,7 @@
 #include "bsp_can.h" // 测试替身直接构造底层 CAN 接收实例。
 #include "motor_feedback_test_support.h"
 #include "test_check.h"
-#if defined(CHASSIS_BOARD)
+#if defined(CHASSIS_BOARD) || defined(ONE_BOARD)
 #include "FreeRTOS.h"
 #include "robot_safety.h"
 #endif
@@ -31,8 +31,14 @@ static uint8_t daemon_online = 1u;
 static CANInstance can_instances[12];
 static DaemonInstance daemon;
 static uint8_t sent[8];
-#if defined(CHASSIS_BOARD)
+#if defined(CHASSIS_BOARD) || defined(ONE_BOARD)
 unsigned motor_safety_test_critical_depth;
+#endif
+#if defined(ONE_BOARD)
+static CAN_TxPeriodicPrepareFn_t deferred_prepare; // 模拟目标已排队但尚未交给硬件。
+static const void *deferred_source; // 保存与排队目标关联的发送来源。
+static uint8_t deferred_payload[8]; // 测试副本，延后执行发送前检查。
+static uint8_t reject_periodic; // 模拟队列拒绝替换旧目标。
 #endif
 
 uint64_t DWT_GetTimeline_us(void) { return now_us; }
@@ -76,11 +82,19 @@ CAN_TxSubmitStatus_t CANSubmitPeriodicPrepared(FDCAN_HandleTypeDef *hcan, const 
 {
     (void)hcan; (void)source; (void)key; (void)priority; (void)deadline_ms; (void)period_us;
     TEST_CHECK(frame != NULL && request_id != NULL && frame->length <= sizeof(sent));
-#if defined(CHASSIS_BOARD)
+#if defined(ONE_BOARD)
+    if (reject_periodic != 0u) return CAN_TX_SUBMIT_FULL; // 失败时旧目标和回调保持原状。
+#endif
+#if defined(CHASSIS_BOARD) || defined(ONE_BOARD)
     TEST_CHECK(motor_safety_test_critical_depth != 0u);
 #endif
     uint8_t payload[sizeof(sent)] = {0};
     memcpy(payload, frame->data, frame->length);
+#if defined(ONE_BOARD)
+    deferred_prepare = prepare; // 保留真实回调，用于模拟队列等待期间失能。
+    deferred_source = source;
+    memcpy(deferred_payload, payload, sizeof(deferred_payload));
+#endif
     if (prepare != NULL)
         prepare(source, HAL_GetTick(), payload, frame->length);
     memset(sent, 0, sizeof(sent));
@@ -145,10 +159,59 @@ static void control_at(uint64_t at_us)
 {
     now_us = at_us;
     DJIMotorControl();
-#if defined(CHASSIS_BOARD)
+#if defined(CHASSIS_BOARD) || defined(ONE_BOARD)
     TEST_CHECK(motor_safety_test_critical_depth == 0u);
 #endif
 }
+
+#if defined(ONE_BOARD)
+static int single_safety_output_gate(void)
+{
+    RobotSafetyInit(); // 初始状态禁止电机输出。
+    Motor_Init_Config_s config = motor_config(1u); // 使用隔离的主机测试电机参数。
+    DJIMotorInstance *motor = DJIMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+    receive(motor, 0u, 0u, 0, 0); // 提供合法反馈供测试 PID 计算。
+    DJIMotorSetRef(motor, 10.0f);
+    DJIMotorEnable(motor);
+    control_at(1000u);
+    for (size_t i = 0u; i < sizeof(sent); ++i) TEST_CHECK(sent[i] == 0u); // 未使能时只发送零目标。
+    RobotSafetySetRcOnline(1u);
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReady());
+    RobotSafetySnapshot_t before_fault = {0};
+    TEST_CHECK(RobotSafetyGetSnapshot(&before_fault));
+    RobotFaultReport(ROBOT_FAULT_CAN_BUSOFF); // 两次发送之间短暂出现并恢复故障。
+    RobotFaultClear(ROBOT_FAULT_CAN_BUSOFF);
+    RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReady());
+    TEST_CHECK(!RobotSafetyIsReadyForGeneration(HAL_GetTick(), before_fault.control_generation)); // 旧代际不能借恢复后的 READY 通过。
+    control_at(2000u);
+    uint8_t nonzero = 0u;
+    for (size_t i = 0u; i < sizeof(sent); ++i) if (sent[i] != 0u) nonzero = 1u;
+    TEST_CHECK(nonzero != 0u && deferred_prepare != NULL); // 有许可时队列取得实际目标和复核回调。
+    RobotSafetyRequestDisable(); // 目标排队后、交给 HAL 前撤销许可。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    for (size_t i = 0u; i < sizeof(deferred_payload); ++i) TEST_CHECK(deferred_payload[i] == 0u);
+    RobotSafetyRequestEnable(); // 假设故障消失并重新使能。
+    RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReady());
+    reject_periodic = 1u; // 替换失败，队列仍持有失能前的旧目标。
+    control_at(2500u);
+    deferred_payload[0] = 0x5au; // 模拟旧队列仍保存非零电流目标。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(deferred_payload[0] == 0u); // 恢复许可不能给旧目标续用新的代际。
+    reject_periodic = 0u;
+    RobotSafetyRequestDisable();
+    control_at(3000u);
+    for (size_t i = 0u; i < sizeof(sent); ++i) TEST_CHECK(sent[i] == 0u); // 后续计算仍不能输出旧目标。
+    return EXIT_SUCCESS;
+}
+#endif
 
 #if defined(CHASSIS_BOARD)
 static int feedback_sample_updated_after_caller_tick(void)
@@ -470,6 +533,10 @@ static int reject_invalid_config(void)
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
+#if defined(ONE_BOARD)
+    if (strcmp(argv[1], "single-safety-output") == 0)
+        return single_safety_output_gate();
+#endif
 #if defined(CHASSIS_BOARD)
     if (strcmp(argv[1], "feedback-after-observed-tick") == 0)
         return feedback_sample_updated_after_caller_tick();

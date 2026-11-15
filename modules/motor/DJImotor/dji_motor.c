@@ -9,7 +9,7 @@
 #include "bsp_log.h"
 #include "motor_pid.h"
 #include "dji_motor_diagnostic_internal.h" // 回环诊断只查询已注册的第一个电机。
-#if defined(CHASSIS_BOARD)
+#if defined(CHASSIS_BOARD) || defined(ONE_BOARD)
 #include "robot_safety.h"
 #endif
 #include <math.h>
@@ -55,6 +55,9 @@ static DJISendGroup_t sender_assignment[9] = {
 };
 
 static uint8_t sender_enable_flag[9] = {0};
+#if defined(ONE_BOARD)
+static uint32_t sender_safety_generation[9]; // 每组已排队目标所属的安全代际。
+#endif
 
 #define DJI_MULTITURN_MAX_GAP_MS 20u /* 超过此间隔无法从单圈编码器证明遗漏圈数。 */
 
@@ -821,6 +824,28 @@ static void DJIMotorPrepareChassisOutput(const void *source, uint32_t now_ms,
 }
 #endif
 
+#if defined(ONE_BOARD)
+static void DJIMotorPrepareSingleOutput(const void *source, uint32_t now_ms,
+                                        uint8_t *payload, uint8_t length)
+{
+    uint8_t found = 0u; // 只有已登记的发送组才能使用代际信息。
+    uint32_t generation = 0u; // 保存该组已排队目标的代际。
+    for (size_t index = 0u; index < sizeof(sender_assignment) / sizeof(sender_assignment[0]); ++index)
+        if (source == &sender_assignment[index])
+        {
+            generation = sender_safety_generation[index]; // 读取成功入队时保存的代际。
+            found = 1u; // 标记来源属于本驱动。
+            break;
+        }
+    if (payload == NULL || length != 8u || found == 0u ||
+        RobotSafetyIsReadyForGeneration(now_ms, generation) == 0u)
+    {
+        if (payload != NULL)
+            memset(payload, 0, length); // 等待期间失能时撤销队列副本中的电流目标。
+    }
+}
+#endif
+
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
 {
     if (motor == NULL || summary == NULL)
@@ -857,6 +882,10 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 // 为所有电机实例计算三环PID,发送控制报文
 void DJIMotorControl()
 {
+#if defined(ONE_BOARD)
+    RobotSafetySnapshot_t cycle_safety = {0}; // 在计算之前记录本周期所属的安全代际。
+    const uint8_t cycle_safety_valid = RobotSafetyGetSnapshot(&cycle_safety); // 查询失败时本周期只输出零值。
+#endif
     uint32_t probe_all = PlatformProbeStart();
     // 直接保存一次指针引用从而减小访存的开销,同样可以提高可读性
     uint8_t group, num; // 电机组号和组内编号
@@ -1043,10 +1072,15 @@ void DJIMotorControl()
                 .length = 8u,
             };
             uint32_t request_id = 0u;
-#if defined(CHASSIS_BOARD)
+#if defined(CHASSIS_BOARD) || defined(ONE_BOARD)
             PlatformTaskCriticalEnter();
             // 许可被其他任务撤销时，只把零目标交给周期队列。
+#if defined(CHASSIS_BOARD)
             if (feedback_healthy == 0u || RobotSafetyIsReadyAt(PlatformTimeNowMs()) == 0u)
+#else
+            if (cycle_safety_valid == 0u ||
+                RobotSafetyIsReadyForGeneration(PlatformTimeNowMs(), cycle_safety.control_generation) == 0u)
+#endif
                 memset(sender_assignment[i].tx_buff, 0, sizeof(sender_assignment[i].tx_buff));
 #endif
 #if defined(CHASSIS_BOARD)
@@ -1054,12 +1088,21 @@ void DJIMotorControl()
                                     &sender_assignment[i], 0u, &frame,
                                     CAN_TX_PRIORITY_CONTROL, 4u, 1000u,
                                     DJIMotorPrepareChassisOutput, &request_id);
+#elif defined(ONE_BOARD)
+            const uint32_t previous_generation = sender_safety_generation[i]; // 提交失败时恢复旧队列的代际。
+            sender_safety_generation[i] = cycle_safety.control_generation; // 目标保留计算前的代际。
+            const CAN_TxSubmitStatus_t submit_status = PlatformCanSubmitPeriodic(sender_assignment[i].bus,
+                                    &sender_assignment[i], 0u, &frame,
+                                    CAN_TX_PRIORITY_CONTROL, 4u, 1000u,
+                                    DJIMotorPrepareSingleOutput, &request_id);
+            if (submit_status != CAN_TX_SUBMIT_ACCEPTED && submit_status != CAN_TX_SUBMIT_COALESCED)
+                sender_safety_generation[i] = previous_generation; // 旧队列没有替换，不能替它更新代际。
 #else
             (void)PlatformCanSubmitPeriodic(sender_assignment[i].bus,
                                     &sender_assignment[i], 0u, &frame,
                                     CAN_TX_PRIORITY_CONTROL, 4u, 1000u, NULL, &request_id);
 #endif
-#if defined(CHASSIS_BOARD)
+#if defined(CHASSIS_BOARD) || defined(ONE_BOARD)
             PlatformTaskCriticalExit();
 #endif
         }
