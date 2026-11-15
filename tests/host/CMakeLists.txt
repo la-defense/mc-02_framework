@@ -1166,6 +1166,8 @@ foreach(mode IN ITEMS legacy time-constant bypass gap missing multi-instance bou
     COMMAND motor_feedback_filter_test ${mode})
   set_tests_properties(production_dji_feedback_filter_${mode} PROPERTIES TIMEOUT 10)
 endforeach()
+add_test(NAME production_dji_control_expired_feedback
+  COMMAND motor_feedback_filter_test control-expired) # 离线监测仍在线时检查真实反馈期限。
 add_executable(motor_chassis_safety_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
   ../../bsp/board/platform_can_periodic_stm32.c # 周期发送适配到测试队列。

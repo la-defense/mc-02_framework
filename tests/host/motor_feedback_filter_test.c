@@ -164,6 +164,26 @@ static void control_at(uint64_t at_us)
 #endif
 }
 
+// 在线监测尚未超时的情况下，控制计算也必须遵守反馈自身的有效期。
+static int control_rejects_expired_feedback(void)
+{
+    Motor_Init_Config_s config = motor_config(1u); // 只在主机使用这组测试电机参数。
+    DJIMotorInstance *motor = DJIMotorInit(&config); // 使用生产初始化和控制代码。
+    TEST_CHECK(motor != NULL); // 确认后续测试有可用实例。
+    receive(motor, 0u, 0u, 0, 0); // 首帧的实际接收时间是 0 ms。
+    DJIMotorSetRef(motor, 10.0f); // 提供能产生非零输出的速度目标。
+    DJIMotorEnable(motor); // 允许测试实例参加控制计算。
+    control_at(1000u); // 首周期建立计算时钟。
+    control_at(2000u); // 第二周期开始计算。
+    TEST_CHECK(sent[0] != 0u || sent[1] != 0u); // 新鲜反馈允许闭环输出。
+    control_at((uint64_t)DJI_FEEDBACK_MAX_AGE_MS * 1000u); // 恰好到达有效期边界。
+    TEST_CHECK(sent[0] != 0u || sent[1] != 0u); // 边界仍属于有效范围。
+    TEST_CHECK(daemon_online != 0u); // 模拟离线监测尚未发现缺帧。
+    control_at(((uint64_t)DJI_FEEDBACK_MAX_AGE_MS + 1u) * 1000u); // 超过反馈期限。
+    TEST_CHECK(sent[0] == 0u && sent[1] == 0u); // 不能继续用旧反馈计算输出。
+    return EXIT_SUCCESS;
+}
+
 #if defined(ONE_BOARD)
 static int single_safety_output_gate(void)
 {
@@ -583,8 +603,8 @@ static int gap_and_rebuild(void)
 
     DJIMotorEnable(motor);
     DJIMotorSetRef(motor, 10.0f);
-    control_at(1000u);
-    control_at(2000u);
+    control_at(52000u); // 控制时刻不早于刚接收的 52 ms 数据。
+    control_at(52500u); // 在滤波器重建之前仍输出零值。
     TEST_CHECK(sent[0] == 0u && sent[1] == 0u);
 
     receive(motor, 52u * 480000u + 1000u, 53u, 30, 300);
@@ -593,7 +613,7 @@ static int gap_and_rebuild(void)
     TEST_CHECK(rebuilt.speed_filter_status == DJI_FILTER_STATUS_REBUILT);
     TEST_CHECK(rebuilt.current_filter_status == DJI_FILTER_STATUS_REBUILT);
     TEST_CHECK(rebuilt.speed_aps == 180.0f && rebuilt.current_feedback == 300.0f);
-    control_at(3000u);
+    control_at(53000u); // 新反馈到达后在同一时间基准上计算。
     TEST_CHECK(sent[1] != 0u);
     return EXIT_SUCCESS;
 }
@@ -767,6 +787,7 @@ int main(int argc, char **argv)
         return chassis_safety_output_gate();
 #endif
     if (strcmp(argv[1], "legacy") == 0) return legacy_compatibility();
+    if (strcmp(argv[1], "control-expired") == 0) return control_rejects_expired_feedback();
     if (strcmp(argv[1], "time-constant") == 0) return time_constant_filter();
     if (strcmp(argv[1], "bypass") == 0) return bypass_filter();
     if (strcmp(argv[1], "gap") == 0) return gap_and_rebuild();

@@ -971,6 +971,9 @@ void DJIMotorControl()
         uint8_t speed_filter_valid;
         uint8_t current_filter_valid;
         uint8_t position_trusted;
+        uint8_t has_feedback_timestamp; // 区分尚未收到反馈与接收时间恰好为零。
+        uint32_t feedback_timestamp_ms; // 保存这份测量数据的原始接收时间。
+        uint32_t now_ms; // 与测量数据一起读取，避免新反馈晚于读取时刻。
         PlatformTaskCriticalEnter();
         setting_snapshot = motor->motor_settings;
         measure_snapshot = motor->measure;
@@ -979,10 +982,16 @@ void DJIMotorControl()
         speed_filter_valid = motor->speed_filter_valid;
         current_filter_valid = motor->current_filter_valid;
         position_trusted = (uint8_t)(motor->encoder_baseline_valid && motor->output_position_trusted);
+        has_feedback_timestamp = motor->has_feedback_timestamp; // 时间戳只有在收到反馈后才有意义。
+        feedback_timestamp_ms = motor->last_feedback_timestamp_ms; // 与本轮测量使用同一份接收时间。
+        now_ms = PlatformTimeNowMs(); // 在读取同一组数据后取当前时间。
         PlatformTaskCriticalExit();
         const Motor_Control_Setting_s *motor_setting = &setting_snapshot;
         DJI_Motor_Measure_s *measure = &measure_snapshot;
-        const uint32_t now_ms = PlatformTimeNowMs();
+        // 即使离线监测尚未超时，内部测量也不能超过它自己的有效期。
+        const uint8_t feedback_fresh = has_feedback_timestamp != 0u &&
+            (uint32_t)(now_ms - feedback_timestamp_ms) <= DJI_FEEDBACK_MAX_AGE_MS;
+        position_trusted = (uint8_t)(position_trusted && feedback_fresh); // 位置环同样不能使用过期反馈。
         // 首轮或间隔异常时仅重新计时，最后统一将本电机输出写0。
         float control_dt = 0.0f;
         PID_Status_e pid_status = MotorPIDBegin(&motor->pid_clock, PlatformTimeNowUs(), &control_dt);
@@ -998,8 +1007,8 @@ void DJIMotorControl()
         const uint8_t current_internal_active =
             (motor_setting->close_loop_type & CURRENT_LOOP) != 0u;
         const uint8_t feedback_valid =
-            (!speed_internal_active || speed_filter_valid) &&
-            (!current_internal_active || current_filter_valid);
+            (!speed_internal_active || (speed_filter_valid && feedback_fresh)) &&
+            (!current_internal_active || (current_filter_valid && feedback_fresh));
         float output_position_rad = 0.0f;
         float output_speed_rad_s = 0.0f;
         const Motor_Feedback_Status_e axis_status = MotorFeedbackConvertDegreesToOutputAxis(

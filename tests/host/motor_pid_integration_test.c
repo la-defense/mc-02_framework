@@ -68,13 +68,13 @@ static void tick(uint64_t at)
     TEST_CHECK(clock_reads == 1u);
 }
 
-static void feed_zero_feedback(DJIMotorInstance *motor)
+static void feed_zero_feedback(DJIMotorInstance *motor, uint64_t received_us)
 {
     CANInstance *can = (CANInstance *)motor->motor_can_port.backend; // 测试模型直接注入底层接收帧。
     memset(can->rx_buff, 0, sizeof(can->rx_buff));
     can->rx_len = 8u;
-    can->rx_timestamp_cycles = 480000u;
-    can->rx_timestamp_ms = 1u;
+    can->rx_timestamp_cycles = (uint32_t)(received_us * 480u); // 对应测试中的 480 MHz 计数。
+    can->rx_timestamp_ms = (uint32_t)(received_us / 1000u); // 使用此次反馈的实际接收时刻。
     can->can_module_callback(can);
 }
 
@@ -101,7 +101,7 @@ int main(void)
     config.controller_param_init_config.speed_PID = pid;
     motor = DJIMotorInit(&config);
     TEST_CHECK(motor != NULL && registered == 1u);
-    feed_zero_feedback(motor);
+    feed_zero_feedback(motor, 1000u);
     DJIMotorSetRef(motor, 2.0f);
     DJIMotorEnable(motor);
     tick(1000u);
@@ -120,12 +120,20 @@ int main(void)
     TEST_CHECK(sent[1] == 2u);
     tick(100000u);
     TEST_CHECK(sent[0] == 0u && sent[1] == 0u);
+    feed_zero_feedback(motor, now_us); // 长间隔后的第一帧开始重建滤波状态。
+    now_us = 101000u; // 新反馈到达时更新测试时钟。
+    feed_zero_feedback(motor, now_us); // 第二帧恢复可用的滤波反馈。
+    TEST_CHECK(DJIMotorRebaseReference(motor, 101u) == MOTOR_FEEDBACK_OK); // 明确重建位置参考。
     tick(101000u);
     TEST_CHECK(sent[1] == 2u);
     tick(101000u);
     TEST_CHECK(sent[0] == 0u && sent[1] == 0u);
     tick(UINT64_C(0x100000000)); // 微秒时间超过 32 位范围时先拒绝过长的控制间隔。
     TEST_CHECK(sent[0] == 0u && sent[1] == 0u); // 失效间隔不能继续输出旧值。
+    feed_zero_feedback(motor, now_us); // 先从间断中重建反馈滤波状态。
+    now_us = UINT64_C(0x100000000) + 1000u; // 重新采样的时刻仍使用 64 位微秒时间。
+    feed_zero_feedback(motor, now_us); // 长时间间断后先取得新的电机反馈。
+    TEST_CHECK(DJIMotorRebaseReference(motor, (uint32_t)(now_us / 1000u)) == MOTOR_FEEDBACK_OK); // 重建多圈参考。
     tick(UINT64_C(0x100000000) + 1000u); // 下一次间隔为正常的 1 ms。
     TEST_CHECK(sent[1] == 2u); // 64 位时间仍能恢复原来的控制结果。
     return EXIT_SUCCESS;
