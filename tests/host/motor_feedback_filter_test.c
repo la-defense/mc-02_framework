@@ -185,6 +185,49 @@ static int control_rejects_expired_feedback(void)
 }
 
 #if defined(ONE_BOARD)
+// 发送前检查必须使用计算旧目标时的反馈时间，不能被后来的反馈续期。
+static int single_queued_feedback_expiry(void)
+{
+    now_us = 1000u; // 建立单板核心条件时使用同一本机时钟。
+    RobotSafetyInit(); // 初始状态禁止输出。
+    RobotSafetySetRcOnline(1u); // 测试遥控输入在线。
+    RobotSafetySetImuValid(1u); // 测试姿态有效。
+    RobotSafetySetCalibValid(1u); // 测试标定有效。
+    RobotSafetySetTaskHealthy(1u); // 测试核心任务正常。
+    RobotSafetyRequestEnable(); // 申请整车使能。
+    RobotSafetyUpdate(); // 发布本次测试的整车许可。
+    Motor_Init_Config_s config = motor_config(1u); // 使用隔离的主机电机配置。
+    DJIMotorInstance *motor = DJIMotorInit(&config); // 注册一台实际驱动实例。
+    TEST_CHECK(motor != NULL); // 注册失败不能继续。
+    receive(motor, 2000u, 2u, 0, 0); // 电机反馈在 2 ms 接收。
+    DJIMotorSetRef(motor, 10.0f); // 请求非零速度。
+    DJIMotorEnable(motor); // 允许测试电机参加计算。
+    control_at(3000u); // 建立 PID 计算时间。
+    control_at(4000u); // 根据 2 ms 反馈计算并入队。
+    TEST_CHECK(deferred_prepare != NULL && (deferred_payload[0] || deferred_payload[1])); // 队列保存了非零目标。
+    uint8_t original[8]; // 保存队列副本，供两次发送前检查使用。
+    memcpy(original, deferred_payload, sizeof(original)); // 记录计算时生成的旧目标。
+    now_us = 22000u; // 原始反馈恰好达到 20 ms。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload)); // 模拟硬件提交前检查。
+    TEST_CHECK(deferred_payload[0] || deferred_payload[1]); // 有效期边界仍可使用。
+    now_us = 23000u; // 原始反馈已经超过期限。
+    receive(motor, 23000u, 23u, 0, 0); // 新反馈到达也不能改变旧目标的计算依据。
+    memcpy(deferred_payload, original, sizeof(original)); // 再次模拟检查同一个旧队列目标。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload)); // 按旧目标的来源时刻检查。
+    TEST_CHECK(deferred_payload[0] == 0u && deferred_payload[1] == 0u); // 旧目标不能借新反馈续期。
+    control_at(24000u); // 根据 23 ms 反馈生成新的队列目标。
+    TEST_CHECK(deferred_payload[0] || deferred_payload[1]); // 确认新目标已经进入队列。
+    now_us = 26000u; // 模拟后续反馈和一次排队替换。
+    receive(motor, 26000u, 26u, 0, 0); // 提供比队列目标更新的反馈。
+    reject_periodic = 1u; // 队列拒绝替换，保留 23 ms 的旧目标。
+    control_at(26000u); // 驱动尝试提交新的控制值。
+    reject_periodic = 0u; // 恢复测试队列行为。
+    now_us = 44000u; // 23 ms 的反馈已过期，26 ms 反馈仍在有效期内。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload)); // 检查实际保留的旧目标。
+    TEST_CHECK(deferred_payload[0] == 0u && deferred_payload[1] == 0u); // 替换失败不能用较新的反馈给旧目标续期。
+    return EXIT_SUCCESS;
+}
+
 static int single_safety_output_gate(void)
 {
     RobotSafetyInit(); // 初始状态禁止电机输出。
@@ -765,6 +808,8 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
 #if defined(ONE_BOARD)
+    if (strcmp(argv[1], "single-queued-feedback-expiry") == 0)
+        return single_queued_feedback_expiry();
     if (strcmp(argv[1], "single-safety-output") == 0)
         return single_safety_output_gate();
     if (strcmp(argv[1], "single-feedback-roles") == 0)

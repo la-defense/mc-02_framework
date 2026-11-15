@@ -57,6 +57,11 @@ static DJISendGroup_t sender_assignment[9] = {
 static uint8_t sender_enable_flag[9] = {0};
 #if defined(ONE_BOARD)
 static uint32_t sender_safety_generation[9]; // 每组已排队目标所属的安全代际。
+typedef struct {
+    uint32_t source_ms[4]; // 每个电机计算目标时使用的内部反馈时间。
+    uint8_t required_mask; // 对应位置为 1 时，该目标依赖内部反馈。
+} DJI_Queued_Feedback_s;
+static DJI_Queued_Feedback_s sender_feedback[9]; // 每组当前排队目标的反馈依据。
 #endif
 
 #define DJI_MULTITURN_MAX_GAP_MS 20u /* 超过此间隔无法从单圈编码器证明遗漏圈数。 */
@@ -887,7 +892,6 @@ static void DJIMotorPrepareSingleOutput(const void *source, uint32_t now_ms,
             memset(payload, 0, length); // 等待期间失能时撤销队列副本中的电流目标。
         return;
     }
-    if (policy_active == 0u && permits.functions != 0u) return; // 旧路径没有机构分类信息，维持原整车许可。
     uint8_t requested[8]; // 保存待复核目标，再以全零构造最终报文。
     memcpy(requested, payload, sizeof(requested)); // 只读取本次队列副本中的目标。
     memset(payload, 0, length); // 未注册或未获许可的槽位保持零输出。
@@ -895,6 +899,15 @@ static void DJIMotorPrepareSingleOutput(const void *source, uint32_t now_ms,
     {
         const DJIMotorInstance *motor = dji_motor_instance[index]; // 逐电机核对当前帧中的输出。
         if (motor == NULL || motor->sender_group != group || motor->message_num >= 4u) continue; // 忽略其他帧及非法槽位。
+        const uint8_t slot = motor->message_num; // 找到该电机在帧内的两字节位置。
+        const uint8_t feedback_required = (uint8_t)(sender_feedback[group].required_mask & (uint8_t)(1u << slot)); // 仅检查实际使用内部反馈的目标。
+        if (feedback_required != 0u && (uint32_t)(now_ms - sender_feedback[group].source_ms[slot]) > DJI_FEEDBACK_MAX_AGE_MS)
+            continue; // 旧计算依据过期后保持该电机输出为零。
+        if (policy_active == 0u && permits.functions != 0u)
+        {
+            memcpy(payload + 2u * slot, requested + 2u * slot, 2u); // 旧整车许可仍允许有效电机输出。
+            continue; // 旧路径无需检查机构分类。
+        }
         uint32_t function = 0u; // 未声明机构时保持禁止。
         switch (motor->output_role)
         {
@@ -949,6 +962,7 @@ void DJIMotorControl()
 #if defined(ONE_BOARD)
     RobotSafetySnapshot_t cycle_safety = {0}; // 在计算之前记录本周期所属的安全代际。
     const uint8_t cycle_safety_valid = RobotSafetyGetSnapshot(&cycle_safety); // 查询失败时本周期只输出零值。
+    DJI_Queued_Feedback_s computed_feedback[9] = {0}; // 本次计算暂存每组、每电机的反馈时间。
 #endif
     uint32_t probe_all = PlatformProbeStart();
     // 直接保存一次指针引用从而减小访存的开销,同样可以提高可读性
@@ -1021,6 +1035,15 @@ void DJIMotorControl()
             ((motor_setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u &&
              (motor_setting->close_loop_type & SPEED_LOOP) != 0u &&
              motor_setting->speed_feedback_source == MOTOR_FEED);
+#if defined(ONE_BOARD)
+        if (internal_axis_active != 0u || current_internal_active != 0u)
+        {
+            const uint8_t output_group = motor->sender_group; // 获取当前电机的发送组。
+            const uint8_t output_slot = motor->message_num; // 获取组内对应的目标位置。
+            computed_feedback[output_group].source_ms[output_slot] = feedback_timestamp_ms; // 保存实际用于计算的反馈时间。
+            computed_feedback[output_group].required_mask |= (uint8_t)(1u << output_slot); // 标记发送前需要检查期限。
+        }
+#endif
         if (axis_status != MOTOR_FEEDBACK_OK && internal_axis_active && pid_status == PID_OK)
             pid_status = PID_NUMERIC_ERROR;
 
@@ -1163,13 +1186,18 @@ void DJIMotorControl()
                                     DJIMotorPrepareChassisOutput, &request_id);
 #elif defined(ONE_BOARD)
             const uint32_t previous_generation = sender_safety_generation[i]; // 提交失败时恢复旧队列的代际。
+            const DJI_Queued_Feedback_s previous_feedback = sender_feedback[i]; // 保存旧队列对应的反馈时间。
             sender_safety_generation[i] = cycle_safety.control_generation; // 目标保留计算前的代际。
+            sender_feedback[i] = computed_feedback[i]; // 同时保存新目标的反馈依据。
             const CAN_TxSubmitStatus_t submit_status = PlatformCanSubmitPeriodic(sender_assignment[i].bus,
                                     &sender_assignment[i], 0u, &frame,
                                     CAN_TX_PRIORITY_CONTROL, 4u, 1000u,
                                     DJIMotorPrepareSingleOutput, &request_id);
             if (submit_status != CAN_TX_SUBMIT_ACCEPTED && submit_status != CAN_TX_SUBMIT_COALESCED)
+            {
                 sender_safety_generation[i] = previous_generation; // 旧队列没有替换，不能替它更新代际。
+                sender_feedback[i] = previous_feedback; // 同样不能用新反馈时间续期旧目标。
+            }
 #else
             (void)PlatformCanSubmitPeriodic(sender_assignment[i].bus,
                                     &sender_assignment[i], 0u, &frame,
