@@ -1793,6 +1793,7 @@ if(UNIX)
   target_link_libraries(robot_cmd_task_test PRIVATE m)
 endif()
 add_test(NAME production_command_task_source_revocation COMMAND robot_cmd_task_test)
+add_test(NAME production_command_mouse_sequence_wrap COMMAND robot_cmd_task_test mouse-sequence) # 鼠标样本回绕不重放旧位移。
 add_test(NAME production_command_task_fault_revocation COMMAND robot_cmd_task_test faults)
 add_test(NAME production_shoot_manual_source_switches COMMAND robot_cmd_task_test shoot-switches)
 add_test(NAME production_remote_gesture_tick_zero COMMAND robot_cmd_task_test gesture-zero)

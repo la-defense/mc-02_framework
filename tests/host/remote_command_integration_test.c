@@ -102,9 +102,12 @@ int main(int argc,char **argv)
         cycle(0); CHECK(RobotSafetyIsReady());
         CHECK(observed_chassis.vx==300);
         CHECK(observed_shoot.friction_mode==FRICTION_ON);
+        CHECK(observed_gimbal.yaw==1.0f); // 真实接收链中的鼠标位移只执行一次。
+        cycle(0); CHECK(observed_gimbal.yaw==1.0f); // 没有新键鼠样本时不重复累加。
         const uint32_t last=now;
         now=last+150; pc_input(3,1|(1<<Key_E)|(1<<Key_F),66); cycle(0);
         CHECK(observed_chassis.vx==300);
+        CHECK(observed_gimbal.yaw==1.0f); // 无线有新帧但 PC 心跳重复时也不能重放位移。
         now=last+151; cycle(1); /* No new frame: command task must revoke. */
         CHECK(RemoteControlIsOnline() && RobotSafetyIsReady() && !EstopIsLatched());
         frame(2,3,18,0); cycle(0); /* RC source remains usable. */

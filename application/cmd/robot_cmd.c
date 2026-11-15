@@ -70,6 +70,7 @@ static float yaw_align_angle_deg = YAW_ALIGN_ANGLE;
 #endif
 static uint8_t previous_vision_active;
 static uint8_t manual_reference_ready;
+static uint32_t last_pc_sample_sequence; // 已观察的键鼠样本号，避免重复使用鼠标位移。
 
 // 只接受配置确认且为正数的底盘最大角速度，旧主机夹具沿用宏输入。
 #if defined(MC02_VISION_PROTOCOL_V2)
@@ -190,6 +191,7 @@ uint8_t RobotCMDInit(void)
     shoot_cmd_send.load_mode = LOAD_STOP;
     previous_vision_active = 0u;
     manual_reference_ready = 0u;
+    last_pc_sample_sequence = 0u; // 新一轮初始化从尚未观察键鼠数据开始。
     if (gimbal_cmd_pub == NULL || gimbal_feed_sub == NULL || shoot_cmd_pub == NULL)
         return 0u;
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
@@ -394,7 +396,7 @@ static void RemoteControlSet(uint8_t vision_active)
  * @brief 输入为键鼠时模式和控制量设置
  *
  */
-static void MouseKeySet(uint8_t vision_active)
+static void MouseKeySet(uint8_t vision_active, uint8_t mouse_delta_new)
 {
     chassis_cmd_send.wz = 0.0f;
     // 键盘模式直接使用陀螺仪反馈模式控制云台, 避免初值 GIMBAL_ZERO_FORCE 导致云台停电机
@@ -402,7 +404,7 @@ static void MouseKeySet(uint8_t vision_active)
     chassis_cmd_send.vx = rc_data[TEMP].key[KEY_PRESS].w * 300 - rc_data[TEMP].key[KEY_PRESS].s * 300; // 系数待测
     chassis_cmd_send.vy = rc_data[TEMP].key[KEY_PRESS].d * 300 - rc_data[TEMP].key[KEY_PRESS].a * 300; // 系数待测, D右移 A左移
 
-    if (!vision_active)
+    if (!vision_active && mouse_delta_new)
     {
         gimbal_cmd_send.yaw += (float)rc_data[TEMP].mouse.x / 660 * 10; // 系数待测
         gimbal_cmd_send.pitch += (float)rc_data[TEMP].mouse.y / 660 * 10;
@@ -507,6 +509,17 @@ void RobotCMDTask()
     // 每轮读取一次输入，即使没有新帧也会检查键鼠是否超过使用时间。
     if (remote_initialized) RemoteControlGetSnapshot(&remote_snapshot);
     else memset(&remote_snapshot, 0, sizeof(remote_snapshot));
+    uint8_t mouse_delta_new = 0u; // 鼠标位移只允许对新的键鼠样本执行一次。
+    if (remote_snapshot.pc_valid && remote_snapshot.pc_sample_sequence != 0u)
+    {
+        const uint32_t sequence = remote_snapshot.pc_sample_sequence; // 使用来源模块分配的本机样本号。
+        const uint32_t advance = sequence - last_pc_sample_sequence; // 无符号差值允许计数回绕。
+        if (last_pc_sample_sequence == 0u || (advance != 0u && advance <= INT32_MAX))
+        {
+            mouse_delta_new = 1u; // 本轮观察到向前的新样本。
+            last_pc_sample_sequence = sequence; // 无论本轮是否使用，旧位移都不能在之后重放。
+        }
+    }
 
     // 新协议分别复制瞄准与导航快照；彼此的更新不能替对方续期。
 #if defined(MC02_VISION_PROTOCOL_V2)
@@ -584,7 +597,7 @@ void RobotCMDTask()
         if (switch_is_down(rc_data[TEMP].rc.switch_left))
             RemoteControlSet(vision_active);
         else
-            MouseKeySet(vision_active);
+            MouseKeySet(vision_active, mouse_delta_new);
     }
     else
         ApplySafeCommands();

@@ -20,3 +20,9 @@ WSL Debug／Release 的遥控相关定向用例各14/14、键鼠相关各7/7通�
 最初定向选择包含尚未构建的 `pc_vision_integration_test`，导致一项Not Run；补齐该目标后7/7通过。临时构建目录在后续WSL会话中已不存在，最终改用持久的 `/home/mc02/build/sentinel-debug` 与 `sentinel-release`，原始配置／构建日志位于 `build/sentinel-*-config.log`、`build/sentinel-*-build.log`。
 
 遥控诊断禁热 Debug／RelWithDebInfo 固件构建及源码／ELF隔离检查通过；GNU size 的text分别为254548／242616 B、data均900 B、bss为153144／153136 B。与本切片前同工具链产物相比，text各增96 B、bss各增32 B；这不是运行时栈测量。本次未上板。
+
+## 鼠标样本去重
+
+命令任务的视觉接管测试覆盖同一鼠标样本重复读取、新样本、视觉接管期间的样本以及回到手动后的不重放；独立测试覆盖序号回绕、旧序号和保留零。真实遥控接收、解析和命令话题联测覆盖重复 PC 心跳及无线仍更新时的鼠标去重；三项专项 ASan／UBSan 均通过。WSL Debug／Release 完整主机回归各 768／768、`verify.py --fast` 通过。普通裸板与遥控诊断 Debug 构建及隔离检查通过，但它们不编入 RobotCMD；`robot_cmd.c` 使用历史编译选项和 Cortex-M7 硬浮点工具链单文件编译通过。未链接生产固件或连接硬件。
+
+读取前被新样本覆盖的位移不能从当前最新值接口恢复；输入事件队列、车型映射和来源期限传递仍待完成。

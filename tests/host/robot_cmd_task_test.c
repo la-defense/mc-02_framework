@@ -14,6 +14,7 @@ UART_HandleTypeDef huart5, huart9;
 CAN_HandleTypeDef hcan1;
 static RC_ctrl_t remote[2];
 static uint8_t remote_online=1;
+static uint32_t pc_sample_sequence=1u; // 测试替身只有显式递增时才交付新鼠标位移。
 static uint32_t tick=100;
 static Vision_Recv_s wire;
 static Vision_Status_t status;
@@ -22,7 +23,7 @@ uint32_t HAL_GetTick(void) { return tick; }
 const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port) { (void)port; return remote; }
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
-{ snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; }
+{ snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; snapshot->pc_sample_sequence=pc_sample_sequence; }
 Vision_Recv_s *VisionInit(PlatformUartPort_t h) { (void)h; return &wire; }
 void VisionSend(void) {}
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link) { *frame=wire; *link=status; ++snapshots; }
@@ -152,6 +153,21 @@ int main(int argc, char **argv)
     MessageSubscriber_t *shoot=MessageSubscriberRegister(ROBOT_TOPIC_SHOOT_COMMAND, ROBOT_TOPIC_ENDPOINT_SHOOT);
     Gimbal_Upload_Data_s pose={0}; pose.gimbal_imu_data.YawTotalAngle=12; pose.gimbal_imu_data.Pitch=3;
     Gimbal_Ctrl_Cmd_s command; Shoot_Ctrl_Cmd_s shooting;
+    if (argc > 1 && !strcmp(argv[1], "mouse-sequence")) {
+        remote[0].rc.switch_left=RC_SW_UP; remote[0].rc.switch_right=RC_SW_MID;
+        remote[0].mouse.x=66; pc_sample_sequence=UINT32_MAX-1u; // 从回绕前的新样本开始。
+        MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.yaw==13);
+        pc_sample_sequence=UINT32_MAX; tick+=5; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.yaw==14);
+        pc_sample_sequence=1u; tick+=5; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 来源会跳过保留的零。
+        CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.yaw==15);
+        pc_sample_sequence=UINT32_MAX; tick+=5; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 回绕前旧样本不能重放。
+        CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.yaw==15);
+        pc_sample_sequence=0u; tick+=5; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 零代表没有样本。
+        CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.yaw==15);
+        return 0;
+    }
     remote[0].rc.switch_left=RC_SW_DOWN; remote[0].rc.switch_right=RC_SW_MID;
     if (argc > 1 && !strcmp(argv[1], "shoot-switches"))
         return shoot_switches(feedback,gimbal,shoot,&pose);
@@ -281,11 +297,22 @@ int main(int argc, char **argv)
     wire.mode=2; status.online=1; tick+=5; status.last_rx_ms=tick;
     MessagePublishNow(feedback, &pose); RobotCMDTask();
     CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), HAL_GetTick(), NULL) == MESSAGE_OK && MessageReadSnapshot(shoot, &shooting, sizeof(shooting), HAL_GetTick(), NULL) == MESSAGE_OK);
-    wire.mode=0; remote[0].mouse.x=66; remote[0].mouse.y=-66; tick+=5;
+    wire.mode=0; remote[0].mouse.x=66; remote[0].mouse.y=-66; ++pc_sample_sequence; tick+=5;
     MessagePublishNow(feedback, &pose); RobotCMDTask();
     CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), HAL_GetTick(), NULL) == MESSAGE_OK && MessageReadSnapshot(shoot, &shooting, sizeof(shooting), HAL_GetTick(), NULL) == MESSAGE_OK);
     CHECK(command.yaw==13 && command.pitch==2 && command.yaw_vel==0 && command.pitch_acc==0);
     CHECK(shooting.shoot_rate==8 && shooting.load_mode==LOAD_BURSTFIRE);
+    tick+=5; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 读取同一鼠标样本不能再次移动目标。
+    CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), HAL_GetTick(), NULL) == MESSAGE_OK);
+    CHECK(command.yaw==13 && command.pitch==2);
+    ++pc_sample_sequence; tick+=5; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 新样本才允许再次累加。
+    CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), HAL_GetTick(), NULL) == MESSAGE_OK);
+    CHECK(command.yaw==14 && command.pitch==1);
+    wire.mode=2; ++pc_sample_sequence; tick+=5; status.last_rx_ms=tick; // 视觉控制期间也记录已观察的鼠标样本。
+    MessagePublishNow(feedback, &pose); RobotCMDTask();
+    wire.mode=0; tick+=5; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 回到手动时不能重放视觉期间的位移。
+    CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), HAL_GetTick(), NULL) == MESSAGE_OK);
+    CHECK(command.yaw==12 && command.pitch==3);
     /* No selected manual source after mode 2: complete output revocation. */
     wire.mode=2; tick+=5; status.last_rx_ms=tick;
     MessagePublishNow(feedback, &pose); RobotCMDTask();
