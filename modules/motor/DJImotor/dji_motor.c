@@ -796,6 +796,33 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     return MOTOR_FEEDBACK_OK;
 }
 
+void DJIMotorGetFeedbackRoles(uint32_t now_ms, DJI_Feedback_Roles_s *output)
+{
+    if (output == NULL) return; // 调用方没有提供存储时不能写入结果。
+    DJI_Feedback_Roles_s result = {0}; // 从空集合开始，缺失的机构不会被当作有效。
+    uint32_t invalid_roles = 0u; // 任一电机无效时，记录其所属机构。
+    result.observed_at_ms = now_ms; // 保留调用方的读取时刻，供后续判断使用期限。
+    for (size_t index = 0u; index < idx; ++index)
+    {
+        const DJIMotorInstance *motor = dji_motor_instance[index]; // 逐台检查启动时登记的电机。
+        if (motor == NULL) continue; // 空槽不属于任何机构。
+        const unsigned role = (unsigned)motor->output_role; // 先转换再校验，避免非法位移。
+        if (role == MOTOR_OUTPUT_UNASSIGNED || role > MOTOR_OUTPUT_LOADER)
+        {
+            ++result.unassigned_count; // 未分配的电机必须由调用方检查。
+            continue; // 不把未知用途算作任何机构的有效反馈。
+        }
+        const uint32_t role_bit = 1u << role; // 每种已声明机构对应独立位。
+        result.present_roles |= role_bit; // 记录该机构至少注册了一台电机。
+        Motor_Feedback_Snapshot_s feedback = {0}; // 每台电机独立取得带时间的反馈。
+        if (DJIMotorGetFeedbackSnapshot(motor, now_ms, &feedback) != MOTOR_FEEDBACK_OK ||
+            feedback.speed.valid == 0u || feedback.current.valid == 0u)
+            invalid_roles |= role_bit; // 本机构任何一台无效，整体速度和电流反馈就不完整。
+    }
+    result.valid_roles = result.present_roles & ~invalid_roles; // 只交付存在且全部检查通过的机构。
+    *output = result; // 汇总结束后一次交付结果。
+}
+
 #if defined(CHASSIS_BOARD)
 static uint8_t DJIMotorChassisFeedbackIsHealthy(uint32_t now_ms)
 {

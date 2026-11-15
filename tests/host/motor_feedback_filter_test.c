@@ -212,6 +212,52 @@ static int single_safety_output_gate(void)
     return EXIT_SUCCESS;
 }
 
+static int single_feedback_roles(void)
+{
+    DJI_Feedback_Roles_s result = {0}; // 接收每次独立读取的机构状态。
+    DJIMotorGetFeedbackRoles(0u, &result); // 没有注册电机时不能声称反馈有效。
+    TEST_CHECK(result.present_roles == 0u && result.valid_roles == 0u);
+    Motor_Init_Config_s config = motor_config(1u); // 注册两台同属底盘的电机。
+    config.output_role = MOTOR_OUTPUT_CHASSIS;
+    DJIMotorInstance *first = DJIMotorInit(&config);
+    config.can_init_config.tx_id = 2u;
+    DJIMotorInstance *second = DJIMotorInit(&config);
+    TEST_CHECK(first != NULL && second != NULL);
+    now_us = 1000u;
+    receive(first, 1000u, 1u, 0, 0); // 只有第一台有反馈，不足以放行整个机构。
+    DJIMotorGetFeedbackRoles(1u, &result);
+    const uint32_t chassis = 1u << MOTOR_OUTPUT_CHASSIS;
+    TEST_CHECK(result.present_roles == chassis && result.valid_roles == 0u);
+    receive(second, 1000u, 1u, 0, 0); // 同机构两台均有效后才标记有效。
+    DJIMotorGetFeedbackRoles(1u, &result);
+    TEST_CHECK(result.valid_roles == chassis && result.observed_at_ms == 1u);
+    now_us = 22000u; // 两台样本已超过现有反馈期限。
+    DJIMotorGetFeedbackRoles(22u, &result);
+    TEST_CHECK(result.valid_roles == 0u);
+    receive(first, 22000u, 22u, 0, 0); // 只恢复一台不能恢复整个机构。
+    DJIMotorGetFeedbackRoles(22u, &result);
+    TEST_CHECK(result.valid_roles == 0u);
+    receive(second, 22000u, 22u, 0, 0);
+    DJIMotorGetFeedbackRoles(22u, &result);
+    TEST_CHECK(result.valid_roles == chassis);
+    config.can_init_config.tx_id = 3u; // 云台反馈缺失不影响已经有效的底盘。
+    config.output_role = MOTOR_OUTPUT_GIMBAL;
+    DJIMotorInstance *gimbal = DJIMotorInit(&config);
+    TEST_CHECK(gimbal != NULL);
+    DJIMotorGetFeedbackRoles(22u, &result);
+    TEST_CHECK(result.present_roles == (chassis | (1u << MOTOR_OUTPUT_GIMBAL)));
+    TEST_CHECK(result.valid_roles == chassis);
+    config.can_init_config.tx_id = 4u; // 未声明用途应单独报告，不能算作已通过的机构。
+    config.output_role = MOTOR_OUTPUT_UNASSIGNED;
+    TEST_CHECK(DJIMotorInit(&config) != NULL);
+    DJIMotorGetFeedbackRoles(22u, &result);
+    TEST_CHECK(result.unassigned_count == 1u && result.valid_roles == chassis);
+    daemon_online = 0u; // 即使时间尚未过期，离线来源也不能标记有效。
+    DJIMotorGetFeedbackRoles(22u, &result);
+    TEST_CHECK(result.valid_roles == 0u);
+    return EXIT_SUCCESS;
+}
+
 static int single_shared_frame_permissions(uint8_t include_unassigned)
 {
     now_us = 1000u; // 先建立本机时刻和核心健康状态。
@@ -590,6 +636,8 @@ int main(int argc, char **argv)
 #if defined(ONE_BOARD)
     if (strcmp(argv[1], "single-safety-output") == 0)
         return single_safety_output_gate();
+    if (strcmp(argv[1], "single-feedback-roles") == 0)
+        return single_feedback_roles();
     if (strcmp(argv[1], "single-shared-frame") == 0)
         return single_shared_frame_permissions(0u);
     if (strcmp(argv[1], "single-unassigned") == 0)

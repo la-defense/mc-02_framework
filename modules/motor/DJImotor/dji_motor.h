@@ -29,6 +29,23 @@
 #define CURRENT_SMOOTH_COEF 0.9f
 #define ECD_ANGLE_COEF_DJI 0.043945f // (360/8192),将编码器值转化为角度制
 
+/** @brief DJI 已注册电机按机构统计的速度和电流反馈状态。 */
+typedef struct
+{
+    uint32_t present_roles; // 存在至少一台已注册电机的机构位，位号取 MotorOutputRole_t。
+    uint32_t valid_roles; // 该机构所有已注册 DJI 电机的速度和电流反馈均有效时置位。
+    uint32_t observed_at_ms; // 读取时的本机毫秒，用于避免长期沿用本次结果。
+    uint8_t unassigned_count; // 未声明机构的已注册电机数量，不归入任何有效机构。
+} DJI_Feedback_Roles_s;
+
+/** @brief 汇总当前已注册 DJI 电机的速度和电流反馈，不授予运行许可。
+ * @param[in] now_ms 本机毫秒时间，使用与反馈相同的时钟。
+ * @param[out] output 非空时接收本次统计；空指针时不做任何处理。
+ * @note 空机构不会被标为有效。位置、多圈基准、外部反馈和其他电机驱动需要调用方另行检查；
+ *       逐台读取期间反馈可能更新；注册表须在启动阶段完成，运行期不得同时注册或注销电机。
+ */
+void DJIMotorGetFeedbackRoles(uint32_t now_ms, DJI_Feedback_Roles_s *output);
+
 /** @brief 每个反馈量可单独选择旧逐帧滤波、按真实dt计算的一阶低通或原始值。 */
 typedef enum
 {
