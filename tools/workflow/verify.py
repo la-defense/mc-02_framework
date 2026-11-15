@@ -13,6 +13,11 @@
 `--build-root` 指到 WSL 的 ext4 路径（例如 `~/mc02-build`），避免在 `/mnt/d`
 上反复读写。`--dry-run` 只打印命令，适合核对本机环境。
 
+每一步都带时限，不让一次卡顿吞掉整轮验证：转交前先跑一条 `--exec /bin/true`
+探测会话，探不通就直接报错退出；单条命令超过 `--command-timeout` 秒、整次转交
+超过 `--wsl-timeout` 秒都会停下。WSL 的会话层偶尔会整体僵死——虚拟机空转，
+任何进入发行版的命令都不返回——这时 `wsl --shutdown` 之后重跑即可。
+
 用法：
     python3 tools/workflow/verify.py --fast
     python3 tools/workflow/verify.py --host
@@ -39,16 +44,23 @@ import presets
 ROOT = Path(__file__).resolve().parents[2]
 STAGES = ("todo", "docs", "tools", "host", "firmware", "archive")
 
+# 单条命令和整次 WSL 转交的默认上限，按这台机器跑 `--all` 的实际耗时留够余量。
+DEFAULT_COMMAND_TIMEOUT = 1800.0
+DEFAULT_WSL_TIMEOUT = 7200.0
+# 会话探测的等待时间；虚拟机可能要从关闭状态冷启动，比正常进一次宽一些。
+PROBE_TIMEOUT = 60.0
+
 
 @dataclass
 class Options:
-    """一次验证运行需要的路径与并行度。"""
+    """一次验证运行需要的路径、并行度与单条命令时限。"""
 
     root: Path
     build_root: Path
     parallel: int
     selected: list[presets.Preset]
     dry_run: bool
+    command_timeout: float = DEFAULT_COMMAND_TIMEOUT
 
 
 def tools_dir(root: Path) -> Path:
@@ -167,13 +179,49 @@ def to_wsl_path(path: Path) -> str:
     return text.replace("\\", "/")
 
 
-def run_commands(commands: list[list[str]], root: Path, dry_run: bool) -> None:
-    """顺序执行命令；打印每条命令，失败时抛出带命令的异常。"""
+def probe_wsl(wsl: str, root: str, timeout: float = PROBE_TIMEOUT,
+              runner=subprocess.run) -> bool:
+    """用一条不依赖工程的命令确认 WSL 会话能建起来。
+
+    会话层僵死时，任何进入发行版的命令都不会返回，而且不会自己超时。先探
+    一次，可以在探测器给的时限内失败，不必等整轮验证一起挂住。
+    """
+    command = [wsl, "--cd", root, "--exec", "/bin/true"]
+    try:
+        completed = runner(command, timeout=timeout, check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return completed.returncode == 0
+
+
+def forward_to_wsl(command: list[str], timeout: float = DEFAULT_WSL_TIMEOUT) -> int:
+    """把整次验证转交给 WSL，并给这次转交加上限。"""
+    try:
+        return subprocess.call(command, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # call() 只终止 wsl.exe 本身，guest 里的命令可能还在跑。
+        print(f"\n转交 WSL 超过 {timeout:.0f} 秒仍未结束，已停止等待。", file=sys.stderr)
+        print("虚拟机里可能还有命令在运行；确认不需要后执行 `wsl --shutdown` 收尾。",
+              file=sys.stderr)
+        return 1
+
+
+def run_commands(commands: list[list[str]], root: Path, dry_run: bool,
+                 command_timeout: float = DEFAULT_COMMAND_TIMEOUT,
+                 runner=subprocess.run) -> None:
+    """顺序执行命令；打印每条命令，失败或超时抛出带命令的异常。"""
     for command in commands:
         print("$ " + " ".join(command), flush=True)
         if dry_run:
             continue
-        completed = subprocess.run(command, cwd=root)
+        try:
+            completed = runner(command, cwd=root, timeout=command_timeout)
+        except subprocess.TimeoutExpired as error:
+            # 卡住的命令不会自己退出，继续等下去整轮验证都拿不到结果。
+            raise RuntimeError(
+                f"命令超过 {command_timeout:.0f} 秒未结束：{' '.join(command)}"
+            ) from error
         if completed.returncode != 0:
             raise RuntimeError(f"命令失败（退出码 {completed.returncode}）：{' '.join(command)}")
 
@@ -182,7 +230,8 @@ def run_stage(stage: str, options: Options) -> float:
     """执行一个阶段并返回耗时秒数。"""
     started = time.monotonic()
     print(f"\n[{stage}] 开始", flush=True)
-    run_commands(stage_commands(stage, options), options.root, options.dry_run)
+    run_commands(stage_commands(stage, options), options.root, options.dry_run,
+                 options.command_timeout)
     elapsed = time.monotonic() - started
     print(f"[{stage}] 通过，用时 {elapsed:.1f}s", flush=True)
     return elapsed
@@ -201,6 +250,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--parallel", type=int, default=os.cpu_count() or 2,
                         help="CMake 和 CTest 的并行任务数")
     parser.add_argument("--dry-run", action="store_true", help="只打印命令")
+    parser.add_argument("--command-timeout", type=float, default=DEFAULT_COMMAND_TIMEOUT,
+                        help=f"单条命令的时限，单位秒，默认 {DEFAULT_COMMAND_TIMEOUT:.0f}")
+    parser.add_argument("--wsl-timeout", type=float, default=DEFAULT_WSL_TIMEOUT,
+                        help=f"整次转交 WSL 的时限，单位秒，默认 {DEFAULT_WSL_TIMEOUT:.0f}")
     parser.add_argument("--list", action="store_true", help="列出阶段和预设")
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
     parser.add_argument("--no-wsl", action="store_true", help=argparse.SUPPRESS)
@@ -221,8 +274,14 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded[index + 1] = to_wsl_path(Path(forwarded[index + 1]))
         command = [wsl, "--cd", to_wsl_path(args.root), "--exec", "python3",
                    to_wsl_path(Path(__file__).resolve()), "--no-wsl", *forwarded]
+        # 先花几十秒确认会话进得去：僵死的虚拟机会把后面的等待全部吞掉。
+        if not probe_wsl(wsl, to_wsl_path(args.root)):
+            print("WSL 会话在探测时限内没有响应，验证没有开始。", file=sys.stderr)
+            print("这通常是会话层僵死：先执行 `wsl --shutdown`，再重跑本命令。",
+                  file=sys.stderr)
+            return 1
         print("$ " + " ".join(command), flush=True)
-        return subprocess.call(command)
+        return forward_to_wsl(command, args.wsl_timeout)
 
     if args.list:
         print("阶段：" + "、".join(STAGES))
@@ -242,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         parallel=max(1, args.parallel),
         selected=chosen,
         dry_run=args.dry_run,
+        command_timeout=args.command_timeout,
     )
     stages = selected_stages(args)
     timings: list[tuple[str, float]] = []

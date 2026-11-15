@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,21 @@ sys.path.insert(0, str(ROOT / "tools" / "workflow"))
 
 import presets
 import verify
+
+
+class RecordingRunner:
+    """记录调用参数，并按预设返回成功或超时，用来在不启动进程的情况下检查调用方式。"""
+
+    def __init__(self, *, returncode: int = 0, timeout: bool = False) -> None:
+        self.returncode = returncode
+        self.timeout = timeout
+        self.calls: list[tuple[list[str], dict]] = []
+
+    def __call__(self, command: list[str], **kwargs):
+        self.calls.append((command, kwargs))
+        if self.timeout:
+            raise subprocess.TimeoutExpired(command, kwargs.get("timeout", 0))
+        return subprocess.CompletedProcess(command, self.returncode)
 
 
 class VerifyTests(unittest.TestCase):
@@ -76,6 +92,34 @@ class VerifyTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("check_todo.py", out.getvalue())
         self.assertIn("check_docs_links.py", out.getvalue())
+
+    def test_timeout_flags_have_defaults(self) -> None:
+        args = verify.parse_args(["--fast"])
+        self.assertEqual(args.command_timeout, verify.DEFAULT_COMMAND_TIMEOUT)
+        self.assertEqual(args.wsl_timeout, verify.DEFAULT_WSL_TIMEOUT)
+
+    def test_run_commands_passes_timeout_and_raises_on_expiry(self) -> None:
+        runner = RecordingRunner(timeout=True)
+        with self.assertRaises(RuntimeError) as caught:
+            verify.run_commands([["cmake", "--build", "x"]], ROOT, False, 5, runner)
+        self.assertEqual(runner.calls[0][1]["timeout"], 5)
+        self.assertIn("超过 5 秒", str(caught.exception))
+        self.assertIn("cmake --build x", str(caught.exception))
+
+    def test_probe_wsl_accepts_reachable_session(self) -> None:
+        runner = RecordingRunner(returncode=0)
+        self.assertTrue(verify.probe_wsl("wsl.exe", "/mnt/d/repo", 5, runner=runner))
+        self.assertIn("/bin/true", runner.calls[0][0])
+        self.assertEqual(runner.calls[0][1]["timeout"], 5)
+
+    def test_probe_wsl_rejects_unreachable_session(self) -> None:
+        # 会话僵死时探测不会返回，只能靠超时判定为不可用。
+        runner = RecordingRunner(timeout=True)
+        self.assertFalse(verify.probe_wsl("wsl.exe", "/mnt/d/repo", 5, runner=runner))
+
+    def test_probe_wsl_rejects_failed_probe(self) -> None:
+        runner = RecordingRunner(returncode=1)
+        self.assertFalse(verify.probe_wsl("wsl.exe", "/mnt/d/repo", 5, runner=runner))
 
 
 if __name__ == "__main__":

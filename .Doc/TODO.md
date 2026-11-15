@@ -14,6 +14,14 @@
 
 - [ ] **MC02-0144** [enhancement] [ready-for-agent] 建立独立受限上车调试配置的软件入口。验收：与bench_safe及robot区分构建身份，按确认模块选择依赖，默认失能、仅人工新鲜输入显式使能、发射关闭；缺少对应机械／输出限制时拒绝运动配置，主机故障及ARM构建验证通过。现场验收另行确认，详见[交付路线](../docs/workflow/specs/sentinel-software-delivery.md)与[实施记录](../docs/workflow/tickets/MC02-0144.md)。
 
+## 2026-11-15：WSL 会话僵死与验证入口超时
+
+- [x] **MC02-0145** [bug] 给本地验证入口的 WSL 调用加会话探测与超时，避免整批挂死。
+  验收完成：查清 11-15 20:00 起的六条 `wsl.exe` 停在会话建立阶段，虚拟机负载 0.02、内存 539 MB／7943 MB、swap 未使用，构建目录最新文件停在 19:58，那批命令一条都没有执行；用 `wsl --system -u root` 在同一个内核里看到八个 `Relay` 卡在 `unix_stream_read` 等待 `/run/WSL/<N>_interop`，Windows 侧对应的 `wslhost` 进程存在但不推进。`tools/workflow/verify.py` 增加转发前的 `/bin/true` 会话探测（60 秒）、`--command-timeout`（默认 1800 秒）和 `--wsl-timeout`（默认 7200 秒），超时都给出可执行的下一步；`tests/tools/test_verify.py` 用注入的 runner 覆盖探测与超时两个分支。
+  验证：`test_verify.py` 12 项通过；工具回归 187 项通过（1 项跳过）；`python tools/workflow/verify.py --fast` 端到端通过，探测和转交正常，用时 25.0 秒，退出码 0；TODO 与文档链接检查通过。证据摘要见 [MC02-0145 记录](../docs/workflow/tickets/MC02-0145-evidence/README.md)。
+  局限：僵死时进不去发行版，guest 内只能靠系统发行版旁路观察；探测只覆盖 `verify.py` 这一条入口，直接敲 `wsl.exe` 仍会无限等待；`subprocess` 超时只终止 Windows 侧进程，虚拟机里的命令可能还在跑。
+  教学资料：[第21篇](../docs/学习笔记/21-从TODO到可重复验证的工程闭环.md#验证入口怎样避免一起挂死mc02-0145)。
+
 ## 2026-11-14：分支成果选择性整合
 
 - [ ] **MC02-0142** [bug] [needs-triage] 修复 FreeRTOS 运行时统计计时源的 DWT 回绕处理。验收：任务切换时间差不受 `DWT->CYCCNT` 约 8.94 秒回绕影响；主机测试覆盖跨回绕增量和计时源异常，目标验证确认统计连续。范围只限 FreeRTOS 运行时统计，不扩展通用时基接口或其他暂缓主题。
