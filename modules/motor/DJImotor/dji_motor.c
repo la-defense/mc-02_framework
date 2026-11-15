@@ -777,7 +777,7 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     const uint32_t effective_now_ms = caller_elapsed < 0x80000000u ?
                                       feedback_read_time_ms : now_ms;
     const uint8_t fresh = (DaemonIsOnline(motor->daemon) != 0u) &&
-        ((uint32_t)(effective_now_ms - timestamp_ms) <= DJI_MULTITURN_MAX_GAP_MS);
+        ((uint32_t)(effective_now_ms - timestamp_ms) <= DJI_FEEDBACK_MAX_AGE_MS);
     Motor_Feedback_Snapshot_s candidate = {0};
     candidate.sample_sequence = sequence;
     StoreSignal(&candidate.position, position_rad, MOTOR_UNIT_RAD, MOTOR_REFERENCE_OUTPUT_AXIS,
@@ -801,6 +801,7 @@ void DJIMotorGetFeedbackRoles(uint32_t now_ms, DJI_Feedback_Roles_s *output)
     if (output == NULL) return; // 调用方没有提供存储时不能写入结果。
     DJI_Feedback_Roles_s result = {0}; // 从空集合开始，缺失的机构不会被当作有效。
     uint32_t invalid_roles = 0u; // 任一电机无效时，记录其所属机构。
+    uint32_t timestamp_roles = 0u; // 区分尚未保存时刻与合法的 0ms 采样。
     result.observed_at_ms = now_ms; // 保留调用方的读取时刻，供后续判断使用期限。
     for (size_t index = 0u; index < idx; ++index)
     {
@@ -814,10 +815,19 @@ void DJIMotorGetFeedbackRoles(uint32_t now_ms, DJI_Feedback_Roles_s *output)
         }
         const uint32_t role_bit = 1u << role; // 每种已声明机构对应独立位。
         result.present_roles |= role_bit; // 记录该机构至少注册了一台电机。
+        ++result.motor_count[role]; // 调用方还需核对数量是否符合车型配置。
         Motor_Feedback_Snapshot_s feedback = {0}; // 每台电机独立取得带时间的反馈。
         if (DJIMotorGetFeedbackSnapshot(motor, now_ms, &feedback) != MOTOR_FEEDBACK_OK ||
             feedback.speed.valid == 0u || feedback.current.valid == 0u)
+        {
             invalid_roles |= role_bit; // 本机构任何一台无效，整体速度和电流反馈就不完整。
+            continue; // 不把无效样本的时间用于计算有效期限。
+        }
+        const uint32_t source_ms = feedback.speed.source_time_ms; // 速度和电流来自同一帧的接收时间。
+        const uint32_t earlier_by = result.oldest_source_ms[role] - source_ms; // 无符号差值允许时钟回绕。
+        if (!(timestamp_roles & role_bit) || (earlier_by != 0u && earlier_by <= INT32_MAX))
+            result.oldest_source_ms[role] = source_ms; // 同机构选择最早的有效 DJI 样本。
+        timestamp_roles |= role_bit; // 标明该机构已有可比较的时刻。
     }
     result.valid_roles = result.present_roles & ~invalid_roles; // 只交付存在且全部检查通过的机构。
     *output = result; // 汇总结束后一次交付结果。

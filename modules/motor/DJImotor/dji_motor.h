@@ -23,6 +23,7 @@
 #include "dji_motor_task.h"
 
 #define DJI_MOTOR_CNT 12
+#define DJI_FEEDBACK_MAX_AGE_MS 20u // 速度、电流反馈最多沿用到原始接收后的这个时间。
 
 /* 原DJIMotorInit()继续沿用这两个逐帧兼容系数。 */
 #define SPEED_SMOOTH_COEF 0.85f
@@ -35,13 +36,16 @@ typedef struct
     uint32_t present_roles; // 存在至少一台已注册电机的机构位，位号取 MotorOutputRole_t。
     uint32_t valid_roles; // 该机构所有已注册 DJI 电机的速度和电流反馈均有效时置位。
     uint32_t observed_at_ms; // 读取时的本机毫秒，用于避免长期沿用本次结果。
+    uint32_t oldest_source_ms[MOTOR_OUTPUT_LOADER + 1u]; // 各有效机构中最早的 DJI 采样时刻，按机构枚举索引。
+    uint8_t motor_count[MOTOR_OUTPUT_LOADER + 1u]; // 各机构已注册的 DJI 数量，供调用方与车型预期比较。
     uint8_t unassigned_count; // 未声明机构的已注册电机数量，不归入任何有效机构。
 } DJI_Feedback_Roles_s;
 
 /** @brief 汇总当前已注册 DJI 电机的速度和电流反馈，不授予运行许可。
  * @param[in] now_ms 本机毫秒时间，使用与反馈相同的时钟。
  * @param[out] output 非空时接收本次统计；空指针时不做任何处理。
- * @note 空机构不会被标为有效。位置、多圈基准、外部反馈和其他电机驱动需要调用方另行检查；
+ * @note 只有 valid_roles 中相应位为1时，oldest_source_ms 才有意义；其期限为 DJI_FEEDBACK_MAX_AGE_MS。
+ *       空机构不会被标为有效。位置、多圈基准、外部反馈和其他电机驱动需要调用方另行检查；
  *       逐台读取期间反馈可能更新；注册表须在启动阶段完成，运行期不得同时注册或注销电机。
  */
 void DJIMotorGetFeedbackRoles(uint32_t now_ms, DJI_Feedback_Roles_s *output);

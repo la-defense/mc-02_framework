@@ -228,33 +228,102 @@ static int single_feedback_roles(void)
     DJIMotorGetFeedbackRoles(1u, &result);
     const uint32_t chassis = 1u << MOTOR_OUTPUT_CHASSIS;
     TEST_CHECK(result.present_roles == chassis && result.valid_roles == 0u);
-    receive(second, 1000u, 1u, 0, 0); // 同机构两台均有效后才标记有效。
-    DJIMotorGetFeedbackRoles(1u, &result);
-    TEST_CHECK(result.valid_roles == chassis && result.observed_at_ms == 1u);
-    now_us = 22000u; // 两台样本已超过现有反馈期限。
-    DJIMotorGetFeedbackRoles(22u, &result);
+    TEST_CHECK(result.motor_count[MOTOR_OUTPUT_CHASSIS] == 2u); // 即使尚未全部反馈，也能检查注册数量。
+    now_us = 2000u; receive(second, 2000u, 2u, 0, 0); // 同机构两台均有效后才标记有效。
+    DJIMotorGetFeedbackRoles(2u, &result);
+    TEST_CHECK(result.valid_roles == chassis && result.oldest_source_ms[MOTOR_OUTPUT_CHASSIS] == 1u);
+    DJIMotorGetFeedbackRoles(2u, &result); // 重复读取不改变最早采样时刻。
+    TEST_CHECK(result.oldest_source_ms[MOTOR_OUTPUT_CHASSIS] == 1u);
+    now_us = 23000u; // 两个样本均已超过现有反馈期限。
+    DJIMotorGetFeedbackRoles(23u, &result);
     TEST_CHECK(result.valid_roles == 0u);
-    receive(first, 22000u, 22u, 0, 0); // 只恢复一台不能恢复整个机构。
-    DJIMotorGetFeedbackRoles(22u, &result);
+    receive(first, 23000u, 23u, 0, 0); // 只恢复一台不能恢复整个机构。
+    DJIMotorGetFeedbackRoles(23u, &result);
     TEST_CHECK(result.valid_roles == 0u);
-    receive(second, 22000u, 22u, 0, 0);
-    DJIMotorGetFeedbackRoles(22u, &result);
-    TEST_CHECK(result.valid_roles == chassis);
+    receive(second, 23000u, 23u, 0, 0);
+    DJIMotorGetFeedbackRoles(23u, &result);
+    TEST_CHECK(result.valid_roles == chassis && result.oldest_source_ms[MOTOR_OUTPUT_CHASSIS] == 23u);
     config.can_init_config.tx_id = 3u; // 云台反馈缺失不影响已经有效的底盘。
     config.output_role = MOTOR_OUTPUT_GIMBAL;
     DJIMotorInstance *gimbal = DJIMotorInit(&config);
     TEST_CHECK(gimbal != NULL);
-    DJIMotorGetFeedbackRoles(22u, &result);
+    DJIMotorGetFeedbackRoles(23u, &result);
     TEST_CHECK(result.present_roles == (chassis | (1u << MOTOR_OUTPUT_GIMBAL)));
-    TEST_CHECK(result.valid_roles == chassis);
+    TEST_CHECK(result.valid_roles == chassis && result.motor_count[MOTOR_OUTPUT_GIMBAL] == 1u);
     config.can_init_config.tx_id = 4u; // 未声明用途应单独报告，不能算作已通过的机构。
     config.output_role = MOTOR_OUTPUT_UNASSIGNED;
     TEST_CHECK(DJIMotorInit(&config) != NULL);
-    DJIMotorGetFeedbackRoles(22u, &result);
+    DJIMotorGetFeedbackRoles(23u, &result);
     TEST_CHECK(result.unassigned_count == 1u && result.valid_roles == chassis);
     daemon_online = 0u; // 即使时间尚未过期，离线来源也不能标记有效。
-    DJIMotorGetFeedbackRoles(22u, &result);
+    DJIMotorGetFeedbackRoles(23u, &result);
     TEST_CHECK(result.valid_roles == 0u);
+    return EXIT_SUCCESS;
+}
+
+static int single_feedback_roles_wrap(void)
+{
+    Motor_Init_Config_s config = motor_config(1u); // 两台底盘电机分别在回绕前后接收反馈。
+    config.output_role = MOTOR_OUTPUT_CHASSIS;
+    DJIMotorInstance *first = DJIMotorInit(&config);
+    config.can_init_config.tx_id = 2u;
+    DJIMotorInstance *second = DJIMotorInit(&config);
+    TEST_CHECK(first != NULL && second != NULL);
+    now_us = (uint64_t)(UINT32_MAX - 3u) * 1000u;
+    receive(first, 1000u, UINT32_MAX - 3u, 0, 0);
+    now_us = ((uint64_t)UINT32_MAX + 2u) * 1000u; // 本机毫秒回绕到 1。
+    receive(second, 2000u, 1u, 0, 0);
+    DJI_Feedback_Roles_s result = {0};
+    DJIMotorGetFeedbackRoles(1u, &result);
+    TEST_CHECK((result.valid_roles & (1u << MOTOR_OUTPUT_CHASSIS)) != 0u);
+    TEST_CHECK(result.oldest_source_ms[MOTOR_OUTPUT_CHASSIS] == UINT32_MAX - 3u);
+    return EXIT_SUCCESS;
+}
+
+static int single_feedback_roles_to_safety(void)
+{
+    now_us = 1000u; RobotSafetyInit(); // 使用实际安全管理与 DJI 反馈汇总。
+    RobotSafetySetRcOnline(1u); RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u); RobotSafetySetTaskHealthy(1u);
+    const RobotControlPolicy_t policy = {ROBOT_CONTROL_CHASSIS, 1u, 0u, 0u};
+    TEST_CHECK(RobotSafetyConfigureControl(&policy));
+    RobotSafetyRequestEnable(); RobotSafetyUpdate();
+    Motor_Init_Config_s config = motor_config(1u); // 登记两台底盘 DJI 电机。
+    config.output_role = MOTOR_OUTPUT_CHASSIS;
+    DJIMotorInstance *first = DJIMotorInit(&config);
+    config.can_init_config.tx_id = 2u;
+    DJIMotorInstance *second = DJIMotorInit(&config);
+    TEST_CHECK(first != NULL && second != NULL);
+    now_us = 2000u; receive(first, 2000u, 2u, 0, 0);
+    now_us = 4000u; receive(second, 4000u, 4u, 0, 0);
+    DJI_Feedback_Roles_s roles = {0};
+    DJIMotorGetFeedbackRoles(4u, &roles); // 核对所有预期电机均有效后，才向安全管理提交。
+    TEST_CHECK(roles.motor_count[MOTOR_OUTPUT_CHASSIS] == 2u &&
+               (roles.valid_roles & (1u << MOTOR_OUTPUT_CHASSIS)) != 0u);
+    RobotSafetyControlInputs_t input = {0};
+    input.mode = ROBOT_CONTROL_MANUAL;
+    input.manual = (RobotControlLease_t){4u, 100u, 1u};
+    input.feedback_valid_functions = ROBOT_CONTROL_CHASSIS;
+    input.feedback[0] = (RobotControlLease_t){roles.oldest_source_ms[MOTOR_OUTPUT_CHASSIS], DJI_FEEDBACK_MAX_AGE_MS, 1u};
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReady());
+    now_us = 10000u; receive(second, 10000u, 10u, 0, 0); // 更新第二台不能延长第一台的期限。
+    DJIMotorGetFeedbackRoles(10u, &roles);
+    TEST_CHECK(roles.oldest_source_ms[MOTOR_OUTPUT_CHASSIS] == 2u);
+    input.manual.source_time_ms = 10u;
+    input.feedback[0].source_time_ms = roles.oldest_source_ms[MOTOR_OUTPUT_CHASSIS];
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    now_us = 23000u; TEST_CHECK(!RobotSafetyIsReady()); // 第一台的实际反馈已超过 20ms。
+    now_us = 24000u; receive(first, 24000u, 24u, 0, 0);
+    DJIMotorGetFeedbackRoles(24u, &roles);
+    TEST_CHECK(roles.oldest_source_ms[MOTOR_OUTPUT_CHASSIS] == 10u);
+    input.feedback[0].source_time_ms = roles.oldest_source_ms[MOTOR_OUTPUT_CHASSIS];
+    input.manual.source_time_ms = 23u; // 恢复前的旧命令不得接管。
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    TEST_CHECK(!RobotSafetyIsReady());
+    now_us = 25000u; input.manual.source_time_ms = 25u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReady()); // 反馈和恢复后的新命令均有效。
     return EXIT_SUCCESS;
 }
 
@@ -680,6 +749,10 @@ int main(int argc, char **argv)
         return single_safety_output_gate();
     if (strcmp(argv[1], "single-feedback-roles") == 0)
         return single_feedback_roles();
+    if (strcmp(argv[1], "single-feedback-roles-wrap") == 0)
+        return single_feedback_roles_wrap();
+    if (strcmp(argv[1], "single-feedback-roles-to-safety") == 0)
+        return single_feedback_roles_to_safety();
     if (strcmp(argv[1], "single-feedback-expired-frame") == 0)
         return single_feedback_expired_frame();
     if (strcmp(argv[1], "single-shared-frame") == 0)
