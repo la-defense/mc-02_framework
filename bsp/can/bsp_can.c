@@ -135,6 +135,7 @@ typedef struct
     CAN_TxStats_t tx;
     CAN_BusStats_t bus;
     uint8_t tx_ownership_uncertain; /* HAL 已接受但无法关联硬件槽，重启前必须隔离。 */
+    uint8_t rx_callback_active; /* 设备回调正在运行时禁止故障后直接重启。 */
     volatile uint32_t rx_generation; /* 本总线故障时递增，其他总线不受影响。 */
     CANTxScheduler_t tx_scheduler;
     /* ---- 接收队列(SPSC): 中断入队, 任务用 CANProcessRx() 消费 ---- */
@@ -1191,15 +1192,22 @@ void CANProcessRx(void)
         {
             CANRxItem_t *it = &bus->rxq[bus->rxq_tail];
             CANInstance *ins = it->instance;
-            if (CANBusIsActive(i) && it->generation == bus->rx_generation &&
+            taskENTER_CRITICAL(); // 与故障处理同时判断总线状态和回调是否开始。
+            const uint8_t dispatch = (uint8_t)(CANBusIsActive(i) && it->generation == bus->rx_generation &&
                 ins != NULL && ins->can_module_callback != NULL &&
-                (uint32_t)(HAL_GetTick() - it->timestamp_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS)
+                (uint32_t)(HAL_GetTick() - it->timestamp_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS);
+            if (dispatch != 0u) bus->rx_callback_active = 1u; // 在回调执行前发布占用状态。
+            taskEXIT_CRITICAL(); // 回调保持在普通任务上下文，不在临界区运行。
+            if (dispatch != 0u)
             {
                 ins->rx_len = it->len;
                 ins->rx_timestamp_ms = it->timestamp_ms;
                 ins->rx_timestamp_cycles = it->timestamp_cycles;
                 memcpy(ins->rx_buff, it->data, it->len);
                 ins->can_module_callback(ins);
+                taskENTER_CRITICAL(); // 与故障处理同步回调结束状态。
+                bus->rx_callback_active = 0u; // 回调返回后才允许后续判断总线可否重启。
+                taskEXIT_CRITICAL();
             }
             bus->rx_dispatch++;
 
@@ -2028,6 +2036,8 @@ void CANHealthMonitor(void)
             ++bus->rx_generation; // 恢复后丢弃故障前已经进入软件队列的反馈。
             CANTxCancelQueued(&bus->tx_scheduler); // 控制器重启前撤销已经排队但未提交的旧帧。
             uint8_t hardware_pending = bus->tx_ownership_uncertain; // 无法关联槽位时同样视为有未确认帧。
+            if (bus->rx_callback_active != 0u)
+                hardware_pending = 1u; // 旧反馈回调尚未结束，当前不能安全恢复该总线。
             for (uint8_t slot = 0u; slot < CAN_TX_MAX_HW_BUFFERS; ++slot)
                 if (bus->tx_scheduler.hw_result[slot] != CAN_TX_INVALID_RESULT_INDEX)
                     hardware_pending = 1u; // 任一已交给 HAL 的槽尚未报告完成或中止。

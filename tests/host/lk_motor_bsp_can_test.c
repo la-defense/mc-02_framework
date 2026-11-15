@@ -2720,6 +2720,36 @@ static void test_busoff_discards_queued_feedback(void)
     TEST_CHECK(other_state.count == 1u && other_state.marker == 0x11u); // 其他总线的旧队列不变。
 }
 
+static void busoff_during_rx_callback(void *context, const PlatformCanRxFrame_t *frame)
+{
+    ExtendedRxState *state = context; // 记录故障时已经开始的设备回调。
+    ++state->count; // 该回调已经取得旧帧，不能假装它未执行。
+    state->marker = frame->data[0]; // 保存本次回调接收的内容。
+    status_busoff[0] = 1u; // 模拟回调运行期间总线发生故障。
+    now_us = 100000u; // 推进到健康检查时刻。
+    CANHealthMonitor(); // 在回调尚未返回时运行生产故障处理。
+}
+
+static void test_busoff_during_rx_callback(void)
+{
+    PlatformCanRxPort_t first = {0}; // 故障总线上的接收端点。
+    ExtendedRxState state = {0}; // 回调实际执行情况。
+    PlatformCanEndpoint_t endpoint = {.can_bus = PLATFORM_CAN_BUS_1, .tx_id = 0x321u, .rx_id = 0x123u};
+    TEST_CHECK(PlatformCanRxRegister(&first, &endpoint, busoff_during_rx_callback, &state));
+    TEST_CHECK(CANStartBus(&hfdcan2)); // 第二条总线不应因本次故障隔离。
+    rx_frames[0][0].header.Identifier = endpoint.rx_id; // 排入故障前的设备反馈。
+    rx_frames[0][0].header.DataLength = 1u << 16u;
+    rx_frames[0][0].data[0] = 0x51u;
+    rx_frame_count[0] = 1u;
+    now_us = 99000u;
+    HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+    const uint32_t starts_before = bus_start_count[0]; // 回调期间不能重启该总线。
+    CANProcessRx();
+    TEST_CHECK(state.count == 1u && state.marker == 0x51u); // 已开始的回调可返回。
+    TEST_CHECK(CANBusIsQuarantined(&hfdcan1)); // 故障处理发现回调尚未结束时隔离。
+    TEST_CHECK(!CANBusIsQuarantined(&hfdcan2) && bus_start_count[0] == starts_before);
+}
+
 static void test_busoff_discards_hardware_fifo(uint8_t read_failure)
 {
     PlatformCanRxPort_t first = {0}, other = {0}; // 两路端点用于检查隔离范围。
@@ -2886,6 +2916,8 @@ int main(int argc, char **argv)
         test_busoff_cancels_queued();
     else if (strcmp(argv[1], "busoff-rx-generation") == 0)
         test_busoff_discards_queued_feedback();
+    else if (strcmp(argv[1], "busoff-rx-active") == 0)
+        test_busoff_during_rx_callback();
     else if (strcmp(argv[1], "busoff-rx-hardware") == 0)
         test_busoff_discards_hardware_fifo(0u);
     else if (strcmp(argv[1], "busoff-rx-read-fails") == 0)
