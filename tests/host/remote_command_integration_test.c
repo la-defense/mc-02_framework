@@ -108,6 +108,10 @@ int main(int argc,char **argv)
         now=last+150; pc_input(3,1|(1<<Key_E)|(1<<Key_F),66); cycle(0);
         CHECK(observed_chassis.vx==300);
         CHECK(observed_gimbal.yaw==1.0f); // 无线有新帧但 PC 心跳重复时也不能重放位移。
+        MessageFreshness_t source_time={0}; Chassis_Ctrl_Cmd_s stored={0};
+        CHECK(MessageReadSnapshot(chassis, &stored, sizeof(stored), now, &source_time)==MESSAGE_OK);
+        CHECK(source_time.source_time_ms==last && source_time.published_time_ms==now && source_time.source_max_age_ms==REMOTE_PC_LEASE_MS); // 键鼠时间不能被新的无线帧覆盖。
+        CHECK(MessageReadSnapshot(chassis, &stored, sizeof(stored), now+1u, NULL)==MESSAGE_ERR_EXPIRED); // 来源过期时，即使命令刚发布也不能继续执行。
         now=last+151; cycle(1); /* No new frame: command task must revoke. */
         CHECK(RemoteControlIsOnline() && RobotSafetyIsReady() && !EstopIsLatched());
         frame(2,3,18,0); cycle(0); /* RC source remains usable. */

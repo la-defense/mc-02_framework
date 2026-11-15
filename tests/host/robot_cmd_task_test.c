@@ -15,6 +15,8 @@ CAN_HandleTypeDef hcan1;
 static RC_ctrl_t remote[2];
 static uint8_t remote_online=1;
 static uint32_t pc_sample_sequence=1u; // 测试替身只有显式递增时才交付新鼠标位移。
+static uint8_t fixed_source_enabled; // 双板期限场景固定来源时间。
+static uint32_t fixed_source_ms;
 static uint32_t tick=100;
 static Vision_Recv_s wire;
 static Vision_Status_t status;
@@ -23,7 +25,7 @@ uint32_t HAL_GetTick(void) { return tick; }
 const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port) { (void)port; return remote; }
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
-{ snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; snapshot->pc_sample_sequence=pc_sample_sequence; }
+{ snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; snapshot->pc_sample_sequence=pc_sample_sequence; snapshot->radio_source_time_ms=fixed_source_enabled ? fixed_source_ms : tick; snapshot->pc_source_time_ms=fixed_source_enabled ? fixed_source_ms : tick; }
 Vision_Recv_s *VisionInit(PlatformUartPort_t h) { (void)h; return &wire; }
 void VisionSend(void) {}
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link) { *frame=wire; *link=status; ++snapshots; }
@@ -127,6 +129,22 @@ int main(int argc, char **argv)
     CHECK(RobotSafetyIsReady());
     CHECK(RobotCMDInit());
 #ifdef GIMBAL_BOARD
+    if (argc > 1 && !strcmp(argv[1], "dual-freshness")) {
+        MessageSubscriber_t *bridge=MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
+        MessagePublisher_t *feedback=MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK,ROBOT_TOPIC_ENDPOINT_GIMBAL);
+        CHECK(bridge != NULL && feedback != NULL);
+        Gimbal_Upload_Data_s pose={0}; Chassis_Ctrl_Cmd_s sent={0}; MessageFreshness_t time={0};
+        remote[0].rc.switch_left=RC_SW_DOWN; remote[0].rc.switch_right=RC_SW_MID; remote[0].rc.rocker_r_=10;
+        fixed_source_enabled=1u; fixed_source_ms=tick; // 遥控来源时间固定，任务仍持续运行。
+        MessagePublishNow(feedback,&pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(bridge,&sent,sizeof(sent),tick,&time)==MESSAGE_OK && sent.vx==100.0f);
+        CHECK(time.source_time_ms==fixed_source_ms && time.source_max_age_ms==0u); // 双板使用既有固定来源期限。
+        tick+=50u; MessagePublishNow(feedback,&pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(bridge,&sent,sizeof(sent),tick,NULL)==MESSAGE_OK);
+        ++tick; MessagePublishNow(feedback,&pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(bridge,&sent,sizeof(sent),tick,NULL)==MESSAGE_ERR_EXPIRED); // 重复发布不能延长板间来源期限。
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "dual-board")) {
         MessageSubscriber_t *bridge=MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);
         CHECK(bridge != NULL);
@@ -236,6 +254,11 @@ int main(int argc, char **argv)
     CHECK(command.gimbal_mode==GIMBAL_GYRO_MODE && fabsf(command.yaw-14.323945f)<0.0001f);
     CHECK(fabsf(command.pitch-10.729578f)<0.0001f && command.yaw_vel>0 && command.pitch_acc<0);
     CHECK(shooting.load_mode==LOAD_BURSTFIRE && shooting.shoot_rate==10);
+    tick+=10; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 只刷新姿态，不替视觉帧续期。
+    MessageFreshness_t vision_time={0};
+    CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), tick, &vision_time) == MESSAGE_OK);
+    CHECK(vision_time.source_time_ms==status.last_rx_ms && vision_time.source_max_age_ms==VISION_CONTROL_MAX_AGE_MS && vision_time.published_time_ms==tick);
+    CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), status.last_rx_ms+51u, NULL) == MESSAGE_ERR_EXPIRED);
     wire.mode=1; tick+=5; status.last_rx_ms=tick;
     MessagePublishNow(feedback, &pose); RobotCMDTask();
     CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), HAL_GetTick(), NULL) == MESSAGE_OK && MessageReadSnapshot(shoot, &shooting, sizeof(shooting), HAL_GetTick(), NULL) == MESSAGE_OK);

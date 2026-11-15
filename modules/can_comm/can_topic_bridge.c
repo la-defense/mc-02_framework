@@ -107,6 +107,8 @@ CanTopicBridgeStatus_t CanTopicBridgeSend(CanTopicBridge_t *bridge, uint32_t now
         // 先取消旧组余帧；已全部交给硬件时等待终态，不堆积新组。
         if (!CanTopicCancelPending(bridge)) return CAN_BRIDGE_SEND;
     }
+    if (freshness.source_max_age_ms != 0u)
+        return CAN_BRIDGE_CONFIG; // 现有线格式不携带来源期限，不能假设对端话题配置一致。
     const uint32_t age=(uint32_t)(now_ms-freshness.source_time_ms);
     if (age >= bridge->outgoing_desc.max_age_ms) return CAN_BRIDGE_EXPIRED;
     message.topic_id=bridge->outgoing_desc.topic_id;

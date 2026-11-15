@@ -15,8 +15,10 @@
 typedef struct
 {
     MessageFreshness_t freshness;
-    uint8_t expiry_counted;
 } MessageSlot_t;
+
+#define MESSAGE_EXPIRY_COUNTED (1u << 31) // 与来源期限共用原有结构体的对齐空间。
+#define MESSAGE_SOURCE_AGE_MASK (MESSAGE_EXPIRY_COUNTED - 1u) // 期限限制在可比较的半区间。
 
 typedef struct
 {
@@ -371,10 +373,10 @@ MessageStatus_t MessagePublisherInvalidate(MessagePublisher_t *publisher)
     return MESSAGE_OK;
 }
 
-MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data,
+static MessageStatus_t MessagePublishInternal(MessagePublisher_t *publisher, const void *data,
                                  uint32_t source_time_ms, uint32_t received_time_ms,
                                  uint32_t published_time_ms,
-                                 MessageClockDomain_t source_clock)
+                                 MessageClockDomain_t source_clock, uint32_t source_max_age_ms)
 {
     if (publisher == NULL || data == NULL || publisher->storage_index >= MESSAGE_CENTER_MAX_SUBSCRIBERS)
         return MESSAGE_ERR_ARGUMENT;
@@ -451,7 +453,7 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
         slot->freshness.received_time_ms = received_time_ms;
         slot->freshness.published_time_ms = published_time_ms;
         slot->freshness.source_clock = (uint8_t)source_clock;
-        slot->expiry_counted = 0u;
+        slot->freshness.source_max_age_ms = source_max_age_ms; // 高位初始为零，低位保存可选来源期限。
         subscriber->count++;
     }
     uint8_t backlog = 0u;
@@ -465,6 +467,28 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
     return MESSAGE_OK;
 }
 
+MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data,
+                                 uint32_t source_time_ms, uint32_t received_time_ms,
+                                 uint32_t published_time_ms, MessageClockDomain_t source_clock)
+{
+    return MessagePublishInternal(publisher, data, source_time_ms, received_time_ms,
+                                  published_time_ms, source_clock, 0u); // 旧接口沿用原来源期限语义。
+}
+
+MessageStatus_t MessagePublishAtBounded(MessagePublisher_t *publisher, const void *data,
+    uint32_t source_time_ms, uint32_t received_time_ms, uint32_t published_time_ms,
+    MessageClockDomain_t source_clock, uint32_t source_max_age_ms)
+{
+    if (source_clock != MESSAGE_CLOCK_LOCAL && source_clock != MESSAGE_CLOCK_LOCAL_MAPPED)
+        return MESSAGE_ERR_CLOCK_DOMAIN; // 未映射的远端时间不能与本机发布时刻比较。
+    if (source_max_age_ms == 0u || source_max_age_ms > INT32_MAX ||
+        (uint32_t)(published_time_ms - source_time_ms) > source_max_age_ms ||
+        (uint32_t)(published_time_ms - received_time_ms) > INT32_MAX)
+        return MESSAGE_ERR_RANGE; // 期限非法、来源过期或时间属于将来时均不发布。
+    return MessagePublishInternal(publisher, data, source_time_ms, received_time_ms,
+                                  published_time_ms, source_clock, source_max_age_ms); // 统一复制与目录校验。
+}
+
 MessageStatus_t MessagePublishNow(MessagePublisher_t *publisher, const void *data)
 {
     const uint32_t now_ms = PlatformTimeNowMs();
@@ -472,8 +496,14 @@ MessageStatus_t MessagePublishNow(MessagePublisher_t *publisher, const void *dat
 }
 
 static uint8_t IsMessageFresh(const MessageTopicDescriptor_t *descriptor,
-                              const MessageFreshness_t *freshness, uint32_t now_ms)
+                              const MessageSlot_t *slot, uint32_t now_ms)
 {
+    const MessageFreshness_t *freshness = &slot->freshness; // 同时读取时间和消息自身的期限。
+    const uint32_t source_age = freshness->source_max_age_ms & MESSAGE_SOURCE_AGE_MASK; // 零表示旧接口未指定额外期限。
+    if (source_age != 0u)
+        return (uint8_t)(freshness->valid &&
+            (uint32_t)(now_ms - freshness->published_time_ms) <= descriptor->max_age_ms &&
+            (uint32_t)(now_ms - freshness->source_time_ms) <= source_age); // 两种期限必须同时有效。
     const uint32_t age_origin = freshness->source_clock == MESSAGE_CLOCK_REMOTE_RAW ?
                                 freshness->received_time_ms : freshness->source_time_ms;
     return (uint8_t)(freshness->valid &&
@@ -532,13 +562,13 @@ MessageStatus_t MessageReadSnapshot(MessageSubscriber_t *subscriber, void *outpu
     }
     const MessageTopicDescriptor_t *descriptor = &topics[subscriber->topic_index].descriptor;
     MessageSlot_t *slot = GetSlotMetadata(subscriber, subscriber->head);
-    if (!IsMessageFresh(descriptor, &slot->freshness, now_ms))
+    if (!IsMessageFresh(descriptor, slot, now_ms))
     {
         // 快照保留在队列里供诊断；同一条数据只在首次被读到过期时计数。
-        if (slot->expiry_counted == 0u)
+        if ((slot->freshness.source_max_age_ms & MESSAGE_EXPIRY_COUNTED) == 0u)
         {
             CountOnce(&topics[subscriber->topic_index].stats.expired);
-            slot->expiry_counted = 1u;
+            slot->freshness.source_max_age_ms |= MESSAGE_EXPIRY_COUNTED; // 不覆盖低位保存的来源期限。
         }
         memset(output, 0, output_size);
         if (freshness != NULL)
@@ -548,7 +578,10 @@ MessageStatus_t MessageReadSnapshot(MessageSubscriber_t *subscriber, void *outpu
     }
     memcpy(output, GetSlotData(subscriber, descriptor, subscriber->head), output_size);
     if (freshness != NULL)
-        *freshness = slot->freshness;
+    {
+        *freshness = slot->freshness; // 复制消息原始时间和期限。
+        freshness->source_max_age_ms &= MESSAGE_SOURCE_AGE_MASK; // 内部统计标记不交付给调用者。
+    }
     PlatformTaskCriticalExit();
     return MESSAGE_OK;
 }
@@ -569,11 +602,14 @@ MessageStatus_t MessageReadEvent(MessageSubscriber_t *subscriber, void *output,
     while (subscriber->count > 0u)
     {
         MessageSlot_t *slot = GetSlotMetadata(subscriber, subscriber->head);
-        if (IsMessageFresh(descriptor, &slot->freshness, now_ms))
+        if (IsMessageFresh(descriptor, slot, now_ms))
         {
             memcpy(output, GetSlotData(subscriber, descriptor, subscriber->head), output_size);
             if (freshness != NULL)
-                *freshness = slot->freshness;
+            {
+                *freshness = slot->freshness; // 按次事件同样保留来源期限。
+                freshness->source_max_age_ms &= MESSAGE_SOURCE_AGE_MASK; // 内部统计标记不属于公开数据。
+            }
             subscriber->head = (uint8_t)((subscriber->head + 1u) % descriptor->capacity);
             subscriber->count--;
             PlatformTaskCriticalExit();

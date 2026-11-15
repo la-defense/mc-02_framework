@@ -44,6 +44,8 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     snapshot->input = remote_input;
     snapshot->remote_online = 1u;
     snapshot->pc_valid = 1u;
+    snapshot->radio_source_time_ms = test_tick; // 测试替身提供本轮无线来源时间。
+    snapshot->pc_source_time_ms = test_tick; // 测试替身提供本轮键鼠来源时间。
 }
 
 const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t handle)

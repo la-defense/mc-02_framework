@@ -85,6 +85,7 @@ CanTopicBridgeStatus_t CanTopicBridgeSetBeforePublishCallback(CanTopicBridge_t *
  * @param[out] request_id 成功入队时填写；失败保持原值。
  * @return 状态；发送失败或排队未成功不消费版本，已入队的后续失败不自动重放。
  * @note 每个方向最多保留一个在途组；来源无效或出现新版本时取消尚未提交的旧帧。
+ *       当前线格式不携带独立来源期限，带该期限的消息返回 CAN_BRIDGE_CONFIG。
  *       已全部交给HAL时须等待其结束，已经交给HAL的帧无法撤回。
  */
 CanTopicBridgeStatus_t CanTopicBridgeSend(CanTopicBridge_t *bridge, uint32_t now_ms, uint32_t *request_id);

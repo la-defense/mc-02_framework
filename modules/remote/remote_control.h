@@ -131,6 +131,7 @@ const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port);
  */
 uint8_t RemoteControlIsOnline();
 
+#define REMOTE_RADIO_LEASE_MS 100u // 无线合法帧的原始接收时间最多使用 100 ms。
 #define REMOTE_PC_LEASE_MS 150u
 typedef enum
 {

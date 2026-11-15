@@ -122,6 +122,10 @@ int main(void)
     const CanTopicCodec_t codec={copy_bytes,NULL,4u};
     TEST_CHECK(CanTopicBridgeInit(&bridge,&transport,out,remote,&codec,&codec,map_time,&synchronized)==CAN_BRIDGE_OK);
     uint32_t value=123u, id=99u;
+    TEST_CHECK(MessagePublishAtBounded(local,&value,99u,99u,100u,MESSAGE_CLOCK_LOCAL,10u)==MESSAGE_OK);
+    TEST_CHECK(CanTopicBridgeSend(&bridge,100u,&id)==CAN_BRIDGE_CONFIG && id==99u); // 旧线格式不能表达较短来源期限。
+    TEST_CHECK(MessagePublishAtBounded(local,&value,99u,99u,100u,MESSAGE_CLOCK_LOCAL,100u)==MESSAGE_OK);
+    TEST_CHECK(CanTopicBridgeSend(&bridge,100u,&id)==CAN_BRIDGE_CONFIG && id==99u); // 不假设对端具有相同的固定期限。
     TEST_CHECK(MessagePublishAt(local,&value,100u,100u,100u,MESSAGE_CLOCK_LOCAL)==MESSAGE_OK);
     fake_now_ms=110u;
     tx_result=CAN_TX_SUBMIT_FULL;

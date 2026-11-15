@@ -35,6 +35,8 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     snapshot->input = remote_input;
     snapshot->remote_online = remote_online;
     snapshot->pc_valid = pc_valid;
+    snapshot->radio_source_time_ms = test_tick; // 替身模拟本轮收到新的无线输入。
+    snapshot->pc_source_time_ms = test_tick; // 自主档需要的 PC 状态也保持有效。
 }
 Vision_Recv_s *VisionInit(PlatformUartPort_t handle) { (void)handle; return &unused_wire_frame; }
 void VisionSend(void) {}
@@ -159,11 +161,16 @@ int main(void)
         test_tick, NULL) == MESSAGE_OK && shoot.shoot_mode == SHOOT_OFF);
 
     // 导航年龄恰好达到100ms时仍有效；再过1ms，旧目标必须清零。
+    const uint32_t navigation_received_ms = test_tick; // 后续发布不能改写该来源时间。
     test_tick += VISION_V2_NAV_MAX_AGE_MS;
     TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
     RobotCMDTask();
+    MessageFreshness_t navigation_command_time = {0};
     TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
-        test_tick, NULL) == MESSAGE_OK && chassis.vx == 500.0f);
+        test_tick, &navigation_command_time) == MESSAGE_OK && chassis.vx == 500.0f);
+    TEST_CHECK(navigation_command_time.source_time_ms == navigation_received_ms &&
+               navigation_command_time.published_time_ms == test_tick &&
+               navigation_command_time.source_max_age_ms == VISION_V2_NAV_MAX_AGE_MS); // 原接收时间与本轮发布时间分别保留。
     test_tick += 1u;
     TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
     RobotCMDTask();

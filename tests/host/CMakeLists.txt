@@ -1277,6 +1277,10 @@ target_include_directories(message_center_capacity_test PRIVATE ../../modules/me
 add_test(NAME production_message_center_payload_storage_capacity COMMAND message_center_capacity_test)
 set_tests_properties(production_message_center_payload_storage_capacity PROPERTIES TIMEOUT 10)
 add_executable(message_center_pair_test message_center_pair_test.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}) # 使用生产消息中心测试成对登记。
+add_executable(message_center_source_deadline_test message_center_source_deadline_test.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}) # 来源和发布期限各自检查。
+target_include_directories(message_center_source_deadline_test BEFORE PRIVATE init_resource_fakes) # 复用主机锁替身。
+target_include_directories(message_center_source_deadline_test PRIVATE . ../../modules/message_center) # 引入断言和消息接口。
+add_test(NAME production_message_center_source_deadline COMMAND message_center_source_deadline_test) # 检查重复发布、边界和回绕。
 target_include_directories(message_center_pair_test BEFORE PRIVATE init_resource_fakes) # 复用主机锁替身。
 target_include_directories(message_center_pair_test PRIVATE . ../../modules/message_center) # 引入测试断言和公共接口。
 add_test(NAME production_message_center_pair_payload_capacity COMMAND message_center_pair_test payload) # 订阅负载不足。
@@ -1897,6 +1901,7 @@ if(UNIX)
   target_link_libraries(robot_cmd_dual_test PRIVATE m)
 endif()
 add_test(NAME production_dual_board_command_skips_unused_feedback_read COMMAND robot_cmd_dual_test dual-board)
+add_test(NAME production_dual_board_command_source_deadline COMMAND robot_cmd_dual_test dual-freshness) # 双板固定期限不能被重复发布延长。
 foreach(target IN ITEMS robot_cmd_task_test robot_cmd_vision_test robot_cmd_v2_test robot_cmd_dual_test)
   target_sources(${target} PRIVATE ${MC02_HOST_DAEMON_SOURCES})
   target_include_directories(${target} PRIVATE ../../modules/daemon)

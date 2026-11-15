@@ -178,6 +178,19 @@ MessageStatus_t MessagePublishAt(MessagePublisher_t *publisher, const void *data
                                  uint32_t published_time_ms,
                                  MessageClockDomain_t source_clock);
 
+/** @brief 发布本机时间域数据，同时限制来源年龄和本次发布时间的年龄。
+ * @param[in] publisher,data 已登记发布者与待读取的完整负载。
+ * @param[in] source_time_ms,received_time_ms,published_time_ms 分别为来源、接收和发布的本机毫秒。
+ * @param[in] source_clock 本地或已映射本地时间域，须与话题声明一致。
+ * @param[in] source_max_age_ms 来源最大年龄，范围 1～INT32_MAX 毫秒。
+ * @return 成功或具体错误；非法、将来及已过期来源不改变队列。
+ * @note 读取时同时检查话题发布期限和来源期限；重复发布不能延长来源有效期。
+ *       读取结果携带 source_max_age_ms，转发时须继续保留或缩短该期限。
+ */
+MessageStatus_t MessagePublishAtBounded(MessagePublisher_t *publisher, const void *data,
+    uint32_t source_time_ms, uint32_t received_time_ms, uint32_t published_time_ms,
+    MessageClockDomain_t source_clock, uint32_t source_max_age_ms);
+
 /** @brief 发布本地任务刚生成的快照，三种本地时间取同一次HAL毫秒读取。
  * @param[in] publisher 有效发布句柄。
  * @param[in] data 至少可读目录声明的payload_size字节。

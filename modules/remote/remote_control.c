@@ -206,7 +206,7 @@ static void RCLostCallback(const DaemonEvent_t *event, void *id)
     const uint32_t now = PlatformTimeNowMs();
     const uint32_t primask = PlatformIrqSaveAndDisable();
     if (remote_control_diag.has_valid_frame != 0u &&
-        (uint32_t)(now - remote_control_diag.last_valid_tick) <= 100u)
+        (uint32_t)(now - remote_control_diag.last_valid_tick) <= REMOTE_RADIO_LEASE_MS)
     {
         // 新帧可能在超时检查后到达；过期回调不能撤销这份新输入。
         PlatformIrqRestore(primask);
@@ -246,8 +246,8 @@ const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port)
     pc_sample_sequence = 0u; // 本机键鼠样本号只在模块初始化时归零。
     RevokePC(PlatformTimeNowMs(), REMOTE_PC_REVOKE_NONE);
     Daemon_Init_Config_s daemon_conf = {
-        .transport_timeout_ms = 100u,
-        .data_timeout_ms = 100u,
+        .transport_timeout_ms = REMOTE_RADIO_LEASE_MS,
+        .data_timeout_ms = REMOTE_RADIO_LEASE_MS,
         .startup_grace_ms = 1000u,
         .event_max_age_ms = 500u,
         .source_id = 0x7001u,
@@ -280,7 +280,7 @@ uint8_t RemoteControlIsOnline(void)
     const uint32_t check_time = PlatformTimeNowMs();
     const uint8_t online = (uint8_t)(rc_init_flag != 0u &&
         remote_control_diag.has_valid_frame != 0u &&
-        (uint32_t)(check_time - remote_control_diag.last_valid_tick) <= 100u &&
+        (uint32_t)(check_time - remote_control_diag.last_valid_tick) <= REMOTE_RADIO_LEASE_MS &&
         DaemonIsOnline(rc_daemon_instance));
     remote_control_diag.online = online;
     PlatformIrqRestore(primask);
@@ -295,7 +295,7 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     const uint32_t now = PlatformTimeNowMs();
     const uint8_t online = (uint8_t)(rc_init_flag != 0u &&
         remote_control_diag.has_valid_frame != 0u &&
-        (uint32_t)(now - remote_control_diag.last_valid_tick) <= 100u &&
+        (uint32_t)(now - remote_control_diag.last_valid_tick) <= REMOTE_RADIO_LEASE_MS &&
         DaemonIsOnline(rc_daemon_instance));
     remote_control_diag.online = online;
     ExpirePC(now);

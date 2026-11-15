@@ -72,6 +72,53 @@ static uint8_t previous_vision_active;
 static uint8_t manual_reference_ready;
 static uint32_t last_pc_sample_sequence; // 已观察的键鼠样本号，避免重复使用鼠标位移。
 
+typedef struct {
+    uint32_t source_ms; // 当前最先到期的原始来源时刻。
+    uint32_t max_age_ms; // 该来源允许的总年龄。
+    uint32_t remaining_ms; // 在本轮取时刻还可使用的时间。
+    uint8_t valid; // 所有已合入来源都有效时为1。
+} RobotCmdLease_t;
+
+// 合并一个本机时间来源；任一依赖失效都使该命令不可发布为有效目标。
+static void RobotCmdLeaseInclude(RobotCmdLease_t *lease, uint8_t available,
+                                 uint32_t source_ms, uint32_t max_age_ms, uint32_t now_ms)
+{
+    if (!lease->valid) return; // 先前依赖已经失效时不能由新来源恢复。
+    const uint32_t age = now_ms - source_ms; // 无符号差值允许本机时钟回绕。
+    if (!available || max_age_ms == 0u || max_age_ms > INT32_MAX || age > max_age_ms)
+    {
+        lease->valid = 0u; // 缺失、将来时间和超期均不能授予目标。
+        return;
+    }
+    const uint32_t remaining = max_age_ms - age; // 比较各依赖剩余时间而不是只比较原始时刻。
+    if (remaining < lease->remaining_ms)
+    {
+        lease->source_ms = source_ms; // 保留最先到期依赖的原始时间。
+        lease->max_age_ms = max_age_ms; // 同时保留它自己的期限。
+        lease->remaining_ms = remaining; // 后续依赖可以进一步缩短允许时间。
+    }
+}
+
+// 命令话题还按自己的发布期限检查；失败时撤销旧目标。
+static void RobotCmdPublishBounded(MessagePublisher_t *publisher, const void *command,
+                                   const RobotCmdLease_t *lease, uint32_t now_ms)
+{
+    MessageStatus_t status = MESSAGE_ERR_RANGE; // 来源缺失时直接撤销旧目标。
+    if (lease->valid)
+    {
+#if defined(GIMBAL_BOARD)
+        if (lease->max_age_ms >= MESSAGE_DEFAULT_MAX_AGE_MS)
+            status = MessagePublishAt(publisher, command, lease->source_ms, lease->source_ms,
+                                      now_ms, MESSAGE_CLOCK_LOCAL); // 双板现有话题按来源固定 50 ms，不能延长当前来源。
+#else
+        status = MessagePublishAtBounded(publisher, command, lease->source_ms, lease->source_ms,
+                                         now_ms, MESSAGE_CLOCK_LOCAL, lease->max_age_ms); // 单板分别保留来源和发布期限。
+#endif
+    }
+    if (status != MESSAGE_OK)
+        (void)MessagePublisherInvalidate(publisher); // 不能把失败前的目标继续留给执行任务。
+}
+
 // 只接受配置确认且为正数的底盘最大角速度，旧主机夹具沿用宏输入。
 #if defined(MC02_VISION_PROTOCOL_V2)
 static uint8_t GetMaximumChassisYawRateDegS(float *maximum)
@@ -293,7 +340,7 @@ static void ApplyVisionV2Navigation(void)
     const float vx_mm_s = vx_m_s * 1000.0f;
     const float vy_mm_s = vy_m_s * 1000.0f;
     const float wz_deg_s = wz_rad_s * RAD_2_DEGREE;
-    float max_yaw_rate_deg_s;
+    float max_yaw_rate_deg_s = 0.0f; // 获取配置失败时不会使用未初始化值。
     if (!isfinite(vx_mm_s) || !isfinite(vy_mm_s) || !isfinite(wz_deg_s) ||
         !GetMaximumChassisYawRateDegS(&max_yaw_rate_deg_s) ||
         fabsf(wz_deg_s) > max_yaw_rate_deg_s)
@@ -503,8 +550,9 @@ void RobotCMDTask()
    // 来源离线事件在整车任务中执行，确保撤销遥控许可与视觉清理不挤入监控任务。
    (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_ROBOT_TASK, DAEMON_EVENT_MAX_DEPTH, NULL);
     // 控制选择不读取底盘回传，避免单板复制未使用的反馈或双板为它加锁。
+    MessageFreshness_t gimbal_feedback_time = {0}; // 本地保持姿态时也要保留反馈的原始时间。
     const uint8_t feedback_received = (uint8_t)(MessageReadSnapshot(gimbal_feed_sub,
-        &gimbal_fetch_data, sizeof(gimbal_fetch_data), PlatformTimeNowMs(), NULL) == MESSAGE_OK);
+        &gimbal_fetch_data, sizeof(gimbal_fetch_data), PlatformTimeNowMs(), &gimbal_feedback_time) == MESSAGE_OK);
 
     // 每轮读取一次输入，即使没有新帧也会检查键鼠是否超过使用时间。
     if (remote_initialized) RemoteControlGetSnapshot(&remote_snapshot);
@@ -607,7 +655,8 @@ void RobotCMDTask()
     else if (autonomous_selected && RobotSafetyIsReady())
         ApplyVisionV2GimbalHold();
 
-    if (VisionV2NavigationAllowed(autonomous_selected))
+    const uint8_t navigation_active = VisionV2NavigationAllowed(autonomous_selected); // 保存本轮实际采用的底盘来源。
+    if (navigation_active)
         ApplyVisionV2Navigation();
     else if (autonomous_selected)
     {
@@ -628,11 +677,11 @@ void RobotCMDTask()
     VisionControlShootCommand_s selected_shoot_command;
 #if defined(MC02_VISION_PROTOCOL_V2)
     // 新协议没有击发字段；视觉只能给云台目标，发射仍只接收本地手动输入。
-    VisionControlSelectShootCommand(NULL,
+    const uint8_t vision_shoot_selected = VisionControlSelectShootCommand(NULL,
                                     manual_control_active ? &manual_shoot_command : NULL,
                                     &selected_shoot_command);
 #else
-    VisionControlSelectShootCommand(&vision_input,
+    const uint8_t vision_shoot_selected = VisionControlSelectShootCommand(&vision_input,
                                     manual_allowed ? &manual_shoot_command : NULL,
                                     &selected_shoot_command);
 #endif
@@ -645,11 +694,50 @@ void RobotCMDTask()
     // VisionUpdateTx 由 ins_task 完成姿态解算后填充, 这里只负责发送
     VisionSend();
 
-    // 推送消息,双板通信等
-    // 其他应用所需的控制数据在remotecontrolsetmode和mousekeysetmode中完成设置
+    const uint32_t publish_ms = PlatformTimeNowMs(); // 本轮分别保留来源和发布时刻。
+    RobotCmdLease_t radio = {.remaining_ms = UINT32_MAX, .valid = 1u}; // 所有现有模式均依赖无线选择和使能。
+    RobotCmdLeaseInclude(&radio, remote_online, remote_snapshot.radio_source_time_ms,
+                         REMOTE_RADIO_LEASE_MS, publish_ms);
+    RobotCmdLease_t manual = radio; // 键鼠模式还依赖独立的 PC 心跳。
+    if (switch_is_up(rc_data[TEMP].rc.switch_left))
+        RobotCmdLeaseInclude(&manual, remote_snapshot.pc_valid, remote_snapshot.pc_source_time_ms,
+                             REMOTE_PC_LEASE_MS, publish_ms);
+    RobotCmdLease_t vision = radio; // 视觉目标仍依赖本轮实际选择及自身接收时间。
+#if defined(MC02_VISION_PROTOCOL_V2)
+    RobotCmdLeaseInclude(&vision, vision_active, vision_v2_aim_freshness.received_time_ms,
+                         VISION_V2_AIM_MAX_AGE_MS, publish_ms);
+    RobotCmdLease_t navigation = manual; // 现有 V2 自主选择还要求无线和键鼠状态有效。
+    RobotCmdLeaseInclude(&navigation, navigation_active, vision_v2_navigation_freshness.received_time_ms,
+                         VISION_V2_NAV_MAX_AGE_MS, publish_ms);
+    RobotCmdLease_t local_hold = manual; // 失去瞄准后的本地保持依赖新鲜云台反馈。
+    RobotCmdLeaseInclude(&local_hold, feedback_received, gimbal_feedback_time.source_time_ms,
+                         MESSAGE_DEFAULT_MAX_AGE_MS, publish_ms);
+#else
+    RobotCmdLeaseInclude(&vision, vision_active, vision_status_snapshot.last_rx_ms,
+                         VISION_CONTROL_MAX_AGE_MS, publish_ms);
+#endif
+    // 停止命令是本机新决定；运动目标需要保留实际来源期限。
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
-    (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
+    if (chassis_cmd_send.chassis_mode == CHASSIS_ZERO_FORCE)
+        (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
+    else
+#if defined(MC02_VISION_PROTOCOL_V2)
+        RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, navigation_active ? &navigation : &manual, publish_ms);
+#else
+        RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual, publish_ms);
+#endif
 #endif // ONE_BOARD
-    (void)MessagePublishNow(shoot_cmd_pub, &shoot_cmd_send);
-    (void)MessagePublishNow(gimbal_cmd_pub, &gimbal_cmd_send);
+    if (shoot_cmd_send.shoot_mode == SHOOT_OFF && shoot_cmd_send.friction_mode == FRICTION_OFF && shoot_cmd_send.load_mode == LOAD_STOP)
+        (void)MessagePublishNow(shoot_cmd_pub, &shoot_cmd_send);
+    else
+        RobotCmdPublishBounded(shoot_cmd_pub, &shoot_cmd_send, vision_shoot_selected ? &vision : &manual, publish_ms);
+    if (gimbal_cmd_send.gimbal_mode == GIMBAL_ZERO_FORCE)
+        (void)MessagePublishNow(gimbal_cmd_pub, &gimbal_cmd_send);
+    else
+#if defined(MC02_VISION_PROTOCOL_V2)
+        RobotCmdPublishBounded(gimbal_cmd_pub, &gimbal_cmd_send,
+            vision_active ? &vision : (autonomous_selected ? &local_hold : &manual), publish_ms);
+#else
+        RobotCmdPublishBounded(gimbal_cmd_pub, &gimbal_cmd_send, vision_active ? &vision : &manual, publish_ms);
+#endif
 }
