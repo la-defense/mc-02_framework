@@ -996,6 +996,7 @@ add_test(NAME production_can_busoff_without_init COMMAND lk_motor_bsp_can_test b
 add_test(NAME production_can_busoff_fifo_stuck COMMAND lk_motor_bsp_can_test busoff-fifo-stuck) # FIFO 不下降时有界退出。
 add_test(NAME production_can_busoff_inflight_quarantine COMMAND lk_motor_bsp_can_test busoff-inflight) # 硬件帧未确认不能重启。
 add_test(NAME production_can_busoff_unknown_slot COMMAND lk_motor_bsp_can_test busoff-unknown-slot) # 槽位不明也要保持隔离。
+add_test(NAME production_can_tx_slot_collision COMMAND lk_motor_bsp_can_test tx-slot-collision) # 槽位冲突立即隔离。
 add_test(NAME production_platform_can_receive COMMAND lk_motor_bsp_can_test platform-can-rx)
 add_test(NAME production_dji_receive_registration_rollback COMMAND lk_motor_bsp_can_test dji-rx-rollback)
 add_test(NAME production_dji_startup_rollback COMMAND lk_motor_bsp_can_test dji-startup-rollback)

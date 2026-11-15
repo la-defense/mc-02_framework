@@ -2805,6 +2805,14 @@ static void test_busoff_inflight_quarantine(uint8_t unknown_slot)
     tx_latest_unknown = unknown_slot; // 两个场景分别覆盖已知和无法关联的硬件槽。
     CANProcessTxBus(&hfdcan1); // 模拟 HAL 已接受但尚未报告完成。
     TEST_CHECK(tx_accept_count[0] == 1u);
+    if (unknown_slot != 0u)
+    {
+        TEST_CHECK(CANBusIsQuarantined(&hfdcan1)); // 槽位不明不能等到后续 BusOff 才隔离。
+        TEST_CHECK(!CANBusIsQuarantined(&hfdcan2)); // 不应影响其他总线。
+        uint32_t rejected = 0u;
+        TEST_CHECK(CANSubmitOneShot(&hfdcan1, &payload, &frame, CAN_TX_PRIORITY_NORMAL, 500u, &rejected) == CAN_TX_SUBMIT_NOT_READY);
+        TEST_CHECK(rejected == 0u); // 未接受的提交不能分配编号。
+    }
     const uint32_t starts_before = bus_start_count[0]; // 对比故障后是否再次启动。
     status_busoff[0] = 1u; // 发送结果尚不明确时发生 BusOff。
     now_us = 100000u;
@@ -2818,6 +2826,26 @@ static void test_busoff_inflight_quarantine(uint8_t unknown_slot)
     if (unknown_slot == 0u)
         TEST_CHECK(result.pending_frames == 1u); // 状态取消不等于硬件确认帧已撤销。
     TEST_CHECK(!CANStartBus(&hfdcan1)); // 重复启动不能绕过隔离。
+}
+
+static void test_tx_slot_collision_quarantine(void)
+{
+    TEST_CHECK(CANStartBus(&hfdcan1)); // 模拟两个发送请求共用一个硬件槽。
+    TEST_CHECK(CANStartBus(&hfdcan2)); // 保留另一条独立总线。
+    const uint8_t payload = 0x34u;
+    const CAN_TxFrame_t frame = scheduler_frame(0x321u, CAN_TX_ID_STANDARD, &payload, 1u);
+    uint32_t first = 0u, second = 0u, waiting = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, &payload, &frame, CAN_TX_PRIORITY_NORMAL, 500u, &first) == CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTxBus(&hfdcan1); // 第一帧已接受，模拟尚未完成。
+    tx_next_buffer_index[0] = 0u; // 让 HAL 错误地把下一帧也关联到同一个槽。
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, &payload, &frame, CAN_TX_PRIORITY_NORMAL, 500u, &second) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, &payload, &frame, CAN_TX_PRIORITY_BACKGROUND, 500u, &waiting) == CAN_TX_SUBMIT_ACCEPTED);
+    CANProcessTxBus(&hfdcan1); // 发现槽位冲突后立即隔离。
+    TEST_CHECK(CANBusIsQuarantined(&hfdcan1) && !CANBusIsQuarantined(&hfdcan2));
+    CAN_TxResult_t result = {0};
+    TEST_CHECK(CANGetTxRequestState(second, &result) && result.state == CAN_TX_RESULT_FAILED);
+    TEST_CHECK(CANGetTxRequestState(waiting, &result) && result.state == CAN_TX_RESULT_CANCELLED);
+    TEST_CHECK(CANGetTxRequestState(first, &result) && result.state == CAN_TX_RESULT_CANCELLED && result.pending_frames == 1u);
 }
 
 int main(int argc, char **argv)
@@ -2876,6 +2904,8 @@ int main(int argc, char **argv)
         test_busoff_inflight_quarantine(0u);
     else if (strcmp(argv[1], "busoff-unknown-slot") == 0)
         test_busoff_inflight_quarantine(1u);
+    else if (strcmp(argv[1], "tx-slot-collision") == 0)
+        test_tx_slot_collision_quarantine();
     else if (strcmp(argv[1], "platform-can-rx") == 0)
         test_platform_can_receive();
     else if (strcmp(argv[1], "dji-rx-rollback") == 0)

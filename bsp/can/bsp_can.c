@@ -1005,7 +1005,8 @@ static void CANProcessTxSelected(uint8_t selected_bus)
             scheduler->hw_result[hardware_index] != CAN_TX_INVALID_RESULT_INDEX)
         {
             // HAL已经接受但没有可关联的槽位时绝不重发，避免重复发送同一命令。
-            bus->tx_ownership_uncertain = 1u; // 无法确认该硬件帧结束，后续故障不能直接重启。
+            bus->tx_ownership_uncertain = 1u; // 无法确认该硬件帧何时结束。
+            can_recovering |= (uint8_t)(1u << bus_index); // 离开临界区前禁止其他任务再向此总线提交或发送。
             if (result->pending_hw > 0u)
                 result->pending_hw--;
             CANTxSetTerminal(scheduler, result_index, CAN_TX_RESULT_FAILED);
@@ -1026,6 +1027,8 @@ static void CANProcessTxSelected(uint8_t selected_bus)
         }
 
         taskEXIT_CRITICAL();
+        if (bus->tx_ownership_uncertain != 0u)
+            CANQuarantineBus(bus->handle); // 硬件帧归属不明时立即隔离，不等待下一次健康检查。
         DWT_ProbeDone(&can_prof_tx, probe_start);
     }
 }
