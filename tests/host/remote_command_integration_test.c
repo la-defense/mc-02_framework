@@ -16,6 +16,7 @@ static uint32_t now;
 static uint8_t *dma;
 static Vision_Recv_s vision;
 static Vision_Status_t vision_status;
+static uint32_t advance_on_vision_send; // 模拟命令计算后、发布前被任务抢占。
 uint32_t HAL_GetTick(void) { return now; }
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h,uint8_t *p,uint16_t n)
 { (void)n; if(h==&huart5)dma=p; return HAL_OK; }
@@ -25,7 +26,7 @@ HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *h,uint8_t *p,uint16_t n,
 HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *h,uint8_t *p,uint16_t n) { return HAL_UART_Transmit(h,p,n,0); }
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h,uint8_t *p,uint16_t n) { return HAL_UART_Transmit(h,p,n,0); }
 Vision_Recv_s *VisionInit(PlatformUartPort_t h) { (void)h;return &vision; }
-void VisionSend(void) {}
+void VisionSend(void) { now += advance_on_vision_send; advance_on_vision_send=0u; }
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *status)
 { *frame=vision;*status=vision_status; }
 static void frame(uint8_t left,uint8_t right,uint16_t length,uint8_t mouse)
@@ -75,9 +76,70 @@ int main(int argc,char **argv)
     CHECK(RemoteControlIsOnline() && !EstopIsLatched() && RobotSafetyGetState()==ROBOT_SAFE);
     for(;now<=2020;now+=10) { frame(2,2,18,0); cycle(0); DaemonTask(); }
     CHECK(RobotSafetyIsReady());
+    if(argc>1 && !strcmp(argv[1],"pc-mouse-publish-expiry")) {
+        pc_input(1u,0u,0u); pc_input(2u,0u,0u); pc_input(3u,0u,66u); // 缓存一份真实鼠标事件。
+        const uint32_t origin=now;
+        now=origin+70u; pc_input(3u,0u,66u); // 无线帧继续到达，重复 PC 心跳不产生新位移。
+        now=origin+140u; pc_input(4u,0u,0u); // 新心跳保持键鼠在线，但不能更新旧事件时间。
+        now=origin+150u; Gimbal_Upload_Data_s pose={0}; MessagePublishNow(feedback,&pose);
+        advance_on_vision_send=1u; RobotCMDTask(); // 消费时恰好有效，发布前过期。
+        Gimbal_Ctrl_Cmd_s dropped={0};
+        CHECK(MessageReadSnapshot(gimbal,&dropped,sizeof(dropped),now,NULL)==MESSAGE_ERR_EMPTY);
+        cycle(0); CHECK(observed_gimbal.gimbal_mode==GIMBAL_GYRO_MODE && observed_gimbal.yaw==0.0f); // 新周期从实际姿态接续，不复用过期位移。
+        return 0;
+    }
+    if(argc>1 && !strcmp(argv[1],"pc-mouse-boundary")) {
+        pc_input(1u,0u,0u); pc_input(2u,0u,0u); pc_input(3u,0u,66u);
+        RemoteControlSnapshot_s earlier={0}; RemoteControlGetSnapshot(&earlier); // 消费者先取得第三份样本。
+        pc_input(4u,0u,66u); // 随后到达的第四份不能混入已有快照。
+        RemoteMouseBatch_t batch={0};
+        CHECK(RemoteControlConsumeMouse(earlier.pc_sample_sequence,&batch)==REMOTE_MOUSE_OK && batch.x==66 && batch.count==1u);
+        CHECK(RemoteControlConsumeMouse(earlier.pc_sample_sequence,&batch)==REMOTE_MOUSE_EMPTY);
+        RemoteControlGetSnapshot(&earlier);
+        CHECK(RemoteControlConsumeMouse(earlier.pc_sample_sequence,&batch)==REMOTE_MOUSE_OK && batch.x==66 && batch.count==1u);
+        pc_input(5u,0u,66u); RemoteControlGetSnapshot(&earlier);
+        CHECK(RemoteControlConsumeMouse(0u,&batch)==REMOTE_MOUSE_EMPTY); // 无有效快照时不能抢先消费。
+        now+=70u; pc_input(5u,0u,66u); // 重复心跳只保持无线在线。
+        now+=70u; pc_input(6u,0u,0u); // 保持键鼠在线，不改变旧位移时间。
+        now+=11u; pc_input(7u,0u,0u); RemoteControlGetSnapshot(&earlier);
+        CHECK(RemoteControlConsumeMouse(earlier.pc_sample_sequence,&batch)==REMOTE_MOUSE_EMPTY && batch.count==0u); // 超过 150ms 的旧事件被丢弃。
+        pc_input(8u,0u,66u); // 缓存一份尚未消费的鼠标位移。
+        const uint8_t centered[18]={0,4,32,0,1,8,0,0,0,0,8,0,0,0,0,0,0,4};
+        memcpy(dma,centered,18); dma[5]|=(3u<<4)|(2u<<6); // 同一 PC 心跳下切换到遥控档。
+        HAL_UARTEx_RxEventCallback(&huart5,18u); USARTProcessRx(); // 无线变化仍须清除旧位移。
+        RemoteControlGetSnapshot(&earlier);
+        CHECK(earlier.pc_valid && RemoteControlConsumeMouse(earlier.pc_sample_sequence,&batch)==REMOTE_MOUSE_EMPTY);
+        pc_input(9u,0u,66u); now+=101u; pc_input(10u,0u,0u); // 即使离线事件尚未派发，接收间隔也已超无线期限。
+        RemoteControlGetSnapshot(&earlier); CHECK(!earlier.pc_valid && EstopIsLatched()); // 调试失联锁存急停，重新连接仍需两帧松开。
+        pc_input(11u,0u,0u); RemoteControlGetSnapshot(&earlier); CHECK(earlier.pc_valid);
+        CHECK(RemoteControlConsumeMouse(earlier.pc_sample_sequence,&batch)==REMOTE_MOUSE_EMPTY); // 失联前的位移不能借新心跳恢复。
+        RemoteControlDiagnostics_s before_gap={0}, after_gap={0};
+        CHECK(RemoteControlGetDiagnostics(&before_gap));
+        --now; pc_input(12u,0u,0u); ++now; // 人为注入来源时间回退的旧无线帧。
+        CHECK(RemoteControlGetDiagnostics(&after_gap) && after_gap.rejected_fields==before_gap.rejected_fields+1u &&
+              after_gap.last_valid_tick==before_gap.last_valid_tick); // 旧帧不能覆盖新接收时间。
+        return 0;
+    }
+    if(argc>1 && !strcmp(argv[1],"pc-mouse-burst")) {
+        pc_input(1u,0u,0u); pc_input(2u,0u,0u); // 两帧松开后才授权键鼠。
+        pc_input(3u,1u,66u); pc_input(4u,1u,66u); // 两份新位移先于一次命令周期到达。
+        cycle(0); CHECK(observed_gimbal.yaw==2.0f && observed_chassis.vx==300.0f);
+        cycle(0); CHECK(observed_gimbal.yaw==2.0f); // 已消费的两份位移不能重复。
+        pc_input(5u,1u,(uint16_t)-66); cycle(0); CHECK(observed_gimbal.yaw==1.0f);
+        for (uint16_t heartbeat=6u; heartbeat<=13u; ++heartbeat) pc_input(heartbeat,1u,66u); // 容量内八份位移都应交付。
+        cycle(0); CHECK(observed_gimbal.yaw==9.0f);
+        for (uint16_t heartbeat=14u; heartbeat<=22u; ++heartbeat) pc_input(heartbeat,1u,66u); // 第九份位移触发有界队列溢出。
+        cycle(0); CHECK(observed_gimbal.gimbal_mode==GIMBAL_ZERO_FORCE && observed_chassis.vx==300.0f);
+        RemoteControlDiagnostics_s diagnostics;
+        CHECK(RemoteControlGetDiagnostics(&diagnostics) && diagnostics.mouse_overflows==1u);
+        pc_input(23u,1u,66u); cycle(0); // 溢出被消费后，从当前姿态接续新位移。
+        CHECK(observed_gimbal.gimbal_mode==GIMBAL_GYRO_MODE && observed_gimbal.yaw==1.0f);
+        return 0;
+    }
     if(argc>1 && !strcmp(argv[1],"pc-vision")) {
         pc_input(1,0,0); pc_input(2,0,0); pc_input(3,1|(1<<Key_E)|(1<<Key_F),66); cycle(0);
         const uint32_t last=now;
+        now=last+75; pc_input(3,1,66); // 重复 PC 心跳但维持无线在线。
         now=last+150; pc_input(3,1,66);
         vision=(Vision_Recv_s){.mode=2,.yaw=.1f,.pitch=.1f,.yaw_vel=.2f,.pitch_acc=-.3f};
         vision_status.online=1; vision_status.last_rx_ms=now;
@@ -105,6 +167,7 @@ int main(int argc,char **argv)
         CHECK(observed_gimbal.yaw==1.0f); // 真实接收链中的鼠标位移只执行一次。
         cycle(0); CHECK(observed_gimbal.yaw==1.0f); // 没有新键鼠样本时不重复累加。
         const uint32_t last=now;
+        now=last+75; pc_input(3,1|(1<<Key_E)|(1<<Key_F),66); // 无线有新帧，PC 心跳仍保持不变。
         now=last+150; pc_input(3,1|(1<<Key_E)|(1<<Key_F),66); cycle(0);
         CHECK(observed_chassis.vx==300);
         CHECK(observed_gimbal.yaw==1.0f); // 无线有新帧但 PC 心跳重复时也不能重放位移。

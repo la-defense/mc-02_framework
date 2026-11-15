@@ -312,6 +312,7 @@ class RemoteProfileTests(unittest.TestCase):
         addresses = {key: 0x24003000 + i * 4 for i, key in enumerate(fields)}
         values = {key: 0 for key in fields}
         values['raw_mouse_z'] = 0x8000
+        values['mouse_overflows'] = 3  # 保留鼠标队列溢出的只读诊断值。
         server = FakeOpenOCDServer(addresses=addresses, values=values)
         try:
             raw = probe_snapshot_live.read_snapshot(addresses, '127.0.0.1', server.port, 2, fields)
@@ -320,6 +321,7 @@ class RemoteProfileTests(unittest.TestCase):
             server.close()
         self.assertEqual(actual['raw_mouse_z'], 0x8000)
         self.assertEqual(actual['mouse_z'], -32768)
+        self.assertEqual(actual['mouse_overflows'], 3)
         self.assertIn(f"mdw 0x{addresses['raw_mouse_z']:08x} 1", server.commands)
         self.assertFalse(any(c in {'halt', 'resume', 'reset'} for c in server.commands))
 

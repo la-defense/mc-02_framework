@@ -1598,6 +1598,7 @@ target_include_directories(remote_control_test PRIVATE ../../bsp/usart ../../mod
 add_test(NAME production_remote_startup_offline COMMAND remote_control_test)
 add_test(NAME production_remote_snapshot_source_metadata COMMAND remote_control_test snapshot-metadata) # 验证数据和原始时间一致交付。
 add_test(NAME production_remote_formal_autonomous_offline COMMAND remote_control_test formal-autonomous-offline) # 真实离线回调不能绕过模式规则。
+add_test(NAME production_remote_formal_autonomous_gap COMMAND remote_control_test formal-autonomous-gap) # 延迟派发时仍区分正式自主资格。
 set_tests_properties(production_remote_snapshot_source_metadata PROPERTIES TIMEOUT 10)
 set_tests_properties(production_remote_formal_autonomous_offline PROPERTIES TIMEOUT 10)
 add_test(NAME production_remote_complete_frame COMMAND remote_control_test length)
@@ -1660,6 +1661,9 @@ if(UNIX)
 endif()
 add_test(NAME production_remote_to_command_safety COMMAND remote_command_integration_test)
 add_test(NAME production_pc_command_expiry_and_remote_handoff COMMAND remote_command_integration_test pc-command)
+add_test(NAME production_pc_mouse_burst_and_overflow COMMAND remote_command_integration_test pc-mouse-burst) # 多帧位移有界交付与溢出处理。
+add_test(NAME production_pc_mouse_event_boundaries COMMAND remote_command_integration_test pc-mouse-boundary) # 快照交错、过期与切档清理。
+add_test(NAME production_pc_mouse_publish_expiry COMMAND remote_command_integration_test pc-mouse-publish-expiry) # 发布前过期不得在下一周期复用。
 add_executable(pc_vision_integration_test remote_command_integration_test.c
   ../../bsp/usart/bsp_usart.c ${MC02_HOST_REMOTE_SOURCES} ../../modules/remote/remote_safety.c
   ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c ../../application/cmd/robot_cmd.c

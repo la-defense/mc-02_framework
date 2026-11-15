@@ -21,6 +21,44 @@ static uint16_t pc_sequence;
 static uint8_t pc_have_sequence, pc_authorized;
 static uint32_t radio_sample_sequence; // 每份合法无线输入递增，独立于诊断累计数。
 static uint32_t pc_sample_sequence; // 只有键鼠心跳向前并接受时递增，超时不清去重历史。
+typedef struct {
+    int16_t x, y; // 一次接受的鼠标相对位移。
+    uint32_t source_ms; // UART 接收到该位移的原始时间。
+    uint32_t sequence; // 该位移所属的本机键鼠样本号。
+} RemoteMouseEvent_t;
+static RemoteMouseEvent_t mouse_events[REMOTE_MOUSE_EVENT_CAPACITY]; // 按到达顺序保存未消费位移。
+static uint8_t mouse_head, mouse_count, mouse_overflow; // 环形队列位置、数量和溢出状态。
+
+// 调用前已进入中断保护；撤销或切换输入时不能保留旧位移。
+static void ClearMousePending(void)
+{
+    mouse_head = 0u; // 下一次入队从队首开始。
+    mouse_count = 0u; // 丢弃全部旧事件。
+    mouse_overflow = 0u; // 新的输入阶段重新开始统计。
+}
+
+// 调用前已进入中断保护；队列满时整批丢弃并等待消费者确认。
+static void QueueMouse(const RC_ctrl_t *input, uint32_t source_ms)
+{
+    if (!switch_is_up(input->rc.switch_left))
+    {
+        ClearMousePending(); // 切出键鼠档后不能再执行之前的位移。
+        return;
+    }
+    if (input->mouse.x == 0 && input->mouse.y == 0) return; // 零位移不占用事件槽。
+    if (mouse_overflow != 0u) return; // 消费者尚未观察到溢出前不接受不完整的新批次。
+    if (mouse_count == REMOTE_MOUSE_EVENT_CAPACITY)
+    {
+        mouse_count = 0u; // 丢弃无法完整交付的积压。
+        mouse_head = 0u; // 复位索引，等待消费者确认溢出。
+        mouse_overflow = 1u; // 本批不能被误当成完整位移。
+        if (remote_control_diag.mouse_overflows != UINT32_MAX) ++remote_control_diag.mouse_overflows; // 诊断计数到上限后保持。
+        return;
+    }
+    const uint8_t tail = (uint8_t)((mouse_head + mouse_count) % REMOTE_MOUSE_EVENT_CAPACITY); // 在队尾保存新事件。
+    mouse_events[tail] = (RemoteMouseEvent_t){input->mouse.x, input->mouse.y, source_ms, pc_sample_sequence}; // 保存原始时间与样本号。
+    ++mouse_count; // 完成复制后再增加可读数量。
+}
 
 // 保留0为未收到；32位自然回绕时跳过0，保证使用方能识别首份有效输入。
 static uint32_t NextSampleSequence(uint32_t previous)
@@ -46,6 +84,7 @@ static void RevokePC(uint32_t now, RemotePcRevokeReason_e reason)
         remote_control_diag.pc_revoke_reason = reason;
     }
     pc_sequence = 0u; pc_have_sequence = pc_authorized = 0u;
+    ClearMousePending(); // 失联或人工撤销后不能重放旧鼠标位移。
     remote_control_diag.pc_authorized = remote_control_diag.pc_recovery_count = 0u;
     ClearPC(&rc_ctrl[TEMP]); ClearPC(&rc_ctrl[LAST]);
 }
@@ -167,8 +206,37 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
         PlatformIrqRestore(primask);
         return;
     }
-    const uint32_t primask = PlatformIrqSaveAndDisable();
-    const uint32_t now = PlatformTimeNowMs();
+    uint32_t primask = PlatformIrqSaveAndDisable();
+    uint32_t now = PlatformTimeNowMs();
+    if (remote_control_diag.has_valid_frame != 0u)
+    {
+        const uint32_t gap = block->received_ms - remote_control_diag.last_valid_tick; // 比较实际接收时刻，不用延迟派发时刻。
+        if (gap > INT32_MAX)
+        {
+            ++remote_control_diag.rejected_fields; // 迟到的旧无线帧不能覆盖较新状态。
+            PlatformIrqRestore(primask);
+            return;
+        }
+        if (gap > REMOTE_RADIO_LEASE_MS)
+        {
+            RevokePC(now, REMOTE_PC_REVOKE_RADIO_LOST); // 离线回调尚未执行时也清除旧位移并要求重新授权。
+            remote_control_diag.offline_tick = now; // 保留本次发现断联的时刻。
+            remote_control_diag.offline_last_valid_tick = remote_control_diag.last_valid_tick; // 保存断联前最后接收时间。
+            ++remote_control_diag.offline_events; // 与离线回调使用同一诊断计数。
+            remote_control_diag.has_valid_frame = remote_control_diag.online = 0u; // 避免延迟离线回调重复处理。
+            RobotSafetySetRcOnline(0u); // 先在保护内撤销旧无线许可。
+            PlatformIrqRestore(primask); // 急停日志不能放在外层中断屏蔽中提交。
+            if (!RobotSafetyIsFormalAutonomous()) EstopRequest(ESTOP_REASON_RC_OFFLINE); // 调试和手动模式锁存急停。
+            primask = PlatformIrqSaveAndDisable(); // USART 单一派发者尚未返回；重新保护状态后处理本帧。
+            now = PlatformTimeNowMs(); // 重新取时，避免中途抢占后接受过期帧。
+            if ((uint32_t)(now - block->received_ms) > 50u)
+            {
+                ++remote_control_diag.rejected_length; // 已过接收处理期限的帧不重新授权。
+                PlatformIrqRestore(primask);
+                return;
+            }
+        }
+    }
     const uint16_t heartbeat = (uint16_t)(frame[10] | ((uint16_t)frame[11] << 8));
     remote_control_diag.raw_mouse_z = heartbeat;
     remote_control_diag.raw_key_bitmap = candidate.key[0].keys;
@@ -177,13 +245,18 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
     remote_control_diag.raw_mouse_left = candidate.mouse.press_l;
     remote_control_diag.raw_mouse_right = candidate.mouse.press_r;
     // 键鼠尚未通过检查时沿用已保存结果；撤销路径会先把该结果清零，摇杆仍可更新。
-    if (AcceptPC(&candidate, heartbeat, now, block->received_ms)) UpdateKeyEdges(&candidate);
+    if (AcceptPC(&candidate, heartbeat, now, block->received_ms))
+    {
+        UpdateKeyEdges(&candidate); // 只有新心跳才更新按键边沿。
+        QueueMouse(&candidate, block->received_ms); // 位移单独排队，避免多帧被最新值覆盖。
+    }
     else
     {
         candidate.mouse = controls[TEMP].mouse;
         memcpy(candidate.key, controls[TEMP].key, sizeof(candidate.key));
         memcpy(candidate.key_count, controls[TEMP].key_count, sizeof(candidate.key_count));
     }
+    if (!switch_is_up(candidate.rc.switch_left)) ClearMousePending(); // 即使 PC 心跳重复，切出键鼠档也要清除旧位移。
     controls[TEMP] = candidate;
     controls[LAST] = candidate;
     remote_control_diag.accepted_frames++;
@@ -308,6 +381,41 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     snapshot->pc_source_time_ms = remote_control_diag.pc_last_advance_tick; // 键鼠使用自己的期限起点。
     snapshot->pc_sample_sequence = pc_sample_sequence; // 重复心跳和重复查询都保留已有编号。
     PlatformIrqRestore(primask);
+}
+
+RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through_sequence, RemoteMouseBatch_t *batch)
+{
+    if (batch == NULL) return REMOTE_MOUSE_BAD_ARGUMENT; // 没有输出对象时不改变队列。
+    RemoteMouseBatch_t result = {0}; // 默认交付空批次。
+    if (through_sequence == 0u) { *batch = result; return REMOTE_MOUSE_EMPTY; } // 没有对应输入时不消费后来到达的数据。
+    const uint32_t previous = PlatformIrqSaveAndDisable(); // 接收和消费共用同一队列保护。
+    const uint32_t now = PlatformTimeNowMs(); // 本轮按当前本机时间检查事件期限。
+    ExpirePC(now); // 消费者延迟时也要执行键鼠失联撤销。
+    if (mouse_overflow != 0u)
+    {
+        ClearMousePending(); // 消费者已获知丢失，后续新事件重新开始。
+        PlatformIrqRestore(previous); // 不在中断屏蔽时执行上层处理。
+        *batch = result; // 溢出批次不交付部分位移。
+        return REMOTE_MOUSE_OVERFLOW;
+    }
+    while (mouse_count != 0u)
+    {
+        const RemoteMouseEvent_t event = mouse_events[mouse_head]; // 只读取队首，维持接收顺序。
+        if ((uint32_t)(through_sequence - event.sequence) > INT32_MAX) break; // 比快照更新的事件留到下一轮。
+        mouse_head = (uint8_t)((mouse_head + 1u) % REMOTE_MOUSE_EVENT_CAPACITY); // 从队列移除当前事件。
+        --mouse_count; // 消费和丢弃过期事件都释放一个槽。
+        if ((uint32_t)(now - event.source_ms) > REMOTE_PC_LEASE_MS) continue; // 过期或将来事件不得执行。
+        if (result.count == 0u ||
+            ((uint32_t)(result.oldest_source_ms - event.source_ms) != 0u &&
+             (uint32_t)(result.oldest_source_ms - event.source_ms) <= INT32_MAX))
+            result.oldest_source_ms = event.source_ms; // 保存本批最早原始时间，允许时钟回绕。
+        result.x += event.x; // 最多八个 int16 值相加，不会溢出 int32。
+        result.y += event.y; // 同样累计竖直位移。
+        ++result.count; // 只有未过期事件计入交付数量。
+    }
+    PlatformIrqRestore(previous); // 整批复制结束后恢复进入前的中断状态。
+    *batch = result; // 一次交付结果，失败或空队列不会保留旧位移。
+    return result.count != 0u ? REMOTE_MOUSE_OK : REMOTE_MOUSE_EMPTY;
 }
 
 uint8_t RemoteControlGetDiagnostics(RemoteControlDiagnostics_s *output)

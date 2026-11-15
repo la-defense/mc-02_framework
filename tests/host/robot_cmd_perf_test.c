@@ -47,6 +47,13 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     snapshot->radio_source_time_ms = test_tick; // 测试替身提供本轮无线来源时间。
     snapshot->pc_source_time_ms = test_tick; // 测试替身提供本轮键鼠来源时间。
 }
+RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through, RemoteMouseBatch_t *batch)
+{
+    (void)through; // 性能场景没有未消费的鼠标位移。
+    if (batch == NULL) return REMOTE_MOUSE_BAD_ARGUMENT;
+    memset(batch, 0, sizeof(*batch));
+    return REMOTE_MOUSE_EMPTY;
+}
 
 const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t handle)
 {

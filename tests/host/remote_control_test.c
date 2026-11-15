@@ -200,6 +200,26 @@ int main(int argc, char **argv)
     const RC_ctrl_t *rc = RemoteControlInit(PLATFORM_UART_5);
     CHECK(rc != NULL && dma_buffer != NULL);
     CHECK(!RemoteControlIsOnline());
+    if (argc > 1 && !strcmp(argv[1], "formal-autonomous-gap")) {
+        RobotSafetySetImuValid(1u); RobotSafetySetCalibValid(1u);
+        const RobotControlPolicy_t policy = {ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL, 1u, 1u, 0u};
+        CHECK(RobotSafetyConfigureControl(&policy)); RobotSafetyUpdate();
+        now = 1u;
+        const RobotSafetyControlInputs_t inputs = {
+            .mode = ROBOT_CONTROL_AUTONOMOUS, // 本场景选择正式自主。
+            .match = {1u, 5000u, 1u}, // 比赛阶段覆盖整个测试。
+            .feedback = {{1u, 5000u, 1u}, {1u, 5000u, 1u}, {0u, 0u, 0u}}, // 两组核心反馈有效。
+            .feedback_valid_functions = ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL,
+            .match_running = 1u,
+        };
+        CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate(); CHECK(RobotSafetyIsReady());
+        pc_frame(1u,0u); pc_frame(2u,0u); pc_frame(3u,1u); // 已授权键鼠，模拟无线正常。
+        now+=101u; pc_frame(4u,0u); // 离线事件未派发前先收到新无线帧。
+        RemoteControlSnapshot_s snapshot; RemoteControlGetSnapshot(&snapshot); RobotSafetyUpdate();
+        CHECK(!snapshot.pc_valid && !EstopIsLatched() && RobotSafetyIsReady()); // 正式自主不因遥控间断急停，键鼠仍要重新授权。
+        CHECK(DIAG(offline_events)==1u);
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "formal-autonomous-offline")) {
         RobotSafetySetImuValid(1u); RobotSafetySetCalibValid(1u); // 真实安全接口报告已检查的核心条件。
         const RobotControlPolicy_t policy = {ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL, 1u, 1u, 0u};
@@ -279,6 +299,7 @@ int main(int argc, char **argv)
         RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.input.key[0].w);
         pc_frame(0x8001,0); RemoteControlGetSnapshot(&s); CHECK(s.pc_valid && s.input.key[0].w);
         uint8_t b[18]; const uint16_t ch[5]={1024,1024,1024,1024,1024};
+        now=75; pc_frame(0x8001,0); // 无线仍有帧，PC 心跳不推进。
         encode(b,ch,1,3); set_heartbeat(b,2); b[12]=2; now=100; receive(b,18);
         CHECK(DIAG(pc_last_advance_tick)==0 && DIAG(raw_mouse_z)==0x8001);
         // 无线帧继续到达，但重复键鼠心跳不能延长150ms键鼠期限。

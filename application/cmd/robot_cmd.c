@@ -70,7 +70,6 @@ static float yaw_align_angle_deg = YAW_ALIGN_ANGLE;
 #endif
 static uint8_t previous_vision_active;
 static uint8_t manual_reference_ready;
-static uint32_t last_pc_sample_sequence; // 已观察的键鼠样本号，避免重复使用鼠标位移。
 
 typedef struct {
     uint32_t source_ms; // 当前最先到期的原始来源时刻。
@@ -100,14 +99,15 @@ static void RobotCmdLeaseInclude(RobotCmdLease_t *lease, uint8_t available,
 }
 
 // 命令话题还按自己的发布期限检查；失败时撤销旧目标。
-static void RobotCmdPublishBounded(MessagePublisher_t *publisher, const void *command,
-                                   const RobotCmdLease_t *lease, uint32_t now_ms)
+static uint8_t RobotCmdPublishBounded(MessagePublisher_t *publisher, const void *command,
+                                      const RobotCmdLease_t *lease, uint32_t now_ms)
 {
     MessageStatus_t status = MESSAGE_ERR_RANGE; // 来源缺失时直接撤销旧目标。
     if (lease->valid)
     {
 #if defined(GIMBAL_BOARD)
-        if (lease->max_age_ms >= MESSAGE_DEFAULT_MAX_AGE_MS)
+        if (lease->max_age_ms >= MESSAGE_DEFAULT_MAX_AGE_MS &&
+            (uint32_t)(now_ms - lease->source_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS)
             status = MessagePublishAt(publisher, command, lease->source_ms, lease->source_ms,
                                       now_ms, MESSAGE_CLOCK_LOCAL); // 双板现有话题按来源固定 50 ms，不能延长当前来源。
 #else
@@ -116,7 +116,11 @@ static void RobotCmdPublishBounded(MessagePublisher_t *publisher, const void *co
 #endif
     }
     if (status != MESSAGE_OK)
+    {
         (void)MessagePublisherInvalidate(publisher); // 不能把失败前的目标继续留给执行任务。
+        return 0u; // 通知云台接续逻辑丢弃未成功发布的内部目标。
+    }
+    return 1u; // 本轮目标已按期限交付。
 }
 
 // 只接受配置确认且为正数的底盘最大角速度，旧主机夹具沿用宏输入。
@@ -238,7 +242,6 @@ uint8_t RobotCMDInit(void)
     shoot_cmd_send.load_mode = LOAD_STOP;
     previous_vision_active = 0u;
     manual_reference_ready = 0u;
-    last_pc_sample_sequence = 0u; // 新一轮初始化从尚未观察键鼠数据开始。
     if (gimbal_cmd_pub == NULL || gimbal_feed_sub == NULL || shoot_cmd_pub == NULL)
         return 0u;
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
@@ -443,7 +446,7 @@ static void RemoteControlSet(uint8_t vision_active)
  * @brief 输入为键鼠时模式和控制量设置
  *
  */
-static void MouseKeySet(uint8_t vision_active, uint8_t mouse_delta_new)
+static void MouseKeySet(uint8_t vision_active, const RemoteMouseBatch_t *mouse)
 {
     chassis_cmd_send.wz = 0.0f;
     // 键盘模式直接使用陀螺仪反馈模式控制云台, 避免初值 GIMBAL_ZERO_FORCE 导致云台停电机
@@ -451,10 +454,10 @@ static void MouseKeySet(uint8_t vision_active, uint8_t mouse_delta_new)
     chassis_cmd_send.vx = rc_data[TEMP].key[KEY_PRESS].w * 300 - rc_data[TEMP].key[KEY_PRESS].s * 300; // 系数待测
     chassis_cmd_send.vy = rc_data[TEMP].key[KEY_PRESS].d * 300 - rc_data[TEMP].key[KEY_PRESS].a * 300; // 系数待测, D右移 A左移
 
-    if (!vision_active && mouse_delta_new)
+    if (!vision_active && mouse->count != 0u)
     {
-        gimbal_cmd_send.yaw += (float)rc_data[TEMP].mouse.x / 660 * 10; // 系数待测
-        gimbal_cmd_send.pitch += (float)rc_data[TEMP].mouse.y / 660 * 10;
+        gimbal_cmd_send.yaw += (float)mouse->x / 660 * 10; // 本批有效位移只执行一次，系数待测。
+        gimbal_cmd_send.pitch += (float)mouse->y / 660 * 10; // 多份位移已按接收顺序消费。
     }
 
     switch (rc_data[TEMP].key_count[KEY_PRESS][Key_Z] % 3) // Z键设置弹速
@@ -557,17 +560,9 @@ void RobotCMDTask()
     // 每轮读取一次输入，即使没有新帧也会检查键鼠是否超过使用时间。
     if (remote_initialized) RemoteControlGetSnapshot(&remote_snapshot);
     else memset(&remote_snapshot, 0, sizeof(remote_snapshot));
-    uint8_t mouse_delta_new = 0u; // 鼠标位移只允许对新的键鼠样本执行一次。
-    if (remote_snapshot.pc_valid && remote_snapshot.pc_sample_sequence != 0u)
-    {
-        const uint32_t sequence = remote_snapshot.pc_sample_sequence; // 使用来源模块分配的本机样本号。
-        const uint32_t advance = sequence - last_pc_sample_sequence; // 无符号差值允许计数回绕。
-        if (last_pc_sample_sequence == 0u || (advance != 0u && advance <= INT32_MAX))
-        {
-            mouse_delta_new = 1u; // 本轮观察到向前的新样本。
-            last_pc_sample_sequence = sequence; // 无论本轮是否使用，旧位移都不能在之后重放。
-        }
-    }
+    RemoteMouseBatch_t mouse_batch = {0}; // 按次位移与持续按键状态分别处理。
+    const RemoteMouseStatus_t mouse_status = RemoteControlConsumeMouse(
+        remote_snapshot.pc_valid ? remote_snapshot.pc_sample_sequence : 0u, &mouse_batch); // 只消费本次读取以前的事件。
 
     // 新协议分别复制瞄准与导航快照；彼此的更新不能替对方续期。
 #if defined(MC02_VISION_PROTOCOL_V2)
@@ -614,6 +609,8 @@ void RobotCMDTask()
 #endif
     VisionControlGimbalCommand_s vision_gimbal;
     const uint8_t vision_active = VisionControlBuildGimbalCommand(&vision_input, &vision_gimbal);
+    if (previous_vision_active && !vision_active)
+        memset(&mouse_batch, 0, sizeof(mouse_batch)); // 接管时无法确认积压位移发生在视觉退出前还是之后，先丢弃并以姿态接续。
     RobotSafetySetRcOnline(remote_online);
 #if defined(MC02_VISION_PROTOCOL_V2)
     const uint8_t manual_control_active = (uint8_t)(remote_online &&
@@ -645,7 +642,14 @@ void RobotCMDTask()
         if (switch_is_down(rc_data[TEMP].rc.switch_left))
             RemoteControlSet(vision_active);
         else
-            MouseKeySet(vision_active, mouse_delta_new);
+        {
+            MouseKeySet(vision_active, &mouse_batch); // 本轮已消费位移只应用一次。
+            if (!vision_active && mouse_status != REMOTE_MOUSE_OK && mouse_status != REMOTE_MOUSE_EMPTY)
+            {
+                gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE; // 位移不完整时本轮撤销云台目标。
+                manual_reference_ready = 0u; // 下次人工控制从真实姿态重新接续。
+            }
+        }
     }
     else
         ApplySafeCommands();
@@ -702,6 +706,10 @@ void RobotCMDTask()
     if (switch_is_up(rc_data[TEMP].rc.switch_left))
         RobotCmdLeaseInclude(&manual, remote_snapshot.pc_valid, remote_snapshot.pc_source_time_ms,
                              REMOTE_PC_LEASE_MS, publish_ms);
+    RobotCmdLease_t manual_gimbal = manual; // 本轮若使用了鼠标事件，还须检查最早事件的期限。
+    if (manual_allowed && !vision_active && switch_is_up(rc_data[TEMP].rc.switch_left) && mouse_batch.count != 0u)
+        RobotCmdLeaseInclude(&manual_gimbal, mouse_status == REMOTE_MOUSE_OK, mouse_batch.oldest_source_ms,
+                             REMOTE_PC_LEASE_MS, publish_ms);
     RobotCmdLease_t vision = radio; // 视觉目标仍依赖本轮实际选择及自身接收时间。
 #if defined(MC02_VISION_PROTOCOL_V2)
     RobotCmdLeaseInclude(&vision, vision_active, vision_v2_aim_freshness.received_time_ms,
@@ -722,22 +730,24 @@ void RobotCMDTask()
         (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
     else
 #if defined(MC02_VISION_PROTOCOL_V2)
-        RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, navigation_active ? &navigation : &manual, publish_ms);
+        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, navigation_active ? &navigation : &manual, publish_ms);
 #else
-        RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual, publish_ms);
+        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual, publish_ms);
 #endif
 #endif // ONE_BOARD
     if (shoot_cmd_send.shoot_mode == SHOOT_OFF && shoot_cmd_send.friction_mode == FRICTION_OFF && shoot_cmd_send.load_mode == LOAD_STOP)
         (void)MessagePublishNow(shoot_cmd_pub, &shoot_cmd_send);
     else
-        RobotCmdPublishBounded(shoot_cmd_pub, &shoot_cmd_send, vision_shoot_selected ? &vision : &manual, publish_ms);
+        (void)RobotCmdPublishBounded(shoot_cmd_pub, &shoot_cmd_send, vision_shoot_selected ? &vision : &manual, publish_ms);
     if (gimbal_cmd_send.gimbal_mode == GIMBAL_ZERO_FORCE)
         (void)MessagePublishNow(gimbal_cmd_pub, &gimbal_cmd_send);
     else
 #if defined(MC02_VISION_PROTOCOL_V2)
-        RobotCmdPublishBounded(gimbal_cmd_pub, &gimbal_cmd_send,
-            vision_active ? &vision : (autonomous_selected ? &local_hold : &manual), publish_ms);
+        if (!RobotCmdPublishBounded(gimbal_cmd_pub, &gimbal_cmd_send,
+            vision_active ? &vision : (autonomous_selected ? &local_hold : &manual_gimbal), publish_ms))
+            manual_reference_ready = 0u; // 本轮未交付的内部角度不能在下一轮复用。
 #else
-        RobotCmdPublishBounded(gimbal_cmd_pub, &gimbal_cmd_send, vision_active ? &vision : &manual, publish_ms);
+        if (!RobotCmdPublishBounded(gimbal_cmd_pub, &gimbal_cmd_send, vision_active ? &vision : &manual_gimbal, publish_ms))
+            manual_reference_ready = 0u; // 恢复后必须从实时姿态重新接续。
 #endif
 }

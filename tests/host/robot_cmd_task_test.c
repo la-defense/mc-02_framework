@@ -15,6 +15,7 @@ CAN_HandleTypeDef hcan1;
 static RC_ctrl_t remote[2];
 static uint8_t remote_online=1;
 static uint32_t pc_sample_sequence=1u; // 测试替身只有显式递增时才交付新鼠标位移。
+static uint32_t consumed_pc_sequence; // 每份替身位移最多交付一次。
 static uint8_t fixed_source_enabled; // 双板期限场景固定来源时间。
 static uint32_t fixed_source_ms;
 static uint32_t tick=100;
@@ -26,6 +27,18 @@ const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port) { (void)port; return
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
 { snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; snapshot->pc_sample_sequence=pc_sample_sequence; snapshot->radio_source_time_ms=fixed_source_enabled ? fixed_source_ms : tick; snapshot->pc_source_time_ms=fixed_source_enabled ? fixed_source_ms : tick; }
+RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through, RemoteMouseBatch_t *batch)
+{
+    if (batch == NULL) return REMOTE_MOUSE_BAD_ARGUMENT;
+    memset(batch, 0, sizeof(*batch));
+    const uint32_t advance = through - consumed_pc_sequence; // 测试替身按来源序号去重并允许回绕。
+    if (through == 0u || (consumed_pc_sequence != 0u && (advance == 0u || advance > INT32_MAX))) return REMOTE_MOUSE_EMPTY;
+    consumed_pc_sequence = through;
+    if (remote[0].mouse.x == 0 && remote[0].mouse.y == 0) return REMOTE_MOUSE_EMPTY;
+    batch->x = remote[0].mouse.x; batch->y = remote[0].mouse.y;
+    batch->oldest_source_ms = tick; batch->count = 1u;
+    return REMOTE_MOUSE_OK;
+}
 Vision_Recv_s *VisionInit(PlatformUartPort_t h) { (void)h; return &wire; }
 void VisionSend(void) {}
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link) { *frame=wire; *link=status; ++snapshots; }
@@ -142,7 +155,7 @@ int main(int argc, char **argv)
         tick+=50u; MessagePublishNow(feedback,&pose); RobotCMDTask();
         CHECK(MessageReadSnapshot(bridge,&sent,sizeof(sent),tick,NULL)==MESSAGE_OK);
         ++tick; MessagePublishNow(feedback,&pose); RobotCMDTask();
-        CHECK(MessageReadSnapshot(bridge,&sent,sizeof(sent),tick,NULL)==MESSAGE_ERR_EXPIRED); // 重复发布不能延长板间来源期限。
+        CHECK(MessageReadSnapshot(bridge,&sent,sizeof(sent),tick,NULL)==MESSAGE_ERR_EMPTY); // 超过固定期限时撤销旧话题。
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "dual-board")) {
@@ -323,14 +336,14 @@ int main(int argc, char **argv)
     wire.mode=0; remote[0].mouse.x=66; remote[0].mouse.y=-66; ++pc_sample_sequence; tick+=5;
     MessagePublishNow(feedback, &pose); RobotCMDTask();
     CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), HAL_GetTick(), NULL) == MESSAGE_OK && MessageReadSnapshot(shoot, &shooting, sizeof(shooting), HAL_GetTick(), NULL) == MESSAGE_OK);
-    CHECK(command.yaw==13 && command.pitch==2 && command.yaw_vel==0 && command.pitch_acc==0);
+    CHECK(command.yaw==12 && command.pitch==3 && command.yaw_vel==0 && command.pitch_acc==0); // 视觉退出当轮的积压位移不跨模式重放。
     CHECK(shooting.shoot_rate==8 && shooting.load_mode==LOAD_BURSTFIRE);
     tick+=5; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 读取同一鼠标样本不能再次移动目标。
     CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), HAL_GetTick(), NULL) == MESSAGE_OK);
-    CHECK(command.yaw==13 && command.pitch==2);
+    CHECK(command.yaw==12 && command.pitch==3);
     ++pc_sample_sequence; tick+=5; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 新样本才允许再次累加。
     CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), HAL_GetTick(), NULL) == MESSAGE_OK);
-    CHECK(command.yaw==14 && command.pitch==1);
+    CHECK(command.yaw==13 && command.pitch==2);
     wire.mode=2; ++pc_sample_sequence; tick+=5; status.last_rx_ms=tick; // 视觉控制期间也记录已观察的鼠标样本。
     MessagePublishNow(feedback, &pose); RobotCMDTask();
     wire.mode=0; tick+=5; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 回到手动时不能重放视觉期间的位移。

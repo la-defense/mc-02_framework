@@ -38,6 +38,13 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     snapshot->radio_source_time_ms = test_tick; // 替身模拟本轮收到新的无线输入。
     snapshot->pc_source_time_ms = test_tick; // 自主档需要的 PC 状态也保持有效。
 }
+RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through, RemoteMouseBatch_t *batch)
+{
+    (void)through; // 本场景不模拟鼠标位移。
+    if (batch == NULL) return REMOTE_MOUSE_BAD_ARGUMENT;
+    memset(batch, 0, sizeof(*batch));
+    return REMOTE_MOUSE_EMPTY;
+}
 Vision_Recv_s *VisionInit(PlatformUartPort_t handle) { (void)handle; return &unused_wire_frame; }
 void VisionSend(void) {}
 void VisionGetStatus(Vision_Status_t *status)

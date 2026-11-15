@@ -1,5 +1,12 @@
 remote_control
 <p align='right'>neozng1@hnu.edu.cn</p>
+
+> 当前接入以 [remote_control.h](remote_control.h) 和 `RobotCMDTask()` 为准，下方开关用途包含上游历史说明。
+
+键盘状态由 `RemoteControlGetSnapshot()` 读取；鼠标位移由唯一命令任务通过 `RemoteControlConsumeMouse()` 按次消费。接收端最多缓存八个事件，保留接收时间和本机样本号；过期、切档或来源失效的事件被丢弃。溢出时整批丢弃，状态与 `mouse_overflows` 计数可用于诊断，人工云台暂时失能并在下次控制时以实际姿态接续。
+
+前后无线帧原始接收间隔超过 100 ms 时，即使离线回调尚未派发也先撤销旧键鼠数据；手动／调试模式锁存遥控离线急停，正式自主按其许可规则处理，键鼠重新授权需要两帧松开。
+
 ```
 /*************************发射机DT7***************************
  *                                                            *

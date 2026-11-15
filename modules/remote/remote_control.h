@@ -158,6 +158,29 @@ typedef struct
  */
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot);
 
+#define REMOTE_MOUSE_EVENT_CAPACITY 8u // 最多保存八份尚未消费的鼠标位移。
+typedef enum {
+    REMOTE_MOUSE_OK = 0, // 已交付至少一份未过期位移。
+    REMOTE_MOUSE_EMPTY, // 没有可消费位移。
+    REMOTE_MOUSE_OVERFLOW, // 输入过快导致位移丢失，本批结果不可信。
+    REMOTE_MOUSE_BAD_ARGUMENT // 参数无效，队列不变。
+} RemoteMouseStatus_t;
+typedef struct {
+    int32_t x; // 本批水平位移总和，原始鼠标单位。
+    int32_t y; // 本批竖直位移总和，原始鼠标单位。
+    uint32_t oldest_source_ms; // 本批最早位移的原接收时间。
+    uint8_t count; // 本批合并的有效事件数，最多 REMOTE_MOUSE_EVENT_CAPACITY。
+} RemoteMouseBatch_t;
+
+/** @brief 由唯一命令任务消费不晚于指定键鼠样本号的鼠标位移。
+ * @param[in] through_sequence 本轮键鼠读取获得的本机序号；0 表示本轮不消费。
+ * @param[out] batch 非空时接收结果；参数错误不改写，其他状态清零或写入整批。
+ * @return 有有效位移、无数据、队列溢出或参数错误。
+ * @note 事件仅在键鼠授权且选择键鼠档时记录；失联、撤销或离开键鼠档会丢弃待处理位移。
+ *       过期事件不执行；溢出会丢弃当前积压并报告，后续新事件可重新开始。
+ */
+RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through_sequence, RemoteMouseBatch_t *batch);
+
 // 诊断副本；时间单位为 HAL 毫秒，次数为累计次数，不参与调用方直接控制。
 typedef struct
 {
@@ -185,6 +208,7 @@ typedef struct
     uint32_t pc_expirations;
     uint32_t pc_revoke_tick;
     uint32_t pc_revoke_reason;
+    uint32_t mouse_overflows; // 队列溢出时累计，供诊断查询。
 } RemoteControlDiagnostics_s;
 
 /** @brief 一次复制遥控诊断记录，避免逐字段读取跨越接收或离线更新。
