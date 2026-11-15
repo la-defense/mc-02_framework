@@ -71,13 +71,18 @@ typedef struct
 static TestRxFrame_t rx_frames[DEVICE_CAN_CNT][64];
 static uint8_t rx_frame_count[DEVICE_CAN_CNT];
 static uint8_t rx_frame_read[DEVICE_CAN_CNT];
+static TestRxFrame_t rx_fifo1_frames[DEVICE_CAN_CNT][64]; // 分开模拟每条总线的 FIFO1。
+static uint8_t rx_fifo1_count[DEVICE_CAN_CNT], rx_fifo1_read[DEVICE_CAN_CNT];
 static uint8_t inject_after_filter, pending_registration_irq;
 static uint8_t rx_read_failures; // 受控注入接收失败，避免测试因错误循环无限运行。
+static uint8_t rx_fifo1_failure; // 单独注入 FIFO1 读取失败。
+static uint8_t rx_fifo_stuck; // 模拟成功读取但 FIFO 占用不下降。
 static uint32_t rx_read_calls; // 记录 HAL 实际读取次数。
 static uint32_t burst_rx_count[DEVICE_CAN_CNT];
 static uint32_t burst_rx_bad[DEVICE_CAN_CNT];
 static uint32_t burst_last_cycle[DEVICE_CAN_CNT];
 static uint8_t status_busoff[DEVICE_CAN_CNT]; // 模拟各总线独立的关闭状态。
+static uint8_t suppress_busoff_init; // 模拟总线关闭标志与 INIT 状态尚不一致。
 static uint8_t status_error[DEVICE_CAN_CNT]; // 模拟各总线独立的错误状态。
 static uint8_t status_read_failure; // 模拟 HAL 查询失败。
 static uint8_t inject_submit_on_stop; // 在控制器停止期间模拟其他任务提交。
@@ -283,6 +288,7 @@ uint32_t HAL_FDCAN_GetProtocolStatus(FDCAN_HandleTypeDef *handle, FDCAN_Protocol
     if (bus < DEVICE_CAN_CNT) {
         status->BusOff = status_busoff[bus];
         status->ErrorPassive = status_error[bus];
+        if (status->BusOff && !suppress_busoff_init) handle->Instance->CCCR |= FDCAN_CCCR_INIT; // 通常 BusOff 后进入 INIT。
     }
     return HAL_OK;
 }
@@ -294,14 +300,15 @@ uint32_t HAL_FDCAN_GetErrorCounters(FDCAN_HandleTypeDef *handle, FDCAN_ErrorCoun
 }
 uint32_t HAL_FDCAN_GetRxFifoFillLevel(FDCAN_HandleTypeDef *handle, uint32_t fifo)
 {
-    (void)fifo;
     uint8_t bus = bus_for_handle(handle);
+    if (rx_fifo_stuck && bus == 0u && fifo == FDCAN_RX_FIFO0) return 1u; // 模拟异常时始终不为空。
+    if (bus < DEVICE_CAN_CNT && fifo == FDCAN_RX_FIFO1)
+        return (uint32_t)(rx_fifo1_count[bus] - rx_fifo1_read[bus]); // FIFO1 独立于 FIFO0。
     return bus < DEVICE_CAN_CNT ? (uint32_t)(rx_frame_count[bus] - rx_frame_read[bus]) : 0u;
 }
 uint32_t HAL_FDCAN_GetRxMessage(FDCAN_HandleTypeDef *handle, uint32_t fifo,
                                 FDCAN_RxHeaderTypeDef *header, uint8_t *data)
 {
-    (void)fifo;
     ++rx_read_calls; // 每次调用都计数，验证失败后不会继续读取。
     if (rx_read_failures != 0u)
     {
@@ -309,6 +316,21 @@ uint32_t HAL_FDCAN_GetRxMessage(FDCAN_HandleTypeDef *handle, uint32_t fifo,
         return HAL_ERROR;
     }
     uint8_t bus = bus_for_handle(handle);
+    if (rx_fifo_stuck && bus == 0u && fifo == FDCAN_RX_FIFO0)
+    {
+        memset(header, 0, sizeof(*header)); // 模拟 HAL 报告读取成功。
+        memset(data, 0, 64u); // 清空输出，保留 FIFO 不下降的故障。
+        return HAL_OK;
+    }
+    if (bus < DEVICE_CAN_CNT && fifo == FDCAN_RX_FIFO1)
+    {
+        if (rx_fifo1_failure != 0u) return HAL_ERROR; // FIFO0 成功后也可能在 FIFO1 失败。
+        if (rx_fifo1_read[bus] >= rx_fifo1_count[bus]) return HAL_ERROR; // 空 FIFO 不可读取。
+        TestRxFrame_t *frame = &rx_fifo1_frames[bus][rx_fifo1_read[bus]++]; // 只消费 FIFO1 的帧。
+        *header = frame->header; // 复制被丢弃的帧头。
+        memcpy(data, frame->data, sizeof(frame->data)); // 和实际 HAL 一样允许最大负载。
+        return HAL_OK;
+    }
     if (bus >= DEVICE_CAN_CNT || rx_frame_read[bus] >= rx_frame_count[bus])
         return HAL_ERROR;
     TestRxFrame_t *frame = &rx_frames[bus][rx_frame_read[bus]++];
@@ -2698,6 +2720,45 @@ static void test_busoff_discards_queued_feedback(void)
     TEST_CHECK(other_state.count == 1u && other_state.marker == 0x11u); // 其他总线的旧队列不变。
 }
 
+static void test_busoff_discards_hardware_fifo(uint8_t read_failure)
+{
+    PlatformCanRxPort_t first = {0}, other = {0}; // 两路端点用于检查隔离范围。
+    ExtendedRxState first_state = {0}, other_state = {0}; // 记录最终派发次数。
+    PlatformCanEndpoint_t endpoint = {.can_bus = PLATFORM_CAN_BUS_1, .tx_id = 0x321u, .rx_id = 0x123u};
+    TEST_CHECK(PlatformCanRxRegister(&first, &endpoint, extended_rx_callback, &first_state));
+    endpoint.can_bus = PLATFORM_CAN_BUS_2;
+    TEST_CHECK(PlatformCanRxRegister(&other, &endpoint, extended_rx_callback, &other_state));
+    rx_frames[0][0].header.Identifier = 0x123u; // 故障前的帧仍留在 FIFO0。
+    rx_frames[0][0].header.DataLength = 1u << 16u;
+    rx_frames[0][0].data[0] = 0x11u;
+    rx_frame_count[0] = 1u;
+    rx_fifo1_frames[0][0] = rx_frames[0][0]; // FIFO1 也留有旧帧。
+    rx_fifo1_count[0] = 1u;
+    rx_frames[1][0] = rx_frames[0][0]; // 另一条总线的帧不能被清除。
+    rx_frame_count[1] = 1u;
+    rx_read_failures = (uint8_t)(read_failure == 1u); // 模拟 FIFO0 读取失败。
+    rx_fifo1_failure = (uint8_t)(read_failure == 2u); // 另一个场景模拟 FIFO1 读取失败。
+    status_busoff[0] = 1u;
+    now_us = 100000u;
+    CANHealthMonitor(); // 只清理暂停总线的硬件 FIFO。
+    if (read_failure != 0u)
+    {
+        TEST_CHECK(CANBusIsQuarantined(&hfdcan1)); // 未确认清空时禁止重启。
+        TEST_CHECK(rx_frame_read[0] == (uint8_t)(read_failure == 2u)); // FIFO1 失败前允许 FIFO0 已清空。
+        TEST_CHECK(rx_fifo1_read[0] == 0u); // 失败不能伪装成 FIFO1 已清空。
+    }
+    else
+    {
+        TEST_CHECK(!CANBusIsQuarantined(&hfdcan1));
+        TEST_CHECK(rx_frame_read[0] == 1u && rx_fifo1_read[0] == 1u); // 两个 FIFO 均已清空。
+        HAL_FDCAN_RxFifo0Callback(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE);
+        HAL_FDCAN_RxFifo1Callback(&hfdcan1, FDCAN_IT_RX_FIFO1_NEW_MESSAGE);
+    }
+    HAL_FDCAN_RxFifo0Callback(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE); // 其他总线仍正常读取。
+    CANProcessRx();
+    TEST_CHECK(first_state.count == 0u && other_state.count == 1u);
+}
+
 static void test_busoff_recovery_failure(uint8_t stop_failure)
 {
     TEST_CHECK(CANStartBus(&hfdcan1)); // 在启用故障注入前启动总线。
@@ -2710,6 +2771,27 @@ static void test_busoff_recovery_failure(uint8_t stop_failure)
     TEST_CHECK(CANBusIsQuarantined(&hfdcan1));
     TEST_CHECK(!CANBusIsQuarantined(&hfdcan2));
     TEST_CHECK(!CANStartBus(&hfdcan1)); // 不能靠重新注册绕过隔离。
+}
+
+static void test_busoff_without_init(void)
+{
+    TEST_CHECK(CANStartBus(&hfdcan1)); // 正常启动后再注入不一致状态。
+    suppress_busoff_init = 1u; // 不模拟硬件进入 INIT。
+    status_busoff[0] = 1u;
+    now_us = 100000u;
+    CANHealthMonitor();
+    TEST_CHECK(CANBusIsQuarantined(&hfdcan1)); // 无法证明接收已停止时不能清空后重启。
+}
+
+static void test_busoff_fifo_stuck(void)
+{
+    TEST_CHECK(CANStartBus(&hfdcan1)); // 准备故障总线。
+    rx_fifo_stuck = 1u; // 读取后占用仍不下降。
+    status_busoff[0] = 1u; // 驱动进入 FIFO 清理路径。
+    now_us = 100000u;
+    CANHealthMonitor();
+    TEST_CHECK(rx_read_calls == 64u); // 读操作必须在固定次数后停止。
+    TEST_CHECK(CANBusIsQuarantined(&hfdcan1)); // 未能清空时保持隔离。
 }
 
 static void test_busoff_inflight_quarantine(uint8_t unknown_slot)
@@ -2776,10 +2858,20 @@ int main(int argc, char **argv)
         test_busoff_cancels_queued();
     else if (strcmp(argv[1], "busoff-rx-generation") == 0)
         test_busoff_discards_queued_feedback();
+    else if (strcmp(argv[1], "busoff-rx-hardware") == 0)
+        test_busoff_discards_hardware_fifo(0u);
+    else if (strcmp(argv[1], "busoff-rx-read-fails") == 0)
+        test_busoff_discards_hardware_fifo(1u);
+    else if (strcmp(argv[1], "busoff-rx-fifo1-fails") == 0)
+        test_busoff_discards_hardware_fifo(2u);
     else if (strcmp(argv[1], "busoff-stop-fails") == 0)
         test_busoff_recovery_failure(1u);
     else if (strcmp(argv[1], "busoff-start-fails") == 0)
         test_busoff_recovery_failure(0u);
+    else if (strcmp(argv[1], "busoff-without-init") == 0)
+        test_busoff_without_init();
+    else if (strcmp(argv[1], "busoff-fifo-stuck") == 0)
+        test_busoff_fifo_stuck();
     else if (strcmp(argv[1], "busoff-inflight") == 0)
         test_busoff_inflight_quarantine(0u);
     else if (strcmp(argv[1], "busoff-unknown-slot") == 0)

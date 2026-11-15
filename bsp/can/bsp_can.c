@@ -1958,6 +1958,31 @@ uint8_t CANGetObservationCounters(uint8_t bus_index, CAN_ObservationCounters_t *
     return 1u;
 }
 
+// 控制器已进入 INIT 时有界丢弃两个硬件 FIFO 的旧帧，不向模块派发。
+static uint8_t CANDiscardStoppedRx(FDCAN_HandleTypeDef *handle)
+{
+    if (handle == NULL || handle->Instance == NULL ||
+        (handle->Instance->CCCR & FDCAN_CCCR_INIT) == 0u)
+        return 0u; // 不能证明停止接收时，不能认定 FIFO 已清空。
+    const uint32_t fifos[] = {FDCAN_RX_FIFO0, FDCAN_RX_FIFO1}; // 两个硬件 FIFO 都要处理。
+    for (uint8_t index = 0u; index < 2u; ++index)
+    {
+        const uint32_t fifo = fifos[index]; // 选择本轮清理的 FIFO。
+        for (uint8_t count = 0u; count < 64u; ++count)
+        {
+            if (HAL_FDCAN_GetRxFifoFillLevel(handle, fifo) == 0u) break; // 已空时转向下一个 FIFO。
+            if (handle->State != HAL_FDCAN_STATE_BUSY) return 0u; // HAL 只允许 BUSY 状态读取接收帧。
+            FDCAN_RxHeaderTypeDef header = {0}; // 旧帧头只用于满足 HAL 输出要求。
+            uint8_t data[64] = {0}; // HAL 可能复制最长 CAN FD 负载，不能只预留 8 字节。
+            if (HAL_FDCAN_GetRxMessage(handle, fifo, &header, data) != HAL_OK)
+                return 0u; // 读取失败时旧帧可能仍在，禁止重启。
+        }
+        if (HAL_FDCAN_GetRxFifoFillLevel(handle, fifo) != 0u)
+            return 0u; // 超过硬件最大容量仍未清空，不能无限等待或放行。
+    }
+    return 1u; // 两个 FIFO 均确认为空。
+}
+
 /**
  * @brief CAN 总线健康检查 + BusOff 恢复
  *        空总线(没有从机应答)会让 TEC 迅速累计到 256 进入 BusOff, 而 BusOff 后
@@ -2007,6 +2032,11 @@ void CANHealthMonitor(void)
             if (hardware_pending != 0u)
             {
                 CANQuarantineBus(bus->handle); // 尚不能确认硬件帧已取消，不能重新启动总线。
+                continue;
+            }
+            if (!CANDiscardStoppedRx(bus->handle))
+            {
+                CANQuarantineBus(bus->handle); // 无法确认旧硬件接收帧已清除时保持隔离。
                 continue;
             }
             /* 对齐 HAL 的 State(它可能与真实硬件不一致), 否则 Start 会直接返回错误 */

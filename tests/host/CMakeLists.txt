@@ -987,8 +987,13 @@ add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platfo
 add_test(NAME production_platform_can_status COMMAND lk_motor_bsp_can_test platform-can-status)
 add_test(NAME production_can_busoff_cancels_queued COMMAND lk_motor_bsp_can_test busoff-cancel-queued) # 只撤销故障总线的软件旧帧。
 add_test(NAME production_can_busoff_rx_generation COMMAND lk_motor_bsp_can_test busoff-rx-generation) # 丢弃故障前入队的本总线反馈。
+add_test(NAME production_can_busoff_rx_hardware COMMAND lk_motor_bsp_can_test busoff-rx-hardware) # 两个硬件 FIFO 均需清空。
+add_test(NAME production_can_busoff_rx_read_fails COMMAND lk_motor_bsp_can_test busoff-rx-read-fails) # 读取失败保持隔离。
+add_test(NAME production_can_busoff_rx_fifo1_fails COMMAND lk_motor_bsp_can_test busoff-rx-fifo1-fails) # 第二个 FIFO 失败也保持隔离。
 add_test(NAME production_can_busoff_stop_fails COMMAND lk_motor_bsp_can_test busoff-stop-fails) # 停止失败不得恢复。
 add_test(NAME production_can_busoff_start_fails COMMAND lk_motor_bsp_can_test busoff-start-fails) # 启动失败不得恢复。
+add_test(NAME production_can_busoff_without_init COMMAND lk_motor_bsp_can_test busoff-without-init) # 接收未停止时不能认定 FIFO 已清空。
+add_test(NAME production_can_busoff_fifo_stuck COMMAND lk_motor_bsp_can_test busoff-fifo-stuck) # FIFO 不下降时有界退出。
 add_test(NAME production_can_busoff_inflight_quarantine COMMAND lk_motor_bsp_can_test busoff-inflight) # 硬件帧未确认不能重启。
 add_test(NAME production_can_busoff_unknown_slot COMMAND lk_motor_bsp_can_test busoff-unknown-slot) # 槽位不明也要保持隔离。
 add_test(NAME production_platform_can_receive COMMAND lk_motor_bsp_can_test platform-can-rx)
