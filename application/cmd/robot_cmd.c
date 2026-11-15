@@ -685,13 +685,36 @@ void RobotCMDTask()
                                     manual_control_active ? &manual_shoot_command : NULL,
                                     &selected_shoot_command);
 #else
-    const uint8_t vision_shoot_selected = VisionControlSelectShootCommand(&vision_input,
-                                    manual_allowed ? &manual_shoot_command : NULL,
+    RobotControlPermits_t shoot_permits = {0}; // 没有完整自主许可时不让视觉取得击发权。
+    const uint8_t formal_autonomous = RobotSafetyIsFormalAutonomous(); // 读取安全管理确认的车型自主资格和所选模式。
+    const uint8_t vision_fire_allowed = (uint8_t)(formal_autonomous &&
+        RobotSafetyGetFunctionPermitsAt(PlatformTimeNowMs(), &shoot_permits) &&
+        shoot_permits.fire_allowed && shoot_permits.fire_source == ROBOT_CONTROL_SOURCE_VISION); // 自主击发须有当前有效的独立许可。
+    const uint8_t vision_shoot_selected = VisionControlSelectShootCommand(
+                                    vision_fire_allowed ? &vision_input : NULL, // 仅正式自主且获许可时使用视觉击发。
+                                    (!formal_autonomous && manual_allowed) ? &manual_shoot_command : NULL, // 人工及辅助模式保留人工击发权。
                                     &selected_shoot_command);
 #endif
     ApplyShootCommand(&selected_shoot_command);
 
     EmergencyHandler(remote_online); // 最终安全状态始终覆盖命令选择
+    RobotControlPermits_t current_permits = {0}; // 分功能策略启用时再次检查实际发射许可。
+    if (RobotSafetyGetFunctionPermitsAt(PlatformTimeNowMs(), &current_permits))
+    {
+        if ((current_permits.functions & ROBOT_CONTROL_SHOOTER) == 0u)
+        {
+            shoot_cmd_send.shoot_mode = SHOOT_OFF; // 发射机构局部禁止时关闭发射模块。
+            shoot_cmd_send.friction_mode = FRICTION_OFF; // 不保留受禁止机构的摩擦轮目标。
+            shoot_cmd_send.load_mode = LOAD_STOP; // 拨弹目标同时清零。
+            shoot_cmd_send.shoot_rate = 0.0f; // 不把旧射速留给下次接管。
+        }
+        else if (current_permits.fire_allowed == 0u ||
+                 current_permits.fire_source != (vision_shoot_selected ? ROBOT_CONTROL_SOURCE_VISION : ROBOT_CONTROL_SOURCE_MANUAL))
+        {
+            shoot_cmd_send.load_mode = LOAD_STOP; // 机构许可不等于允许本次击发。
+            shoot_cmd_send.shoot_rate = 0.0f; // 击发来源不匹配时撤销旧射速。
+        }
+    }
     previous_vision_active = (uint8_t)(vision_active && RobotSafetyIsReady());
 
     // 设置视觉发送数据(四元数+yaw/pitch+弹速+弹计数), 通过 VisionUpdateTx + VisionSend 回传上位机

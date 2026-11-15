@@ -1827,6 +1827,9 @@ endif()
 add_test(NAME production_command_task_vision_handoff COMMAND robot_cmd_vision_test)
 add_test(NAME production_command_task_vision_fault_recovery COMMAND robot_cmd_vision_test faults)
 add_test(NAME production_shoot_vision_source_switches COMMAND robot_cmd_vision_test shoot-switches)
+add_test(NAME production_shoot_manual_authority COMMAND robot_cmd_vision_test shoot-manual-authority) # 人工击发不能被视觉帧覆盖。
+add_test(NAME production_shoot_formal_authority COMMAND robot_cmd_vision_test shoot-formal-authority) # 正式自主击发必须获得安全许可。
+add_test(NAME production_shoot_local_permission COMMAND robot_cmd_vision_test shoot-local-permission) # 发射局部禁止不依赖整车是否 READY。
 add_executable(robot_cmd_v2_test robot_cmd_v2_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c ../../application/topics/robot_topics.c
   ../../modules/safety/robot_safety.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}

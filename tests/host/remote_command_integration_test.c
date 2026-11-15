@@ -143,13 +143,13 @@ int main(int argc,char **argv)
         now=last+150; pc_input(3,1,66);
         vision=(Vision_Recv_s){.mode=2,.yaw=.1f,.pitch=.1f,.yaw_vel=.2f,.pitch_acc=-.3f};
         vision_status.online=1; vision_status.last_rx_ms=now;
-        cycle(0); CHECK(observed_shoot.load_mode==LOAD_BURSTFIRE && observed_gimbal.yaw_vel>0);
+        cycle(0); CHECK(observed_shoot.load_mode==LOAD_1_BULLET && observed_gimbal.yaw_vel>0); // 键鼠仍有效时，供弹使用人工选择。
         now=last+151; cycle(0);
         CHECK(observed_chassis.chassis_mode==CHASSIS_ZERO_FORCE && observed_chassis.vx==0);
-        CHECK(observed_shoot.friction_mode==FRICTION_ON && observed_shoot.load_mode==LOAD_BURSTFIRE);
+        CHECK(observed_shoot.friction_mode==FRICTION_OFF && observed_shoot.load_mode==LOAD_STOP); // 人工来源过期后，视觉不能擅自恢复击发。
         CHECK(observed_gimbal.yaw_vel>0 && observed_gimbal.pitch_acc<0);
         CHECK(RobotSafetyIsReady() && !EstopIsLatched());
-        vision.mode=1; cycle(0); CHECK(observed_shoot.load_mode==LOAD_STOP && observed_shoot.friction_mode==FRICTION_ON);
+        vision.mode=1; cycle(0); CHECK(observed_shoot.load_mode==LOAD_STOP && observed_shoot.friction_mode==FRICTION_OFF); // 视觉模式变化不产生人工发射请求。
         vision.mode=0; cycle(1);
         pc_input(4,1,0); cycle(1);
         pc_input(5,0,0); pc_input(6,0,0); pc_input(7,1,0); cycle(0);
