@@ -258,6 +258,47 @@ static int single_feedback_roles(void)
     return EXIT_SUCCESS;
 }
 
+static int single_feedback_expired_frame(void)
+{
+    now_us = 1000u; RobotSafetyInit(); // 建立允许人工运行的核心条件。
+    RobotSafetySetRcOnline(1u); RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u); RobotSafetySetTaskHealthy(1u);
+    const RobotControlPolicy_t policy = {ROBOT_CONTROL_ALL, 1u, 0u, 0u};
+    TEST_CHECK(RobotSafetyConfigureControl(&policy));
+    RobotSafetyRequestEnable(); RobotSafetyUpdate();
+    RobotSafetyControlInputs_t input = {0};
+    input.mode = ROBOT_CONTROL_MANUAL;
+    input.manual = (RobotControlLease_t){2u, 100u, 1u}; // 运动命令仍在有效期限内。
+    for (unsigned i = 0u; i < 3u; ++i) input.feedback[i] = (RobotControlLease_t){2u, 100u, 1u};
+    input.feedback[0].max_age_ms = 3u; // 底盘反馈在本测试中先过期。
+    input.feedback_valid_functions = ROBOT_CONTROL_ALL;
+    now_us = 2000u; TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    for (uint8_t i = 0u; i < 2u; ++i)
+    {
+        Motor_Init_Config_s config = motor_config((uint8_t)(i + 1u));
+        config.output_role = i == 0u ? MOTOR_OUTPUT_CHASSIS : MOTOR_OUTPUT_GIMBAL;
+        DJIMotorInstance *motor = DJIMotorInit(&config);
+        TEST_CHECK(motor != NULL);
+        receive(motor, 2000u, 2u, 0, 0); // 两台电机都收到设备反馈。
+        DJIMotorSetRef(motor, 10.0f); DJIMotorEnable(motor);
+    }
+    control_at(3000u); control_at(4000u); // 计算并排队两个非零目标。
+    TEST_CHECK((sent[0] || sent[1]) && (sent[2] || sent[3]));
+    now_us = 6000u; // 底盘期限已过，排队帧还没有被硬件接受。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    for (unsigned i = 0u; i < 8u; ++i) TEST_CHECK(deferred_payload[i] == 0u); // 发现过期时旧代际整帧撤销。
+    control_at(7000u); // 下一帧可以保留其他仍有效的机构。
+    TEST_CHECK(sent[0] == 0u && sent[1] == 0u && (sent[2] || sent[3]));
+    now_us = 8000u; input.feedback[0] = (RobotControlLease_t){8u, 3u, 1u};
+    input.manual.source_time_ms = 7u; // 故障恢复前的命令不得接管。
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    control_at(9000u); TEST_CHECK(sent[0] == 0u && sent[1] == 0u);
+    now_us = 10000u; input.manual.source_time_ms = 10u; // 恢复后新的人工命令才可以接管。
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    control_at(11000u); TEST_CHECK(sent[0] || sent[1]);
+    return EXIT_SUCCESS;
+}
+
 static int single_shared_frame_permissions(uint8_t include_unassigned)
 {
     now_us = 1000u; // 先建立本机时刻和核心健康状态。
@@ -273,6 +314,7 @@ static int single_shared_frame_permissions(uint8_t include_unassigned)
     RobotSafetyControlInputs_t input = {0};
     input.mode = ROBOT_CONTROL_MANUAL;
     input.manual = (RobotControlLease_t){2u, 100u, 1u}; // 恢复后新鲜的人工来源。
+    for (unsigned i = 0u; i < 3u; ++i) input.feedback[i] = (RobotControlLease_t){2u, 100u, 1u}; // 模拟独立有效的三组反馈。
     input.feedback_valid_functions = ROBOT_CONTROL_ALL;
     input.manual_fire_requested = 1u;
     now_us = 2000u;
@@ -638,6 +680,8 @@ int main(int argc, char **argv)
         return single_safety_output_gate();
     if (strcmp(argv[1], "single-feedback-roles") == 0)
         return single_feedback_roles();
+    if (strcmp(argv[1], "single-feedback-expired-frame") == 0)
+        return single_feedback_expired_frame();
     if (strcmp(argv[1], "single-shared-frame") == 0)
         return single_shared_frame_permissions(0u);
     if (strcmp(argv[1], "single-unassigned") == 0)

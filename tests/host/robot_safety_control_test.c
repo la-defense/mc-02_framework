@@ -26,6 +26,7 @@ static RobotSafetyControlInputs_t Inputs(RobotControlMode_t mode)
         .aim = {now, 20u, 1u}, // 瞄准期限独立于人工和导航。
         .navigation = {now, 50u, 1u}, // 导航期限独立。
         .match = {now, 100u, 1u}, // 本时刻报告比赛运行阶段。
+        .feedback = {{now, 5000u, 1u}, {now, 5000u, 1u}, {now, 5000u, 1u}}, // 测试中三组反馈分别有效。
         .feedback_valid_functions = ROBOT_CONTROL_ALL, // 本场景全部反馈已检查。
         .match_running = 1u, // 比赛运行事实仍受match期限检查。
         .manual_fire_requested = 1u, // 用于验证辅助人工击发。
@@ -88,6 +89,94 @@ static int ManualAndPulses(void)
     return 0;
 }
 
+static int FeedbackExpiry(void)
+{
+    now = 1000u; Healthy(1u); // 从新的安全管理状态开始。
+    const RobotControlPolicy_t policy = {ROBOT_CONTROL_ALL, 1u, 0u, 0u};
+    CHECK(RobotSafetyConfigureControl(&policy));
+    RobotSafetyRequestEnable(); RobotSafetyUpdate();
+    now = 1001u; RobotSafetyControlInputs_t inputs = Inputs(ROBOT_CONTROL_MANUAL);
+    inputs.feedback[0] = (RobotControlLease_t){1001u, 5u, 1u}; // 只有底盘采用较短的测试期限。
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    RobotControlPermits_t permits;
+    now = 1006u; CHECK(RobotSafetyGetFunctionPermitsAt(now, &permits)); // 恰好达到期限仍有效。
+    CHECK((permits.functions & ROBOT_CONTROL_CHASSIS) != 0u);
+    RobotSafetySnapshot_t before, after;
+    CHECK(RobotSafetyGetSnapshot(&before));
+    now = 1007u; CHECK(RobotSafetyGetFunctionPermitsAt(now, &permits)); // 超期后只撤销底盘。
+    CHECK((permits.functions & ROBOT_CONTROL_CHASSIS) == 0u && (permits.functions & ROBOT_CONTROL_GIMBAL) != 0u);
+    CHECK(RobotSafetyGetSnapshot(&after) && before.control_generation != after.control_generation);
+    now = 1008u; inputs.feedback[0] = (RobotControlLease_t){1008u, 5u, 1u}; // 新反馈不复用恢复前命令。
+    inputs.manual.source_time_ms = 1007u;
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    CHECK(RobotSafetyGetFunctionPermitsAt(now, &permits) && !(permits.functions & ROBOT_CONTROL_CHASSIS));
+    now = 1009u; inputs.manual.source_time_ms = now; // 恢复后的新命令才可接管。
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    CHECK(RobotSafetyGetFunctionPermitsAt(now, &permits) && (permits.functions & ROBOT_CONTROL_CHASSIS));
+    now = 1016u; inputs.feedback[0] = (RobotControlLease_t){1016u, 5u, 1u}; // 中间没有查询，也必须识别过期。
+    inputs.manual.source_time_ms = now;
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    CHECK(RobotSafetyGetFunctionPermitsAt(now, &permits) && !(permits.functions & ROBOT_CONTROL_CHASSIS));
+    now = 1017u; inputs.manual.source_time_ms = now;
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    CHECK(RobotSafetyGetFunctionPermitsAt(now, &permits) && (permits.functions & ROBOT_CONTROL_CHASSIS));
+    CHECK(RobotSafetyGetFunctionPermitsAt(1015u, &permits) && (permits.functions & ROBOT_CONTROL_CHASSIS)); // 调用方先取时、后收到新反馈时不能误报过期。
+    inputs.feedback[0].max_age_ms = 5000u; // 相同原样本不能通过扩大期限续命。
+    CHECK(!RobotSafetyPublishControlInputs(&inputs));
+    CHECK(!RobotSafetyIsReady());
+    return 0;
+}
+
+static int FeedbackWrap(void)
+{
+    now = UINT32_MAX - 5u; Healthy(1u); // 在本机计时回绕前建立状态。
+    const RobotControlPolicy_t policy = {ROBOT_CONTROL_ALL, 1u, 0u, 0u};
+    CHECK(RobotSafetyConfigureControl(&policy));
+    RobotSafetyRequestEnable(); RobotSafetyUpdate();
+    now = UINT32_MAX - 4u; RobotSafetyControlInputs_t inputs = Inputs(ROBOT_CONTROL_MANUAL);
+    inputs.feedback[0] = (RobotControlLease_t){now, 10u, 1u}; // 回绕后仍按真实经过时间计算。
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    RobotControlPermits_t permits;
+    now = 4u; CHECK(RobotSafetyGetFunctionPermitsAt(now, &permits));
+    CHECK(permits.functions & ROBOT_CONTROL_CHASSIS); // 原始样本经过九毫秒。
+    now = 6u; CHECK(RobotSafetyGetFunctionPermitsAt(now, &permits));
+    CHECK(!(permits.functions & ROBOT_CONTROL_CHASSIS)); // 十一毫秒时已经过期。
+    now = 7u; inputs.feedback[0] = (RobotControlLease_t){now, 10u, 1u};
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    now = 8u; inputs.manual.source_time_ms = now; // 回绕后的新来源可以通过恢复屏障。
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    CHECK(RobotSafetyGetFunctionPermitsAt(now, &permits) && (permits.functions & ROBOT_CONTROL_CHASSIS));
+    return 0;
+}
+
+static int InvalidFeedbackLease(void)
+{
+    for (unsigned variant = 0u; variant < 4u; ++variant)
+    {
+        now = 50u; Healthy(1u); // 每种非法时间都从独立启动开始。
+        const RobotControlPolicy_t policy = {ROBOT_CONTROL_ALL, 1u, 0u, 0u};
+        CHECK(RobotSafetyConfigureControl(&policy));
+        RobotSafetyRequestEnable(); RobotSafetyUpdate();
+        now = 51u; RobotSafetyControlInputs_t inputs = Inputs(ROBOT_CONTROL_MANUAL);
+        if (variant == 0u) inputs.feedback[0].valid = 0u; // 有效位缺少对应有效时间。
+        if (variant == 1u) inputs.feedback[0].max_age_ms = 0u; // 零期限不构成有效反馈。
+        if (variant == 2u) inputs.feedback[0].source_time_ms = 52u; // 将来时间不可接受。
+        if (variant == 3u) inputs.feedback[0].max_age_ms = UINT32_MAX; // 半区间外无法区分回绕。
+        CHECK(!RobotSafetyPublishControlInputs(&inputs));
+        RobotSafetyUpdate(); CHECK(!RobotSafetyIsReady()); // 拒绝后不能取得运行许可。
+    }
+    now = 200u; Healthy(1u);
+    const RobotControlPolicy_t policy = {ROBOT_CONTROL_ALL, 1u, 0u, 0u};
+    CHECK(RobotSafetyConfigureControl(&policy));
+    RobotSafetyRequestEnable(); RobotSafetyUpdate();
+    now = 201u; RobotSafetyControlInputs_t inputs = Inputs(ROBOT_CONTROL_MANUAL);
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    now = 202u; inputs.feedback[0].source_time_ms = 200u; // 较早反馈即使尚在期限内也不能替换新样本。
+    CHECK(!RobotSafetyPublishControlInputs(&inputs));
+    CHECK(!RobotSafetyIsReady());
+    return 0;
+}
+
 static int Autonomous(void)
 {
     now = 300u; Healthy(0u); // 正式自主没有遥控在线条件。
@@ -123,6 +212,9 @@ static int Autonomous(void)
 int main(void)
 {
     CHECK(ManualAndPulses() == 0);
+    CHECK(FeedbackExpiry() == 0);
+    CHECK(FeedbackWrap() == 0);
+    CHECK(InvalidFeedbackLease() == 0);
     CHECK(Autonomous() == 0);
     return 0;
 }

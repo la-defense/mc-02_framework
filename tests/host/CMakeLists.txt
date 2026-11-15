@@ -1212,6 +1212,7 @@ endif()
 add_test(NAME production_dji_single_safety_output_gate COMMAND motor_single_safety_test single-safety-output)
 add_test(NAME production_dji_single_shared_frame_permissions COMMAND motor_single_safety_test single-shared-frame) # 同帧不同机构分开授权。
 add_test(NAME production_dji_single_feedback_roles COMMAND motor_single_safety_test single-feedback-roles) # 同机构逐台检查反馈。
+add_test(NAME production_dji_single_feedback_expired_frame COMMAND motor_single_safety_test single-feedback-expired-frame) # 排队期间反馈过期撤销旧帧。
 add_test(NAME production_dji_single_unassigned_motor COMMAND motor_single_safety_test single-unassigned) # 未声明机构不能借用其他机构许可。
 set_tests_properties(production_dji_single_safety_output_gate PROPERTIES TIMEOUT 10)
 set_tests_properties(production_dji_chassis_safety_output_gate PROPERTIES TIMEOUT 10)

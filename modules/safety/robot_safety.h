@@ -57,6 +57,7 @@ typedef struct {
     RobotControlLease_t aim; // 瞄准来源自己的期限。
     RobotControlLease_t navigation; // 导航来源自己的期限。
     RobotControlLease_t match; // 裁判阶段自己的期限。
+    RobotControlLease_t feedback[3]; // 底盘、云台、发射各自的反馈原始时刻和最短有效期限。
     uint32_t feedback_valid_functions; // 本轮必需反馈有效的功能位。
     uint32_t blocked_functions; // 按已确认故障影响范围禁止的功能位。
     uint8_t match_running; // 有效裁判阶段是否允许运行。
@@ -71,6 +72,7 @@ typedef struct {
 uint8_t RobotSafetyConfigureControl(const RobotControlPolicy_t *policy);
 /** @brief 由唯一命令仲裁者提交同一轮来源事实，不改变原始来源时刻。
  * @param[in] inputs 非空来源数据，内部复制；错误时撤销旧来源，保持原模式等待新数据。
+ * @note 每个有效反馈位必须携带该功能所有必需反馈的最早到期时间，不能因重新汇总而续期。
  * @return 1为接受；0为未配置或输入错误。提交不代替RobotSafetyUpdate推进状态。
  */
 uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs);

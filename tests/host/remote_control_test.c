@@ -208,6 +208,7 @@ int main(int argc, char **argv)
         const RobotSafetyControlInputs_t inputs = {
             .mode = ROBOT_CONTROL_AUTONOMOUS, // 场景明确使用正式自主。
             .match = {1u, 5000u, 1u}, // 后续无线离线期间比赛阶段仍有效。
+            .feedback = {{1u, 5000u, 1u}, {1u, 5000u, 1u}, {0u, 0u, 0u}}, // 两组测试反馈在本场景保持有效。
             .feedback_valid_functions = ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL, // 由测试模拟已检查的反馈。
             .match_running = 1u, // 正在比赛；没有人工连续目标或击发请求。
         };

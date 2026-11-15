@@ -33,8 +33,52 @@ static uint32_t control_barrier_ms; // 来源时间必须严格晚于最近恢�
 static uint32_t control_generation; // 即使故障在两个周期之间恢复，也留下变化记录。
 static uint32_t control_local_wait; // 发生过局部禁止、恢复后需新来源的功能位。
 static uint32_t control_local_barrier[3]; // 底盘／云台／发射各自恢复时刻，避免局部故障中断其他功能。
+static uint32_t control_feedback_seen; // 记录已接受原始反馈时间的功能位。
+static RobotControlLease_t control_feedback_last[3]; // 保留最后接受的时间与期限，防止重复样本续期。
 static RobotControlPolicy_t control_policy;
 static RobotSafetyControlInputs_t control_inputs;
+
+// 调用前已进入安全状态临界区；超期后保留各功能的恢复屏障。
+static void ControlExpireFeedbackLocked(uint32_t now_ms)
+{
+    uint32_t lost = 0u; // 记录本轮因过期而新丢失的功能。
+    for (unsigned i = 0u; i < 3u; ++i)
+    {
+        const uint32_t bit = 1u << i; // 每组反馈对应一个功能位。
+        if ((control_inputs.feedback_valid_functions & bit) == 0u) continue; // 已无有效反馈时不重复记录。
+        const RobotControlLease_t *lease = &control_inputs.feedback[i]; // 检查对应机构自己的期限。
+        if (lease->valid && lease->max_age_ms > 0u && lease->max_age_ms <= INT32_MAX &&
+            (uint32_t)(now_ms - lease->source_time_ms) <= lease->max_age_ms) continue; // 恰好达到期限仍有效。
+        control_inputs.feedback_valid_functions &= ~bit; // 撤销已过期的反馈，避免后续查询继续使用。
+        if ((control_policy.enabled_functions & bit) && !(control_inputs.blocked_functions & bit))
+            lost |= bit; // 仅对之前可用的功能记录新的禁止边沿。
+    }
+    if (lost == 0u) return; // 没有新失效时不改变代际或接管时间。
+    control_local_wait |= lost; // 这些功能恢复后需要各自的新来源。
+    for (unsigned i = 0u; i < 3u; ++i)
+        if (lost & (1u << i)) control_local_barrier[i] = now_ms; // 保存实际发现过期的时刻。
+    control_generation++; // 已排队目标必须因反馈过期而失效。
+}
+
+// 同一原始时间不能通过加长期限续期；时间回绕时只接受半区间内向前的样本。
+static uint8_t ControlFeedbackValidLocked(const RobotSafetyControlInputs_t *inputs, uint32_t now_ms)
+{
+    for (unsigned i = 0u; i < 3u; ++i)
+    {
+        const uint32_t bit = 1u << i; // 逐组校验声明有效的反馈。
+        if ((inputs->feedback_valid_functions & bit) == 0u) continue; // 未声明有效的组不要求时间。
+        const RobotControlLease_t *lease = &inputs->feedback[i]; // 期限来自该组最早失效的必需数据。
+        if (!lease->valid || lease->max_age_ms == 0u || lease->max_age_ms > INT32_MAX ||
+            (uint32_t)(now_ms - lease->source_time_ms) > lease->max_age_ms) return 0u; // 无效、将来或过期均拒绝。
+        if (control_feedback_seen & bit)
+        {
+            const uint32_t advance = lease->source_time_ms - control_feedback_last[i].source_time_ms; // 比较原始时刻而非提交时刻。
+            if (advance > INT32_MAX || (advance == 0u && lease->max_age_ms > control_feedback_last[i].max_age_ms))
+                return 0u; // 不接受旧样本，也不允许同一份样本延长期限。
+        }
+    }
+    return 1u; // 所有声明有效的组均通过后才允许提交。
+}
 
 // 调用前已进入安全状态临界区；资格不等于已通过比赛阶段检查。
 static uint8_t ControlFormalLocked(void)
@@ -129,6 +173,9 @@ static void ControlFilterLocalLocked(const RobotControlFacts_t *facts, RobotCont
 static uint8_t ControlEvaluateLocked(uint32_t now_ms, RobotControlPermits_t *output)
 {
     if (!control_configured) return 0u; // 未配置时不使用新的许可接口。
+    const uint32_t actual_ms = PlatformTimeNowMs(); // 调用者取时后可能已有新反馈被发布。
+    if ((uint32_t)(actual_ms - now_ms) <= INT32_MAX) now_ms = actual_ms; // 使用较晚时刻，避免把新样本误判为将来数据。
+    ControlExpireFeedbackLocked(now_ms); // 即使发布任务停止，查询也要撤销过期反馈。
     RobotControlFacts_t facts = ControlFactsLocked(&control_inputs); // 同一临界区读取核心与来源。
     const uint8_t healthy = (uint8_t)(facts.core_ready && !facts.immediate_inhibit); // 核心恢复与业务来源恢复分别处理。
     if (healthy && !control_was_healthy)
@@ -194,11 +241,14 @@ uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs
     uint8_t accepted = 0u; // 默认不接受尚未配置的提交。
     if (control_configured)
     {
+        const uint32_t now_ms = PlatformTimeNowMs(); // 使用一次读取的本机时间处理过期和本次提交。
+        ControlExpireFeedbackLocked(now_ms); // 两次提交之间没有查询时，也要保留过期边沿。
         if (inputs != NULL)
         {
             const RobotControlFacts_t facts = ControlFactsLocked(inputs); // 核心和使能始终由管理者提供。
             RobotControlPermits_t unused;
-            accepted = (uint8_t)(RobotControlEvaluate(&control_policy, &facts, PlatformTimeNowMs(), &unused) == ROBOT_CONTROL_OK); // 检查来源枚举和期限。
+            accepted = (uint8_t)(ControlFeedbackValidLocked(inputs, now_ms) &&
+                RobotControlEvaluate(&control_policy, &facts, now_ms, &unused) == ROBOT_CONTROL_OK); // 检查反馈以及其他来源的枚举和期限。
         }
         if (accepted)
         {
@@ -209,8 +259,14 @@ uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs
             const uint32_t changed = lost | recovered; // 故障和恢复边沿都留下时间，重复发布不会续期。
             control_local_wait |= lost; // 保留已发生的局部禁止。
             for (unsigned i = 0u; i < 3u; ++i)
-                if (changed & (1u << i)) control_local_barrier[i] = PlatformTimeNowMs(); // 每个功能独立等待恢复后的新来源。
+                if (changed & (1u << i)) control_local_barrier[i] = now_ms; // 每个功能独立等待恢复后的新来源。
             if (lost) control_generation++; // 对查询者保留周期之间的局部故障变化。
+            for (unsigned i = 0u; i < 3u; ++i)
+                if (inputs->feedback_valid_functions & (1u << i))
+                {
+                    control_feedback_seen |= 1u << i; // 此功能已有已验证的原始反馈时间。
+                    control_feedback_last[i] = inputs->feedback[i]; // 保留时间和期限用于拒绝重放。
+                }
             control_inputs = *inputs; // 全部检查后一次发布来源与反馈事实。
         }
         else
@@ -347,6 +403,8 @@ void RobotSafetyInit(void)
     control_barrier_ms = 0u; // 初始数值不作为有效来源时间。
     control_generation = 0u; // 该计数只描述当前启动周期。
     control_local_wait = 0u; // 新启动没有沿用上个周期的局部恢复记录。
+    control_feedback_seen = 0u; // 新启动不沿用前次反馈时间。
+    memset(control_feedback_last, 0, sizeof(control_feedback_last)); // 清除前次反馈及其期限。
     memset(control_local_barrier, 0, sizeof(control_local_barrier)); // 三种功能各自重新建立恢复时间。
     memset(&control_policy, 0, sizeof(control_policy)); // 清掉上个启动的车型策略副本。
     memset(&control_inputs, 0, sizeof(control_inputs)); // 不保存重启前的目标和击发请求。
