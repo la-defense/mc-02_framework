@@ -185,6 +185,66 @@ static int control_rejects_expired_feedback(void)
 }
 
 #if defined(ONE_BOARD)
+// 发射机构可运行但击发已撤销时，拨弹电机不能借摩擦轮许可继续输出。
+static int single_loader_fire_permit(void)
+{
+    now_us = 1000u; RobotSafetyInit(); // 从初始安全状态建立测试条件。
+    RobotSafetySetRcOnline(1u); RobotSafetySetImuValid(1u); // 人工输入和姿态有效。
+    RobotSafetySetCalibValid(1u); RobotSafetySetTaskHealthy(1u); // 标定和任务有效。
+    const RobotControlPolicy_t policy = {ROBOT_CONTROL_ALL, 1u, 0u, 0u}; // 测试分功能人工策略。
+    TEST_CHECK(RobotSafetyConfigureControl(&policy)); // 在初始状态配置许可策略。
+    RobotSafetyRequestEnable(); RobotSafetyUpdate(); // 请求使能并建立来源起点。
+    now_us = 2000u; // 新输入晚于使能起点。
+    RobotSafetyControlInputs_t input = {0}; // 用明确的测试事实填充策略输入。
+    input.mode = ROBOT_CONTROL_MANUAL; // 人工决定击发。
+    input.manual = (RobotControlLease_t){2u, 100u, 1u}; // 人工来源有独立期限。
+    for (unsigned i = 0u; i < 3u; ++i) input.feedback[i] = (RobotControlLease_t){2u, 100u, 1u}; // 三组反馈均有效。
+    input.feedback_valid_functions = ROBOT_CONTROL_ALL; // 声明所有测试机构具备反馈。
+    input.manual_fire_requested = 1u; // 初始允许人工击发。
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate(); // 发布本轮许可。
+    RobotSafetySnapshot_t initial_safety = {0}; // 保存故障前的代际供后续拒绝测试。
+    TEST_CHECK(RobotSafetyGetSnapshot(&initial_safety)); // 初始安全状态必须可读。
+    DJIMotorInstance *motors[2] = {0}; // 两台电机共享一个 CAN 帧。
+    for (uint8_t i = 0u; i < 2u; ++i)
+    {
+        Motor_Init_Config_s config = motor_config((uint8_t)(i + 1u)); // 使用独立测试设备编号。
+        config.output_role = i == 0u ? MOTOR_OUTPUT_FRICTION : MOTOR_OUTPUT_LOADER; // 分别声明摩擦轮和拨弹。
+        motors[i] = DJIMotorInit(&config); // 走实际电机注册路径。
+        TEST_CHECK(motors[i] != NULL); // 注册失败不能继续测试。
+        receive(motors[i], 2000u, 2u, 0, 0); // 提供新鲜电机反馈。
+        if (i == 0u) DJIMotorSetRef(motors[i], 10.0f); // 摩擦轮使用普通参考。
+        else
+        {
+            RobotSafetySnapshot_t safety = {0}; // 拨弹参考必须绑定当前许可代际。
+            TEST_CHECK(RobotSafetyGetSnapshot(&safety)); // 保存当前安全代际。
+            TEST_CHECK(DJIMotorSetRefForGeneration(motors[i], 10.0f, safety.control_generation)); // 模拟发射任务提交授权参考。
+        }
+        DJIMotorEnable(motors[i]); // 允许电机参加计算。
+    }
+    control_at(3000u); control_at(4000u); // 建立 PID 计时并产生非零输出。
+    TEST_CHECK((sent[0] || sent[1]) && (sent[2] || sent[3])); // 初始许可允许两个机构运行。
+    now_us = 5000u; input.manual_fire_requested = 0u; // 人工撤销击发，摩擦轮仍获机构许可。
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate(); // 发射任务尚未运行。
+    TEST_CHECK(!DJIMotorSetRefForGeneration(motors[1], 20.0f, initial_safety.control_generation)); // 旧代际不能趁撤销时写入参考。
+    control_at(6000u); // 电机任务先于发射任务运行。
+    TEST_CHECK(sent[0] || sent[1]); // 摩擦轮可继续运转。
+    TEST_CHECK(sent[2] == 0u && sent[3] == 0u); // 旧拨弹参考不能借机构许可继续输出。
+    now_us = 7000u; input.manual_fire_requested = 1u; input.manual.source_time_ms = 7u; // 恢复后的新人工来源允许再次击发。
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate(); // 安全管理接受新许可。
+    TEST_CHECK(!DJIMotorSetRefForGeneration(motors[1], 20.0f, initial_safety.control_generation)); // 许可恢复也不能使旧代际重新有效。
+    control_at(8000u); // 发射任务仍未刷新拨弹参考。
+    TEST_CHECK(sent[0] || sent[1]); // 摩擦轮继续运行。
+    TEST_CHECK(sent[2] == 0u && sent[3] == 0u); // 新许可不能激活故障前留下的旧参考。
+    RobotSafetySnapshot_t renewed = {0}; // 重新读取恢复后的安全代际。
+    TEST_CHECK(RobotSafetyGetSnapshot(&renewed)); // 只有当前代际可用于新参考。
+    TEST_CHECK(!DJIMotorSetRefForGeneration(motors[0], 10.0f, renewed.control_generation)); // 摩擦轮不能误用拨弹接口。
+    TEST_CHECK(!DJIMotorSetRefForGeneration(motors[1], NAN, renewed.control_generation)); // 非有限参考必须拒绝。
+    TEST_CHECK(DJIMotorSetRefForGeneration(motors[1], 10.0f, renewed.control_generation)); // 模拟发射任务提交新的拨弹参考。
+    control_at(9000u); // 电机任务计算新代际参考。
+    TEST_CHECK(sent[2] || sent[3]); // 新许可与新参考同时存在时才输出。
+    return EXIT_SUCCESS;
+}
+
 // 发送前检查必须使用计算旧目标时的反馈时间，不能被后来的反馈续期。
 static int single_queued_feedback_expiry(void)
 {
@@ -462,7 +522,13 @@ static int single_shared_frame_permissions(uint8_t include_unassigned)
         DJIMotorInstance *motor = DJIMotorInit(&config);
         TEST_CHECK(motor != NULL);
         receive(motor, 2000u, 2u, 0, 0);
-        DJIMotorSetRef(motor, 10.0f);
+        if (config.output_role == MOTOR_OUTPUT_LOADER)
+        {
+            RobotSafetySnapshot_t safety = {0}; // 拨弹参考绑定本轮安全代际。
+            TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+            TEST_CHECK(DJIMotorSetRefForGeneration(motor, 10.0f, safety.control_generation));
+        }
+        else DJIMotorSetRef(motor, 10.0f);
         DJIMotorEnable(motor);
     }
     control_at(3000u);
@@ -808,6 +874,8 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
 #if defined(ONE_BOARD)
+    if (strcmp(argv[1], "single-loader-fire-permit") == 0)
+        return single_loader_fire_permit();
     if (strcmp(argv[1], "single-queued-feedback-expiry") == 0)
         return single_queued_feedback_expiry();
     if (strcmp(argv[1], "single-safety-output") == 0)

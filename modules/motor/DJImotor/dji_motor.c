@@ -6,6 +6,7 @@
 #include "general_def.h"
 #include "../../../bsp/dwt/platform_probe.h"
 #include "../../../bsp/os/platform_sync.h"
+#include "../../../bsp/os/platform_irq.h"
 #include "bsp_log.h"
 #include "motor_pid.h"
 #include "dji_motor_diagnostic_internal.h" // 回环诊断只查询已注册的第一个电机。
@@ -60,6 +61,7 @@ static uint32_t sender_safety_generation[9]; // 每组已排队目标所属的�
 typedef struct {
     uint32_t source_ms[4]; // 每个电机计算目标时使用的内部反馈时间。
     uint8_t required_mask; // 对应位置为 1 时，该目标依赖内部反馈。
+    uint8_t reference_valid_mask; // 对应拨弹目标的参考属于本次计算使用的安全代际。
 } DJI_Queued_Feedback_s;
 static DJI_Queued_Feedback_s sender_feedback[9]; // 每组当前排队目标的反馈依据。
 #endif
@@ -908,6 +910,9 @@ static void DJIMotorPrepareSingleOutput(const void *source, uint32_t now_ms,
             memcpy(payload + 2u * slot, requested + 2u * slot, 2u); // 旧整车许可仍允许有效电机输出。
             continue; // 旧路径无需检查机构分类。
         }
+        if (motor->output_role == MOTOR_OUTPUT_LOADER &&
+            (permits.fire_allowed == 0u || (sender_feedback[group].reference_valid_mask & (uint8_t)(1u << slot)) == 0u))
+            continue; // 拨弹还需要击发许可，且参考必须属于本次目标的安全代际。
         uint32_t function = 0u; // 未声明机构时保持禁止。
         switch (motor->output_role)
         {
@@ -953,7 +958,32 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
         return;
     PlatformTaskCriticalEnter();
     motor->motor_controller.pid_ref = ref;
+    motor->reference_generation_valid = 0u; // 普通参考不具备拨弹所需的代际凭据。
     PlatformTaskCriticalExit();
+}
+
+uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation)
+{
+    if (motor == NULL || motor->output_role != MOTOR_OUTPUT_LOADER || !isfinite(ref)) return 0u; // 只接受有效拨弹实例和有限参考。
+#if defined(ONE_BOARD)
+    const PlatformIrqState_t irq = PlatformIrqSaveAndDisable(); // 许可检查与参考写入之间不允许插入禁止事件。
+    RobotControlPermits_t permits = {0}; // 查询失败时默认禁止发射。
+    uint8_t policy_active = 0u; // 区分旧整车许可与分功能许可。
+    const uint8_t allowed = (uint8_t)(RobotSafetyGetOutputPermitsForGeneration(PlatformTimeNowMs(), generation, &permits, &policy_active) &&
+        (permits.functions & ROBOT_CONTROL_SHOOTER) && (!policy_active || permits.fire_allowed)); // 新策略的拨弹参考必须获得击发许可。
+    if (allowed)
+    {
+        motor->motor_controller.pid_ref = ref; // 原子写入已授权的参考值。
+        motor->reference_safety_generation = generation; // 记录参考所属的代际。
+        motor->reference_generation_valid = 1u; // 完整写入后才标记代际有效。
+    }
+    PlatformIrqRestore(irq); // 恢复进入前的中断状态。
+    return allowed; // 拒绝时保留旧参考，但发送路径不会借新代际重用它。
+#else
+    (void)generation; // 其他板角色仍由各自既有发送路径约束。
+    DJIMotorSetRef(motor, ref); // 沿用现有参考设置。
+    return 1u;
+#endif
 }
 
 // 为所有电机实例计算三环PID,发送控制报文
@@ -988,11 +1018,19 @@ void DJIMotorControl()
         uint8_t has_feedback_timestamp; // 区分尚未收到反馈与接收时间恰好为零。
         uint32_t feedback_timestamp_ms; // 保存这份测量数据的原始接收时间。
         uint32_t now_ms; // 与测量数据一起读取，避免新反馈晚于读取时刻。
+#if defined(ONE_BOARD)
+        uint32_t reference_generation; // 与参考值同时复制其安全代际。
+        uint8_t reference_generation_valid; // 复制参考是否具备代际凭据。
+#endif
         PlatformTaskCriticalEnter();
         setting_snapshot = motor->motor_settings;
         measure_snapshot = motor->measure;
         output_axis = motor->output_axis;
         pid_ref = motor_controller->pid_ref;
+#if defined(ONE_BOARD)
+        reference_generation = motor->reference_safety_generation; // 与参考值读取同一组数据。
+        reference_generation_valid = motor->reference_generation_valid; // 不能把普通参考当作已授权拨弹。
+#endif
         speed_filter_valid = motor->speed_filter_valid;
         current_filter_valid = motor->current_filter_valid;
         position_trusted = (uint8_t)(motor->encoder_baseline_valid && motor->output_position_trusted);
@@ -1036,6 +1074,9 @@ void DJIMotorControl()
              (motor_setting->close_loop_type & SPEED_LOOP) != 0u &&
              motor_setting->speed_feedback_source == MOTOR_FEED);
 #if defined(ONE_BOARD)
+        if (motor->output_role == MOTOR_OUTPUT_LOADER && reference_generation_valid &&
+            reference_generation == cycle_safety.control_generation)
+            computed_feedback[motor->sender_group].reference_valid_mask |= (uint8_t)(1u << motor->message_num); // 记录本次计算真正使用的拨弹代际。
         if (internal_axis_active != 0u || current_internal_active != 0u)
         {
             const uint8_t output_group = motor->sender_group; // 获取当前电机的发送组。

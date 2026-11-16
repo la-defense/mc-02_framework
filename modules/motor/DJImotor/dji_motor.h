@@ -105,6 +105,8 @@ typedef struct
 {
     DJI_Motor_Measure_s measure;            // 电机测量值
     Motor_Output_Axis_Config_s output_axis; // 控制与公开位置／速度均按此配置换算。
+    uint32_t reference_safety_generation; // 拨弹参考由发射任务确认时的安全代际。
+    uint8_t reference_generation_valid; // 只有显式绑定代际的参考才能在单板新策略下驱动拨弹。
     Motor_Control_Setting_s motor_settings; // 电机设置
     MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
     Motor_Controller_s motor_controller;    // 电机控制器
@@ -199,6 +201,15 @@ uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor);
 * @note 外部来源须声明匹配单位和参考系；电调原始电流不自动换算为A。
  */
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
+
+/** @brief 为拨弹电机设置属于指定安全代际的参考值。
+ * @param[in,out] motor 已注册的拨弹电机，不能为空。
+ * @param[in] ref 有限参考，单位与 DJIMotorSetRef 相同。
+ * @param[in] generation 发射命令计算时保存的安全代际。
+ * @return 1 为当前许可和代际匹配并已写入，0 为参数或许可无效且不改写参考。
+ * @note 单板下要求当前击发许可；停止时用普通接口清零参考并撤销其代际。其他角色沿用原路径。
+ */
+uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation);
 
 /** @brief 改写角度或速度反馈来源，下一轮控制生效。
 * @param[in,out] motor 有效实例，不能为 NULL。

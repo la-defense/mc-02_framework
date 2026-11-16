@@ -223,7 +223,7 @@ void ShootTask()
     // 停止供弹时改为速度环并把目标速度置 0。
     case LOAD_STOP:
         DJIMotorOuterLoop(loader, SPEED_LOOP);
-        DJIMotorSetRef(loader, 0);
+        DJIMotorSetRef(loader, 0.0f); // 停止时直接清除参考及其拨弹代际。
         break;
     // 仅从其他模式进入单发且等待时间已到时，增加一次目标角度，避免每个周期重复增加。
     case LOAD_1_BULLET:
@@ -234,7 +234,7 @@ void ShootTask()
                 feedback.position.valid != 0u)
             {
                 DJIMotorOuterLoop(loader, ANGLE_LOOP);
-                DJIMotorSetRef(loader, feedback.position.value + one_bullet_delta);
+                (void)DJIMotorSetRefForGeneration(loader, feedback.position.value + one_bullet_delta, shoot_cmd_recv.safety_generation); // 单发参考不能跨故障复用。
                 hibernate_time = PlatformProbeTimelineMs();
                 dead_time = 150;
             }
@@ -242,7 +242,7 @@ void ShootTask()
             {
                 /* 位置基准无效时不拿旧角度发弹；下一次单发命令可重新尝试。 */
                 DJIMotorStop(loader);
-                DJIMotorSetRef(loader, 0.0f);
+                DJIMotorSetRef(loader, 0.0f); // 反馈无效时直接清除旧参考。
             }
         }
         break;
@@ -255,7 +255,7 @@ void ShootTask()
                 feedback.position.valid != 0u)
             {
                 DJIMotorOuterLoop(loader, ANGLE_LOOP);
-                DJIMotorSetRef(loader, feedback.position.value + 3.0f * one_bullet_delta);
+                (void)DJIMotorSetRefForGeneration(loader, feedback.position.value + 3.0f * one_bullet_delta, shoot_cmd_recv.safety_generation); // 三发参考同样绑定安全代际。
                 hibernate_time = PlatformProbeTimelineMs();
                 dead_time = 300;
             }
@@ -263,19 +263,19 @@ void ShootTask()
             {
                 /* 三发同样要求可信位置，否则不提交新的角度目标。 */
                 DJIMotorStop(loader);
-                DJIMotorSetRef(loader, 0.0f);
+                DJIMotorSetRef(loader, 0.0f); // 反馈无效时直接清除旧参考。
             }
         }
         break;
     // 连续供弹用输出轴速度环：发/秒乘每发输出轴角度，得到 rad/s。
     case LOAD_BURSTFIRE:
         DJIMotorOuterLoop(loader, SPEED_LOOP);
-        DJIMotorSetRef(loader, shoot_cmd_recv.shoot_rate * one_bullet_delta);
+        (void)DJIMotorSetRefForGeneration(loader, shoot_cmd_recv.shoot_rate * one_bullet_delta, shoot_cmd_recv.safety_generation); // 连发速度属于当前许可代际。
         break;
     // 反转目标使用输出轴 rad/s，转子减速比由驱动内部处理。
     case LOAD_REVERSE:
         DJIMotorOuterLoop(loader, SPEED_LOOP);
-        DJIMotorSetRef(loader, -shoot_config->loader_reverse_speed_rad_s);
+        (void)DJIMotorSetRefForGeneration(loader, -shoot_config->loader_reverse_speed_rad_s, shoot_cmd_recv.safety_generation); // 反转参考同样受许可代际限制。
         break;
     default:
         // 未知供弹模式保持等待；此路径不会返回到任务中的下一次运行记录更新。

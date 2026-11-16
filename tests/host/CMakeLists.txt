@@ -1213,6 +1213,7 @@ if(UNIX)
 endif()
 add_test(NAME production_dji_single_safety_output_gate COMMAND motor_single_safety_test single-safety-output)
 add_test(NAME production_dji_single_queued_feedback_expiry COMMAND motor_single_safety_test single-queued-feedback-expiry) # 排队目标不能借新反馈续期。
+add_test(NAME production_dji_single_loader_fire_permit COMMAND motor_single_safety_test single-loader-fire-permit) # 拨弹独立检查击发许可。
 add_test(NAME production_dji_single_shared_frame_permissions COMMAND motor_single_safety_test single-shared-frame) # 同帧不同机构分开授权。
 add_test(NAME production_dji_single_feedback_roles COMMAND motor_single_safety_test single-feedback-roles) # 同机构逐台检查反馈。
 add_test(NAME production_dji_single_feedback_roles_wrap COMMAND motor_single_safety_test single-feedback-roles-wrap) # 反馈时间跨回绕仍选择最早样本。

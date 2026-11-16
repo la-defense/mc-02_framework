@@ -20,6 +20,7 @@ typedef struct {
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config);
 uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor);
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
+uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation); // 测试替身复核发射命令的安全代际。
 void DJIMotorStop(DJIMotorInstance *motor);
 void DJIMotorEnable(DJIMotorInstance *motor);
 void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e loop);

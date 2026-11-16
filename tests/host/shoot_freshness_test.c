@@ -85,6 +85,15 @@ uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor)
     return 0u; // 非测试实例或重复回退均视为失败。
 }
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref) { if (motor != NULL) motor->ref = ref; }
+uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation)
+{
+    RobotControlPermits_t permits = {0}; // 测试替身复用真实安全管理。
+    uint8_t active = 0u; // 记录是否使用分功能策略。
+    if (motor == NULL || !RobotSafetyGetOutputPermitsForGeneration(now_ms, generation, &permits, &active) ||
+        !(permits.functions & ROBOT_CONTROL_SHOOTER) || (active && !permits.fire_allowed)) return 0u; // 拒绝错误代际和未许可的拨弹参考。
+    motor->ref = ref; // 允许时模拟电机驱动写入参考。
+    return 1u; // 测试可继续检查写入结果。
+}
 void DJIMotorStop(DJIMotorInstance *motor) { if (motor != NULL) motor->enabled = 0u; }
 void DJIMotorEnable(DJIMotorInstance *motor) { if (motor != NULL) motor->enabled = 1u; }
 void DJIMotorOuterLoop(DJIMotorInstance *motor, Closeloop_Type_e loop)
