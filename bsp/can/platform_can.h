@@ -75,6 +75,16 @@ uint8_t PlatformCanStartBus(PlatformCanBus_t bus);
  */
 uint8_t PlatformCanBusIsQuarantined(PlatformCanBus_t bus);
 
+/** @brief 已检测到控制器故障或隔离时调用的有界观察函数。 */
+typedef void (*PlatformCanFaultObserver_t)(PlatformCanBus_t bus, void *context);
+/** @brief 启动阶段安装唯一的总线故障观察者。
+ * @param[in] observer 非空短回调，接收板级逻辑总线编号。
+ * @param[in] context 可为空；非空时须在固件运行期间有效。
+ * @return 1 为安装成功，0 为参数错误或已有观察者。
+ * @note 回调在中断保护内执行，只允许更新有界状态，不得阻塞、记录日志或调用 HAL。
+ */
+uint8_t PlatformCanInstallFaultObserver(PlatformCanFaultObserver_t observer, void *context);
+
 /** @brief 注册一个经典 CAN 接收端点，标识符类型由端点配置指定。
  * @param[in,out] port 调用前清零，成功后长期保存在原地址；失败不修改。
  * @param[in] endpoint 本板逻辑总线和收发 ID，调用期间可读。

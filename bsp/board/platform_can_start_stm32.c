@@ -8,6 +8,35 @@
 _Static_assert(CAN_MX_REGISTER_CNT > 0 && CAN_MX_REGISTER_CNT <= UINT8_MAX,
                "CAN endpoint capacity must fit the platform interface");
 
+static PlatformCanFaultObserver_t platform_fault_observer; // 保存整车安装的长期观察者。
+static void *platform_fault_context; // 保存观察者上下文。
+
+// 底层句柄在这里转换为板级逻辑编号，不向业务暴露 HAL 类型。
+static void PlatformCanReportFault(FDCAN_HandleTypeDef *handle, void *context)
+{
+    (void)context; // 使用只在启动阶段安装的静态上下文。
+    for (unsigned index = PLATFORM_CAN_BUS_1; index <= PLATFORM_CAN_BUS_3; ++index)
+    {
+        const PlatformCanBus_t bus = (PlatformCanBus_t)index; // 逐条核对板级绑定。
+        if (BoardCanResolve(bus) == handle && platform_fault_observer != NULL)
+        {
+            platform_fault_observer(bus, platform_fault_context); // 交付实际故障总线。
+            return; // 同一控制器只允许对应一个逻辑总线。
+        }
+    }
+}
+
+uint8_t PlatformCanInstallFaultObserver(PlatformCanFaultObserver_t observer, void *context)
+{
+    if (observer == NULL || platform_fault_observer != NULL) return 0u; // 无效或重复安装不能覆盖现有观察者。
+    platform_fault_context = context; // 启动阶段先保存上下文。
+    platform_fault_observer = observer; // 再准备可调用的上层回调。
+    if (CANInstallFaultObserver(PlatformCanReportFault, NULL)) return 1u; // 底层成功登记后启用观察。
+    platform_fault_observer = NULL; // 失败时撤销本层安装。
+    platform_fault_context = NULL; // 避免保留未生效的上下文。
+    return 0u;
+}
+
 uint8_t PlatformCanGetFilterCapacity(PlatformCanBus_t bus, PlatformCanFilterCapacity_t *capacity)
 {
     FDCAN_HandleTypeDef *handle = BoardCanResolve(bus); // 查询板级逻辑总线绑定。

@@ -353,6 +353,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     application/alarm_startup.c # 按核心依赖处理告警初始化结果。
     application/log_startup.c # 按核心依赖检查日志出口。
     application/robot_can_guard.c # 诊断后检查 CAN 核心依赖。
+    application/robot_can_runtime.c # 运行时核心 CAN 故障通知安全管理。
     application/robot_can_capacity.c # 启动前检查 CAN 端点容量。
     application/robot_can_requirements.c # 统计车型使用的 CAN 端点。
     application/robot_task.c # 现有任务循环与周期维护。

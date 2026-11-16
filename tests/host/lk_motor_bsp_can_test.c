@@ -20,6 +20,7 @@
 #include "task_monitor.h"
 #include "init_diagnostic.h"
 #include "robot_safety.h"
+#include "robot_can_runtime.h"
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
@@ -799,7 +800,12 @@ void InitDiagnosticReportFailure(InitDiagnosticStage_e stage, uint8_t module, In
 void InitDiagnosticReportDegraded(InitDiagnosticStage_e stage, uint8_t module, InitDiagnosticReason_e reason, uint16_t resource)
 { (void)stage; (void)module; (void)reason; (void)resource; }
 void InitDiagnosticMarkReady(void) { ++integration_ready; }
-void RobotFaultReport(Robot_Fault_e fault) { TEST_CHECK(fault == ROBOT_FAULT_INIT_FAILURE); ++integration_faults; }
+static unsigned can_runtime_faults; // 记录联合测试中的核心总线故障。
+void RobotFaultReport(Robot_Fault_e fault)
+{
+    if (fault == ROBOT_FAULT_CAN_BUSOFF) { ++can_runtime_faults; return; } // 记录核心总线通知。
+    TEST_CHECK(fault == ROBOT_FAULT_INIT_FAILURE); ++integration_faults; // 保留原启动故障测试。
+}
 void RobotSafetyRequestDisable(void) { ++integration_disabled; }
 void BSP_SafetyStartupLatchOutputsOff(void) { ++integration_shutdowns; } // 主机记录关断调用，不驱动引脚。
 
@@ -2667,9 +2673,22 @@ static void test_platform_can_status(void)
     TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_UNKNOWN);
 }
 
+static unsigned observed_can_faults; // 测试实际平台适配器报告的故障次数。
+static PlatformCanBus_t observed_can_bus; // 保存观察者收到的逻辑总线。
+
+static void observe_can_fault(PlatformCanBus_t bus, void *context)
+{
+    TEST_CHECK(context == &observed_can_faults); // 上下文必须与安装时一致。
+    TEST_CHECK(can_test_irq_mask != 0u); // 故障状态和许可撤销位于同一短保护内。
+    ++observed_can_faults; // 此回调只更新有界内存。
+    observed_can_bus = bus; // 保存板级转换后的逻辑编号。
+}
+
 // 故障恢复前仅撤销该总线尚在软件队列的请求；另一条总线继续调度。
 static void test_busoff_cancels_queued(void)
 {
+    TEST_CHECK(PlatformCanInstallFaultObserver(observe_can_fault, &observed_can_faults)); // 安装实际平台观察入口。
+    TEST_CHECK(!PlatformCanInstallFaultObserver(observe_can_fault, &observed_can_faults)); // 不能覆盖已安装观察者。
     TEST_CHECK(CANStartBus(&hfdcan1)); // 启动故障注入总线。
     TEST_CHECK(CANStartBus(&hfdcan2)); // 启动不受影响的总线。
     const uint8_t payload = 0x42u; // 两条总线使用相同的测试数据。
@@ -2681,12 +2700,45 @@ static void test_busoff_cancels_queued(void)
     inject_submit_on_stop = 1u; // 在 HAL 停止操作中插入一次并发提交。
     now_us = 100000u; // 到达健康检查周期，两个请求均尚未过期。
     CANHealthMonitor(); // 使用生产故障检查和软件队列撤销入口。
+    TEST_CHECK(observed_can_faults == 1u && observed_can_bus == PLATFORM_CAN_BUS_1); // 短故障即使控制器随后重启也必须通知。
     TEST_CHECK(stop_submit_status == CAN_TX_SUBMIT_NOT_READY); // 恢复期间不能提交新帧。
     CAN_TxResult_t result = {0};
     TEST_CHECK(CANGetTxRequestState(fault_id, &result) && result.state == CAN_TX_RESULT_CANCELLED);
     TEST_CHECK(CANGetTxRequestState(other_id, &result) && result.state == CAN_TX_RESULT_QUEUED);
     CANProcessTx(); // 恢复后的本轮只能提交另一条总线的请求。
     TEST_CHECK(tx_accept_count[0] == 0u && tx_accept_count[1] == 1u);
+}
+
+// 同时使用生产车型依赖转换、板级适配和 CAN 故障入口。
+static void test_busoff_runtime_notification(void)
+{
+    RobotModulePlan_t plan = {0}; // 使用隔离的测试车型依赖。
+    plan.enabled = ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS) | ROBOT_MODULE_BIT(ROBOT_MODULE_ALARM); // 核心和辅助模块均启用。
+    plan.required = ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS); // 只有底盘属于核心。
+    const RobotCanFilterDemand_t demands[] = {
+        {ROBOT_MODULE_CHASSIS, PLATFORM_CAN_BUS_1, 4u, 0u}, // CAN1 是核心设备总线。
+        {ROBOT_MODULE_ALARM, PLATFORM_CAN_BUS_2, 1u, 0u}, // CAN2 只服务辅助设备。
+    };
+    TEST_CHECK(RobotCanRuntimeInstall(&plan, demands, 2u)); // 安装真实故障通知链。
+    TEST_CHECK(CANStartBus(&hfdcan1) && CANStartBus(&hfdcan2)); // 启动两条独立测试总线。
+    status_busoff[1] = 1u; now_us = 100000u; // 先让辅助总线发生故障。
+    CANHealthMonitor(); // 由真实健康检查上报。
+    TEST_CHECK(can_runtime_faults == 0u); // 辅助故障不能触发核心全局禁止。
+    status_busoff[1] = 0u; status_busoff[0] = 1u; now_us = 200000u; // 然后让核心总线发生故障。
+    CANHealthMonitor(); // 即使随后重启成功也要先通知。
+    TEST_CHECK(can_runtime_faults == 1u); // 核心故障必须进入安全报告接口。
+}
+
+static void test_can_status_runtime_failure(void)
+{
+    RobotModulePlan_t plan = {0}; // 配置单一核心底盘。
+    plan.enabled = plan.required = ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS); // 此测试只有一个核心模块。
+    const RobotCanFilterDemand_t demand = {ROBOT_MODULE_CHASSIS, PLATFORM_CAN_BUS_1, 4u, 0u}; // 底盘使用第一条总线。
+    TEST_CHECK(RobotCanRuntimeInstall(&plan, &demand, 1u)); // 安装核心故障通知。
+    TEST_CHECK(CANStartBus(&hfdcan1)); // 启动被监控的控制器。
+    status_read_failure = 1u; now_us = 100000u; // 模拟状态查询失败。
+    CANHealthMonitor(); // 运行实际健康检查。
+    TEST_CHECK(can_runtime_faults == 1u && CANBusIsQuarantined(&hfdcan1)); // 不可信状态必须触发通知并保持隔离。
 }
 
 static void test_busoff_discards_queued_feedback(void)
@@ -2914,6 +2966,10 @@ int main(int argc, char **argv)
         test_platform_can_status();
     else if (strcmp(argv[1], "busoff-cancel-queued") == 0)
         test_busoff_cancels_queued();
+    else if (strcmp(argv[1], "busoff-runtime") == 0)
+        test_busoff_runtime_notification();
+    else if (strcmp(argv[1], "status-runtime-failure") == 0)
+        test_can_status_runtime_failure();
     else if (strcmp(argv[1], "busoff-rx-generation") == 0)
         test_busoff_discards_queued_feedback();
     else if (strcmp(argv[1], "busoff-rx-active") == 0)

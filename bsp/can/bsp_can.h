@@ -205,6 +205,16 @@ uint8_t CANStartBus(FDCAN_HandleTypeDef *hcan);
  */
 uint8_t CANBusIsQuarantined(FDCAN_HandleTypeDef *hcan);
 
+/** @brief 控制器故障观察函数；在短中断保护中调用，不得阻塞或访问 HAL。 */
+typedef void (*CANFaultObserver_t)(FDCAN_HandleTypeDef *hcan, void *context);
+/** @brief 启动阶段登记唯一的总线故障观察者。
+ * @param[in] observer 非空的短回调；控制器故障检测或隔离时调用。
+ * @param[in] context 回调上下文，必须在整个运行期间有效，可为 NULL。
+ * @return 1 表示成功登记；参数无效或已有观察者返回 0。
+ * @note 回调只允许更新有界内存状态，不得等待、记录日志、调用 HAL 或提交报文。
+ */
+uint8_t CANInstallFaultObserver(CANFaultObserver_t observer, void *context);
+
 /** @brief 配置一条 FDCAN 总线的发送容量和周期利用率预算。
 * @param[in] hcan 已支持的 FDCAN 句柄；必须在首次 CANRegister() 前调用。
 * @param[in] config 每总线独立配置；队列容量 1～16、利用率 1～1000‰、速率大于零。

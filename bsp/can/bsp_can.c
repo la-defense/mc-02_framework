@@ -20,6 +20,29 @@ static uint8_t idx;
 static volatile uint8_t can_service_started; // 任务与中断读取每条总线的启动状态。
 static volatile uint8_t can_recovering; // 失败总线重新启动期间禁止提交、发送和接收派发。
 static uint8_t can_filter_quarantined; // 模式恢复失败后锁定该总线，直到系统重启。
+static CANFaultObserver_t can_fault_observer; // 启动阶段安装的唯一故障观察者。
+static void *can_fault_context; // 故障观察者的长期上下文。
+
+uint8_t CANInstallFaultObserver(CANFaultObserver_t observer, void *context)
+{
+    if (observer == NULL) return 0u; // 空回调不能提供故障通知。
+    const uint32_t saved = __get_PRIMASK(); // 保存调用者的中断状态。
+    __disable_irq(); // 原子安装回调和上下文。
+    const uint8_t available = (uint8_t)(can_fault_observer == NULL); // 不覆盖其他安全观察者。
+    if (available)
+    {
+        can_fault_context = context; // 先准备长期上下文。
+        can_fault_observer = observer; // 最后发布可调用的回调。
+    }
+    __set_PRIMASK(saved); // 恢复安装前的中断状态。
+    return available; // 重复登记由启动流程按核心错误处理。
+}
+
+// 调用方已经屏蔽中断，确保观察者看到故障时旧许可立即失效。
+static void CANNotifyFaultLocked(FDCAN_HandleTypeDef *handle)
+{
+    if (can_fault_observer != NULL) can_fault_observer(handle, can_fault_context); // 只调用已登记的有界观察者。
+}
 // 只查询有效总线的启动位；未配置的总线不能调用 HAL 收发。
 static uint8_t CANBusIsActive(uint8_t bus_index)
 {
@@ -1540,6 +1563,8 @@ void CANQuarantineBus(FDCAN_HandleTypeDef *handle)
     if (bus_index >= DEVICE_CAN_CNT) return; // 未知句柄不能影响其他总线。
     const uint32_t saved = __get_PRIMASK(); // 保留调用前的中断状态。
     __disable_irq(); // 先撤销服务状态及待派发的旧反馈。
+    if ((can_filter_quarantined & (uint8_t)(1u << bus_index)) == 0u)
+        CANNotifyFaultLocked(handle); // 首次隔离在放开中断前通知整车。
     can_filter_quarantined |= (uint8_t)(1u << bus_index); // 禁止后续注册隐式重启。
     can_service_started &= (uint8_t)~(1u << bus_index); // 新提交和调度不再使用此总线。
     // 保留单消费者队列指针；派发任务会丢弃隔离总线的旧反馈。
@@ -2018,7 +2043,10 @@ void CANHealthMonitor(void)
         CANBusState_t *bus = &can_bus[i];
 
         if (HAL_FDCAN_GetProtocolStatus(bus->handle, &ps) != HAL_OK)
-            continue;
+        {
+            CANQuarantineBus(bus->handle); // 无法确认控制器状态时，通知观察者并停止该总线。
+            continue; // 不使用未初始化的状态，也不尝试直接放行。
+        }
         if (HAL_FDCAN_GetErrorCounters(bus->handle, &ec) == HAL_OK)
         {
             bus->bus.tx_error_count = (uint8_t)ec.TxErrorCnt;
@@ -2032,7 +2060,11 @@ void CANHealthMonitor(void)
             if (ps.BusOff)
                 bus->bus.busoff++;
             taskENTER_CRITICAL(); // 与发送队列提交和推进互斥。
+            const uint32_t saved = __get_PRIMASK(); // 故障上报与总线暂停不能被其他任务或中断穿插。
+            __disable_irq(); // 进入短中断保护。
             can_recovering |= (uint8_t)(1u << i); // 先暂停本总线，禁止恢复期间接收新请求。
+            CANNotifyFaultLocked(bus->handle); // 在任何重启操作之前撤销依赖此总线的旧许可。
+            __set_PRIMASK(saved); // 恢复进入前的中断状态。
             ++bus->rx_generation; // 恢复后丢弃故障前已经进入软件队列的反馈。
             CANTxCancelQueued(&bus->tx_scheduler); // 控制器重启前撤销已经排队但未提交的旧帧。
             uint8_t hardware_pending = bus->tx_ownership_uncertain; // 无法关联槽位时同样视为有未确认帧。

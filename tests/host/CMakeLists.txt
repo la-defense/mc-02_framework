@@ -786,6 +786,14 @@ target_compile_options(robot_can_guard_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_robot_can_guard_core_and_aux COMMAND robot_can_guard_test)
 set_tests_properties(production_robot_can_guard_core_and_aux PROPERTIES TIMEOUT 10)
 
+add_executable(robot_can_runtime_test robot_can_runtime_test.c ../../application/robot_can_runtime.c
+  ../../application/config/module_plan.c ../../modules/safety/robot_safety.c) # 使用生产模块依赖和安全管理。
+target_include_directories(robot_can_runtime_test BEFORE PRIVATE robot_cmd_fakes) # 提供主机中断与日志替身。
+target_include_directories(robot_can_runtime_test PRIVATE . ../../application ../../application/config
+  ../../modules/safety ../../bsp/can ../../bsp/board ../../bsp/os)
+target_compile_options(robot_can_runtime_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_robot_can_runtime_core_fault COMMAND robot_can_runtime_test) # 核心总线故障即时撤销许可。
+
 # 使用生产模块依赖图检查标准／扩展过滤器和全局登记容量。
 add_executable(robot_can_capacity_test robot_can_capacity_test.c ../../application/robot_can_capacity.c
   ../../application/config/module_plan.c)
@@ -934,6 +942,7 @@ endforeach()
 # 这组回归链接生产 BSP CAN 注册与发送实现，仅替换 HAL、时间和日志。
 add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ../../application/config/module_plan.c # 联合依赖计划、真实消息中心与电机注册回退。
+  ../../application/robot_can_runtime.c # 联合车型核心依赖与实际故障通知。
   ../../application/robot_startup.c # 联合启动协调器检查核心失败不创建任务。
   ${MC02_HOST_LK_SOURCES} ../../modules/motor/motor_feedback.c
   ../../modules/super_cap/super_cap.c # 联合生产电容和 CAN 驱动验证启动回退。
@@ -954,7 +963,7 @@ target_include_directories(lk_motor_bsp_can_test BEFORE PRIVATE ../../bsp/can lk
   lk_motor_fakes . ../../modules/motor/LKmotor ../../modules/motor ../../modules
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/message_center ../../modules/can_comm ../../modules/time_sync)
 target_include_directories(lk_motor_bsp_can_test PRIVATE ../../modules/super_cap ../../application/config) # 引入生产电容和模块计划接口。
-target_include_directories(lk_motor_bsp_can_test PRIVATE ../../application ../../modules/task_monitor ../../modules/safety ../../bsp/os ../../bsp/watchdog ../../bsp/safety) # 协调器只使用框架接口。
+target_include_directories(lk_motor_bsp_can_test PRIVATE ../../application ../../modules/task_monitor ../../modules/safety ../../bsp/os ../../bsp/board ../../bsp/watchdog ../../bsp/safety) # 协调器只使用框架接口。
 target_compile_options(lk_motor_bsp_can_test PRIVATE -Wall -Wextra -Werror
   -Wno-type-limits -ffunction-sections -fdata-sections -fno-builtin-malloc -fno-builtin-free)
 target_compile_definitions(lk_motor_bsp_can_test PRIVATE MC02_CAN_SELFTEST_FAKE_HOOK=1) # 可在探针间模拟回环中断。
@@ -986,6 +995,8 @@ add_test(NAME production_lk_motor_logical_receive COMMAND lk_motor_bsp_can_test 
 add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platform-can)
 add_test(NAME production_platform_can_status COMMAND lk_motor_bsp_can_test platform-can-status)
 add_test(NAME production_can_busoff_cancels_queued COMMAND lk_motor_bsp_can_test busoff-cancel-queued) # 只撤销故障总线的软件旧帧。
+add_test(NAME production_can_busoff_runtime_notification COMMAND lk_motor_bsp_can_test busoff-runtime) # 车型核心依赖接收实际总线故障通知。
+add_test(NAME production_can_status_failure_runtime_notification COMMAND lk_motor_bsp_can_test status-runtime-failure) # 状态不可读时核心总线保持隔离。
 add_test(NAME production_can_busoff_rx_generation COMMAND lk_motor_bsp_can_test busoff-rx-generation) # 丢弃故障前入队的本总线反馈。
 add_test(NAME production_can_busoff_rx_active COMMAND lk_motor_bsp_can_test busoff-rx-active) # 回调未结束时不得重启故障总线。
 add_test(NAME production_can_busoff_rx_hardware COMMAND lk_motor_bsp_can_test busoff-rx-hardware) # 两个硬件 FIFO 均需清空。

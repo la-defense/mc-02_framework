@@ -12,6 +12,7 @@
 #include "robot_param_guard.h"
 #include "robot_power.h"
 #include "robot_can_guard.h"
+#include "robot_can_runtime.h"
 #include "robot_can_capacity.h"
 #include "robot_can_requirements.h"
 #include "platform_can.h"
@@ -389,6 +390,14 @@ uint8_t RobotInitializeApplications(void)
         InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, resource); // 记录预检失败。
         goto init_failed; // 核心资源不足时不注册业务设备。
     }
+#if defined(MC02_PROFILE_ROBOT)
+    if (!RobotCanRuntimeInstall(RobotBuildGetPlan(), can_demands, can_count))
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                    INIT_FAILURE_RESOURCE, 0u); // 核心总线无法建立故障观察时记录启动失败。
+        goto init_failed; // 不允许缺少故障通知的机器人固件进入控制。
+    }
+#endif
     RobotStartContext_t start_context = {.config = robot_config, .can_rejected = can_result.rejected_modules}; // 辅助失败由启动流程登记。
     const RobotPowerRailConfig_t power_rails[PLATFORM_POWER_COUNT] = {
         {MC02_POWER_24V_1_STAGE, MC02_POWER_24V_1_MASK}, // PC14：第一路 24V 的阶段及使用模块。
