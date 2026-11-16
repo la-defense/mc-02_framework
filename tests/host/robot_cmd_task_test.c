@@ -22,6 +22,7 @@ static uint32_t tick=100;
 static Vision_Recv_s wire;
 static Vision_Status_t status;
 static unsigned snapshots;
+static uint8_t inject_short_fault; // 在命令选择期间注入已经恢复的短故障。
 uint32_t HAL_GetTick(void) { return tick; }
 const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port) { (void)port; return remote; }
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
@@ -41,7 +42,17 @@ RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through, RemoteMouseBatch
 }
 Vision_Recv_s *VisionInit(PlatformUartPort_t h) { (void)h; return &wire; }
 void VisionSend(void) {}
-void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link) { *frame=wire; *link=status; ++snapshots; }
+void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link)
+{
+    *frame=wire; *link=status; ++snapshots; // 提供本轮视觉数据。
+    if (inject_short_fault) // 验证命令读取和发布之间发生的短故障。
+    {
+        inject_short_fault = 0u; // 只在一个周期注入。
+        RobotFaultReport(ROBOT_FAULT_CAN_BUSOFF); // 记录故障禁止。
+        RobotFaultClear(ROBOT_FAULT_CAN_BUSOFF); // 模拟同一轮中已恢复。
+        RobotSafetyUpdate(); // 旧状态名称可能重新回到 READY。
+    }
+}
 /* Subscribe to production messages rather than inspecting task-private state. */
 static int shoot_cycle(MessagePublisher_t *feedback, MessageSubscriber_t *gimbal, MessageSubscriber_t *shoot,
                        Gimbal_Upload_Data_s *pose, shoot_mode_e enabled,
@@ -303,6 +314,14 @@ int main(int argc, char **argv)
         return 0;
     }
     remote[0].rc.switch_left=RC_SW_DOWN; remote[0].rc.switch_right=RC_SW_MID;
+    if (argc > 1 && !strcmp(argv[1], "shoot-short-fault")) {
+        remote[0].rc.dial = -600; // 人工请求连续供弹。
+        inject_short_fault = 1u; // 故障发生在命令选取与最终发布之间。
+        CHECK(!shoot_cycle(feedback,gimbal,shoot,&pose,SHOOT_OFF,FRICTION_OFF,LOAD_STOP,0,0)); // 整轮旧代际必须撤销。
+        ++tick; // 下一轮重新读取人工来源。
+        CHECK(!shoot_cycle(feedback,gimbal,shoot,&pose,SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,8,0)); // 新代际可重新计算。
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "shoot-manual-authority"))
         return shoot_manual_authority(feedback,gimbal,shoot,&pose);
     if (argc > 1 && !strcmp(argv[1], "shoot-formal-authority"))

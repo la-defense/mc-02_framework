@@ -7,6 +7,7 @@
 #include "config.h"
 #include "message_center.h"
 #include "topics/robot_topics.h"
+#include "robot_safety.h" // 发射任务通过真实安全管理验证代际和许可。
 
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "FAIL:%d %s\n", __LINE__, #condition); return 1; \
@@ -108,12 +109,97 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
 static MessageStatus_t publish(MessagePublisher_t *publisher,
                                const Shoot_Ctrl_Cmd_s *command, uint32_t timestamp)
 {
-    return MessagePublishAt(publisher, command, timestamp, timestamp, timestamp,
+    Shoot_Ctrl_Cmd_s stamped = *command; // 测试发布者模仿命令任务绑定安全代际。
+    RobotSafetySnapshot_t safety = {0}; // 保存计算命令时读取的安全状态。
+    if (!RobotSafetyGetSnapshot(&safety)) return MESSAGE_ERR_RANGE; // 查询失败时不能发布动作。
+    stamped.safety_generation = safety.control_generation; // 后续故障不能给旧命令续用新代际。
+    stamped.fire_source = ROBOT_CONTROL_SOURCE_MANUAL; // 本测试命令来自人工输入。
+    return MessagePublishAt(publisher, &stamped, timestamp, timestamp, timestamp,
                             MESSAGE_CLOCK_LOCAL);
 }
 
 int main(int argc, char **argv)
 {
+    RobotSafetyInit(); // 测试默认使用真实安全管理。
+    RobotSafetySetRcOnline(1u); // 提供人工模式的遥控在线条件。
+    RobotSafetySetImuValid(1u); // 提供姿态有效条件。
+    RobotSafetySetCalibValid(1u); // 提供标定有效条件。
+    RobotSafetySetTaskHealthy(1u); // 提供任务健康条件。
+    RobotSafetyRequestEnable(); // 测试操作者请求使能。
+    RobotSafetyUpdate(); // 发布经检查的整车状态。
+    if (argc == 2 && strcmp(argv[1], "safety-fire") == 0)
+    {
+        RobotSafetyInit(); // 新策略只能在初始 SAFE 阶段配置。
+        RobotSafetySetRcOnline(1u); RobotSafetySetImuValid(1u); // 提供遥控和姿态条件。
+        RobotSafetySetCalibValid(1u); RobotSafetySetTaskHealthy(1u); // 提供标定和任务条件。
+        const RobotControlPolicy_t policy = {ROBOT_CONTROL_ALL, 1u, 0u, 0u}; // 本测试使用人工分功能许可。
+        CHECK(RobotSafetyConfigureControl(&policy)); // 启动时配置策略。
+        RobotSafetyRequestEnable(); RobotSafetyUpdate(); // 等待后续人工来源。
+        now_ms = 1u; // 新来源晚于初次使能。
+        RobotSafetyControlInputs_t inputs = {0}; // 本轮测试的来源与反馈。
+        inputs.mode = ROBOT_CONTROL_MANUAL; // 人工决定击发。
+        inputs.manual = (RobotControlLease_t){now_ms, 100u, 1u}; // 测试人工来源有效。
+        for (unsigned i = 0u; i < 3u; ++i) inputs.feedback[i] = (RobotControlLease_t){now_ms, 100u, 1u}; // 测试三组反馈有效。
+        inputs.feedback_valid_functions = ROBOT_CONTROL_ALL; // 全部测试机构可用。
+        inputs.manual_fire_requested = 1u; // 当前人工请求连续供弹。
+        CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate(); // 发布初始许可。
+        CHECK(ShootInit() == 1u); // 注册生产发射任务和测试电机。
+        MessagePublisher_t *publisher = MessagePublisherRegister(ROBOT_TOPIC_SHOOT_COMMAND, ROBOT_TOPIC_ENDPOINT_COMMAND); // 通过实际话题提交。
+        CHECK(publisher != NULL); // 话题注册必须成功。
+        Shoot_Ctrl_Cmd_s command = {.shoot_mode = SHOOT_ON, .friction_mode = FRICTION_ON,
+            .load_mode = LOAD_BURSTFIRE, .shoot_rate = 8.0f, .bullet_speed = (Bullet_Speed_e)99}; // 产生非零拨弹目标。
+        CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK); ShootTask(); // 发布并执行命令。
+        CHECK(shoot_fake_motors[2].ref > 0.0f); // 初始许可允许供弹。
+        ++now_ms; inputs.manual_fire_requested = 0u; // 人工撤销击发，机构仍可运行。
+        CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate(); ShootTask(); // 发射任务发现许可失效。
+        CHECK(shoot_fake_motors[2].ref == 0.0f && !shoot_fake_motors[2].enabled); // 旧代际先撤销全部电机目标。
+        command.load_mode = LOAD_STOP; // 命令任务重新发布允许摩擦轮的停止供弹命令。
+        CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK); ShootTask(); // 新代际可以保留机构运行。
+        CHECK(shoot_fake_motors[0].enabled && shoot_fake_motors[2].ref == 0.0f); // 摩擦轮恢复而拨弹继续停止。
+        command.load_mode = LOAD_BURSTFIRE; // 下一步模拟旧连续请求。
+        ++now_ms; inputs.manual_fire_requested = 1u; // 恢复许可但不发布新的发射命令。
+        CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+        CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK); ShootTask(); // 以新的发布时刻重复旧人工来源。
+        CHECK(shoot_fake_motors[2].ref == 0.0f); // 旧来源不能借许可恢复继续供弹。
+        ++now_ms; inputs.manual.source_time_ms = now_ms; // 操作者提供恢复后的新来源。
+        CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate(); // 更新安全事实。
+        CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK); ShootTask(); // 发布新的连续供弹命令。
+        CHECK(shoot_fake_motors[2].ref > 0.0f); // 新来源允许重新接管。
+        ++now_ms; inputs.manual_fire_requested = 0u; // 发射任务不运行时先撤销击发。
+        CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate(); // 安全管理记录撤销边沿。
+        ++now_ms; inputs.manual_fire_requested = 1u; // 随后恢复请求，但来源仍是撤销前的值。
+        CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate(); ShootTask(); // 两次变化均发生在发射任务周期之间。
+        CHECK(!shoot_fake_motors[2].enabled && shoot_fake_motors[2].ref == 0.0f); // 即使恢复得很快，旧代际也不能供弹。
+        CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK); ShootTask(); // 只重发旧来源不能绕过恢复屏障。
+        CHECK(shoot_fake_motors[2].ref == 0.0f); // 没有恢复后的新人工输入仍禁止拨弹。
+        ++now_ms; inputs.manual.source_time_ms = now_ms; // 最后提供真正的新人工来源。
+        CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate(); // 新来源通过恢复检查。
+        CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK); ShootTask(); // 发布新命令。
+        CHECK(shoot_fake_motors[2].ref > 0.0f); // 新来源才能重新供弹。
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "safety-generation") == 0)
+    {
+        CHECK(ShootInit() == 1u); // 初始化生产发射任务与测试电机。
+        MessagePublisher_t *publisher = MessagePublisherRegister(ROBOT_TOPIC_SHOOT_COMMAND, ROBOT_TOPIC_ENDPOINT_COMMAND); // 使用实际消息中心发布。
+        CHECK(publisher != NULL); // 必须取得命令话题。
+        Shoot_Ctrl_Cmd_s command = {.shoot_mode = SHOOT_ON, .friction_mode = FRICTION_ON,
+            .load_mode = LOAD_BURSTFIRE, .shoot_rate = 8.0f, .bullet_speed = (Bullet_Speed_e)99}; // 使用人工连续供弹请求。
+        now_ms = 1u; // 让命令具有明确的本机时间。
+        CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK); // 发布故障前命令。
+        ShootTask(); // 执行生产发射任务。
+        CHECK(shoot_fake_motors[2].enabled && shoot_fake_motors[2].ref > 0.0f); // 故障前允许供弹。
+        RobotFaultReport(ROBOT_FAULT_CAN_BUSOFF); // 两次发射任务之间发生总线故障。
+        RobotFaultClear(ROBOT_FAULT_CAN_BUSOFF); // 模拟故障立即恢复。
+        RobotSafetyUpdate(); // 整车可能再次 READY，但旧命令代际已失效。
+        ++now_ms; // 旧命令仍在消息期限内。
+        ShootTask(); // 不发布新命令，直接消费旧值。
+        CHECK(!shoot_fake_motors[2].enabled && shoot_fake_motors[2].ref == 0.0f); // 旧值不得在恢复后继续供弹。
+        CHECK(publish(publisher, &command, now_ms) == MESSAGE_OK); // 恢复后的新命令使用当前代际。
+        ShootTask(); // 再次运行发射任务。
+        CHECK(shoot_fake_motors[2].enabled && shoot_fake_motors[2].ref > 0.0f); // 新连续命令才可重新接管。
+        return 0;
+    }
     if (argc == 2 && strncmp(argv[1], "release-", 8u) == 0)
     {
         CHECK(ShootInit() == 1u); // 清理对象必须是已经完成初始化的机构。
@@ -188,7 +274,13 @@ int main(int argc, char **argv)
     const MessageStatus_t read_status = MessageReadSnapshot(observer, &published_command,
         sizeof(published_command), now_ms, NULL);
     CHECK(read_status == MESSAGE_OK);
-    CHECK(memcmp(&published_command, &command, sizeof(command)) == 0);
+    CHECK(published_command.shoot_mode == command.shoot_mode &&
+          published_command.friction_mode == command.friction_mode &&
+          published_command.load_mode == command.load_mode); // 核对实际发布的发射目标。
+    RobotSafetySnapshot_t published_safety = {0}; // 同时核对发布者附加的安全代际。
+    CHECK(RobotSafetyGetSnapshot(&published_safety)); // 测试中安全管理应可读取。
+    CHECK(published_command.safety_generation == published_safety.control_generation &&
+          published_command.fire_source == ROBOT_CONTROL_SOURCE_MANUAL); // 代际和来源由发布者明确填写。
     ShootTask();
     CHECK(shoot_fake_motors[0].enabled && shoot_fake_motors[1].enabled && shoot_fake_motors[2].enabled);
     const float friction_speed = 30000.0f * 0.01745329252f / 19.0f;

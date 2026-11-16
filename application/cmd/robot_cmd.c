@@ -550,6 +550,8 @@ static void EmergencyHandler(uint8_t remote_online)
 /* 机器人核心控制任务,200Hz频率运行(必须高于视觉发送频率) */
 void RobotCMDTask()
 {
+    RobotSafetySnapshot_t command_safety = {0}; // 先记录整轮选择命令时所属的安全代际。
+    const uint8_t command_safety_valid = RobotSafetyGetSnapshot(&command_safety); // 读取失败时不能发布发射动作。
    // 来源离线事件在整车任务中执行，确保撤销遥控许可与视觉清理不挤入监控任务。
    (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_ROBOT_TASK, DAEMON_EVENT_MAX_DEPTH, NULL);
     // 控制选择不读取底盘回传，避免单板复制未使用的反馈或双板为它加锁。
@@ -698,22 +700,25 @@ void RobotCMDTask()
     ApplyShootCommand(&selected_shoot_command);
 
     EmergencyHandler(remote_online); // 最终安全状态始终覆盖命令选择
-    RobotControlPermits_t current_permits = {0}; // 分功能策略启用时再次检查实际发射许可。
-    if (RobotSafetyGetFunctionPermitsAt(PlatformTimeNowMs(), &current_permits))
+    RobotControlPermits_t current_permits = {0}; // 默认不授予发射许可。
+    uint8_t policy_active = 0u; // 同次查询区分旧整车许可与分功能策略。
+    const uint8_t permits_valid = (uint8_t)(command_safety_valid &&
+        RobotSafetyGetOutputPermitsForGeneration(PlatformTimeNowMs(), command_safety.control_generation,
+                                                  &current_permits, &policy_active)); // 许可和代际必须同时有效。
+    shoot_cmd_send.safety_generation = command_safety.control_generation; // 发射任务继续检查本轮代际。
+    shoot_cmd_send.fire_source = (uint8_t)(vision_shoot_selected ? ROBOT_CONTROL_SOURCE_VISION : ROBOT_CONTROL_SOURCE_MANUAL); // 记录实际选择的击发来源。
+    if (!permits_valid || (current_permits.functions & ROBOT_CONTROL_SHOOTER) == 0u)
     {
-        if ((current_permits.functions & ROBOT_CONTROL_SHOOTER) == 0u)
-        {
-            shoot_cmd_send.shoot_mode = SHOOT_OFF; // 发射机构局部禁止时关闭发射模块。
-            shoot_cmd_send.friction_mode = FRICTION_OFF; // 不保留受禁止机构的摩擦轮目标。
-            shoot_cmd_send.load_mode = LOAD_STOP; // 拨弹目标同时清零。
-            shoot_cmd_send.shoot_rate = 0.0f; // 不把旧射速留给下次接管。
-        }
-        else if (current_permits.fire_allowed == 0u ||
-                 current_permits.fire_source != (vision_shoot_selected ? ROBOT_CONTROL_SOURCE_VISION : ROBOT_CONTROL_SOURCE_MANUAL))
-        {
-            shoot_cmd_send.load_mode = LOAD_STOP; // 机构许可不等于允许本次击发。
-            shoot_cmd_send.shoot_rate = 0.0f; // 击发来源不匹配时撤销旧射速。
-        }
+        shoot_cmd_send.shoot_mode = SHOOT_OFF; // 查询失败、代际变化或机构禁止均关闭发射。
+        shoot_cmd_send.friction_mode = FRICTION_OFF; // 不保留受禁止机构的摩擦轮目标。
+        shoot_cmd_send.load_mode = LOAD_STOP; // 拨弹目标同时清零。
+        shoot_cmd_send.shoot_rate = 0.0f; // 不把旧射速留给下次接管。
+    }
+    else if (policy_active && (current_permits.fire_allowed == 0u ||
+             current_permits.fire_source != (RobotControlSource_t)shoot_cmd_send.fire_source))
+    {
+        shoot_cmd_send.load_mode = LOAD_STOP; // 机构许可不等于允许本次击发。
+        shoot_cmd_send.shoot_rate = 0.0f; // 击发来源不匹配时撤销旧射速。
     }
     previous_vision_active = (uint8_t)(vision_active && RobotSafetyIsReady());
 

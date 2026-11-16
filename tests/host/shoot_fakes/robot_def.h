@@ -54,6 +54,8 @@ typedef struct {
     Bullet_Speed_e bullet_speed;
     uint8_t rest_heat;
     float shoot_rate;
+    uint32_t safety_generation; // 与生产发射话题保持相同的安全代际字段。
+    uint8_t fire_source; // 与生产发射话题保持相同的击发来源字段。
 } Shoot_Ctrl_Cmd_s;
 #pragma pack(pop)
 #endif

@@ -204,6 +204,8 @@ typedef struct
     Bullet_Speed_e bullet_speed; // 弹速枚举
     uint8_t rest_heat;
     float shoot_rate; // 连续发射的射频,unit per s,发/秒
+    uint32_t safety_generation; // 命令计算前读取的安全代际，供发射任务拒绝故障前旧命令。
+    uint8_t fire_source; // 当前拨弹请求的来源，取 RobotControlSource_t 的值。
 } Shoot_Ctrl_Cmd_s;
 
 /* ----------------gimbal/shoot/chassis发布的反馈数据----------------*/

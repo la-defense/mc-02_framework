@@ -11,6 +11,7 @@
 #include "platform_probe.h"
 #include "general_def.h"
 #include "platform_sync.h"
+#include "robot_safety.h"
 #include <stddef.h>
 #include <string.h>
 #include <math.h>
@@ -24,6 +25,8 @@ static uint8_t friction_count;
 static const Shoot_Config_s *shoot_config;
 static loader_mode_e last_load_mode = LOAD_STOP; // 上次处理的模式，用于判断是否刚进入单发或三发。
 static uint8_t require_load_stop = 1u; // 数据中断后先等一次停止供弹，再允许新的单发或三发。
+static uint8_t fire_wait_new_source; // 击发许可中断后，不复用原有来源。
+static uint32_t fire_inhibit_ms; // 记录本次击发禁止的起点。
 
 static Shoot_Ctrl_Cmd_s shoot_cmd_recv; // 来自cmd的发射控制信息
 static MessageSubscriber_t *shoot_sub;
@@ -145,8 +148,17 @@ uint8_t ShootReleaseStartupDevices(void)
 void ShootTask()
 {
     // 从cmd获取控制数据
-    const uint8_t command_fresh = (uint8_t)(MessageReadSnapshot(shoot_sub, &shoot_cmd_recv,
-        sizeof(shoot_cmd_recv), PlatformTimeNowMs(), NULL) == MESSAGE_OK);
+    const uint32_t now_ms = PlatformTimeNowMs(); // 本轮统一使用一个读取时刻。
+    MessageFreshness_t command_time = {0}; // 保留命令的原始来源时间。
+    const uint8_t received = (uint8_t)(MessageReadSnapshot(shoot_sub, &shoot_cmd_recv,
+        sizeof(shoot_cmd_recv), now_ms, &command_time) == MESSAGE_OK);
+    RobotControlPermits_t permits = {0}; // 查询失败时所有发射功能保持禁止。
+    uint8_t policy_active = 0u; // 旧整车路径不提供单独的击发来源。
+    uint8_t fire_denied = 0u; // 区分真实停止命令与本轮因禁止而强制停止。
+    const uint8_t command_fresh = (uint8_t)(received &&
+        RobotSafetyGetOutputPermitsForGeneration(now_ms, shoot_cmd_recv.safety_generation,
+                                                  &permits, &policy_active) &&
+        (permits.functions & ROBOT_CONTROL_SHOOTER)); // 使用前再次检查代际和发射机构许可。
     if (!command_fresh)
     {
         memset(&shoot_cmd_recv, 0, sizeof(shoot_cmd_recv));
@@ -156,8 +168,24 @@ void ShootTask()
         // 数据中断后不立即重放单发或三发，须先收到停止供弹命令。
         require_load_stop = 1u;
     }
+    else if (policy_active && shoot_cmd_recv.load_mode != LOAD_STOP &&
+             (!permits.fire_allowed || permits.fire_source != (RobotControlSource_t)shoot_cmd_recv.fire_source ||
+              (fire_wait_new_source && ((uint32_t)(command_time.source_time_ms - fire_inhibit_ms) == 0u ||
+                                         (uint32_t)(command_time.source_time_ms - fire_inhibit_ms) > INT32_MAX))))
+    {
+        if (!fire_wait_new_source) fire_inhibit_ms = now_ms; // 首次失去击发许可时记下恢复起点。
+        fire_wait_new_source = 1u; // 连发也不能用禁止前的来源自动恢复。
+        fire_denied = 1u; // 强制生成的停止不能当作人工松开击发。
+        require_load_stop = 1u; // 单发和三发仍须先见到停止供弹。
+        shoot_cmd_recv.load_mode = LOAD_STOP; // 保留允许的摩擦轮运行，撤销拨弹。
+        shoot_cmd_recv.shoot_rate = 0.0f; // 清除这次禁止的射速。
+    }
+    else if (policy_active && shoot_cmd_recv.load_mode != LOAD_STOP)
+    {
+        fire_wait_new_source = 0u; // 来源晚于禁止起点且当前许可有效，允许处理新请求。
+    }
     // 新消息持续请求单发也先等待 LOAD_STOP；连续供弹仍按当前模式处理。
-    else if (require_load_stop != 0u)
+    if (command_fresh && !fire_denied && require_load_stop != 0u)
     {
         if (shoot_cmd_recv.load_mode == LOAD_STOP)
             require_load_stop = 0u;

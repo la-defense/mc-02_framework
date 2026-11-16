@@ -1830,6 +1830,7 @@ add_test(NAME production_shoot_vision_source_switches COMMAND robot_cmd_vision_t
 add_test(NAME production_shoot_manual_authority COMMAND robot_cmd_vision_test shoot-manual-authority) # 人工击发不能被视觉帧覆盖。
 add_test(NAME production_shoot_formal_authority COMMAND robot_cmd_vision_test shoot-formal-authority) # 正式自主击发必须获得安全许可。
 add_test(NAME production_shoot_local_permission COMMAND robot_cmd_vision_test shoot-local-permission) # 发射局部禁止不依赖整车是否 READY。
+add_test(NAME production_shoot_command_short_fault COMMAND robot_cmd_vision_test shoot-short-fault) # 命令计算期间的短故障不能借恢复放行。
 add_executable(robot_cmd_v2_test robot_cmd_v2_test.c ../../application/cmd/robot_cmd.c
   ../../modules/remote/remote_safety.c ../../application/topics/robot_topics.c
   ../../modules/safety/robot_safety.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
@@ -1918,14 +1919,17 @@ foreach(target IN ITEMS robot_cmd_task_test robot_cmd_vision_test robot_cmd_v2_t
 endforeach()
 add_executable(shoot_freshness_test shoot_freshness_test.c
   ../../application/shoot/shoot.c ../../application/topics/robot_topics.c
+  ../../modules/safety/robot_safety.c # 使用真实安全管理验证发射任务的跨周期检查。
   ${MC02_HOST_MESSAGE_CENTER_SOURCES})
 target_include_directories(shoot_freshness_test BEFORE PRIVATE shoot_fakes init_resource_fakes)
 target_include_directories(shoot_freshness_test PRIVATE ../../application ../../application/shoot
-  ../../modules ../../modules/message_center ../../modules/master_machine ../../modules/imu
+  ../../modules ../../modules/message_center ../../modules/master_machine ../../modules/imu ../../modules/safety
   ../../modules/algorithm ../../modules/BMI088
   ../../Middlewares/Third_Party/CMSIS-DSP-1.7.0/Include ../../Drivers/CMSIS/Include
   ../../Drivers/CMSIS/Device/ST/STM32H7xx/Include ../../bsp/usart ../../bsp/os ../../bsp/dwt)
 add_test(NAME production_shoot_init_and_expired_command_rearm COMMAND shoot_freshness_test)
+add_test(NAME production_shoot_generation_revalidation COMMAND shoot_freshness_test safety-generation) # 故障恢复不复用排队旧命令。
+add_test(NAME production_shoot_fire_revalidation COMMAND shoot_freshness_test safety-fire) # 击发撤销后连续供弹等待新来源。
 foreach(failure IN ITEMS 1 2 3 4 5 6 7 8 9)
   add_test(NAME production_shoot_startup_motor_failure_${failure} COMMAND shoot_freshness_test ${failure}) # 分别注入电机或回退失败。
 endforeach()

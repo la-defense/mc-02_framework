@@ -31,6 +31,9 @@ static uint8_t control_was_healthy; // 识别核心条件恢复，要求恢复�
 static uint8_t control_barrier_valid; // 区分尚未发生禁止和禁止发生于0ms。
 static uint32_t control_barrier_ms; // 来源时间必须严格晚于最近恢复／禁止检查时刻。
 static uint32_t control_generation; // 即使故障在两个周期之间恢复，也留下变化记录。
+static uint8_t control_fire_was_allowed; // 记录上次计算是否允许击发，用于识别短暂撤销。
+static uint8_t control_fire_wait; // 击发撤销后要求新的对应来源。
+static uint32_t control_fire_barrier_ms; // 保存最近一次击发撤销的本机时间。
 static uint32_t control_local_wait; // 发生过局部禁止、恢复后需新来源的功能位。
 static uint32_t control_local_barrier[3]; // 底盘／云台／发射各自恢复时刻，避免局部故障中断其他功能。
 static uint32_t control_feedback_seen; // 记录已接受原始反馈时间的功能位。
@@ -195,6 +198,22 @@ static uint8_t ControlEvaluateLocked(uint32_t now_ms, RobotControlPermits_t *out
     }
     if (RobotControlEvaluate(&control_policy, &facts, now_ms, output) != ROBOT_CONTROL_OK) return 0u; // 错误时不交付许可。
     ControlFilterLocalLocked(&facts, output); // 最后复核各功能自己的恢复起点。
+    if (control_fire_was_allowed && !output->fire_allowed)
+    {
+        control_fire_barrier_ms = now_ms; // 记录击发许可从有到无的时刻。
+        control_fire_wait = 1u; // 恢复时不能重放此前的击发来源。
+        control_generation++; // 即使在发射任务两次运行之间恢复，旧命令也会失效。
+    }
+    if (control_fire_wait && output->fire_allowed)
+    {
+        const RobotControlLease_t *fire_lease = output->fire_source == ROBOT_CONTROL_SOURCE_VISION ? &facts.aim : &facts.manual; // 按实际击发来源检查原始时间。
+        if (!ControlSourceAfter(fire_lease, control_fire_barrier_ms))
+        {
+            output->fire_source = ROBOT_CONTROL_SOURCE_NONE; // 恢复前的来源不能重新获得击发权。
+            output->fire_allowed = 0u; // 其他功能及摩擦轮许可不随之撤销。
+        }
+    }
+    control_fire_was_allowed = output->fire_allowed; // 保存过滤后的许可，避免重复记录同一次撤销。
     return 1u;
 }
 
@@ -243,6 +262,8 @@ uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs
     {
         const uint32_t now_ms = PlatformTimeNowMs(); // 使用一次读取的本机时间处理过期和本次提交。
         ControlExpireFeedbackLocked(now_ms); // 两次提交之间没有查询时，也要保留过期边沿。
+        RobotControlPermits_t previous_permits = {0}; // 新提交覆盖前先检查旧来源是否已经失去击发许可。
+        (void)ControlEvaluateLocked(now_ms, &previous_permits); // 过期边沿不能被新的来源覆盖。
         if (inputs != NULL)
         {
             const RobotControlFacts_t facts = ControlFactsLocked(inputs); // 核心和使能始终由管理者提供。
@@ -268,6 +289,8 @@ uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs
                     control_feedback_last[i] = inputs->feedback[i]; // 保留时间和期限用于拒绝重放。
                 }
             control_inputs = *inputs; // 全部检查后一次发布来源与反馈事实。
+            RobotControlPermits_t current_permits = {0}; // 立即检查本次提交的击发撤销。
+            (void)ControlEvaluateLocked(now_ms, &current_permits); // 两次提交之间没有任务运行时也保留禁止事件。
         }
         else
         {
@@ -402,6 +425,9 @@ void RobotSafetyInit(void)
     control_barrier_valid = 0u; // 尚未发生新启动周期中的接管检查。
     control_barrier_ms = 0u; // 初始数值不作为有效来源时间。
     control_generation = 0u; // 该计数只描述当前启动周期。
+    control_fire_was_allowed = 0u; // 不沿用上次启动的击发许可。
+    control_fire_wait = 0u; // 新启动由全局接管规则处理旧来源。
+    control_fire_barrier_ms = 0u; // 没有本周期击发撤销时不使用此时间。
     control_local_wait = 0u; // 新启动没有沿用上个周期的局部恢复记录。
     control_feedback_seen = 0u; // 新启动不沿用前次反馈时间。
     memset(control_feedback_last, 0, sizeof(control_feedback_last)); // 清除前次反馈及其期限。
