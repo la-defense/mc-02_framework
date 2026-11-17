@@ -1,5 +1,7 @@
 # MC02-0003：基础人工输入适配验证
 
+遥控／键盘转换补充：主机使用隔离测试映射检查摇杆通道、正反按键、来源档位、无线与键鼠各自期限、较早截止时间、重复读取和计时回绕；另用生产遥控接收程序的真实解析结果验证原接收时间及键盘样本号。WSL Debug／Release 全量各 795／795 通过，两项相关 ASan／UBSan 测试及 `verify.py --fast` 通过；新增转换源文件通过 Cortex-M7 硬浮点单文件编译。新接口尚未进入固件源码选择，也没有替换 RobotCMD；测试参数未写入哨兵车型，未连接硬件。
+
 本记录针对标准命令接口首个软件切片，不替代 TODO 状态。
 
 - WSL CMake Debug／Release 定向 CTest `production_standard_cmd_manual_and_events` 各1/1通过；测试使用显式检查，Release下仍生效。

@@ -19,6 +19,14 @@ include(../../cmake/mc02_dsp.cmake)
 mc02_add_dsp(mc02_dsp_host TRUE)
 # 人工输入适配直接编译生产纯C实现，Release也用显式检查验证失败输出和期限。
 add_executable(std_cmd_test std_cmd_test.c ../../modules/standard_cmd/std_cmd.c)
+add_executable(std_cmd_remote_test std_cmd_remote_test.c ../../modules/standard_cmd/std_cmd.c
+  ../../modules/standard_cmd/std_cmd_remote.c) # 使用人工测试配置验证遥控来源转换。
+target_include_directories(std_cmd_remote_test PRIVATE . ../../modules/standard_cmd ../../modules/remote ../../bsp/board)
+target_compile_options(std_cmd_remote_test PRIVATE -Wall -Wextra -Werror)
+if(UNIX)
+  target_link_libraries(std_cmd_remote_test PRIVATE m)
+endif()
+add_test(NAME production_std_cmd_remote_adapter COMMAND std_cmd_remote_test)
 target_include_directories(std_cmd_test PRIVATE ../../modules/standard_cmd)
 target_compile_features(std_cmd_test PRIVATE c_std_11)
 target_compile_options(std_cmd_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
@@ -1641,11 +1649,13 @@ if(UNIX AND NOT APPLE)
 endif()
 add_executable(remote_control_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ../../modules/remote/remote_safety.c
+  ../../modules/standard_cmd/std_cmd.c ../../modules/standard_cmd/std_cmd_remote.c # 联合真实遥控接收与人工转换。
   ../../modules/safety/can_recovery.c # 联合真实遥控来源验证恢复屏障。
   ${MC02_HOST_REMOTE_SOURCES} ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c)
 target_include_directories(remote_control_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
-target_include_directories(remote_control_test PRIVATE ../../bsp/usart ../../modules/remote
+target_include_directories(remote_control_test PRIVATE ../../bsp/usart ../../modules/remote ../../modules/standard_cmd
   ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../modules/message_center ../../application)
+target_compile_definitions(remote_control_test PRIVATE MC02_STD_CMD_ADAPTER_TEST=1) # 启用真实来源与转换联测。
 add_test(NAME production_remote_startup_offline COMMAND remote_control_test)
 add_test(NAME production_remote_snapshot_source_metadata COMMAND remote_control_test snapshot-metadata) # 验证数据和原始时间一致交付。
 add_test(NAME production_remote_source_selection_generation COMMAND remote_control_test source-epoch) # 短暂切换和重连必须留下代次。

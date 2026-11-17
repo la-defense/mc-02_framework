@@ -16,6 +16,9 @@
 #include "can_recovery.h"
 #include "bsp_usart.h"
 #include "remote_safety.h"
+#if defined(MC02_STD_CMD_ADAPTER_TEST)
+#include "std_cmd_remote.h"
+#endif
 #include "../../bsp/board/board_uart_stm32.h"
 #if MC02_BENCH_RC_DIAGNOSTICS
 #include "remote_bench.h"
@@ -267,6 +270,21 @@ int main(int argc, char **argv)
         RemoteControlGetSnapshot(&value);
         CHECK(value.radio_sequence == 4u && value.pc_sample_sequence == 3u && value.input.key[0].w);
         CHECK(value.radio_source_time_ms == 30u && value.pc_source_time_ms == 30u);
+#if defined(MC02_STD_CMD_ADAPTER_TEST)
+        StdCmdRemoteMap_t mapping = {0}; // 使用只属于主机的测试比例。
+        mapping.remote_map.max_age_ms = 100u; mapping.keyboard_map.max_age_ms = 150u;
+        mapping.remote_map.allowed_frames = mapping.keyboard_map.allowed_frames = 1u << STD_CMD_FRAME_CHASSIS;
+        for (unsigned axis = 0u; axis < STD_CMD_AXIS_COUNT; ++axis)
+        {
+            mapping.remote_map.axis[axis] = (StdCmdAxisMap_t){660.0f, 0.01f, 10.0f};
+            mapping.keyboard_map.axis[axis] = (StdCmdAxisMap_t){1.0f, 1.0f, 1.0f};
+        }
+        mapping.keyboard_positive[STD_CMD_VX] = (uint16_t)(1u << Key_W); // 将真实接收的 W 映射为测试前进。
+        StdCmdManualIntent_t intent = {0};
+        CHECK(StdCmdAdaptRemote(&mapping, &value, now, &intent) == STD_CMD_OK);
+        CHECK(intent.source == STD_CMD_KEY_MOUSE && intent.axis[STD_CMD_VX] == 1.0f &&
+              intent.sequence == 3u && intent.source_time_ms == 30u); // 真实接收时间不能被任务派发时间替代。
+#endif
         frame[12] = 2u; now = 40u; receive(frame, sizeof(frame)); // 非法鼠标字段不得更新任何来源信息。
         RemoteControlGetSnapshot(&value);
         CHECK(value.radio_sequence == 4u && value.pc_sample_sequence == 3u && value.radio_source_time_ms == 30u);
