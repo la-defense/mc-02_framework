@@ -50,6 +50,32 @@ typedef struct
  */
 void DJIMotorGetFeedbackRoles(uint32_t now_ms, DJI_Feedback_Roles_s *output);
 
+/** @brief 单台已登记 DJI 电机的恢复检查数据。 */
+typedef struct {
+    PlatformCanBus_t bus; /**< 电机实际使用的逻辑 CAN 总线。 */
+    MotorOutputRole_t role; /**< 登记时声明的机构用途。 */
+    uint32_t sequence; /**< 本机反馈序号，0 表示尚未收到合法样本。 */
+    uint32_t source_time_ms; /**< 样本原始接收时间；sequence 为 0 时无意义。 */
+    uint8_t speed_valid; /**< 速度已验证且没有过期。 */
+    uint8_t current_valid; /**< 电流已验证且没有过期。 */
+    uint8_t position_valid; /**< 多圈位置可信且没有过期。 */
+} DJI_RecoveryFeedbackItem_s;
+
+/** @brief 按固定登记顺序保存全部 DJI 电机的恢复检查数据。 */
+typedef struct {
+    uint8_t count; /**< 有效条目数，最多 DJI_MOTOR_CNT。 */
+    DJI_RecoveryFeedbackItem_s motors[DJI_MOTOR_CNT]; /**< 下标与启动登记顺序对应。 */
+} DJI_RecoveryFeedback_s;
+
+/** @brief 读取各台 DJI 电机的来源时间、序号、用途及有效性。
+ * @param[in] now_ms 本机毫秒时刻，允许回绕。
+ * @param[out] output 非空时接收完整结果；参数无效时不改写。
+ * @return 1 为成功，0 为参数无效或登记表不完整。
+ * @note 运行前须完成设备登记；运行期间不能并发注册或注销。逐台读取期间反馈可更新，
+ * 每条数据应继续按各自源时间检查；调用方须核对车型期望数量和其他型号的反馈。
+ */
+uint8_t DJIMotorGetRecoveryFeedback(uint32_t now_ms, DJI_RecoveryFeedback_s *output);
+
 /** @brief 每个反馈量可单独选择旧逐帧滤波、按真实dt计算的一阶低通或原始值。 */
 typedef enum
 {

@@ -2724,9 +2724,16 @@ static void test_busoff_runtime_notification(void)
     status_busoff[1] = 1u; now_us = 100000u; // 先让辅助总线发生故障。
     CANHealthMonitor(); // 由真实健康检查上报。
     TEST_CHECK(can_runtime_faults == 0u); // 辅助故障不能触发核心全局禁止。
+    RobotCanFaultSnapshot_t events = {0}; // 查询实际故障观察者记录。
+    TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && events.fault_generation == 0u); // 辅助总线不改变核心代次。
     status_busoff[1] = 0u; status_busoff[0] = 1u; now_us = 200000u; // 然后让核心总线发生故障。
     CANHealthMonitor(); // 即使随后重启成功也要先通知。
     TEST_CHECK(can_runtime_faults == 1u); // 核心故障必须进入安全报告接口。
+    TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && events.fault_generation == 1u &&
+               events.bus_generation[0] == 1u); // 故障事件必须保留在恢复检查可读取的代次中。
+    now_us = 300000u; CANHealthMonitor(); // 第一条总线再次检测到关闭。
+    TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && events.fault_generation == 2u &&
+               events.bus_generation[0] == 2u); // 第二次短故障不能被已有故障位覆盖。
 }
 
 static void test_can_status_runtime_failure(void)

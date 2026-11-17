@@ -787,7 +787,8 @@ add_test(NAME production_robot_can_guard_core_and_aux COMMAND robot_can_guard_te
 set_tests_properties(production_robot_can_guard_core_and_aux PROPERTIES TIMEOUT 10)
 
 add_executable(robot_can_runtime_test robot_can_runtime_test.c ../../application/robot_can_runtime.c
-  ../../application/config/module_plan.c ../../modules/safety/robot_safety.c) # 使用生产模块依赖和安全管理。
+  ../../application/config/module_plan.c ../../modules/safety/robot_safety.c
+  ../../modules/safety/can_recovery.c) # 使用生产模块依赖、安全管理和恢复计算。
 target_include_directories(robot_can_runtime_test BEFORE PRIVATE robot_cmd_fakes) # 提供主机中断与日志替身。
 target_include_directories(robot_can_runtime_test PRIVATE . ../../application ../../application/config
   ../../modules/safety ../../bsp/can ../../bsp/board ../../bsp/os)
@@ -952,6 +953,7 @@ add_executable(lk_motor_bsp_can_test lk_motor_bsp_can_test.c
   ../../bsp/board/platform_can_periodic_stm32.c # 周期发送使用生产平台适配。
   ../../bsp/board/platform_can_rx_stm32.c # 通过生产适配注册与派发接收端点。
   ../../bsp/board/platform_can_start_stm32.c # 使用生产适配单独启动 CAN 总线。
+  ../../bsp/os/platform_irq_stm32.c # 运行期故障代次使用生产中断保护适配。
   ../../modules/motor/motor_pid.c
   ${MC02_HOST_DJI_SOURCES}
   ../../modules/algorithm/controller.c ${MC02_HOST_DAEMON_SOURCES} ../../bsp/can/bsp_can.c
@@ -1207,7 +1209,7 @@ add_executable(motor_single_safety_test motor_feedback_filter_test.c
   ../../bsp/board/platform_can_periodic_stm32.c dji_can_unregister_fake.c
   ../../modules/motor/motor_feedback.c ../../modules/algorithm/controller.c
   ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c
-  ../../modules/safety/robot_safety.c) # 单板使用真实安全管理与电机发送实现。
+  ../../modules/safety/robot_safety.c ../../modules/safety/can_recovery.c) # 单板使用真实安全管理、恢复计算与电机发送实现。
 target_include_directories(motor_single_safety_test BEFORE PRIVATE motor_safety_fakes motor_pid_fakes)
 target_include_directories(motor_single_safety_test PRIVATE ../../modules/motor
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/safety
@@ -1225,6 +1227,7 @@ endif()
 add_test(NAME production_dji_single_safety_output_gate COMMAND motor_single_safety_test single-safety-output)
 add_test(NAME production_dji_single_queued_feedback_expiry COMMAND motor_single_safety_test single-queued-feedback-expiry) # 排队目标不能借新反馈续期。
 add_test(NAME production_dji_single_loader_fire_permit COMMAND motor_single_safety_test single-loader-fire-permit) # 拨弹独立检查击发许可。
+add_test(NAME production_dji_recovery_real_feedback COMMAND motor_single_safety_test recovery-real-feedback) # 用真实电机反馈推进恢复条件。
 add_test(NAME production_dji_single_shared_frame_permissions COMMAND motor_single_safety_test single-shared-frame) # 同帧不同机构分开授权。
 add_test(NAME production_dji_single_feedback_roles COMMAND motor_single_safety_test single-feedback-roles) # 同机构逐台检查反馈。
 add_test(NAME production_dji_single_feedback_roles_wrap COMMAND motor_single_safety_test single-feedback-roles-wrap) # 反馈时间跨回绕仍选择最早样本。

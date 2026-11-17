@@ -14,6 +14,7 @@
 #if defined(CHASSIS_BOARD) || defined(ONE_BOARD)
 #include "FreeRTOS.h"
 #include "robot_safety.h"
+#include "can_recovery.h" // 验证真实反馈能否用于恢复顺序检查。
 #endif
 
 #include <math.h>
@@ -185,6 +186,74 @@ static int control_rejects_expired_feedback(void)
 }
 
 #if defined(ONE_BOARD)
+// 把每台真实电机的序号和有效性填入测试恢复输入，不改变采样时间。
+static void recovery_input_from_dji(CanRecoveryInput_t *input, const DJI_RecoveryFeedback_s *feedback)
+{
+    input->valid_feedback_mask = 0u; // 每轮从空集合重新检查。
+    for (uint8_t i = 0u; i < feedback->count; ++i)
+    {
+        input->feedback_sequence[i] = feedback->motors[i].sequence; // 使用电机自己的原始序号。
+        if (feedback->motors[i].speed_valid && feedback->motors[i].current_valid)
+            input->valid_feedback_mask |= 1u << i; // 速度与电流都有效时才接受该电机。
+    }
+}
+
+// 用两条真实驱动反馈推进恢复；不使用机构汇总时间冒充每台电机的更新。
+static int recovery_real_feedback(void)
+{
+    DJIMotorInstance *motors[2] = {0}; // 两台电机使用固定登记顺序。
+    for (uint8_t i = 0u; i < 2u; ++i)
+    {
+        Motor_Init_Config_s config = motor_config((uint8_t)(i + 1u)); // 分配不同设备编号。
+        config.output_role = MOTOR_OUTPUT_CHASSIS; // 本场景检查两台底盘电机。
+        config.can_init_config.can_bus = i == 0u ? PLATFORM_CAN_BUS_1 : PLATFORM_CAN_BUS_2; // 分别记录实际总线。
+        motors[i] = DJIMotorInit(&config); // 使用生产驱动登记。
+        TEST_CHECK(motors[i] != NULL); // 登记失败时不能继续。
+        receive(motors[i], 480000u, 1u, 0, 0); // 两台均在故障前有反馈，周期计数与 480 MHz 时钟对应。
+    }
+    Motor_Init_Config_s optional = motor_config(3u); // 增加一台尚无反馈的非核心测试设备。
+    optional.output_role = MOTOR_OUTPUT_FRICTION; // 明确区分它的用途。
+    optional.can_init_config.can_bus = PLATFORM_CAN_BUS_2; // 与第二台共享测试总线但使用不同设备编号。
+    TEST_CHECK(DJIMotorInit(&optional) != NULL); // 该设备虽未收到帧，也必须出现在登记列表。
+    now_us = 1000u; // 与最早反馈使用相同时间域。
+    DJI_RecoveryFeedback_s feedback = {0}; // 收集每台电机的原始信息。
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(1u, &feedback) && feedback.count == 3u); // 全部已登记设备都必须出现。
+    TEST_CHECK(feedback.motors[0].bus == PLATFORM_CAN_BUS_1 && feedback.motors[1].bus == PLATFORM_CAN_BUS_2); // 总线绑定不能混淆。
+    TEST_CHECK(feedback.motors[0].sequence == 1u && feedback.motors[1].sequence == 1u); // 初始反馈各自保存序号。
+    TEST_CHECK(feedback.motors[2].bus == PLATFORM_CAN_BUS_2 && feedback.motors[2].sequence == 0u &&
+               !feedback.motors[2].speed_valid && !feedback.motors[2].position_valid); // 无首帧的设备不能被标记为有效。
+    CanRecovery_t recovery = {0}; // 测试实例独立持有状态。
+    const CanRecoveryConfig_t config = {3u, 100u}; // 测试用户选择的 100 ms 候选稳定时间，不代表实车确认。
+    TEST_CHECK(CanRecoveryInit(&recovery, &config)); // 验证测试配置有效。
+    CanRecoveryInput_t input = {.now_ms = 1u, .inhibit_generation = 1u, .permit_ok = 1u, .command_sequence = 10u}; // 故障中先记录两台的基准。
+    recovery_input_from_dji(&input, &feedback); // 原序号和有效性分别传入恢复检查。
+    TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 总线故障期间必须禁止。
+    now_us = 2000u; receive(motors[0], 960000u, 2u, 0, 0); // 只有第一台收到新反馈。
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(2u, &feedback)); // 重新读取两台实际反馈。
+    input.now_ms = 2u; input.bus_ok = 1u; // 测试总线恢复。
+    recovery_input_from_dji(&input, &feedback); // 原序号不会因汇总而递增。
+    TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 第二台仍是旧样本，不能开始稳定计时。
+    now_us = 3000u; receive(motors[1], 1440000u, 3u, 0, 0); // 第二台也收到新反馈。
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(3u, &feedback)); // 读取各自新序号。
+    input.now_ms = 3u; recovery_input_from_dji(&input, &feedback); // 更新各路原始序号及有效性。
+    TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 全部新反馈到齐后开始稳定计时。
+    for (uint32_t time_ms = 13u; time_ms <= 103u; time_ms += 10u)
+    {
+        now_us = (uint64_t)time_ms * 1000u; // 每隔 10 ms 更新测试时钟。
+        for (unsigned i = 0u; i < 2u; ++i)
+            receive(motors[i], time_ms * 480000u, time_ms, 0, 0); // 两台电机必须持续产生新反馈。
+        TEST_CHECK(DJIMotorGetRecoveryFeedback(time_ms, &feedback)); // 取得当前真实驱动数据。
+        input.now_ms = time_ms; recovery_input_from_dji(&input, &feedback); // 按各自原始时间检查有效性。
+        TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 包括 100 ms 边界在内，仍等待之后的新命令。
+    }
+    input.now_ms = 104u; input.command_sequence = 11u; TEST_CHECK(CanRecoveryStep(&recovery, &input)); // 稳定后的新命令才使恢复条件成立。
+    now_us = 125000u; TEST_CHECK(DJIMotorGetRecoveryFeedback(125u, &feedback)); // 原始反馈超过 20 ms。
+    TEST_CHECK(!feedback.motors[0].speed_valid && !feedback.motors[1].speed_valid); // 重复汇总不能刷新反馈期限。
+    input.now_ms = 125u; recovery_input_from_dji(&input, &feedback); // 从电机结果读取过期状态。
+    TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 反馈过期立即撤销恢复结果。
+    return EXIT_SUCCESS;
+}
+
 // 发射机构可运行但击发已撤销时，拨弹电机不能借摩擦轮许可继续输出。
 static int single_loader_fire_permit(void)
 {
@@ -874,6 +943,8 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
 #if defined(ONE_BOARD)
+    if (strcmp(argv[1], "recovery-real-feedback") == 0)
+        return recovery_real_feedback();
     if (strcmp(argv[1], "single-loader-fire-permit") == 0)
         return single_loader_fire_permit();
     if (strcmp(argv[1], "single-queued-feedback-expiry") == 0)

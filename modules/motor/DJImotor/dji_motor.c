@@ -840,6 +840,30 @@ void DJIMotorGetFeedbackRoles(uint32_t now_ms, DJI_Feedback_Roles_s *output)
     *output = result; // 汇总结束后一次交付结果。
 }
 
+uint8_t DJIMotorGetRecoveryFeedback(uint32_t now_ms, DJI_RecoveryFeedback_s *output)
+{
+    if (output == NULL || idx > DJI_MOTOR_CNT) return 0u; // 输出无效或登记数量异常时不交付部分数据。
+    DJI_RecoveryFeedback_s result = {0}; // 无样本的电机保持序号零和各量无效。
+    result.count = idx; // 保留完整登记数量，调用方须与车型要求比较。
+    for (size_t index = 0u; index < idx; ++index)
+    {
+        const DJIMotorInstance *motor = dji_motor_instance[index]; // 使用启动时固定的登记顺序。
+        if (motor == NULL) return 0u; // 登记表不完整时不能把缺失电机当作健康。
+        DJI_RecoveryFeedbackItem_s *item = &result.motors[index]; // 每台电机占独立位置。
+        item->bus = motor->motor_can_endpoint.can_bus; // 使用注册时实际选择的总线。
+        item->role = motor->output_role; // 保留机构用途供车型检查。
+        Motor_Feedback_Snapshot_s feedback = {0}; // 每台电机按实际接收时间取得反馈。
+        if (DJIMotorGetFeedbackSnapshot(motor, now_ms, &feedback) != MOTOR_FEEDBACK_OK) continue; // 没有合法样本时保持序号零和无效标志。
+        item->sequence = feedback.sample_sequence; // 保存这份原始样本的序号。
+        item->source_time_ms = feedback.speed.source_time_ms; // 三种反馈来自同一帧的接收时刻。
+        item->speed_valid = feedback.speed.valid; // 不把过期的速度视为可用。
+        item->current_valid = feedback.current.valid; // 电流有效性单独报告。
+        item->position_valid = feedback.position.valid; // 多圈参考失效不能被速度代替。
+    }
+    *output = result; // 只有完整遍历后才交付。
+    return 1u;
+}
+
 #if defined(CHASSIS_BOARD)
 static uint8_t DJIMotorChassisFeedbackIsHealthy(uint32_t now_ms)
 {

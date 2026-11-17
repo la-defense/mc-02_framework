@@ -4,10 +4,33 @@
 #include "robot_can_runtime.h"
 #include "platform_can.h"
 #include "robot_safety.h"
+#include "platform_irq.h"
 #include <stddef.h>
 
 static uint8_t core_can_buses; // 每位对应一条已声明的核心逻辑总线。
 static uint8_t observer_installed; // 不允许运行时覆盖已有故障绑定。
+static uint8_t fault_can_buses; // 记录从安装以来发生故障的核心总线。
+static uint32_t fault_generation; // 任一核心总线事件都会推进此代次。
+static uint32_t bus_generation[3]; // 每条核心总线单独记录事件代次。
+
+uint8_t RobotCanRuntimeGetFaultSnapshot(RobotCanFaultSnapshot_t *output)
+{
+    if (output == NULL) return 0u; // 没有输出存储时不执行读取。
+    const PlatformIrqState_t irq = PlatformIrqSaveAndDisable(); // 一次复制总线集合和全部事件代次。
+    if (!observer_installed)
+    {
+        PlatformIrqRestore(irq); // 尚未安装时恢复中断，不改变调用者的旧结果。
+        return 0u;
+    }
+    RobotCanFaultSnapshot_t result = {0}; // 先构造完整的本地结果。
+    result.core_bus_mask = core_can_buses; // 保留车型声明的核心总线。
+    result.fault_bus_mask = fault_can_buses; // 报告安装后观察到的故障总线。
+    result.fault_generation = fault_generation; // 任一核心总线的最新事件代次。
+    for (unsigned i = 0u; i < 3u; ++i) result.bus_generation[i] = bus_generation[i]; // 各总线分别复制。
+    PlatformIrqRestore(irq); // 恢复调用者的中断状态。
+    *output = result; // 成功后才交付完整结果。
+    return 1u;
+}
 
 // 此回调在短中断保护内执行，安全管理只更新有界状态，不打印日志。
 static void RobotCanRuntimeFault(PlatformCanBus_t bus, void *context)
@@ -15,7 +38,13 @@ static void RobotCanRuntimeFault(PlatformCanBus_t bus, void *context)
     (void)context; // 车型依赖在启动时已复制到静态位图。
     if (bus < PLATFORM_CAN_BUS_1 || bus > PLATFORM_CAN_BUS_3) return; // 无效编号不能索引位图。
     const uint8_t bit = (uint8_t)(1u << ((unsigned)bus - (unsigned)PLATFORM_CAN_BUS_1)); // 转成该总线的固定位置。
-    if (core_can_buses & bit) RobotFaultReport(ROBOT_FAULT_CAN_BUSOFF); // 核心依赖发生故障时立即撤销旧许可。
+    if (core_can_buses & bit)
+    {
+        fault_can_buses |= bit; // 保留该核心总线曾发生故障的记录。
+        ++fault_generation; // 即使故障位已置位，新的事件也不能丢失。
+        ++bus_generation[(unsigned)bus - (unsigned)PLATFORM_CAN_BUS_1]; // 保留这条总线自己的事件代次。
+        RobotFaultReport(ROBOT_FAULT_CAN_BUSOFF); // 核心依赖发生故障时立即撤销旧许可。
+    }
 }
 
 uint8_t RobotCanRuntimeInstall(const RobotModulePlan_t *plan,

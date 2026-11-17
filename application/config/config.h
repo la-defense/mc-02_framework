@@ -117,12 +117,19 @@ typedef struct
     float loader_reverse_speed_rad_s; // 拨弹盘输出轴反转目标速度，rad/s
 } Shoot_Config_s;
 
+/** @brief 核心 CAN 恢复所需的车型确认数据。 */
+typedef struct {
+    uint32_t feedback_stable_ms; // 所有必需反馈持续有效的候选时间，单位 ms。
+    uint8_t confirmed; // 1 表示已按实车反馈周期和故障注入确认；0 仅供软件验证。
+} RobotCanRecoveryConfig_s;
+
 // 机器人参数结构体
 typedef struct
 {
     Chassis_Config_s chassis_param;
     Gimbal_Config_s gimbal_param;
     Shoot_Config_s shoot_param;
+    RobotCanRecoveryConfig_s can_recovery; // CAN 自动恢复参数；未确认时不能作为实车恢复授权。
     PlatformImuPort_t imu_sensor; // 姿态解算使用的逻辑 IMU，由板级适配绑定。
     PlatformPwmChannel_t imu_heater_pwm; // 温控输出使用的逻辑 PWM。
     PlatformAdcChannel_t imu_heater_supply; // 温控检查电源电压使用的逻辑 ADC。
