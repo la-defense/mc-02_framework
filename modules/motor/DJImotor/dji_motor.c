@@ -852,6 +852,8 @@ uint8_t DJIMotorGetRecoveryFeedback(uint32_t now_ms, DJI_RecoveryFeedback_s *out
         DJI_RecoveryFeedbackItem_s *item = &result.motors[index]; // 每台电机占独立位置。
         item->bus = motor->motor_can_endpoint.can_bus; // 使用注册时实际选择的总线。
         item->role = motor->output_role; // 保留机构用途供车型检查。
+        item->motor_type = motor->motor_type; // 按型号核对车型所需设备。
+        item->motor_id = motor->motor_can_endpoint.tx_id; // 使用登记时的设备编号。
         Motor_Feedback_Snapshot_s feedback = {0}; // 每台电机按实际接收时间取得反馈。
         if (DJIMotorGetFeedbackSnapshot(motor, now_ms, &feedback) != MOTOR_FEEDBACK_OK) continue; // 没有合法样本时保持序号零和无效标志。
         item->sequence = feedback.sample_sequence; // 保存这份原始样本的序号。

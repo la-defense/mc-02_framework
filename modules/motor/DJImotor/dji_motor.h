@@ -54,6 +54,8 @@ void DJIMotorGetFeedbackRoles(uint32_t now_ms, DJI_Feedback_Roles_s *output);
 typedef struct {
     PlatformCanBus_t bus; /**< 电机实际使用的逻辑 CAN 总线。 */
     MotorOutputRole_t role; /**< 登记时声明的机构用途。 */
+    Motor_Type_e motor_type; /**< 由车型配置登记的 DJI 电机型号。 */
+    uint32_t motor_id; /**< 设备编号，范围 1～8。 */
     uint32_t sequence; /**< 本机反馈序号，0 表示尚未收到合法样本。 */
     uint32_t source_time_ms; /**< 样本原始接收时间；sequence 为 0 时无意义。 */
     uint8_t speed_valid; /**< 速度已验证且没有过期。 */

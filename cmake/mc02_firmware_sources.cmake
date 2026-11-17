@@ -198,6 +198,7 @@ set(MC02_APPLICATION_COMMON_C_SOURCES
     application/log_startup.c # 按车型核心依赖检查日志出口。
     application/robot_can_guard.c # 诊断后传播总线隔离与依赖失败。
     application/robot_can_runtime.c # 按车型核心依赖观察运行期 CAN 故障。
+    application/robot_can_motor_recovery.c # 将核心电机配置对应到恢复反馈。
     application/robot_can_capacity.c # 启动前检查 CAN 端点容量。
     application/robot_can_requirements.c # 汇总车型实际 CAN 端点需求。
     application/robot_startup.c # 启动协调者按顺序完成设备与任务准备。

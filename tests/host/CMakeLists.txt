@@ -811,6 +811,18 @@ target_compile_definitions(robot_can_requirements_test PRIVATE MC02_PROFILE_ROBO
 target_compile_options(robot_can_requirements_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_robot_can_requirements_mapping COMMAND robot_can_requirements_test)
 
+add_executable(robot_can_motor_recovery_test robot_can_motor_recovery_test.c
+  ../../application/robot_can_motor_recovery.c ../../application/config/module_plan.c
+  ../../modules/safety/can_recovery.c) # 核对车型设备与逐台恢复反馈。
+target_include_directories(robot_can_motor_recovery_test PRIVATE . ../../application ../../application/config
+  ../../application/chassis ../../modules ../../modules/motor ../../modules/motor/DJImotor
+  ../../modules/algorithm ../../modules/daemon ../../modules/safety ../../modules/alarm ../../modules/referee
+  ../../modules/imu ../../modules/master_machine ../../modules/message_center
+  ../../bsp/board ../../bsp/can ../../bsp/os ../../bsp/usart)
+target_compile_definitions(robot_can_motor_recovery_test PRIVATE MC02_PROFILE_ROBOT=1 ONE_BOARD=1)
+target_compile_options(robot_can_motor_recovery_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_can_recovery_motor_manifest COMMAND robot_can_motor_recovery_test)
+
 add_executable(robot_can_requirements_disabled_test robot_can_requirements_disabled_test.c
   ../../application/robot_can_requirements.c) # 使用关闭业务模块的生成配置检查双板需求。
 target_include_directories(robot_can_requirements_disabled_test BEFORE PRIVATE motor_profile_fakes robot_def_role_fakes)
@@ -1207,6 +1219,7 @@ add_test(NAME production_dji_chassis_safety_output_gate
   COMMAND motor_chassis_safety_test chassis-safety-output)
 add_executable(motor_single_safety_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
+  ../../application/robot_can_motor_recovery.c ../../application/config/module_plan.c # 使用真实车型映射处理生产驱动反馈。
   ../../bsp/board/platform_can_periodic_stm32.c dji_can_unregister_fake.c
   ../../modules/motor/motor_feedback.c ../../modules/algorithm/controller.c
   ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c
@@ -1214,7 +1227,9 @@ add_executable(motor_single_safety_test motor_feedback_filter_test.c
 target_include_directories(motor_single_safety_test BEFORE PRIVATE motor_safety_fakes motor_pid_fakes)
 target_include_directories(motor_single_safety_test PRIVATE ../../modules/motor
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/safety
-  ../../modules/imu ../../modules/master_machine ../../application ../../bsp/usart)
+  ../../modules/imu ../../modules/master_machine ../../modules/alarm ../../modules/referee
+  ../../modules/message_center ../../application ../../application/config ../../application/chassis
+  ../../bsp/usart ../../bsp/board ../../bsp/can ../../bsp/os)
 target_compile_definitions(motor_single_safety_test PRIVATE ONE_BOARD=1) # 选择单板发送路径。
 if(MSVC)
   target_compile_options(motor_single_safety_test PRIVATE /FIstm32h7xx_hal.h)

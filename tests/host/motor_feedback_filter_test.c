@@ -15,6 +15,9 @@
 #include "FreeRTOS.h"
 #include "robot_safety.h"
 #include "can_recovery.h" // 验证真实反馈能否用于恢复顺序检查。
+#if defined(ONE_BOARD)
+#include "robot_can_motor_recovery.h" // 使用车型身份检查真实电机反馈。
+#endif
 #endif
 
 #include <math.h>
@@ -220,6 +223,13 @@ static int recovery_real_feedback(void)
     TEST_CHECK(DJIMotorGetRecoveryFeedback(1u, &feedback) && feedback.count == 3u); // 全部已登记设备都必须出现。
     TEST_CHECK(feedback.motors[0].bus == PLATFORM_CAN_BUS_1 && feedback.motors[1].bus == PLATFORM_CAN_BUS_2); // 总线绑定不能混淆。
     TEST_CHECK(feedback.motors[0].sequence == 1u && feedback.motors[1].sequence == 1u); // 初始反馈各自保存序号。
+    const RobotCanMotorPlan_t identity = {.count = 2u, .motors = {
+        {.bus = PLATFORM_CAN_BUS_1, .role = MOTOR_OUTPUT_CHASSIS, .type = M3508, .id = 1u},
+        {.bus = PLATFORM_CAN_BUS_2, .role = MOTOR_OUTPUT_CHASSIS, .type = M3508, .id = 2u}}}; // 两台必需电机按车型声明身份。
+    CanRecoveryInput_t mapped = {0}; // 非核心第三台不会代替必需电机。
+    TEST_CHECK(RobotCanMotorRecoveryMap(&identity, &feedback, 1u, &mapped) &&
+               mapped.valid_feedback_mask == 3u && mapped.feedback_sequence[0] == 1u &&
+               mapped.feedback_sequence[1] == 1u); // 用生产驱动数据核对型号、编号、总线和来源序号。
     TEST_CHECK(feedback.motors[2].bus == PLATFORM_CAN_BUS_2 && feedback.motors[2].sequence == 0u &&
                !feedback.motors[2].speed_valid && !feedback.motors[2].position_valid); // 无首帧的设备不能被标记为有效。
     CanRecovery_t recovery = {0}; // 测试实例独立持有状态。
