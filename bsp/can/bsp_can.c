@@ -2135,26 +2135,42 @@ void CANGetStatus(FDCAN_HandleTypeDef *hcan, CAN_Status_t *status)
     if (hcan == NULL || status == NULL)
         return;
 
-    FDCAN_ProtocolStatusTypeDef protocol_status;
-    FDCAN_ErrorCountersTypeDef error_counters;
-
     status->status = CAN_STATUS_UNKNOWN;
     status->rx_error_count = 0;
     status->tx_error_count = 0;
 
-    if (!CANBusIsActive(CANBusIndexFromHandle(hcan)))
-        return; // 未初始化的控制器不能读取 HAL 状态，保持 UNKNOWN。
+    const uint8_t bus_index = CANBusIndexFromHandle(hcan); // 将句柄转换为固定总线编号。
+    if (bus_index >= DEVICE_CAN_CNT || hcan->Instance == NULL) return; // 未知控制器不能访问寄存器。
+    const uint32_t saved_before = __get_PRIMASK(); // 保留调用前的中断状态。
+    __disable_irq(); // 一起读取服务状态和接收故障代际。
+    const uint8_t active_before = CANBusIsActive(bus_index); // 恢复或隔离中的总线不可用。
+    const uint32_t generation = can_bus[bus_index].rx_generation; // 短故障后即使重启也不能沿用旧查询。
+    const uint8_t stopped_before = (uint8_t)((hcan->Instance->CCCR & FDCAN_CCCR_INIT) != 0u); // 控制器停在初始化状态不能作为正常运行。
+    __set_PRIMASK(saved_before); // HAL 查询留在中断保护之外。
+    if (!active_before || stopped_before) return; // 无法证明运行时保持 UNKNOWN。
 
+    FDCAN_ProtocolStatusTypeDef protocol_status;
+    FDCAN_ErrorCountersTypeDef error_counters;
     if (HAL_FDCAN_GetProtocolStatus(hcan, &protocol_status) != HAL_OK)
-        return;
+        return; // 查询失败不能交付正常状态。
     if (HAL_FDCAN_GetErrorCounters(hcan, &error_counters) != HAL_OK)
-        return;
+        return; // 两次查询都成功后才能检查结果。
+
+    const uint32_t saved_after = __get_PRIMASK(); // 再次保存调用者的中断状态。
+    __disable_irq(); // 避免服务状态和代际检查之间插入软件故障处理。
+    const uint8_t unchanged = (uint8_t)(CANBusIsActive(bus_index) &&
+        generation == can_bus[bus_index].rx_generation); // 查询期间重启或隔离均不能返回旧结果。
+    const uint8_t stopped_after = (uint8_t)((hcan->Instance->CCCR & FDCAN_CCCR_INIT) != 0u); // 控制器可能在 HAL 查询期间进入 INIT。
+    __set_PRIMASK(saved_after); // 尽快恢复原中断状态。
+    if (!unchanged) return; // 软件状态已变化时保持 UNKNOWN。
 
     status->rx_error_count = (uint8_t)error_counters.RxErrorCnt;
     status->tx_error_count = (uint8_t)error_counters.TxErrorCnt;
 
     if (protocol_status.BusOff)
         status->status = CAN_STATUS_BUSOFF;
+    else if (stopped_after)
+        status->status = CAN_STATUS_UNKNOWN; // 没有 BusOff 但已停在 INIT，同样不能判定正常。
     else if (protocol_status.ErrorPassive || error_counters.RxErrorCnt > 0 || error_counters.TxErrorCnt > 0)
         status->status = CAN_STATUS_ERROR;
     else

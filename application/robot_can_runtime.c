@@ -32,6 +32,28 @@ uint8_t RobotCanRuntimeGetFaultSnapshot(RobotCanFaultSnapshot_t *output)
     return 1u;
 }
 
+uint8_t RobotCanRuntimeGetReadiness(RobotCanReadiness_t *output)
+{
+    if (output == NULL) return 0u; // 无输出空间时不读取硬件。
+    RobotCanFaultSnapshot_t before = {0}; // 保存一轮查询开始前的总线和故障代次。
+    if (!RobotCanRuntimeGetFaultSnapshot(&before)) return 0u; // 观察者未安装时不能声称总线受保护。
+    uint8_t ready = 0u; // 尚未检查的总线都按不可用处理。
+    for (unsigned index = 0u; index < 3u; ++index)
+    {
+        const uint8_t bit = (uint8_t)(1u << index); // 固定映射到第一至第三条逻辑总线。
+        if ((before.core_bus_mask & bit) == 0u) continue; // 非核心总线不影响此结果。
+        const PlatformCanBus_t bus = (PlatformCanBus_t)((unsigned)PLATFORM_CAN_BUS_1 + index); // 恢复板级逻辑编号。
+        if (PlatformCanGetStatus(bus) == PLATFORM_CAN_STATUS_OK) ready |= bit; // 只有控制器状态明确正常才记录。
+    }
+    RobotCanFaultSnapshot_t after = {0}; // 再读取全部核心总线的故障事件。
+    if (!RobotCanRuntimeGetFaultSnapshot(&after)) return 0u; // 无法确认时不交付部分结果。
+    if (before.fault_generation != after.fault_generation || before.core_bus_mask != after.core_bus_mask)
+        ready = 0u; // 查询期间发生短故障时撤销整轮观察。
+    const RobotCanReadiness_t candidate = {after.core_bus_mask, ready, after.fault_generation}; // 保留调用者后续要核对的代次。
+    *output = candidate; // 先完整检查再交付结果。
+    return 1u;
+}
+
 // 此回调在短中断保护内执行，安全管理只更新有界状态，不打印日志。
 static void RobotCanRuntimeFault(PlatformCanBus_t bus, void *context)
 {

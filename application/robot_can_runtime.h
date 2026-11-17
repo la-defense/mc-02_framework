@@ -21,6 +21,20 @@ typedef struct {
  */
 uint8_t RobotCanRuntimeGetFaultSnapshot(RobotCanFaultSnapshot_t *output);
 
+/** @brief 一轮查询所需总线的控制器状态和故障代次。 */
+typedef struct {
+    uint8_t core_bus_mask; /**< 车型声明的全部核心 CAN 总线。 */
+    uint8_t ready_bus_mask; /**< 本轮确认控制器正常的核心总线；查询期间出现故障时清零。 */
+    uint32_t fault_generation; /**< 本轮结束时的核心故障事件代次。 */
+} RobotCanReadiness_t;
+
+/** @brief 检查核心总线是否能参与后续恢复条件计算。
+ * @param[out] output 成功时接收完整结果；空指针或观察者未安装时保持原值。
+ * @return 1 为查询完成，0 为参数错误或观察者未安装；调用者须比较两个总线位图。
+ * @note 不检查设备反馈、授权或新命令，不清除故障；最终放行前仍须再次核对故障代次。
+ */
+uint8_t RobotCanRuntimeGetReadiness(RobotCanReadiness_t *output);
+
 /** @brief 根据启动计划安装核心总线故障观察者。
  * @param[in] plan 已声明的模块计划，不可为 NULL。
  * @param[in] demands 端点需求数组；count 为零时可为 NULL。

@@ -11,8 +11,21 @@ static PlatformCanFaultObserver_t installed_observer; // 保存平台安装的�
 static void *installed_context; // 回调时传回相同上下文。
 static uint8_t reject_observer_install; // 模拟平台无法安装观察者。
 static uint32_t now_ms; // 本机测试时钟。
+static PlatformCanStatus_t bus_status[3] = {PLATFORM_CAN_STATUS_OK, PLATFORM_CAN_STATUS_OK,
+                                           PLATFORM_CAN_STATUS_OK}; // 每条逻辑总线独立注入状态。
+static uint8_t inject_fault_in_status; // 查询第二条核心总线时可插入短故障。
 
 uint32_t HAL_GetTick(void) { return now_ms; } // 平台时基使用主机测试时间。
+PlatformCanStatus_t PlatformCanGetStatus(PlatformCanBus_t bus)
+{
+    if (bus < PLATFORM_CAN_BUS_1 || bus > PLATFORM_CAN_BUS_3) return PLATFORM_CAN_STATUS_UNKNOWN;
+    if (inject_fault_in_status && bus == PLATFORM_CAN_BUS_3)
+    {
+        inject_fault_in_status = 0u; // 每轮只注入一次。
+        installed_observer(PLATFORM_CAN_BUS_1, installed_context); // 模拟查询前一条总线后发生短故障。
+    }
+    return bus_status[(unsigned)bus - (unsigned)PLATFORM_CAN_BUS_1]; // 返回该控制器的当前状态。
+}
 uint8_t PlatformCanBusIsBound(PlatformCanBus_t bus)
 {
     return (uint8_t)(bus >= PLATFORM_CAN_BUS_1 && bus <= PLATFORM_CAN_BUS_3); // 测试板声明三条逻辑总线。
@@ -45,6 +58,8 @@ int main(void)
         {ROBOT_MODULE_COMMUNICATION, PLATFORM_CAN_BUS_3, 1u, 0u}, // 第三条总线承载核心依赖。
     };
     RobotCanFaultSnapshot_t events = {0}; // 结果只在观察者成功安装后有效。
+    RobotCanReadiness_t readiness = {0}; // 核心总线状态只能在观察者已安装后读取。
+    TEST_CHECK(!RobotCanRuntimeGetReadiness(&readiness)); // 未安装不能绕过故障代次保护。
     TEST_CHECK(!RobotCanRuntimeGetFaultSnapshot(&events)); // 启动前不能伪造总线状态。
     TEST_CHECK(!RobotCanRuntimeInstall(NULL, demands, 2u)); // 空计划不能建立故障绑定。
     TEST_CHECK(!RobotCanRuntimeInstall(&plan, NULL, 1u)); // 需求数组缺失必须拒绝。
@@ -59,6 +74,11 @@ int main(void)
     TEST_CHECK(installed_observer != NULL); // 核心总线必须建立观察者。
     TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && events.core_bus_mask == 5u &&
                events.fault_generation == 0u); // 第一和第三条总线属于核心闭包。
+    bus_status[1] = PLATFORM_CAN_STATUS_BUSOFF; // 辅助总线故障不改变核心总线状态。
+    TEST_CHECK(RobotCanRuntimeGetReadiness(&readiness) && readiness.ready_bus_mask == 5u);
+    bus_status[2] = PLATFORM_CAN_STATUS_UNKNOWN; // 必需总线无法确认时不能恢复。
+    TEST_CHECK(RobotCanRuntimeGetReadiness(&readiness) && readiness.ready_bus_mask == 1u);
+    bus_status[2] = PLATFORM_CAN_STATUS_OK; // 恢复测试状态。
     installed_observer(PLATFORM_CAN_BUS_2, installed_context); // 辅助总线故障不应全局失能。
     TEST_CHECK(RobotSafetyIsReady()); // 核心许可保持有效。
     TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && events.fault_generation == 0u); // 辅助故障不改变核心代次。
@@ -74,6 +94,10 @@ int main(void)
     TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && events.fault_generation == 3u &&
                events.bus_generation[0] == 2u && events.bus_generation[2] == 1u &&
                events.fault_bus_mask == 5u); // 各总线代次独立，整体代次记录全部事件。
+    inject_fault_in_status = 1u; // 两条总线状态逐一查询的间隙发生核心故障。
+    TEST_CHECK(RobotCanRuntimeGetReadiness(&readiness) && readiness.ready_bus_mask == 0u &&
+               readiness.fault_generation == 4u); // 即使硬件状态已恢复，本轮也不能交付旧结果。
+    TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && events.fault_generation == 4u); // 后续恢复计算从新代次开始。
     CanRecovery_t recovery = {0}; // 创建独立的主机恢复检查实例。
     const CanRecoveryConfig_t recovery_config = {1u, 100u}; // 100 ms 是待实测的哨兵候选值。
     TEST_CHECK(CanRecoveryInit(&recovery, &recovery_config)); // 配置必须有效。

@@ -86,6 +86,8 @@ static uint8_t status_busoff[DEVICE_CAN_CNT]; // 模拟各总线独立的关闭�
 static uint8_t suppress_busoff_init; // 模拟总线关闭标志与 INIT 状态尚不一致。
 static uint8_t status_error[DEVICE_CAN_CNT]; // 模拟各总线独立的错误状态。
 static uint8_t status_read_failure; // 模拟 HAL 查询失败。
+static uint8_t status_inject_recovery; // 在状态查询期间注入完整故障及控制器重启。
+static uint8_t status_inject_quarantine; // 在状态查询期间注入总线隔离。
 static uint8_t inject_submit_on_stop; // 在控制器停止期间模拟其他任务提交。
 static CAN_TxSubmitStatus_t stop_submit_status; // 记录并发提交结果。
 static uint8_t fail_recovery_stop, fail_recovery_start; // 注入停止或重新启动失败。
@@ -295,7 +297,19 @@ uint32_t HAL_FDCAN_GetProtocolStatus(FDCAN_HandleTypeDef *handle, FDCAN_Protocol
 }
 uint32_t HAL_FDCAN_GetErrorCounters(FDCAN_HandleTypeDef *handle, FDCAN_ErrorCountersTypeDef *counters)
 {
-    (void)handle;
+    if (status_inject_recovery)
+    {
+        status_inject_recovery = 0u; // 重入健康检查时不重复注入。
+        status_busoff[0] = 1u; // 让查询期间发生一次核心总线故障。
+        now_us = 100000u; // 到达健康检查时刻。
+        CANHealthMonitor(); // 使用生产恢复路径，测试完成前状态可能重新变好。
+        status_busoff[0] = 0u; // 后续查询模拟总线恢复。
+    }
+    if (status_inject_quarantine)
+    {
+        status_inject_quarantine = 0u; // 隔离只能注入一次。
+        CANQuarantineBus(handle); // 模拟查询期间其他执行路径发现故障。
+    }
     memset(counters, 0, sizeof(*counters));
     return HAL_OK;
 }
@@ -2673,6 +2687,22 @@ static void test_platform_can_status(void)
     TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_UNKNOWN);
 }
 
+// 控制器状态查询期间的短故障不能被后续恢复掩盖。
+static void test_platform_can_status_interrupted(void)
+{
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_1)); // 启动测试总线。
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_OK);
+    hfdcan1.Instance->CCCR |= FDCAN_CCCR_INIT; // 模拟控制器停在初始化状态。
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_UNKNOWN);
+    hfdcan1.Instance->CCCR &= ~FDCAN_CCCR_INIT; // 恢复正常状态后再次查询。
+    status_inject_recovery = 1u; // HAL 查询中间发生 BusOff 和重新启动。
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_UNKNOWN);
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_OK); // 新查询可使用恢复后的状态。
+    status_inject_quarantine = 1u; // 另一种并发路径将总线隔离。
+    TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_UNKNOWN);
+    TEST_CHECK(PlatformCanBusIsQuarantined(PLATFORM_CAN_BUS_1)); // 隔离之后持续不可用。
+}
+
 static unsigned observed_can_faults; // 测试实际平台适配器报告的故障次数。
 static PlatformCanBus_t observed_can_bus; // 保存观察者收到的逻辑总线。
 
@@ -2721,6 +2751,9 @@ static void test_busoff_runtime_notification(void)
     };
     TEST_CHECK(RobotCanRuntimeInstall(&plan, demands, 2u)); // 安装真实故障通知链。
     TEST_CHECK(CANStartBus(&hfdcan1) && CANStartBus(&hfdcan2)); // 启动两条独立测试总线。
+    RobotCanReadiness_t readiness = {0}; // 同时使用生产板级状态和车型核心总线。
+    TEST_CHECK(RobotCanRuntimeGetReadiness(&readiness) && readiness.core_bus_mask == 1u &&
+               readiness.ready_bus_mask == 1u); // 正常核心总线可参与后续恢复判断。
     status_busoff[1] = 1u; now_us = 100000u; // 先让辅助总线发生故障。
     CANHealthMonitor(); // 由真实健康检查上报。
     TEST_CHECK(can_runtime_faults == 0u); // 辅助故障不能触发核心全局禁止。
@@ -2731,6 +2764,7 @@ static void test_busoff_runtime_notification(void)
     TEST_CHECK(can_runtime_faults == 1u); // 核心故障必须进入安全报告接口。
     TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && events.fault_generation == 1u &&
                events.bus_generation[0] == 1u); // 故障事件必须保留在恢复检查可读取的代次中。
+    TEST_CHECK(RobotCanRuntimeGetReadiness(&readiness) && readiness.ready_bus_mask == 0u); // 控制器仍报告 BusOff，不能作为恢复依据。
     now_us = 300000u; CANHealthMonitor(); // 第一条总线再次检测到关闭。
     TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && events.fault_generation == 2u &&
                events.bus_generation[0] == 2u); // 第二次短故障不能被已有故障位覆盖。
@@ -2971,6 +3005,8 @@ int main(int argc, char **argv)
         test_rx_failure_and_invalid_frames();
     else if (strcmp(argv[1], "platform-can-status") == 0)
         test_platform_can_status();
+    else if (strcmp(argv[1], "platform-can-status-interrupted") == 0)
+        test_platform_can_status_interrupted();
     else if (strcmp(argv[1], "busoff-cancel-queued") == 0)
         test_busoff_cancels_queued();
     else if (strcmp(argv[1], "busoff-runtime") == 0)

@@ -998,6 +998,7 @@ add_test(NAME production_platform_can_queue COMMAND lk_motor_bsp_can_test platfo
 add_test(NAME production_platform_can_status COMMAND lk_motor_bsp_can_test platform-can-status)
 add_test(NAME production_can_busoff_cancels_queued COMMAND lk_motor_bsp_can_test busoff-cancel-queued) # 只撤销故障总线的软件旧帧。
 add_test(NAME production_can_busoff_runtime_notification COMMAND lk_motor_bsp_can_test busoff-runtime) # 车型核心依赖接收实际总线故障通知。
+add_test(NAME production_can_status_interrupted COMMAND lk_motor_bsp_can_test platform-can-status-interrupted) # 短故障、停止和隔离不能报告正常。
 add_test(NAME production_can_status_failure_runtime_notification COMMAND lk_motor_bsp_can_test status-runtime-failure) # 状态不可读时核心总线保持隔离。
 add_test(NAME production_can_busoff_rx_generation COMMAND lk_motor_bsp_can_test busoff-rx-generation) # 丢弃故障前入队的本总线反馈。
 add_test(NAME production_can_busoff_rx_active COMMAND lk_motor_bsp_can_test busoff-rx-active) # 回调未结束时不得重启故障总线。

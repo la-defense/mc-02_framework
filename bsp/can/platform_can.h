@@ -28,7 +28,8 @@ typedef enum {
 
 /** @brief 查询逻辑总线的控制器状态。
  * @param[in] bus 板级声明的逻辑总线编号。
- * @return 当前控制器状态；没有绑定时返回 UNKNOWN。
+ * @return 当前控制器状态；未启动、恢复中、隔离、查询失败或状态变化时返回 UNKNOWN。
+ * @note 即使返回 OK，也只能说明查询期间的控制器状态；最终恢复许可仍需检查故障事件、反馈和新命令。
  */
 PlatformCanStatus_t PlatformCanGetStatus(PlatformCanBus_t bus);
 
