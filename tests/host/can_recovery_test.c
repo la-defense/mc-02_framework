@@ -122,9 +122,63 @@ static int TestLostAndReplayedValues(void)
     return 0;
 }
 
+static int TestTimedSources(void)
+{
+    CanRecoveryTimed_t state = {0}; // 每条控制路径独立保存来源和恢复阶段。
+    const CanRecoveryConfig_t config = {1u, 10u}; // 测试等待 10 ms。
+    CanRecoveryTimedInput_t input = {
+        .core = {.now_ms = 100u, .valid_feedback_mask = 1u, .feedback_sequence = {10u},
+                 .command_sequence = 5u, .bus_ok = 1u, .permit_ok = 1u},
+        .command_source_id = 1u, .command_source_ms = 100u, .command_max_age_ms = 100u};
+    CHECK(CanRecoveryTimedInit(&state, &config));
+    CHECK(!CanRecoveryTimedStep(&state, &input)); // 首次来源先记录已有数据。
+    input.core.feedback_sequence[0] = 11u;
+    CHECK(!CanRecoveryTimedStep(&state, &input) && state.recovery.phase == CAN_RECOVERY_STABILIZING);
+    input.core.now_ms = 110u;
+    CHECK(!CanRecoveryTimedStep(&state, &input) && state.recovery.phase == CAN_RECOVERY_WAIT_COMMAND);
+    input.core.now_ms = 111u; input.core.command_sequence = 6u; input.command_source_ms = 109u;
+    CHECK(!CanRecoveryTimedStep(&state, &input)); // 稳定前产生、稳定后才交付的命令不能恢复。
+    input.core.command_sequence = 7u; input.command_source_ms = 110u;
+    CHECK(!CanRecoveryTimedStep(&state, &input)); // 与稳定完成同一毫秒也不判定为之后。
+    input.core.command_sequence = 8u; input.command_source_ms = 111u;
+    CHECK(CanRecoveryTimedStep(&state, &input)); // 新序号和新来源时间均满足。
+    input.command_source_id = 2u; input.core.command_sequence = 1u; // 切换到另一个独立序号空间。
+    CHECK(!CanRecoveryTimedStep(&state, &input) && state.recovery.phase == CAN_RECOVERY_WAIT_FEEDBACK);
+    input.core.feedback_sequence[0] = 12u; input.core.now_ms = 112u; input.command_source_ms = 112u;
+    CHECK(!CanRecoveryTimedStep(&state, &input) && state.recovery.phase == CAN_RECOVERY_STABILIZING);
+    input.core.now_ms = 122u; input.command_source_ms = 122u; input.core.command_sequence = 2u;
+    CHECK(!CanRecoveryTimedStep(&state, &input) && state.recovery.phase == CAN_RECOVERY_WAIT_COMMAND);
+    input.core.now_ms = 123u; input.command_source_ms = 123u; input.core.command_sequence = 3u;
+    CHECK(CanRecoveryTimedStep(&state, &input));
+    input.core.now_ms = 224u; // 同一份命令已超过 100 ms 期限。
+    CHECK(!CanRecoveryTimedStep(&state, &input) && state.recovery.phase == CAN_RECOVERY_WAIT_COMMAND);
+    input.core.now_ms = 225u; input.command_source_ms = 225u; input.core.command_sequence = 4u;
+    CHECK(CanRecoveryTimedStep(&state, &input)); // 恢复后的新样本可以再次接管。
+    ++input.command_source_epoch; // 两次读取之间切出又切回同一来源。
+    CHECK(!CanRecoveryTimedStep(&state, &input) && state.recovery.phase == CAN_RECOVERY_WAIT_FEEDBACK);
+    input.core.inhibit_generation++; // 两次调用之间有短故障。
+    CHECK(!CanRecoveryTimedStep(&state, &input) && state.recovery.phase == CAN_RECOVERY_WAIT_FEEDBACK);
+    CHECK(CanRecoveryTimedInit(&state, &config)); // 使用独立实例检查时间与序号回绕。
+    input = (CanRecoveryTimedInput_t){
+        .core = {.now_ms = UINT32_MAX - 5u, .valid_feedback_mask = 1u, .feedback_sequence = {1u},
+                 .command_sequence = UINT32_MAX, .bus_ok = 1u, .permit_ok = 1u},
+        .command_source_id = 1u, .command_source_ms = UINT32_MAX - 5u, .command_max_age_ms = 100u};
+    CHECK(!CanRecoveryTimedStep(&state, &input));
+    input.core.feedback_sequence[0] = 2u;
+    CHECK(!CanRecoveryTimedStep(&state, &input));
+    input.core.now_ms = 4u; // 稳定时间和来源时刻跨过 32 位回绕。
+    CHECK(!CanRecoveryTimedStep(&state, &input) && state.recovery.phase == CAN_RECOVERY_WAIT_COMMAND);
+    input.core.command_sequence = 1u; input.command_source_ms = 4u;
+    CHECK(!CanRecoveryTimedStep(&state, &input)); // 等于恢复边界仍不能接管。
+    input.core.now_ms = 5u; input.command_source_ms = 5u; input.core.command_sequence = 2u;
+    CHECK(CanRecoveryTimedStep(&state, &input)); // 回绕后的较新来源允许接管。
+    return 0;
+}
+
 int main(void)
 {
     if (TestRecovery() != 0) return 1;
     if (TestWrapAndInvalid() != 0) return 1;
-    return TestLostAndReplayedValues();
+    if (TestLostAndReplayedValues() != 0) return 1;
+    return TestTimedSources();
 }

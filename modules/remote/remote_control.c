@@ -20,6 +20,7 @@ static RemoteControlDiagnostics_s remote_control_diag;
 static uint16_t pc_sequence;
 static uint8_t pc_have_sequence, pc_authorized;
 static uint32_t radio_sample_sequence; // 每份合法无线输入递增，独立于诊断累计数。
+static uint32_t source_selection_generation; // 记录来源开关变化和断线重连。
 static uint32_t pc_sample_sequence; // 只有键鼠心跳向前并接受时递增，超时不清去重历史。
 typedef struct {
     int16_t x, y; // 一次接受的鼠标相对位移。
@@ -257,6 +258,9 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
         memcpy(candidate.key_count, controls[TEMP].key_count, sizeof(candidate.key_count));
     }
     if (!switch_is_up(candidate.rc.switch_left)) ClearMousePending(); // 即使 PC 心跳重复，切出键鼠档也要清除旧位移。
+    if (remote_control_diag.has_valid_frame == 0u ||
+        controls[TEMP].rc.switch_left != candidate.rc.switch_left)
+        source_selection_generation = NextSampleSequence(source_selection_generation); // 合法来源切换即使很短也留下记录。
     controls[TEMP] = candidate;
     controls[LAST] = candidate;
     remote_control_diag.accepted_frames++;
@@ -316,6 +320,7 @@ const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port)
     memset((void *)&remote_control_diag, 0, sizeof(remote_control_diag));
     pc_authorized = 0u;
     radio_sample_sequence = 0u; // 启动注册建立新的无线读取记录。
+    source_selection_generation = 0u; // 上电后尚未选择过有效来源。
     pc_sample_sequence = 0u; // 本机键鼠样本号只在模块初始化时归零。
     RevokePC(PlatformTimeNowMs(), REMOTE_PC_REVOKE_NONE);
     Daemon_Init_Config_s daemon_conf = {
@@ -378,6 +383,7 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     snapshot->pc_valid = (uint8_t)(snapshot->remote_online && pc_authorized);
     snapshot->radio_source_time_ms = remote_control_diag.last_valid_tick; // 继承接收事件时间，不使用本次查询时刻。
     snapshot->radio_sequence = radio_sample_sequence; // 与当前无线输入一起交付。
+    snapshot->source_selection_generation = source_selection_generation; // 保留两次读取之间的来源变化。
     snapshot->pc_source_time_ms = remote_control_diag.pc_last_advance_tick; // 键鼠使用自己的期限起点。
     snapshot->pc_sample_sequence = pc_sample_sequence; // 重复心跳和重复查询都保留已有编号。
     PlatformIrqRestore(primask);

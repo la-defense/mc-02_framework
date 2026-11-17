@@ -61,4 +61,37 @@ uint8_t CanRecoveryInit(CanRecovery_t *state, const CanRecoveryConfig_t *config)
  */
 uint8_t CanRecoveryStep(CanRecovery_t *state, const CanRecoveryInput_t *input);
 
+/** @brief 带原始时间和来源切换检查的恢复状态；由单一协调任务持有。 */
+typedef struct {
+    CanRecovery_t recovery; /**< 原有总线和逐台反馈恢复状态。 */
+    uint32_t source_id; /**< 最近采用的非零命令来源编号。 */
+    uint32_t source_epoch; /**< 来源选择变化代次，允许自然回绕。 */
+    uint32_t command_barrier_ms; /**< 反馈稳定检查完成时的本机时间。 */
+    uint8_t barrier_valid; /**< 区分尚未建立起点和起点恰好为零。 */
+} CanRecoveryTimed_t;
+
+/** @brief 含真实来源时间的恢复输入。 */
+typedef struct {
+    CanRecoveryInput_t core; /**< 总线、反馈、资格和命令序号。 */
+    uint32_t command_source_id; /**< 来源编号，0 表示没有有效来源。 */
+    uint32_t command_source_epoch; /**< 来源选择变化时递增，防止周期之间的短暂切换被漏掉。 */
+    uint32_t command_source_ms; /**< 原始来源接收时间，单位本机 ms。 */
+    uint32_t command_max_age_ms; /**< 来源允许的最大年龄，范围 1～INT32_MAX ms。 */
+} CanRecoveryTimedInput_t;
+
+/** @brief 初始化带来源时间检查的恢复实例。
+ * @param[out] state 单一任务持有的状态，失败不修改。
+ * @param[in] config 逐台反馈位图和稳定时间。
+ * @return 1 为成功，0 为参数或配置错误。
+ */
+uint8_t CanRecoveryTimedInit(CanRecoveryTimed_t *state, const CanRecoveryConfig_t *config);
+
+/** @brief 检查新命令的来源、原始时间和原有恢复条件。
+ * @param[in,out] state 已初始化的单一任务状态。
+ * @param[in] input 完整输入；原始时间必须已转换为本机时钟。
+ * @return 1 为反馈稳定后收到对应来源的新命令，0 为不允许恢复或输入错误。
+ * @note 来源切换重新验证反馈；稳定前产生但延迟交付的命令不能接管。此函数不解除故障。
+ */
+uint8_t CanRecoveryTimedStep(CanRecoveryTimed_t *state, const CanRecoveryTimedInput_t *input);
+
 #endif

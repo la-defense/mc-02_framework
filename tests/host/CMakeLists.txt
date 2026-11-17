@@ -1627,12 +1627,14 @@ if(UNIX AND NOT APPLE)
 endif()
 add_executable(remote_control_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ../../modules/remote/remote_safety.c
+  ../../modules/safety/can_recovery.c # 联合真实遥控来源验证恢复屏障。
   ${MC02_HOST_REMOTE_SOURCES} ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c)
 target_include_directories(remote_control_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
 target_include_directories(remote_control_test PRIVATE ../../bsp/usart ../../modules/remote
   ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../modules/message_center ../../application)
 add_test(NAME production_remote_startup_offline COMMAND remote_control_test)
 add_test(NAME production_remote_snapshot_source_metadata COMMAND remote_control_test snapshot-metadata) # 验证数据和原始时间一致交付。
+add_test(NAME production_remote_source_selection_generation COMMAND remote_control_test source-epoch) # 短暂切换和重连必须留下代次。
 add_test(NAME production_remote_formal_autonomous_offline COMMAND remote_control_test formal-autonomous-offline) # 真实离线回调不能绕过模式规则。
 add_test(NAME production_remote_formal_autonomous_gap COMMAND remote_control_test formal-autonomous-gap) # 延迟派发时仍区分正式自主资格。
 set_tests_properties(production_remote_snapshot_source_metadata PROPERTIES TIMEOUT 10)
@@ -1653,7 +1655,8 @@ add_test(NAME production_pc_sequence_and_invalid_frames COMMAND remote_control_t
 if(UNIX AND NOT APPLE)
   add_executable(remote_control_thread_test remote_control_test.c ../../bsp/usart/bsp_usart.c
     ../../modules/remote/remote_safety.c ${MC02_HOST_REMOTE_SOURCES}
-    ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c host_critical_model.c)
+    ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c
+    ../../modules/safety/can_recovery.c host_critical_model.c)
   target_include_directories(remote_control_thread_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
   target_include_directories(remote_control_thread_test PRIVATE ../../bsp/usart ../../modules/remote
     ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine
@@ -1676,7 +1679,8 @@ add_test(NAME production_uart_registration_irq_state COMMAND usart_snapshot_test
 set_tests_properties(production_uart_immutable_dispatch PROPERTIES TIMEOUT 10)
 add_executable(remote_bench_test remote_control_test.c ../../bsp/usart/bsp_usart.c
   ${MC02_HOST_REMOTE_SOURCES} ../../modules/remote/remote_safety.c
-  ../../modules/remote/remote_bench.c ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c)
+  ../../modules/remote/remote_bench.c ${MC02_HOST_DAEMON_SOURCES} ../../modules/safety/robot_safety.c
+  ../../modules/safety/can_recovery.c)
 target_include_directories(remote_bench_test BEFORE PRIVATE remote_fakes robot_cmd_fakes)
 target_include_directories(remote_bench_test PRIVATE ../../bsp/usart ../../modules/remote
   ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../modules/message_center ../../application)

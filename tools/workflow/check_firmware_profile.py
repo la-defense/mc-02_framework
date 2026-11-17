@@ -74,6 +74,7 @@ PORTABLE_FRAMEWORK_SOURCES = {
     "modules/daemon/daemon_event_task.c",  # 来源事件任务入口。
     "modules/message_center/message_center.c",  # 消息目录和有界队列。
     "modules/safety/robot_safety.c",  # 整车许可与故障管理。
+    "modules/safety/can_recovery.c",  # 核心反馈与新命令恢复条件。
 }
 # 可选文件只有被车型清单选中时才进入独立框架目标。
 OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {

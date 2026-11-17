@@ -13,6 +13,7 @@
 #include "remote_control.h"
 #include "daemon.h"
 #include "robot_safety.h"
+#include "can_recovery.h"
 #include "bsp_usart.h"
 #include "remote_safety.h"
 #include "../../bsp/board/board_uart_stm32.h"
@@ -269,6 +270,44 @@ int main(int argc, char **argv)
         frame[12] = 2u; now = 40u; receive(frame, sizeof(frame)); // 非法鼠标字段不得更新任何来源信息。
         RemoteControlGetSnapshot(&value);
         CHECK(value.radio_sequence == 4u && value.pc_sample_sequence == 3u && value.radio_source_time_ms == 30u);
+        return 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "source-epoch")) {
+        uint8_t frame[18]; const uint16_t ch[5] = {1024,1024,1024,1024,1024};
+        RemoteControlSnapshot_s before = {0}, after = {0};
+        encode(frame, ch, RC_SW_DOWN, RC_SW_MID); now = 1u; receive(frame, sizeof(frame));
+        RemoteControlGetSnapshot(&before);
+        CHECK(before.source_selection_generation != 0u); // 首次合法来源建立选择代次。
+        CanRecoveryTimed_t recovery = {0}; // 用真实无线帧的来源信息驱动恢复检查。
+        const CanRecoveryConfig_t config = {1u, 10u}; // 测试反馈稳定等待 10 ms。
+        CHECK(CanRecoveryTimedInit(&recovery, &config));
+        CanRecoveryTimedInput_t recovery_input = {
+            .core = {.now_ms = now, .valid_feedback_mask = 1u, .feedback_sequence = {1u},
+                     .command_sequence = before.radio_sequence, .bus_ok = 1u, .permit_ok = 1u},
+            .command_source_id = 1u, .command_source_epoch = before.source_selection_generation,
+            .command_source_ms = before.radio_source_time_ms, .command_max_age_ms = REMOTE_RADIO_LEASE_MS};
+        CHECK(!CanRecoveryTimedStep(&recovery, &recovery_input));
+        now = 2u; receive(frame, sizeof(frame)); RemoteControlGetSnapshot(&after);
+        CHECK(after.source_selection_generation == before.source_selection_generation); // 同档新帧不能误报切换。
+        recovery_input.core.now_ms = now; recovery_input.core.feedback_sequence[0] = 2u;
+        recovery_input.core.command_sequence = after.radio_sequence;
+        recovery_input.command_source_ms = after.radio_source_time_ms;
+        CHECK(!CanRecoveryTimedStep(&recovery, &recovery_input) &&
+              recovery.recovery.phase == CAN_RECOVERY_STABILIZING); // 模拟新电机反馈开始稳定等待。
+        encode(frame, ch, RC_SW_UP, RC_SW_MID); now = 3u; receive(frame, sizeof(frame));
+        encode(frame, ch, RC_SW_DOWN, RC_SW_MID); now = 4u; receive(frame, sizeof(frame));
+        RemoteControlGetSnapshot(&after);
+        CHECK(after.source_selection_generation == before.source_selection_generation + 2u); // 两次读取之间切出又切回仍会留下变化。
+        recovery_input.core.now_ms = now; recovery_input.core.command_sequence = after.radio_sequence;
+        recovery_input.command_source_ms = after.radio_source_time_ms;
+        recovery_input.command_source_epoch = after.source_selection_generation;
+        CHECK(!CanRecoveryTimedStep(&recovery, &recovery_input) &&
+              recovery.recovery.phase == CAN_RECOVERY_WAIT_FEEDBACK); // 短暂切换后必须重新验证反馈。
+        before = after; frame[12] = 2u; now = 5u; receive(frame, sizeof(frame)); // 非法帧不能改变选择代次。
+        RemoteControlGetSnapshot(&after); CHECK(after.source_selection_generation == before.source_selection_generation);
+        frame[12] = 0u; now = 105u; daemon_cycle(); // 超过最近合法帧的无线期限。
+        now = 106u; receive(frame, sizeof(frame)); RemoteControlGetSnapshot(&after);
+        CHECK(after.source_selection_generation != before.source_selection_generation); // 即使回到同档，断线重连也须重新建立来源。
         return 0;
     }
 #ifdef MC02_REMOTE_THREAD_TEST

@@ -305,6 +305,7 @@ set(MC02_PORTABLE_FRAMEWORK_SOURCES
     modules/daemon/daemon_event_task.c # 来源事件处理任务的框架入口。
     modules/message_center/message_center.c # 有界消息与话题目录。
     modules/safety/robot_safety.c # 整车许可、故障与急停状态。
+    modules/safety/can_recovery.c # 核心反馈与新命令的恢复顺序。
     modules/safety/robot_control_policy.c) # 三模式来源与分功能许可计算。
 # 板间通信和时间映射仅在车型选择时进入独立目标。
 set(MC02_OPTIONAL_PORTABLE_SOURCES

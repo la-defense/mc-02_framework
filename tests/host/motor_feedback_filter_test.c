@@ -206,6 +206,15 @@ static int control_rejects_expired_feedback(void)
 }
 
 #if defined(ONE_BOARD)
+// 将测试命令的原始时间交给生产恢复检查，序号和反馈由调用方分别维护。
+static uint8_t recovery_timed_step(CanRecoveryTimed_t *state, const CanRecoveryInput_t *input,
+                                   uint32_t source_ms)
+{
+    const CanRecoveryTimedInput_t timed = {.core = *input, .command_source_id = 1u,
+        .command_source_ms = source_ms, .command_max_age_ms = 200u}; // 测试来源期限与电机反馈期限分开。
+    return CanRecoveryTimedStep(state, &timed); // 原始时间和序号都要通过。
+}
+
 // 用两条真实驱动反馈推进恢复；不使用机构汇总时间冒充每台电机的更新。
 static int recovery_real_feedback(void)
 {
@@ -237,9 +246,9 @@ static int recovery_real_feedback(void)
                mapped.feedback_sequence[1] == 1u); // 用生产驱动数据核对型号、编号、总线和来源序号。
     TEST_CHECK(feedback.motors[2].bus == PLATFORM_CAN_BUS_2 && feedback.motors[2].sequence == 0u &&
                !feedback.motors[2].speed_valid && !feedback.motors[2].position_valid); // 无首帧的设备不能被标记为有效。
-    CanRecovery_t recovery = {0}; // 测试实例独立持有状态。
+    CanRecoveryTimed_t recovery = {0}; // 测试实例独立持有反馈与命令时间。
     const CanRecoveryConfig_t config = {3u, 100u}; // 测试用户选择的 100 ms 候选稳定时间，不代表实车确认。
-    TEST_CHECK(CanRecoveryInit(&recovery, &config)); // 验证测试配置有效。
+    TEST_CHECK(CanRecoveryTimedInit(&recovery, &config)); // 验证测试配置有效。
     RobotSafetyInit(); // 由真实安全管理维护使能和故障。
     RobotSafetySetRcOnline(1u); RobotSafetySetImuValid(1u);
     RobotSafetySetCalibValid(1u); RobotSafetySetTaskHealthy(1u);
@@ -258,18 +267,18 @@ static int recovery_real_feedback(void)
     CanRecoveryInput_t input = {.now_ms = 1u, .inhibit_generation = buses.fault_generation,
         .permit_ok = 1u, .command_sequence = 10u}; // 故障中先记录两台的基准。
     TEST_CHECK(RobotCanMotorRecoveryMap(&identity, &feedback, 1u, &input)); // 原序号和有效性经过生产身份映射。
-    TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 总线故障期间必须禁止。
+    TEST_CHECK(!recovery_timed_step(&recovery, &input, 1u)); // 总线故障期间必须禁止。
     now_us = 2000u; receive(motors[0], 960000u, 2u, 0, 0); // 只有第一台收到新反馈。
     TEST_CHECK(DJIMotorGetRecoveryFeedback(2u, &feedback)); // 重新读取两台实际反馈。
     recovery_bus_ok = 1u; // 两条测试总线均已恢复。
     TEST_CHECK(RobotCanRuntimeGetReadiness(&buses) && buses.ready_bus_mask == buses.core_bus_mask);
     input.now_ms = 2u; input.bus_ok = 1u; // 测试总线恢复。
     TEST_CHECK(RobotCanMotorRecoveryMap(&identity, &feedback, 2u, &input)); // 原序号不会因汇总而递增。
-    TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 第二台仍是旧样本，不能开始稳定计时。
+    TEST_CHECK(!recovery_timed_step(&recovery, &input, 1u)); // 第二台仍是旧样本，不能开始稳定计时。
     now_us = 3000u; receive(motors[1], 1440000u, 3u, 0, 0); // 第二台也收到新反馈。
     TEST_CHECK(DJIMotorGetRecoveryFeedback(3u, &feedback)); // 读取各自新序号。
     input.now_ms = 3u; TEST_CHECK(RobotCanMotorRecoveryMap(&identity, &feedback, 3u, &input)); // 更新各路原始序号及有效性。
-    TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 全部新反馈到齐后开始稳定计时。
+    TEST_CHECK(!recovery_timed_step(&recovery, &input, 1u)); // 全部新反馈到齐后开始稳定计时。
     for (uint32_t time_ms = 13u; time_ms <= 103u; time_ms += 10u)
     {
         now_us = (uint64_t)time_ms * 1000u; // 每隔 10 ms 更新测试时钟。
@@ -277,9 +286,9 @@ static int recovery_real_feedback(void)
             receive(motors[i], time_ms * 480000u, time_ms, 0, 0); // 两台电机必须持续产生新反馈。
         TEST_CHECK(DJIMotorGetRecoveryFeedback(time_ms, &feedback)); // 取得当前真实驱动数据。
         input.now_ms = time_ms; TEST_CHECK(RobotCanMotorRecoveryMap(&identity, &feedback, time_ms, &input)); // 按各自原始时间检查有效性。
-        TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 包括 100 ms 边界在内，仍等待之后的新命令。
+        TEST_CHECK(!recovery_timed_step(&recovery, &input, 1u)); // 包括 100 ms 边界在内，仍等待之后的新命令。
     }
-    input.now_ms = 104u; input.command_sequence = 11u; TEST_CHECK(CanRecoveryStep(&recovery, &input)); // 稳定后的新命令才使恢复条件成立。
+    input.now_ms = 104u; input.command_sequence = 11u; TEST_CHECK(recovery_timed_step(&recovery, &input, 104u)); // 稳定后的新命令才使恢复条件成立。
     now_us = 104000u; // 最终安全检查使用同一真实测试时钟。
     TEST_CHECK(RobotCanRuntimeGetReadiness(&buses) && buses.ready_bus_mask == buses.core_bus_mask);
     TEST_CHECK(RobotSafetyGetSnapshot(&safety) && RobotSafetyCanRecover(safety.control_generation));
@@ -287,7 +296,7 @@ static int recovery_real_feedback(void)
     TEST_CHECK(!RobotCanRuntimeTryClearFault(buses.fault_generation, safety.control_generation, 104u)); // 旧总线代次不能清除新故障。
     TEST_CHECK(RobotCanRuntimeGetReadiness(&buses)); // 新一轮必须使用新的故障代次。
     input.inhibit_generation = buses.fault_generation; // 恢复状态机观察到这次短故障。
-    TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 新故障要求重新验证所有反馈。
+    TEST_CHECK(!recovery_timed_step(&recovery, &input, 104u)); // 新故障要求重新验证所有反馈。
     for (uint32_t time_ms = 105u; time_ms <= 205u; time_ms += 10u)
     {
         now_us = (uint64_t)time_ms * 1000u; // 使用真实测试时钟推进第二次等待。
@@ -296,18 +305,18 @@ static int recovery_real_feedback(void)
         TEST_CHECK(DJIMotorGetRecoveryFeedback(time_ms, &feedback));
         input.now_ms = time_ms;
         TEST_CHECK(RobotCanMotorRecoveryMap(&identity, &feedback, time_ms, &input));
-        TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 稳定期结束后仍等待新命令。
+        TEST_CHECK(!recovery_timed_step(&recovery, &input, 104u)); // 稳定期结束后仍等待新命令。
     }
     now_us = 206000u;
     input.now_ms = 206u; input.command_sequence = 12u; // 第二次恢复后使用更新的命令。
-    TEST_CHECK(CanRecoveryStep(&recovery, &input));
+    TEST_CHECK(recovery_timed_step(&recovery, &input, 206u));
     TEST_CHECK(RobotCanRuntimeGetReadiness(&buses) && RobotSafetyGetSnapshot(&safety));
     TEST_CHECK(RobotCanRuntimeTryClearFault(buses.fault_generation, safety.control_generation, 206u)); // 真实故障代次与资格通过后才清除。
     TEST_CHECK((RobotSafetyGetFaults() & ROBOT_FAULT_CAN_BUSOFF) == 0u); // 故障位已解除，但仍需状态机放行。
     now_us = 227000u; TEST_CHECK(DJIMotorGetRecoveryFeedback(227u, &feedback)); // 原始反馈超过 20 ms。
     TEST_CHECK(!feedback.motors[0].speed_valid && !feedback.motors[1].speed_valid); // 重复汇总不能刷新反馈期限。
     input.now_ms = 227u; TEST_CHECK(RobotCanMotorRecoveryMap(&identity, &feedback, 227u, &input)); // 从电机结果读取过期状态。
-    TEST_CHECK(!CanRecoveryStep(&recovery, &input)); // 反馈过期立即撤销恢复结果。
+    TEST_CHECK(!recovery_timed_step(&recovery, &input, 206u)); // 反馈过期立即撤销恢复结果。
     return EXIT_SUCCESS;
 }
 

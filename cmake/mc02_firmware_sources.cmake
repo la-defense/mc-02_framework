@@ -180,6 +180,7 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/remote/remote_control.c
     modules/remote/remote_safety.c
     modules/safety/robot_safety.c
+    modules/safety/can_recovery.c # 核心反馈与新命令的恢复顺序。
     modules/safety/robot_control_policy.c # 安全管理所需的纯C模式策略。
     modules/super_cap/super_cap.c
     modules/task_monitor/task_monitor.c

@@ -150,3 +150,49 @@ uint8_t CanRecoveryStep(CanRecovery_t *state, const CanRecoveryInput_t *input)
     }
     return (uint8_t)(state->phase == CAN_RECOVERY_READY); // 未知阶段也不能授予许可。
 }
+
+uint8_t CanRecoveryTimedInit(CanRecoveryTimed_t *state, const CanRecoveryConfig_t *config)
+{
+    if (state == NULL || config == NULL) return 0u; // 无效对象不能改写旧状态。
+    CanRecoveryTimed_t candidate = {0}; // 新实例不继承旧来源和等待起点。
+    if (!CanRecoveryInit(&candidate.recovery, config)) return 0u; // 先检查核心恢复配置。
+    *state = candidate; // 全部配置成功后才交付实例。
+    return 1u;
+}
+
+uint8_t CanRecoveryTimedStep(CanRecoveryTimed_t *state, const CanRecoveryTimedInput_t *input)
+{
+    if (state == NULL || input == NULL || state->recovery.initialized != 1u) return 0u; // 无效状态不能允许恢复。
+    CanRecoveryInput_t current = input->core; // 保留调用方的逐台反馈和禁止代次。
+    const uint8_t source_valid = (uint8_t)(input->command_source_id != 0u &&
+        current.command_sequence != 0u && input->command_max_age_ms > 0u &&
+        input->command_max_age_ms <= INT32_MAX &&
+        (uint32_t)(current.now_ms - input->command_source_ms) <= input->command_max_age_ms); // 过期或将来的来源不能提供新命令。
+    if (!source_valid) current.command_sequence = 0u; // 无有效来源时不能复用旧命令。
+    if (source_valid && (input->command_source_id != state->source_id ||
+                         input->command_source_epoch != state->source_epoch))
+    {
+        const CanRecoveryConfig_t config = state->recovery.config; // 来源切换时保留原反馈配置。
+        if (!CanRecoveryInit(&state->recovery, &config)) return 0u; // 任何初始化错误都保持禁止。
+        state->source_id = input->command_source_id; // 后续序号只和同一来源比较。
+        state->source_epoch = input->command_source_epoch; // 记录来源选择代次，短暂切换也会重新等待。
+        state->barrier_valid = 0u; // 新来源不能使用旧来源的稳定起点。
+        (void)CanRecoveryStep(&state->recovery, &current); // 先记录切换时已存在的反馈和命令。
+        return 0u; // 等待每台电机重新更新并保持稳定。
+    }
+    const CanRecoveryPhase_t before = state->recovery.phase; // 记录本轮推进前的阶段。
+    if (state->barrier_valid && (before == CAN_RECOVERY_WAIT_COMMAND || before == CAN_RECOVERY_READY))
+    {
+        const uint32_t advance = input->command_source_ms - state->command_barrier_ms; // 仅接收稳定之后产生的原始命令。
+        if (advance == 0u || advance > INT32_MAX) current.command_sequence = 0u; // 同时刻、旧时间或歧义时间不能接管。
+    }
+    const uint8_t ready = CanRecoveryStep(&state->recovery, &current); // 总线、逐台反馈及命令序号继续由原状态机检查。
+    if (before == CAN_RECOVERY_STABILIZING && state->recovery.phase == CAN_RECOVERY_WAIT_COMMAND)
+    {
+        state->command_barrier_ms = current.now_ms; // 稳定完成当轮作为新命令的时间起点。
+        state->barrier_valid = 1u; // 0 ms 起点同样有效。
+    }
+    if (state->recovery.phase == CAN_RECOVERY_WAIT_BUS || state->recovery.phase == CAN_RECOVERY_WAIT_FEEDBACK)
+        state->barrier_valid = 0u; // 故障或反馈失效后不能沿用上次起点。
+    return (uint8_t)(ready && state->barrier_valid); // 两套检查均通过才交付恢复条件。
+}
