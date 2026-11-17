@@ -142,6 +142,22 @@ void RobotFaultReport(Robot_Fault_e fault);
 * @param[in] fault 需要清除的故障位，可组合多个。 */
 void RobotFaultClear(Robot_Fault_e fault);
 
+/** @brief 查询 CAN 恢复所需的安全资格，不清除任何故障。
+ * @param[in] expected_generation 本轮读取的安全代际。
+ * @return 1 为 CAN 故障存在且其他核心条件及当前运行资格有效；否则返回 0。
+ * @note 来源期限使用安全管理实际读取的时间；不检查总线、电机反馈或新命令。
+ */
+uint8_t RobotSafetyCanRecover(uint32_t expected_generation);
+
+/** @brief 在同一安全代际中检查 CAN 故障以外的条件，并尝试清除 CAN 故障位。
+ * @param[in] expected_generation 恢复检查开始时读取的安全代际。
+ * @param[in] now_ms 调用方读取的本机时间；实际检查使用安全管理重新读取的时刻。
+ * @return 1 为故障位已清除，0 为代际、核心条件或运行资格不满足。
+ * @note 只供 CAN 恢复协调者使用；调用方还须确认总线、逐台反馈、稳定时间和恢复后新命令，
+ * 并与 CAN 故障代次的最终比较保持同一中断保护。函数不设置 READY 或电机输出。
+ */
+uint8_t RobotSafetyTryClearCanFault(uint32_t expected_generation, uint32_t now_ms);
+
 /** @brief 保存急停和原因并清除使能请求；运行状态在 Update 中转为 ESTOP。
 * @param[in] reason 急停原因，重复相同原因不重复报告。 */
 void EstopRequest(Estop_Reason_e reason);

@@ -114,5 +114,53 @@ int main(void)
     RobotSafetyUpdate(); // 控制器恢复不能自行清除故障。
     TEST_CHECK(!RobotSafetyIsReady()); // 在恢复流程接入前保持禁止。
     TEST_CHECK(!RobotCanRuntimeInstall(&plan, demands, 2u)); // 不允许运行中重置观察者。
+    RobotSafetySnapshot_t safety = {0}; // 模拟协调者最后一次读取的安全代际。
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+    TEST_CHECK(RobotSafetyCanRecover(safety.control_generation)); // 检查资格本身不清除故障。
+    TEST_CHECK((RobotSafetyGetFaults() & ROBOT_FAULT_CAN_BUSOFF) != 0u);
+    TEST_CHECK(!RobotCanRuntimeTryClearFault(events.fault_generation - 1u, safety.control_generation, now_ms)); // 过期的总线代次不能清除新故障。
+    RobotFaultReport(ROBOT_FAULT_TILT); // 检查期间出现另一项核心故障。
+    TEST_CHECK(!RobotCanRuntimeTryClearFault(events.fault_generation, safety.control_generation, now_ms)); // 旧安全代次不能提交。
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+    TEST_CHECK(!RobotCanRuntimeTryClearFault(events.fault_generation, safety.control_generation, now_ms)); // 即使取得新代次，其他故障也阻止清除。
+    RobotFaultClear(ROBOT_FAULT_TILT); // 模拟其他故障已由各自流程恢复。
+    RobotSafetyRequestDisable(); // 人工主动失能。
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+    TEST_CHECK(!RobotSafetyCanRecover(safety.control_generation));
+    TEST_CHECK(!RobotCanRuntimeTryClearFault(events.fault_generation, safety.control_generation, now_ms)); // 失能期间不能清除 CAN 故障。
+    RobotSafetyRequestEnable(); // 模拟满足前置条件后的明确使能请求。
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+    TEST_CHECK(RobotCanRuntimeTryClearFault(events.fault_generation, safety.control_generation, now_ms)); // 当前代次和核心资格均有效时才清除。
+    TEST_CHECK((RobotSafetyGetFaults() & ROBOT_FAULT_CAN_BUSOFF) == 0u);
+    TEST_CHECK(!RobotSafetyIsReady()); // 清除故障本身不推进整车状态。
+    RobotSafetyUpdate(); // 由原整车状态机重新检查是否允许运行。
+    TEST_CHECK(RobotSafetyIsReady());
+
+    RobotSafetyInit(); // 重新构造正式自主测试，不沿用人工使能。
+    RobotSafetySetImuValid(1u); RobotSafetySetCalibValid(1u); RobotSafetySetTaskHealthy(1u);
+    const RobotControlPolicy_t autonomous_policy = {ROBOT_CONTROL_ALL, 1u, 1u, 0u}; // 测试车型具备正式自主资格。
+    TEST_CHECK(RobotSafetyConfigureControl(&autonomous_policy));
+    RobotSafetyControlInputs_t autonomous = {0};
+    autonomous.mode = ROBOT_CONTROL_AUTONOMOUS; // 自主运行不依赖遥控。
+    autonomous.match = (RobotControlLease_t){10u, 100u, 1u}; // 裁判阶段有独立时限。
+    autonomous.match_running = 1u; // 裁判阶段允许比赛运行。
+    now_ms = 10u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&autonomous));
+    RobotSafetySetRcOnline(0u); // 遥控离线只保留诊断，不阻止正式自主。
+    installed_observer(PLATFORM_CAN_BUS_1, installed_context);
+    TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && RobotSafetyGetSnapshot(&safety));
+    now_ms = 111u; // 比赛阶段数据已经过期。
+    TEST_CHECK(!RobotSafetyCanRecover(safety.control_generation));
+    TEST_CHECK(!RobotCanRuntimeTryClearFault(events.fault_generation, safety.control_generation, 10u)); // 传入旧时间不能延长比赛阶段期限。
+    autonomous.match.source_time_ms = 111u; // 模拟新的有效裁判阶段。
+    TEST_CHECK(RobotSafetyPublishControlInputs(&autonomous));
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+    TEST_CHECK(RobotSafetyCanRecover(safety.control_generation)); // 正式自主资格无需遥控或人工使能。
+    TEST_CHECK(RobotCanRuntimeTryClearFault(events.fault_generation, safety.control_generation, now_ms)); // 比赛有效且其他核心条件正常时不要求遥控。
+    installed_observer(PLATFORM_CAN_BUS_1, installed_context); // 再次模拟 CAN 故障。
+    EstopRequest(ESTOP_REASON_MANUAL); // 操作者尚未解除急停。
+    TEST_CHECK(RobotCanRuntimeGetFaultSnapshot(&events) && RobotSafetyGetSnapshot(&safety));
+    TEST_CHECK(!RobotSafetyCanRecover(safety.control_generation));
+    TEST_CHECK(!RobotCanRuntimeTryClearFault(events.fault_generation, safety.control_generation, now_ms)); // 正式自主也不能绕过人工急停。
     return 0;
 }

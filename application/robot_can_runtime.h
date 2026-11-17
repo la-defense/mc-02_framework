@@ -35,6 +35,17 @@ typedef struct {
  */
 uint8_t RobotCanRuntimeGetReadiness(RobotCanReadiness_t *output);
 
+/** @brief 在同一短中断保护中复核总线故障代次及安全资格，再尝试清除 CAN 故障。
+ * @param[in] expected_fault_generation 反馈及命令恢复检查使用的 CAN 故障代次。
+ * @param[in] expected_safety_generation 同轮读取的安全代次。
+ * @param[in] now_ms 调用方读取的本机时间；安全管理重新读取实际检查时刻。
+ * @return 1 为已清除 CAN 故障位；状态变化、资格失效或未安装时返回 0。
+ * @note 仅供完成总线、逐台反馈连续有效和恢复后新命令检查的协调者调用；
+ * 此函数不查询 HAL 或反馈，不推进 READY，也不替代现场验收。
+ */
+uint8_t RobotCanRuntimeTryClearFault(uint32_t expected_fault_generation,
+                                     uint32_t expected_safety_generation, uint32_t now_ms);
+
 /** @brief 根据启动计划安装核心总线故障观察者。
  * @param[in] plan 已声明的模块计划，不可为 NULL。
  * @param[in] demands 端点需求数组；count 为零时可为 NULL。

@@ -1220,6 +1220,7 @@ add_test(NAME production_dji_chassis_safety_output_gate
 add_executable(motor_single_safety_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
   ../../application/robot_can_motor_recovery.c ../../application/config/module_plan.c # 使用真实车型映射处理生产驱动反馈。
+  ../../application/robot_can_runtime.c # 将电机、总线与真实安全管理共同用于恢复测试。
   ../../bsp/board/platform_can_periodic_stm32.c dji_can_unregister_fake.c
   ../../modules/motor/motor_feedback.c ../../modules/algorithm/controller.c
   ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c

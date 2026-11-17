@@ -624,6 +624,54 @@ void RobotFaultClear(Robot_Fault_e fault)
     RobotSafetyExitCritical(previous);
 }
 
+// 调用方已进入安全临界区；这里只判断资格，不清除故障或推进状态。
+static uint8_t RobotSafetyCanRecoverLocked(uint32_t expected_generation, uint32_t now_ms)
+{
+    const uint8_t formal = ControlFormalLocked(); // 正式自主不依赖遥控在线或人工使能。
+    uint32_t other_faults = fault_flags & ~(uint32_t)ROBOT_FAULT_CAN_BUSOFF; // 此处仅考虑当前要恢复的 CAN 故障。
+    if (formal) other_faults &= ~(uint32_t)ROBOT_FAULT_RC_OFFLINE; // 保留自主模式已有的遥控豁免。
+    uint8_t allowed = (uint8_t)(control_generation == expected_generation &&
+        (fault_flags & ROBOT_FAULT_CAN_BUSOFF) != 0u && other_faults == 0u &&
+        imu_valid && calib_valid && task_healthy && !estop_latched && !calib_requested); // 核心或代际变化时不得清除故障。
+    if (formal)
+    {
+        const RobotControlLease_t *match = &control_inputs.match; // 自主运行资格必须来自当前裁判阶段。
+        allowed = (uint8_t)(allowed && !control_disabled && control_inputs.match_running &&
+            match->valid == 1u && match->max_age_ms > 0u && match->max_age_ms <= INT32_MAX &&
+            (uint32_t)(now_ms - match->source_time_ms) <= match->max_age_ms); // 过期或将来的阶段数据不能授权。
+    }
+    else
+    {
+        allowed = (uint8_t)(allowed && rc_online && enable_requested && !control_disabled); // 人工模式保留在线和显式使能要求。
+        if (control_configured)
+        {
+            const RobotControlLease_t *manual = &control_inputs.manual; // 新策略还需已选择的人工来源有效。
+            allowed = (uint8_t)(allowed && control_inputs.mode != ROBOT_CONTROL_AUTONOMOUS &&
+                manual->valid == 1u && manual->max_age_ms > 0u && manual->max_age_ms <= INT32_MAX &&
+                (uint32_t)(now_ms - manual->source_time_ms) <= manual->max_age_ms); // 无效或过期输入不能恢复。
+        }
+    }
+    return allowed; // 调用方按同一临界区的判断决定是否清除。
+}
+
+uint8_t RobotSafetyCanRecover(uint32_t expected_generation)
+{
+    const uint32_t previous = RobotSafetyEnterCritical(); // 来源和核心状态必须在同一保护内读取。
+    const uint8_t allowed = RobotSafetyCanRecoverLocked(expected_generation, PlatformTimeNowMs()); // 以实际查询时刻检查期限。
+    RobotSafetyExitCritical(previous); // 恢复调用者的中断状态。
+    return allowed; // 不清除故障，不代表允许运动。
+}
+
+uint8_t RobotSafetyTryClearCanFault(uint32_t expected_generation, uint32_t now_ms)
+{
+    (void)now_ms; // 恢复许可必须以安全管理实际检查时刻为准。
+    const uint32_t previous = RobotSafetyEnterCritical(); // 同时检查并修改安全管理保存的状态。
+    const uint8_t allowed = RobotSafetyCanRecoverLocked(expected_generation, PlatformTimeNowMs()); // 防止时间倒退或调用方传入旧时刻。
+    if (allowed) RobotSafetyClearFaultLocked(ROBOT_FAULT_CAN_BUSOFF); // 只清除已验证的这一故障位。
+    RobotSafetyExitCritical(previous); // 恢复进入前的中断状态，不推进整车状态。
+    return allowed; // 剩余控制许可由正常状态机和新命令继续决定。
+}
+
 void EstopRequest(Estop_Reason_e reason)
 {
     const uint32_t previous = RobotSafetyEnterCritical();

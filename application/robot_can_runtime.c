@@ -54,6 +54,17 @@ uint8_t RobotCanRuntimeGetReadiness(RobotCanReadiness_t *output)
     return 1u;
 }
 
+uint8_t RobotCanRuntimeTryClearFault(uint32_t expected_fault_generation,
+                                     uint32_t expected_safety_generation, uint32_t now_ms)
+{
+    const PlatformIrqState_t irq = PlatformIrqSaveAndDisable(); // 禁止新故障插入代次检查和故障位清除之间。
+    uint8_t cleared = 0u; // 未完成全部检查时保持禁止。
+    if (observer_installed && fault_generation == expected_fault_generation)
+        cleared = RobotSafetyTryClearCanFault(expected_safety_generation, now_ms); // 安全管理原子复核其他故障与资格。
+    PlatformIrqRestore(irq); // 恢复调用者进入前的中断状态。
+    return cleared; // 状态更新和新目标发布仍由整车周期执行。
+}
+
 // 此回调在短中断保护内执行，安全管理只更新有界状态，不打印日志。
 static void RobotCanRuntimeFault(PlatformCanBus_t bus, void *context)
 {
