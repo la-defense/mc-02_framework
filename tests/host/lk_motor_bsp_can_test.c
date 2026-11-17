@@ -2674,13 +2674,25 @@ static void test_platform_can_queue(void)
 static void test_platform_can_status(void)
 {
     TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_INVALID) == PLATFORM_CAN_STATUS_UNKNOWN);
+    TEST_CHECK(!PlatformCanRecoveryStillReady(PLATFORM_CAN_INVALID)); // 未绑定资源不能用于最终恢复。
     TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_UNKNOWN); // 尚未启动不查询 HAL。
+    TEST_CHECK(!PlatformCanRecoveryStillReady(PLATFORM_CAN_BUS_1)); // 控制器启动前不能恢复。
     TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_1)); // 启动各总线后才查询硬件状态。
     TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_2));
     TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_3));
     status_error[1] = 1u; // 第二条总线报告错误。
     status_busoff[2] = 1u; // 第三条总线进入总线关闭。
     TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_1) == PLATFORM_CAN_STATUS_OK);
+    TEST_CHECK(PlatformCanRecoveryStillReady(PLATFORM_CAN_BUS_1)); // 正常控制器通过最终复核。
+    hfdcan1.Instance->PSR = FDCAN_PSR_BO; // 模拟总线刚进入关闭状态。
+    TEST_CHECK(!PlatformCanRecoveryStillReady(PLATFORM_CAN_BUS_1));
+    hfdcan1.Instance->PSR = FDCAN_PSR_EP; // 被动错误也不能恢复。
+    TEST_CHECK(!PlatformCanRecoveryStillReady(PLATFORM_CAN_BUS_1));
+    hfdcan1.Instance->PSR = 0u; // 清除模拟的协议状态。
+    hfdcan1.Instance->ECR = 1u; // 错误计数尚未清零时继续等待。
+    TEST_CHECK(!PlatformCanRecoveryStillReady(PLATFORM_CAN_BUS_1));
+    hfdcan1.Instance->ECR = 0u; // 清除模拟的错误计数。
+    TEST_CHECK(PlatformCanRecoveryStillReady(PLATFORM_CAN_BUS_1));
     TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_2) == PLATFORM_CAN_STATUS_ERROR);
     TEST_CHECK(PlatformCanGetStatus(PLATFORM_CAN_BUS_3) == PLATFORM_CAN_STATUS_BUSOFF);
     status_read_failure = 1u; // 硬件查询失败时不显示为正常。

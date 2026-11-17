@@ -19,3 +19,9 @@ PlatformCanStatus_t PlatformCanGetStatus(PlatformCanBus_t bus)
     default: return PLATFORM_CAN_STATUS_UNKNOWN;
     }
 }
+
+uint8_t PlatformCanRecoveryStillReady(PlatformCanBus_t bus)
+{
+    FDCAN_HandleTypeDef *handle = BoardCanResolve(bus); // 通过板级表解析逻辑总线。
+    return handle != NULL && CANRecoveryStillReady(handle); // 无绑定时不予恢复。
+}

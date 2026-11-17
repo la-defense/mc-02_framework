@@ -16,6 +16,14 @@ static RemoteSafetyGestures_s remote_gestures;
 #include "general_def.h"
 #include "dji_motor.h"
 #include "robot_safety.h"
+#if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
+#include "robot_can_recovery_coordinator.h"
+#if defined(MC02_VISION_PROTOCOL_V2)
+#define ROBOT_RECOVERY_KEYBOARD_ALLOWED 0u // 新协议将该档位用于自主。
+#else
+#define ROBOT_RECOVERY_KEYBOARD_ALLOWED 1u // 旧协议将该档位用于人工键鼠。
+#endif
+#endif
 #include "daemon.h"
 #include "vision_control.h"
 #include "../../bsp/os/platform_sync.h"
@@ -588,6 +596,9 @@ void RobotCMDTask()
         previous_vision_active = 0u;
         RobotSafetySetRcOnline(remote_snapshot.remote_online);
         EmergencyHandler(remote_snapshot.remote_online);
+#if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
+        (void)RobotCanRecoveryPoll(&remote_snapshot, ROBOT_RECOVERY_KEYBOARD_ALLOWED, NULL); // 应用反馈失效时中断连续等待。
+#endif
         ApplySafeCommands();
         VisionSend();
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
@@ -700,6 +711,10 @@ void RobotCMDTask()
     ApplyShootCommand(&selected_shoot_command);
 
     EmergencyHandler(remote_online); // 最终安全状态始终覆盖命令选择
+#if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
+    if (RobotCanRecoveryPoll(&remote_snapshot, ROBOT_RECOVERY_KEYBOARD_ALLOWED, &gimbal_feedback_time))
+        RobotSafetyUpdate(); // 故障解除后推进状态；本轮旧命令已经被安全处理覆盖。
+#endif
     RobotControlPermits_t current_permits = {0}; // 默认不授予发射许可。
     uint8_t policy_active = 0u; // 同次查询区分旧整车许可与分功能策略。
     const uint8_t permits_valid = (uint8_t)(command_safety_valid &&

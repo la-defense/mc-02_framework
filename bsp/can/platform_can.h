@@ -33,6 +33,13 @@ typedef enum {
  */
 PlatformCanStatus_t PlatformCanGetStatus(PlatformCanBus_t bus);
 
+/** @brief 使用固定寄存器读取再次核对总线可运行状态。
+ * @param[in] bus 板级逻辑总线编号。
+ * @return 1 为服务和控制器状态仍正常，0 为无绑定或无法确认。
+ * @note 不调用 HAL；供最终故障代次复核的短中断保护使用，不代替完整状态与设备反馈检查。
+ */
+uint8_t PlatformCanRecoveryStillReady(PlatformCanBus_t bus);
+
 /** @brief 调用者长期保存的接收端点；初始化前清零，注册后不可复制或改写。 */
 typedef struct {
     void *backend; /**< 平台私有对象；业务不得读取或修改。 */

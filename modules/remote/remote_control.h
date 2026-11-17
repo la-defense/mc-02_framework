@@ -159,6 +159,14 @@ typedef struct
  */
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot);
 
+/** @brief 复核人工恢复使用的遥控／键鼠样本仍是当前有效来源。
+ * @param[in] snapshot 之前读取的输入；不能为 NULL。
+ * @param[in] now_ms 当前本机毫秒，允许回绕。
+ * @return 1 为来源档位、选择代次、样本序号和期限均未改变；否则为 0。
+ * @note 只读取固定内存，不执行 HAL、日志或动作；可在最终故障复核的中断保护中调用。
+ */
+uint8_t RemoteControlRecoveryStillValid(const RemoteControlSnapshot_s *snapshot, uint32_t now_ms);
+
 #define REMOTE_MOUSE_EVENT_CAPACITY 8u // 最多保存八份尚未消费的鼠标位移。
 typedef enum {
     REMOTE_MOUSE_OK = 0, // 已交付至少一份未过期位移。

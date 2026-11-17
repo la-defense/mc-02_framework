@@ -57,6 +57,7 @@ typedef struct {
     Motor_Type_e motor_type; /**< 由车型配置登记的 DJI 电机型号。 */
     uint32_t motor_id; /**< 设备编号，范围 1～8。 */
     uint32_t sequence; /**< 本机反馈序号，0 表示尚未收到合法样本。 */
+    uint32_t gap_generation; /**< 反馈超时或质量失效时递增，便于识别检查间的短暂中断。 */
     uint32_t source_time_ms; /**< 样本原始接收时间；sequence 为 0 时无意义。 */
     uint8_t speed_valid; /**< 速度已验证且没有过期。 */
     uint8_t current_valid; /**< 电流已验证且没有过期。 */
@@ -77,6 +78,16 @@ typedef struct {
  * 每条数据应继续按各自源时间检查；调用方须核对车型期望数量和其他型号的反馈。
  */
 uint8_t DJIMotorGetRecoveryFeedback(uint32_t now_ms, DJI_RecoveryFeedback_s *output);
+
+/** @brief 短中断保护内复核必需电机反馈没有间断且仍然有效。
+ * @param[in] observed 先前成功取得的完整登记结果，不能为空。
+ * @param[in] registered_mask 必需电机在登记数组中的位图，不能为零。
+ * @param[in] now_ms 检查时的本机毫秒；样本等于 20 ms 仍有效。
+ * @return 1 为所有必需项身份一致、反馈连续且最新样本未过期；否则为 0。
+ * @note 不执行 HAL 或日志；登记表须在运行前固定。可与最终安全代际复核放在同一中断保护中。
+ */
+uint8_t DJIMotorRecoveryStillValid(const DJI_RecoveryFeedback_s *observed,
+                                   uint32_t registered_mask, uint32_t now_ms);
 
 /** @brief 每个反馈量可单独选择旧逐帧滤波、按真实dt计算的一阶低通或原始值。 */
 typedef enum
@@ -170,6 +181,7 @@ typedef struct
     uint8_t encoder_baseline_valid;
     uint8_t output_position_trusted;
     uint32_t feedback_sequence;
+    uint32_t feedback_gap_generation; // 记录接收间隔超时及滤波质量失效。
 } DJIMotorInstance;
 
 typedef struct

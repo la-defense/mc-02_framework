@@ -1404,6 +1404,21 @@ uint8_t CANBusIsQuarantined(FDCAN_HandleTypeDef *hcan)
     return (uint8_t)((can_filter_quarantined & (uint8_t)(1u << index)) != 0u);
 }
 
+uint8_t CANRecoveryStillReady(FDCAN_HandleTypeDef *hcan)
+{
+    const uint8_t index = CANBusIndexFromHandle(hcan); // 从固定绑定查询总线编号。
+    if (index >= DEVICE_CAN_CNT || hcan == NULL || hcan->Instance == NULL) return 0u; // 无效控制器不能访问寄存器。
+    const uint32_t saved = __get_PRIMASK(); // 保留进入前中断状态。
+    __disable_irq(); // 服务标记和寄存器在同一短窗口检查。
+    const uint8_t ready = (uint8_t)(CANBusIsActive(index) &&
+        (can_filter_quarantined & (uint8_t)(1u << index)) == 0u &&
+        (hcan->Instance->CCCR & FDCAN_CCCR_INIT) == 0u &&
+        (hcan->Instance->PSR & (FDCAN_PSR_EP | FDCAN_PSR_BO)) == 0u &&
+        (hcan->Instance->ECR & (FDCAN_ECR_TEC | FDCAN_ECR_REC)) == 0u); // 控制器停止、关闭或错误时不能恢复。
+    __set_PRIMASK(saved); // 恢复原有中断状态。
+    return ready; // 后续仍须检查反馈和安全资格。
+}
+
 /* ----------------------- two extern callable function -----------------------*/
 
 // 逐条总线执行：切换 CAN_SELFTEST_MODE、注册测试接收者、发送并派发确认、注销、恢复普通模式。

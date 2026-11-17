@@ -278,6 +278,7 @@ int main(int argc, char **argv)
         encode(frame, ch, RC_SW_DOWN, RC_SW_MID); now = 1u; receive(frame, sizeof(frame));
         RemoteControlGetSnapshot(&before);
         CHECK(before.source_selection_generation != 0u); // 首次合法来源建立选择代次。
+        CHECK(RemoteControlRecoveryStillValid(&before, now)); // 当前摇杆可供后续恢复检查。
         CanRecoveryTimed_t recovery = {0}; // 用真实无线帧的来源信息驱动恢复检查。
         const CanRecoveryConfig_t config = {1u, 10u}; // 测试反馈稳定等待 10 ms。
         CHECK(CanRecoveryTimedInit(&recovery, &config));
@@ -289,6 +290,7 @@ int main(int argc, char **argv)
         CHECK(!CanRecoveryTimedStep(&recovery, &recovery_input));
         now = 2u; receive(frame, sizeof(frame)); RemoteControlGetSnapshot(&after);
         CHECK(after.source_selection_generation == before.source_selection_generation); // 同档新帧不能误报切换。
+        CHECK(!RemoteControlRecoveryStillValid(&before, now)); // 已有更新帧时不能用旧输入提交最终恢复。
         recovery_input.core.now_ms = now; recovery_input.core.feedback_sequence[0] = 2u;
         recovery_input.core.command_sequence = after.radio_sequence;
         recovery_input.command_source_ms = after.radio_source_time_ms;
@@ -308,6 +310,8 @@ int main(int argc, char **argv)
         frame[12] = 0u; now = 105u; daemon_cycle(); // 超过最近合法帧的无线期限。
         now = 106u; receive(frame, sizeof(frame)); RemoteControlGetSnapshot(&after);
         CHECK(after.source_selection_generation != before.source_selection_generation); // 即使回到同档，断线重连也须重新建立来源。
+        CHECK(RemoteControlRecoveryStillValid(&after, now));
+        CHECK(!RemoteControlRecoveryStillValid(&after, now + REMOTE_RADIO_LEASE_MS + 1u)); // 不依赖后台任务，也按原始时间撤销过期输入。
         return 0;
     }
 #ifdef MC02_REMOTE_THREAD_TEST

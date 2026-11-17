@@ -18,6 +18,7 @@
 #if defined(ONE_BOARD)
 #include "robot_can_motor_recovery.h" // 使用车型身份检查真实电机反馈。
 #include "robot_can_runtime.h" // 联合核心 CAN 故障与安全恢复检查。
+#include "robot_can_recovery_coordinator.h" // 联合实际协调器验证恢复顺序。
 #endif
 #endif
 
@@ -59,6 +60,15 @@ PlatformCanStatus_t PlatformCanGetStatus(PlatformCanBus_t bus)
 {
     if (bus != PLATFORM_CAN_BUS_1 && bus != PLATFORM_CAN_BUS_2) return PLATFORM_CAN_STATUS_UNKNOWN; // 仅这两条是测试核心总线。
     return recovery_bus_ok ? PLATFORM_CAN_STATUS_OK : PLATFORM_CAN_STATUS_BUSOFF; // 控制器状态由测试注入。
+}
+uint8_t PlatformCanRecoveryStillReady(PlatformCanBus_t bus)
+{
+    return (uint8_t)(recovery_bus_ok && (bus == PLATFORM_CAN_BUS_1 || bus == PLATFORM_CAN_BUS_2)); // 最终总线状态由测试注入。
+}
+uint8_t RemoteControlRecoveryStillValid(const RemoteControlSnapshot_s *remote, uint32_t now)
+{
+    return (uint8_t)(remote != NULL && remote->remote_online && remote->radio_sequence != 0u &&
+        (uint32_t)(now - remote->radio_source_time_ms) <= REMOTE_RADIO_LEASE_MS); // 独立遥控驱动测试覆盖真实最终复核。
 }
 #endif
 
@@ -206,6 +216,56 @@ static int control_rejects_expired_feedback(void)
 }
 
 #if defined(ONE_BOARD)
+// 两台生产电机、整车安全管理和协调器一起运行；只替换总线及遥控硬件。
+static int recovery_coordinator_real_motors(void)
+{
+    DJIMotorInstance *motors[2] = {0}; // 两台测试电机都有独立身份。
+    RobotCanRecoveryCoordinator_t coordinator = {0}; // 模拟已确认的隔离测试配置。
+    coordinator.enabled = 1u;
+    coordinator.motors.count = 2u;
+    for (uint8_t i = 0u; i < 2u; ++i)
+    {
+        Motor_Init_Config_s config = motor_config((uint8_t)(i + 1u)); // 每台采用不同的测试编号。
+        config.output_role = MOTOR_OUTPUT_CHASSIS;
+        config.can_init_config.can_bus = PLATFORM_CAN_BUS_1;
+        motors[i] = DJIMotorInit(&config); // 使用真实电机注册和接收处理。
+        TEST_CHECK(motors[i] != NULL);
+        coordinator.motors.motors[i] = (RobotCanMotorRequirement_t){
+            .bus = PLATFORM_CAN_BUS_1, .role = MOTOR_OUTPUT_CHASSIS, .type = M3508, .id = i + 1u};
+        receive(motors[i], 480000u, 1u, 0, 0); // 故障前的旧反馈不能用于恢复。
+    }
+    const CanRecoveryConfig_t timing = {3u, 100u}; // 仅在主机使用的候选时间。
+    TEST_CHECK(CanRecoveryTimedInit(&coordinator.timing, &timing));
+    now_us = 1000u;
+    RobotSafetyInit(); RobotSafetySetRcOnline(1u); RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u); RobotSafetySetTaskHealthy(1u);
+    RobotSafetyRequestEnable(); RobotSafetyUpdate(); // 建立人工有效使能。
+    RobotModulePlan_t plan = {0};
+    plan.enabled = plan.required = ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS);
+    const RobotCanFilterDemand_t demand = {ROBOT_MODULE_CHASSIS, PLATFORM_CAN_BUS_1, 2u, 0u};
+    TEST_CHECK(RobotCanRuntimeInstall(&plan, &demand, 1u)); // 使用生产故障观察者。
+    recovery_fault_observer(PLATFORM_CAN_BUS_1, recovery_fault_context); // 故障立即撤销整车许可。
+    RemoteControlSnapshot_s remote = {.remote_online = 1u, .radio_sequence = 1u,
+        .radio_source_time_ms = 1u, .source_selection_generation = 1u};
+    remote.input.rc.switch_left = RC_SW_DOWN;
+    MessageFreshness_t freshness = {.valid = 1u, .timestamp_ms = 1u};
+    TEST_CHECK(!RobotCanRecoveryCoordinatorStep(&coordinator, &remote, 0u, &freshness)); // 总线未恢复先记录基准。
+    recovery_bus_ok = 1u; // 测试模拟控制器重新可用。
+    for (uint32_t ms = 2u; ms <= 102u; ms += 10u)
+    {
+        now_us = (uint64_t)ms * 1000u;
+        for (unsigned i = 0u; i < 2u; ++i) receive(motors[i], ms * 480000u, ms, 0, 0);
+        remote.radio_source_time_ms = ms; ++remote.radio_sequence; // 每轮交付真实意义上的新遥控帧。
+        freshness.timestamp_ms = ms; // 云台反馈同步保持有效。
+        TEST_CHECK(!RobotCanRecoveryCoordinatorStep(&coordinator, &remote, 0u, &freshness)); // 稳定结束时仍不得使用旧命令。
+    }
+    now_us = 103000u; remote.radio_source_time_ms = 103u; ++remote.radio_sequence;
+    freshness.timestamp_ms = 103u;
+    TEST_CHECK(RobotCanRecoveryCoordinatorStep(&coordinator, &remote, 0u, &freshness)); // 稳定后的新命令允许尝试解除。
+    TEST_CHECK((RobotSafetyGetFaults() & ROBOT_FAULT_CAN_BUSOFF) == 0u); // 真正的安全管理已清除故障。
+    return EXIT_SUCCESS;
+}
+
 // 将测试命令的原始时间交给生产恢复检查，序号和反馈由调用方分别维护。
 static uint8_t recovery_timed_step(CanRecoveryTimed_t *state, const CanRecoveryInput_t *input,
                                    uint32_t source_ms)
@@ -241,9 +301,12 @@ static int recovery_real_feedback(void)
         {.bus = PLATFORM_CAN_BUS_1, .role = MOTOR_OUTPUT_CHASSIS, .type = M3508, .id = 1u},
         {.bus = PLATFORM_CAN_BUS_2, .role = MOTOR_OUTPUT_CHASSIS, .type = M3508, .id = 2u}}}; // 两台必需电机按车型声明身份。
     CanRecoveryInput_t mapped = {0}; // 非核心第三台不会代替必需电机。
-    TEST_CHECK(RobotCanMotorRecoveryMap(&identity, &feedback, 1u, &mapped) &&
+    uint32_t registered_mask = 0u; // 最终复核使用实际登记下标。
+    TEST_CHECK(RobotCanMotorRecoveryMapWithMask(&identity, &feedback, 1u, &mapped, &registered_mask) &&
                mapped.valid_feedback_mask == 3u && mapped.feedback_sequence[0] == 1u &&
                mapped.feedback_sequence[1] == 1u); // 用生产驱动数据核对型号、编号、总线和来源序号。
+    TEST_CHECK(registered_mask == 3u && DJIMotorRecoveryStillValid(&feedback, registered_mask, 1u));
+    TEST_CHECK(!DJIMotorRecoveryStillValid(&feedback, registered_mask, 22u)); // 后台尚未巡检时也按原始时间拒绝过期样本。
     TEST_CHECK(feedback.motors[2].bus == PLATFORM_CAN_BUS_2 && feedback.motors[2].sequence == 0u &&
                !feedback.motors[2].speed_valid && !feedback.motors[2].position_valid); // 无首帧的设备不能被标记为有效。
     CanRecoveryTimed_t recovery = {0}; // 测试实例独立持有反馈与命令时间。
@@ -269,6 +332,7 @@ static int recovery_real_feedback(void)
     TEST_CHECK(RobotCanMotorRecoveryMap(&identity, &feedback, 1u, &input)); // 原序号和有效性经过生产身份映射。
     TEST_CHECK(!recovery_timed_step(&recovery, &input, 1u)); // 总线故障期间必须禁止。
     now_us = 2000u; receive(motors[0], 960000u, 2u, 0, 0); // 只有第一台收到新反馈。
+    TEST_CHECK(DJIMotorRecoveryStillValid(&feedback, registered_mask, 2u)); // 连续更新且没有间断时可以检查更新后的反馈。
     TEST_CHECK(DJIMotorGetRecoveryFeedback(2u, &feedback)); // 重新读取两台实际反馈。
     recovery_bus_ok = 1u; // 两条测试总线均已恢复。
     TEST_CHECK(RobotCanRuntimeGetReadiness(&buses) && buses.ready_bus_mask == buses.core_bus_mask);
@@ -317,6 +381,10 @@ static int recovery_real_feedback(void)
     TEST_CHECK(!feedback.motors[0].speed_valid && !feedback.motors[1].speed_valid); // 重复汇总不能刷新反馈期限。
     input.now_ms = 227u; TEST_CHECK(RobotCanMotorRecoveryMap(&identity, &feedback, 227u, &input)); // 从电机结果读取过期状态。
     TEST_CHECK(!recovery_timed_step(&recovery, &input, 206u)); // 反馈过期立即撤销恢复结果。
+    const uint32_t prior_gap = feedback.motors[0].gap_generation; // 记录断流前的间断代次。
+    now_us = 228000u; receive(motors[0], 228u * 480000u, 228u, 0, 0); // 反馈超过 20 ms 后重新到达。
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(228u, &feedback)); // 通过生产驱动再次读取。
+    TEST_CHECK(feedback.motors[0].gap_generation != prior_gap); // 两次检查之间断流也会留下记录。
     return EXIT_SUCCESS;
 }
 
@@ -1067,6 +1135,8 @@ int main(int argc, char **argv)
         return single_motion_reference_generation();
     if (strcmp(argv[1], "recovery-real-feedback") == 0)
         return recovery_real_feedback();
+    if (strcmp(argv[1], "recovery-coordinator-real-motors") == 0)
+        return recovery_coordinator_real_motors();
     if (strcmp(argv[1], "single-loader-fire-permit") == 0)
         return single_loader_fire_permit();
     if (strcmp(argv[1], "single-queued-feedback-expiry") == 0)

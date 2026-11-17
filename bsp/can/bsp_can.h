@@ -205,6 +205,13 @@ uint8_t CANStartBus(FDCAN_HandleTypeDef *hcan);
  */
 uint8_t CANBusIsQuarantined(FDCAN_HandleTypeDef *hcan);
 
+/** @brief 无 HAL 查询地复核核心总线是否仍处于可运行状态。
+ * @param[in] hcan 已绑定控制器；空指针或未知句柄返回 0。
+ * @return 1 为服务启动且控制器未停止、总线关闭或错误被动，错误计数为零；其他为 0。
+ * @note 使用固定次数的寄存器读取，不代替设备反馈、软件队列处理或完整状态查询。
+ */
+uint8_t CANRecoveryStillReady(FDCAN_HandleTypeDef *hcan);
+
 /** @brief 控制器故障观察函数；在短中断保护中调用，不得阻塞或访问 HAL。 */
 typedef void (*CANFaultObserver_t)(FDCAN_HandleTypeDef *hcan, void *context);
 /** @brief 启动阶段登记唯一的总线故障观察者。

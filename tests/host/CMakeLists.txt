@@ -277,6 +277,7 @@ set(MC02_HOST_REMOTE_SOURCES
 # 电机测试按目标原有的 CAN 替身编译同一份板级绑定。
 set(MC02_HOST_DJI_SOURCES
   ../../modules/motor/DJImotor/dji_motor.c # 生产电机驱动。
+  ../../bsp/os/platform_irq_stm32.c # 电机反馈最终复核保存与恢复中断状态。
   ../../bsp/board/board_can_stm32.c # 逻辑 CAN 到测试总线的绑定。
   ../../bsp/board/platform_can_rx_stm32.c # 真实逻辑 CAN 接收适配。
   ../../bsp/board/platform_probe_stm32.c # 周期计数到秒的换算适配。
@@ -823,6 +824,16 @@ target_compile_definitions(robot_can_motor_recovery_test PRIVATE MC02_PROFILE_RO
 target_compile_options(robot_can_motor_recovery_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_can_recovery_motor_manifest COMMAND robot_can_motor_recovery_test)
 
+add_executable(robot_can_recovery_coordinator_test robot_can_recovery_coordinator_test.c
+  ../../application/robot_can_recovery_coordinator.c ../../modules/safety/can_recovery.c) # 验证实际协调逻辑。
+target_include_directories(robot_can_recovery_coordinator_test PRIVATE . ../../application ../../application/config
+  ../../application/chassis ../../modules ../../modules/motor ../../modules/motor/DJImotor
+  ../../modules/algorithm ../../modules/daemon ../../modules/safety ../../modules/alarm ../../modules/referee
+  ../../modules/imu ../../modules/master_machine ../../modules/message_center ../../modules/remote
+  ../../bsp/board ../../bsp/can ../../bsp/os ../../bsp/usart)
+target_compile_options(robot_can_recovery_coordinator_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_can_recovery_coordinator COMMAND robot_can_recovery_coordinator_test)
+
 add_executable(robot_can_requirements_disabled_test robot_can_requirements_disabled_test.c
   ../../application/robot_can_requirements.c) # 使用关闭业务模块的生成配置检查双板需求。
 target_include_directories(robot_can_requirements_disabled_test BEFORE PRIVATE motor_profile_fakes robot_def_role_fakes)
@@ -1219,6 +1230,7 @@ add_test(NAME production_dji_chassis_safety_output_gate
   COMMAND motor_chassis_safety_test chassis-safety-output)
 add_executable(motor_single_safety_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
+  ../../application/robot_can_recovery_coordinator.c # 联合真实安全管理和电机反馈验证恢复协调。
   ../../application/robot_can_motor_recovery.c ../../application/config/module_plan.c # 使用真实车型映射处理生产驱动反馈。
   ../../application/robot_can_runtime.c # 将电机、总线与真实安全管理共同用于恢复测试。
   ../../bsp/board/platform_can_periodic_stm32.c dji_can_unregister_fake.c
@@ -1228,6 +1240,7 @@ add_executable(motor_single_safety_test motor_feedback_filter_test.c
 target_include_directories(motor_single_safety_test BEFORE PRIVATE motor_safety_fakes motor_pid_fakes)
 target_include_directories(motor_single_safety_test PRIVATE ../../modules/motor
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/safety
+  ../../modules/remote # 协调器的人工来源定义。
   ../../modules/imu ../../modules/master_machine ../../modules/alarm ../../modules/referee
   ../../modules/message_center ../../application ../../application/config ../../application/chassis
   ../../bsp/usart ../../bsp/board ../../bsp/can ../../bsp/os)
@@ -1246,6 +1259,7 @@ add_test(NAME production_dji_single_queued_feedback_expiry COMMAND motor_single_
 add_test(NAME production_dji_single_loader_fire_permit COMMAND motor_single_safety_test single-loader-fire-permit) # 拨弹独立检查击发许可。
 add_test(NAME production_dji_single_motion_reference_generation COMMAND motor_single_safety_test single-motion-reference-generation) # 故障后底盘和云台旧参考不能重放。
 add_test(NAME production_dji_recovery_real_feedback COMMAND motor_single_safety_test recovery-real-feedback) # 用真实电机反馈推进恢复条件。
+add_test(NAME production_dji_recovery_coordinator_real_motors COMMAND motor_single_safety_test recovery-coordinator-real-motors) # 协调器与真实电机及安全管理联测。
 add_test(NAME production_dji_single_shared_frame_permissions COMMAND motor_single_safety_test single-shared-frame) # 同帧不同机构分开授权。
 add_test(NAME production_dji_single_feedback_roles COMMAND motor_single_safety_test single-feedback-roles) # 同机构逐台检查反馈。
 add_test(NAME production_dji_single_feedback_roles_wrap COMMAND motor_single_safety_test single-feedback-roles-wrap) # 反馈时间跨回绕仍选择最早样本。

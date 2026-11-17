@@ -356,6 +356,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     application/robot_can_guard.c # 诊断后检查 CAN 核心依赖。
     application/robot_can_runtime.c # 运行时核心 CAN 故障通知安全管理。
     application/robot_can_motor_recovery.c # 按车型逐台核对 CAN 恢复反馈。
+    application/robot_can_recovery_coordinator.c # 组合人工输入、反馈与总线恢复检查。
     application/robot_can_capacity.c # 启动前检查 CAN 端点容量。
     application/robot_can_requirements.c # 统计车型使用的 CAN 端点。
     application/robot_task.c # 现有任务循环与周期维护。

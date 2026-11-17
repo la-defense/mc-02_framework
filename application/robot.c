@@ -13,6 +13,9 @@
 #include "robot_power.h"
 #include "robot_can_guard.h"
 #include "robot_can_runtime.h"
+#if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
+#include "robot_can_recovery_coordinator.h"
+#endif
 #include "robot_can_capacity.h"
 #include "robot_can_requirements.h"
 #include "platform_can.h"
@@ -417,6 +420,10 @@ uint8_t RobotInitializeApplications(void)
                                         robot_module_startup.failed_module);
         goto init_failed;
     }
+#if defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
+    ROBOT_INIT_CHECK(RobotCanRecoveryStart(robot_config, RobotBuildGetPlan()), INIT_STAGE_APPLICATION,
+                     INIT_MODULE_ROBOT, INIT_FAILURE_DEPENDENCY, 0u); // 配置确认后不能跳过核心电机清单检查。
+#endif
     for (unsigned module = 0u; module < ROBOT_MODULE_COUNT; ++module)
     {
         const uint32_t bit = ROBOT_MODULE_BIT(module);

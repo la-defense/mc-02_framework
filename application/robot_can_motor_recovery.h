@@ -45,4 +45,16 @@ uint8_t RobotCanMotorPlanBuild(const Robot_Config_s *config, const RobotModulePl
  */
 uint8_t RobotCanMotorRecoveryMap(const RobotCanMotorPlan_t *plan, const DJI_RecoveryFeedback_s *feedback,
                                   uint32_t now_ms, CanRecoveryInput_t *input);
+
+/** @brief 同时取得对应的实际登记下标位图，供最终原子复核使用。
+ * @param[in] plan 车型必需电机。
+ * @param[in] feedback 当前登记数据。
+ * @param[in] now_ms 读取结束时的本机毫秒。
+ * @param[in,out] input 成功时更新恢复反馈；失败不改变。
+ * @param[out] registered_mask 成功时写入登记下标位图；不能为空，失败不改变。
+ * @return 1 为全部身份匹配，0 为参数、容量或身份错误。
+ */
+uint8_t RobotCanMotorRecoveryMapWithMask(const RobotCanMotorPlan_t *plan,
+    const DJI_RecoveryFeedback_s *feedback, uint32_t now_ms, CanRecoveryInput_t *input,
+    uint32_t *registered_mask);
 #endif

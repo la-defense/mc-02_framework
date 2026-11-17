@@ -134,6 +134,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "application/robot_can_guard.c",  # 诊断后传播总线隔离影响。
     "application/robot_can_runtime.c",  # 按车型核心依赖通知运行期总线故障。
     "application/robot_can_motor_recovery.c",  # 核对车型核心电机的恢复反馈。
+    "application/robot_can_recovery_coordinator.c",  # 组合单板人工输入和核心反馈的恢复检查。
     "application/robot_can_requirements.c",  # 统计车型声明的设备需求。
     "application/robot_param_guard.c",  # 参数维护与温控、监控的配合。
     "application/robot_power.c",  # 受控电源阶段及模块失败传播。
@@ -531,6 +532,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/robot_can_guard.h",  # 模块与逻辑总线依赖。
                         source_root / "application/robot_can_runtime.h",  # 运行期核心总线故障入口。
                         source_root / "application/robot_can_motor_recovery.h",  # 核心电机恢复身份匹配。
+                        source_root / "application/robot_can_recovery_coordinator.h",  # 单板人工恢复协调接口。
                         source_root / "application/robot_can_requirements.h",  # 车型设备需求入口。
                         source_root / "application/robot_param_guard.h",  # 维护操作公开回调。
                         source_root / "application/robot_power.h",  # 模块电源阶段声明。

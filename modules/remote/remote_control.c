@@ -389,6 +389,28 @@ void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
     PlatformIrqRestore(primask);
 }
 
+uint8_t RemoteControlRecoveryStillValid(const RemoteControlSnapshot_s *snapshot, uint32_t now_ms)
+{
+    if (snapshot == NULL) return 0u; // 没有原始输入时不能验证恢复来源。
+    const PlatformIrqState_t irq = PlatformIrqSaveAndDisable(); // 来源与代次必须一次检查。
+    const uint16_t selected = snapshot->input.rc.switch_left; // 保存此前读取的人工来源档位。
+    uint8_t valid = (uint8_t)(snapshot->remote_online && rc_init_flag && remote_control_diag.has_valid_frame &&
+        snapshot->radio_sequence != 0u && snapshot->radio_sequence == radio_sample_sequence &&
+        snapshot->source_selection_generation == source_selection_generation &&
+        snapshot->radio_source_time_ms == remote_control_diag.last_valid_tick &&
+        selected == rc_ctrl[TEMP].rc.switch_left &&
+        (uint32_t)(now_ms - snapshot->radio_source_time_ms) <= REMOTE_RADIO_LEASE_MS); // 无线更新、切档或超时均要求重新采样。
+    if (switch_is_up(selected))
+        valid = (uint8_t)(valid && snapshot->pc_valid && pc_authorized &&
+            snapshot->pc_sample_sequence != 0u && snapshot->pc_sample_sequence == pc_sample_sequence &&
+            snapshot->pc_source_time_ms == remote_control_diag.pc_last_advance_tick &&
+            (uint32_t)(now_ms - snapshot->pc_source_time_ms) <= REMOTE_PC_LEASE_MS); // 键鼠档还要保留独立心跳期限。
+    else if (!switch_is_down(selected))
+        valid = 0u; // 中间档不提供人工控制命令。
+    PlatformIrqRestore(irq); // 恢复调用者原有中断状态。
+    return valid; // 不触碰动作命令或运行许可。
+}
+
 RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through_sequence, RemoteMouseBatch_t *batch)
 {
     if (batch == NULL) return REMOTE_MOUSE_BAD_ARGUMENT; // 没有输出对象时不改变队列。

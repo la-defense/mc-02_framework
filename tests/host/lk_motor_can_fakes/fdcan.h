@@ -50,6 +50,10 @@ typedef uint32_t HAL_StatusTypeDef;
 #define FDCAN_MODE_NORMAL 0u
 #define FDCAN_MODE_EXTERNAL_LOOPBACK 1u
 #define FDCAN_CCCR_INIT (1u << 0)
+#define FDCAN_PSR_EP (1u << 5)
+#define FDCAN_PSR_BO (1u << 7)
+#define FDCAN_ECR_TEC 0xffu
+#define FDCAN_ECR_REC (0x7fu << 8)
 #define FDCAN_FILTER_MASK 0u
 #define FDCAN_ESI_ACTIVE 0u
 #define FDCAN_BRS_OFF 0u

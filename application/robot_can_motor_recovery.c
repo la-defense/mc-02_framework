@@ -85,10 +85,10 @@ uint8_t RobotCanMotorPlanBuild(const Robot_Config_s *config, const RobotModulePl
     return 1u;
 }
 
-uint8_t RobotCanMotorRecoveryMap(const RobotCanMotorPlan_t *plan, const DJI_RecoveryFeedback_s *feedback,
-                                  uint32_t now_ms, CanRecoveryInput_t *input)
+uint8_t RobotCanMotorRecoveryMapWithMask(const RobotCanMotorPlan_t *plan, const DJI_RecoveryFeedback_s *feedback,
+                                         uint32_t now_ms, CanRecoveryInput_t *input, uint32_t *registered_mask)
 {
-    if (plan == NULL || feedback == NULL || input == NULL || plan->count == 0u ||
+    if (plan == NULL || feedback == NULL || input == NULL || registered_mask == NULL || plan->count == 0u ||
         plan->count > DJI_MOTOR_CNT || feedback->count > DJI_MOTOR_CNT) return 0u; // 非法容量不能访问数组。
     uint32_t sequences[CAN_RECOVERY_MAX_FEEDBACK] = {0}; // 按车型固定顺序存储原始序号。
     uint32_t valid = 0u; // 开始时没有电机满足反馈条件。
@@ -127,5 +127,13 @@ uint8_t RobotCanMotorRecoveryMap(const RobotCanMotorPlan_t *plan, const DJI_Reco
     }
     memcpy(input->feedback_sequence, sequences, sizeof(sequences)); // 所有身份匹配后才交付序号。
     input->valid_feedback_mask = valid; // 保留每台设备独立有效位。
+    *registered_mask = used; // 保留实际登记下标，最终检查不依赖车型顺序。
     return 1u;
+}
+
+uint8_t RobotCanMotorRecoveryMap(const RobotCanMotorPlan_t *plan, const DJI_RecoveryFeedback_s *feedback,
+                                  uint32_t now_ms, CanRecoveryInput_t *input)
+{
+    uint32_t ignored_mask = 0u; // 不需要登记下标的调用方只读取反馈。
+    return RobotCanMotorRecoveryMapWithMask(plan, feedback, now_ms, input, &ignored_mask);
 }

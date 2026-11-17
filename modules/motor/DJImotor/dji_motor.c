@@ -252,6 +252,8 @@ static void UpdateFeedbackFilter(DJIMotorInstance *motor, uint8_t is_speed, floa
 
 static void InvalidateFeedbackForMissingSample(DJIMotorInstance *motor)
 {
+    if (motor->speed_filter_valid || motor->current_filter_valid || motor->output_position_trusted)
+        ++motor->feedback_gap_generation; // 主动判定缺样时也留下间断记录，重复失效不重复计数。
     motor->output_position_trusted = 0u;
     if (motor->speed_filter_valid)
     {
@@ -423,6 +425,9 @@ static void DecodeDJIMotor(void *context, const PlatformCanRxFrame_t *frame)
     }
     measure->temperature = rxbuff[6];
 
+    if ((!first_feedback && elapsed_ms > DJI_FEEDBACK_MAX_AGE_MS) ||
+        !motor->speed_filter_valid || !motor->current_filter_valid)
+        ++motor->feedback_gap_generation; // 检查周期之间曾断流或质量失效也须重新计时。
     motor->feedback_dt_s = dt_s;
     motor->last_feedback_cycles = frame->received_ticks;
     motor->last_feedback_timestamp_ms = frame->received_ms;
@@ -856,7 +861,13 @@ uint8_t DJIMotorGetRecoveryFeedback(uint32_t now_ms, DJI_RecoveryFeedback_s *out
         item->motor_id = motor->motor_can_endpoint.tx_id; // 使用登记时的设备编号。
         Motor_Feedback_Snapshot_s feedback = {0}; // 每台电机按实际接收时间取得反馈。
         if (DJIMotorGetFeedbackSnapshot(motor, now_ms, &feedback) != MOTOR_FEEDBACK_OK) continue; // 没有合法样本时保持序号零和无效标志。
+        PlatformTaskCriticalEnter(); // 序号与间断代次必须属于同一份样本。
+        const uint8_t same_sample = (uint8_t)(motor->feedback_sequence == feedback.sample_sequence); // 读取期间有新帧时拒绝组合。
+        const uint32_t gap_generation = motor->feedback_gap_generation; // 记录最近一次反馈间断。
+        PlatformTaskCriticalExit(); // 不在保护内进行后续数据转换。
+        if (!same_sample) continue; // 下轮重读，不能混合两次反馈。
         item->sequence = feedback.sample_sequence; // 保存这份原始样本的序号。
+        item->gap_generation = gap_generation; // 间断代次随样本一起交付。
         item->source_time_ms = feedback.speed.source_time_ms; // 三种反馈来自同一帧的接收时刻。
         item->speed_valid = feedback.speed.valid; // 不把过期的速度视为可用。
         item->current_valid = feedback.current.valid; // 电流有效性单独报告。
@@ -864,6 +875,34 @@ uint8_t DJIMotorGetRecoveryFeedback(uint32_t now_ms, DJI_RecoveryFeedback_s *out
     }
     *output = result; // 只有完整遍历后才交付。
     return 1u;
+}
+
+uint8_t DJIMotorRecoveryStillValid(const DJI_RecoveryFeedback_s *observed,
+                                   uint32_t registered_mask, uint32_t now_ms)
+{
+    if (observed == NULL || observed->count == 0u || observed->count > DJI_MOTOR_CNT ||
+        registered_mask == 0u || (registered_mask >> observed->count) != 0u) return 0u; // 无效结果或越界位不能参与恢复。
+    const PlatformIrqState_t irq = PlatformIrqSaveAndDisable(); // 与最终安全检查保持同一原子窗口。
+    uint8_t valid = (uint8_t)(idx == observed->count); // 运行中设备登记变化时拒绝旧结果。
+    for (uint8_t index = 0u; valid && index < observed->count; ++index)
+    {
+        if ((registered_mask & (UINT32_C(1) << index)) == 0u) continue; // 辅助电机不阻止核心恢复。
+        const DJIMotorInstance *motor = dji_motor_instance[index]; // 定位已登记的必需实例。
+        const DJI_RecoveryFeedbackItem_s *item = &observed->motors[index]; // 使用同一下标的原始读取结果。
+        if (motor == NULL || motor->motor_can_endpoint.can_bus != item->bus ||
+            motor->output_role != item->role || motor->motor_type != item->motor_type ||
+            motor->motor_can_endpoint.tx_id != item->motor_id ||
+            motor->feedback_sequence == 0u || item->sequence == 0u ||
+            motor->feedback_gap_generation != item->gap_generation ||
+            (uint32_t)(motor->last_feedback_timestamp_ms - item->source_time_ms) > INT32_MAX ||
+            !motor->has_feedback_timestamp || !motor->speed_filter_valid || !motor->current_filter_valid ||
+            !item->speed_valid || !item->current_valid ||
+            (item->position_valid && (!motor->encoder_baseline_valid || !motor->output_position_trusted)) ||
+            (uint32_t)(now_ms - motor->last_feedback_timestamp_ms) > DJI_FEEDBACK_MAX_AGE_MS)
+            valid = 0u; // 间断、倒退、身份或有效性变化时让调用方重新等待。
+    }
+    PlatformIrqRestore(irq); // 恢复调用者进入前的中断状态。
+    return valid; // 此结果仍不代替总线和整车许可检查。
 }
 
 #if defined(CHASSIS_BOARD)
