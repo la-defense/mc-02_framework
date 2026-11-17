@@ -30,7 +30,7 @@ OPTIONAL_SOURCES = {
     # 旧版板间格式没有来源时间和序号，只保留源码供历史查阅。
     "modules/can_comm/can_comm.c",
     "modules/bluetooth/HC05.c", "modules/ist8310/ist8310.c", "modules/oled/oled.c",
-    "modules/standard_cmd/std_cmd.c", "modules/unicomm/unicomm.c",
+    "modules/unicomm/unicomm.c",
     "modules/TFminiPlus/tfminiplus.c", "modules/motor/DMmotor/dmmotor.c",
     "modules/motor/DRmotor/drmotor.c", "modules/motor/XMmotor/xmmotor.c",
     "modules/motor/servo_motor/servo_motor.c", "modules/motor/step_motor/step_motor.c",
@@ -78,6 +78,9 @@ PORTABLE_FRAMEWORK_SOURCES = {
 }
 # 可选文件只有被车型清单选中时才进入独立框架目标。
 OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
+    "modules/standard_cmd/std_cmd.c",  # 人工 SI 意图及来源期限。
+    "modules/standard_cmd/std_cmd_remote.c",  # 遥控与键盘输入映射。
+    "application/cmd/robot_manual_motion.c",  # 人工目标到旧应用单位的转换。
     "modules/algorithm/QuaternionEKF.c",  # 四元数姿态估计。
     "modules/algorithm/controller.c",  # 通用 PID 计算。
     "modules/algorithm/crc.c",  # 软件 CRC。
@@ -403,7 +406,7 @@ def check_portable_includes(entry: dict, source_root: Path, source: str) -> None
                source_root / "modules/can_comm", source_root / "modules/time_sync",
                source_root / "modules/algorithm", source_root / "modules/referee",
                source_root / "modules", source_root / "modules/motor", source_root / "modules/motor/DJImotor", source_root / "modules/motor/LKmotor", source_root / "modules/motor/HTmotor", source_root / "modules/lcd",
-               source_root / "bsp/usart", source_root / "modules/remote",
+               source_root / "bsp/usart", source_root / "modules/remote", source_root / "modules/standard_cmd",
                source_root / "modules/master_machine", source_root / "bsp/usb",
                source_root / "modules/imu", source_root / "modules/BMI088",
                source_root / "modules/task_monitor", source_root / "modules/alarm", source_root / "bsp/board", source_root / "bsp/dwt",
@@ -522,6 +525,9 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/chassis/omni.h",
                         source_root / "application/chassis/mecanum.h",
                         source_root / "application/cmd/robot_cmd.h",
+                        source_root / "application/cmd/robot_manual_motion.h",  # 人工目标的单位转换接口。
+                        source_root / "modules/standard_cmd/std_cmd.h",  # 不依赖平台的人工意图定义。
+                        source_root / "modules/standard_cmd/std_cmd_remote.h",  # 遥控输入映射接口。
                         source_root / "application/gimbal/gimbal.h",
                         source_root / "application/shoot/shoot.h",
                         source_root / "application/topics/robot_can_bridge_config.h",

@@ -134,6 +134,10 @@ const Robot_Config_s *SentinelConfigInit(void)
             .feedback_stable_ms = 100u, // 哨兵候选稳定等待时间 100 ms，需结合真实反馈周期验证。
             .confirmed = 0u, // 尚未完成实车故障注入，不能凭此启用自动恢复。
         },
+        .manual_input = {
+            .map = 0, // 操作映射、方向和输出上限尚未按实车确认。
+            .max_dt_ms = 0u, // 任务周期和允许的最大计算间隔尚未确认。
+        },
         .alarm_config = &sentinel_alarm_config,
         .referee_ui_config = &sentinel_referee_ui_config,
         .imu_sensor = PLATFORM_IMU_BOARD_1, // 当前使用 MC-02 板载 IMU。

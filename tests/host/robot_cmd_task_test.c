@@ -9,6 +9,15 @@
 #include "message_center.h"
 #include "topics/robot_topics.h"
 #include "vision_control.h"
+#if defined(MC02_MANUAL_GENERATED_TEST)
+#include "config.h"
+#include "config/vehicle_selection.h"
+static StdCmdRemoteMap_t test_manual_map; // 仅供主机使用的人工输入比例和方向。
+static Robot_Config_s test_robot_config; // 只提供命令任务读取的测试字段。
+static uint32_t test_source_generation = 1u;
+const Robot_Config_s *RobotConfigFeed(void) { return &test_robot_config; }
+uint8_t RobotBuildModuleStarted(RobotModule_t module) { (void)module; return 1u; }
+#endif
 #define CHECK(c) do { if (!(c)) { fprintf(stderr,"FAIL:%d %s\n",__LINE__,#c); return 1; } } while(0)
 UART_HandleTypeDef huart5, huart9;
 CAN_HandleTypeDef hcan1;
@@ -27,7 +36,11 @@ uint32_t HAL_GetTick(void) { return tick; }
 const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port) { (void)port; return remote; }
 uint8_t RemoteControlIsOnline(void) { return remote_online; }
 void RemoteControlGetSnapshot(RemoteControlSnapshot_s *snapshot)
-{ snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; snapshot->pc_sample_sequence=pc_sample_sequence; snapshot->radio_source_time_ms=fixed_source_enabled ? fixed_source_ms : tick; snapshot->pc_source_time_ms=fixed_source_enabled ? fixed_source_ms : tick; }
+{ snapshot->input=remote[0]; snapshot->remote_online=remote_online; snapshot->pc_valid=remote_online; snapshot->pc_sample_sequence=pc_sample_sequence; snapshot->radio_source_time_ms=fixed_source_enabled ? fixed_source_ms : tick; snapshot->pc_source_time_ms=fixed_source_enabled ? fixed_source_ms : tick;
+#if defined(MC02_MANUAL_GENERATED_TEST)
+  snapshot->radio_sequence=pc_sample_sequence; snapshot->source_selection_generation=test_source_generation; // 真实来源具有非零序号和选择代次。
+#endif
+}
 RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through, RemoteMouseBatch_t *batch)
 {
     if (batch == NULL) return REMOTE_MOUSE_BAD_ARGUMENT;
@@ -251,10 +264,104 @@ static int shoot_local_permission(MessagePublisher_t *feedback, MessageSubscribe
 }
 int main(int argc, char **argv)
 {
+#if defined(MC02_MANUAL_GENERATED_TEST)
+    test_manual_map.remote_map.max_age_ms = 100u; test_manual_map.keyboard_map.max_age_ms = 150u;
+    test_manual_map.remote_map.allowed_frames = test_manual_map.keyboard_map.allowed_frames = 1u << STD_CMD_FRAME_CHASSIS;
+    for (unsigned axis = 0u; axis < STD_CMD_AXIS_COUNT; ++axis)
+    {
+        test_manual_map.remote_map.axis[axis] = (StdCmdAxisMap_t){660.0f, 0.01f, 10.0f};
+        test_manual_map.keyboard_map.axis[axis] = (StdCmdAxisMap_t){1.0f, 1.0f, 1.0f};
+    }
+    test_manual_map.remote_axis[STD_CMD_VX] = STD_CMD_RC_RIGHT_Y;
+    test_manual_map.remote_axis[STD_CMD_VY] = STD_CMD_RC_RIGHT_X;
+    test_manual_map.remote_axis[STD_CMD_YAW_RATE] = STD_CMD_RC_LEFT_X;
+    test_manual_map.keyboard_positive[STD_CMD_VX] = (uint16_t)(1u << Key_W);
+    test_robot_config.manual_input.map = &test_manual_map; test_robot_config.manual_input.max_dt_ms = 20u;
+    test_robot_config.gimbal_param.gimbal_offset.pitch_min_angle = -20.0f;
+    test_robot_config.gimbal_param.gimbal_offset.pitch_max_angle = 20.0f;
+    if (argc > 1 && !strcmp(argv[1], "manual-unconfigured"))
+    {
+        test_robot_config.manual_input.map = NULL; // 未确认的车型不能使用测试默认映射。
+        CHECK(!RobotCMDInit());
+        return 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "manual-invalid-dt"))
+    {
+        test_robot_config.manual_input.max_dt_ms = 0u; // 没有确认积分时限不能启动人工控制。
+        CHECK(!RobotCMDInit());
+        return 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "manual-unsupported-frame"))
+    {
+        test_manual_map.remote_frame = STD_CMD_FRAME_FIELD; // 旧应用尚未接入场地参考变换。
+        test_manual_map.remote_map.allowed_frames |= 1u << STD_CMD_FRAME_FIELD;
+        CHECK(!RobotCMDInit());
+        return 0;
+    }
+#endif
     RobotSafetyInit(); RobotSafetySetRcOnline(1); RobotSafetySetImuValid(1);
     RobotSafetySetCalibValid(1); RobotSafetyRequestEnable(); RobotSafetyUpdate();
     CHECK(RobotSafetyIsReady());
     CHECK(RobotCMDInit());
+#if defined(MC02_MANUAL_GENERATED_TEST)
+    if (argc > 1 && !strcmp(argv[1], "manual-mapping"))
+    {
+        MessagePublisher_t *feedback = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_GIMBAL);
+        MessageSubscriber_t *chassis = MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_CHASSIS);
+        MessageSubscriber_t *gimbal = MessageSubscriberRegister(ROBOT_TOPIC_GIMBAL_COMMAND, ROBOT_TOPIC_ENDPOINT_GIMBAL);
+        Gimbal_Upload_Data_s pose = {0}; pose.gimbal_imu_data.YawTotalAngle = 12.0f; pose.gimbal_imu_data.Pitch = 3.0f;
+        Chassis_Ctrl_Cmd_s driving = {0}; Gimbal_Ctrl_Cmd_s aiming = {0};
+        remote[0].rc.switch_left = RC_SW_DOWN; remote[0].rc.switch_right = RC_SW_MID;
+        remote[0].rc.rocker_r1 = 100; remote[0].rc.rocker_r_ = -50; remote[0].rc.rocker_l_ = 100;
+        MessagePublishNow(feedback, &pose); RobotCMDTask(); // 首次人工接管只建立姿态参考。
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK);
+        CHECK(driving.vx == 1000.0f && driving.vy == 500.0f && aiming.yaw == 12.0f);
+        tick += 10u; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK);
+        CHECK(fabsf(aiming.yaw - 12.572958f) < 0.001f); // 以实际 10 ms 积分配置的 1 rad/s。
+        inject_short_fault = 1u; tick += 5u; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK && aiming.gimbal_mode == GIMBAL_ZERO_FORCE); // 同周期短故障撤销旧代次目标。
+        tick += 5u; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK && aiming.yaw == 12.0f); // 恢复后从实际姿态建立新目标。
+        tick += 21u; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK);
+        CHECK(driving.chassis_mode == CHASSIS_ZERO_FORCE && aiming.gimbal_mode == GIMBAL_ZERO_FORCE); // 积分间隔超限立即撤销。
+        tick += 5u; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK && aiming.yaw == 12.0f); // 之后从真实姿态接续。
+        wire.mode = 2u; wire.yaw = 0.25f; wire.pitch = 0.1f; status.online = 1u;
+        tick += 5u; status.last_rx_ms = tick; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK && aiming.gimbal_mode == GIMBAL_GYRO_MODE);
+        wire.mode = 0u; tick += 5u; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK && aiming.yaw == 12.0f); // 视觉退出首次接续不跨模式积分。
+        wire.mode = 2u; tick += 5u; status.last_rx_ms = tick; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        tick += 21u; status.last_rx_ms = tick; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK && aiming.gimbal_mode == GIMBAL_ZERO_FORCE); // 人工计算失败后视觉辅助不能重新放行。
+        wire.mode = 0u;
+        remote[0].rc.switch_left = RC_SW_UP; remote[0].key[KEY_PRESS].keys = (uint16_t)(1u << Key_W);
+        ++test_source_generation; ++pc_sample_sequence; tick += 5u; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK && driving.vx == 1000.0f);
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK && aiming.yaw == 12.0f); // 切换来源后重新接续实际姿态。
+        remote[0].rc.switch_left = RC_SW_DOWN; ++test_source_generation; ++pc_sample_sequence;
+        test_manual_map.remote_map.max_age_ms = 10u; // 模拟车型比无线协议更短的输入期限。
+        fixed_source_enabled = 1u; fixed_source_ms = tick; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK && driving.chassis_mode != CHASSIS_ZERO_FORCE);
+        tick += 11u; MessagePublishNow(feedback, &pose); RobotCMDTask(); // 无线帧仍未到协议超时，但车型期限已过。
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK && driving.chassis_mode == CHASSIS_ZERO_FORCE);
+        fixed_source_enabled = 1u; fixed_source_ms = tick - 101u; tick += 5u;
+        MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK && driving.chassis_mode == CHASSIS_ZERO_FORCE); // 过期人工来源不能发布运动。
+        fixed_source_enabled = 0u; test_manual_map.remote_map.max_age_ms = 100u;
+        test_manual_map.remote_axis[STD_CMD_PITCH_RATE] = STD_CMD_RC_LEFT_Y;
+        remote[0].rc.rocker_l1 = 660; pose.gimbal_imu_data.Pitch = 19.0f;
+        tick += 5u; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        tick += 10u; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
+        CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK &&
+              aiming.gimbal_mode == GIMBAL_ZERO_FORCE); // 超过车型 pitch 范围时拒绝目标。
+        return 0;
+    }
+#endif
 #ifdef GIMBAL_BOARD
     if (argc > 1 && !strcmp(argv[1], "dual-freshness")) {
         MessageSubscriber_t *bridge=MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND,ROBOT_TOPIC_ENDPOINT_CAN_BRIDGE);

@@ -18,16 +18,28 @@ static float ReadRemoteAxis(const RC_ctrl_t *input, StdCmdRemoteAxis_t axis)
     }
 }
 
+uint8_t StdCmdRemoteMapIsValid(const StdCmdRemoteMap_t *map)
+{
+    if (map == NULL) return 0u; // 没有配置不能启动人工控制。
+    for (unsigned axis = 0u; axis < STD_CMD_AXIS_COUNT; ++axis)
+        if ((unsigned)map->remote_axis[axis] >= STD_CMD_RC_AXIS_COUNT ||
+            (map->keyboard_positive[axis] & map->keyboard_negative[axis]) != 0u)
+            return 0u; // 通道越界或同一键对应正反方向均无效。
+    StdCmdManualInput_t probe = {.valid = 1u, .sequence = 1u, .source_time_ms = 1u,
+        .max_age_ms = REMOTE_RADIO_LEASE_MS, .source = STD_CMD_REMOTE, .frame = map->remote_frame}; // 只用零输入检查映射，不执行动作。
+    StdCmdManualIntent_t result = {0}; // 验证结果只保存在局部。
+    if (StdCmdAdaptManual(&map->remote_map, &probe, 1u, &result) != STD_CMD_OK) return 0u; // 摇杆映射和方向参照都必须合法。
+    probe.source = STD_CMD_KEY_MOUSE; // 键鼠使用自己的映射和期限。
+    probe.frame = map->keyboard_frame;
+    probe.max_age_ms = REMOTE_PC_LEASE_MS;
+    return (uint8_t)(StdCmdAdaptManual(&map->keyboard_map, &probe, 1u, &result) == STD_CMD_OK); // 两种来源均可检查后才允许启动。
+}
+
 StdCmdStatus_t StdCmdAdaptRemote(const StdCmdRemoteMap_t *map, const RemoteControlSnapshot_s *remote,
                                  uint32_t now_ms, StdCmdManualIntent_t *output)
 {
     if (map == NULL || remote == NULL || output == NULL) return STD_CMD_BAD_ARGUMENT; // 输入不全不能改写旧输出。
-    for (unsigned axis = 0u; axis < STD_CMD_AXIS_COUNT; ++axis)
-    {
-        if ((unsigned)map->remote_axis[axis] >= STD_CMD_RC_AXIS_COUNT ||
-            (map->keyboard_positive[axis] & map->keyboard_negative[axis]) != 0u)
-            return STD_CMD_BAD_CONFIG; // 无效遥控通道或同一按键同时表示正反方向时拒绝。
-    }
+    if (!StdCmdRemoteMapIsValid(map)) return STD_CMD_BAD_CONFIG; // 两种来源的通道及参数都必须完整。
     if (!remote->remote_online || remote->radio_sequence == 0u ||
         (uint32_t)(now_ms - remote->radio_source_time_ms) > REMOTE_RADIO_LEASE_MS)
         return STD_CMD_INVALID_INPUT; // 无线离线或来源过期时，键盘和摇杆都不可使用。

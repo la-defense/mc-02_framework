@@ -193,6 +193,12 @@ if(MC02_IMU_BACKEND STREQUAL "fusion")
     list(APPEND MC02_COMMON_MODULE_C_SOURCES Middlewares/Third_Party/Fusion/FusionAhrs.c)
 endif()
 
+if(MC02_FEATURE_COMMAND AND MC02_FEATURE_REMOTE)
+    list(APPEND MC02_COMMON_MODULE_C_SOURCES
+        modules/standard_cmd/std_cmd.c # 人工输入的 SI 单位及期限检查。
+        modules/standard_cmd/std_cmd_remote.c) # 遥控和键盘按车型映射。
+endif()
+
 set(MC02_APPLICATION_COMMON_C_SOURCES
     application/robot_task.c # 常驻任务的周期执行与监控。
     application/ins_startup.c # 姿态初始化和按车型分类的失败处理。
@@ -221,6 +227,7 @@ set(MC02_APPLICATION_SINGLE_C_SOURCES
     application/chassis/chassis.c
     application/chassis/chassis_motion.c
     application/cmd/robot_cmd.c
+    application/cmd/robot_manual_motion.c # 人工 SI 意图到现有应用单位的转换。
     application/gimbal/gimbal.c
     application/shoot/shoot.c)
 set(MC02_APPLICATION_CHASSIS_C_SOURCES
@@ -230,6 +237,7 @@ set(MC02_APPLICATION_CHASSIS_C_SOURCES
 set(MC02_APPLICATION_GIMBAL_C_SOURCES
     application/topics/robot_can_bridge.c
     application/cmd/robot_cmd.c
+    application/cmd/robot_manual_motion.c # 云台侧人工意图转换。
     application/gimbal/gimbal.c
     application/shoot/shoot.c)
 

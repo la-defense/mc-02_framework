@@ -27,6 +27,13 @@ if(UNIX)
   target_link_libraries(std_cmd_remote_test PRIVATE m)
 endif()
 add_test(NAME production_std_cmd_remote_adapter COMMAND std_cmd_remote_test)
+add_executable(robot_manual_motion_test robot_manual_motion_test.c ../../application/cmd/robot_manual_motion.c) # 使用生产单位转换。
+target_include_directories(robot_manual_motion_test PRIVATE . ../../application/cmd ../../modules/standard_cmd)
+target_compile_options(robot_manual_motion_test PRIVATE -Wall -Wextra -Werror)
+if(UNIX)
+  target_link_libraries(robot_manual_motion_test PRIVATE m)
+endif()
+add_test(NAME production_robot_manual_motion_units COMMAND robot_manual_motion_test)
 target_include_directories(std_cmd_test PRIVATE ../../modules/standard_cmd)
 target_compile_features(std_cmd_test PRIVATE c_std_11)
 target_compile_options(std_cmd_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
@@ -1857,6 +1864,25 @@ add_executable(robot_cmd_task_test robot_cmd_task_test.c ../../application/cmd/r
   ../../application/topics/robot_topics.c
   ../../modules/safety/robot_safety.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
   ../../modules/master_machine/vision_control.c)
+add_executable(robot_cmd_generated_manual_test robot_cmd_task_test.c ../../application/cmd/robot_cmd.c
+  ../../application/cmd/robot_manual_motion.c ../../modules/standard_cmd/std_cmd.c
+  ../../modules/standard_cmd/std_cmd_remote.c ../../modules/remote/remote_safety.c
+  ../../application/topics/robot_topics.c ../../modules/safety/robot_safety.c
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../modules/master_machine/vision_control.c) # 使用生产命令与适配实现检查生成配置。
+target_include_directories(robot_cmd_generated_manual_test BEFORE PRIVATE robot_cmd_generated_fakes robot_cmd_fakes)
+target_include_directories(robot_cmd_generated_manual_test PRIVATE ../../application ../../application/cmd ../../application/config
+  ../../modules ../../modules/standard_cmd ../../modules/remote ../../modules/imu ../../modules/master_machine
+  ../../modules/message_center ../../modules/safety ../../modules/daemon ../../bsp/usart)
+target_compile_definitions(robot_cmd_generated_manual_test PRIVATE MC02_CONFIG_GENERATED=1 MC02_MANUAL_GENERATED_TEST=1 ONE_BOARD=1
+  VISION_LIMITS_CONFIGURED=1 VISION_YAW_CONSTRAINT=VISION_YAW_BOUNDED
+  VISION_YAW_MIN_DEG=-180.0f VISION_YAW_MAX_DEG=180.0f) # 视觉辅助只用于验证失败时不能重新接管。
+if(UNIX)
+  target_link_libraries(robot_cmd_generated_manual_test PRIVATE m)
+endif()
+add_test(NAME production_command_generated_manual_mapping COMMAND robot_cmd_generated_manual_test manual-mapping)
+add_test(NAME production_command_generated_manual_unconfigured COMMAND robot_cmd_generated_manual_test manual-unconfigured)
+add_test(NAME production_command_generated_manual_invalid_dt COMMAND robot_cmd_generated_manual_test manual-invalid-dt)
+add_test(NAME production_command_generated_manual_unsupported_frame COMMAND robot_cmd_generated_manual_test manual-unsupported-frame)
 target_include_directories(robot_cmd_task_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_cmd_task_test PRIVATE ../../application ../../application/cmd ../../application/config
   ../../modules ../../modules/remote ../../modules/imu ../../modules/master_machine ../../modules/message_center
@@ -1984,7 +2010,7 @@ if(UNIX)
 endif()
 add_test(NAME production_dual_board_command_skips_unused_feedback_read COMMAND robot_cmd_dual_test dual-board)
 add_test(NAME production_dual_board_command_source_deadline COMMAND robot_cmd_dual_test dual-freshness) # 双板固定期限不能被重复发布延长。
-foreach(target IN ITEMS robot_cmd_task_test robot_cmd_vision_test robot_cmd_v2_test robot_cmd_dual_test)
+foreach(target IN ITEMS robot_cmd_task_test robot_cmd_generated_manual_test robot_cmd_vision_test robot_cmd_v2_test robot_cmd_dual_test)
   target_sources(${target} PRIVATE ${MC02_HOST_DAEMON_SOURCES})
   target_include_directories(${target} PRIVATE ../../modules/daemon)
 endforeach()

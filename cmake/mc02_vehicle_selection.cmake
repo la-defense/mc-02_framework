@@ -99,6 +99,15 @@ function(mc02_require_production_core profile mechanics gimbal)
     endif()
 endfunction()
 
+function(mc02_require_manual_input profile role confirmed)
+    if(NOT "${confirmed}" MATCHES "^(TRUE|FALSE)$")
+        message(FATAL_ERROR "Vehicle manual input confirmation must be TRUE or FALSE") # 非法标记不能被当作已确认。
+    endif()
+    if("${profile}" STREQUAL "robot" AND NOT "${role}" STREQUAL "chassis" AND NOT confirmed)
+        message(FATAL_ERROR "Vehicle manual input mapping and integration interval are unconfirmed") # 命令侧缺少真实输入配置时禁止生成固件。
+    endif()
+endfunction()
+
 function(mc02_validate_module_graph enabled required)
     foreach(module IN LISTS enabled required)
         if(NOT module IN_LIST MC02_MODULE_NAMES)

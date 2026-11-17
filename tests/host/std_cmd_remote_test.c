@@ -24,6 +24,7 @@ int main(void)
     map.remote_axis[STD_CMD_VY] = STD_CMD_RC_RIGHT_X; // 平移由测试右摇杆水平通道提供。
     map.keyboard_positive[STD_CMD_VX] = (uint16_t)(1u << Key_W); // W 为测试正向。
     map.keyboard_negative[STD_CMD_VX] = (uint16_t)(1u << Key_S); // S 为测试负向。
+    TEST_CHECK(StdCmdRemoteMapIsValid(&map)); // 两种来源的配置都通过启动检查。
     RemoteControlSnapshot_s remote = {0};
     remote.remote_online = 1u; remote.radio_sequence = 7u; remote.radio_source_time_ms = 100u;
     remote.input.rc.switch_left = RC_SW_DOWN; remote.input.rc.rocker_r1 = 100; remote.input.rc.rocker_r_ = -50;

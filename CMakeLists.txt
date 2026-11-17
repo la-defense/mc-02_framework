@@ -309,6 +309,9 @@ set(MC02_PORTABLE_FRAMEWORK_SOURCES
     modules/safety/robot_control_policy.c) # 三模式来源与分功能许可计算。
 # 板间通信和时间映射仅在车型选择时进入独立目标。
 set(MC02_OPTIONAL_PORTABLE_SOURCES
+    modules/standard_cmd/std_cmd.c # 人工 SI 意图与来源期限。
+    modules/standard_cmd/std_cmd_remote.c # 遥控和键盘输入映射。
+    application/cmd/robot_manual_motion.c # 人工意图到应用消息的单位转换。
     modules/algorithm/QuaternionEKF.c # 四元数姿态估计，矩阵调用经框架接口。
     modules/algorithm/controller.c # 通用 PID 计算。
     modules/algorithm/crc.c # 软件 CRC 计算。
@@ -465,6 +468,7 @@ target_include_directories(mc02_portable_framework PRIVATE
     bsp/board # 板级资源和蜂鸣器公开接口。
     modules/referee # 裁判协议与图形接口。
     modules/remote # 遥控输入公开接口。
+    modules/standard_cmd # 人工输入与 SI 意图公开接口。
     modules/master_machine # 上位机协议和传输选择接口。
     bsp/usb # 不含芯片类型的 USB 传输接口。
     modules/imu # 姿态任务及传感器接口。

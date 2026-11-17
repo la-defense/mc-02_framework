@@ -16,6 +16,11 @@ static RemoteSafetyGestures_s remote_gestures;
 #include "general_def.h"
 #include "dji_motor.h"
 #include "robot_safety.h"
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+#include "std_cmd_remote.h"
+#include "robot_manual_motion.h"
+#include <limits.h>
+#endif
 #if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
 #include "robot_can_recovery_coordinator.h"
 #if defined(MC02_VISION_PROTOCOL_V2)
@@ -183,6 +188,13 @@ static MessagePublisher_t *gimbal_cmd_pub;            // 云台控制消息发�
 static MessageSubscriber_t *gimbal_feed_sub;          // 云台反馈信息订阅者
 static Gimbal_Ctrl_Cmd_s gimbal_cmd_send;      // 传递给云台的控制信息
 static Gimbal_Upload_Data_s gimbal_fetch_data; // 从云台获取的反馈信息
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+static const StdCmdRemoteMap_t *manual_input_map; // 车型确认后的只读输入映射。
+static uint32_t manual_max_dt_ms, manual_last_ms, manual_source_generation; // 保存积分限制、上次时刻和来源代次。
+static uint32_t manual_safety_generation; // 故障恢复后不能沿用禁止事件前的枪口参考。
+static uint8_t manual_clock_valid, manual_intent_valid, manual_safety_generation_seen; // 区分尚未读取和代次恰好为零。
+static StdCmdManualIntent_t manual_intent; // 保存本轮来源及期限，发布时再次检查。
+#endif
 
 static MessagePublisher_t *shoot_cmd_pub;           // 发射控制消息发布者
 static Shoot_Ctrl_Cmd_s shoot_cmd_send;      // 传递给发射的控制信息
@@ -195,6 +207,16 @@ uint8_t RobotCMDInit(void)
     const Robot_Config_s *config = RobotConfigFeed();
     if (config == NULL)
         return 0u;
+#if MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+    manual_input_map = config->manual_input.map; // 只接受车型提供的人工比例和方向。
+    manual_max_dt_ms = config->manual_input.max_dt_ms; // 积分超时上限也必须明确。
+    if (!StdCmdRemoteMapIsValid(manual_input_map) || manual_max_dt_ms == 0u ||
+        manual_max_dt_ms > INT32_MAX ||
+        (manual_input_map->remote_frame != STD_CMD_FRAME_CHASSIS && manual_input_map->remote_frame != STD_CMD_FRAME_BIG_YAW) ||
+        (manual_input_map->keyboard_frame != STD_CMD_FRAME_CHASSIS && manual_input_map->keyboard_frame != STD_CMD_FRAME_BIG_YAW))
+        return 0u; // 缺少有效映射、积分上限或旧应用尚不支持的参照时不能启动命令模块。
+    manual_clock_valid = manual_intent_valid = manual_safety_generation_seen = 0u; // 启动不继承旧命令、时间或安全代次。
+#endif
     // 云台和底盘机械偏置从本车型唯一配置读取。
 #if defined(MC02_VISION_PROTOCOL_V2)
     command_chassis_config = &config->chassis_param;
@@ -408,12 +430,14 @@ static void ApplyVisionGimbal(const VisionControlGimbalCommand_s *command)
 static void RemoteControlSet(uint8_t vision_active)
 {
     chassis_cmd_send.wz = 0.0f;
+#if !defined(MC02_CONFIG_GENERATED)
     if (!vision_active)
     {
         // 纯遥控器拨杆控制云台角度增量
         gimbal_cmd_send.yaw += RC_TO_YAW_ANGLE * (float)rc_data[TEMP].rc.rocker_l_;
         gimbal_cmd_send.pitch += RC_TO_PITCH_ANGLE * (float)rc_data[TEMP].rc.rocker_l1;
     }
+#endif
 
     if (switch_is_down(rc_data[TEMP].rc.switch_right)) // 右侧开关向下：选择底盘自转。
     {
@@ -431,8 +455,10 @@ static void RemoteControlSet(uint8_t vision_active)
     // 云台软件限位
 
     // 摇杆读数换成平移目标，当前系数仍需按实际底盘确认。
+#if !defined(MC02_CONFIG_GENERATED)
     chassis_cmd_send.vx = 10.0f * (float)rc_data[TEMP].rc.rocker_r_; // _水平方向
     chassis_cmd_send.vy = 10.0f * (float)rc_data[TEMP].rc.rocker_r1; // 1数值方向
+#endif
 
     // 发射参数
     if (switch_is_up(rc_data[TEMP].rc.switch_right)) // 右侧开关状态[上],弹舱打开
@@ -459,8 +485,10 @@ static void MouseKeySet(uint8_t vision_active, const RemoteMouseBatch_t *mouse)
     chassis_cmd_send.wz = 0.0f;
     // 键盘模式直接使用陀螺仪反馈模式控制云台, 避免初值 GIMBAL_ZERO_FORCE 导致云台停电机
     gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
+#if !defined(MC02_CONFIG_GENERATED)
     chassis_cmd_send.vx = rc_data[TEMP].key[KEY_PRESS].w * 300 - rc_data[TEMP].key[KEY_PRESS].s * 300; // 系数待测
     chassis_cmd_send.vy = rc_data[TEMP].key[KEY_PRESS].d * 300 - rc_data[TEMP].key[KEY_PRESS].a * 300; // 系数待测, D右移 A左移
+#endif
 
     if (!vision_active && mouse->count != 0u)
     {
@@ -522,6 +550,51 @@ static void MouseKeySet(uint8_t vision_active, const RemoteMouseBatch_t *mouse)
     }
 }
 
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+// 单一命令任务把已选择人工来源转换为现有应用单位；不会授予运行许可。
+static uint8_t ApplyConfiguredManual(uint8_t vision_active)
+{
+    const uint32_t now = PlatformTimeNowMs(); // 输入期限和积分间隔使用同一时基。
+    manual_intent_valid = 0u; // 失败时不能继续发布上一轮的人工来源。
+    if (StdCmdAdaptRemote(manual_input_map, &remote_snapshot, now, &manual_intent) != STD_CMD_OK)
+    {
+        manual_clock_valid = 0u; // 来源无效后必须重新建立积分起点。
+        return 0u;
+    }
+    uint32_t dt_ms = 0u; // 首次接管不积分，以当前姿态建立参考。
+    if (manual_clock_valid && manual_reference_ready &&
+        manual_source_generation == remote_snapshot.source_selection_generation)
+        dt_ms = now - manual_last_ms; // 后续周期使用实际间隔，支持计时回绕。
+    RobotManualMotion_t motion = {0}; // 先在局部构造整份新控制量。
+    if (!RobotManualMotionProject(&manual_intent, now, dt_ms, manual_max_dt_ms,
+        chassis_cmd_send.offset_angle, gimbal_cmd_send.yaw, gimbal_cmd_send.pitch, &motion))
+    {
+        manual_clock_valid = 0u; // 期限、数值或间隔失败后不得复用参考。
+        return 0u;
+    }
+    if (!vision_active && manual_reference_ready &&
+        (motion.pitch_deg < vision_limits.pitch_min_deg || motion.pitch_deg > vision_limits.pitch_max_deg))
+    {
+        manual_clock_valid = 0u; // 超出车型 pitch 目标范围时不能继续沿用本次参考。
+        return 0u;
+    }
+    manual_last_ms = now; // 只有成功后才推进人工积分时刻。
+    manual_source_generation = remote_snapshot.source_selection_generation; // 切档或重连后重新接续。
+    manual_clock_valid = 1u; // 后续周期可以计算实测间隔。
+    manual_intent_valid = 1u; // 发布前还需再次检查原始期限。
+    chassis_cmd_send.vx = motion.vx_mm_s; // 按旧应用消息交付前进速度。
+    chassis_cmd_send.vy = motion.vy_right_mm_s; // 显式交付向右为正的横移速度。
+    chassis_cmd_send.wz = motion.wz_deg_s; // 当前应用使用度每秒。
+    chassis_cmd_send.offset_angle = motion.offset_deg; // 底盘参照不再重复按云台角度转换。
+    if (!vision_active && manual_reference_ready)
+    {
+        gimbal_cmd_send.yaw = motion.yaw_deg; // 仅在人工控制云台时应用积分结果。
+        gimbal_cmd_send.pitch = motion.pitch_deg; // 视觉辅助的瞄准目标继续由视觉提供。
+    }
+    return 1u;
+}
+#endif
+
 /* 把控制量强制置为失能状态, 用于SAFE/CALIB/FAULT/ESTOP */
 static void ApplySafeCommands(void)
 {
@@ -558,8 +631,24 @@ static void EmergencyHandler(uint8_t remote_online)
 /* 机器人核心控制任务,200Hz频率运行(必须高于视觉发送频率) */
 void RobotCMDTask()
 {
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+    manual_intent_valid = 0u; // 每轮必须重新验证实际输入。
+#endif
     RobotSafetySnapshot_t command_safety = {0}; // 先记录整轮选择命令时所属的安全代际。
     const uint8_t command_safety_valid = RobotSafetyGetSnapshot(&command_safety); // 读取失败时不能发布发射动作。
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+    if (!command_safety_valid || (manual_safety_generation_seen &&
+        manual_safety_generation != command_safety.control_generation))
+    {
+        manual_clock_valid = 0u; // 周期之间发生短故障时不能跨禁止事件积分。
+        manual_reference_ready = 0u; // 新代次必须重新使用实际姿态作为目标起点。
+    }
+    if (command_safety_valid)
+    {
+        manual_safety_generation = command_safety.control_generation; // 保存当前控制代次供下轮比较。
+        manual_safety_generation_seen = 1u; // 首次读取后零也是有效代次。
+    }
+#endif
    // 来源离线事件在整车任务中执行，确保撤销遥控许可与视觉清理不挤入监控任务。
    (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_ROBOT_TASK, DAEMON_EVENT_MAX_DEPTH, NULL);
     // 控制选择不读取底盘回传，避免单板复制未使用的反馈或双板为它加锁。
@@ -592,6 +681,9 @@ void RobotCMDTask()
     if (!feedback_received || !isfinite(gimbal_fetch_data.gimbal_imu_data.YawTotalAngle) ||
         !isfinite(gimbal_fetch_data.gimbal_imu_data.Pitch))
     {
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+        manual_clock_valid = 0u; // 失去姿态后不能跨失效间隔积分。
+#endif
         manual_reference_ready = 0u;
         previous_vision_active = 0u;
         RobotSafetySetRcOnline(remote_snapshot.remote_online);
@@ -621,7 +713,7 @@ void RobotCMDTask()
     const VisionControlInput_s vision_input = GetVisionControlInput();
 #endif
     VisionControlGimbalCommand_s vision_gimbal;
-    const uint8_t vision_active = VisionControlBuildGimbalCommand(&vision_input, &vision_gimbal);
+    uint8_t vision_active = VisionControlBuildGimbalCommand(&vision_input, &vision_gimbal);
     if (previous_vision_active && !vision_active)
         memset(&mouse_batch, 0, sizeof(mouse_batch)); // 接管时无法确认积压位移发生在视觉退出前还是之后，先丢弃并以姿态接续。
     RobotSafetySetRcOnline(remote_online);
@@ -636,6 +728,14 @@ void RobotCMDTask()
     gimbal_cmd_send.yaw_vel = gimbal_cmd_send.yaw_acc = 0.0f;
     gimbal_cmd_send.pitch_vel = gimbal_cmd_send.pitch_acc = 0.0f;
     uint8_t manual_allowed = manual_control_active;
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+    if (!manual_control_active || (previous_vision_active && !vision_active) || (manual_clock_valid &&
+        manual_source_generation != remote_snapshot.source_selection_generation))
+    {
+        manual_clock_valid = 0u; // 切换来源或退出人工模式时停止旧积分。
+        manual_reference_ready = 0u; // 下次人工接管以真实姿态建立参考。
+    }
+#endif
     // 视觉刚退出或首次进入手动时，以当前姿态接续目标，避免跳回上次手动留下的角度。
     if (!vision_active && manual_control_active && (previous_vision_active || !manual_reference_ready))
     {
@@ -663,6 +763,14 @@ void RobotCMDTask()
                 manual_reference_ready = 0u; // 下次人工控制从真实姿态重新接续。
             }
         }
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+        if (!ApplyConfiguredManual(vision_active))
+        {
+            manual_allowed = 0u; // 未确认配置、来源过期或计算失败均不得执行旧目标。
+            vision_active = 0u; // 人工来源失效时不能在本轮重新应用辅助瞄准。
+            ApplySafeCommands(); // 本轮撤销运动和发射请求。
+        }
+#endif
     }
     else
         ApplySafeCommands();
@@ -709,6 +817,10 @@ void RobotCMDTask()
                                     &selected_shoot_command);
 #endif
     ApplyShootCommand(&selected_shoot_command);
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+    if (manual_control_active && !manual_allowed)
+        ApplySafeCommands(); // 人工输入失败后，后续来源选择不能重新填入本轮运动或发射目标。
+#endif
 
     EmergencyHandler(remote_online); // 最终安全状态始终覆盖命令选择
 #if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
@@ -757,6 +869,11 @@ void RobotCMDTask()
     if (switch_is_up(rc_data[TEMP].rc.switch_left))
         RobotCmdLeaseInclude(&manual, remote_snapshot.pc_valid, remote_snapshot.pc_source_time_ms,
                              REMOTE_PC_LEASE_MS, publish_ms);
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+    if (manual_control_active)
+        RobotCmdLeaseInclude(&manual, manual_intent_valid, manual_intent.source_time_ms,
+                             manual_intent.max_age_ms, publish_ms); // 配置期限不能因转成旧消息而丢失。
+#endif
     RobotCmdLease_t manual_gimbal = manual; // 本轮若使用了鼠标事件，还须检查最早事件的期限。
     if (manual_allowed && !vision_active && switch_is_up(rc_data[TEMP].rc.switch_left) && mouse_batch.count != 0u)
         RobotCmdLeaseInclude(&manual_gimbal, mouse_status == REMOTE_MOUSE_OK, mouse_batch.oldest_source_ms,

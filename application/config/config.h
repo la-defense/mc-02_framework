@@ -123,6 +123,12 @@ typedef struct {
     uint8_t confirmed; // 1 表示已按实车反馈周期和故障注入确认；0 仅供软件验证。
 } RobotCanRecoveryConfig_s;
 
+struct StdCmdRemoteMap; // 人工输入映射由 standard_cmd 定义，配置只保留只读指针。
+typedef struct {
+    const struct StdCmdRemoteMap *map; // 实际摇杆、键盘比例和方向；未确认时为 NULL。
+    uint32_t max_dt_ms; // 云台角速度积分允许的最大实测间隔，单位 ms；未确认时为 0。
+} RobotManualInputConfig_s;
+
 // 机器人参数结构体
 typedef struct
 {
@@ -130,6 +136,7 @@ typedef struct
     Gimbal_Config_s gimbal_param;
     Shoot_Config_s shoot_param;
     RobotCanRecoveryConfig_s can_recovery; // CAN 自动恢复参数；未确认时不能作为实车恢复授权。
+    RobotManualInputConfig_s manual_input; // 人工映射及周期保护；未确认时不允许运动。
     PlatformImuPort_t imu_sensor; // 姿态解算使用的逻辑 IMU，由板级适配绑定。
     PlatformPwmChannel_t imu_heater_pwm; // 温控输出使用的逻辑 PWM。
     PlatformAdcChannel_t imu_heater_supply; // 温控检查电源电压使用的逻辑 ADC。

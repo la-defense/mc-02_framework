@@ -309,6 +309,17 @@ file(WRITE "${{CMAKE_BINARY_DIR}}/selected-sources.txt" "${{MC02_SELECTED_SOURCE
         self.assertIn("APP-10", result.stderr)
         self.assertEqual(self.run_case('mc02_require_production_core(bench_safe FALSE FALSE)\n').returncode, 0)
 
+    def test_manual_input_confirmation_for_command_boards(self):
+        # 仅测试规则；这里的 TRUE 不代表哨兵映射已经过实车确认。
+        for role in ("single", "gimbal"):
+            result = self.run_case(f'mc02_require_manual_input(robot {role} FALSE)\n')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("manual input", result.stderr)
+            self.assertEqual(self.run_case(f'mc02_require_manual_input(robot {role} TRUE)\n').returncode, 0)
+        self.assertEqual(self.run_case('mc02_require_manual_input(robot chassis FALSE)\n').returncode, 0)
+        self.assertEqual(self.run_case('mc02_require_manual_input(bench_safe single FALSE)\n').returncode, 0)
+        self.assertNotEqual(self.run_case('mc02_require_manual_input(robot single UNKNOWN)\n').returncode, 0)
+
     def test_power_declaration_requires_confirmed_production_rails(self):
         # 裸板保持关闭，可在尚不清楚实车接线时编译。
         result = self.run_case('mc02_validate_power_plan(bench_safe UNCONFIRMED UNCONFIRMED UNCONFIRMED)\n')

@@ -18,7 +18,7 @@ typedef enum {
 } StdCmdRemoteAxis_t;
 
 /** @brief 各车型人工输入映射；数值系数与机械限制必须单独确认。 */
-typedef struct {
+typedef struct StdCmdRemoteMap {
     StdCmdManualMap_t remote_map; /**< 遥控原始通道到各 SI 单位的配置。 */
     StdCmdManualMap_t keyboard_map; /**< 键盘方向值 -1、0、1 到各 SI 单位的配置。 */
     StdCmdRemoteAxis_t remote_axis[STD_CMD_AXIS_COUNT]; /**< 每个运动轴使用哪一路遥控输入。 */
@@ -27,6 +27,12 @@ typedef struct {
     StdCmdFrame_t remote_frame; /**< 遥控平移采用的方向参照。 */
     StdCmdFrame_t keyboard_frame; /**< 键盘平移采用的方向参照。 */
 } StdCmdRemoteMap_t;
+
+/** @brief 检查两种人工来源的完整映射，不读取设备或授予许可。
+ * @param[in] map 车型提供的映射，不能为空。
+ * @return 1 为全部通道、方向参照及来源配置有效；否则为 0。
+ */
+uint8_t StdCmdRemoteMapIsValid(const StdCmdRemoteMap_t *map);
 
 /** @brief 使用当前已选择档位换算人工连续输入。
  * @param[in] map 已确认并按车型提供的映射，不能为空。
