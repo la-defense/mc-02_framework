@@ -255,6 +255,42 @@ static int recovery_real_feedback(void)
 }
 
 // 发射机构可运行但击发已撤销时，拨弹电机不能借摩擦轮许可继续输出。
+static int single_motion_reference_generation(void)
+{
+    now_us = 1000u; RobotSafetyInit(); // 设置可运行的单板整车条件。
+    RobotSafetySetRcOnline(1u); RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u); RobotSafetySetTaskHealthy(1u);
+    RobotSafetyRequestEnable(); RobotSafetyUpdate(); // 旧整车路径也必须保护运动参考。
+    RobotSafetySnapshot_t before = {0}; // 故障前的命令携带此代际。
+    TEST_CHECK(RobotSafetyGetSnapshot(&before) && RobotSafetyIsReady());
+    DJIMotorInstance *motors[2] = {0}; // 底盘和云台共用一个发送帧。
+    for (uint8_t i = 0u; i < 2u; ++i)
+    {
+        Motor_Init_Config_s config = motor_config((uint8_t)(i + 1u));
+        config.output_role = i == 0u ? MOTOR_OUTPUT_CHASSIS : MOTOR_OUTPUT_GIMBAL;
+        motors[i] = DJIMotorInit(&config);
+        TEST_CHECK(motors[i] != NULL);
+        receive(motors[i], 1000u, 1u, 0, 0); // 两台电机都具备新鲜反馈。
+        TEST_CHECK(DJIMotorSetRefForGeneration(motors[i], 10.0f, before.control_generation));
+        DJIMotorEnable(motors[i]);
+    }
+    control_at(2000u); control_at(3000u); // 初始化计算间隔后生成非零输出。
+    TEST_CHECK((sent[0] || sent[1]) && (sent[2] || sent[3]));
+    RobotFaultReport(ROBOT_FAULT_CAN_BUSOFF); // 在两个电机周期之间发生并恢复故障。
+    RobotFaultClear(ROBOT_FAULT_CAN_BUSOFF); RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyIsReady());
+    TEST_CHECK(!DJIMotorSetRefForGeneration(motors[0], 20.0f, before.control_generation));
+    control_at(4000u); // 底盘和云台任务尚未刷新参考。
+    TEST_CHECK(sent[0] == 0u && sent[1] == 0u && sent[2] == 0u && sent[3] == 0u);
+    RobotSafetySnapshot_t after = {0}; // 新命令必须绑定恢复后的代际。
+    TEST_CHECK(RobotSafetyGetSnapshot(&after));
+    TEST_CHECK(DJIMotorSetRefForGeneration(motors[0], 10.0f, after.control_generation));
+    TEST_CHECK(DJIMotorSetRefForGeneration(motors[1], 10.0f, after.control_generation));
+    control_at(5000u); // 新参考才可继续计算。
+    TEST_CHECK((sent[0] || sent[1]) && (sent[2] || sent[3]));
+    return EXIT_SUCCESS;
+}
+
 static int single_loader_fire_permit(void)
 {
     now_us = 1000u; RobotSafetyInit(); // 从初始安全状态建立测试条件。
@@ -534,20 +570,29 @@ static int single_feedback_expired_frame(void)
     input.feedback[0].max_age_ms = 3u; // 底盘反馈在本测试中先过期。
     input.feedback_valid_functions = ROBOT_CONTROL_ALL;
     now_us = 2000u; TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    DJIMotorInstance *motors[2] = {0}; // 保留电机实例，模拟应用后续刷新参考。
     for (uint8_t i = 0u; i < 2u; ++i)
     {
         Motor_Init_Config_s config = motor_config((uint8_t)(i + 1u));
         config.output_role = i == 0u ? MOTOR_OUTPUT_CHASSIS : MOTOR_OUTPUT_GIMBAL;
         DJIMotorInstance *motor = DJIMotorInit(&config);
+        motors[i] = motor;
         TEST_CHECK(motor != NULL);
         receive(motor, 2000u, 2u, 0, 0); // 两台电机都收到设备反馈。
-        DJIMotorSetRef(motor, 10.0f); DJIMotorEnable(motor);
+        RobotSafetySnapshot_t safety = {0};
+        TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+        TEST_CHECK(DJIMotorSetRefForGeneration(motor, 10.0f, safety.control_generation));
+        DJIMotorEnable(motor);
     }
     control_at(3000u); control_at(4000u); // 计算并排队两个非零目标。
     TEST_CHECK((sent[0] || sent[1]) && (sent[2] || sent[3]));
     now_us = 6000u; // 底盘期限已过，排队帧还没有被硬件接受。
     deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
     for (unsigned i = 0u; i < 8u; ++i) TEST_CHECK(deferred_payload[i] == 0u); // 发现过期时旧代际整帧撤销。
+    RobotSafetySnapshot_t renewed = {0}; // 下一轮云台应用先提交新代际参考。
+    TEST_CHECK(RobotSafetyGetSnapshot(&renewed));
+    now_us = 7000u;
+    TEST_CHECK(DJIMotorSetRefForGeneration(motors[1], 10.0f, renewed.control_generation));
     control_at(7000u); // 下一帧可以保留其他仍有效的机构。
     TEST_CHECK(sent[0] == 0u && sent[1] == 0u && (sent[2] || sent[3]));
     now_us = 8000u; input.feedback[0] = (RobotControlLease_t){8u, 3u, 1u};
@@ -556,6 +601,8 @@ static int single_feedback_expired_frame(void)
     control_at(9000u); TEST_CHECK(sent[0] == 0u && sent[1] == 0u);
     now_us = 10000u; input.manual.source_time_ms = 10u; // 恢复后新的人工命令才可以接管。
     TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyGetSnapshot(&renewed)); // 以新的来源和代际刷新底盘参考。
+    TEST_CHECK(DJIMotorSetRefForGeneration(motors[0], 10.0f, renewed.control_generation));
     control_at(11000u); TEST_CHECK(sent[0] || sent[1]);
     return EXIT_SUCCESS;
 }
@@ -584,14 +631,17 @@ static int single_shared_frame_permissions(uint8_t include_unassigned)
     TEST_CHECK(RobotSafetyIsReady());
     const MotorOutputRole_t roles[4] = {MOTOR_OUTPUT_CHASSIS, MOTOR_OUTPUT_GIMBAL,
                                         MOTOR_OUTPUT_FRICTION, MOTOR_OUTPUT_LOADER};
+    DJIMotorInstance *motors[4] = {0}; // 继续使用相同实例检查共享帧。
     for (uint8_t i = 0u; i < 4u; ++i)
     {
         Motor_Init_Config_s config = motor_config((uint8_t)(i + 1u));
         config.output_role = (include_unassigned != 0u && i == 3u) ? MOTOR_OUTPUT_UNASSIGNED : roles[i]; // 可注入未声明的电机。
         DJIMotorInstance *motor = DJIMotorInit(&config);
+        motors[i] = motor;
         TEST_CHECK(motor != NULL);
         receive(motor, 2000u, 2u, 0, 0);
-        if (config.output_role == MOTOR_OUTPUT_LOADER)
+        if (config.output_role == MOTOR_OUTPUT_LOADER || config.output_role == MOTOR_OUTPUT_CHASSIS ||
+            config.output_role == MOTOR_OUTPUT_GIMBAL)
         {
             RobotSafetySnapshot_t safety = {0}; // 拨弹参考绑定本轮安全代际。
             TEST_CHECK(RobotSafetyGetSnapshot(&safety));
@@ -614,6 +664,10 @@ static int single_shared_frame_permissions(uint8_t include_unassigned)
     RobotSafetyUpdate();
     deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
     for (uint8_t i = 0u; i < 8u; ++i) TEST_CHECK(deferred_payload[i] == 0u); // 旧代际的整帧不能重放。
+    RobotSafetySnapshot_t current = {0}; // 未受影响的应用在下一轮刷新自己的运动参考。
+    TEST_CHECK(RobotSafetyGetSnapshot(&current));
+    TEST_CHECK(DJIMotorSetRefForGeneration(motors[0], 10.0f, current.control_generation));
+    TEST_CHECK(DJIMotorSetRefForGeneration(motors[1], 10.0f, current.control_generation));
     control_at(6000u);
     TEST_CHECK(sent[0] != 0u || sent[1] != 0u); // 底盘继续工作。
     TEST_CHECK(sent[2] != 0u || sent[3] != 0u); // 云台继续工作。
@@ -943,6 +997,8 @@ int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
 #if defined(ONE_BOARD)
+    if (strcmp(argv[1], "single-motion-reference-generation") == 0)
+        return single_motion_reference_generation();
     if (strcmp(argv[1], "recovery-real-feedback") == 0)
         return recovery_real_feedback();
     if (strcmp(argv[1], "single-loader-fire-permit") == 0)

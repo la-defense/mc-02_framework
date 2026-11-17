@@ -231,9 +231,9 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
 /** @brief 为拨弹电机设置属于指定安全代际的参考值。
  * @param[in,out] motor 已注册的拨弹电机，不能为空。
  * @param[in] ref 有限参考，单位与 DJIMotorSetRef 相同。
- * @param[in] generation 发射命令计算时保存的安全代际。
+  * @param[in] generation 运动或发射命令计算时保存的安全代际。
  * @return 1 为当前许可和代际匹配并已写入，0 为参数或许可无效且不改写参考。
- * @note 单板下要求当前击发许可；停止时用普通接口清零参考并撤销其代际。其他角色沿用原路径。
+  * @note 仅支持底盘、云台和拨弹。单板检查对应功能许可，拨弹还检查击发许可；停止时用普通接口清零参考并撤销其代际。其他板角色沿用原路径。
  */
 uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation);
 

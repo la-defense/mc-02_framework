@@ -988,13 +988,24 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 
 uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation)
 {
-    if (motor == NULL || motor->output_role != MOTOR_OUTPUT_LOADER || !isfinite(ref)) return 0u; // 只接受有效拨弹实例和有限参考。
+    if (motor == NULL || !isfinite(ref)) return 0u; // 没有实例或参考不是有限数时不能提交。
+    if (motor->output_role != MOTOR_OUTPUT_CHASSIS && motor->output_role != MOTOR_OUTPUT_GIMBAL &&
+        motor->output_role != MOTOR_OUTPUT_LOADER) return 0u; // 未声明用途的电机不能借用此接口。
 #if defined(ONE_BOARD)
+    uint32_t required_function = 0u; // 按电机用途选择所需的功能许可。
+    switch (motor->output_role)
+    {
+    case MOTOR_OUTPUT_CHASSIS: required_function = ROBOT_CONTROL_CHASSIS; break; // 轮组需要底盘许可。
+    case MOTOR_OUTPUT_GIMBAL: required_function = ROBOT_CONTROL_GIMBAL; break; // 云台轴需要云台许可。
+    case MOTOR_OUTPUT_LOADER: required_function = ROBOT_CONTROL_SHOOTER; break; // 拨弹需要发射机构许可。
+    default: return 0u; // 其他电机不接受此接口。
+    }
     const PlatformIrqState_t irq = PlatformIrqSaveAndDisable(); // 许可检查与参考写入之间不允许插入禁止事件。
     RobotControlPermits_t permits = {0}; // 查询失败时默认禁止发射。
     uint8_t policy_active = 0u; // 区分旧整车许可与分功能许可。
     const uint8_t allowed = (uint8_t)(RobotSafetyGetOutputPermitsForGeneration(PlatformTimeNowMs(), generation, &permits, &policy_active) &&
-        (permits.functions & ROBOT_CONTROL_SHOOTER) && (!policy_active || permits.fire_allowed)); // 新策略的拨弹参考必须获得击发许可。
+        (permits.functions & required_function) &&
+        (motor->output_role != MOTOR_OUTPUT_LOADER || !policy_active || permits.fire_allowed)); // 拨弹还需要击发许可。
     if (allowed)
     {
         motor->motor_controller.pid_ref = ref; // 原子写入已授权的参考值。
@@ -1108,6 +1119,12 @@ void DJIMotorControl()
             computed_feedback[output_group].source_ms[output_slot] = feedback_timestamp_ms; // 保存实际用于计算的反馈时间。
             computed_feedback[output_group].required_mask |= (uint8_t)(1u << output_slot); // 标记发送前需要检查期限。
         }
+#endif
+#if defined(ONE_BOARD)
+        if ((motor->output_role == MOTOR_OUTPUT_CHASSIS || motor->output_role == MOTOR_OUTPUT_GIMBAL) &&
+            (cycle_safety_valid == 0u || reference_generation_valid == 0u ||
+             reference_generation != cycle_safety.control_generation))
+            pid_status = PID_BAD_ARGUMENT; // 底盘和云台只计算本安全代际明确接受的参考。
 #endif
         if (axis_status != MOTOR_FEEDBACK_OK && internal_axis_active && pid_status == PID_OK)
             pid_status = PID_NUMERIC_ERROR;

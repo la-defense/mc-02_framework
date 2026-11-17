@@ -705,6 +705,14 @@ void RobotCMDTask()
     const uint8_t permits_valid = (uint8_t)(command_safety_valid &&
         RobotSafetyGetOutputPermitsForGeneration(PlatformTimeNowMs(), command_safety.control_generation,
                                                   &current_permits, &policy_active)); // 许可和代际必须同时有效。
+    chassis_cmd_send.safety_generation = command_safety.control_generation; // 底盘继续检查选择命令前的代际。
+    gimbal_cmd_send.safety_generation = command_safety.control_generation; // 云台使用同一轮命令的代际。
+#if defined(ONE_BOARD)
+    if (!permits_valid || (current_permits.functions & ROBOT_CONTROL_CHASSIS) == 0u)
+        chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE; // 本轮未获底盘许可时不发布运动目标。
+    if (!permits_valid || (current_permits.functions & ROBOT_CONTROL_GIMBAL) == 0u)
+        gimbal_cmd_send.gimbal_mode = GIMBAL_ZERO_FORCE; // 云台同样不能接受失效代际。
+#endif
     shoot_cmd_send.safety_generation = command_safety.control_generation; // 发射任务继续检查本轮代际。
     shoot_cmd_send.fire_source = (uint8_t)(vision_shoot_selected ? ROBOT_CONTROL_SOURCE_VISION : ROBOT_CONTROL_SOURCE_MANUAL); // 记录实际选择的击发来源。
     if (!permits_valid || (current_permits.functions & ROBOT_CONTROL_SHOOTER) == 0u)

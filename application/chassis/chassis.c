@@ -378,15 +378,32 @@ void ChassisTask()
     else
     {
         const float rotor_to_output = -DEGREE_2_RAD / wheel_measure->reduction_ratio_wheel;
+#if defined(ONE_BOARD)
+        // 每台轮电机都用命令原有的代际；任何一台未获许可时清除四轮目标。
+        const uint32_t generation = chassis_cmd_recv.safety_generation;
+        const uint8_t lf_ok = DJIMotorSetRefForGeneration(motor_lf, motion_output.motor_speed_deg_s[0] * rotor_to_output, generation);
+        const uint8_t rf_ok = DJIMotorSetRefForGeneration(motor_rf, motion_output.motor_speed_deg_s[1] * rotor_to_output, generation);
+        const uint8_t lb_ok = DJIMotorSetRefForGeneration(motor_lb, motion_output.motor_speed_deg_s[2] * rotor_to_output, generation);
+        const uint8_t rb_ok = DJIMotorSetRefForGeneration(motor_rb, motion_output.motor_speed_deg_s[3] * rotor_to_output, generation);
+        if (!(lf_ok && rf_ok && lb_ok && rb_ok))
+        {
+            ChassisStopAndClear(); // 任一参考被拒绝时撤销全部轮组参考。
+            command_allowed = 0u; // 继续发布反馈，但不重新使能轮组。
+        }
+#else
         DJIMotorSetRef(motor_lf, motion_output.motor_speed_deg_s[0] * rotor_to_output);
         DJIMotorSetRef(motor_rf, motion_output.motor_speed_deg_s[1] * rotor_to_output);
         DJIMotorSetRef(motor_lb, motion_output.motor_speed_deg_s[2] * rotor_to_output);
         DJIMotorSetRef(motor_rb, motion_output.motor_speed_deg_s[3] * rotor_to_output);
-        DJIMotorEnable(motor_lf);
-        DJIMotorEnable(motor_rf);
-        DJIMotorEnable(motor_lb);
-        DJIMotorEnable(motor_rb);
-        chassis_cmd_recv.wz = motion_output.wz_deg_s;
+#endif
+        if (command_allowed)
+        {
+            DJIMotorEnable(motor_lf);
+            DJIMotorEnable(motor_rf);
+            DJIMotorEnable(motor_lb);
+            DJIMotorEnable(motor_rb);
+            chassis_cmd_recv.wz = motion_output.wz_deg_s;
+        }
     }
 
     // 根据电机的反馈速度和IMU(如果有)计算真实速度

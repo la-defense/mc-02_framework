@@ -179,8 +179,17 @@ void GimbalTask()
         DJIMotorChangeFeed(yaw_motor, SPEED_LOOP, OTHER_FEED);
         DJIMotorChangeFeed(pitch_motor, ANGLE_LOOP, OTHER_FEED);
         DJIMotorChangeFeed(pitch_motor, SPEED_LOOP, OTHER_FEED);
+#if defined(ONE_BOARD)
+        if (!DJIMotorSetRefForGeneration(yaw_motor, gimbal_cmd_recv.yaw * DEGREE_2_RAD, gimbal_cmd_recv.safety_generation) ||
+            !DJIMotorSetRefForGeneration(pitch_motor, gimbal_cmd_recv.pitch * DEGREE_2_RAD, gimbal_cmd_recv.safety_generation))
+        {
+            DJIMotorStop(yaw_motor); // 任一轴未获许可时停止两轴。
+            DJIMotorStop(pitch_motor); // 避免只执行部分目标。
+        }
+#else
         DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw * DEGREE_2_RAD);
         DJIMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch * DEGREE_2_RAD);
+#endif
         break;
     // FREE 目前与 GYRO 行为相同，尚未实现独立的底盘跟随控制。
     case GIMBAL_FREE_MODE:
@@ -190,8 +199,17 @@ void GimbalTask()
         DJIMotorChangeFeed(yaw_motor, SPEED_LOOP, OTHER_FEED);
         DJIMotorChangeFeed(pitch_motor, ANGLE_LOOP, OTHER_FEED);
         DJIMotorChangeFeed(pitch_motor, SPEED_LOOP, OTHER_FEED);
+#if defined(ONE_BOARD)
+        if (!DJIMotorSetRefForGeneration(yaw_motor, gimbal_cmd_recv.yaw * DEGREE_2_RAD, gimbal_cmd_recv.safety_generation) ||
+            !DJIMotorSetRefForGeneration(pitch_motor, gimbal_cmd_recv.pitch * DEGREE_2_RAD, gimbal_cmd_recv.safety_generation))
+        {
+            DJIMotorStop(yaw_motor); // 任一轴未获许可时停止两轴。
+            DJIMotorStop(pitch_motor); // 避免只执行部分目标。
+        }
+#else
         DJIMotorSetRef(yaw_motor, gimbal_cmd_recv.yaw * DEGREE_2_RAD);
         DJIMotorSetRef(pitch_motor, gimbal_cmd_recv.pitch * DEGREE_2_RAD);
+#endif
         break;
     default:
         DJIMotorStop(yaw_motor);

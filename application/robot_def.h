@@ -172,6 +172,7 @@ typedef struct
     float offset_angle; // 底盘和云台归中方向的夹角，单位 deg。
     chassis_mode_e chassis_mode;
     int chassis_speed_buff;
+    uint32_t safety_generation; // 单板命令所属安全代际，不进入双板线协议。
     // UI部分
     //  ...
 
@@ -192,6 +193,7 @@ typedef struct
     float pitch_acc;
 
     gimbal_mode_e gimbal_mode;
+    uint32_t safety_generation; // 单板命令所属安全代际。
 } Gimbal_Ctrl_Cmd_s;
 
 // cmd发布的发射控制数据,由shoot订阅

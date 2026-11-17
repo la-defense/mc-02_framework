@@ -97,6 +97,8 @@ static unsigned motor_init_count;
 static unsigned startup_scenario, motor_attempt, rollback_count; // 记录启动失败注入与清理次数。
 static uint8_t rolled_back[2]; // 检查两台电机分别被撤销。
 static MotorAction_s actions[16];
+static uint8_t reject_generation_reference; // 模拟云台参考被安全管理拒绝。
+static uint32_t observed_generation; // 检查云台是否保留命令携带的代际。
 static size_t action_count;
 static Gimbal_Ctrl_Cmd_s incoming_command;
 static MessageStatus_t incoming_status = MESSAGE_ERR_EMPTY;
@@ -197,6 +199,15 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float reference)
     RecordMotorAction((MotorAction_s){.action = MOTOR_ACTION_SET_REF,
                                       .motor_index = MotorIndex(motor),
                                       .reference = reference});
+}
+
+uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float reference, uint32_t generation)
+{
+    observed_generation = generation; // 记录命令交给电机的原代际。
+    if (motor == NULL) return 0u; // 无实例时拒绝写入。
+    if (reject_generation_reference && MotorIndex(motor) == 1u) return 0u; // 大 yaw 已写入后拒绝 pitch。
+    DJIMotorSetRef(motor, reference); // 沿用已有的调用记录。
+    return 1u;
 }
 
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
@@ -409,7 +420,22 @@ int main(int argc, char **argv)
     incoming_status = MESSAGE_ERR_EXPIRED;
     CheckStoppedMode();
 
+#if defined(ONE_BOARD)
+    incoming_status = MESSAGE_OK;
+    incoming_command = (Gimbal_Ctrl_Cmd_s){.yaw = 10.0f, .pitch = 5.0f,
+                                           .gimbal_mode = GIMBAL_GYRO_MODE, .safety_generation = 42u};
+    ResetActions();
+    GimbalTask();
+    TEST_CHECK(observed_generation == 42u); // 电机收到的是命令的代际。
+    reject_generation_reference = 1u; // 命令已读取但许可不再有效。
+    ResetActions();
+    GimbalTask();
+    TEST_CHECK(FindAction(MOTOR_ACTION_STOP, 0u, OPEN_LOOP) != NULL);
+    TEST_CHECK(FindAction(MOTOR_ACTION_STOP, 1u, OPEN_LOOP) != NULL);
+    TEST_CHECK(publish_count == 7u); // 参考失败时也继续交付反馈。
+#else
     TEST_CHECK(publish_count == 5u);
+#endif
     TEST_CHECK(published_feedback.gimbal_imu_data.Roll == imu_storage.Roll);
     TEST_CHECK(published_feedback.gimbal_imu_data.Pitch == imu_storage.Pitch);
     TEST_CHECK(published_feedback.yaw_motor_single_round_angle == 42u);

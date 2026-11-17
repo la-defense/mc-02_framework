@@ -69,6 +69,8 @@ static unsigned fail_motor_attempt; // 非零时在指定电机申请处注入�
 static unsigned motor_attempt; // 记录电机申请次数。
 static uint8_t motor_rolled_back[4]; // 记录各电机是否已撤销。
 static unsigned operation_order;
+static uint8_t reject_motion_reference; // 模拟安全代际失效时电机拒绝目标。
+static uint32_t observed_motion_generation; // 保存底盘交给电机的命令代际。
 static SuperCapInstance cap;
 static int fail_cap, fail_motor;
 static unsigned supercap_init_calls;
@@ -114,6 +116,14 @@ uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor)
 }
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 { if (motor) { motor->ref = ref; motor->set_ref_order = ++operation_order; } }
+uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation)
+{
+    observed_motion_generation = generation; // 核对底盘是否传递原命令的代际。
+    if (motor == NULL) return 0u; // 无实例时不能声称已写入。
+    if (reject_motion_reference && motor == &motors[1]) return 0u; // 第一台轮电机已写入后，拒绝第二台。
+    DJIMotorSetRef(motor, ref); // 保留已有的参考和调用顺序记录。
+    return 1u;
+}
 void DJIMotorStop(DJIMotorInstance *motor)
 { if (motor) { motor->enabled = 0; ++motor->stop_count; } }
 void DJIMotorEnable(DJIMotorInstance *motor)
@@ -451,6 +461,16 @@ int main(int argc, char **argv)
     }
     CHECK(last_reference_write < first_enable);
     CHECK(motors[0].ref > 0.0f && motors[2].ref < 0.0f);
+#if defined(ONE_BOARD)
+    command.safety_generation = 42u; // 测试用代际只属于主机输入。
+    MessagePublishNow(commands, &command);
+    ChassisTask();
+    CHECK(observed_motion_generation == 42u); // 不使用任务当前时刻替换命令的原始代际。
+    reject_motion_reference = 1u; // 模拟命令被读取后许可发生变化。
+    ChassisTask();
+    for (unsigned i = 0; i < 4; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+    reject_motion_reference = 0u;
+#endif
     command = (Chassis_Ctrl_Cmd_s){.offset_angle = 0.5f,
                                    .chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW};
     MessagePublishNow(commands, &command);

@@ -1227,6 +1227,7 @@ endif()
 add_test(NAME production_dji_single_safety_output_gate COMMAND motor_single_safety_test single-safety-output)
 add_test(NAME production_dji_single_queued_feedback_expiry COMMAND motor_single_safety_test single-queued-feedback-expiry) # 排队目标不能借新反馈续期。
 add_test(NAME production_dji_single_loader_fire_permit COMMAND motor_single_safety_test single-loader-fire-permit) # 拨弹独立检查击发许可。
+add_test(NAME production_dji_single_motion_reference_generation COMMAND motor_single_safety_test single-motion-reference-generation) # 故障后底盘和云台旧参考不能重放。
 add_test(NAME production_dji_recovery_real_feedback COMMAND motor_single_safety_test recovery-real-feedback) # 用真实电机反馈推进恢复条件。
 add_test(NAME production_dji_single_shared_frame_permissions COMMAND motor_single_safety_test single-shared-frame) # 同帧不同机构分开授权。
 add_test(NAME production_dji_single_feedback_roles COMMAND motor_single_safety_test single-feedback-roles) # 同机构逐台检查反馈。
@@ -1877,6 +1878,16 @@ target_compile_definitions(gimbal_mode_test PRIVATE MC02_PROFILE_BENCH_SAFE=1)
 target_compile_options(gimbal_mode_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
 target_link_libraries(gimbal_mode_test PRIVATE m)
 add_test(NAME production_gimbal_mode_state_transitions COMMAND gimbal_mode_test)
+add_executable(gimbal_single_mode_test gimbal_mode_test.c ../../application/gimbal/gimbal.c)
+target_include_directories(gimbal_single_mode_test BEFORE PRIVATE gimbal_mode_fakes)
+target_include_directories(gimbal_single_mode_test PRIVATE . ../../application ../../application/gimbal
+  ../../application/topics ../../modules/imu ../../modules/master_machine ../../modules/motor
+  ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon
+  ../../modules/message_center ../../modules ../../bsp/can ../../bsp/os)
+target_compile_definitions(gimbal_single_mode_test PRIVATE MC02_PROFILE_BENCH_SAFE=1 ONE_BOARD=1) # 单板路径检查命令代际。
+target_compile_options(gimbal_single_mode_test PRIVATE -Wall -Wextra -Werror -fno-fast-math)
+target_link_libraries(gimbal_single_mode_test PRIVATE m)
+add_test(NAME production_gimbal_single_generation COMMAND gimbal_single_mode_test)
 foreach(release_result IN ITEMS success failure)
   add_test(NAME production_gimbal_release_${release_result} COMMAND gimbal_mode_test release-${release_result}) # 成功注册后再撤销。
   add_test(NAME production_chassis_release_${release_result} COMMAND chassis_task_configured_test release-${release_result}) # 保留其他模块的登记。

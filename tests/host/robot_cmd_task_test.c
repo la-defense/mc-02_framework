@@ -315,11 +315,21 @@ int main(int argc, char **argv)
     }
     remote[0].rc.switch_left=RC_SW_DOWN; remote[0].rc.switch_right=RC_SW_MID;
     if (argc > 1 && !strcmp(argv[1], "shoot-short-fault")) {
+        MessageSubscriber_t *chassis = MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_CHASSIS);
+        Chassis_Ctrl_Cmd_s driving = {0}; // 同时检查这一轮是否撤销底盘目标。
+        RobotSafetySnapshot_t current = {0}; // 读取新发布命令所属的安全代际。
         remote[0].rc.dial = -600; // 人工请求连续供弹。
         inject_short_fault = 1u; // 故障发生在命令选取与最终发布之间。
         CHECK(!shoot_cycle(feedback,gimbal,shoot,&pose,SHOOT_OFF,FRICTION_OFF,LOAD_STOP,0,0)); // 整轮旧代际必须撤销。
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
+        CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), tick, NULL) == MESSAGE_OK);
+        CHECK(driving.chassis_mode == CHASSIS_ZERO_FORCE && command.gimbal_mode == GIMBAL_ZERO_FORCE); // 短故障后运动也不能沿用旧一轮选择。
         ++tick; // 下一轮重新读取人工来源。
         CHECK(!shoot_cycle(feedback,gimbal,shoot,&pose,SHOOT_ON,FRICTION_ON,LOAD_BURSTFIRE,8,0)); // 新代际可重新计算。
+        CHECK(RobotSafetyGetSnapshot(&current));
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
+        CHECK(MessageReadSnapshot(gimbal, &command, sizeof(command), tick, NULL) == MESSAGE_OK);
+        CHECK(driving.safety_generation == current.control_generation && command.safety_generation == current.control_generation); // 新命令带着本轮代际交给下游。
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "shoot-manual-authority"))
