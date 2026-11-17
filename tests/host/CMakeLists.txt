@@ -839,6 +839,14 @@ target_compile_definitions(robot_can_motor_recovery_test PRIVATE MC02_PROFILE_RO
 target_compile_options(robot_can_motor_recovery_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_can_recovery_motor_manifest COMMAND robot_can_motor_recovery_test)
 
+add_executable(robot_control_feedback_test robot_control_feedback_test.c ../../application/robot_control_feedback.c) # 使用生产反馈汇总实现。
+target_include_directories(robot_control_feedback_test PRIVATE . ../../application ../../application/config
+  ../../application/chassis ../../modules ../../modules/motor ../../modules/motor/DJImotor ../../modules/algorithm
+  ../../modules/daemon ../../modules/safety ../../modules/alarm ../../modules/referee ../../modules/imu
+  ../../modules/master_machine ../../modules/message_center ../../bsp/board ../../bsp/can ../../bsp/os ../../bsp/usart)
+target_compile_options(robot_control_feedback_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_control_feedback_by_function COMMAND robot_control_feedback_test)
+
 add_executable(robot_can_recovery_coordinator_test robot_can_recovery_coordinator_test.c
   ../../application/robot_can_recovery_coordinator.c ../../modules/safety/can_recovery.c) # 验证实际协调逻辑。
 target_include_directories(robot_can_recovery_coordinator_test PRIVATE . ../../application ../../application/config
@@ -1246,6 +1254,7 @@ add_test(NAME production_dji_chassis_safety_output_gate
 add_executable(motor_single_safety_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
   ../../application/robot_can_recovery_coordinator.c # 联合真实安全管理和电机反馈验证恢复协调。
+  ../../application/robot_control_feedback.c # 联合真实反馈和安全管理验证功能期限。
   ../../application/robot_can_motor_recovery.c ../../application/config/module_plan.c # 使用真实车型映射处理生产驱动反馈。
   ../../application/robot_can_runtime.c # 将电机、总线与真实安全管理共同用于恢复测试。
   ../../bsp/board/platform_can_periodic_stm32.c dji_can_unregister_fake.c
@@ -1275,6 +1284,7 @@ add_test(NAME production_dji_single_loader_fire_permit COMMAND motor_single_safe
 add_test(NAME production_dji_single_motion_reference_generation COMMAND motor_single_safety_test single-motion-reference-generation) # 故障后底盘和云台旧参考不能重放。
 add_test(NAME production_dji_recovery_real_feedback COMMAND motor_single_safety_test recovery-real-feedback) # 用真实电机反馈推进恢复条件。
 add_test(NAME production_dji_recovery_coordinator_real_motors COMMAND motor_single_safety_test recovery-coordinator-real-motors) # 协调器与真实电机及安全管理联测。
+add_test(NAME production_dji_control_feedback_to_safety COMMAND motor_single_safety_test control-feedback-safety) # 分功能反馈及恢复后新来源。
 add_test(NAME production_dji_single_shared_frame_permissions COMMAND motor_single_safety_test single-shared-frame) # 同帧不同机构分开授权。
 add_test(NAME production_dji_single_feedback_roles COMMAND motor_single_safety_test single-feedback-roles) # 同机构逐台检查反馈。
 add_test(NAME production_dji_single_feedback_roles_wrap COMMAND motor_single_safety_test single-feedback-roles-wrap) # 反馈时间跨回绕仍选择最早样本。

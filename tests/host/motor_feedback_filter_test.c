@@ -19,6 +19,8 @@
 #include "robot_can_motor_recovery.h" // 使用车型身份检查真实电机反馈。
 #include "robot_can_runtime.h" // 联合核心 CAN 故障与安全恢复检查。
 #include "robot_can_recovery_coordinator.h" // 联合实际协调器验证恢复顺序。
+#include "robot_control_feedback.h" // 使用生产设备与安全管理检查分功能反馈。
+#include "message_center.h" // 姿态来源时间使用消息中心的本机时钟标识。
 #endif
 #endif
 
@@ -689,6 +691,63 @@ static int single_feedback_roles_to_safety(void)
     return EXIT_SUCCESS;
 }
 
+static int single_control_feedback_to_safety(void)
+{
+    now_us = 1000u; RobotSafetyInit(); // 使用真实安全管理和生产电机驱动。
+    RobotSafetySetRcOnline(1u); RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u); RobotSafetySetTaskHealthy(1u);
+    const RobotControlPolicy_t policy = {ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL, 1u, 0u, 0u};
+    TEST_CHECK(RobotSafetyConfigureControl(&policy)); RobotSafetyRequestEnable(); RobotSafetyUpdate();
+    Motor_Init_Config_s config = motor_config(1u); config.output_role = MOTOR_OUTPUT_CHASSIS;
+    DJIMotorInstance *chassis = DJIMotorInit(&config);
+    config.can_init_config.tx_id = 2u; config.output_role = MOTOR_OUTPUT_GIMBAL;
+    DJIMotorInstance *gimbal = DJIMotorInit(&config);
+    TEST_CHECK(chassis != NULL && gimbal != NULL);
+    const RobotCanMotorPlan_t plan = {.count = 2u, .motors = {
+        {.bus = PLATFORM_CAN_BUS_1, .role = MOTOR_OUTPUT_CHASSIS, .type = M3508, .id = 1u},
+        {.bus = PLATFORM_CAN_BUS_1, .role = MOTOR_OUTPUT_GIMBAL, .type = M3508, .id = 2u}}};
+    RobotControlFeedback_t collector = {0}; TEST_CHECK(RobotControlFeedbackInit(&collector, &plan));
+    MessageFreshness_t pose = {.valid = 1u, .source_clock = MESSAGE_CLOCK_LOCAL, .timestamp_ms = 1u};
+    DJI_RecoveryFeedback_s raw = {0}; RobotControlFeedbackResult_t feedback = {0};
+    now_us = 2000u; receive(chassis, 960000u, 2u, 0, 0); receive(gimbal, 960000u, 2u, 0, 0);
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(2u, &raw));
+    TEST_CHECK(RobotControlFeedbackCollect(&collector, &raw, &pose, 2u, &feedback));
+    TEST_CHECK(feedback.valid_functions == (ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL));
+    TEST_CHECK(DJIMotorRecoveryStillValid(&raw, feedback.registered_motor_mask[0] | feedback.registered_motor_mask[1], 2u));
+    RobotSafetyControlInputs_t input = {.mode = ROBOT_CONTROL_MANUAL, .manual = {2u, 100u, 1u}};
+    input.feedback_valid_functions = feedback.valid_functions;
+    input.feedback[0] = feedback.feedback[0]; input.feedback[1] = feedback.feedback[1];
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate(); // 核心恢复建立新命令起点。
+    now_us = 3000u; input.manual.source_time_ms = 3u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    RobotControlPermits_t permits = {0}; TEST_CHECK(RobotSafetyGetFunctionPermitsAt(3u, &permits));
+    TEST_CHECK(permits.functions == (ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL));
+    now_us = 15000u; receive(gimbal, 7200000u, 15u, 0, 0); // 云台持续有反馈，底盘暂时未更新。
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(15u, &raw));
+    TEST_CHECK(RobotControlFeedbackCollect(&collector, &raw, &pose, 15u, &feedback));
+    input.feedback_valid_functions = feedback.valid_functions;
+    input.feedback[0] = feedback.feedback[0]; input.feedback[1] = feedback.feedback[1]; input.manual.source_time_ms = 15u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    now_us = 24000u; receive(chassis, 11520000u, 24u, 0, 0); receive(gimbal, 11520000u, 24u, 0, 0);
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(24u, &raw));
+    TEST_CHECK(RobotControlFeedbackCollect(&collector, &raw, &pose, 24u, &feedback));
+    TEST_CHECK(feedback.valid_functions == ROBOT_CONTROL_GIMBAL); // 底盘断流后即使新帧到达也报告失效一次。
+    input.feedback_valid_functions = feedback.valid_functions;
+    input.feedback[0] = feedback.feedback[0]; input.feedback[1] = feedback.feedback[1]; input.manual.source_time_ms = 24u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(24u, &permits) && permits.functions == ROBOT_CONTROL_GIMBAL);
+    now_us = 25000u; TEST_CHECK(RobotControlFeedbackCollect(&collector, &raw, &pose, 25u, &feedback));
+    input.feedback_valid_functions = feedback.valid_functions;
+    input.feedback[0] = feedback.feedback[0]; input.feedback[1] = feedback.feedback[1];
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(25u, &permits) && permits.functions == ROBOT_CONTROL_GIMBAL); // 恢复前来源不能让底盘接管。
+    now_us = 26000u; input.manual.source_time_ms = 26u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(26u, &permits) &&
+        permits.functions == (ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL)); // 新来源恢复对应功能。
+    return EXIT_SUCCESS;
+}
+
 static int single_feedback_expired_frame(void)
 {
     now_us = 1000u; RobotSafetyInit(); // 建立允许人工运行的核心条件。
@@ -1137,6 +1196,8 @@ int main(int argc, char **argv)
         return recovery_real_feedback();
     if (strcmp(argv[1], "recovery-coordinator-real-motors") == 0)
         return recovery_coordinator_real_motors();
+    if (strcmp(argv[1], "control-feedback-safety") == 0)
+        return single_control_feedback_to_safety();
     if (strcmp(argv[1], "single-loader-fire-permit") == 0)
         return single_loader_fire_permit();
     if (strcmp(argv[1], "single-queued-feedback-expiry") == 0)
