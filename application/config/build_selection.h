@@ -31,4 +31,11 @@
 #define MC02_SELECTED_DRIVER_DM 0
 #define MC02_CHASSIS_IS_OMNI 0
 #endif
+
+// 仅由正式构建的模块选择启用独立底盘；禁热和旧组合保留各自的任务路径。
+#if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && MC02_FEATURE_CHASSIS
+#define MC02_TASK_CHASSIS 1
+#else
+#define MC02_TASK_CHASSIS 0
+#endif
 #endif

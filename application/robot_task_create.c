@@ -14,6 +14,10 @@
 #include "task_monitor.h"
 #include "init_diagnostic.h"
 #include <stddef.h>
+#if MC02_TASK_CHASSIS
+#include "robot_monitor_plan.h"
+static PlatformTaskHandle_t chassisTaskHandle; // 创建成功后随统一启动结果放行。
+#endif
 #if !defined(MC02_PROFILE_BENCH_SAFE) && MC02_SELECTED_DRIVER_HT
 #include "../modules/motor/HTmotor/ht_motor_task.h"
 #endif
@@ -113,6 +117,24 @@ uint8_t OSTaskInit(void)
     CreateTask("daemontask", StartDAEMONTASK, 512u, PLATFORM_TASK_NORMAL, &daemonTaskHandle); // 状态检查与恢复。
 
     CreateTask("robottask", StartROBOTTASK, 1024u, PLATFORM_TASK_NORMAL, &robotTaskHandle); // 整车控制与诊断。
+
+#if MC02_TASK_CHASSIS
+    const RobotChassisTaskConfig_t *chassis = RobotGetChassisTaskConfig(); // 只读启动时监控接受的配置。
+    const uint8_t chassis_started = RobotBuildModuleStarted(ROBOT_MODULE_CHASSIS); // 必须完成底盘设备初始化。
+    if (chassis != NULL && chassis_started)
+    {
+        CreateTask("chassistask", StartCHASSISTASK, chassis->stack_words,
+                   PLATFORM_TASK_NORMAL, &chassisTaskHandle); // 沿用拆分前的普通优先级。
+    }
+    if ((chassis != NULL || chassis_started) && chassisTaskHandle == NULL)
+    {
+        // 计划、设备状态或任务创建不完整时，使用独立底盘资源编号，阻止统一放行。
+        const InitDiagnosticReason_e reason = chassis != NULL && chassis_started
+            ? INIT_FAILURE_TASK_CREATE : INIT_FAILURE_DEPENDENCY;
+        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS, reason, INIT_RESOURCE_TASK_CHASSIS);
+        all_created = 0u;
+    }
+#endif
 
 #if MC02_FEATURE_UI
 #if defined(MC02_CONFIG_GENERATED)

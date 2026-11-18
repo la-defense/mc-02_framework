@@ -26,6 +26,12 @@ void StartDAEMONTASK(void const *argument);
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。
  */
 void StartROBOTTASK(void const *argument);
+#if MC02_TASK_CHASSIS
+/** @brief 等待统一放行，再单独运行已初始化的底盘。
+ * @param[in] argument 未使用，创建时传 NULL。
+ */
+void StartCHASSISTASK(void const *argument);
+#endif
 #if MC02_FEATURE_UI
 /** @brief 等待新鲜裁判机器人编号并周期运行 UI；每次循环至少等待 1 ms。
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。

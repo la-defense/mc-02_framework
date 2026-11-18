@@ -130,6 +130,15 @@ static const RobotAlarmConfig_t sentinel_alarm_config = {
 const Robot_Config_s *SentinelConfigInit(void)
 {
     static const Robot_Config_s sentinel_config = {
+        .chassis_task = {
+            .timing = {
+                .period_us = 0u, // 底盘周期待根据实车端到端时限确认，单位 μs。
+                .budget_us = 0u, // 单轮执行预算待配合周期确认，单位 μs。
+            },
+            .deadline_ms = 0u, // 底盘进度监控期限待确认，单位 ms。
+            .startup_grace_ms = 0u, // 放行后的首次工作宽限待确认，单位 ms。
+            .stack_words = 0u, // 独立任务栈容量待确认，单位为字。
+        },
         .can_recovery = {
             .feedback_stable_ms = 100u, // 哨兵候选稳定等待时间 100 ms，需结合真实反馈周期验证。
             .confirmed = 0u, // 尚未完成实车故障注入，不能凭此启用自动恢复。

@@ -22,6 +22,10 @@ uint8_t ChassisInitRollbackFailed(void);
 uint8_t ChassisReleaseStartupDevices(void);
 /** @brief 在成功初始化后执行一轮底盘控制；超过 50 ms 的命令失效并停止相应输出。 */
 void ChassisTask(void);
+/** @brief 撤销本任务持有的四轮速度参考并停止轮组。
+ * @note 由底盘任务在设备已初始化后调用，任务时钟失效时也使用此入口。
+ */
+void ChassisStopAndClear(void);
 /** @brief 初始化云台资源。
  * @return 成功返回 1，资源或话题注册失败返回 0。
  * @note 由启动协调任务调用一次；INS 随后由协调任务初始化。

@@ -160,10 +160,7 @@ uint8_t ChassisReleaseStartupDevices(void)
     return released; // 底层无法安全清理时禁止启动后续任务。
 }
 
-/**
- * @brief 停止四个底盘电机并清除可能遗留的速度参考值
- */
-static void ChassisStopAndClear(void)
+void ChassisStopAndClear(void)
 {
     DJIMotorStop(motor_lf);
     DJIMotorStop(motor_rf);

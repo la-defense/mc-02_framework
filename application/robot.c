@@ -330,8 +330,17 @@ uint8_t RobotInit(void)
         goto init_failed; // 沿用现有启动失能路径。
     }
 #endif
-    if (RobotConfigureTaskMonitor(task_modules) != TASK_MONITOR_RESULT_OK)
+    if (RobotConfigureTaskMonitor(task_modules, &robot_config->chassis_task) != TASK_MONITOR_RESULT_OK)
     {
+#if MC02_TASK_CHASSIS
+        if ((task_modules->enabled & ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS)) != 0u &&
+            RobotValidateChassisTask(&robot_config->chassis_task) != PLATFORM_PERIODIC_READY)
+        {
+            InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
+                                        INIT_FAILURE_TASK_TIMING, INIT_RESOURCE_TASK_CHASSIS);
+            goto init_failed; // 底盘时限缺失时不进入设备初始化。
+        }
+#endif
         InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
                                     INIT_FAILURE_DEPENDENCY, 0u);
         goto init_failed;
@@ -589,7 +598,7 @@ void RobotTask()
     if (RobotBuildModuleStarted(ROBOT_MODULE_SHOOTER))
         ShootTask();
 #endif
-#if MC02_FEATURE_CHASSIS
+#if MC02_FEATURE_CHASSIS && !MC02_TASK_CHASSIS
     if (RobotBuildModuleStarted(ROBOT_MODULE_CHASSIS))
         ChassisTask();
 #endif

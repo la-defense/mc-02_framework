@@ -70,6 +70,7 @@ typedef enum
     INIT_RESOURCE_TASK_UART_TX,
     INIT_RESOURCE_TASK_LOG,
     INIT_RESOURCE_TASK_TIM5_PROBE,    ///< 显式启用的 TIM5 裸板自测。
+    INIT_RESOURCE_TASK_CHASSIS,       ///< 独立底盘任务。
 } InitDiagnosticResource_e;
 
 /** @brief 看门狗模块失败时区分启动与正常运行窗口。 */

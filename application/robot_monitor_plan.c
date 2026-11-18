@@ -7,6 +7,7 @@
 #include "config/vehicle_selection.h"
 #endif
 #include <stddef.h>
+#include <limits.h>
 
 #define ROBOT_DIAGNOSTIC_PERIOD_MS 5u // 整车诊断的名义周期，单位 ms。
 #define ROBOT_INS_PERIOD_MS 1u // 姿态任务的名义周期，单位 ms。
@@ -113,10 +114,39 @@ static const TaskMonitorTaskConfig_t robot_task_monitor_config[] = {
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 30u, .startup_grace_ms = 100u}, // 串口发送。
 };
 
-TaskMonitor_Result_e RobotConfigureTaskMonitor(const RobotModulePlan_t *plan)
+#if MC02_TASK_CHASSIS
+static RobotChassisTaskConfig_t chassis_task_config; // 由启动者填写，放行后保持只读。
+static uint8_t chassis_task_prepared; // 监控接受底盘配置后才允许创建任务。
+
+PlatformPeriodicResult_t RobotValidateChassisTask(const RobotChassisTaskConfig_t *config)
 {
+    if (config == NULL || config->timing.period_us % 1000u != 0u || config->deadline_ms == 0u ||
+        config->timing.period_us / 1000u > config->deadline_ms || config->deadline_ms >= (uint32_t)INT32_MAX ||
+        config->startup_grace_ms == 0u || config->startup_grace_ms >= (uint32_t)INT32_MAX ||
+        config->stack_words == 0u || config->stack_words > UINT16_MAX)
+        return PLATFORM_PERIODIC_CONFIG; // 监控仍用毫秒，缺参数或超出 OS 容量时不启动底盘。
+    const PlatformPeriodicCapabilities_t capabilities = PlatformTaskPeriodicCapabilities(); // 读取实际 RTOS 刻度。
+    PlatformPeriodicClock_t validated; // 使用生产等待算法检查周期及预算。
+    return PlatformPeriodicInit(&validated, &config->timing, capabilities.rtos_quantum_us, 0u);
+}
+
+const RobotChassisTaskConfig_t *RobotGetChassisTaskConfig(void)
+{
+    return chassis_task_prepared ? &chassis_task_config : NULL;
+}
+#endif
+
+TaskMonitor_Result_e RobotConfigureTaskMonitor(const RobotModulePlan_t *plan,
+    const RobotChassisTaskConfig_t *chassis)
+{
+#if MC02_TASK_CHASSIS
+    TaskMonitorTaskConfig_t selected[sizeof(robot_task_monitor_config) /
+                                      sizeof(robot_task_monitor_config[0]) + 1u]; // 额外保留一个底盘监控项。
+#else
+    (void)chassis; // 此构建不会启动独立底盘。
     TaskMonitorTaskConfig_t selected[sizeof(robot_task_monitor_config) /
                                       sizeof(robot_task_monitor_config[0])]; // 使用固定容量。
+#endif
     uint32_t count = 0u; // 按原顺序保存实际需要的监控。
 #if defined(MC02_CONFIG_GENERATED)
     if (RobotModulePlanValidate(plan, NULL) != ROBOT_MODULE_OK)
@@ -143,5 +173,30 @@ TaskMonitor_Result_e RobotConfigureTaskMonitor(const RobotModulePlan_t *plan)
 #endif
         selected[count++] = item; // 只交付该车型实际需要的监控。
     }
+#if MC02_TASK_CHASSIS
+    const uint8_t chassis_enabled = (uint8_t)((plan->enabled & ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS)) != 0u);
+    if (chassis_enabled)
+    {
+        if (RobotValidateChassisTask(chassis) != PLATFORM_PERIODIC_READY)
+            return TASK_MONITOR_RESULT_BAD_CONFIGURATION; // 没有有效时间和容量时不注册任何监控。
+        selected[count++] = (TaskMonitorTaskConfig_t){
+            .id = TASK_MONITOR_CHASSIS, // 由底盘任务自己报告进度。
+            .name = "CHASSIS", // 健康查询和故障日志使用的名称。
+            .mode = TASK_MONITOR_MODE_PERIODIC, // 预期周期性取得进度。
+            .role = TASK_MONITOR_ROLE_CORE, // 底盘工作停滞时按既有核心路径停输出。
+            .period_ms = chassis->timing.period_us / 1000u, // 已确认可整毫秒表示。
+            .deadline_ms = chassis->deadline_ms, // 使用车型确认的完成期限。
+            .startup_grace_ms = chassis->startup_grace_ms, // 从统一放行开始计算首次宽限。
+        };
+    }
+    const TaskMonitor_Result_e result = TaskMonitorInitConfigured(selected, count); // 集中发布监控配置。
+    if (result == TASK_MONITOR_RESULT_OK)
+    {
+        if (chassis_enabled) chassis_task_config = *chassis; // 复制一份运行期固定配置。
+        chassis_task_prepared = chassis_enabled; // 只有整表成功才发布底盘任务配置。
+    }
+    return result;
+#else
     return TaskMonitorInitConfigured(selected, count); // 监控模块复制配置，局部数组可释放。
+#endif
 }

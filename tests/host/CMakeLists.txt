@@ -190,6 +190,34 @@ foreach(task IN ITEMS ins comm daemon robot)
 endforeach()
 add_test(NAME production_robot_task_cycle_finish_error COMMAND robot_task_cycle_test daemon finish-error)
 set_tests_properties(production_robot_task_cycle_finish_error PROPERTIES TIMEOUT 10)
+# 在主机替身上编译正式底盘分支，分别检查监控、创建和实际任务入口。
+add_executable(robot_chassis_monitor_test robot_monitor_plan_test.c ../../application/robot_monitor_plan.c
+  ../../application/config/module_plan.c ../../bsp/os/platform_periodic.c)
+add_executable(robot_chassis_create_test robot_task_create_test.c ../../application/robot_task_create.c)
+add_executable(robot_chassis_cycle_test robot_task_cycle_test.c ../../application/robot_task.c)
+foreach(target IN ITEMS robot_chassis_monitor_test robot_chassis_create_test robot_chassis_cycle_test)
+  target_include_directories(${target} PRIVATE task_creation_fakes . ../../application ../../modules/task_monitor
+    ../../modules/imu ../../modules/motor ../../modules/daemon ../../bsp/os ../../bsp/log ../../bsp/dwt
+    ../../bsp/crash ../../bsp/usart)
+  target_compile_definitions(${target} PRIVATE
+    MC02_CONFIG_GENERATED=1 # 用主机替身提供编译模块定义。
+    MC02_PROFILE_ROBOT=1 # 运行正式底盘任务选择路径。
+    MC02_FEATURE_CHASSIS=1 # 仅在这些隔离目标中接入底盘任务。
+    DISABLE_LOG_SYSTEM=1) # 主机检查诊断结果及调用顺序。
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+endforeach()
+target_compile_definitions(robot_chassis_cycle_test PRIVATE MC02_FEATURE_UI=0) # 不编译与此测试无关的裁判界面。
+target_compile_options(robot_chassis_cycle_test PRIVATE -ffunction-sections -fdata-sections)
+target_link_options(robot_chassis_cycle_test PRIVATE -Wl,--gc-sections)
+add_test(NAME production_chassis_task_monitor COMMAND robot_chassis_monitor_test chassis)
+add_test(NAME production_chassis_task_cycle COMMAND robot_chassis_cycle_test chassis)
+add_test(NAME production_chassis_task_clock_failure COMMAND robot_chassis_cycle_test chassis finish-error)
+foreach(scenario IN ITEMS normal create missing not-started disabled)
+  add_test(NAME production_chassis_task_create_${scenario} COMMAND robot_chassis_create_test chassis-${scenario})
+  set_tests_properties(production_chassis_task_create_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+set_tests_properties(production_chassis_task_monitor production_chassis_task_cycle production_chassis_task_clock_failure
+  PROPERTIES TIMEOUT 10)
 # 直接运行生成代码中的 FDCAN MSP，模拟重复初始化和跨总线退出。
 add_executable(fdcan_msp_test fdcan_msp_test.c ../../Core/Src/fdcan.c)
 target_include_directories(fdcan_msp_test BEFORE PRIVATE fdcan_msp_fakes .)

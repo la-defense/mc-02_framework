@@ -21,6 +21,7 @@ PlatformPeriodicCapabilities_t PlatformTaskPeriodicCapabilities(void)
     return fake_periodic_capabilities;
 }
 
+#if !MC02_TASK_CHASSIS
 static void TestDiagnosticAdmission(void)
 {
     RobotModulePlan_t modules = {.enabled = ROBOT_MODULE_BIT(ROBOT_MODULE_IMU)};
@@ -44,6 +45,7 @@ static void TestDiagnosticAdmission(void)
     modules.enabled = 0u; // 车型禁用姿态时不校验姿态的拍点，压缩索引仍须指向通信任务。
     TEST_CHECK(RobotValidateTaskPeriods(&modules, &failed) == PLATFORM_PERIODIC_CONFIG && failed == ROBOT_PERIODIC_COMM);
 }
+#endif
 
 uint8_t RobotBuildMarkFailure(RobotModule_t module)
 {
@@ -60,14 +62,61 @@ TaskMonitor_Result_e TaskMonitorInitConfigured(const TaskMonitorTaskConfig_t *co
     return TASK_MONITOR_RESULT_OK;
 }
 
+#if MC02_TASK_CHASSIS
+static void TestChassisAdmission(void)
+{
+    RobotModulePlan_t plan = {
+        .enabled = ROBOT_MODULE_BIT(ROBOT_MODULE_SAFETY) | ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS),
+        .required = ROBOT_MODULE_BIT(ROBOT_MODULE_SAFETY) | ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS),
+    };
+    RobotChassisTaskConfig_t chassis = {
+        .timing = {.period_us = 4000u, .budget_us = 2000u}, // 主机假时钟的周期和单轮预算。
+        .deadline_ms = 12u, // 主机试验用监控期限。
+        .startup_grace_ms = 50u, // 主机试验用首次工作宽限。
+        .stack_words = 192u, // 替身不分配或运行真实栈。
+    };
+    TEST_CHECK(RobotConfigureTaskMonitor(&plan, NULL) == TASK_MONITOR_RESULT_BAD_CONFIGURATION);
+    TEST_CHECK(init_calls == 0u && RobotGetChassisTaskConfig() == NULL);
+    chassis.timing.budget_us = 2100u; // 配置超出 RTOS 可表示的刻度。
+    TEST_CHECK(RobotConfigureTaskMonitor(&plan, &chassis) == TASK_MONITOR_RESULT_BAD_CONFIGURATION);
+    chassis.timing.budget_us = 2000u;
+    chassis.deadline_ms = 3u; // 监控期限短于一个计划周期。
+    TEST_CHECK(RobotConfigureTaskMonitor(&plan, &chassis) == TASK_MONITOR_RESULT_BAD_CONFIGURATION);
+    TEST_CHECK(init_calls == 0u);
+    chassis.deadline_ms = 12u;
+
+    TEST_CHECK(RobotConfigureTaskMonitor(&plan, &chassis) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(init_calls == 1u && captured_count == 5u);
+    const TaskMonitorTaskConfig_t *item = &captured[captured_count - 1u];
+    TEST_CHECK(item->id == TASK_MONITOR_CHASSIS && item->role == TASK_MONITOR_ROLE_CORE);
+    TEST_CHECK(item->period_ms == 4u && item->deadline_ms == 12u && item->startup_grace_ms == 50u);
+    const RobotChassisTaskConfig_t *prepared = RobotGetChassisTaskConfig();
+    TEST_CHECK(prepared != NULL && prepared != &chassis && prepared->stack_words == 192u);
+    chassis.timing.period_us = 0u;
+    TEST_CHECK(prepared->timing.period_us == 4000u); // 调用者临时数据改写后，任务仍使用已经接受的值。
+
+    plan.enabled = plan.required = ROBOT_MODULE_BIT(ROBOT_MODULE_SAFETY);
+    TEST_CHECK(RobotConfigureTaskMonitor(&plan, NULL) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(captured_count == 4u && RobotGetChassisTaskConfig() == NULL);
+}
+#endif
+
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2); // 每个车型依赖场景分别执行。
+#if MC02_TASK_CHASSIS
+    if (strcmp(argv[1], "chassis") == 0)
+    {
+        TestChassisAdmission();
+        return 0;
+    }
+#else
     if (strcmp(argv[1], "timing") == 0)
     {
         TestDiagnosticAdmission(); // 核对实际固件使用的配置和资源分配规则。
         return 0;
     }
+#endif
     const uint32_t safety = ROBOT_MODULE_BIT(ROBOT_MODULE_SAFETY);
     const uint32_t imu = ROBOT_MODULE_BIT(ROBOT_MODULE_IMU);
     const uint32_t gimbal = ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL);
@@ -90,7 +139,7 @@ int main(int argc, char **argv)
     { plan.dependencies[ROBOT_MODULE_SAFETY] = imu; invalid = 1u; }
     else TEST_CHECK(strcmp(argv[1], "aux") == 0);
 
-    const TaskMonitor_Result_e result = RobotConfigureTaskMonitor(&plan); // 执行生产映射。
+    const TaskMonitor_Result_e result = RobotConfigureTaskMonitor(&plan, NULL); // 执行生产映射。
     if (invalid)
     {
         TEST_CHECK(result == TASK_MONITOR_RESULT_BAD_CONFIGURATION && init_calls == 0u);

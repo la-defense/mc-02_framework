@@ -5,6 +5,7 @@
 #pragma once
 
 #include "build_selection.h"
+#include "chassis_task_config.h"
 #include "chassis_motion.h"
 #include "controller.h"
 #include "motor_def.h"
@@ -133,6 +134,7 @@ typedef struct {
 typedef struct
 {
     Chassis_Config_s chassis_param;
+    RobotChassisTaskConfig_t chassis_task; // 独立底盘任务按此配置建立拍点和监控。
     Gimbal_Config_s gimbal_param;
     Shoot_Config_s shoot_param;
     RobotCanRecoveryConfig_s can_recovery; // CAN 自动恢复参数；未确认时不能作为实车恢复授权。

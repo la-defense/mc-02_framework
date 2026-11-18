@@ -7,6 +7,10 @@
 #include "platform_probe.h"
 #include "task_monitor.h"
 #include "test_check.h"
+#if MC02_TASK_CHASSIS
+#include "robot_monitor_plan.h"
+#include "config/vehicle_selection.h"
+#endif
 #include <setjmp.h>
 #include <string.h>
 
@@ -16,6 +20,24 @@ static uint32_t expected_period_ms;
 static unsigned release_delays, initializations, waits, begins, work, finishes, completes, idle_reports, fault_delays;
 static unsigned fairness_delays;
 static uint8_t finish_error; // 注入实际工作以后才发生的计数错误。
+#if MC02_TASK_CHASSIS
+static unsigned stops;
+static const RobotChassisTaskConfig_t chassis = {
+    .timing = {.period_us = 4000u, .budget_us = 4000u}, // 主机试验依赖的控制拍点，单位 μs。
+};
+const RobotChassisTaskConfig_t *RobotGetChassisTaskConfig(void) { return &chassis; }
+uint8_t RobotBuildModuleStarted(RobotModule_t module)
+{
+    TEST_CHECK(module == ROBOT_MODULE_CHASSIS && release_delays == 1u);
+    return 1u; // 设备接线和资源初始化由替身代替。
+}
+void ChassisStopAndClear(void)
+{
+    TEST_CHECK(expected_monitor == TASK_MONITOR_CHASSIS && work == 1u);
+    TEST_CHECK(finish_error ? (finishes == 1u && completes == 0u) : (waits == 3u && completes == 1u));
+    ++stops; // 时钟故障只撤销一次，下一轮仍禁止工作。
+}
+#endif
 
 uint8_t TaskMonitorRuntimeReleased(void)
 {
@@ -39,6 +61,9 @@ void PlatformTaskDelayMs(uint32_t milliseconds)
     // 发生错误后，仅可让出处理器。完成检查失败时不会报告已完成的工作。
     TEST_CHECK(milliseconds == expected_period_ms);
     TEST_CHECK(waits == (finish_error ? 2u : 3u) && completes == (finish_error ? 0u : 1u));
+#if MC02_TASK_CHASSIS
+    TEST_CHECK(stops == 1u); // 首次错误时须先撤销速度参考，再让出处理器。
+#endif
     if (++fault_delays == 2u) longjmp(task_exit, 1); // 验证错误连续保持两轮后退出常驻循环。
 }
 
@@ -102,6 +127,9 @@ void INS_Task(void) { RunWork(TASK_MONITOR_INS); }
 void MotorControlTask(void) { RunWork(TASK_MONITOR_MOTOR); }
 void RobotTask(void) { RunWork(TASK_MONITOR_ROBOT); }
 void DaemonTask(void) { RunWork(TASK_MONITOR_DAEMON); }
+#if MC02_TASK_CHASSIS
+void ChassisTask(void) { RunWork(TASK_MONITOR_CHASSIS); }
+#endif
 void TaskMonitorTick(void) { TEST_CHECK(expected_monitor == TASK_MONITOR_DAEMON && work == 1u); }
 void PlatformMaintainSpi(void) { TEST_CHECK(expected_monitor == TASK_MONITOR_DAEMON && begins == 2u); }
 void PlatformMaintainAnalog(void) { TEST_CHECK(expected_monitor == TASK_MONITOR_DAEMON && begins == 2u); }
@@ -122,10 +150,14 @@ int main(int argc, char **argv)
         TaskMonitor_Id_e monitor; // 入口应报告的监控项。
         uint32_t period_ms; // 入口应从配置取得的名义周期。
     } tasks[] = {
+#if MC02_TASK_CHASSIS
+        {"chassis", StartCHASSISTASK, TASK_MONITOR_CHASSIS, 4u}, // 正式任务入口使用隔离的主机时间配置。
+#else
         {"ins", StartINSTASK, TASK_MONITOR_INS, 1u}, // 姿态采样与解算。
         {"comm", StartMOTORTASK, TASK_MONITOR_MOTOR, 1u}, // 禁热版本只派发通信。
         {"daemon", StartDAEMONTASK, TASK_MONITOR_DAEMON, 10u}, // 维护及监控。
         {"robot", StartROBOTTASK, TASK_MONITOR_ROBOT, 5u}, // 整车诊断。
+#endif
     };
     TEST_CHECK(argc == 2 || (argc == 3 && strcmp(argv[2], "finish-error") == 0));
     finish_error = (uint8_t)(argc == 3);
