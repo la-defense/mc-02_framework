@@ -336,10 +336,21 @@ static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeed
 }
 #endif
 
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
+// 轮速计算完成后再核对消息；若已有不同命令，下一轮才用它重新计算。
+static uint8_t ChassisCommandIsSameAndFresh(const MessageFreshness_t *used)
+{
+    MessageFreshness_t latest = {0}; // 复制当前命令时一并取得序号和来源时间。
+    return MessageReadSnapshot(chassis_sub, &chassis_cmd_recv, sizeof(chassis_cmd_recv),
+                               PlatformTimeNowMs(), &latest) == MESSAGE_OK &&
+        latest.sequence == used->sequence && latest.source_time_ms == used->source_time_ms;
+}
+#endif
+
 /* 机器人底盘控制核心任务 */
 void ChassisTask()
 {
-    // 单板消息和双板通信都按 50 ms 检查命令，失败后清零，不沿用旧速度。
+    // 读取时一起检查话题和来源期限，失败后清零旧命令。
     uint8_t command_fresh = 0u;
     MessageFreshness_t command_freshness = {0};
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
@@ -469,17 +480,13 @@ void ChassisTask()
                                     chassis_cmd_recv.chassis_mode != CHASSIS_ZERO_FORCE &&
                                     ChassisMotionCalculate(&motion_input, &geometry, &limits,
                                                            &motion_output);
-#ifdef CHASSIS_BOARD
+#if defined(ONE_BOARD)
+    if (command_allowed != 0u && !ChassisCommandIsSameAndFresh(&command_freshness))
+        command_allowed = 0u; // 计算期间超期、撤销或被新命令替换，都须先清除旧轮速目标。
+#elif defined(CHASSIS_BOARD)
     if (command_allowed != 0u)
     {
-        Chassis_Ctrl_Cmd_s latest_command = {0};
-        MessageFreshness_t latest_freshness = {0};
-        const uint8_t latest_is_same_and_fresh = (uint8_t)(
-            MessageReadSnapshot(chassis_sub, &latest_command, sizeof(latest_command),
-                                PlatformTimeNowMs(), &latest_freshness) == MESSAGE_OK &&
-            latest_freshness.sequence == command_freshness.sequence &&
-            latest_freshness.source_time_ms == command_freshness.source_time_ms);
-        if (latest_is_same_and_fresh == 0u || RobotSafetyIsReadyAt(PlatformTimeNowMs()) == 0u ||
+        if (!ChassisCommandIsSameAndFresh(&command_freshness) || RobotSafetyIsReadyAt(PlatformTimeNowMs()) == 0u ||
             ChassisMotorFeedbackIsHealthy() == 0u)
         {
             command_allowed = 0u;

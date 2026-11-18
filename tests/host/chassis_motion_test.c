@@ -46,8 +46,31 @@ static int near(float actual, float expected, float tolerance)
     return isfinite(actual) && fabsf(actual - expected) <= tolerance;
 }
 
+// 在 SI 接口直接检查左转和右转的投影方向，同时验证旋转不改变绕竖轴的转速。
+static int test_si_frame_rotation(void)
+{
+    const float half_pi_rad = 1.57079632679489661923f;
+    const ChassisTwist_t source = {.vx_m_s = 2.0f, .vy_m_s = 1.0f, .wz_rad_s = 0.3f};
+    ChassisTwist_t body = {0};
+    CHECK(ChassisMotionRotateToBody(&source, half_pi_rad, &body)); // 参照前方朝底盘左侧。
+    CHECK(near(body.vx_m_s, -1.0f, 0.0001f) && near(body.vy_m_s, 2.0f, 0.0001f));
+    CHECK(body.wz_rad_s == source.wz_rad_s);
+    CHECK(ChassisMotionRotateToBody(&body, -half_pi_rad, &body)); // 反向原位旋转应找回原速度。
+    CHECK(near(body.vx_m_s, source.vx_m_s, 0.0001f) && near(body.vy_m_s, source.vy_m_s, 0.0001f));
+    CHECK(ChassisMotionRotateToBody(&source, -half_pi_rad, &body)); // 参照前方朝底盘右侧。
+    CHECK(near(body.vx_m_s, 1.0f, 0.0001f) && near(body.vy_m_s, -2.0f, 0.0001f));
+    const ChassisTwist_t prior = body;
+    CHECK(!ChassisMotionRotateToBody(&source, INFINITY, &body)); // 非有限方向不能进入快速三角函数。
+    CHECK(!ChassisMotionRotateToBody(&source, 4.0f, &body)); // 角度需要在正负半圈内。
+    const ChassisTwist_t huge = {.vx_m_s = FLT_MAX, .vy_m_s = FLT_MAX};
+    CHECK(!ChassisMotionRotateToBody(&huge, half_pi_rad * 0.5f, &body)); // 投影相加溢出时保持上次结果。
+    CHECK(body.vx_m_s == prior.vx_m_s && body.vy_m_s == prior.vy_m_s && body.wz_rad_s == prior.wz_rad_s);
+    return 0;
+}
+
 int main(void)
 {
+    CHECK(test_si_frame_rotation() == 0);
     ChassisMotionOutput_s out;
     ChassisMotionInput_s in = input(CHASSIS_MOTION_MODE_FOLLOW, 0, 0, 0.5f);
     CHECK(ChassisMotionCalculate(&in, &geometry, &limits, &out));

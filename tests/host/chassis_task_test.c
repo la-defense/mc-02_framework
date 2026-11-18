@@ -611,6 +611,19 @@ int main(int argc, char **argv)
     ChassisTask();
     for (unsigned i = 0; i < 4; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
     reject_motion_reference = 0u;
+
+    test_tick = UINT32_MAX - 2u; // 将短来源期限设在计数回绕后的 0 ms。
+    CHECK(MessagePublishAtBounded(commands, &command, test_tick, test_tick, test_tick,
+                                      MESSAGE_CLOCK_LOCAL, 3u) == MESSAGE_OK);
+    test_tick = 0u; // 轮速计算开始时恰好还在来源期限内。
+    ChassisTask();
+    CHECK(motors[0].enabled && motors[0].ref != 0.0f);
+    tick_read_count = 0u; // 本轮第二次取时发生在四轮目标计算之后。
+    advance_tick_on_read = 2u;
+    advance_tick_by_ms = 1u;
+    ChassisTask();
+    CHECK(test_tick == 1u); // 话题仍不过期，但短来源期限已到。
+    for (unsigned i = 0; i < 4; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
 #endif
     command = (Chassis_Ctrl_Cmd_s){.offset_angle = 0.5f,
                                    .chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW};

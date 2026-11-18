@@ -24,9 +24,9 @@ typedef enum
 typedef struct
 {
     float vx_mm_s;             ///< 前进速度，mm/s（毫米/秒）。
-    float vy_mm_s;             ///< 横移速度，mm/s。
-    float requested_wz_deg_s;  ///< 保留的转速输入，deg/s；当前只检查数字，转速由 mode 决定。
-    float offset_angle_deg;   ///< 云台相对底盘归中方向的角度差，-180～180 deg，含两端。
+    float vy_mm_s;             ///< 旧消息的横移速度，向右为正，mm/s。
+    float requested_wz_deg_s;  ///< 不跟随模式请求的底盘角速度，deg/s。
+    float offset_angle_deg;    ///< 旧消息的方向角，向右转为正，-180～180 deg，含两端。
     ChassisMotionMode_e mode;
 } ChassisMotionInput_s;
 
@@ -72,6 +72,15 @@ typedef struct
     /* 左前、右前、左后、右后，单位为电机轴 deg/s，已计入减速比。 */
     float motor_speed_deg_s[4];
 } ChassisMotionOutput_s;
+
+/** @brief 将一个平移参照下的底盘中心速度转到底盘本体坐标。
+ * @param[in] source 转换前速度，前进及左移为 m/s，绕上轴为 rad/s。
+ * @param[in] frame_heading_rad 参照正前方相对底盘正前方的角，左转为正，范围 [-π, π]。
+ * @param[out] body 成功时写入本体坐标速度，角速度保持原值；允许与 source 指向同一对象。
+ * @return 1 成功；空指针、非有限值或角度越界返回 0，保持原输出。
+ */
+uint8_t ChassisMotionRotateToBody(const ChassisTwist_t *source, float frame_heading_rad,
+                                   ChassisTwist_t *body);
 
 /**
  * @brief 将平移和转动要求换算为四轮电机轴目标速度，并检查允许的速度范围。

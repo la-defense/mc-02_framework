@@ -11,6 +11,7 @@
 
 #include "fast_trig.h"
 
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
@@ -44,6 +45,26 @@ static uint8_t input_is_valid(const ChassisMotionInput_s *input,
            (input->mode == CHASSIS_MOTION_MODE_NO_FOLLOW ||
             input->mode == CHASSIS_MOTION_MODE_FOLLOW ||
             input->mode == CHASSIS_MOTION_MODE_ROTATE);
+}
+
+uint8_t ChassisMotionRotateToBody(const ChassisTwist_t *source, float frame_heading_rad,
+                                   ChassisTwist_t *body)
+{
+    const float pi = 3.14159265358979323846f; // 单圈方向角用半圈作为正负端点。
+    if (source == NULL || body == NULL || !isfinite(frame_heading_rad) || fabsf(frame_heading_rad) > pi ||
+        !isfinite(source->vx_m_s) || !isfinite(source->vy_m_s) || !isfinite(source->wz_rad_s))
+        return 0u; // 快速三角函数与单位转换只处理有效输入。
+    const float cos_theta = FastTrigCosF32(frame_heading_rad); // 参照前方投影到底盘前向的比例。
+    const float sin_theta = FastTrigSinF32(frame_heading_rad); // 参照前方投影到底盘左向的比例。
+    const ChassisTwist_t rotated = {
+        .vx_m_s = source->vx_m_s * cos_theta - source->vy_m_s * sin_theta, // 参照左轴在底盘前向的投影为负正弦。
+        .vy_m_s = source->vx_m_s * sin_theta + source->vy_m_s * cos_theta, // 参照左轴在底盘左向的投影为余弦。
+        .wz_rad_s = source->wz_rad_s, // 平移参照绕同一竖轴旋转，底盘角速度不变。
+    };
+    if (!isfinite(rotated.vx_m_s) || !isfinite(rotated.vy_m_s))
+        return 0u; // 有限输入相加也可能溢出，失败时保留调用方原值。
+    *body = rotated; // 完成两轴计算后一起交付，也允许原位转换。
+    return 1u;
 }
 
 uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
@@ -85,22 +106,21 @@ uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
         return 0;
     }
 
-    // 按云台与底盘的角度差，把平移速度转到底盘方向。
-    const float angle_rad = input->offset_angle_deg * radians_per_degree;
-    const float cos_theta = FastTrigCosF32(angle_rad); // 计算方向变换需要的余弦。
-    const float sin_theta = FastTrigSinF32(angle_rad); // 计算方向变换需要的正弦。
-    const float vx_mm_s = input->vx_mm_s * cos_theta - input->vy_mm_s * sin_theta;
-    const float vy_mm_s = input->vx_mm_s * sin_theta + input->vy_mm_s * cos_theta;
-    // 输入数字正常，计算结果仍可能过大；此时保留清零输出。
-    if (!isfinite(wz_deg_s) || !isfinite(cos_theta) || !isfinite(sin_theta) ||
-        !isfinite(vx_mm_s) || !isfinite(vy_mm_s))
-        return 0;
+    const float meters_per_millimeter = 0.001f;
+    const ChassisTwist_t source = {
+        .vx_m_s = input->vx_mm_s * meters_per_millimeter, // 旧消息的前向 mm/s 换为 m/s。
+        .vy_m_s = -input->vy_mm_s * meters_per_millimeter, // 旧消息向右为正，先换为左向再旋转。
+        .wz_rad_s = wz_deg_s * radians_per_degree, // 使用本轮模式选择的底盘转速。
+    };
+    const float frame_heading_rad = -input->offset_angle_deg * radians_per_degree; // 旧方向角向右转为正。
+    ChassisTwist_t twist; // 麦轮与全向轮都使用同一个底盘本体速度。
+    const float legacy_speed_limit_m_s = FLT_MAX * meters_per_millimeter; // 沿用旧接口旋转结果能表达为 mm/s 的范围。
+    if (!ChassisMotionRotateToBody(&source, frame_heading_rad, &twist) ||
+        fabsf(twist.vx_m_s) > legacy_speed_limit_m_s || fabsf(twist.vy_m_s) > legacy_speed_limit_m_s)
+        return 0; // 旧消息数值越界时保留清零输出。
 
     ChassisWheelSpeeds_t wheels = {0};
     ChassisKinematicsStatus_t calculation = CHASSIS_KINEMATICS_UNSUPPORTED;
-    // 旧消息的横向为右，进入纯数值模型时显式换为左。
-    const ChassisTwist_t twist = {vx_mm_s * 0.001f, -vy_mm_s * 0.001f,
-                                  wz_deg_s * radians_per_degree};
     if (geometry->model == CHASSIS_MOTION_MODEL_OMNI)
     {
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI

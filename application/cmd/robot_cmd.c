@@ -388,10 +388,10 @@ static void ApplyVisionV2Navigation(void)
     const float wz_rad_s = (flags & VISION_V2_NAV_YAW_RATE_VALID) != 0u ?
                            vision_v2_navigation_snapshot.yaw_rate_rad_s : 0.0f;
     const float vx_mm_s = vx_m_s * 1000.0f;
-    const float vy_mm_s = vy_m_s * 1000.0f;
+    const float vy_right_mm_s = -vy_m_s * 1000.0f; // V2 向左为正，旧底盘消息向右为正。
     const float wz_deg_s = wz_rad_s * RAD_2_DEGREE;
     float max_yaw_rate_deg_s = 0.0f; // 获取配置失败时不会使用未初始化值。
-    if (!isfinite(vx_mm_s) || !isfinite(vy_mm_s) || !isfinite(wz_deg_s) ||
+    if (!isfinite(vx_mm_s) || !isfinite(vy_right_mm_s) || !isfinite(wz_deg_s) ||
         !GetMaximumChassisYawRateDegS(&max_yaw_rate_deg_s) ||
         fabsf(wz_deg_s) > max_yaw_rate_deg_s)
     {
@@ -401,10 +401,11 @@ static void ApplyVisionV2Navigation(void)
         chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE;
         return;
     }
-    chassis_cmd_send.vx = vx_mm_s;
-    chassis_cmd_send.vy = vy_mm_s;
-    chassis_cmd_send.wz = wz_deg_s;
-    chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW;
+    chassis_cmd_send.vx = vx_mm_s; // 保留本体前向速度。
+    chassis_cmd_send.vy = vy_right_mm_s; // 按旧消息的右向约定交付。
+    chassis_cmd_send.wz = wz_deg_s; // 独立交付本体角速度。
+    chassis_cmd_send.offset_angle = 0.0f; // V2 导航速度已在底盘本体坐标，无须按云台角度再转一次。
+    chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW; // 底盘使用导航给出的角速度。
 }
 
 static void ApplyVisionV2GimbalHold(void)

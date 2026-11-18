@@ -110,7 +110,7 @@ int main(void)
     TEST_CHECK(feedback != NULL && aim_publisher != NULL && nav_publisher != NULL &&
         chassis_subscriber != NULL && gimbal_subscriber != NULL && shoot_subscriber != NULL);
 
-    Gimbal_Upload_Data_s pose = {0};
+    Gimbal_Upload_Data_s pose = {.yaw_motor_single_round_angle = 90u}; // 云台偏转时，导航速度仍沿底盘本体坐标。
     pose.gimbal_imu_data.YawTotalAngle = 10.0f;
     pose.gimbal_imu_data.Pitch = 2.0f;
     TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
@@ -135,7 +135,7 @@ int main(void)
     TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
         test_tick, NULL) == MESSAGE_OK);
     TEST_CHECK(chassis.chassis_mode == CHASSIS_NO_FOLLOW && chassis.vx == 500.0f &&
-        chassis.vy == -250.0f && fabsf(chassis.wz - 5.72957795f) < 0.0001f);
+        chassis.vy == 250.0f && chassis.offset_angle == 0.0f && fabsf(chassis.wz - 5.72957795f) < 0.0001f); // 本体向右 0.25 m/s 转为旧消息正 250 mm/s。
     TEST_CHECK(MessageReadSnapshot(gimbal_subscriber, &gimbal, sizeof(gimbal),
         test_tick, NULL) == MESSAGE_OK);
     TEST_CHECK(gimbal.gimbal_mode == GIMBAL_GYRO_MODE &&

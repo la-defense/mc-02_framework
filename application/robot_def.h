@@ -167,9 +167,9 @@ typedef struct
 {
     // 控制部分
     float vx;           // 前进速度，单位 mm/s。
-    float vy;           // 横移速度，单位 mm/s。
+    float vy;           // 横移速度，向右为正，单位 mm/s。
     float wz;           // 底盘转动角速度，单位 deg/s。
-    float offset_angle; // 底盘和云台归中方向的夹角，单位 deg。
+    float offset_angle; // 平移参照相对底盘的方向角，向右转为正，单位 deg；本体参照填零。
     chassis_mode_e chassis_mode;
     int chassis_speed_buff;
     uint32_t safety_generation; // 单板命令所属安全代际，不进入双板线协议。
