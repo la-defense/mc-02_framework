@@ -112,6 +112,18 @@ static void RobotCmdLeaseInclude(RobotCmdLease_t *lease, uint8_t available,
     }
 }
 
+#if defined(MC02_VISION_PROTOCOL_V2) || (defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && (defined(ONE_BOARD) || defined(GIMBAL_BOARD)))
+// 二次使用云台反馈时，同时继承原始采样期限和反馈话题的发布期限。
+static void RobotCmdLeaseIncludeGimbalFeedback(RobotCmdLease_t *lease, uint8_t available,
+                                               const MessageFreshness_t *feedback, uint32_t now_ms)
+{
+    const uint32_t source_limit_ms = feedback->source_max_age_ms != 0u ?
+        feedback->source_max_age_ms : MESSAGE_DEFAULT_MAX_AGE_MS; // 兼容未附单独期限的旧反馈。
+    RobotCmdLeaseInclude(lease, available, feedback->source_time_ms, source_limit_ms, now_ms); // 保存反馈的原始采样时间。
+    RobotCmdLeaseInclude(lease, available, feedback->published_time_ms, MESSAGE_DEFAULT_MAX_AGE_MS, now_ms); // 转发也不能延长原反馈话题的期限。
+}
+#endif
+
 // 命令话题还按自己的发布期限检查；失败时撤销旧目标。
 static uint8_t RobotCmdPublishBounded(MessagePublisher_t *publisher, const void *command,
                                       const RobotCmdLease_t *lease, uint32_t now_ms, uint8_t local_hold)
@@ -230,11 +242,13 @@ uint8_t RobotCMDInit(void)
     yaw_align_angle_deg = config->gimbal_param.gimbal_offset.yaw_offset;
     vision_limits.pitch_min_deg = config->gimbal_param.gimbal_offset.pitch_min_angle;
     vision_limits.pitch_max_deg = config->gimbal_param.gimbal_offset.pitch_max_angle;
-    if (!isfinite(yaw_align_angle_deg) ||
-        !isfinite(vision_limits.pitch_min_deg) || !isfinite(vision_limits.pitch_max_deg) ||
+    if (!isfinite(vision_limits.pitch_min_deg) || !isfinite(vision_limits.pitch_max_deg) ||
         vision_limits.pitch_min_deg >= vision_limits.pitch_max_deg)
         return 0u;
 #endif
+    if (!isfinite(yaw_align_angle_deg)) return 0u; // 机械零位无效时无法建立底盘方向参照。
+    yaw_align_angle_deg = fmodf(yaw_align_angle_deg, 360.0f); // 启动时一次性把等价的多圈机械零位换为单圈。
+    if (yaw_align_angle_deg < 0.0f) yaw_align_angle_deg += 360.0f; // 机械零位与编码器使用同一取值方向。
     RemoteSafetyGesturesInit(&remote_gestures);
 #if defined(MC02_CONFIG_GENERATED)
     // 车辆启动阶段已按模块依赖初始化输入源；命令模块只确认依赖，不重复注册设备。
@@ -287,25 +301,22 @@ uint8_t RobotCMDInit(void)
     return 1u;
 }
 
-/**
- * @brief 根据gimbal app传回的当前电机角度计算和零位的误差
- *        单圈绝对角度的范围是0~360,说明文档中有图示
- *
- */
-static void CalcOffsetAngle()
+// 计算旧消息使用的夹角；编码器单圈读数应在 [0, 360) 度。
+static uint8_t CalcOffsetAngle(void)
 {
     const float angle = (float)gimbal_fetch_data.yaw_motor_single_round_angle;
-    if (!isfinite(angle) || !isfinite(yaw_align_angle_deg))
+    if (angle >= 360.0f)
     {
-        chassis_cmd_send.offset_angle = 0.0f;
-        return;
+        chassis_cmd_send.offset_angle = 0.0f; // 不依赖角度的控制可继续，依赖此角度的路径另检查返回值。
+        return 0u;
     }
-    float offset = angle - yaw_align_angle_deg;
+    float offset = angle - yaw_align_angle_deg; // 当前角度减机械零位得到相对方向。
     if (offset > 180.0f)
-        offset -= 360.0f;
+        offset -= 360.0f; // 正向超过半圈时采用等价负角。
     else if (offset < -180.0f)
-        offset += 360.0f;
-    chassis_cmd_send.offset_angle = offset;
+        offset += 360.0f; // 负向超过半圈时采用等价正角。
+    chassis_cmd_send.offset_angle = offset; // 旧消息仍按度交付。
+    return 1u; // 本轮有合法方向角。
 }
 
 #if !defined(MC02_VISION_PROTOCOL_V2)
@@ -711,8 +722,7 @@ void RobotCMDTask()
         return;
     }
 
-    // 根据gimbal的反馈值计算云台和底盘正方向的夹角,不需要传参,通过static私有变量完成
-    CalcOffsetAngle();
+    (void)CalcOffsetAngle(); // 旧主机兼容路径继续使用已有底盘消息。
     const uint8_t remote_online = remote_snapshot.remote_online;
 #if defined(MC02_VISION_PROTOCOL_V2)
     const uint8_t autonomous_selected = (uint8_t)(remote_online &&
@@ -884,6 +894,21 @@ void RobotCMDTask()
         RobotCmdLeaseInclude(&manual, manual_intent_valid, manual_intent.source_time_ms,
                              manual_intent.max_age_ms, publish_ms); // 配置期限不能因转成旧消息而丢失。
 #endif
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
+    RobotCmdLease_t manual_chassis = manual; // 底盘方向依赖单独检查，保留其余人工模块自己的期限。
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+    if (manual_allowed && manual_control_active && manual_intent_valid && manual_intent.frame == STD_CMD_FRAME_BIG_YAW &&
+        chassis_cmd_send.chassis_mode != CHASSIS_ZERO_FORCE)
+    {
+        MessageFreshness_t direction_time = {0}; // 发布前重读方向，保留同一份反馈的原始时间。
+        const uint8_t direction_valid = MessageReadSnapshot(gimbal_feed_sub, &gimbal_fetch_data,
+            sizeof(gimbal_fetch_data), publish_ms, &direction_time) == MESSAGE_OK &&
+            CalcOffsetAngle(); // 同轮收到新反馈时改用新角度；已撤销或角度异常时不能继续平移。
+        RobotCmdLeaseIncludeGimbalFeedback(&manual_chassis, direction_valid, &direction_time,
+                                           publish_ms); // 方向与人工输入采用最先到期的时间。
+    }
+#endif
+#endif
     RobotCmdLease_t manual_gimbal = manual; // 本轮若使用了鼠标事件，还须检查最早事件的期限。
     if (manual_allowed && !vision_active && switch_is_up(rc_data[TEMP].rc.switch_left) && mouse_batch.count != 0u)
         RobotCmdLeaseInclude(&manual_gimbal, mouse_status == REMOTE_MOUSE_OK, mouse_batch.oldest_source_ms,
@@ -896,16 +921,7 @@ void RobotCMDTask()
     RobotCmdLeaseInclude(&navigation, navigation_active, vision_v2_navigation_freshness.received_time_ms,
                          VISION_V2_NAV_MAX_AGE_MS, publish_ms);
     RobotCmdLease_t local_hold = manual; // 失去瞄准后的本地保持依赖新鲜云台反馈。
-    if (gimbal_feedback_time.source_max_age_ms != 0u)
-    {
-        RobotCmdLeaseInclude(&local_hold, feedback_received, gimbal_feedback_time.source_time_ms,
-                             gimbal_feedback_time.source_max_age_ms, publish_ms); // 沿用姿态和编码器的原始期限。
-        RobotCmdLeaseInclude(&local_hold, feedback_received, gimbal_feedback_time.published_time_ms,
-                             MESSAGE_DEFAULT_MAX_AGE_MS, publish_ms); // 转发也不能延长原反馈话题的期限。
-    }
-    else
-        RobotCmdLeaseInclude(&local_hold, feedback_received, gimbal_feedback_time.source_time_ms,
-                             MESSAGE_DEFAULT_MAX_AGE_MS, publish_ms); // 未附带来源期限的旧反馈按原规则检查。
+    RobotCmdLeaseIncludeGimbalFeedback(&local_hold, feedback_received, &gimbal_feedback_time, publish_ms);
 #else
     RobotCmdLeaseInclude(&vision, vision_active, vision_status_snapshot.last_rx_ms,
                          VISION_CONTROL_MAX_AGE_MS, publish_ms);
@@ -916,9 +932,9 @@ void RobotCMDTask()
         (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
     else
 #if defined(MC02_VISION_PROTOCOL_V2)
-        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, navigation_active ? &navigation : &manual, publish_ms, 0u);
+        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, navigation_active ? &navigation : &manual_chassis, publish_ms, 0u);
 #else
-        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual, publish_ms, 0u);
+        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual_chassis, publish_ms, 0u);
 #endif
 #endif // ONE_BOARD
     if (shoot_cmd_send.shoot_mode == SHOOT_OFF && shoot_cmd_send.friction_mode == FRICTION_OFF && shoot_cmd_send.load_mode == LOAD_STOP)

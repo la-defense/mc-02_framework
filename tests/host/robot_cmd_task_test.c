@@ -15,6 +15,8 @@
 static StdCmdRemoteMap_t test_manual_map; // 仅供主机使用的人工输入比例和方向。
 static Robot_Config_s test_robot_config; // 只提供命令任务读取的测试字段。
 static uint32_t test_source_generation = 1u;
+static uint32_t advance_during_send_ms; // 测试这一次发送期间经过的毫秒数。
+static MessagePublisher_t *invalidate_feedback_during_send; // 在计算完成、发布之前撤销反馈。
 const Robot_Config_s *RobotConfigFeed(void) { return &test_robot_config; }
 uint8_t RobotBuildModuleStarted(RobotModule_t module) { (void)module; return 1u; }
 #endif
@@ -54,7 +56,18 @@ RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through, RemoteMouseBatch
     return REMOTE_MOUSE_OK;
 }
 Vision_Recv_s *VisionInit(PlatformUartPort_t h) { (void)h; return &wire; }
-void VisionSend(void) {}
+void VisionSend(void)
+{
+#if defined(MC02_MANUAL_GENERATED_TEST)
+    tick += advance_during_send_ms; // 模拟命令计算被延迟。
+    advance_during_send_ms = 0u; // 注入仅持续本轮。
+    if (invalidate_feedback_during_send != NULL)
+    {
+        (void)MessagePublisherInvalidate(invalidate_feedback_during_send); // 复用消息中心的真实撤销接口。
+        invalidate_feedback_during_send = NULL; // 下一轮由测试自行提供新反馈。
+    }
+#endif
+}
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link)
 {
     *frame=wire; *link=status; ++snapshots; // 提供本轮视觉数据。
@@ -298,25 +311,85 @@ int main(int argc, char **argv)
         CHECK(!RobotCMDInit());
         return 0;
     }
+    if (argc > 1 && !strcmp(argv[1], "manual-frame-feedback"))
+    {
+        test_manual_map.remote_frame = STD_CMD_FRAME_BIG_YAW; // 仅本测试选择大 yaw 方向。
+        test_manual_map.remote_map.allowed_frames |= 1u << STD_CMD_FRAME_BIG_YAW;
+        test_robot_config.gimbal_param.gimbal_offset.yaw_offset = 725.0f; // 等价于单圈 5 度的测试零位。
+    }
 #endif
     RobotSafetyInit(); RobotSafetySetRcOnline(1); RobotSafetySetImuValid(1);
     RobotSafetySetCalibValid(1); RobotSafetyRequestEnable(); RobotSafetyUpdate();
     CHECK(RobotSafetyIsReady());
     CHECK(RobotCMDInit());
 #if defined(MC02_MANUAL_GENERATED_TEST)
+    if (argc > 1 && !strcmp(argv[1], "manual-frame-feedback"))
+    {
+        MessagePublisher_t *feedback = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_GIMBAL);
+        MessageSubscriber_t *chassis = MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_CHASSIS);
+        CHECK(feedback != NULL && chassis != NULL);
+        Gimbal_Upload_Data_s pose = {.yaw_motor_single_round_angle = 95u}; // 相对零位为 90 度的单圈反馈。
+        Chassis_Ctrl_Cmd_s driving;
+        MessageFreshness_t applied_time;
+        remote[0].rc.switch_left = RC_SW_DOWN; // 人工遥控来源保持有效。
+        remote[0].rc.switch_right = RC_SW_MID;
+        remote[0].rc.rocker_r1 = 100;
+        tick = UINT32_MAX - 4u; // 原始期限跨回绕，到 0 ms 仍可使用。
+        const uint32_t source_ms = tick - 15u;
+        CHECK(MessagePublishAtBounded(feedback, &pose, source_ms, source_ms, tick,
+                                      MESSAGE_CLOCK_LOCAL, 20u) == MESSAGE_OK);
+        RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, &applied_time) == MESSAGE_OK);
+        CHECK(driving.chassis_mode != CHASSIS_ZERO_FORCE && driving.vx == 1000.0f && driving.offset_angle == 90.0f);
+        CHECK(applied_time.source_time_ms == source_ms && applied_time.source_max_age_ms == 20u);
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), 0u, NULL) == MESSAGE_OK);
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), 1u, NULL) == MESSAGE_ERR_EXPIRED);
+
+        ++pc_sample_sequence;
+        ++tick; // 读入时仍有效，但在发布前过期。
+        advance_during_send_ms = 5u;
+        RobotCMDTask();
+        CHECK(tick == 1u && MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_ERR_EMPTY);
+
+        ++pc_sample_sequence;
+        ++tick;
+        CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+        RobotCMDTask(); // 新的有效反馈允许继续使用已选方向。
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK && driving.offset_angle == 90.0f);
+        ++pc_sample_sequence;
+        ++tick;
+        invalidate_feedback_during_send = feedback; // 期限内也可能收到显式撤销。
+        RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_ERR_EMPTY);
+
+        ++pc_sample_sequence;
+        ++tick;
+        pose.yaw_motor_single_round_angle = 360u; // 错误角度不能被当作有效零位。
+        CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+        RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_ERR_EMPTY);
+        ++pc_sample_sequence;
+        ++tick;
+        pose.yaw_motor_single_round_angle = 275u; // 270 度应换成等价的 -90 度。
+        CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+        RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK && driving.offset_angle == -90.0f);
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "manual-mapping"))
     {
         MessagePublisher_t *feedback = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_GIMBAL);
         MessageSubscriber_t *chassis = MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_CHASSIS);
         MessageSubscriber_t *gimbal = MessageSubscriberRegister(ROBOT_TOPIC_GIMBAL_COMMAND, ROBOT_TOPIC_ENDPOINT_GIMBAL);
-        Gimbal_Upload_Data_s pose = {0}; pose.gimbal_imu_data.YawTotalAngle = 12.0f; pose.gimbal_imu_data.Pitch = 3.0f;
+        Gimbal_Upload_Data_s pose = {.yaw_motor_single_round_angle = 360u}; // 底盘本体参照不使用编码器方向。
+        pose.gimbal_imu_data.YawTotalAngle = 12.0f; pose.gimbal_imu_data.Pitch = 3.0f;
         Chassis_Ctrl_Cmd_s driving = {0}; Gimbal_Ctrl_Cmd_s aiming = {0};
         remote[0].rc.switch_left = RC_SW_DOWN; remote[0].rc.switch_right = RC_SW_MID;
         remote[0].rc.rocker_r1 = 100; remote[0].rc.rocker_r_ = -50; remote[0].rc.rocker_l_ = 100;
         MessagePublishNow(feedback, &pose); RobotCMDTask(); // 首次人工接管只建立姿态参考。
         CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
         CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK);
-        CHECK(driving.vx == 1000.0f && driving.vy == 500.0f && aiming.yaw == 12.0f);
+        CHECK(driving.vx == 1000.0f && driving.vy == 500.0f && driving.offset_angle == 0.0f && aiming.yaw == 12.0f);
         tick += 10u; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
         CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK);
         CHECK(fabsf(aiming.yaw - 12.572958f) < 0.001f); // 以实际 10 ms 积分配置的 1 rad/s。

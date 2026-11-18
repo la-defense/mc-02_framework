@@ -1967,6 +1967,8 @@ add_test(NAME production_command_generated_manual_mapping COMMAND robot_cmd_gene
 add_test(NAME production_command_generated_manual_unconfigured COMMAND robot_cmd_generated_manual_test manual-unconfigured)
 add_test(NAME production_command_generated_manual_invalid_dt COMMAND robot_cmd_generated_manual_test manual-invalid-dt)
 add_test(NAME production_command_generated_manual_unsupported_frame COMMAND robot_cmd_generated_manual_test manual-unsupported-frame)
+# 验证大 yaw 参照的平移按编码器来源时间失效，并响应同轮的反馈撤销。
+add_test(NAME production_command_generated_manual_frame_feedback COMMAND robot_cmd_generated_manual_test manual-frame-feedback)
 target_include_directories(robot_cmd_task_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_cmd_task_test PRIVATE ../../application ../../application/cmd ../../application/config
   ../../modules ../../modules/remote ../../modules/imu ../../modules/master_machine ../../modules/message_center
