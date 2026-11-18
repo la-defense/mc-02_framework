@@ -1,5 +1,5 @@
 /** @file platform_periodic_tim5_stm32.c
- * @brief 用 MC-02 的空闲 TIM5 和专用信号量唤醒一个周期任务。
+ * @brief 用 MC-02 的 TIM5 比较通道和独立信号量唤醒周期任务。
  */
 #include "../os/platform_periodic.h"
 #include "../os/platform_irq.h"
@@ -12,24 +12,65 @@
 
 #define TIMER_HZ UINT32_C(1000000) // TIM5 计数一次对应 1 μs。
 
-static StaticSemaphore_t signal_storage; // 定时器使用独立的二值信号量，不占应用的通知位。
-static SemaphoreHandle_t wake_signal;
-static TaskHandle_t owner_task; // 当前拥有资源的任务，申请和释放时修改。
-static const PlatformPeriodicClock_t *owner_clock; // 防止同一任务混用多个时钟对象。
-volatile uint32_t mc02_tim5_irq_notifications; // 裸板只读观测：本次申请实际产生的有效通知数。
+typedef struct {
+    volatile uint32_t *compare; // 硬件拍点写入对应的 CCR 寄存器。
+    uint32_t enable; // DIER 中允许本通道中断的位。
+    uint32_t flag; // SR 中报告本通道比较到期的位。
+} TimerChannel_t;
+
+typedef struct {
+    TaskHandle_t task; // 只有申请任务可以等待或释放。
+    const PlatformPeriodicClock_t *clock; // 同时核对申请时绑定的周期状态地址。
+    StaticSemaphore_t storage; // 每个通道独立存储一次尚未消费的唤醒。
+    SemaphoreHandle_t signal; // 有通道归属时，ISR 用此句柄交付唤醒。
+} TimerOwner_t;
+
+static const TimerChannel_t channels[] = {
+    {&TIM5->CCR1, TIM_DIER_CC1IE, TIM_SR_CC1IF}, // 通道 1 的拍点、中断开关和到期位。
+    {&TIM5->CCR2, TIM_DIER_CC2IE, TIM_SR_CC2IF}, // 通道 2 的拍点、中断开关和到期位。
+    {&TIM5->CCR3, TIM_DIER_CC3IE, TIM_SR_CC3IF}, // 通道 3 的拍点、中断开关和到期位。
+    {&TIM5->CCR4, TIM_DIER_CC4IE, TIM_SR_CC4IF}, // 通道 4 的拍点、中断开关和到期位。
+};
+#define CHANNEL_COUNT (sizeof(channels) / sizeof(channels[0])) // 比较通道数量决定同时申请的上限。
+static TimerOwner_t owners[CHANNEL_COUNT];
+static size_t owner_count; // 第一个任务启动计数，最后一个任务关闭计数。
+volatile uint32_t mc02_tim5_irq_notifications; // 裸板只读观测：本次计数器启用期间交付的唤醒数。
 
 static uint8_t TaskContextReady(void)
 {
     return (uint8_t)(!PlatformIrqIsInHandler() && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING);
 }
 
-// 定时器由本模块独占，清除全部标志不会影响其它外设。
-static void DisarmCompare(void)
+// 只有首次启动或最后一次释放时，才清理定时器的全部中断。
+static void ClearTimerInterrupts(void)
 {
     TIM5->DIER = 0u; // 先停止比较中断的产生。
-    TIM5->SR = 0u; // 清除定时器内的旧比较和更新标志。
+    WRITE_REG(TIM5->SR, 0u); // 清除定时器内的旧比较和更新标志。
     __DSB(); // 外设写入完成后才清除 NVIC 挂起位。
     NVIC_ClearPendingIRQ(TIM5_IRQn); // 已送到中断控制器的旧请求也要清掉。
+}
+
+// SR 写零清除、写一保留；只清本通道，即使其他通道刚好到期也能保住标志。
+static void ClearMatch(const TimerChannel_t *channel)
+{
+    WRITE_REG(TIM5->SR, ~channel->flag);
+    __DSB(); // 等外设收到写入后，再检查时刻或退出中断。
+}
+
+// 调用者在任务临界区或 TIM5 ISR 中，只撤销指定通道。
+static void DisarmCompare(const TimerChannel_t *channel)
+{
+    TIM5->DIER &= ~channel->enable; // 保留其他任务已经打开的比较中断。
+    ClearMatch(channel); // 共享 NVIC 挂起位由其他通道继续使用。
+}
+
+// 在任务临界区查找匹配项；找不到时不访问定时器寄存器。
+static size_t OwnerChannel(const PlatformPeriodicClock_t *clock)
+{
+    const TaskHandle_t task = xTaskGetCurrentTaskHandle();
+    for (size_t i = 0u; i < CHANNEL_COUNT; ++i)
+        if (owners[i].clock == clock && owners[i].task == task) return i;
+    return CHANNEL_COUNT;
 }
 
 // 按当前 MC-02 的 TIMPRE=0 时钟规则计算 1 MHz 分频。
@@ -59,30 +100,52 @@ PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
     if (divider == 0u || HAL_NVIC_GetPriorityGrouping() != NVIC_PRIORITYGROUP_4)
         return PLATFORM_PERIODIC_CONFIG; // 中断优先级必须能调用 FreeRTOS 的 ISR 接口。
     taskENTER_CRITICAL(); // 检查占用与取得资源之间不允许切换任务。
-    if (owner_task != NULL || __HAL_RCC_TIM5_IS_CLK_ENABLED() || NVIC_GetEnableIRQ(TIM5_IRQn))
+    const TaskHandle_t task = xTaskGetCurrentTaskHandle(); // 用实际任务身份登记所有权。
+    size_t index = CHANNEL_COUNT; // 用越界索引表示尚无可用通道。
+    for (size_t i = 0u; i < CHANNEL_COUNT; ++i) // 保留第一个空位，同时检查全部现有申请。
+    {
+        if (owners[i].task == task || owners[i].clock == clock) // 防止重复绑定任务或覆盖他人的周期状态。
+        {
+            taskEXIT_CRITICAL();
+            return PLATFORM_PERIODIC_RESOURCE;
+        }
+        if (index == CHANNEL_COUNT && owners[i].task == NULL) index = i; // 优先复用低号空闲通道。
+    }
+    const uint8_t first = (uint8_t)(owner_count == 0u); // 只在首个申请进入时接管硬件。
+    const uint8_t clock_enabled = (uint8_t)(__HAL_RCC_TIM5_IS_CLK_ENABLED() != 0u); // 查外部是否已开时钟。
+    const uint8_t irq_enabled = (uint8_t)(NVIC_GetEnableIRQ(TIM5_IRQn) != 0u); // 查共享中断是否已经启用。
+    // 首次申请要确认硬件空闲；后续申请要确认共享硬件的计数条件未改变。
+    const uint8_t unavailable = first ? (clock_enabled || irq_enabled)
+        : (!clock_enabled || !irq_enabled || TIM5->PSC != divider - 1u || (TIM5->CR1 & TIM_CR1_CEN) == 0u);
+    if (index == CHANNEL_COUNT || unavailable)
     {
         taskEXIT_CRITICAL();
-        return PLATFORM_PERIODIC_RESOURCE; // 他人已经启用的时钟或中断不得清理。
+        return PLATFORM_PERIODIC_RESOURCE; // 无空位、硬件已被占用或现有计数条件已改变。
     }
-    wake_signal = xSemaphoreCreateBinaryStatic(&signal_storage); // 无需分配堆内存。
-    if (wake_signal == NULL)
+    TimerOwner_t *owner = &owners[index]; // 只修改此次取得的通道。
+    owner->signal = xSemaphoreCreateBinaryStatic(&owner->storage); // 无需分配堆内存。
+    if (owner->signal == NULL) // 申请失败时保留所有已有通道。
     {
         taskEXIT_CRITICAL();
         return PLATFORM_PERIODIC_RESOURCE;
     }
-    __HAL_RCC_TIM5_CLK_ENABLE(); // 先提供外设寄存器时钟。
-    __HAL_RCC_TIM5_FORCE_RESET(); // 清除旧计数模式、通道模式及输出脚设置。
-    __HAL_RCC_TIM5_RELEASE_RESET();
-    TIM5->PSC = divider - 1u; // 寄存器写入分频值减一。
-    TIM5->ARR = UINT32_MAX; // 保留完整的 32 位计数范围。
-    TIM5->EGR = TIM_EGR_UG; // 装载预分频和计数初值。
-    DisarmCompare(); // 在开放 NVIC 前清掉初始更新标志。
-    owner_task = xTaskGetCurrentTaskHandle(); // 记录可等待和释放的唯一任务。
-    owner_clock = clock; // 将硬件计数域与该任务的状态对象绑定。
-    mc02_tim5_irq_notifications = 0u; // 每次检查单独统计实际唤醒。
-    HAL_NVIC_SetPriority(TIM5_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY, 0u); // 使用可调用 ISR 信号量接口的优先级。
-    HAL_NVIC_EnableIRQ(TIM5_IRQn);
-    TIM5->CR1 = TIM_CR1_CEN; // 使用默认向上计数和内部时钟，不打开输出通道。
+    if (first) // 后续任务共享当前计数值，不能让已有任务的计划时刻跳变。
+    {
+        __HAL_RCC_TIM5_CLK_ENABLE(); // 先提供外设寄存器时钟。
+        __HAL_RCC_TIM5_FORCE_RESET(); // 清除旧计数、通道和 GPIO 输出模式。
+        __HAL_RCC_TIM5_RELEASE_RESET(); // 解除复位后才能配置计数器。
+        TIM5->PSC = divider - 1u; // 寄存器写入分频值减一。
+        TIM5->ARR = UINT32_MAX; // 保留完整的 32 位计数范围。
+        TIM5->EGR = TIM_EGR_UG; // 装载预分频和计数初值。
+        ClearTimerInterrupts(); // 在开放 NVIC 前清掉初始更新标志。
+        mc02_tim5_irq_notifications = 0u; // 从这次硬件启动开始统计唤醒。
+        HAL_NVIC_SetPriority(TIM5_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY, 0u); // 允许 ISR 使用 FreeRTOS 信号量。
+        HAL_NVIC_EnableIRQ(TIM5_IRQn); // 允许已登记的比较通道发出请求。
+        TIM5->CR1 = TIM_CR1_CEN; // 启动内部向上计数，输出通道保持关闭。
+    }
+    owner->task = task; // 绑定能够等待或释放的任务。
+    owner->clock = clock; // 保存每次操作需要核对的状态地址。
+    ++owner_count; // 其他持有者仍然存在时不得关闭定时器。
     validated.next_tick = TIM5->CNT; // 第一拍立即到期。
     validated.last_tick = validated.next_tick; // 同一初值用于检查计数前进。
     *clock = validated; // 完成配置后才交付。
@@ -100,31 +163,37 @@ PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
     PlatformPeriodicRelease_t *release)
 {
     if (clock == NULL || release == NULL) return PLATFORM_PERIODIC_CONFIG;
-    if (!TaskContextReady() || owner_clock != clock || owner_task != xTaskGetCurrentTaskHandle())
-        return PLATFORM_PERIODIC_CONTEXT; // 无权使用时不得读写 TIM5。
+    if (!TaskContextReady()) return PLATFORM_PERIODIC_CONTEXT;
+    taskENTER_CRITICAL(); // 查找时不与其他任务的申请或释放交错。
+    const size_t index = OwnerChannel(clock);
+    taskEXIT_CRITICAL();
+    if (index == CHANNEL_COUNT) return PLATFORM_PERIODIC_CONTEXT; // 无权使用时不得读写 TIM5。
+    const TimerChannel_t *channel = &channels[index]; // 该通道只允许当前任务释放。
+    const SemaphoreHandle_t signal = owners[index].signal; // 任务等待和 ISR 交付用同一个信号量。
     PlatformPeriodicClock_t candidate = *clock; // 等待失败不会移动原拍点。
     PlatformPeriodicRelease_t observed;
     PlatformPeriodicResult_t result = PlatformPeriodicPoll(&candidate, TIM5->CNT, &observed);
     if (result == PLATFORM_PERIODIC_WAIT)
     {
-        (void)xSemaphoreTake(wake_signal, 0u); // 清掉上次结束后可能留在信号量中的通知。
+        (void)xSemaphoreTake(signal, 0u); // 清掉上次结束后可能留在信号量中的通知。
         taskENTER_CRITICAL(); // 写入比较值期间禁止本定时器中断介入。
-        DisarmCompare();
-        TIM5->CCR1 = observed.scheduled_tick; // 通道 1 只比较计数，不驱动引脚。
+        DisarmCompare(channel); // 清掉本通道旧比较，保留其他任务的等待。
+        *channel->compare = observed.scheduled_tick; // 通道只比较计数，不驱动引脚。
+        ClearMatch(channel); // 去掉改写 CCR 前可能刚到期的旧比较；下面用 CNT 复查新拍点。
         uint8_t armed = 0u;
         if (!Reached(TIM5->CNT, observed.scheduled_tick))
         {
-            TIM5->DIER = TIM_DIER_CC1IE; // 只允许通道 1 比较中断。
+            TIM5->DIER |= channel->enable; // 只新增本通道的中断允许位。
             armed = 1u; // 判定尚未到期；之后到期将由 ISR 保留通知。
         }
         taskEXIT_CRITICAL();
 
         const uint64_t ticks = ((uint64_t)observed.wait_ticks * configTICK_RATE_HZ + TIMER_HZ - 1u) / TIMER_HZ + 1u; // 向上换算并留一刻度，防止整 tick 边界使超时提前。
         const TickType_t limit = ticks >= portMAX_DELAY ? portMAX_DELAY - 1u : (TickType_t)ticks; // 绝不无限等待丢失的中断。
-        const uint8_t signaled = (uint8_t)(!armed || xSemaphoreTake(wake_signal, limit) == pdTRUE); // 已到期的竞态可直接复查。
-        taskENTER_CRITICAL();
-        DisarmCompare(); // 超时或唤醒后取消本次比较，下一轮不继承中断。
-        taskEXIT_CRITICAL();
+        const uint8_t signaled = (uint8_t)(!armed || xSemaphoreTake(signal, limit) == pdTRUE); // 已到期的竞态可直接复查。
+        taskENTER_CRITICAL(); // 防止清比较时中断再次向本任务发通知。
+        DisarmCompare(channel); // 超时或唤醒后只取消本通道的比较。
+        taskEXIT_CRITICAL(); // 允许其他已到期通道继续交付通知。
         if (!signaled) return PLATFORM_PERIODIC_CLOCK; // 计数前进也不能掩盖预期中断丢失。
         result = PlatformPeriodicPoll(&candidate, TIM5->CNT, &observed); // 只接受硬件时刻已经到期的结果。
         if (result == PLATFORM_PERIODIC_WAIT) return PLATFORM_PERIODIC_CLOCK; // 提前通知不能运行新一拍。
@@ -139,28 +208,43 @@ PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
 
 PlatformPeriodicResult_t PlatformTaskHighResClose(const PlatformPeriodicClock_t *clock)
 {
-    if (clock == NULL || !TaskContextReady() || owner_clock != clock ||
-        owner_task != xTaskGetCurrentTaskHandle()) return PLATFORM_PERIODIC_CONTEXT;
+    if (clock == NULL || !TaskContextReady()) return PLATFORM_PERIODIC_CONTEXT;
     taskENTER_CRITICAL(); // 释放过程中不允许新任务接管。
-    DisarmCompare();
-    HAL_NVIC_DisableIRQ(TIM5_IRQn); // 停止来自 TIM5 的异常请求。
-    TIM5->CR1 = 0u; // 停止计数后再关闭外设时钟。
-    __HAL_RCC_TIM5_CLK_DISABLE();
-    vSemaphoreDelete(wake_signal); // 外设和 IRQ 停止后才释放静态信号量。
-    wake_signal = NULL; // 下一次申请重新初始化通知。
-    owner_clock = NULL; // 关闭后旧状态地址不再有权限。
-    owner_task = NULL; // 下一任务可以重新初始化硬件。
+    const size_t index = OwnerChannel(clock); // 只有原任务和原周期状态能关闭此通道。
+    if (index == CHANNEL_COUNT)
+    {
+        taskEXIT_CRITICAL();
+        return PLATFORM_PERIODIC_CONTEXT;
+    }
+    TimerOwner_t *owner = &owners[index]; // 只释放本任务的通道。
+    DisarmCompare(&channels[index]); // 停止本通道通知后才删除信号量。
+    if (--owner_count == 0u) // 最后一个任务离开时才关闭共享硬件。
+    {
+        HAL_NVIC_DisableIRQ(TIM5_IRQn); // 先停止来自 TIM5 的异常入口。
+        TIM5->CR1 = 0u; // 停止计数，不再产生新标志。
+        ClearTimerInterrupts(); // 清掉留在定时器和 NVIC 内的旧请求。
+        __HAL_RCC_TIM5_CLK_DISABLE(); // 无后续寄存器访问时再关时钟。
+    }
+    vSemaphoreDelete(owner->signal); // 本通道已经关闭，ISR 不会再访问它。
+    owner->signal = NULL; // 下次分配时重新初始化信号量。
+    owner->clock = NULL; // 撤销旧周期状态的访问权。
+    owner->task = NULL; // 通道可由另一任务接管。
     taskEXIT_CRITICAL();
     return PLATFORM_PERIODIC_READY;
 }
 
 void TIM5_IRQHandler(void)
 {
-    if ((TIM5->SR & TIM_SR_CC1IF) == 0u || (TIM5->DIER & TIM_DIER_CC1IE) == 0u)
-        return; // 非本次比较的请求既不通知，也不取消还没到期的比较。
-    DisarmCompare(); // 每次设置只产生一次唤醒。
-    BaseType_t reschedule = pdFALSE;
-    if (xSemaphoreGiveFromISR(wake_signal, &reschedule) == pdTRUE)
-        ++mc02_tim5_irq_notifications; // 只记录成功写入信号量的通知。
-    portYIELD_FROM_ISR(reschedule); // 如需要，立即交还调度器。
+    const uint32_t pending = TIM5->SR; // 记录进入时已经到期的通道，稍后到期的由下次 IRQ 处理。
+    const uint32_t enabled = TIM5->DIER; // 忽略尚未等待的通道留下的比较标志。
+    BaseType_t reschedule = pdFALSE; // 任一通知唤醒更高优先级任务时，退出前请求调度。
+    for (size_t i = 0u; i < CHANNEL_COUNT; ++i) // 一次中断可能同时服务多个任务。
+    {
+        const TimerChannel_t *channel = &channels[i]; // 使用同一通道的开关、标志和信号量。
+        if ((pending & channel->flag) == 0u || (enabled & channel->enable) == 0u) continue; // 未打开或未到期时不交付。
+        DisarmCompare(channel); // 每次设置只产生一次通知，保留其他通道的状态位。
+        if (xSemaphoreGiveFromISR(owners[i].signal, &reschedule) == pdTRUE)
+            ++mc02_tim5_irq_notifications; // 只记录成功写入信号量的通知。
+    }
+    if (reschedule != pdFALSE) portYIELD_FROM_ISR(reschedule); // 全部交付后只请求一次调度。
 }

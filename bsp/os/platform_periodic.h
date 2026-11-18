@@ -90,7 +90,8 @@ PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock
  * @param[out] clock 成功才写入；必须在本次使用期间保持有效且不可直接改写。
  * @param[in] config 固定周期与预算，单位 μs。
  * @return READY 为成功，其他值说明配置、资源或调用上下文错误。
- * @note 仅在启用相应平台后端的构建中提供。由同一正常任务负责申请、等待和释放。
+ * @note 仅在启用相应平台后端的构建中提供。每个任务最多申请一次，通道耗尽返回 RESOURCE。
+ *       由申请任务负责等待和释放，在删除任务前须先释放。
  */
 PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
     const PlatformPeriodicConfig_t *config);
@@ -104,7 +105,7 @@ PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
 PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
     PlatformPeriodicRelease_t *release);
 
-/** @brief 停止硬件比较和计数，释放本次申请的资源。
+/** @brief 停止本任务的硬件比较并释放通道，最后一次释放才停止共享计数器。
  * @param[in] clock 本任务申请的状态地址，不可为空。
  * @return READY 为成功，错误调用不会释放其他任务的资源。
  */

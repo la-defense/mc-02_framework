@@ -19,7 +19,7 @@ uint8_t test_timer_enabled;
 static uint32_t pclk = 120000000u; // 模拟当前板卡的 APB1 时钟。
 static uint32_t priority_group = NVIC_PRIORITYGROUP_4;
 static uint8_t irq_enabled, in_handler, deny_alloc;
-static int first_task, second_task;
+static int first_task, second_task, extra_tasks[3];
 static TaskHandle_t current = &first_task;
 static unsigned critical_depth, notifications, waits;
 static uint32_t arm_race_tick; // 设置非零时模拟计数在写比较寄存器前到期。
@@ -27,9 +27,21 @@ static uint8_t irq_before_wait, timeout, early_signal;
 static uint32_t delay_us; // 模拟 ISR 之后调度任务的延迟。
 static uint32_t reset_tick; // 模拟计数起点接近回绕。
 static unsigned deleted_signals; // 确认资源释放顺序。
+static unsigned timer_resets, nvic_clears;
+static PlatformPeriodicClock_t *nested_clock; // 当前任务阻塞时，替身可切换到另一个任务。
+static uint8_t nested_timeout; // 第二个任务单独超时，首个任务仍应收到通知。
 
-void __HAL_RCC_TIM5_FORCE_RESET(void) { test_timer = (TestTimer_t){.CNT = reset_tick}; }
+void __HAL_RCC_TIM5_FORCE_RESET(void)
+{
+    ++timer_resets;
+    test_timer = (TestTimer_t){.CNT = reset_tick};
+}
 void __HAL_RCC_TIM5_RELEASE_RESET(void) {}
+void TestWriteTimerStatus(volatile uint32_t *reg, uint32_t value)
+{
+    TEST_CHECK(reg == &TIM5->SR);
+    *reg &= value; // SR 写入 1 时不能清除已有标志。
+}
 void __DSB(void)
 {
     if (arm_race_tick != 0u)
@@ -47,23 +59,47 @@ void HAL_NVIC_SetPriority(int irq, uint32_t preempt, uint32_t sub)
 void HAL_NVIC_EnableIRQ(int irq) { TEST_CHECK(irq == TIM5_IRQn); irq_enabled = 1u; }
 void HAL_NVIC_DisableIRQ(int irq) { TEST_CHECK(irq == TIM5_IRQn); irq_enabled = 0u; }
 uint32_t NVIC_GetEnableIRQ(int irq) { TEST_CHECK(irq == TIM5_IRQn); return irq_enabled; }
-void NVIC_ClearPendingIRQ(int irq) { TEST_CHECK(irq == TIM5_IRQn); }
+void NVIC_ClearPendingIRQ(int irq) { TEST_CHECK(irq == TIM5_IRQn); ++nvic_clears; }
 uint8_t PlatformIrqIsInHandler(void) { return in_handler; }
 BaseType_t xTaskGetSchedulerState(void) { return taskSCHEDULER_RUNNING; }
 TaskHandle_t xTaskGetCurrentTaskHandle(void) { return current; }
 void taskENTER_CRITICAL(void) { ++critical_depth; }
 
-static void FireCompare(void)
+static void RunIrq(void)
 {
     TEST_CHECK(irq_enabled && test_timer_enabled && critical_depth == 0u);
     in_handler = 1u;
-    TIM5_IRQHandler(); // 无标志的额外入口不能取消有效的比较。
-    TEST_CHECK(TIM5->DIER == TIM_DIER_CC1IE);
-    TIM5->CNT = TIM5->CCR1 + delay_us; // 比较后可能经过多个周期才轮到任务。
-    TIM5->SR = TIM_SR_CC1IF;
     TIM5_IRQHandler();
     TIM5_IRQHandler(); // 同一事件只产生一次通知。
     in_handler = 0u;
+}
+
+static void FireCompare(void)
+{
+    const uint32_t enabled = TIM5->DIER; // 单通道场景进入时，其他持有者没有正在等待的比较。
+    RunIrq(); // 无标志的额外入口不能取消有效的比较。
+    TEST_CHECK(TIM5->DIER == enabled);
+    switch (enabled)
+    {
+        case TIM_DIER_CC1IE:
+            TIM5->CNT = TIM5->CCR1 + delay_us;
+            TIM5->SR |= TIM_SR_CC1IF;
+            break;
+        case TIM_DIER_CC2IE:
+            TIM5->CNT = TIM5->CCR2 + delay_us;
+            TIM5->SR |= TIM_SR_CC2IF;
+            break;
+        case TIM_DIER_CC3IE:
+            TIM5->CNT = TIM5->CCR3 + delay_us;
+            TIM5->SR |= TIM_SR_CC3IF;
+            break;
+        case TIM_DIER_CC4IE:
+            TIM5->CNT = TIM5->CCR4 + delay_us;
+            TIM5->SR |= TIM_SR_CC4IF;
+            break;
+        default: TEST_CHECK(0); // 多通道同时到期由单独的测试步骤模拟。
+    }
+    RunIrq();
 }
 
 void taskEXIT_CRITICAL(void)
@@ -84,17 +120,43 @@ SemaphoreHandle_t xSemaphoreCreateBinaryStatic(StaticSemaphore_t *storage)
 }
 void vSemaphoreDelete(SemaphoreHandle_t signal)
 {
-    TEST_CHECK(signal != NULL && !irq_enabled && !test_timer_enabled); // 确认 ISR 不会再引用此对象。
+    TEST_CHECK(signal != NULL && critical_depth != 0u); // 释放期间 ISR 无法访问对象。
     ++deleted_signals;
 }
 BaseType_t xSemaphoreGiveFromISR(SemaphoreHandle_t signal, BaseType_t *reschedule)
 {
-    TEST_CHECK(in_handler && signal->value == 0u && TIM5->DIER == 0u);
+    TEST_CHECK(in_handler && signal != NULL && signal->value == 0u);
     ++notifications;
     signal->value = 1u;
     *reschedule = pdTRUE;
     return pdTRUE;
 }
+
+static void RunOtherTaskWhileBlocked(void)
+{
+    TEST_CHECK(TIM5->DIER == TIM_DIER_CC1IE);
+    PlatformPeriodicClock_t *clock = nested_clock; // 取走模拟切换请求，避免嵌套等待再次触发。
+    nested_clock = NULL;
+    const unsigned clears = nvic_clears; // 普通比较和部分释放都不能清掉共享的 NVIC 请求。
+    current = &second_task; // 让第二个任务在同一计数域等下一拍。
+    PlatformPeriodicRelease_t release = {.scheduled_tick = 17u};
+    const PlatformPeriodicResult_t result = PlatformTaskHighResWait(clock, &release);
+    if (nested_timeout) // 第二个任务超时并退出时，第一个通道仍有待处理的通知。
+    {
+        TEST_CHECK(result == PLATFORM_PERIODIC_CLOCK && release.scheduled_tick == 17u);
+        TEST_CHECK(PlatformTaskHighResClose(clock) == PLATFORM_PERIODIC_READY);
+        TEST_CHECK(TIM5->DIER == TIM_DIER_CC1IE && TIM5->SR == TIM_SR_CC1IF);
+        TEST_CHECK(irq_enabled && test_timer_enabled);
+        RunIrq(); // 第一拍留在 NVIC 和外设中的请求仍然可以交付。
+    }
+    else
+    {
+        TEST_CHECK(result == PLATFORM_PERIODIC_READY && release.scheduled_tick == TIM5->CCR2);
+    }
+    TEST_CHECK(nvic_clears == clears);
+    current = &first_task; // 恢复原任务，消费自己的信号量。
+}
+
 BaseType_t xSemaphoreTake(SemaphoreHandle_t signal, TickType_t ticks)
 {
     if (ticks != 0u)
@@ -103,11 +165,96 @@ BaseType_t xSemaphoreTake(SemaphoreHandle_t signal, TickType_t ticks)
         ++waits;
         if (timeout) return pdFALSE; // 模拟停表或丢失比较中断。
         if (early_signal) return pdTRUE; // 模拟提前通知，计数还没有到期。
+        if (!signal->value && nested_clock != NULL)
+            RunOtherTaskWhileBlocked(); // 原任务阻塞，允许另一个任务设置自己的比较。
+        if (!signal->value && current == &second_task && (TIM5->DIER & TIM_DIER_CC2IE))
+        {
+            TEST_CHECK(TIM5->DIER == (TIM_DIER_CC1IE | TIM_DIER_CC2IE)); // 两个任务的比较应同时有效。
+            TIM5->CNT = TIM5->CCR1; // 两个任务的同一拍在调度前已经到期。
+            TEST_CHECK(TIM5->CNT == TIM5->CCR2);
+            TIM5->SR |= TIM_SR_CC1IF; // 首个任务的比较已经送到共享中断。
+            if (nested_timeout) return pdFALSE; // 仅第二个任务失去唤醒，不应清除首个任务的标志。
+            TIM5->SR |= TIM_SR_CC2IF;
+            RunIrq(); // 一次 IRQ 为两个通道分别交付唤醒。
+        }
         if (!signal->value) FireCompare(); // 没有预先通知时模拟等待期间触发 ISR。
     }
     const BaseType_t ready = signal->value ? pdTRUE : pdFALSE;
     signal->value = 0u;
     return ready;
+}
+
+static void TestSharedTimer(const PlatformPeriodicConfig_t *config)
+{
+    PlatformPeriodicClock_t first, second, extra[3];
+    PlatformPeriodicRelease_t release;
+    const unsigned original_resets = timer_resets;
+    const unsigned original_deletes = deleted_signals;
+    reset_tick = 0u;
+    current = &first_task;
+    TEST_CHECK(PlatformTaskHighResOpen(&first, config) == PLATFORM_PERIODIC_READY);
+    TEST_CHECK(PlatformTaskHighResWait(&first, &release) == PLATFORM_PERIODIC_READY && release.scheduled_tick == 0u);
+
+    current = &second_task;
+    TIM5->CNT = 40u; // 原有计数不能因另一任务申请而回到零。
+    deny_alloc = 1u;
+    TEST_CHECK(PlatformTaskHighResOpen(&second, config) == PLATFORM_PERIODIC_RESOURCE && TIM5->CNT == 40u);
+    deny_alloc = 0u;
+    TEST_CHECK(PlatformTaskHighResOpen(&second, config) == PLATFORM_PERIODIC_READY && second.next_tick == 40u);
+    TEST_CHECK(timer_resets == original_resets + 1u);
+    TEST_CHECK(PlatformTaskHighResClose(&second) == PLATFORM_PERIODIC_READY && TIM5->CNT == 40u);
+
+    reset_tick = 100u; // 重新建立同一拍点，模拟两个任务同时到期。
+    current = &first_task;
+    TEST_CHECK(PlatformTaskHighResClose(&first) == PLATFORM_PERIODIC_READY && !irq_enabled);
+    TEST_CHECK(PlatformTaskHighResOpen(&first, config) == PLATFORM_PERIODIC_READY);
+    TEST_CHECK(PlatformTaskHighResWait(&first, &release) == PLATFORM_PERIODIC_READY);
+    current = &second_task;
+    const unsigned shared_resets = timer_resets;
+    TEST_CHECK(PlatformTaskHighResOpen(&second, config) == PLATFORM_PERIODIC_READY);
+    TEST_CHECK(PlatformTaskHighResWait(&second, &release) == PLATFORM_PERIODIC_READY);
+    TEST_CHECK(timer_resets == shared_resets);
+
+    current = &first_task;
+    nested_clock = &second;
+    TEST_CHECK(PlatformTaskHighResWait(&first, &release) == PLATFORM_PERIODIC_READY && release.scheduled_tick == 600u);
+    TEST_CHECK(mc02_tim5_irq_notifications == 2u && TIM5->DIER == 0u); // 一次 ISR 交付两个独立通知。
+    nested_timeout = 1u;
+    nested_clock = &second;
+    TEST_CHECK(PlatformTaskHighResWait(&first, &release) == PLATFORM_PERIODIC_READY && release.scheduled_tick == 1100u);
+    TEST_CHECK(mc02_tim5_irq_notifications == 3u && TIM5->DIER == 0u); // 另一个通道超时并退出后仍收到通知。
+    nested_timeout = 0u;
+
+    // 复用第二个通道，四个持有者用满全部通道后，第五个仍应失败。
+    current = &second_task;
+    TEST_CHECK(PlatformTaskHighResOpen(&second, config) == PLATFORM_PERIODIC_READY && second.next_tick == 1100u);
+    for (size_t i = 0; i < 3u; ++i)
+    {
+        current = &extra_tasks[i];
+        const PlatformPeriodicResult_t expected = i < 2u ? PLATFORM_PERIODIC_READY : PLATFORM_PERIODIC_RESOURCE;
+        TEST_CHECK(PlatformTaskHighResOpen(&extra[i], config) == expected);
+    }
+    // 释放通道 3 后，第五个任务可使用该通道，剩余任务仍保持原计数。
+    current = &extra_tasks[0];
+    TEST_CHECK(PlatformTaskHighResClose(&extra[0]) == PLATFORM_PERIODIC_READY);
+    current = &extra_tasks[2];
+    TEST_CHECK(PlatformTaskHighResOpen(&extra[2], config) == PLATFORM_PERIODIC_READY && extra[2].next_tick == 1100u);
+    TEST_CHECK(PlatformTaskHighResWait(&extra[2], &release) == PLATFORM_PERIODIC_READY); // 领取通道 3 的首拍。
+    current = &extra_tasks[1];
+    TEST_CHECK(PlatformTaskHighResWait(&extra[1], &release) == PLATFORM_PERIODIC_READY); // 领取通道 4 的首拍。
+    current = &extra_tasks[2];
+    TEST_CHECK(PlatformTaskHighResWait(&extra[2], &release) == PLATFORM_PERIODIC_READY && TIM5->CCR3 == 1600u);
+    TEST_CHECK(PlatformTaskHighResClose(&extra[2]) == PLATFORM_PERIODIC_READY && irq_enabled);
+    current = &extra_tasks[1];
+    TEST_CHECK(PlatformTaskHighResWait(&extra[1], &release) == PLATFORM_PERIODIC_READY && release.scheduled_tick == 1600u);
+    TEST_CHECK(PlatformTaskHighResWait(&extra[1], &release) == PLATFORM_PERIODIC_READY && TIM5->CCR4 == 2100u);
+    TEST_CHECK(mc02_tim5_irq_notifications == 5u); // 两个高号通道也分别收到比较通知。
+    TEST_CHECK(PlatformTaskHighResClose(&extra[1]) == PLATFORM_PERIODIC_READY && irq_enabled);
+    current = &second_task;
+    TEST_CHECK(PlatformTaskHighResClose(&second) == PLATFORM_PERIODIC_READY && irq_enabled);
+    current = &first_task;
+    TEST_CHECK(PlatformTaskHighResClose(&first) == PLATFORM_PERIODIC_READY && !irq_enabled && !test_timer_enabled);
+    TEST_CHECK(deleted_signals == original_deletes + 8u && timer_resets == shared_resets);
 }
 
 int main(void)
@@ -139,8 +286,10 @@ int main(void)
     in_handler = 1u;
     TEST_CHECK(PlatformTaskHighResWait(&clock, &release) == PLATFORM_PERIODIC_CONTEXT);
     in_handler = 0u;
-    current = &second_task; // 资源不能被另一任务使用或释放。
+    // 同一任务不得重复申请，另一个任务不能用旧状态地址取得通道。
     TEST_CHECK(PlatformTaskHighResOpen(&other, &config) == PLATFORM_PERIODIC_RESOURCE);
+    current = &second_task;
+    TEST_CHECK(PlatformTaskHighResOpen(&clock, &config) == PLATFORM_PERIODIC_RESOURCE);
     TEST_CHECK(PlatformTaskHighResWait(&clock, &release) == PLATFORM_PERIODIC_CONTEXT);
     TEST_CHECK(PlatformTaskHighResClose(&clock) == PLATFORM_PERIODIC_CONTEXT);
     current = &first_task;
@@ -175,5 +324,6 @@ int main(void)
     TEST_CHECK(mc02_tim5_irq_notifications == 1u);
     TEST_CHECK(PlatformTaskHighResClose(&other) == PLATFORM_PERIODIC_READY);
     TEST_CHECK(deleted_signals == 2u);
+    TestSharedTimer(&config);
     return 0;
 }

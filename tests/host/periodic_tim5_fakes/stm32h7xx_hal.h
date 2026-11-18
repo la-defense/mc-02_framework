@@ -4,7 +4,7 @@
 #ifndef MC02_TEST_PERIODIC_TIM5_HAL_H
 #define MC02_TEST_PERIODIC_TIM5_HAL_H
 #include <stdint.h>
-typedef struct { volatile uint32_t CR1, DIER, SR, EGR, CNT, PSC, ARR, CCR1; } TestTimer_t;
+typedef struct { volatile uint32_t CR1, DIER, SR, EGR, CNT, PSC, ARR, CCR1, CCR2, CCR3, CCR4; } TestTimer_t;
 typedef struct { volatile uint32_t CFGR; } TestRcc_t;
 typedef struct { uint32_t APB1CLKDivider; } RCC_ClkInitTypeDef;
 extern TestTimer_t test_timer;
@@ -19,13 +19,21 @@ extern uint8_t test_timer_enabled;
 #define TIM_CR1_CEN 1u
 #define TIM_EGR_UG 1u
 #define TIM_DIER_CC1IE 2u
+#define TIM_DIER_CC2IE 4u
+#define TIM_DIER_CC3IE 8u
+#define TIM_DIER_CC4IE 16u
 #define TIM_SR_CC1IF 2u
+#define TIM_SR_CC2IF 4u
+#define TIM_SR_CC3IF 8u
+#define TIM_SR_CC4IF 16u
+#define WRITE_REG(reg, value) TestWriteTimerStatus(&(reg), (value)) // 模拟 SR 写零清除、写一保留。
 #define __HAL_RCC_TIM5_IS_CLK_ENABLED() (test_timer_enabled)
 #define __HAL_RCC_TIM5_CLK_ENABLE() (test_timer_enabled = 1u)
 #define __HAL_RCC_TIM5_CLK_DISABLE() (test_timer_enabled = 0u)
 void __HAL_RCC_TIM5_FORCE_RESET(void);
 void __HAL_RCC_TIM5_RELEASE_RESET(void);
 void __DSB(void);
+void TestWriteTimerStatus(volatile uint32_t *reg, uint32_t value);
 void HAL_RCC_GetClockConfig(RCC_ClkInitTypeDef *config, uint32_t *latency);
 uint32_t HAL_RCC_GetPCLK1Freq(void);
 uint32_t HAL_NVIC_GetPriorityGrouping(void);
