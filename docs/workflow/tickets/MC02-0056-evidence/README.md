@@ -55,3 +55,5 @@ DJI 汇总补充每类已登记数量和有效反馈中最早的原始采样时�
 云台反馈期限回归使用 `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --build-root /home/mc02/build/sentinel-full --parallel 6`。WSL Debug／Release 各 803/803 项通过，工具检查运行 188 项（其中有跳过项），普通裸板和遥控诊断 Debug 构建及 ELF 隔离检查通过。云台及 DJI 单圈反馈的 10 项 ASan／UBSan 检查通过，覆盖重复发布、两路分别过期与撤销、时钟回绕，以及真实 DJI 解码后单圈角度与原始时刻的一致性。测试替身保留进程生命周期分配，专项关闭了泄漏检查。
 
 云台、整车周期和 DJI 源码另按 Cortex-M7 硬浮点选项单文件编译通过。`-fstack-usage` 对 `GimbalTask`、`GimbalUpdateFeedback` 和 `DJIMotorGetSingleTurnAngle` 分别报告 32 B、168 B 和 40 B，这是各函数的静态用量，板上栈余量和耗时待测。禁热裸板配置不链接实际云台控制和 DJI 发送路径。本轮没有硬件验收。
+
+V2 保持命令回归使用生产 `RobotCMDTask` 和消息中心。短期限的反馈在到期边界仍可用，下一毫秒读不到生成的保持命令。另注入命令计算后、发布前的延迟，确认反馈过期时会清除旧命令。`verify.py --fast --host` 通过，Debug／Release 各 803/803 项通过，V2 命令回归通过 ASan／UBSan。单板 SP、单板 V2 和云台板 V2 的命令源码以 Cortex-M7 硬浮点选项单文件编译通过，未验证板上任务耗时。

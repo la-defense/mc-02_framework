@@ -113,20 +113,25 @@ static void RobotCmdLeaseInclude(RobotCmdLease_t *lease, uint8_t available,
 
 // 命令话题还按自己的发布期限检查；失败时撤销旧目标。
 static uint8_t RobotCmdPublishBounded(MessagePublisher_t *publisher, const void *command,
-                                      const RobotCmdLease_t *lease, uint32_t now_ms)
+                                      const RobotCmdLease_t *lease, uint32_t now_ms, uint8_t local_hold)
 {
     MessageStatus_t status = MESSAGE_ERR_RANGE; // 来源缺失时直接撤销旧目标。
     if (lease->valid)
     {
 #if defined(GIMBAL_BOARD)
-        if (lease->max_age_ms >= MESSAGE_DEFAULT_MAX_AGE_MS &&
-            (uint32_t)(now_ms - lease->source_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS)
-            status = MessagePublishAt(publisher, command, lease->source_ms, lease->source_ms,
-                                      now_ms, MESSAGE_CLOCK_LOCAL); // 双板现有话题按来源固定 50 ms，不能延长当前来源。
+        if (!local_hold)
+        {
+            if (lease->max_age_ms >= MESSAGE_DEFAULT_MAX_AGE_MS &&
+                (uint32_t)(now_ms - lease->source_ms) <= MESSAGE_DEFAULT_MAX_AGE_MS)
+                status = MessagePublishAt(publisher, command, lease->source_ms, lease->source_ms,
+                                          now_ms, MESSAGE_CLOCK_LOCAL); // 双板既有发送路径保持固定 50 ms 期限。
+        }
+        else
 #else
-        status = MessagePublishAtBounded(publisher, command, lease->source_ms, lease->source_ms,
-                                         now_ms, MESSAGE_CLOCK_LOCAL, lease->max_age_ms); // 单板分别保留来源和发布期限。
+        (void)local_hold; // 单板的各本地话题均支持来源期限。
 #endif
+            status = MessagePublishAtBounded(publisher, command, lease->source_ms, lease->source_ms,
+                                             now_ms, MESSAGE_CLOCK_LOCAL, lease->max_age_ms); // 本地保持直接沿用源反馈期限。
     }
     if (status != MESSAGE_OK)
     {
@@ -886,8 +891,16 @@ void RobotCMDTask()
     RobotCmdLeaseInclude(&navigation, navigation_active, vision_v2_navigation_freshness.received_time_ms,
                          VISION_V2_NAV_MAX_AGE_MS, publish_ms);
     RobotCmdLease_t local_hold = manual; // 失去瞄准后的本地保持依赖新鲜云台反馈。
-    RobotCmdLeaseInclude(&local_hold, feedback_received, gimbal_feedback_time.source_time_ms,
-                         MESSAGE_DEFAULT_MAX_AGE_MS, publish_ms);
+    if (gimbal_feedback_time.source_max_age_ms != 0u)
+    {
+        RobotCmdLeaseInclude(&local_hold, feedback_received, gimbal_feedback_time.source_time_ms,
+                             gimbal_feedback_time.source_max_age_ms, publish_ms); // 沿用姿态和编码器的原始期限。
+        RobotCmdLeaseInclude(&local_hold, feedback_received, gimbal_feedback_time.published_time_ms,
+                             MESSAGE_DEFAULT_MAX_AGE_MS, publish_ms); // 转发也不能延长原反馈话题的期限。
+    }
+    else
+        RobotCmdLeaseInclude(&local_hold, feedback_received, gimbal_feedback_time.source_time_ms,
+                             MESSAGE_DEFAULT_MAX_AGE_MS, publish_ms); // 未附带来源期限的旧反馈按原规则检查。
 #else
     RobotCmdLeaseInclude(&vision, vision_active, vision_status_snapshot.last_rx_ms,
                          VISION_CONTROL_MAX_AGE_MS, publish_ms);
@@ -898,24 +911,25 @@ void RobotCMDTask()
         (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
     else
 #if defined(MC02_VISION_PROTOCOL_V2)
-        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, navigation_active ? &navigation : &manual, publish_ms);
+        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, navigation_active ? &navigation : &manual, publish_ms, 0u);
 #else
-        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual, publish_ms);
+        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual, publish_ms, 0u);
 #endif
 #endif // ONE_BOARD
     if (shoot_cmd_send.shoot_mode == SHOOT_OFF && shoot_cmd_send.friction_mode == FRICTION_OFF && shoot_cmd_send.load_mode == LOAD_STOP)
         (void)MessagePublishNow(shoot_cmd_pub, &shoot_cmd_send);
     else
-        (void)RobotCmdPublishBounded(shoot_cmd_pub, &shoot_cmd_send, vision_shoot_selected ? &vision : &manual, publish_ms);
+        (void)RobotCmdPublishBounded(shoot_cmd_pub, &shoot_cmd_send, vision_shoot_selected ? &vision : &manual, publish_ms, 0u);
     if (gimbal_cmd_send.gimbal_mode == GIMBAL_ZERO_FORCE)
         (void)MessagePublishNow(gimbal_cmd_pub, &gimbal_cmd_send);
     else
 #if defined(MC02_VISION_PROTOCOL_V2)
         if (!RobotCmdPublishBounded(gimbal_cmd_pub, &gimbal_cmd_send,
-            vision_active ? &vision : (autonomous_selected ? &local_hold : &manual_gimbal), publish_ms))
+            vision_active ? &vision : (autonomous_selected ? &local_hold : &manual_gimbal), publish_ms,
+            (uint8_t)(!vision_active && autonomous_selected)))
             manual_reference_ready = 0u; // 本轮未交付的内部角度不能在下一轮复用。
 #else
-        if (!RobotCmdPublishBounded(gimbal_cmd_pub, &gimbal_cmd_send, vision_active ? &vision : &manual_gimbal, publish_ms))
+        if (!RobotCmdPublishBounded(gimbal_cmd_pub, &gimbal_cmd_send, vision_active ? &vision : &manual_gimbal, publish_ms, 0u))
             manual_reference_ready = 0u; // 恢复后必须从实时姿态重新接续。
 #endif
 }

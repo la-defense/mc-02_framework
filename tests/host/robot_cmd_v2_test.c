@@ -25,6 +25,7 @@ static uint32_t test_tick = 100u;
 static uint8_t remote_online = 1u;
 static uint8_t pc_valid = 1u;
 static uint8_t vision_online = 1u;
+static uint32_t vision_send_elapsed_ms; // 模拟选好命令后、发布前经过的时间。
 static Vision_Recv_s unused_wire_frame;
 static RefereeSnapshot_t referee_snapshot;
 
@@ -46,7 +47,7 @@ RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through, RemoteMouseBatch
     return REMOTE_MOUSE_EMPTY;
 }
 Vision_Recv_s *VisionInit(PlatformUartPort_t handle) { (void)handle; return &unused_wire_frame; }
-void VisionSend(void) {}
+void VisionSend(void) { test_tick += vision_send_elapsed_ms; }
 void VisionGetStatus(Vision_Status_t *status)
 {
     memset(status, 0, sizeof(*status));
@@ -156,7 +157,9 @@ int main(void)
     // 新导航不能延长旧瞄准；瞄准过期后云台保持当前姿态，导航仍可独立使用。
     test_tick += 1u;
     pose.gimbal_imu_data.YawTotalAngle = 12.0f;
-    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    const uint32_t pose_source_ms = test_tick - 2u; // 本轮收到的姿态来自两毫秒前。
+    TEST_CHECK(MessagePublishAtBounded(feedback, &pose, pose_source_ms, pose_source_ms,
+        test_tick, MESSAGE_CLOCK_LOCAL, 5u) == MESSAGE_OK);
     TEST_CHECK(PublishVision(nav_publisher, &navigation, 79u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
     RobotCMDTask();
     TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
@@ -166,6 +169,12 @@ int main(void)
         gimbal.yaw_vel == 0.0f && gimbal.pitch_vel == 0.0f);
     TEST_CHECK(MessageReadSnapshot(shoot_subscriber, &shoot, sizeof(shoot),
         test_tick, NULL) == MESSAGE_OK && shoot.shoot_mode == SHOOT_OFF);
+    MessageFreshness_t hold_time = {0};
+    TEST_CHECK(MessageReadSnapshot(gimbal_subscriber, &gimbal, sizeof(gimbal),
+        pose_source_ms + 5u, &hold_time) == MESSAGE_OK); // 原期限的最后一毫秒仍可使用。
+    TEST_CHECK(hold_time.source_time_ms == pose_source_ms && hold_time.source_max_age_ms == 5u);
+    TEST_CHECK(MessageReadSnapshot(gimbal_subscriber, &gimbal, sizeof(gimbal),
+        pose_source_ms + 6u, NULL) == MESSAGE_ERR_EXPIRED); // 命令发布不再延长这份反馈。
 
     // 导航年龄恰好达到100ms时仍有效；再过1ms，旧目标必须清零。
     const uint32_t navigation_received_ms = test_tick; // 后续发布不能改写该来源时间。
@@ -288,6 +297,16 @@ int main(void)
         test_tick, NULL) == MESSAGE_OK && fabsf(gimbal.yaw - 11.4591559f) < 0.0001f);
     TEST_CHECK(MessageReadSnapshot(shoot_subscriber, &shoot, sizeof(shoot),
         test_tick, NULL) == MESSAGE_OK && shoot.shoot_mode == SHOOT_OFF);
+
+    vision_online = 0u; // 没有视觉目标，本轮只可能生成本地保持命令。
+    test_tick += 1u;
+    TEST_CHECK(MessagePublishAtBounded(feedback, &pose, test_tick, test_tick,
+        test_tick, MESSAGE_CLOCK_LOCAL, 5u) == MESSAGE_OK);
+    vision_send_elapsed_ms = 6u;
+    RobotCMDTask();
+    vision_send_elapsed_ms = 0u;
+    TEST_CHECK(MessageReadSnapshot(gimbal_subscriber, &gimbal, sizeof(gimbal),
+        test_tick, NULL) == MESSAGE_ERR_EMPTY); // 计算后发布前过期，连上次目标也须撤销。
 
     vision_online = 1u;
     remote_online = 0u;
