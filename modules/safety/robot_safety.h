@@ -76,6 +76,17 @@ uint8_t RobotSafetyConfigureControl(const RobotControlPolicy_t *policy);
  * @return 1为接受；0为未配置或输入错误。提交不代替RobotSafetyUpdate推进状态。
  */
 uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs);
+/** @brief 启动时把分功能反馈交给整车采集者，阻止旧整车许可绕过反馈。
+ * @return 1 为绑定成功；0 为重复绑定、非初始 SAFE、有使能请求或底盘板角色。
+ * @note 绑定后，命令提交中的反馈字段被忽略，配置来源策略前保持失能。
+ */
+uint8_t RobotSafetyBindVehicleFeedback(void);
+/** @brief 由整车采集者提交三个功能的反馈期限，不改写控制来源。
+ * @param[in] valid_functions 当前反馈有效的功能位。
+ * @param[in] feedback 按底盘、云台、发射排列的三个有效期；NULL 会清除旧反馈。
+ * @return 1 为接受；0 为未配置或者数据错误。数据错误时撤销旧反馈。
+ */
+uint8_t RobotSafetyPublishVehicleFeedback(uint32_t valid_functions, const RobotControlLease_t feedback[3]);
 /** @brief 同时读取分功能许可；当前来源过期或立即禁止会在查询时再次撤销。
  * @param[in] now_ms 本机毫秒时刻。
  * @param[out] output 非空，仅返回1时整份改写；未进入READY时返回成功的全零许可。

@@ -230,6 +230,11 @@ set(MC02_APPLICATION_SINGLE_C_SOURCES
     application/cmd/robot_manual_motion.c # 人工 SI 意图到现有应用单位的转换。
     application/gimbal/gimbal.c
     application/shoot/shoot.c)
+if(MC02_FEATURE_COMMAND AND MC02_FEATURE_REMOTE AND MC02_SELECTED_DRIVER_DJI)
+    list(APPEND MC02_APPLICATION_SINGLE_C_SOURCES
+        application/robot_control_feedback.c # 汇总车型启用机构的实际反馈及其期限。
+        application/robot_control_feedback_runtime.c) # 单板命令任务采集与提交整车反馈。
+endif()
 set(MC02_APPLICATION_CHASSIS_C_SOURCES
     application/topics/robot_can_bridge.c
     application/chassis/chassis.c

@@ -38,6 +38,7 @@ static uint32_t control_local_wait; // 发生过局部禁止、恢复后需新�
 static uint32_t control_local_barrier[3]; // 底盘／云台／发射各自恢复时刻，避免局部故障中断其他功能。
 static uint32_t control_feedback_seen; // 记录已接受原始反馈时间的功能位。
 static RobotControlLease_t control_feedback_last[3]; // 保留最后接受的时间与期限，防止重复样本续期。
+static uint8_t control_vehicle_feedback; // 绑定后只有整车采集者可以更新反馈。
 static RobotControlPolicy_t control_policy;
 static RobotSafetyControlInputs_t control_inputs;
 
@@ -254,53 +255,110 @@ uint8_t RobotSafetyConfigureControl(const RobotControlPolicy_t *policy)
 #endif
 }
 
-uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs)
+// 持有安全临界区时提交已合并的来源和反馈，统一记录每个功能的失效与恢复。
+static uint8_t ControlPublishLocked(const RobotSafetyControlInputs_t *inputs, uint32_t now_ms)
 {
-    const uint32_t previous = RobotSafetyEnterCritical(); // 数据与核心状态在同一保护内检查。
-    uint8_t accepted = 0u; // 默认不接受尚未配置的提交。
-    if (control_configured)
+    const RobotControlFacts_t facts = ControlFactsLocked(inputs); // 核心和使能始终由管理者提供。
+    RobotControlPermits_t unused; // 提前用同一策略检查本次提交的格式。
+    if (!ControlFeedbackValidLocked(inputs, now_ms) ||
+        RobotControlEvaluate(&control_policy, &facts, now_ms, &unused) != ROBOT_CONTROL_OK)
+        return 0u; // 非法期限、位号或模式不修改现有状态。
+    const uint32_t old_available = control_policy.enabled_functions & control_inputs.feedback_valid_functions & ~control_inputs.blocked_functions; // 记录原来可用的功能。
+    const uint32_t new_available = control_policy.enabled_functions & inputs->feedback_valid_functions & ~inputs->blocked_functions; // 记录本次可用的功能。
+    const uint32_t lost = old_available & ~new_available; // 找出刚失去反馈或被禁止的功能。
+    const uint32_t changed = lost | (new_available & ~old_available & control_local_wait); // 首次收到反馈不等于从故障恢复。
+    control_local_wait |= lost; // 发生过局部禁止的功能须等待恢复后的新来源。
+    for (unsigned i = 0u; i < 3u; ++i)
     {
-        const uint32_t now_ms = PlatformTimeNowMs(); // 使用一次读取的本机时间处理过期和本次提交。
-        ControlExpireFeedbackLocked(now_ms); // 两次提交之间没有查询时，也要保留过期边沿。
-        RobotControlPermits_t previous_permits = {0}; // 新提交覆盖前先检查旧来源是否已经失去击发许可。
-        (void)ControlEvaluateLocked(now_ms, &previous_permits); // 过期边沿不能被新的来源覆盖。
-        if (inputs != NULL)
+        const uint32_t bit = 1u << i; // 按固定顺序检查每个功能。
+        if (changed & bit) control_local_barrier[i] = now_ms; // 记录禁止和恢复各自的时刻。
+        if (inputs->feedback_valid_functions & bit)
         {
-            const RobotControlFacts_t facts = ControlFactsLocked(inputs); // 核心和使能始终由管理者提供。
-            RobotControlPermits_t unused;
-            accepted = (uint8_t)(ControlFeedbackValidLocked(inputs, now_ms) &&
-                RobotControlEvaluate(&control_policy, &facts, now_ms, &unused) == ROBOT_CONTROL_OK); // 检查反馈以及其他来源的枚举和期限。
+            control_feedback_seen |= bit; // 已取得可信原始时间。
+            control_feedback_last[i] = inputs->feedback[i]; // 记录原始时间与期限供后续比较。
         }
-        if (accepted)
+    }
+    if (lost) control_generation++; // 排队的旧代次目标不能跨过这次失效。
+    control_inputs = *inputs; // 完整交付同一轮数据。
+    (void)ControlEvaluateLocked(now_ms, &unused); // 立即记录功能和来源许可的变化。
+    return 1u;
+}
+
+uint8_t RobotSafetyBindVehicleFeedback(void)
+{
+#if defined(CHASSIS_BOARD)
+    return 0u; // 双板底盘继续由远端许可与本地检查配合。
+#else
+    const uint32_t previous = RobotSafetyEnterCritical(); // 绑定和准备使能不能交错。
+    const uint8_t allowed = (uint8_t)(!control_vehicle_feedback && !control_configured &&
+        robot_state == ROBOT_SAFE && !enable_requested && !calib_requested && !estop_latched);
+    if (allowed) control_vehicle_feedback = 1u; // 启动后固定反馈的提交入口。
+    RobotSafetyExitCritical(previous); // 恢复进入前的中断状态。
+    return allowed;
+#endif
+}
+
+uint8_t RobotSafetyPublishVehicleFeedback(uint32_t valid_functions, const RobotControlLease_t feedback[3])
+{
+    const uint32_t previous = RobotSafetyEnterCritical(); // 不允许命令提交覆盖本次反馈更新。
+    uint8_t accepted = 0u; // 等待来源策略配置通过，保持禁止。
+    if (control_configured && control_vehicle_feedback)
+    {
+        const uint32_t now_ms = PlatformTimeNowMs(); // 先记录两次提交间已经发生的过期。
+        RobotControlPermits_t unused; // 查询只用于处理过期和禁止边沿。
+        (void)ControlEvaluateLocked(now_ms, &unused);
+        RobotSafetyControlInputs_t candidate = control_inputs; // 保留选择好的模式和来源。
+        if (feedback != NULL && (valid_functions & ~ROBOT_CONTROL_ALL) == 0u)
         {
-            const uint32_t old_available = control_policy.enabled_functions & control_inputs.feedback_valid_functions & ~control_inputs.blocked_functions; // 上一批可用功能。
-            const uint32_t new_available = control_policy.enabled_functions & inputs->feedback_valid_functions & ~inputs->blocked_functions; // 本批可用功能。
-            const uint32_t lost = old_available & ~new_available; // 只记录本次新出现的局部禁止。
-            const uint32_t recovered = new_available & ~old_available & control_local_wait; // 首次得到反馈不当作故障恢复。
-            const uint32_t changed = lost | recovered; // 故障和恢复边沿都留下时间，重复发布不会续期。
-            control_local_wait |= lost; // 保留已发生的局部禁止。
-            for (unsigned i = 0u; i < 3u; ++i)
-                if (changed & (1u << i)) control_local_barrier[i] = now_ms; // 每个功能独立等待恢复后的新来源。
-            if (lost) control_generation++; // 对查询者保留周期之间的局部故障变化。
-            for (unsigned i = 0u; i < 3u; ++i)
-                if (inputs->feedback_valid_functions & (1u << i))
-                {
-                    control_feedback_seen |= 1u << i; // 此功能已有已验证的原始反馈时间。
-                    control_feedback_last[i] = inputs->feedback[i]; // 保留时间和期限用于拒绝重放。
-                }
-            control_inputs = *inputs; // 全部检查后一次发布来源与反馈事实。
-            RobotControlPermits_t current_permits = {0}; // 立即检查本次提交的击发撤销。
-            (void)ControlEvaluateLocked(now_ms, &current_permits); // 两次提交之间没有任务运行时也保留禁止事件。
+            candidate.feedback_valid_functions = valid_functions; // 只提交采集者已验证的反馈位。
+            memcpy(candidate.feedback, feedback, sizeof(candidate.feedback)); // 带上各来源最早到期时间。
+            accepted = ControlPublishLocked(&candidate, now_ms); // 同一规则处理失效和恢复。
         }
-        else
+        if (!accepted)
         {
-            const RobotControlMode_t mode = control_inputs.mode; // 错误提交不能切换到其他有动作模式。
-            memset(&control_inputs, 0, sizeof(control_inputs)); // 清除旧来源和反馈位，立即阻止旧结果继续使用。
-            control_inputs.mode = mode; // 正式自主可保留模式等待新阶段事实，但无功能许可。
-            ControlRevokeLocked(); // 错误提交后也要求重新接管新输入。
+            candidate.feedback_valid_functions = 0u; // 汇总结果错误或缺少数据时撤销全部反馈。
+            memset(candidate.feedback, 0, sizeof(candidate.feedback)); // 清除相应期限。
+            (void)ControlPublishLocked(&candidate, now_ms); // 仍保留已取得的来源事实和禁止记录。
         }
     }
     RobotSafetyExitCritical(previous); // 发布结束后恢复进入前的屏蔽状态。
+    return accepted;
+}
+
+uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs)
+{
+    const uint32_t previous = RobotSafetyEnterCritical(); // 来源和反馈按同一状态发布。
+    uint8_t accepted = 0u; // 尚未配置时不接收来源提交。
+    if (control_configured)
+    {
+        const uint32_t now_ms = PlatformTimeNowMs(); // 此时刻同时用于处理过期和本次提交。
+        RobotControlPermits_t unused; // 新提交之前检查旧许可是否已经撤销。
+        (void)ControlEvaluateLocked(now_ms, &unused);
+        RobotSafetyControlInputs_t candidate = {0}; // 无效输入最终清除全部来源。
+        if (inputs != NULL)
+        {
+            candidate = *inputs; // 读取本轮命令仲裁结果。
+            if (control_vehicle_feedback)
+            {
+                candidate.feedback_valid_functions = control_inputs.feedback_valid_functions; // 命令不能授予自己反馈许可。
+                memcpy(candidate.feedback, control_inputs.feedback, sizeof(candidate.feedback)); // 反馈仍沿用采集者提供的期限。
+            }
+            accepted = ControlPublishLocked(&candidate, now_ms); // 同时检查期限、模式与枚举。
+        }
+        if (!accepted)
+        {
+            memset(&candidate, 0, sizeof(candidate)); // 撤销旧来源，保持禁止。
+            candidate.mode = control_inputs.mode; // 无效提交不改变当前模式。
+            if (control_vehicle_feedback)
+            {
+                candidate.feedback_valid_functions = control_inputs.feedback_valid_functions; // 独立有效性由采集者维护。
+                memcpy(candidate.feedback, control_inputs.feedback, sizeof(candidate.feedback)); // 保留其原始期限。
+            }
+            control_inputs = candidate; // 不再保留旧命令及请求。
+            ControlRevokeLocked(); // 下一次接管仍要用新的来源。
+        }
+    }
+    RobotSafetyExitCritical(previous); // 恢复调用前的屏蔽状态。
     return accepted;
 }
 
@@ -419,6 +477,7 @@ void RobotSafetyInit(void)
     estop_reason = ESTOP_REASON_NONE;
     imu_fault_logged = 0u;
     task_fault_logged = 0u;
+    control_vehicle_feedback = 0u; // 重新启动后重新绑定反馈的提交入口。
     control_configured = 0u; // 系统重新初始化后须由车型重新配置模式策略。
     control_disabled = 0u; // 尚未配置的旧路径不受新策略影响。
     control_was_healthy = 0u; // 新一次启动重新建立核心恢复边沿。
@@ -764,7 +823,7 @@ uint8_t RobotSafetyIsReadyAt(uint32_t now_ms)
                            RobotSafetyRemoteLeaseFreshLocked(now_ms) != 0u) ? 1u : 0u;
 #else
     (void)now_ms;
-    const uint8_t ready = (robot_state == ROBOT_READY && fault_flags == ROBOT_FAULT_NONE &&
+    const uint8_t ready = (!control_vehicle_feedback && robot_state == ROBOT_READY && fault_flags == ROBOT_FAULT_NONE &&
                            rc_online != 0u && imu_valid != 0u && calib_valid != 0u &&
                            task_healthy != 0u && enable_requested != 0u &&
                            calib_requested == 0u && estop_latched == 0u) ? 1u : 0u;
@@ -940,6 +999,10 @@ void RobotSafetyUpdate(void)
             RobotControlPermits_t permits = {0}; // 独立功能许可由同一个管理者计算。
             const uint8_t valid = ControlEvaluateLocked(PlatformTimeNowMs(), &permits); // 使用当前来源和恢复起点，不借旧READY授权。
             new_state = valid && permits.functions != 0u ? ROBOT_READY : ROBOT_SAFE; // 无可用功能时保持SAFE等待新条件。
+        }
+        else if (control_vehicle_feedback)
+        {
+            new_state = ROBOT_SAFE; // 反馈已绑定但来源策略尚未准备好，不能使用旧整车许可。
         }
         else if (enable_requested != 0u)
         {

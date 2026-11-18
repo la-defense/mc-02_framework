@@ -1257,6 +1257,7 @@ add_executable(motor_single_safety_test motor_feedback_filter_test.c
   ${MC02_HOST_DJI_SOURCES} ../../modules/motor/motor_pid.c
   ../../application/robot_can_recovery_coordinator.c # 联合真实安全管理和电机反馈验证恢复协调。
   ../../application/robot_control_feedback.c # 联合真实反馈和安全管理验证功能期限。
+  ../../application/robot_control_feedback_runtime.c # 复用固件周期提交入口，无需由测试复制反馈数据。
   ../../application/robot_can_motor_recovery.c ../../application/config/module_plan.c # 使用真实车型映射处理生产驱动反馈。
   ../../application/robot_can_runtime.c # 将电机、总线与真实安全管理共同用于恢复测试。
   ../../bsp/board/platform_can_periodic_stm32.c dji_can_unregister_fake.c

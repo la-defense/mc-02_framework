@@ -23,6 +23,7 @@ static RemoteSafetyGestures_s remote_gestures;
 #endif
 #if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
 #include "robot_can_recovery_coordinator.h"
+#include "robot_control_feedback_runtime.h"
 #if defined(MC02_VISION_PROTOCOL_V2)
 #define ROBOT_RECOVERY_KEYBOARD_ALLOWED 0u // 新协议将该档位用于自主。
 #else
@@ -660,6 +661,11 @@ void RobotCMDTask()
     MessageFreshness_t gimbal_feedback_time = {0}; // 本地保持姿态时也要保留反馈的原始时间。
     const uint8_t feedback_received = (uint8_t)(MessageReadSnapshot(gimbal_feed_sub,
         &gimbal_fetch_data, sizeof(gimbal_fetch_data), PlatformTimeNowMs(), &gimbal_feedback_time) == MESSAGE_OK);
+    const uint8_t pose_valid = (uint8_t)(feedback_received && isfinite(gimbal_fetch_data.gimbal_imu_data.YawTotalAngle) &&
+        isfinite(gimbal_fetch_data.gimbal_imu_data.Pitch)); // 缺少可用姿态时，不能为云台发布有效期限。
+#if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
+    (void)RobotControlFeedbackPoll(pose_valid ? &gimbal_feedback_time : NULL); // 退出早期分支之前也交付反馈失效。
+#endif
 
     // 每轮读取一次输入，即使没有新帧也会检查键鼠是否超过使用时间。
     if (remote_initialized) RemoteControlGetSnapshot(&remote_snapshot);
@@ -683,8 +689,7 @@ void RobotCMDTask()
     VisionGetSnapshot(&vision_recv_snapshot, &vision_status_snapshot);
 #endif
     // 没有当前姿态或角度为 NaN、无穷大时，不建立手动参考，先发布停止命令。
-    if (!feedback_received || !isfinite(gimbal_fetch_data.gimbal_imu_data.YawTotalAngle) ||
-        !isfinite(gimbal_fetch_data.gimbal_imu_data.Pitch))
+    if (!pose_valid)
     {
 #if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
         manual_clock_valid = 0u; // 失去姿态后不能跨失效间隔积分。

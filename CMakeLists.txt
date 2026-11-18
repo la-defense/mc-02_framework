@@ -360,6 +360,8 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     application/robot_can_runtime.c # 运行时核心 CAN 故障通知安全管理。
     application/robot_can_motor_recovery.c # 按车型逐台核对 CAN 恢复反馈。
     application/robot_can_recovery_coordinator.c # 组合人工输入、反馈与总线恢复检查。
+    application/robot_control_feedback.c # 逐台核对电机反馈与机构期限。
+    application/robot_control_feedback_runtime.c # 整车启动绑定和运行期反馈提交。
     application/robot_can_capacity.c # 启动前检查 CAN 端点容量。
     application/robot_can_requirements.c # 统计车型使用的 CAN 端点。
     application/robot_task.c # 现有任务循环与周期维护。
