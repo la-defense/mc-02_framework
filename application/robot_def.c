@@ -59,7 +59,8 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
         !IsSupportedDJIMotor(&chassis->chassis_motor_config, 0u))
         return 0u;
 
-    if (chassis->wheel_type != MECANUM_WHEEL && chassis->wheel_type != OMNI_WHEEL)
+    if ((chassis->wheel_type != MECANUM_WHEEL && chassis->wheel_type != OMNI_WHEEL) ||
+        !ChassisOdometryGapIsValid(chassis->odometry_max_gap_ms, chassis->wheel_type == OMNI_WHEEL))
         return 0u;
 #if defined(MC02_PROFILE_ROBOT)
     // 启动校验使用与控制周期相同的计算入口，提前发现滚动方向和轮组秩不足。

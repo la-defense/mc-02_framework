@@ -50,14 +50,34 @@ static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left righ
 static uint8_t chassis_rollback_failed; // 记录启动时无法撤销的设备资源。
 static ChassisVelocityFeedback_t chassis_velocity; // 底盘任务更新，其他任务只读取完整副本。
 static uint8_t chassis_velocity_valid; // 时间戳零也可有效，单独记录。
+static ChassisOdometryFeedback_t chassis_odometry; // 与速度在同一临界区交付。
+static uint8_t chassis_odometry_valid;
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+static ChassisOdometryFeedback_t odometry_anchor; // 只由底盘任务更新，启动阶段负责清理。
+static ChassisTwist_t odometry_anchor_twist; // 上一个不同来源时刻对应的底盘自身速度。
+static uint8_t odometry_anchor_known; // 时间为零也能成为有效样本。
+static uint8_t odometry_integrating; // 收到无效数据后等待下一个新样本开启新段。
+#endif
 
-// 更新结果和有效位时不允许其他任务读取未完成的数据。
-static void PublishVelocity(const ChassisVelocityFeedback_t *velocity)
+// 在同一个短临界区交付速度、里程计和各自有效位。
+static void PublishMotionFeedback(const ChassisVelocityFeedback_t *velocity, const ChassisOdometryFeedback_t *odometry)
 {
-    PlatformTaskCriticalEnter(); // 进入短临界区，只交付数据。
+    PlatformTaskCriticalEnter(); // 计算已完成，此处只复制数据。
     chassis_velocity = velocity != NULL ? *velocity : (ChassisVelocityFeedback_t){0}; // 无效时一起清除三个分量。
     chassis_velocity_valid = (uint8_t)(velocity != NULL); // 读者不会误用已清除的值。
-    PlatformTaskCriticalExit();
+    chassis_odometry = odometry != NULL ? *odometry : (ChassisOdometryFeedback_t){0}; // 断流时撤销已发布位姿。
+    chassis_odometry_valid = (uint8_t)(odometry != NULL); // 单独标记，关闭里程计不影响速度。
+    PlatformTaskCriticalExit(); // 读者现在可取得完整副本。
+}
+
+// 底盘尚未运行时调用；保留段号，使重启底盘模块后的新段可以识别。
+static void ResetMotionFeedback(void)
+{
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+    odometry_anchor_known = 0u; // 初始化前的时间不再用于比较。
+    odometry_integrating = 0u; // 下一个可信样本从零开始。
+#endif
+    PublishMotionFeedback(NULL, NULL);
 }
 
 uint8_t ChassisInitRollbackFailed(void)
@@ -77,10 +97,11 @@ static uint32_t chassis_command_max_age_ms = 0u;
 
 uint8_t ChassisInit(void)
 {
-    PublishVelocity(NULL); // 重新初始化时清除旧轮组估计。
+    ResetMotionFeedback(); // 重新初始化时清除旧轮组估计及位姿。
     chassis_rollback_failed = 0u; // 本次初始化从无回退故障开始。
     chassis_config = ChassisConfigFeed();
-    if (chassis_config == NULL)
+    if (chassis_config == NULL || !ChassisOdometryGapIsValid(chassis_config->odometry_max_gap_ms,
+                                                            chassis_config->wheel_type == OMNI_WHEEL))
         return 0u;
     if (!RobotTopicsInit())
         return 0u;
@@ -159,7 +180,7 @@ rollback:
 
 uint8_t ChassisReleaseStartupDevices(void)
 {
-    PublishVelocity(NULL); // 资源撤销后不能再交付旧轮速。
+    ResetMotionFeedback(); // 资源撤销后不能再交付旧轮速或位姿。
     uint8_t released = 1u; // 汇总所有设备的撤销结果。
 #if MC02_FEATURE_SUPERCAP
     if (!ChassisLegacySuperCapRollbackStartup()) released = 0u; // 旧电容由底盘持有，先撤销它。
@@ -223,6 +244,22 @@ uint8_t Chassis_GetVelocityFeedback(ChassisVelocityFeedback_t *output)
     return 1u;
 }
 
+uint8_t Chassis_GetOdometry(ChassisOdometryFeedback_t *output)
+{
+    if (output == NULL) return 0u;
+    PlatformTaskCriticalEnter(); // 位姿、来源时间和段号必须取自同一份结果。
+    const ChassisOdometryFeedback_t odometry = chassis_odometry;
+    const uint8_t available = chassis_odometry_valid;
+    PlatformTaskCriticalExit();
+    if (!available || (uint32_t)(PlatformTimeNowMs() - odometry.source_time_ms) > DJI_FEEDBACK_MAX_AGE_MS)
+    {
+        *output = (ChassisOdometryFeedback_t){0}; // 底盘任务停更时也按轮速的原期限失效。
+        return 0u;
+    }
+    *output = odometry;
+    return 1u;
+}
+
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
 // 取四个已经换算到输出轴的轮速；不足四份时整个底盘速度无效。
 static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity)
@@ -252,6 +289,50 @@ static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity)
     }
     velocity->source_time_ms = now - oldest_age; // 保留这个样本的原始时刻。
     return 1u;
+}
+
+// 只用不同来源时刻的有效速度积分；计算期间不占用发布临界区。
+static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeedback_t *velocity)
+{
+    if (velocity == NULL || chassis_config->odometry_max_gap_ms == 0u)
+    {
+        odometry_integrating = 0u; // 丢失任一轮后不能用旧位姿续算。
+        return NULL; // 关闭里程计也不能交付位姿。
+    }
+    const uint32_t now = PlatformTimeNowMs(); // 计算期间跨越期限时，以当前时间为准。
+    if (now - velocity->source_time_ms > DJI_FEEDBACK_MAX_AGE_MS)
+    {
+        odometry_integrating = 0u; // 本轮速度在积分前已经到期。
+        return NULL;
+    }
+    const uint8_t anchor_recent = odometry_anchor_known &&
+        now - odometry_anchor.source_time_ms <= DJI_FEEDBACK_MAX_AGE_MS; // 来源失效后只允许重新起算。
+    const uint32_t elapsed_ms = velocity->source_time_ms - odometry_anchor.source_time_ms; // 无符号差同时适用于时间回绕。
+    if (anchor_recent && elapsed_ms == 0u)
+        return odometry_integrating ? &odometry_anchor : NULL; // 部分轮刷新并不代表最早时刻前进。
+    if (anchor_recent && elapsed_ms > INT32_MAX)
+    {
+        odometry_integrating = 0u; // 近期样本倒退，保留原时刻作为同一批数据的比较基准。
+        return NULL;
+    }
+
+    if (!odometry_integrating || !anchor_recent || elapsed_ms > chassis_config->odometry_max_gap_ms)
+    {
+        odometry_anchor.pose = (ChassisLocalPose_t){0}; // 当前样本成为新的起点和初始朝向。
+        ++odometry_anchor.segment; // 读者据此识别两份位姿是否共享原点。
+    }
+    else if (ChassisKinematicsIntegrate(&odometry_anchor.pose, &odometry_anchor_twist,
+                                       &velocity->twist, (float)elapsed_ms * 0.001f) != CHASSIS_KINEMATICS_OK)
+    {
+        odometry_integrating = 0u; // 位姿计算失败，下一份新样本重新起算。
+        return NULL;
+    }
+
+    odometry_anchor.source_time_ms = velocity->source_time_ms; // 不用任务执行时间延长有效期。
+    odometry_anchor_twist = velocity->twist; // 作为下一段区间中较早一端的速度。
+    odometry_anchor_known = 1u; // 只有可信的新样本可以更新比较基准。
+    odometry_integrating = 1u; // 当前段已有可发布位姿。
+    return &odometry_anchor;
 }
 #endif
 
@@ -459,10 +540,9 @@ void ChassisTask()
     // 全向轮估计独立于命令许可，停机滑行期间也能读取实测速度。
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
     ChassisVelocityFeedback_t velocity;
-    if (chassis_config->wheel_type == OMNI_WHEEL && EstimateOmniVelocity(&velocity))
-        PublishVelocity(&velocity);
-    else
-        PublishVelocity(NULL); // 当前轮组无估计功能或本轮数据失效。
+    const ChassisVelocityFeedback_t *feedback = chassis_config->wheel_type == OMNI_WHEEL &&
+        EstimateOmniVelocity(&velocity) ? &velocity : NULL; // 不支持或轮速失效时，两个本地结果都撤销。
+    PublishMotionFeedback(feedback, UpdateOdometry(feedback));
 #endif
 
     // // 获取裁判系统数据   建议将裁判系统与底盘分离，所以此处数据应使用消息中心发送

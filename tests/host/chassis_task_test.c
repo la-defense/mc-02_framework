@@ -353,8 +353,8 @@ static int test_bridge_to_chassis(void)
 }
 #endif
 
-// 用已知的切向轮组测试生产任务发布速度及按原始时间失效。
-static int TestOmniVelocity(void)
+// 仅在软件测试使用尺寸已知的切向轮组。
+static void SelectOmniFixture(void)
 {
     const float u = 0.70710678118f;
     chassis_configuration.wheel_type = OMNI_WHEEL;
@@ -364,6 +364,13 @@ static int TestOmniVelocity(void)
         {-0.2f, 0.2f, -u, -u, 0.1f}, // 左后轮。
         {-0.2f, -0.2f, u, -u, 0.1f}, // 右后轮。
     }};
+}
+
+// 用已知的切向轮组测试生产任务发布速度及按原始时间失效。
+static int TestOmniVelocity(void)
+{
+    SelectOmniFixture();
+    const float u = 0.70710678118f;
     CHECK(ChassisInit() == 1u);
     ChassisVelocityFeedback_t sample = {0};
     CHECK(Chassis_GetVelocityFeedback(&sample) == 0u); // 启动本身不产生测量。
@@ -380,6 +387,8 @@ static int TestOmniVelocity(void)
     CHECK(Chassis_GetVelocityFeedback(&sample) == 1u);
     CHECK(sample.source_time_ms == UINT32_MAX - 4u && fabsf(sample.twist.vx_m_s - 1.0f) < 0.0001f);
     CHECK(fabsf(sample.twist.vy_m_s) < 0.0001f && fabsf(sample.twist.wz_rad_s) < 0.0001f);
+    ChassisOdometryFeedback_t pose;
+    CHECK(Chassis_GetOdometry(&pose) == 0u); // 默认关闭位姿，速度仍有效。
     test_tick = 15u; // 距最早反馈正好 20 ms，仍有效。
     ChassisTask();
     CHECK(Chassis_GetVelocityFeedback(&sample) == 1u && sample.source_time_ms == UINT32_MAX - 4u);
@@ -402,9 +411,86 @@ static int TestOmniVelocity(void)
     return 0;
 }
 
+// 注入纯前进的同一批轮速，调用真实的底盘周期入口。
+static void PublishForwardWheels(uint32_t time_ms)
+{
+    const float u = 0.70710678118f;
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
+    {
+        motors[i].feedback_online = 1u; // 本批反馈四轮均在线。
+        motors[i].feedback_speed_valid = 1u; // 替身按输出轴 rad/s 交付。
+        motors[i].feedback_speed_rad_s = i % 2u == 0u ? -10.0f * u : 10.0f * u; // 四轮合成前进 1 m/s。
+        motors[i].feedback_source_time_ms = time_ms; // 采样时间独立于执行任务的时刻。
+    }
+}
+
+static int TestOmniOdometry(void)
+{
+    ChassisOdometryFeedback_t result;
+    chassis_configuration.odometry_max_gap_ms = 5u; // 测试值，先验证麦轮不能启用本功能。
+    CHECK(ChassisInit() == 0u && motor_attempt == 0u);
+    SelectOmniFixture();
+    CHECK(ChassisInit() == 1u && Chassis_GetOdometry(&result) == 0u);
+
+    test_tick = UINT32_MAX - 2u; // 从回绕前开始，下一样本的时间为零。
+    PublishForwardWheels(test_tick);
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 1u && result.pose.x_m == 0.0f);
+    const uint32_t first_segment = result.segment;
+    test_tick = 0u;
+    PublishForwardWheels(test_tick);
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 1u && result.source_time_ms == 0u && result.segment == first_segment);
+    CHECK(fabsf(result.pose.x_m - 0.003f) < 0.00001f);
+
+    test_tick = 2u;
+    PublishForwardWheels(test_tick);
+    motors[2].feedback_source_time_ms = 0u; // 其余轮速更新时，最早时刻没有前进。
+    motors[1].feedback_speed_rad_s *= 2.0f; // 新旧混合速度也不应覆盖积分起点。
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 1u && result.source_time_ms == 0u);
+    CHECK(fabsf(result.pose.x_m - 0.003f) < 0.00001f);
+    test_tick = 5u;
+    PublishForwardWheels(test_tick);
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 1u && result.source_time_ms == 5u && result.segment == first_segment);
+    CHECK(fabsf(result.pose.x_m - 0.008f) < 0.00001f);
+
+    test_tick = 11u; // 全部轮速仍在线，但相隔 6 ms 超过配置的 5 ms。
+    PublishForwardWheels(test_tick);
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 1u && result.segment == first_segment + 1u && result.pose.x_m == 0.0f);
+    motors[0].feedback_source_time_ms = 10u; // 仍在有效期的旧帧不能让积分时刻倒退。
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 0u && result.pose.x_m == 0.0f && result.segment == 0u);
+    PublishForwardWheels(test_tick); // 同一时刻的样本不能恢复已中断的积分。
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 0u);
+    PublishForwardWheels(++test_tick);
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 1u && result.segment == first_segment + 2u);
+    motors[1].feedback_speed_valid = 0u; // 任一轮失效立即撤销位姿。
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 0u);
+    PublishForwardWheels(++test_tick);
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 1u && result.segment == first_segment + 3u);
+
+    test_tick = 33u; // 发布者未再运行，13 ms 取得的样本仍在最后一个有效毫秒。
+    CHECK(Chassis_GetOdometry(&result) == 1u);
+    ++test_tick;
+    CHECK(Chassis_GetOdometry(&result) == 0u && result.source_time_ms == 0u);
+    PublishForwardWheels(18u); // 有效的延迟样本恰好相隔 5 ms，也不得接回失效的段。
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 1u && result.segment == first_segment + 4u && result.pose.x_m == 0.0f);
+    CHECK(ChassisReleaseStartupDevices() == 1u && Chassis_GetOdometry(&result) == 0u);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "velocity") == 0) return TestOmniVelocity();
+    if (argc == 2 && strcmp(argv[1], "odometry") == 0) return TestOmniOdometry();
     if (argc == 2 && strncmp(argv[1], "motor-at-", 9u) == 0)
         fail_motor_attempt = (unsigned)(argv[1][9] - '0'); // 注入指定轮电机注册失败。
     if (argc == 2 && strcmp(argv[1], "rollback-failure") == 0)

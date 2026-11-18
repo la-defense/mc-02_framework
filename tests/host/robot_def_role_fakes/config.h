@@ -32,6 +32,7 @@ typedef struct {
     Wheel_Measure_s wheel_measure;
     ChassisMotionLimits_s motion_limits;
     OmniGeometry_t omni_geometry;
+    uint32_t odometry_max_gap_ms; // 用于检查角色配置的可选里程计间隔，单位 ms。
     Motor_Init_Config_s chassis_motor_config;
     uint8_t chassis_motor_id[8];
 } Chassis_Config_s;

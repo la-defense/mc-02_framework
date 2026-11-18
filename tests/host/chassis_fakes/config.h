@@ -34,6 +34,7 @@ typedef struct {
     Wheel_Measure_s wheel_measure;
     ChassisMotionLimits_s motion_limits;
     OmniGeometry_t omni_geometry;
+    uint32_t odometry_max_gap_ms; // 与生产配置同义，0 关闭，正值限制积分间隔。
     Motor_Init_Config_s chassis_motor_config;
     uint8_t chassis_motor_id[4];
 } Chassis_Config_s;

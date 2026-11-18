@@ -39,6 +39,26 @@ static void TestOmniEstimate(void)
     TEST_CHECK(OmniEstimate(NULL, &geometry, &result) == CHASSIS_KINEMATICS_ARGUMENT);
 }
 
+static void TestLocalPoseIntegration(void)
+{
+    const float pi = 3.14159265359f;
+    ChassisLocalPose_t pose = {0};
+    const ChassisTwist_t circle = {pi * 0.5f, 0.0f, pi * 0.5f}; // 半径 1 m，1 s 左转四分之一圈。
+    TEST_CHECK(ChassisKinematicsIntegrate(&pose, &circle, &circle, 1.0f) == CHASSIS_KINEMATICS_OK);
+    TEST_CHECK(close_to(pose.x_m, 1.0f) && close_to(pose.y_m, 1.0f) && close_to(pose.yaw_rad, pi * 0.5f));
+    const ChassisTwist_t standstill = {0};
+    const ChassisTwist_t forward = {2.0f, 0.0f, 0.0f}; // 平均 1 m/s，朝本地坐标的左向前进。
+    TEST_CHECK(ChassisKinematicsIntegrate(&pose, &standstill, &forward, 1.0f) == CHASSIS_KINEMATICS_OK);
+    TEST_CHECK(close_to(pose.x_m, 1.0f) && close_to(pose.y_m, 2.0f));
+    const ChassisTwist_t turn = {0.0f, 0.0f, pi}; // 原地再左转半圈，输出角度回到 -π/2。
+    TEST_CHECK(ChassisKinematicsIntegrate(&pose, &turn, &turn, 1.0f) == CHASSIS_KINEMATICS_OK);
+    TEST_CHECK(close_to(pose.x_m, 1.0f) && close_to(pose.y_m, 2.0f) && close_to(pose.yaw_rad, -pi * 0.5f));
+    const ChassisTwist_t invalid = {0.0f, 0.0f, NAN};
+    TEST_CHECK(ChassisKinematicsIntegrate(&pose, &turn, &invalid, 1.0f) == CHASSIS_KINEMATICS_ARGUMENT);
+    TEST_CHECK(ChassisKinematicsIntegrate(&pose, &turn, &turn, 0.0f) == CHASSIS_KINEMATICS_ARGUMENT);
+    TEST_CHECK(close_to(pose.x_m, 1.0f) && close_to(pose.y_m, 2.0f) && close_to(pose.yaw_rad, -pi * 0.5f));
+}
+
 int main(void)
 {
     ChassisTwist_t input = {1.0f, 0.0f, 0.0f};
@@ -81,5 +101,6 @@ int main(void)
     TEST_CHECK(OmniCalculate(&input, NULL, &output) == CHASSIS_KINEMATICS_ARGUMENT);
     TEST_CHECK(OmniCalculate(&input, &omni, NULL) == CHASSIS_KINEMATICS_ARGUMENT);
     TestOmniEstimate();
+    TestLocalPoseIntegration();
     return EXIT_SUCCESS;
 }

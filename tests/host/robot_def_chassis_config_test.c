@@ -55,6 +55,13 @@ int main(void)
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK);
     TEST_CHECK(selected == &test_config);
 
+    test_config.chassis_param.odometry_max_gap_ms = 5u; // 合法的全向轮测试配置。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK);
+    test_config.chassis_param.odometry_max_gap_ms = UINT32_C(0x80000000); // 超过 32 位毫秒时间可区分的先后范围。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS);
+    TEST_CHECK(selected == NULL);
+    set_valid_config();
+
     test_config.chassis_param.chassis_motor_config.can_init_config.can_bus = PLATFORM_CAN_INVALID; // 未声明总线不可启动核心底盘。
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS);
     TEST_CHECK(selected == NULL); // 错误配置不能沿用前一次选择结果。

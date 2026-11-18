@@ -71,6 +71,7 @@ typedef struct
     Wheel_Measure_s wheel_measure;
     ChassisMotionLimits_s motion_limits;
     OmniGeometry_t omni_geometry;
+    uint32_t odometry_max_gap_ms; /**< 两个来源样本间隔的上限，ms；0 关闭轮速里程计。 */
 
     Motor_Init_Config_s chassis_motor_config;
     PID_Init_Config_s chassis_follow_gimbal_PID;

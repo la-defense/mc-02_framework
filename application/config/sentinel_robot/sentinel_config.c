@@ -186,6 +186,7 @@ const Robot_Config_s *SentinelConfigInit(void)
             .motion_limits = {.configured = 0u},
             // 未测量轮位、滚动方向和限速；生产构建由车型确认状态拒绝。
             .omni_geometry = {.wheels = {{0}}},
+            .odometry_max_gap_ms = 0u, // 轮速来源间隔待实测；0 关闭本地里程计。
             // 长度使用 mm，减速比无单位；参数沿用移入版本，启用时仍须按实车核对。
             .wheel_measure = {
                 .center_gimbal_offset_x = 0.0,

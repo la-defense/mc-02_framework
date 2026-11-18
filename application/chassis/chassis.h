@@ -29,6 +29,20 @@ typedef struct {
  */
 uint8_t Chassis_GetVelocityFeedback(ChassisVelocityFeedback_t *output);
 
+/** @brief 本地轮速里程计，只在同一段内使用相同的参考原点。 */
+typedef struct {
+    ChassisLocalPose_t pose; /**< 从该段起点累计的位移和朝向。 */
+    uint32_t source_time_ms; /**< 最近一次参与积分的最早轮速接收时间。 */
+    uint32_t segment; /**< 断流或超出允许间隔后重新起算，每段加 1，允许回绕。 */
+} ChassisOdometryFeedback_t;
+
+/** @brief 复制可选的本地轮速里程计，供任务上下文使用。
+ * @param[out] output 位姿、来源时间及段号；失败时非空输出清零。
+ * @return 1 表示已启用且轮速来源有效；0 表示关闭、未取得样本或已失效。
+ * @note 首个有效样本的位姿为零。发生断流时不用旧位姿接续；本地位姿会受轮组打滑影响。
+ */
+uint8_t Chassis_GetOdometry(ChassisOdometryFeedback_t *output);
+
 /** @brief 复制四个轮子的当前电机信息，供 LCD 使用。
 * @param[out] summary 输出对象，NULL 时不处理；先清零，未注册电机项保持为 0。
  */

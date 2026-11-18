@@ -98,3 +98,27 @@ ChassisKinematicsStatus_t ChassisKinematicsEstimate(const ChassisWheelSpeeds_t *
     *output = (ChassisTwist_t){estimate[0], estimate[1], estimate[2]};
     return CHASSIS_KINEMATICS_OK;
 }
+
+ChassisKinematicsStatus_t ChassisKinematicsIntegrate(ChassisLocalPose_t *pose,
+    const ChassisTwist_t *previous, const ChassisTwist_t *current, float dt_s)
+{
+    if (pose == NULL || previous == NULL || current == NULL || !isfinite(dt_s) || dt_s <= 0.0f)
+        return CHASSIS_KINEMATICS_ARGUMENT; // 缺少输入或时间没有前进时不修改位姿。
+    const float dx = (0.5f * previous->vx_m_s + 0.5f * current->vx_m_s) * dt_s; // 以两端平均前进速度求无转动时的位移。
+    const float dy = (0.5f * previous->vy_m_s + 0.5f * current->vy_m_s) * dt_s; // 横移也以底盘自身的左侧为正。
+    const float half_turn = (0.5f * previous->wz_rad_s + 0.5f * current->wz_rad_s) * dt_s * 0.5f; // 取本段朝向变化的一半。
+    if (!isfinite(dx) || !isfinite(dy) || !isfinite(half_turn) || !isfinite(pose->yaw_rad))
+        return CHASSIS_KINEMATICS_ARGUMENT; // 三角函数只接收有限角度，异常时保留上次结果。
+    const float scale = fabsf(half_turn) < 0.0001f ? 1.0f : sinf(half_turn) / half_turn; // 弧长换为弦长；接近直行时用极限值避免除零。
+    const float middle_yaw = pose->yaw_rad + half_turn; // 弦的方向相对区间中点朝向计算。
+    const float c = cosf(middle_yaw), s = sinf(middle_yaw); // 将底盘自身的位移转到本段起点的坐标。
+    const ChassisLocalPose_t next = {
+        .x_m = pose->x_m + scale * (c * dx - s * dy), // 累加到起点坐标中的前向位移。
+        .y_m = pose->y_m + scale * (s * dx + c * dy), // 累加到起点坐标中的左向位移。
+        .yaw_rad = remainderf(pose->yaw_rad + 2.0f * half_turn, 6.28318530718f), // 保持在约 ±π 内，避免角度随圈数增长。
+    };
+    if (!isfinite(next.x_m) || !isfinite(next.y_m) || !isfinite(next.yaw_rad))
+        return CHASSIS_KINEMATICS_ARGUMENT; // 任一分量溢出时放弃本段积分。
+    *pose = next; // 只在三个分量都通过检查后一起更新。
+    return CHASSIS_KINEMATICS_OK;
+}
