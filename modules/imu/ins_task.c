@@ -284,13 +284,21 @@ static void INSInvalidateControlSnapshot(void)
 static void INSPublishControlSnapshot(void)
 {
     INS_Control_Snapshot_s candidate = {
-        .yaw_rad = INS.Yaw * DEG_2_RAD,
-        .yaw_total_rad = INS.YawTotalAngle * DEG_2_RAD,
-        .pitch_rad = INS.Pitch * DEG_2_RAD,
-        .gyro_rad_s = {INS.Gyro[X], INS.Gyro[Y], INS.Gyro[Z]},
-        .timestamp_ms = bmi088_data.timestamp_ms,
-        .sequence = bmi088_data.sequence,
-        .valid = 1u,
+        .yaw_rad = INS.Yaw * DEG_2_RAD, // 单圈偏航角换成弧度供外环读取。
+        .yaw_total_rad = INS.YawTotalAngle * DEG_2_RAD, // 多圈偏航角换成弧度。
+        .pitch_rad = INS.Pitch * DEG_2_RAD, // 俯仰角换成弧度。
+        .gyro_rad_s = {INS.Gyro[X], INS.Gyro[Y], INS.Gyro[Z]}, // 三轴角速度已经是 rad/s。
+        .attitude = {
+            .Gyro = {INS.Gyro[X], INS.Gyro[Y], INS.Gyro[Z]}, // 兼容消息的角速度仍用 rad/s。
+            .Accel = {INS.Accel[X], INS.Accel[Y], INS.Accel[Z]}, // 原始三轴加速度，单位 m/s²。
+            .Roll = INS.Roll, // 横滚角保留度。
+            .Pitch = INS.Pitch, // 俯仰角保留度。
+            .Yaw = INS.Yaw, // 单圈偏航角保留度。
+            .YawTotalAngle = INS.YawTotalAngle, // 累计偏航角保留度。
+        },
+        .timestamp_ms = bmi088_data.timestamp_ms, // 记录采样时刻，后续读取不会延长期限。
+        .sequence = bmi088_data.sequence, // 两种单位表示来自同一次采样。
+        .valid = 1u, // 仅在有效性检查成功后发布。
     };
     PlatformTaskCriticalEnter();
     ins_control_snapshot = candidate;

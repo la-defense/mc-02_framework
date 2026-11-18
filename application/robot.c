@@ -543,6 +543,10 @@ void RobotTask()
 #else
 #if defined(MC02_CONFIG_GENERATED)
 // 只调度启动计划已接受的模块；被依赖失败阻断或初始化失败的模块保持不调用。
+#if MC02_FEATURE_GIMBAL
+    if (RobotBuildModuleStarted(ROBOT_MODULE_GIMBAL))
+        GimbalUpdateFeedback(); // 本轮命令读取刚采集的反馈，避免消耗整个 5 ms 周期。
+#endif
 #if MC02_FEATURE_COMMAND
     if (RobotBuildModuleStarted(ROBOT_MODULE_COMMAND))
         RobotCMDTask();
@@ -561,6 +565,7 @@ void RobotTask()
 #endif
 #else
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
+    GimbalUpdateFeedback(); // 兼容组合也按先更新反馈、再选择命令的顺序执行。
     RobotCMDTask();
     GimbalTask();
     ShootTask();

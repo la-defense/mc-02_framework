@@ -808,6 +808,25 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     return MOTOR_FEEDBACK_OK;
 }
 
+uint8_t DJIMotorGetSingleTurnAngle(const DJIMotorInstance *motor, float *angle_deg, uint32_t *source_time_ms)
+{
+    if (motor == NULL || angle_deg == NULL || source_time_ms == NULL)
+        return 0u; // 所有输入输出齐全时才读电机状态。
+    PlatformTaskCriticalEnter(); // 防止角度和接收时间分别来自两帧。
+    const float angle = motor->measure.angle_single_round; // 单圈转子角度保留设备侧单位。
+    const uint32_t source_ms = motor->last_feedback_timestamp_ms; // 保留帧的原始接收时刻。
+    const uint32_t now_ms = PlatformTimeNowMs(); // 读时刻和样本一起取，避免新帧晚于读时刻。
+    const uint8_t has_sample = (uint8_t)(motor->has_feedback_timestamp && motor->encoder_baseline_valid); // 必须已收到编码器数据。
+    PlatformTaskCriticalExit(); // 完成复制后释放任务保护。
+    if (!has_sample || DaemonIsOnline(motor->daemon) == 0u ||
+        (uint32_t)(now_ms - source_ms) > DJI_FEEDBACK_MAX_AGE_MS ||
+        !isfinite(angle) || angle < 0.0f || angle >= 360.0f)
+        return 0u; // 未收到、已离线、过期或不在单圈范围时不交付。
+    *angle_deg = angle; // 两项检查完再写回角度。
+    *source_time_ms = source_ms; // 交付同一帧的原始时刻。
+    return 1u;
+}
+
 void DJIMotorGetFeedbackRoles(uint32_t now_ms, DJI_Feedback_Roles_s *output)
 {
     if (output == NULL) return; // 调用方没有提供存储时不能写入结果。

@@ -82,12 +82,13 @@ static Gimbal_Config_s gimbal_configuration = {
 };
 const Gimbal_Config_s *GimbalConfigFeed(void) { return &gimbal_configuration; }
 
-static attitude_t imu_storage = {.Roll = 1.0f, .Pitch = 2.0f, .Yaw = 3.0f};
+static attitude_t imu_storage = {.Roll = -99.0f}; // 与快照使用不同值，发现误读旧存储。
 static INS_Control_Snapshot_s ins_snapshot = {
     .yaw_rad = 0.25f,
     .yaw_total_rad = 6.5f,
     .pitch_rad = -0.5f,
     .gyro_rad_s = {1.25f, -2.5f, 3.75f},
+    .attitude = {.Roll = 1.0f, .Pitch = 2.0f, .Yaw = 3.0f}, // 上报使用这份度制姿态。
     .timestamp_ms = 1234u,
     .sequence = 17u,
     .valid = 1u};
@@ -105,6 +106,9 @@ static MessageStatus_t incoming_status = MESSAGE_ERR_EMPTY;
 static uint32_t current_time_ms;
 static Gimbal_Upload_Data_s published_feedback;
 static unsigned publish_count;
+static unsigned invalidate_count; // 记录旧消息何时被撤销。
+static uint32_t yaw_source_ms, published_source_ms, published_max_age_ms; // 核对两路来源与交付期限。
+static uint8_t yaw_valid = 1u; // 模拟编码器当前是否有合法反馈。
 static unsigned topics_init_count;
 static struct MessagePublisher publisher_storage;
 static struct MessageSubscriber subscriber_storage;
@@ -132,7 +136,7 @@ uint8_t INSGetControlSnapshot(INS_Control_Snapshot_s *snapshot)
     if (snapshot == NULL)
         return 0u;
     *snapshot = ins_snapshot;
-    return 1u;
+    return ins_snapshot.valid;
 }
 
 uint32_t PlatformTimeNowMs(void)
@@ -216,6 +220,15 @@ void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
     (void)summary;
 }
 
+uint8_t DJIMotorGetSingleTurnAngle(const DJIMotorInstance *motor, float *angle_deg, uint32_t *source_time_ms)
+{
+    TEST_CHECK(motor == &motors[0]); // 云台方向只使用 yaw 编码器。
+    if (!yaw_valid) return 0u;
+    *angle_deg = motor->measure.angle_single_round;
+    *source_time_ms = yaw_source_ms;
+    return 1u;
+}
+
 MessagePublisher_t *MessagePublisherRegister(MessageTopicId_t topic_id,
                                              MessageEndpointId_t endpoint_id)
 {
@@ -256,12 +269,25 @@ MessageStatus_t MessageReadSnapshot(MessageSubscriber_t *subscriber, void *outpu
     return incoming_status;
 }
 
-MessageStatus_t MessagePublishNow(MessagePublisher_t *publisher, const void *data)
+MessageStatus_t MessagePublishAtBounded(MessagePublisher_t *publisher, const void *data,
+    uint32_t source_time_ms, uint32_t received_time_ms, uint32_t published_time_ms,
+    MessageClockDomain_t source_clock, uint32_t source_max_age_ms)
 {
     TEST_CHECK(publisher == &publisher_storage);
     TEST_CHECK(data != NULL);
+    TEST_CHECK(source_clock == MESSAGE_CLOCK_LOCAL && source_time_ms == received_time_ms);
+    TEST_CHECK(published_time_ms == current_time_ms);
     memcpy(&published_feedback, data, sizeof(published_feedback));
+    published_source_ms = source_time_ms;
+    published_max_age_ms = source_max_age_ms;
     ++publish_count;
+    return MESSAGE_OK;
+}
+
+MessageStatus_t MessagePublisherInvalidate(MessagePublisher_t *publisher)
+{
+    TEST_CHECK(publisher == &publisher_storage);
+    ++invalidate_count;
     return MESSAGE_OK;
 }
 
@@ -293,6 +319,7 @@ static void CheckActiveMode(gimbal_mode_e mode, float yaw_deg, float pitch_deg)
     incoming_status = MESSAGE_OK;
     ResetActions();
 
+    GimbalUpdateFeedback(); // 遵循整车周期顺序，先刷新反馈再运行控制。
     GimbalTask();
 
     TEST_CHECK(action_count == 8u);
@@ -318,6 +345,7 @@ static void CheckActiveMode(gimbal_mode_e mode, float yaw_deg, float pitch_deg)
 static void CheckStoppedMode(void)
 {
     ResetActions();
+    GimbalUpdateFeedback(); // 停止输出仍可发布有效反馈。
     GimbalTask();
 
     TEST_CHECK(action_count == 4u);
@@ -397,7 +425,8 @@ int main(int argc, char **argv)
                motor_configs[1].controller_param_init_config.speed_PID.Kp == 7.5f);
     TestFeedbackConfiguration();
 
-    current_time_ms = 100u;
+    current_time_ms = 1234u;
+    yaw_source_ms = current_time_ms - 4u; // 编码器更早，但姿态先到期。
     CheckActiveMode(GIMBAL_GYRO_MODE, 90.0f, -30.0f);
     CheckActiveMode(GIMBAL_FREE_MODE, -45.0f, 12.0f);
 
@@ -425,10 +454,12 @@ int main(int argc, char **argv)
     incoming_command = (Gimbal_Ctrl_Cmd_s){.yaw = 10.0f, .pitch = 5.0f,
                                            .gimbal_mode = GIMBAL_GYRO_MODE, .safety_generation = 42u};
     ResetActions();
+    GimbalUpdateFeedback(); // 模拟这两个单板周期开始时的反馈刷新。
     GimbalTask();
     TEST_CHECK(observed_generation == 42u); // 电机收到的是命令的代际。
     reject_generation_reference = 1u; // 命令已读取但许可不再有效。
     ResetActions();
+    GimbalUpdateFeedback(); // 许可变化不影响反馈来源的正常检查。
     GimbalTask();
     TEST_CHECK(FindAction(MOTOR_ACTION_STOP, 0u, OPEN_LOOP) != NULL);
     TEST_CHECK(FindAction(MOTOR_ACTION_STOP, 1u, OPEN_LOOP) != NULL);
@@ -436,9 +467,38 @@ int main(int argc, char **argv)
 #else
     TEST_CHECK(publish_count == 5u);
 #endif
-    TEST_CHECK(published_feedback.gimbal_imu_data.Roll == imu_storage.Roll);
-    TEST_CHECK(published_feedback.gimbal_imu_data.Pitch == imu_storage.Pitch);
+    TEST_CHECK(published_feedback.gimbal_imu_data.Roll == ins_snapshot.attitude.Roll);
+    TEST_CHECK(published_feedback.gimbal_imu_data.Pitch == ins_snapshot.attitude.Pitch);
     TEST_CHECK(published_feedback.yaw_motor_single_round_angle == 42u);
+    TEST_CHECK(published_source_ms == 1230u && published_max_age_ms == 9u); // 姿态在 1239 ms 到期。
+
+    incoming_status = MESSAGE_ERR_EMPTY; // 后续只观察反馈，不请求运动。
+    current_time_ms = 1239u; // 原样本在期限最后一毫秒仍可读。
+    CheckStoppedMode();
+    TEST_CHECK(published_source_ms == 1230u && published_max_age_ms == 9u); // 重发没有延长期限。
+    const unsigned previous_count = publish_count;
+    current_time_ms = 1240u;
+    CheckStoppedMode();
+    TEST_CHECK(publish_count == previous_count && invalidate_count == 1u); // 姿态过期立即撤销。
+    ins_snapshot.timestamp_ms = current_time_ms;
+    yaw_valid = 0u;
+    CheckStoppedMode();
+    TEST_CHECK(publish_count == previous_count && invalidate_count == 2u); // 编码器不可用也撤销。
+
+    yaw_valid = 1u;
+    current_time_ms = 1u; // 横跨毫秒计数回绕，编码器恰好 20 ms。
+    yaw_source_ms = current_time_ms - DJI_FEEDBACK_MAX_AGE_MS;
+    ins_snapshot.timestamp_ms = current_time_ms;
+    CheckStoppedMode();
+    TEST_CHECK(publish_count == previous_count + 1u);
+    TEST_CHECK(published_source_ms == yaw_source_ms && published_max_age_ms == DJI_FEEDBACK_MAX_AGE_MS);
+    ++current_time_ms;
+    CheckStoppedMode();
+    TEST_CHECK(publish_count == previous_count + 1u && invalidate_count == 3u); // 更新姿态也不能替过期编码器续期。
+    yaw_source_ms = current_time_ms;
+    ins_snapshot.valid = 0u;
+    CheckStoppedMode();
+    TEST_CHECK(publish_count == previous_count + 1u && invalidate_count == 4u); // 尚未超时的无效姿态仍立即撤销。
 
     ins_snapshot.sequence = 0u;
     Motor_Signal_Snapshot_s unchanged = {

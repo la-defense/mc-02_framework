@@ -12,7 +12,7 @@
 #include "platform_sync.h"
 #include <string.h>
 
-static attitude_t *gimba_IMU_data; // 云台IMU数据
+#define GIMBAL_INS_MAX_AGE_MS 5u // 云台外环和应用反馈共用现有 IMU 期限，单位 ms。
 static DJIMotorInstance *yaw_motor, *pitch_motor;
 static const Gimbal_Config_s *gimbal_config;
 
@@ -78,7 +78,6 @@ static Motor_Feedback_Status_e ReadGimbalSignal(const void *context,
 
 static MessagePublisher_t *gimbal_pub;             // 云台应用消息发布者(云台反馈给cmd)
 static MessageSubscriber_t *gimbal_sub;            // cmd控制消息订阅者
-static Gimbal_Upload_Data_s gimbal_feedback_data; // 回传给cmd的云台状态信息
 static Gimbal_Ctrl_Cmd_s gimbal_cmd_recv;         // 来自cmd的控制信息
 static uint8_t gimbal_rollback_failed; // 记录启动资源无法撤销的故障。
 
@@ -95,24 +94,23 @@ uint8_t GimbalInit(void)
     gimbal_config = GimbalConfigFeed();
     if (gimbal_config == NULL || gimbal_config->gimbal_type != SINGLE_GIMBAL)
         return 0u;
-    attitude_t *pending_imu = INS_GetStorage(); // INS 存储必须存在，姿态初始化由协调任务继续执行。
-    if (pending_imu == NULL) return 0u; // 未取得存储时不注册任何电机。
+    if (INS_GetStorage() == NULL) return 0u; // 先确认 INS 提供姿态存储，实际读数等采样完成。
     Motor_Init_Config_s yaw_config = gimbal_config->yaw_motor_config;
     Motor_Init_Config_s pitch_config = gimbal_config->pitch_motor_config;
     yaw_config.output_role = MOTOR_OUTPUT_GIMBAL; // 大 yaw 使用云台功能许可。
     pitch_config.output_role = MOTOR_OUTPUT_GIMBAL; // pitch 同样使用云台许可。
     yaw_config.controller_param_init_config.other_angle_feedback =
         (Motor_Signal_Source_s){ReadGimbalSignal, &yaw_position_context,
-                                5u, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL};
+                                GIMBAL_INS_MAX_AGE_MS, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL};
     yaw_config.controller_param_init_config.other_speed_feedback =
         (Motor_Signal_Source_s){ReadGimbalSignal, &yaw_speed_context,
-                                5u, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL};
+                                GIMBAL_INS_MAX_AGE_MS, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL};
     pitch_config.controller_param_init_config.other_angle_feedback =
         (Motor_Signal_Source_s){ReadGimbalSignal, &pitch_position_context,
-                                5u, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL};
+                                GIMBAL_INS_MAX_AGE_MS, MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL};
     pitch_config.controller_param_init_config.other_speed_feedback =
         (Motor_Signal_Source_s){ReadGimbalSignal, &pitch_speed_context,
-                                5u, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL};
+                                GIMBAL_INS_MAX_AGE_MS, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL};
     yaw_config.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
     yaw_config.controller_setting_init_config.speed_feedback_source = OTHER_FEED;
     pitch_config.controller_setting_init_config.angle_feedback_source = OTHER_FEED;
@@ -127,7 +125,6 @@ uint8_t GimbalInit(void)
     if (MessageEndpointPairRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_GIMBAL_COMMAND,
                                     ROBOT_TOPIC_ENDPOINT_GIMBAL, &pending_pub, &pending_sub) != MESSAGE_OK)
         goto rollback; // 任一话题不足时两个端点均未新增。
-    gimba_IMU_data = pending_imu; // 全部成功后发布姿态存储。
     yaw_motor = pending_yaw; // 发布 yaw 电机。
     pitch_motor = pending_pitch; // 发布 pitch 电机。
     gimbal_pub = pending_pub; // 发布反馈话题句柄。
@@ -152,7 +149,40 @@ uint8_t GimbalReleaseStartupDevices(void)
     return released; // 无法撤销时由协调者禁止任务放行。
 }
 
-/* 机器人云台控制核心任务,后续考虑只保留IMU控制,不再需要电机的反馈 */
+void GimbalUpdateFeedback(void)
+{
+    INS_Control_Snapshot_s ins; // 一次读取同一份姿态和采样时间。
+    float yaw_deg; // yaw 单圈角度维持消息规定的度制。
+    uint32_t yaw_ms; // 同一帧 CAN 编码器反馈的接收时刻。
+    if (!INSGetControlSnapshot(&ins) || ins.sequence == 0u ||
+        !DJIMotorGetSingleTurnAngle(yaw_motor, &yaw_deg, &yaw_ms))
+    {
+        (void)MessagePublisherInvalidate(gimbal_pub); // 任一路明确失效时立即撤销已经发布的数据。
+        return;
+    }
+    const uint32_t now_ms = PlatformTimeNowMs(); // 所有采样读取完成后，再检查发送时的实际年龄。
+    const uint32_t ins_age = now_ms - ins.timestamp_ms; // 无符号差值覆盖计时回绕。
+    const uint32_t yaw_age = now_ms - yaw_ms; // 两个来源的期限分别判断。
+    if (ins_age > GIMBAL_INS_MAX_AGE_MS || yaw_age > DJI_FEEDBACK_MAX_AGE_MS)
+    {
+        (void)MessagePublisherInvalidate(gimbal_pub); // 读取过程中已过期时不保留上次结果。
+        return;
+    }
+    const uint32_t source_ms = ins_age >= yaw_age ? ins.timestamp_ms : yaw_ms; // 消息保留两者中较早的来源时间。
+    const uint32_t oldest_age = now_ms - source_ms; // 把剩余时长换算为从该来源起算的期限。
+    const uint32_t ins_remaining = GIMBAL_INS_MAX_AGE_MS - ins_age; // 姿态离过期尚余多少 ms。
+    const uint32_t yaw_remaining = DJI_FEEDBACK_MAX_AGE_MS - yaw_age; // 编码器离过期尚余多少 ms。
+    const uint32_t remaining = ins_remaining < yaw_remaining ? ins_remaining : yaw_remaining; // 采用最先到期的时刻。
+    const Gimbal_Upload_Data_s feedback = {
+        .gimbal_imu_data = ins.attitude, // 保留应用消息中的度制姿态及三轴传感器量。
+        .yaw_motor_single_round_angle = (uint16_t)yaw_deg, // 维持原单圈角度的整数表示。
+    };
+    if (MessagePublishAtBounded(gimbal_pub, &feedback, source_ms, source_ms, now_ms,
+                                MESSAGE_CLOCK_LOCAL, oldest_age + remaining) != MESSAGE_OK)
+        (void)MessagePublisherInvalidate(gimbal_pub); // 发布失败时撤销此前的反馈，避免继续使用旧参考。
+}
+
+/* 机器人云台控制核心任务 */
 void GimbalTask()
 {
     // 只采用不超过 50 ms 的控制消息；失败清零后进入停机分支。
@@ -223,12 +253,6 @@ void GimbalTask()
     // 根据IMU姿态/pitch电机角度反馈计算出当前配重下的重力矩
     // ...
 
-    // 设置反馈数据,主要是imu和yaw的ecd
-    gimbal_feedback_data.gimbal_imu_data = *gimba_IMU_data;
-    gimbal_feedback_data.yaw_motor_single_round_angle = yaw_motor->measure.angle_single_round;
-
-    // 推送消息
-    (void)MessagePublishNow(gimbal_pub, &gimbal_feedback_data);
 }
 
 void Gimbal_GetMotorSummary(Gimbal_Motor_Summary_t *summary)

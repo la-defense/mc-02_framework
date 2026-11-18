@@ -165,11 +165,13 @@ static DJI_Motor_Filter_Config_s filter_config(DJI_Motor_Filter_Mode_e mode)
     };
 }
 
-static void receive(DJIMotorInstance *motor, uint32_t cycles, uint32_t tick_ms,
-                    int16_t rpm, int16_t current)
+static void receive_with_encoder(DJIMotorInstance *motor, uint32_t cycles, uint32_t tick_ms,
+                                 int16_t rpm, int16_t current, uint16_t encoder)
 {
     CANInstance *can = (CANInstance *)motor->motor_can_port.backend; // 从测试端点注入底层帧。
     memset(can->rx_buff, 0, sizeof(can->rx_buff));
+    can->rx_buff[0] = (uint8_t)(encoder >> 8u); // 单圈编码器高字节。
+    can->rx_buff[1] = (uint8_t)encoder; // 单圈编码器低字节。
     can->rx_buff[2] = (uint8_t)((uint16_t)rpm >> 8u);
     can->rx_buff[3] = (uint8_t)rpm;
     can->rx_buff[4] = (uint8_t)((uint16_t)current >> 8u);
@@ -179,6 +181,12 @@ static void receive(DJIMotorInstance *motor, uint32_t cycles, uint32_t tick_ms,
     can->rx_timestamp_ms = tick_ms;
     TEST_CHECK(can->can_module_callback != NULL);
     can->can_module_callback(can);
+}
+
+static void receive(DJIMotorInstance *motor, uint32_t cycles, uint32_t tick_ms,
+                    int16_t rpm, int16_t current)
+{
+    receive_with_encoder(motor, cycles, tick_ms, rpm, current, 0u); // 其余用例保留零编码器输入。
 }
 
 static DJIMotorSummary_t summary(DJIMotorInstance *motor)
@@ -942,6 +950,28 @@ static int chassis_safety_output_gate(void)
 }
 #endif
 
+static int single_turn_angle(void)
+{
+    Motor_Init_Config_s config = motor_config(1u);
+    DJIMotorInstance *motor = DJIMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+    float angle_deg = -1.0f;
+    uint32_t source_ms = 42u;
+    TEST_CHECK(!DJIMotorGetSingleTurnAngle(motor, &angle_deg, &source_ms)); // 启动后没有帧时不交付。
+    TEST_CHECK(angle_deg == -1.0f && source_ms == 42u);
+    now_us = 1000u;
+    receive_with_encoder(motor, 1000u, 1u, 0, 0, 2048u); // 四分之一圈，原始接收时刻为 1 ms。
+    TEST_CHECK(DJIMotorGetSingleTurnAngle(motor, &angle_deg, &source_ms));
+    TEST_CHECK(fabsf(angle_deg - 90.0f) < 0.1f && source_ms == 1u);
+    motor->output_position_trusted = 0u; // 多圈位置失去参考时仍可读取单圈角度。
+    now_us = (1u + DJI_FEEDBACK_MAX_AGE_MS) * 1000u;
+    TEST_CHECK(DJIMotorGetSingleTurnAngle(motor, &angle_deg, &source_ms));
+    now_us += 1000u;
+    TEST_CHECK(!DJIMotorGetSingleTurnAngle(motor, &angle_deg, &source_ms)); // 期限过去一毫秒后立即拒绝。
+    TEST_CHECK(fabsf(angle_deg - 90.0f) < 0.1f && source_ms == 1u);
+    return EXIT_SUCCESS;
+}
+
 static int legacy_compatibility(void)
 {
     Motor_Init_Config_s config = motor_config(1u);
@@ -1224,6 +1254,7 @@ int main(int argc, char **argv)
         return chassis_safety_output_gate();
 #endif
     if (strcmp(argv[1], "legacy") == 0) return legacy_compatibility();
+    if (strcmp(argv[1], "single-turn-angle") == 0) return single_turn_angle();
     if (strcmp(argv[1], "control-expired") == 0) return control_rejects_expired_feedback();
     if (strcmp(argv[1], "time-constant") == 0) return time_constant_filter();
     if (strcmp(argv[1], "bypass") == 0) return bypass_filter();

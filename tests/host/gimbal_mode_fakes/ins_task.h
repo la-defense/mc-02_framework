@@ -30,6 +30,7 @@ typedef struct
     float yaw_total_rad;
     float pitch_rad;
     float gyro_rad_s[3];
+    attitude_t attitude; // 与生产快照一样，将姿态和时刻一同交给云台。
     uint32_t timestamp_ms;
     uint32_t sequence;
     uint8_t valid;

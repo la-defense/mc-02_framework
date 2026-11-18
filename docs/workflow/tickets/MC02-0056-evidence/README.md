@@ -52,3 +52,6 @@ DJI 汇总补充每类已登记数量和有效反馈中最早的原始采样时�
 发射任务复核补充：真实安全管理、消息中心和发射任务联测故障前旧命令、命令计算期间短故障、击发许可撤销及两次发射任务之间撤销又恢复；旧连续请求均不能自动恢复，新的有效来源可接管。WSL Debug／Release 全量各 782 项通过，相关 21 项发射测试和安全管理测试在 ASan／UBSan 下通过；`verify.py --fast` 通过。普通裸板及遥控诊断 Debug 固件通过构建和隔离检查；遥控诊断 FLASH 258992 B、RAM 122488 B、RAM_D2 17408 B，相对上一同配置结果 FLASH 增加 112 B，RAM 和 RAM_D2 不变。发射、命令和安全管理源码分别通过 Cortex-M7 单文件编译；裸板固件不运行发射任务，未连接硬件。
 
 单板 DJI 拨弹补充：生产安全管理与电机发送联测击发撤销时电机任务先运行、许可恢复但旧参考未更新、旧代际写入拒绝，以及新参考接管；摩擦轮在机构许可有效时继续输出。WSL Debug／Release 全量各 783 项、相关单板 DJI 和发射场景的 ASan／UBSan 通过，`verify.py --fast` 通过。发射和 DJI 源码按 Cortex-M7 选项单文件编译；静态栈用量为 `ShootTask` 176 B、`DJIMotorControl` 424 B、拨弹参考设置 48 B、发送前回调 48 B，不代表完整调用链或板上栈余量。中断保护耗时、硬件已接受的报文、双板和其他型号均未验证；未连接硬件。
+云台反馈期限回归使用 `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --build-root /home/mc02/build/sentinel-full --parallel 6`。WSL Debug／Release 各 803/803 项通过，工具检查运行 188 项（其中有跳过项），普通裸板和遥控诊断 Debug 构建及 ELF 隔离检查通过。云台及 DJI 单圈反馈的 10 项 ASan／UBSan 检查通过，覆盖重复发布、两路分别过期与撤销、时钟回绕，以及真实 DJI 解码后单圈角度与原始时刻的一致性。测试替身保留进程生命周期分配，专项关闭了泄漏检查。
+
+云台、整车周期和 DJI 源码另按 Cortex-M7 硬浮点选项单文件编译通过。`-fstack-usage` 对 `GimbalTask`、`GimbalUpdateFeedback` 和 `DJIMotorGetSingleTurnAngle` 分别报告 32 B、168 B 和 40 B，这是各函数的静态用量，板上栈余量和耗时待测。禁热裸板配置不链接实际云台控制和 DJI 发送路径。本轮没有硬件验收。

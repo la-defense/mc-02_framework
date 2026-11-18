@@ -72,6 +72,7 @@ typedef struct
     float yaw_total_rad; /**< 启动基准后的多圈偏航角，单位 rad。 */
     float pitch_rad; /**< 当前俯仰角，单位 rad。 */
     float gyro_rad_s[3]; /**< 机体系 x/y/z 角速度，单位 rad/s。 */
+    attitude_t attitude; /**< 同一份样本的完整姿态，供保留度制的应用消息使用。 */
     uint32_t timestamp_ms; /**< 对应 BMI088 样本的本机接收时刻，允许为0。 */
     uint32_t sequence; /**< 对应 BMI088 样本序号，0 表示尚无有效样本。 */
     uint8_t valid; /**< 姿态和角速度均通过本轮有限值检查时为1。 */

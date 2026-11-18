@@ -309,6 +309,15 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
                                                      uint32_t now_ms,
                                                      Motor_Feedback_Snapshot_s *snapshot);
 
+/** @brief 读取仍在有效期内的转子单圈角度与原始接收时刻。
+ * @param[in] motor 已登记的 DJI 电机。
+ * @param[out] angle_deg 同一帧的转子角度，范围 [0, 360) 度。
+ * @param[out] source_time_ms 同一帧的本机接收时间，单位 ms，允许回绕。
+ * @return 1 为成功；0 为参数错误或反馈不可用，两个输出均保留原值。
+ * @note 由任务调用。单圈读数不要求可信的多圈位置。
+ */
+uint8_t DJIMotorGetSingleTurnAngle(const DJIMotorInstance *motor, float *angle_deg, uint32_t *source_time_ms);
+
 /* ============================================================================
    DJI 假反馈注入自测(默认关闭)
    ----------------------------------------------------------------------------

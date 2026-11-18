@@ -199,8 +199,10 @@ int main(int argc,char **argv)
                control_snapshot.timestamp_ms == now);
     TEST_CHECK(isfinite(control_snapshot.yaw_rad) && isfinite(control_snapshot.yaw_total_rad) &&
                isfinite(control_snapshot.pitch_rad));
+    TEST_CHECK(control_snapshot.attitude.Accel[Z] == vision_imu_sample.acceleration_m_s2[2]); // 完整姿态保留同一份有效样本的加速度。
     for (unsigned axis = 0u; axis < 3u; ++axis)
-        TEST_CHECK(isfinite(control_snapshot.gyro_rad_s[axis]));
+        TEST_CHECK(isfinite(control_snapshot.gyro_rad_s[axis]) &&
+                   control_snapshot.gyro_rad_s[axis] == control_snapshot.attitude.Gyro[axis]); // 电机和应用读取同一份角速度。
     scenario=1;
     for(unsigned i=1;i<=20;i++){tick();TEST_CHECK(valid && imu_filter_mode_diag==KF_PREDICTION);}
     tick();invalid();TEST_CHECK(force_off);

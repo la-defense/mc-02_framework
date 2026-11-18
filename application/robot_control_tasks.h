@@ -34,9 +34,13 @@ uint8_t GimbalInit(void);
 uint8_t GimbalInitRollbackFailed(void);
 /** @brief 在创建周期任务前撤销云台电机；重复调用不重复释放。
  * @return 全部撤销或没有实例返回 1，底层回退失败返回 0。
- * @note 仅供启动协调任务串行调用；调用后不能运行 GimbalTask。
+ * @note 仅供启动协调任务串行调用；调用后停止云台控制和反馈发布。
  */
 uint8_t GimbalReleaseStartupDevices(void);
+/** @brief 读取并发布当前云台姿态和 yaw 单圈角度，任一路无效时清除上一份反馈。
+ * @note 只在云台初始化成功后调用。整车任务应在本轮命令选择之前刷新反馈。
+ */
+void GimbalUpdateFeedback(void);
 /** @brief 在成功初始化后执行一轮云台控制；超过 50 ms 的命令失效并停止相应输出。 */
 void GimbalTask(void);
 /** @brief 初始化发射机构资源。
