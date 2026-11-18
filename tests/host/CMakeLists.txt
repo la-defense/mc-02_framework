@@ -1283,6 +1283,7 @@ endif()
 add_test(NAME production_dji_single_safety_output_gate COMMAND motor_single_safety_test single-safety-output)
 add_test(NAME production_dji_single_queued_feedback_expiry COMMAND motor_single_safety_test single-queued-feedback-expiry) # 排队目标不能借新反馈续期。
 add_test(NAME production_dji_single_queued_feedback_gap COMMAND motor_single_safety_test single-queued-feedback-gap) # 单电机反馈间断后只撤销旧槽位。
+add_test(NAME production_dji_single_queued_external_expiry COMMAND motor_single_safety_test single-queued-external-expiry) # 排队目标沿用反馈和前馈最早到期时刻。
 add_test(NAME production_dji_single_loader_fire_permit COMMAND motor_single_safety_test single-loader-fire-permit) # 拨弹独立检查击发许可。
 add_test(NAME production_dji_single_motion_reference_generation COMMAND motor_single_safety_test single-motion-reference-generation) # 故障后底盘和云台旧参考不能重放。
 add_test(NAME production_dji_recovery_real_feedback COMMAND motor_single_safety_test recovery-real-feedback) # 用真实电机反馈推进恢复条件。

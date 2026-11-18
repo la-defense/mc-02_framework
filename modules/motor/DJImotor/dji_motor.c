@@ -58,13 +58,17 @@ static DJISendGroup_t sender_assignment[9] = {
 static uint8_t sender_enable_flag[9] = {0};
 #if defined(ONE_BOARD)
 static uint32_t sender_safety_generation[9]; // 每组已排队目标所属的安全代际。
+enum {
+    DJI_QUEUED_SPEED = 1u << 0, // 依赖本电机的速度反馈。
+    DJI_QUEUED_CURRENT = 1u << 1, // 依赖本电机的电流反馈。
+    DJI_QUEUED_POSITION = 1u << 2, // 依赖本电机可信的多圈位置。
+    DJI_QUEUED_REFERENCE = 1u << 3, // 拨弹参考属于本次计算使用的安全代际。
+    DJI_QUEUED_DEADLINE = 1u << 4, // 已按实际使用的数据计算到期时刻。
+};
 typedef struct {
-    uint32_t source_ms[4]; // 每个电机计算目标时使用的内部反馈时间。
+    uint32_t deadline_ms[4]; // 每个槽位按原始采样时间计算的最早到期时刻。
     uint32_t gap_generation[4]; // 每个目标使用反馈时看到的间断代次。
-    uint8_t speed_mask; // 对应位置为 1 时，发送前仍需有效的内部速度。
-    uint8_t current_mask; // 对应位置为 1 时，发送前仍需有效的内部电流。
-    uint8_t position_mask; // 对应位置为 1 时，发送前仍需可信的多圈位置。
-    uint8_t reference_valid_mask; // 对应拨弹目标的参考属于本次计算使用的安全代际。
+    uint8_t requirements[4]; // 每个槽位需要复查的反馈、参考及有效期标记。
 } DJI_Queued_Feedback_s;
 static DJI_Queued_Feedback_s sender_feedback[9]; // 每组当前排队目标的反馈依据。
 #endif
@@ -720,7 +724,8 @@ static PID_Status_e ReadSignalForPID(const Motor_Signal_Source_s *source,
                                     Motor_Unit_e unit,
                                     Motor_Reference_e reference,
                                     uint32_t now_ms,
-                                    float *value)
+                                    float *value,
+                                    uint32_t *remaining_ms)
 {
     Motor_Signal_Snapshot_s snapshot = {0};
     if (value == NULL)
@@ -731,6 +736,12 @@ static PID_Status_e ReadSignalForPID(const Motor_Signal_Source_s *source,
         return PID_NUMERIC_ERROR;
     if (status != MOTOR_FEEDBACK_OK)
         return PID_BAD_ARGUMENT;
+    if (remaining_ms != NULL)
+    {
+        const uint32_t age_ms = now_ms - snapshot.source_time_ms; // 已验证该样本在计算时还有效。
+        const uint32_t signal_remaining = source->max_age_ms - age_ms; // 用实际使用的读数计算剩余时间。
+        if (signal_remaining < *remaining_ms) *remaining_ms = signal_remaining; // 任一来源先到期都要撤销该目标。
+    }
     *value = snapshot.value;
     return PID_OK;
 }
@@ -997,23 +1008,25 @@ static void DJIMotorPrepareSingleOutput(const void *source, uint32_t now_ms,
         const DJIMotorInstance *motor = dji_motor_instance[index]; // 逐电机核对当前帧中的输出。
         if (motor == NULL || motor->sender_group != group || motor->message_num >= 4u) continue; // 忽略其他帧及非法槽位。
         const uint8_t slot = motor->message_num; // 找到该电机在帧内的两字节位置。
-        const uint8_t slot_bit = (uint8_t)(1u << slot); // 各反馈要求都按帧内槽位保存。
         const DJI_Queued_Feedback_s *basis = &sender_feedback[group]; // 使用成功入队的依据，不能借新目标更新时间。
+        const uint8_t required = basis->requirements[slot]; // 读取计算这一个槽位时记录的条件。
         if (motor->stop_flag == MOTOR_STOP) continue; // 入队后执行器被停止，硬件提交前清零。
-        if (((basis->speed_mask | basis->current_mask | basis->position_mask) & slot_bit) != 0u &&
-            ((uint32_t)(now_ms - basis->source_ms[slot]) > DJI_FEEDBACK_MAX_AGE_MS ||
-             motor->feedback_gap_generation != basis->gap_generation[slot] ||
-             ((basis->speed_mask & slot_bit) && !motor->speed_filter_valid) ||
-             ((basis->current_mask & slot_bit) && !motor->current_filter_valid) ||
-             ((basis->position_mask & slot_bit) && !(motor->encoder_baseline_valid && motor->output_position_trusted))))
-            continue; // 原始反馈过期、期间发生间断或所需测量量失效时都丢弃旧输出。
+        const uint32_t after_deadline = now_ms - basis->deadline_ms[slot]; // 无符号差值支持毫秒时钟回绕。
+        if ((required & DJI_QUEUED_DEADLINE) && after_deadline != 0u && after_deadline <= INT32_MAX)
+            continue; // 在到期时刻仍有效，下一毫秒开始清零。
+        if ((required & (DJI_QUEUED_SPEED | DJI_QUEUED_CURRENT | DJI_QUEUED_POSITION)) &&
+            (motor->feedback_gap_generation != basis->gap_generation[slot] ||
+             ((required & DJI_QUEUED_SPEED) && !motor->speed_filter_valid) ||
+             ((required & DJI_QUEUED_CURRENT) && !motor->current_filter_valid) ||
+             ((required & DJI_QUEUED_POSITION) && !(motor->encoder_baseline_valid && motor->output_position_trusted))))
+            continue; // 内部反馈间断或所需测量量失效，旧目标也必须清零。
         if (policy_active == 0u && permits.functions != 0u)
         {
             memcpy(payload + 2u * slot, requested + 2u * slot, 2u); // 旧整车许可仍允许有效电机输出。
             continue; // 旧路径无需检查机构分类。
         }
         if (motor->output_role == MOTOR_OUTPUT_LOADER &&
-            (permits.fire_allowed == 0u || (basis->reference_valid_mask & slot_bit) == 0u))
+            (permits.fire_allowed == 0u || (required & DJI_QUEUED_REFERENCE) == 0u))
             continue; // 拨弹还需要击发许可，且参考必须属于本次目标的安全代际。
         uint32_t function = 0u; // 未声明机构时保持禁止。
         switch (motor->output_role)
@@ -1189,18 +1202,23 @@ void DJIMotorControl()
              (motor_setting->close_loop_type & SPEED_LOOP) != 0u &&
              motor_setting->speed_feedback_source == MOTOR_FEED);
 #if defined(ONE_BOARD)
-        if (motor->output_role == MOTOR_OUTPUT_LOADER && reference_generation_valid &&
-            reference_generation == cycle_safety.control_generation)
-            computed_feedback[motor->sender_group].reference_valid_mask |= (uint8_t)(1u << motor->message_num); // 记录本次计算真正使用的拨弹代际。
         DJI_Queued_Feedback_s *basis = &computed_feedback[motor->sender_group]; // 计算结果的依据与目标同组。
         const uint8_t output_slot = motor->message_num; // 在组内对应到电机自己的位置。
-        const uint8_t slot_bit = (uint8_t)(1u << output_slot); // 共用槽位位号标记三种反馈要求。
-        basis->source_ms[output_slot] = feedback_timestamp_ms; // 保留实际用于计算的反馈时间。
+        uint8_t required = 0u; // 逐项记录这一轮计算实际依赖的信号。
         basis->gap_generation[output_slot] = feedback_gap_generation; // 用相同的代次检查短暂断流。
-        if (speed_internal_active) basis->speed_mask |= slot_bit; // 内部速度环须持续有可信测量。
-        if (current_internal_active) basis->current_mask |= slot_bit; // 内部电流环同样检查结果。
+        if (speed_internal_active) required |= DJI_QUEUED_SPEED; // 内部速度环须持续有可信测量。
+        if (current_internal_active) required |= DJI_QUEUED_CURRENT; // 内部电流环同样检查结果。
         if (motor_setting->outer_loop_type == ANGLE_LOOP && (motor_setting->close_loop_type & ANGLE_LOOP) != 0u &&
-            motor_setting->angle_feedback_source == MOTOR_FEED) basis->position_mask |= slot_bit; // 内部位置环还要检查多圈参考。
+            motor_setting->angle_feedback_source == MOTOR_FEED) required |= DJI_QUEUED_POSITION; // 位置环使用编码器时需要多圈参考。
+        if (motor->output_role == MOTOR_OUTPUT_LOADER && reference_generation_valid &&
+            reference_generation == cycle_safety.control_generation)
+            required |= DJI_QUEUED_REFERENCE; // 保留已有的参考代际检查条件。
+        uint32_t remaining_ms = UINT32_MAX; // 没有读取任何限时信号时保留此值。
+        if ((internal_axis_active || current_internal_active) && feedback_fresh)
+            remaining_ms = DJI_FEEDBACK_MAX_AGE_MS - (now_ms - feedback_timestamp_ms); // 先计入内部反馈剩余时间。
+        uint32_t *signal_remaining = &remaining_ms; // 外部信号可以缩短上述期限。
+#else
+        uint32_t *signal_remaining = NULL; // 其他板角色沿用原发送检查。
 #endif
 #if defined(ONE_BOARD)
         if ((motor->output_role == MOTOR_OUTPUT_CHASSIS || motor->output_role == MOTOR_OUTPUT_GIMBAL) &&
@@ -1217,7 +1235,7 @@ void DJIMotorControl()
         {
             if (motor_setting->angle_feedback_source == OTHER_FEED)
                 pid_status = ReadSignalForPID(&motor_controller->other_angle_feedback,
-                    MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL, now_ms, &pid_measure);
+                    MOTOR_UNIT_RAD, MOTOR_REFERENCE_EXTERNAL, now_ms, &pid_measure, signal_remaining);
             else if (motor_setting->angle_feedback_source == MOTOR_FEED && position_trusted != 0u)
                 pid_measure = output_position_rad;
             else if (motor_setting->angle_feedback_source == MOTOR_FEED)
@@ -1236,14 +1254,14 @@ void DJIMotorControl()
             {
                 float feedforward = 0.0f;
                 pid_status = ReadSignalForPID(&motor_controller->speed_feedforward,
-                    MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_OUTPUT_AXIS, now_ms, &feedforward);
+                    MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_OUTPUT_AXIS, now_ms, &feedforward, signal_remaining);
                 if (pid_status == PID_OK)
                     pid_ref += feedforward;
             }
 
             if (pid_status == PID_OK && motor_setting->speed_feedback_source == OTHER_FEED)
                 pid_status = ReadSignalForPID(&motor_controller->other_speed_feedback,
-                    MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL, now_ms, &pid_measure);
+                    MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_EXTERNAL, now_ms, &pid_measure, signal_remaining);
             else if (pid_status == PID_OK && motor_setting->speed_feedback_source == MOTOR_FEED)
                 pid_measure = output_speed_rad_s;
             else if (pid_status == PID_OK)
@@ -1259,7 +1277,7 @@ void DJIMotorControl()
         {
             float feedforward = 0.0f;
             pid_status = ReadSignalForPID(&motor_controller->current_feedforward,
-                MOTOR_UNIT_DEVICE_CURRENT, MOTOR_REFERENCE_OUTPUT_AXIS, now_ms, &feedforward);
+                MOTOR_UNIT_DEVICE_CURRENT, MOTOR_REFERENCE_OUTPUT_AXIS, now_ms, &feedforward, signal_remaining);
             if (pid_status == PID_OK)
                 pid_ref += feedforward;
         }
@@ -1300,6 +1318,15 @@ void DJIMotorControl()
             dji_current_sat_count++;
         }
         set = (int16_t)pid_ref;
+
+#if defined(ONE_BOARD)
+        if (remaining_ms != UINT32_MAX)
+        {
+            basis->deadline_ms[output_slot] = now_ms + remaining_ms; // 合并使用过的所有信号的最早到期时刻。
+            required |= DJI_QUEUED_DEADLINE; // 时刻零也可能是有效截止点，单独记录是否有期限。
+        }
+        basis->requirements[output_slot] = required; // 计算结果和依据一起交给队列。
+#endif
 
         // 分组填入发送数据
         group = motor->sender_group;

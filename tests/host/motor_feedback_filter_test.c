@@ -593,6 +593,81 @@ static int single_queued_feedback_gap(void)
     return EXIT_SUCCESS;
 }
 
+// 测试源独立控制采样时刻，新读数不能续期已经排队的目标。
+static Motor_Feedback_Status_e read_timed_test_signal(const void *context, Motor_Signal_Snapshot_s *output)
+{
+    *output = *(const Motor_Signal_Snapshot_s *)context;
+    return MOTOR_FEEDBACK_OK;
+}
+
+static int single_queued_external_expiry(void)
+{
+    const uint32_t start_ms = UINT32_MAX - 3u; // 最先到期的信号跨过计数回绕。
+    const uint64_t start_us = (uint64_t)start_ms * 1000u;
+    now_us = start_us;
+    RobotSafetyInit();
+    RobotSafetySetRcOnline(1u); // 整车许可保持有效，单独检验每个计算依据的期限。
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate();
+
+    Motor_Signal_Snapshot_s speed = {
+        .value = 1.0f, // 外部速度反馈，单位 rad/s。
+        .unit = MOTOR_UNIT_RAD_S,
+        .reference = MOTOR_REFERENCE_EXTERNAL,
+        .source_time_ms = start_ms, // 记录计算时真正使用的样本。
+        .sequence = 1u,
+        .valid = 1u,
+    };
+    Motor_Signal_Snapshot_s ff = {
+        .value = 2.0f, // 电流前馈为设备侧目标量。
+        .unit = MOTOR_UNIT_DEVICE_CURRENT,
+        .reference = MOTOR_REFERENCE_OUTPUT_AXIS,
+        .source_time_ms = start_ms, // 与速度同一时刻，期限更短。
+        .sequence = 1u,
+        .valid = 1u,
+    };
+    Motor_Init_Config_s config = motor_config(1u);
+    config.controller_setting_init_config.speed_feedback_source = OTHER_FEED; // 速度环使用外部读数。
+    config.controller_setting_init_config.feedforward_flag = CURRENT_FEEDFORWARD; // 电流环还依赖前馈。
+    config.controller_param_init_config.other_speed_feedback = (Motor_Signal_Source_s){
+        .read = read_timed_test_signal, // 测试替身交付完整样本。
+        .context = &speed, // 绑定外部速度读数。
+        .max_age_ms = 10u, // 速度到期晚于前馈。
+        .unit = MOTOR_UNIT_RAD_S, // 速度为 rad/s。
+        .reference = MOTOR_REFERENCE_EXTERNAL, // 与速度环反馈接口一致。
+    };
+    config.controller_param_init_config.current_feedforward = (Motor_Signal_Source_s){
+        .read = read_timed_test_signal, // 复用同一只读接口。
+        .context = &ff, // 绑定独立电流前馈样本。
+        .max_age_ms = 5u, // 最早到期点由它决定。
+        .unit = MOTOR_UNIT_DEVICE_CURRENT, // 使用电调设备量。
+        .reference = MOTOR_REFERENCE_OUTPUT_AXIS, // 按统一输出轴方向给前馈。
+    };
+    DJIMotorInstance *motor = DJIMotorInit(&config);
+    TEST_CHECK(motor != NULL);
+    receive(motor, 100u, start_ms, 0, 0); // 内部电流反馈 20 ms 内仍有效。
+    DJIMotorSetRef(motor, 10.0f);
+    DJIMotorEnable(motor);
+    control_at(start_us + 1000u); // 建立 PID 时间基准。
+    control_at(start_us + 2000u); // 使用同一组有效反馈和前馈计算目标。
+    TEST_CHECK(deferred_prepare != NULL && (deferred_payload[0] || deferred_payload[1]));
+
+    now_us = start_us + 5000u; // 刚好到期，HAL 时刻已经回绕。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(deferred_payload[0] || deferred_payload[1]);
+    ff.source_time_ms = HAL_GetTick(); // 新前馈到达，但还没有重新计算目标。
+    ++ff.sequence;
+    now_us = start_us + 6000u;
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(!(deferred_payload[0] || deferred_payload[1])); // 外部速度和内部电流还新鲜，也不能续期。
+    control_at(start_us + 7000u); // 新计算可使用新的前馈。
+    TEST_CHECK(sent[0] || sent[1]);
+    return EXIT_SUCCESS;
+}
+
 static int single_safety_output_gate(void)
 {
     RobotSafetyInit(); // 初始状态禁止电机输出。
@@ -1290,6 +1365,8 @@ int main(int argc, char **argv)
         return single_queued_feedback_expiry();
     if (strcmp(argv[1], "single-queued-feedback-gap") == 0)
         return single_queued_feedback_gap();
+    if (strcmp(argv[1], "single-queued-external-expiry") == 0)
+        return single_queued_external_expiry();
     if (strcmp(argv[1], "single-safety-output") == 0)
         return single_safety_output_gate();
     if (strcmp(argv[1], "single-feedback-roles") == 0)
