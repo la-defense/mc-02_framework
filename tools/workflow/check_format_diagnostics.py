@@ -54,6 +54,7 @@ def audit_commands(path: Path) -> None:
     """逐条检查自有C源确实有全部选项，厂商C源没有被附加这组策略。"""
     flags = policy_flags()
     own_count, vendor_count, generated_header_count = 0, 0, 0
+    resolved_sources: dict[Path, Path] = {}  # 同一源码被多个配置编译，每次审查只解析一次其路径。
     for entry in json.loads(path.read_text(encoding="utf-8")):
         source = Path(entry["file"])
         if not source.is_absolute():
@@ -61,7 +62,10 @@ def audit_commands(path: Path) -> None:
         if source.suffix.lower() != ".c":
             continue
         # 公开头检查会在构建目录生成 public-header-*.c，目录可能位于仓库外。
-        resolved_source = source.resolve()
+        resolved_source = resolved_sources.get(source)
+        if resolved_source is None:
+            resolved_source = source.resolve()
+            resolved_sources[source] = resolved_source
         try:
             relative = resolved_source.relative_to(ROOT).as_posix()
         except ValueError as error:

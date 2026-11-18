@@ -121,6 +121,15 @@ PlatformPeriodicResult_t PlatformTaskPeriodicInit(PlatformPeriodicClock_t *clock
 PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock,
     PlatformPeriodicRelease_t *release);
 
+/** @brief 用当前 RTOS 刻度检查刚完成的一拍。
+ * @param[in] clock 由 PlatformTaskPeriodicInit 建立并已领取一拍的状态。
+ * @param[in] release 最近一次成功等待返回的拍点。
+ * @param[out] timing 成功时写入耗时和是否超期，失败保持原值。
+ * @return READY 为成功，或返回上下文、配置及计数错误。
+ */
+PlatformPeriodicResult_t PlatformTaskPeriodicFinish(const PlatformPeriodicClock_t *clock,
+    const PlatformPeriodicRelease_t *release, PlatformPeriodicTiming_t *timing);
+
 /** @brief 申请平台硬件计时资源，并使用硬件刻度建立第一拍。
  * @param[out] clock 成功才写入；必须在本次使用期间保持有效且不可直接改写。
  * @param[in] config 固定周期与预算，单位 μs。

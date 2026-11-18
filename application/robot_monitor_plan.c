@@ -1,5 +1,5 @@
 /** @file robot_monitor_plan.c
- * @brief 用车型依赖决定姿态任务是否监控及其故障影响。
+ * @brief 定义周期任务的时间配置并按车型依赖选择监控项。
  */
 #include "robot_monitor_plan.h"
 #include "config/build_selection.h"
@@ -8,16 +8,39 @@
 #endif
 #include <stddef.h>
 
-#define ROBOT_DIAGNOSTIC_PERIOD_MS 5u // 保留整车任务的名义周期，也用于监控的毫秒单位。
+#define ROBOT_DIAGNOSTIC_PERIOD_MS 5u // 整车诊断的名义周期，单位 ms。
+#define ROBOT_INS_PERIOD_MS 1u // 姿态任务的名义周期，单位 ms。
+#define ROBOT_COMM_PERIOD_MS 1u // 通信派发的名义周期，单位 ms。
+#define ROBOT_DAEMON_PERIOD_MS 10u // 设备维护与监控的名义周期，单位 ms。
 
-#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
-static const PlatformPeriodicRequest_t diagnostic_periods[ROBOT_PERIODIC_COUNT] = {
+static const PlatformPeriodicRequest_t task_periods[ROBOT_PERIODIC_COUNT] = {
     [ROBOT_PERIODIC_DIAGNOSTIC] = {
         .timing = {
             .period_us = ROBOT_DIAGNOSTIC_PERIOD_MS * 1000u, // 现有诊断周期，从 ms 转为 μs。
             .budget_us = ROBOT_DIAGNOSTIC_PERIOD_MS * 1000u, // 保留现有单轮耗时告警所用的预算。
         },
         .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 使用 FreeRTOS 精确表示这一间隔。
+    },
+    [ROBOT_PERIODIC_INS] = {
+        .timing = {
+            .period_us = ROBOT_INS_PERIOD_MS * 1000u, // 保留原姿态名义间隔，单位 μs。
+            .budget_us = ROBOT_INS_PERIOD_MS * 1000u, // 保留原姿态耗时告警阈值。
+        },
+        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 禁热固件使用 RTOS 刻度。
+    },
+    [ROBOT_PERIODIC_COMM] = {
+        .timing = {
+            .period_us = ROBOT_COMM_PERIOD_MS * 1000u, // 保留原通信名义间隔，单位 μs。
+            .budget_us = ROBOT_COMM_PERIOD_MS * 1000u, // 保留原通信耗时告警阈值。
+        },
+        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 禁热固件使用 RTOS 刻度。
+    },
+    [ROBOT_PERIODIC_DAEMON] = {
+        .timing = {
+            .period_us = ROBOT_DAEMON_PERIOD_MS * 1000u, // 保留原设备维护名义间隔，单位 μs。
+            .budget_us = ROBOT_DAEMON_PERIOD_MS * 1000u, // 保留原设备维护耗时告警阈值。
+        },
+        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 禁热固件使用 RTOS 刻度。
     },
 #if MC02_BENCH_TIM5_DIAGNOSTICS
     [ROBOT_PERIODIC_TIM5_PROBE] = {
@@ -30,22 +53,36 @@ static const PlatformPeriodicRequest_t diagnostic_periods[ROBOT_PERIODIC_COUNT] 
 #endif
 };
 
-PlatformPeriodicResult_t RobotValidatePeriodicDiagnostics(RobotPeriodicDiagnostic_t *failed)
+const PlatformPeriodicConfig_t *RobotGetTaskPeriod(RobotPeriodicTask_t task)
 {
+    if ((unsigned)task >= ROBOT_PERIODIC_COUNT) return NULL; // 越界时不读取表外数据。
+    return &task_periods[task].timing;
+}
+
+#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
+PlatformPeriodicResult_t RobotValidateTaskPeriods(const RobotModulePlan_t *modules, RobotPeriodicTask_t *failed)
+{
+    PlatformPeriodicRequest_t enabled[ROBOT_PERIODIC_COUNT];
+    RobotPeriodicTask_t ids[ROBOT_PERIODIC_COUNT];
+    size_t count = 0u; // 只为本次配置会创建的任务检查时钟。
+    for (size_t i = 0u; i < ROBOT_PERIODIC_COUNT; ++i)
+    {
+        if (i == ROBOT_PERIODIC_INS && modules != NULL &&
+            (modules->enabled & ROBOT_MODULE_BIT(ROBOT_MODULE_IMU)) == 0u) continue; // 无姿态模块时略过。
+#if !MC02_FEATURE_COMM_DISPATCH
+        if (i == ROBOT_PERIODIC_COMM) continue; // 此构建不创建通信派发任务。
+#endif
+        enabled[count] = task_periods[i]; // 将实际请求交给平台接口。
+        ids[count++] = (RobotPeriodicTask_t)i; // 保留原任务编号，不能把压缩后的索引直接用于诊断。
+    }
     const PlatformPeriodicCapabilities_t capabilities = PlatformTaskPeriodicCapabilities(); // 读取实际唤醒能力。
     uint32_t hardware_mask; // 计划函数需完成整个分配；诊断项的后端已由配置指定。
     size_t failed_index = 0u; // 固定表首项用于报告通用配置错误。
-    const PlatformPeriodicResult_t result = PlatformPeriodicPlan(diagnostic_periods, ROBOT_PERIODIC_COUNT,
-        &capabilities, &hardware_mask, &failed_index); // 校验两种来源是否都能满足各自配置。
+    const PlatformPeriodicResult_t result = PlatformPeriodicPlan(enabled, count,
+        &capabilities, &hardware_mask, &failed_index); // 依据各任务指定的时钟检查精度和容量。
     if (result != PLATFORM_PERIODIC_READY && failed != NULL)
-        *failed = (RobotPeriodicDiagnostic_t)failed_index;
+        *failed = ids[failed_index]; // 报告真正失败的任务。
     return result;
-}
-
-const PlatformPeriodicConfig_t *RobotGetDiagnosticPeriod(RobotPeriodicDiagnostic_t diagnostic)
-{
-    if ((unsigned)diagnostic >= ROBOT_PERIODIC_COUNT) return NULL; // 越界时不读取表外数据。
-    return &diagnostic_periods[diagnostic].timing;
 }
 #endif
 
@@ -62,16 +99,16 @@ static void RobotAuxiliaryInsTaskFailed(TaskMonitor_Id_e id, uint32_t dependenci
 // 周期单位为毫秒；首次任务启动额外保留 100 ms 宽限。
 static const TaskMonitorTaskConfig_t robot_task_monitor_config[] = {
     {.id = TASK_MONITOR_INS, .name = "INS", .mode = TASK_MONITOR_MODE_PERIODIC,
-     .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 5u, .startup_grace_ms = 100u}, // 姿态周期。
+     .role = TASK_MONITOR_ROLE_CORE, .period_ms = ROBOT_INS_PERIOD_MS, .deadline_ms = 5u, .startup_grace_ms = 100u}, // 姿态周期。
 #if MC02_FEATURE_COMM_DISPATCH
     {.id = TASK_MONITOR_MOTOR, .name = "MOTOR", .mode = TASK_MONITOR_MODE_PERIODIC,
-     .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 5u, .startup_grace_ms = 100u}, // 电机及通信派发。
+     .role = TASK_MONITOR_ROLE_CORE, .period_ms = ROBOT_COMM_PERIOD_MS, .deadline_ms = 5u, .startup_grace_ms = 100u}, // 电机及通信派发。
 #endif
     {.id = TASK_MONITOR_ROBOT, .name = "ROBOT", .mode = TASK_MONITOR_MODE_PERIODIC,
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = ROBOT_DIAGNOSTIC_PERIOD_MS,
      .deadline_ms = 20u, .startup_grace_ms = 100u}, // 整车任务，监控沿用以毫秒表达的期限。
     {.id = TASK_MONITOR_DAEMON, .name = "DAEMON", .mode = TASK_MONITOR_MODE_PERIODIC,
-     .role = TASK_MONITOR_ROLE_CORE, .period_ms = 10u, .deadline_ms = 30u, .startup_grace_ms = 100u}, // 设备及任务监控。
+     .role = TASK_MONITOR_ROLE_CORE, .period_ms = ROBOT_DAEMON_PERIOD_MS, .deadline_ms = 30u, .startup_grace_ms = 100u}, // 设备及任务监控。
     {.id = TASK_MONITOR_UART_TX, .name = "UART_TX", .mode = TASK_MONITOR_MODE_PERIODIC,
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 30u, .startup_grace_ms = 100u}, // 串口发送。
 };

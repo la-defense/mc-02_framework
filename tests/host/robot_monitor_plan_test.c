@@ -23,18 +23,26 @@ PlatformPeriodicCapabilities_t PlatformTaskPeriodicCapabilities(void)
 
 static void TestDiagnosticAdmission(void)
 {
-    RobotPeriodicDiagnostic_t failed = ROBOT_PERIODIC_COUNT;
-    TEST_CHECK(RobotValidatePeriodicDiagnostics(&failed) == PLATFORM_PERIODIC_READY && failed == ROBOT_PERIODIC_COUNT);
-    TEST_CHECK(RobotGetDiagnosticPeriod(ROBOT_PERIODIC_DIAGNOSTIC)->period_us == 5000u);
-    TEST_CHECK(RobotGetDiagnosticPeriod(ROBOT_PERIODIC_TIM5_PROBE)->period_us == 500u);
-    TEST_CHECK(RobotGetDiagnosticPeriod(ROBOT_PERIODIC_COUNT) == NULL);
+    RobotModulePlan_t modules = {.enabled = ROBOT_MODULE_BIT(ROBOT_MODULE_IMU)};
+    RobotPeriodicTask_t failed = ROBOT_PERIODIC_COUNT;
+    TEST_CHECK(RobotValidateTaskPeriods(&modules, &failed) == PLATFORM_PERIODIC_READY && failed == ROBOT_PERIODIC_COUNT);
+    TEST_CHECK(RobotGetTaskPeriod(ROBOT_PERIODIC_DIAGNOSTIC)->period_us == 5000u);
+    TEST_CHECK(RobotGetTaskPeriod(ROBOT_PERIODIC_INS)->period_us == 1000u);
+    TEST_CHECK(RobotGetTaskPeriod(ROBOT_PERIODIC_COMM)->period_us == 1000u);
+    TEST_CHECK(RobotGetTaskPeriod(ROBOT_PERIODIC_DAEMON)->period_us == 10000u);
+    TEST_CHECK(RobotGetTaskPeriod(ROBOT_PERIODIC_TIM5_PROBE)->period_us == 500u);
+    TEST_CHECK(RobotGetTaskPeriod(ROBOT_PERIODIC_COUNT) == NULL);
 
     fake_periodic_capabilities.high_res_channels = 0u; // 板级资源被占用，显式定时自测不能悄悄跳过。
     fake_periodic_capabilities.rtos_quantum_us = 100u; // 即使 RTOS 也能表示自测周期，仍需检验 TIM5。
-    TEST_CHECK(RobotValidatePeriodicDiagnostics(&failed) == PLATFORM_PERIODIC_RESOURCE && failed == ROBOT_PERIODIC_TIM5_PROBE);
+    TEST_CHECK(RobotValidateTaskPeriods(&modules, &failed) == PLATFORM_PERIODIC_RESOURCE && failed == ROBOT_PERIODIC_TIM5_PROBE);
     fake_periodic_capabilities.high_res_channels = 4u;
     fake_periodic_capabilities.rtos_quantum_us = 2000u; // 普通任务必须使用 RTOS，不能用空闲 TIM5 掩盖配置错误。
-    TEST_CHECK(RobotValidatePeriodicDiagnostics(&failed) == PLATFORM_PERIODIC_CONFIG && failed == ROBOT_PERIODIC_DIAGNOSTIC);
+    TEST_CHECK(RobotValidateTaskPeriods(&modules, &failed) == PLATFORM_PERIODIC_CONFIG && failed == ROBOT_PERIODIC_DIAGNOSTIC);
+    fake_periodic_capabilities.rtos_quantum_us = 5000u; // 此刻度可表示 5 ms，不能表示 1 ms。
+    TEST_CHECK(RobotValidateTaskPeriods(&modules, &failed) == PLATFORM_PERIODIC_CONFIG && failed == ROBOT_PERIODIC_INS);
+    modules.enabled = 0u; // 车型禁用姿态时不校验姿态的拍点，压缩索引仍须指向通信任务。
+    TEST_CHECK(RobotValidateTaskPeriods(&modules, &failed) == PLATFORM_PERIODIC_CONFIG && failed == ROBOT_PERIODIC_COMM);
 }
 
 uint8_t RobotBuildMarkFailure(RobotModule_t module)
@@ -94,6 +102,10 @@ int main(int argc, char **argv)
     for (uint32_t index = 0u; index < captured_count; ++index)
     {
         const TaskMonitorTaskConfig_t *item = &captured[index]; // 逐项检查复制后的配置。
+        if (item->id == TASK_MONITOR_INS) TEST_CHECK(item->period_ms * 1000u == RobotGetTaskPeriod(ROBOT_PERIODIC_INS)->period_us);
+        if (item->id == TASK_MONITOR_MOTOR) TEST_CHECK(item->period_ms * 1000u == RobotGetTaskPeriod(ROBOT_PERIODIC_COMM)->period_us);
+        if (item->id == TASK_MONITOR_ROBOT) TEST_CHECK(item->period_ms * 1000u == RobotGetTaskPeriod(ROBOT_PERIODIC_DIAGNOSTIC)->period_us);
+        if (item->id == TASK_MONITOR_DAEMON) TEST_CHECK(item->period_ms * 1000u == RobotGetTaskPeriod(ROBOT_PERIODIC_DAEMON)->period_us);
         if (item->id != TASK_MONITOR_INS) { TEST_CHECK(item->role == TASK_MONITOR_ROLE_CORE); continue; }
         found_ins = 1u; // 姿态任务是否存在取决于车型启用状态。
         TEST_CHECK(item->role == (expected_core ? TASK_MONITOR_ROLE_CORE : TASK_MONITOR_ROLE_AUXILIARY));

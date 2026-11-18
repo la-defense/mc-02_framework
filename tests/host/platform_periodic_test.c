@@ -127,6 +127,14 @@ static void TestFreeRtosWait(void)
     TEST_CHECK(PlatformTaskPeriodicWait(&clock, &release) == PLATFORM_PERIODIC_READY);
     TEST_CHECK(sleep_until == 2u && sleep_count == 1u && release.observed_tick == 13u);
     TEST_CHECK(release.scheduled_tick == 12u && release.skipped == 2u && clock.next_tick == 17u);
+    PlatformPeriodicTiming_t timing;
+    now_tick = 15u; // 完成时再读取 RTOS 刻度，包含从实际开始到完成的 2 ms。
+    TEST_CHECK(PlatformTaskPeriodicFinish(&clock, &release, &timing) == PLATFORM_PERIODIC_READY);
+    TEST_CHECK(timing.work_ticks == 2u && !timing.over_budget && !timing.missed_deadline);
+    now_tick = 18u; // 超出预算，也越过下一计划拍。
+    TEST_CHECK(PlatformTaskPeriodicFinish(&clock, &release, &timing) == PLATFORM_PERIODIC_READY);
+    TEST_CHECK(timing.work_ticks == 5u && timing.over_budget && timing.missed_deadline);
+    now_tick = 13u;
     wake_early = 1u;
     TEST_CHECK(PlatformTaskPeriodicWait(&clock, &release) == PLATFORM_PERIODIC_CLOCK);
     TEST_CHECK(clock.last_tick == 13u && clock.next_tick == 17u && release.observed_tick == 13u);

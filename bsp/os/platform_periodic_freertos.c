@@ -62,3 +62,10 @@ PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock
     }
     return status;
 }
+
+PlatformPeriodicResult_t PlatformTaskPeriodicFinish(const PlatformPeriodicClock_t *clock,
+    const PlatformPeriodicRelease_t *release, PlatformPeriodicTiming_t *timing)
+{
+    if (!TaskContextReady()) return PLATFORM_PERIODIC_CONTEXT; // 完成检查仍须在取得拍点的任务中执行。
+    return PlatformPeriodicFinish(clock, release, xTaskGetTickCount(), timing); // 完成时刻和拍点使用同一计数器。
+}

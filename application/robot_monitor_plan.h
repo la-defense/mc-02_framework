@@ -5,29 +5,33 @@
 #define MC02_ROBOT_MONITOR_PLAN_H
 #include "config/module_plan.h"
 #include "task_monitor.h"
-#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
 #include "platform_periodic.h"
 
 typedef enum {
-    ROBOT_PERIODIC_DIAGNOSTIC = 0, /**< 既有整车诊断任务使用 RTOS 刻度。 */
+    ROBOT_PERIODIC_DIAGNOSTIC = 0, /**< 整车诊断及状态汇总。 */
+    ROBOT_PERIODIC_INS, /**< 姿态采样与解算。 */
+    ROBOT_PERIODIC_COMM, /**< 裸板通信派发。 */
+    ROBOT_PERIODIC_DAEMON, /**< 设备维护及任务监控。 */
 #if MC02_BENCH_TIM5_DIAGNOSTICS
     ROBOT_PERIODIC_TIM5_PROBE, /**< 独立裸板自测使用 TIM5 比较通道。 */
 #endif
     ROBOT_PERIODIC_COUNT
-} RobotPeriodicDiagnostic_t;
+} RobotPeriodicTask_t;
 
-/** @brief 检查本次构建启用的诊断周期和唤醒资源。
+/** @brief 读取周期任务的名义间隔及预算。
+ * @param[in] task 周期任务编号。
+ * @return 固件运行期间可读的配置，编号无效时返回 NULL。
+ */
+const PlatformPeriodicConfig_t *RobotGetTaskPeriod(RobotPeriodicTask_t task);
+
+#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
+/** @brief 检查本次启动需要的周期和唤醒资源。
+ * @param[in] modules 启用模块的计划；旧配置可传 NULL。
  * @param[out] failed 失败时写入具体诊断项，成功时保留原值；可以为 NULL。
  * @return READY 为通过，CONFIG 为周期或预算无效，RESOURCE 为硬件通道不足。
  * @note 板级时钟已启动且任务尚未创建时调用，只读取硬件状态。
  */
-PlatformPeriodicResult_t RobotValidatePeriodicDiagnostics(RobotPeriodicDiagnostic_t *failed);
-
-/** @brief 读取已经纳入启动检查的诊断周期。
- * @param[in] diagnostic 构建启用的诊断项。
- * @return 固件运行期间可读的配置，编号无效时返回 NULL。
- */
-const PlatformPeriodicConfig_t *RobotGetDiagnosticPeriod(RobotPeriodicDiagnostic_t diagnostic);
+PlatformPeriodicResult_t RobotValidateTaskPeriods(const RobotModulePlan_t *modules, RobotPeriodicTask_t *failed);
 #endif
 
 /** @brief 将车型依赖映射到已选择任务的核心／辅助监控。

@@ -305,26 +305,32 @@ uint8_t RobotInit(void)
         RobotFaultReport(ROBOT_FAULT_RESET_LOCKOUT);
     if (recovery_state_valid != 0u && recovery_state.manual_estop_latched != 0u)
         EstopRequest(ESTOP_REASON_MANUAL);
+#if defined(MC02_CONFIG_GENERATED)
+    const RobotModulePlan_t *task_modules = RobotBuildGetPlan(); // 监控和启动检查使用相同模块选择。
+#else
+    const RobotModulePlan_t *task_modules = NULL; // 旧配置保留默认启用组合。
+#endif
 #if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
-    RobotPeriodicDiagnostic_t failed_period; // 预检失败时取得具体诊断项。
-    const PlatformPeriodicResult_t timing_status = RobotValidatePeriodicDiagnostics(&failed_period);
+    static const uint16_t task_resources[ROBOT_PERIODIC_COUNT] = {
+        [ROBOT_PERIODIC_DIAGNOSTIC] = INIT_RESOURCE_TASK_ROBOT, // 整车诊断。
+        [ROBOT_PERIODIC_INS] = INIT_RESOURCE_TASK_INS, // 姿态采样。
+        [ROBOT_PERIODIC_COMM] = INIT_RESOURCE_TASK_MOTOR, // 通信派发沿用任务资源编号。
+        [ROBOT_PERIODIC_DAEMON] = INIT_RESOURCE_TASK_DAEMON, // 设备维护和监控。
+#if MC02_BENCH_TIM5_DIAGNOSTICS
+        [ROBOT_PERIODIC_TIM5_PROBE] = INIT_RESOURCE_TASK_TIM5_PROBE, // 专用定时自测。
+#endif
+    };
+    RobotPeriodicTask_t failed_period; // 预检失败时取得具体任务。
+    const PlatformPeriodicResult_t timing_status = RobotValidateTaskPeriods(task_modules, &failed_period);
     if (timing_status != PLATFORM_PERIODIC_READY) // 时基或硬件通道不满足要求时不启动任务。
     {
-        uint16_t resource = INIT_RESOURCE_TASK_ROBOT; // 普通诊断的周期或预算无法表示。
-#if MC02_BENCH_TIM5_DIAGNOSTICS
-        if (failed_period == ROBOT_PERIODIC_TIM5_PROBE) resource = INIT_RESOURCE_TASK_TIM5_PROBE;
-#endif
         const InitDiagnosticReason_e reason = timing_status == PLATFORM_PERIODIC_RESOURCE
             ? INIT_FAILURE_RESOURCE : INIT_FAILURE_TASK_TIMING; // 区分资源不可用与时间配置无效。
-        InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS, reason, resource);
+        InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS, reason, task_resources[failed_period]);
         goto init_failed; // 沿用现有启动失能路径。
     }
 #endif
-    #if defined(MC02_CONFIG_GENERATED)
-    if (RobotConfigureTaskMonitor(RobotBuildGetPlan()) != TASK_MONITOR_RESULT_OK)
-#else
-    if (RobotConfigureTaskMonitor(NULL) != TASK_MONITOR_RESULT_OK)
-#endif
+    if (RobotConfigureTaskMonitor(task_modules) != TASK_MONITOR_RESULT_OK)
     {
         InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
                                     INIT_FAILURE_DEPENDENCY, 0u);

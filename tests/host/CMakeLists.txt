@@ -170,6 +170,26 @@ foreach(scenario core transitive aux disabled missing cycle timing)
   add_test(NAME production_robot_monitor_plan_${scenario} COMMAND robot_monitor_plan_test ${scenario})
   set_tests_properties(production_robot_monitor_plan_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
+# 用实际常驻入口运行一拍，检查未放行、监控拒绝和唤醒故障都不能执行。
+add_executable(robot_task_cycle_test robot_task_cycle_test.c ../../application/robot_task.c
+  ../../application/robot_monitor_plan.c)
+target_include_directories(robot_task_cycle_test PRIVATE task_creation_fakes . ../../application
+  ../../modules/task_monitor ../../modules/imu ../../modules/motor ../../modules/daemon
+  ../../bsp/os ../../bsp/log ../../bsp/dwt ../../bsp/crash)
+target_compile_definitions(robot_task_cycle_test PRIVATE
+  MC02_CONFIG_GENERATED=1 # 复用主机车型配置替身。
+  MC02_PROFILE_BENCH_SAFE=1 # 执行固定周期分支。
+  MC02_FEATURE_UI=0 # 只运行四个纳入预检的任务。
+  DISABLE_LOG_SYSTEM=1) # 主机只检查任务工作和进度。
+target_compile_options(robot_task_cycle_test PRIVATE -Wall -Wextra -Werror
+  -ffunction-sections -fdata-sections)
+target_link_options(robot_task_cycle_test PRIVATE -Wl,--gc-sections)
+foreach(task IN ITEMS ins comm daemon robot)
+  add_test(NAME production_robot_task_cycle_${task} COMMAND robot_task_cycle_test ${task})
+  set_tests_properties(production_robot_task_cycle_${task} PROPERTIES TIMEOUT 10)
+endforeach()
+add_test(NAME production_robot_task_cycle_finish_error COMMAND robot_task_cycle_test daemon finish-error)
+set_tests_properties(production_robot_task_cycle_finish_error PROPERTIES TIMEOUT 10)
 # 直接运行生成代码中的 FDCAN MSP，模拟重复初始化和跨总线退出。
 add_executable(fdcan_msp_test fdcan_msp_test.c ../../Core/Src/fdcan.c)
 target_include_directories(fdcan_msp_test BEFORE PRIVATE fdcan_msp_fakes .)
