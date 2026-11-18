@@ -178,12 +178,45 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
     }
 }
 
+#if MC02_BENCH_TIM5_DIAGNOSTICS
+volatile uint32_t mc02_tim5_probe_result = UINT32_MAX; // 调试器读取，UINT32_MAX 表示尚未完成。
+volatile uint32_t mc02_tim5_probe_releases; // 一次性检查中实际领取的拍数。
+volatile uint32_t mc02_tim5_probe_skipped; // 同时记录由于唤醒迟到而放弃的拍数。
+
+static void RunTim5Probe(void)
+{
+    const PlatformPeriodicConfig_t config = {
+        .period_us = 500u, // 裸板测试拍点，单位 μs。
+        .budget_us = 500u, // 自测只处理计数，不启动业务任务。
+    };
+    PlatformPeriodicClock_t clock;
+    PlatformPeriodicResult_t result = PlatformTaskHighResOpen(&clock, &config); // 先确认硬件可独占。
+    if (result == PLATFORM_PERIODIC_READY)
+    {
+        for (unsigned i = 0u; i < 8u; ++i)
+        {
+            PlatformPeriodicRelease_t release;
+            result = PlatformTaskHighResWait(&clock, &release); // 每轮有限等待一个拍点。
+            if (result != PLATFORM_PERIODIC_READY) break; // 首次失效后结束检查。
+            ++mc02_tim5_probe_releases; // 诊断不运行任何业务控制。
+            mc02_tim5_probe_skipped += release.skipped; // 迟到可由调试器观察。
+        }
+        const PlatformPeriodicResult_t close = PlatformTaskHighResClose(&clock); // 成功或超时都释放定时器。
+        if (result == PLATFORM_PERIODIC_READY) result = close; // 保留先发生的错误。
+    }
+    mc02_tim5_probe_result = (uint32_t)result; // 释放完成后发布最终状态。
+}
+#endif
+
 __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
 {
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_07);
 #if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
     while (!TaskMonitorRuntimeReleased())
         PlatformTaskDelayMs(1u); // 诊断周期从启动完成后开始计时。
+#if MC02_BENCH_TIM5_DIAGNOSTICS
+    RunTim5Probe(); // 执行一次有限的硬件时序检查，随后恢复普通裸板诊断。
+#endif
     const PlatformPeriodicConfig_t config = {
         .period_us = 5000u, // 保留裸板整车诊断的名义周期 5 ms。
         .budget_us = 5000u, // 对应现有单轮耗时告警阈值。

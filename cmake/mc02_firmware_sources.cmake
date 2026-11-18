@@ -310,6 +310,9 @@ endforeach()
 if(NOT MC02_SELECTED_DRIVER_DJI)
     list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES bsp/board/dji_can_diagnostic_stm32.c) # 无 DJI 电机时不编入诊断。
 endif()
+if(MC02_BENCH_TIM5_DIAGNOSTICS)
+    list(APPEND MC02_BSP_C_SOURCES bsp/board/platform_periodic_tim5_stm32.c) # 仅定时诊断显式占用 TIM5。
+endif()
 if(MC02_SELECTED_DRIVER_HT)
     list(APPEND MC02_BSP_C_SOURCES bsp/board/platform_ht_delay_stm32.c) # 仅 HT 沿用的初始化忙等。
 endif()

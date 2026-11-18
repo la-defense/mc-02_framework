@@ -10,7 +10,8 @@ typedef enum {
     PLATFORM_PERIODIC_WAIT, /**< 下一拍尚未到期。 */
     PLATFORM_PERIODIC_CONFIG, /**< 周期、预算或计数分辨率无效。 */
     PLATFORM_PERIODIC_CONTEXT, /**< 当前无法在任务中等待。 */
-    PLATFORM_PERIODIC_CLOCK /**< 计数倒退或后端提前结束等待。 */
+    PLATFORM_PERIODIC_CLOCK, /**< 计数倒退、后端提前结束等待或唤醒超时。 */
+    PLATFORM_PERIODIC_RESOURCE /**< 计时资源已占用或无法建立等待。 */
 } PlatformPeriodicResult_t;
 
 typedef struct {
@@ -84,4 +85,28 @@ PlatformPeriodicResult_t PlatformTaskPeriodicInit(PlatformPeriodicClock_t *clock
  */
 PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock,
     PlatformPeriodicRelease_t *release);
+
+/** @brief 申请平台硬件计时资源，并使用硬件刻度建立第一拍。
+ * @param[out] clock 成功才写入；必须在本次使用期间保持有效且不可直接改写。
+ * @param[in] config 固定周期与预算，单位 μs。
+ * @return READY 为成功，其他值说明配置、资源或调用上下文错误。
+ * @note 仅在启用相应平台后端的构建中提供。由同一正常任务负责申请、等待和释放。
+ */
+PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
+    const PlatformPeriodicConfig_t *config);
+
+/** @brief 用硬件定时器等待下一拍，阻塞由 RTOS 提供有限超时。
+ * @param[in,out] clock 已成功申请的任务私有周期状态，失败时保持原值。
+ * @param[out] release 成功交付最近一个到期拍点，失败时保持原值。
+ * @return READY 或具体失败原因；不补跑错过的旧拍。
+ * @note 调用前须退出临界区，并解除调用者设置的中断屏蔽。
+ */
+PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
+    PlatformPeriodicRelease_t *release);
+
+/** @brief 停止硬件比较和计数，释放本次申请的资源。
+ * @param[in] clock 本任务申请的状态地址，不可为空。
+ * @return READY 为成功，错误调用不会释放其他任务的资源。
+ */
+PlatformPeriodicResult_t PlatformTaskHighResClose(const PlatformPeriodicClock_t *clock);
 #endif
