@@ -29,4 +29,12 @@ typedef struct {
  */
 ChassisKinematicsStatus_t ChassisKinematicsCalculate(const ChassisTwist_t *input,
     const ChassisWheelGeometry_t wheels[CHASSIS_WHEEL_COUNT], ChassisWheelSpeeds_t *output);
+/** @brief 用四轮的实测输出轴速度估计三个底盘速度分量。
+ * @param[in] input 四轮统一编号的输出轴速度，rad/s。
+ * @param[in] wheels 四轮位置、滚动投影和正轮径，和目标轮速计算使用同一套几何。
+ * @param[out] output 底盘中心速度，m/s、rad/s，失败时非空输出清零。
+ * @return OK 或 ARGUMENT；不使用轮速以外的滑移或场地定位信息。
+ */
+ChassisKinematicsStatus_t ChassisKinematicsEstimate(const ChassisWheelSpeeds_t *input,
+    const ChassisWheelGeometry_t wheels[CHASSIS_WHEEL_COUNT], ChassisTwist_t *output);
 #endif

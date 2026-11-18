@@ -15,4 +15,12 @@ typedef struct {
  */
 ChassisKinematicsStatus_t OmniCalculate(const ChassisTwist_t *input,
     const OmniGeometry_t *geometry, ChassisWheelSpeeds_t *output);
+/** @brief 用全向轮输出轴速度估计底盘中心速度。
+ * @param[in] input 统一轮序的实测轮轴 rad/s。
+ * @param[in] geometry 实物位置、单位滚动方向和轮径。
+ * @param[out] output 底盘 m/s、rad/s；失败时非空输出清零。
+ * @return OK 或 ARGUMENT；近退化几何和非有限轮速均拒绝。
+ */
+ChassisKinematicsStatus_t OmniEstimate(const ChassisWheelSpeeds_t *input,
+    const OmniGeometry_t *geometry, ChassisTwist_t *output);
 #endif

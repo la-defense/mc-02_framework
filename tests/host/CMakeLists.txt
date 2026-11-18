@@ -1874,6 +1874,7 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
   endif()
   add_test(NAME production_chassis_task_${chassis_limits_profile} COMMAND ${target})
 endforeach()
+add_test(NAME production_chassis_omni_velocity_feedback COMMAND chassis_task_configured_test velocity)
 add_executable(chassis_dual_topic_test chassis_task_test.c
   ../../application/chassis/chassis.c ../../application/chassis/chassis_supercap_legacy.c ../../application/chassis/chassis_motion.c
     ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c

@@ -17,6 +17,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "FAIL:%d %s\n", __LINE__, #condition); return 1; } } while (0)
@@ -37,7 +38,7 @@ uint32_t HAL_GetTick(void)
 }
 CAN_HandleTypeDef hcan1, hcan2;
 UART_HandleTypeDef huart1;
-static const Chassis_Config_s chassis_configuration = {
+static Chassis_Config_s chassis_configuration = {
     .wheel_type = MECANUM_WHEEL,
     .wheel_measure = {0.0f, 0.0f, 350.0f, 300.0f, RADIUS_WHEEL,
                       REDUCTION_RATIO_WHEEL},
@@ -136,6 +137,10 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uin
     (void)now_ms;
     if (motor == NULL || snapshot == NULL) return MOTOR_FEEDBACK_BAD_ARGUMENT;
     snapshot->speed.valid = motor->feedback_speed_valid;
+    snapshot->speed.unit = motor->feedback_wrong_unit ? 0u : MOTOR_UNIT_RAD_S; // 注入错误单位时估速必须拒绝。
+    snapshot->speed.reference = MOTOR_REFERENCE_OUTPUT_AXIS; // 该替身提供减速器输出轴数据。
+    snapshot->speed.value = motor->feedback_speed_rad_s;
+    snapshot->speed.source_time_ms = motor->feedback_source_time_ms;
     snapshot->current.valid = motor->feedback_current_valid;
     if (motor->feedback_online == 0u) return MOTOR_FEEDBACK_NOT_READY;
     if (motor->feedback_age_ms > 20u) return MOTOR_FEEDBACK_STALE;
@@ -348,8 +353,58 @@ static int test_bridge_to_chassis(void)
 }
 #endif
 
+// 用已知的切向轮组测试生产任务发布速度及按原始时间失效。
+static int TestOmniVelocity(void)
+{
+    const float u = 0.70710678118f;
+    chassis_configuration.wheel_type = OMNI_WHEEL;
+    chassis_configuration.omni_geometry = (OmniGeometry_t){.wheels = {
+        {0.2f, 0.2f, -u, u, 0.1f}, // 左前轮位置、单位滚动方向与轮径。
+        {0.2f, -0.2f, u, u, 0.1f}, // 右前轮。
+        {-0.2f, 0.2f, -u, -u, 0.1f}, // 左后轮。
+        {-0.2f, -0.2f, u, -u, 0.1f}, // 右后轮。
+    }};
+    CHECK(ChassisInit() == 1u);
+    ChassisVelocityFeedback_t sample = {0};
+    CHECK(Chassis_GetVelocityFeedback(&sample) == 0u); // 启动本身不产生测量。
+    test_tick = 4u; // 四份反馈横跨毫秒计数回绕。
+    for (unsigned i = 0u; i < 4u; ++i)
+    {
+        motors[i].feedback_online = 1u;
+        motors[i].feedback_speed_valid = 1u;
+        motors[i].feedback_speed_rad_s = i % 2u == 0u ? -10.0f * u : 10.0f * u; // 模拟底盘向前 1 m/s。
+        motors[i].feedback_source_time_ms = test_tick; // 三轮较新。
+    }
+    motors[2].feedback_source_time_ms = UINT32_MAX - 4u; // 左后轮最早，重新估计也要保留此时刻。
+    ChassisTask(); // 无运动许可时仍读取现有反馈。
+    CHECK(Chassis_GetVelocityFeedback(&sample) == 1u);
+    CHECK(sample.source_time_ms == UINT32_MAX - 4u && fabsf(sample.twist.vx_m_s - 1.0f) < 0.0001f);
+    CHECK(fabsf(sample.twist.vy_m_s) < 0.0001f && fabsf(sample.twist.wz_rad_s) < 0.0001f);
+    test_tick = 15u; // 距最早反馈正好 20 ms，仍有效。
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&sample) == 1u && sample.source_time_ms == UINT32_MAX - 4u);
+    test_tick = 16u; // 发布者未再次运行，读者也须让样本过期。
+    CHECK(Chassis_GetVelocityFeedback(&sample) == 0u && sample.twist.vx_m_s == 0.0f);
+    ChassisTask(); // 即便替身仍报在线，估计也要检查原始时刻。
+    CHECK(Chassis_GetVelocityFeedback(&sample) == 0u);
+
+    motors[2].feedback_source_time_ms = test_tick;
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&sample) == 1u);
+    motors[3].feedback_wrong_unit = 1u; // 一轮的数据不能借用其余三轮的有效性。
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&sample) == 0u);
+    motors[3].feedback_wrong_unit = 0u;
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&sample) == 1u);
+    CHECK(ChassisReleaseStartupDevices() == 1u);
+    CHECK(Chassis_GetVelocityFeedback(&sample) == 0u);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "velocity") == 0) return TestOmniVelocity();
     if (argc == 2 && strncmp(argv[1], "motor-at-", 9u) == 0)
         fail_motor_attempt = (unsigned)(argv[1][9] - '0'); // 注入指定轮电机注册失败。
     if (argc == 2 && strcmp(argv[1], "rollback-failure") == 0)

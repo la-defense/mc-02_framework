@@ -13,6 +13,32 @@ static int close_to(float actual, float expected)
     return isfinite(actual) && fabsf(actual - expected) < 0.0001f;
 }
 
+static void TestOmniEstimate(void)
+{
+    OmniGeometry_t geometry = {.wheels = {
+        {0.3f, 0.1f, 1.0f, 0.0f, 0.1f}, // 左前轮沿前方，转动投影为 -0.1 m。
+        {0.1f, -0.4f, 0.0f, 1.0f, 0.2f}, // 右前轮沿左方，转动投影为 0.1 m。
+        {-0.2f, 0.2f, -1.0f, 0.0f, 0.05f}, // 左后轮沿后方，转动投影为 0.2 m。
+        {-0.3f, -0.4f, 0.0f, -1.0f, 0.25f}, // 右后轮沿右方，转动投影为 0.3 m。
+    }};
+    ChassisWheelSpeeds_t wheels = {{7.0f, -8.5f, -8.0f, 11.6f}}; // 手算 1 m/s、-2 m/s、3 rad/s 的轮轴转速。
+    ChassisTwist_t result;
+    TEST_CHECK(OmniEstimate(&wheels, &geometry, &result) == CHASSIS_KINEMATICS_OK);
+    TEST_CHECK(close_to(result.vx_m_s, 1.0f) && close_to(result.vy_m_s, -2.0f) && close_to(result.wz_rad_s, 3.0f));
+
+    wheels.rad_s[1] = NAN; // 无效轮速使整组输出清零。
+    TEST_CHECK(OmniEstimate(&wheels, &geometry, &result) == CHASSIS_KINEMATICS_ARGUMENT);
+    TEST_CHECK(result.vx_m_s == 0.0f && result.vy_m_s == 0.0f && result.wz_rad_s == 0.0f);
+    wheels.rad_s[1] = -8.5f;
+    for (unsigned i = 0; i < CHASSIS_WHEEL_COUNT; ++i)
+    {
+        geometry.wheels[i].drive_x = 1.0f; // 所有轮方向平行，无法推断横移。
+        geometry.wheels[i].drive_y = 0.0f;
+    }
+    TEST_CHECK(OmniEstimate(&wheels, &geometry, &result) == CHASSIS_KINEMATICS_ARGUMENT);
+    TEST_CHECK(OmniEstimate(NULL, &geometry, &result) == CHASSIS_KINEMATICS_ARGUMENT);
+}
+
 int main(void)
 {
     ChassisTwist_t input = {1.0f, 0.0f, 0.0f};
@@ -54,5 +80,6 @@ int main(void)
     TEST_CHECK(MecanumCalculate(NULL, &mecanum, &output) == CHASSIS_KINEMATICS_ARGUMENT);
     TEST_CHECK(OmniCalculate(&input, NULL, &output) == CHASSIS_KINEMATICS_ARGUMENT);
     TEST_CHECK(OmniCalculate(&input, &omni, NULL) == CHASSIS_KINEMATICS_ARGUMENT);
+    TestOmniEstimate();
     return EXIT_SUCCESS;
 }

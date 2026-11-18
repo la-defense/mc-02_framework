@@ -48,6 +48,17 @@ static Chassis_Upload_Data_s chassis_feedback_data; // 底盘回传的反馈数�
 static const Chassis_Config_s *chassis_config;
 static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left right forward back
 static uint8_t chassis_rollback_failed; // 记录启动时无法撤销的设备资源。
+static ChassisVelocityFeedback_t chassis_velocity; // 底盘任务更新，其他任务只读取完整副本。
+static uint8_t chassis_velocity_valid; // 时间戳零也可有效，单独记录。
+
+// 更新结果和有效位时不允许其他任务读取未完成的数据。
+static void PublishVelocity(const ChassisVelocityFeedback_t *velocity)
+{
+    PlatformTaskCriticalEnter(); // 进入短临界区，只交付数据。
+    chassis_velocity = velocity != NULL ? *velocity : (ChassisVelocityFeedback_t){0}; // 无效时一起清除三个分量。
+    chassis_velocity_valid = (uint8_t)(velocity != NULL); // 读者不会误用已清除的值。
+    PlatformTaskCriticalExit();
+}
 
 uint8_t ChassisInitRollbackFailed(void)
 {
@@ -66,6 +77,7 @@ static uint32_t chassis_command_max_age_ms = 0u;
 
 uint8_t ChassisInit(void)
 {
+    PublishVelocity(NULL); // 重新初始化时清除旧轮组估计。
     chassis_rollback_failed = 0u; // 本次初始化从无回退故障开始。
     chassis_config = ChassisConfigFeed();
     if (chassis_config == NULL)
@@ -147,6 +159,7 @@ rollback:
 
 uint8_t ChassisReleaseStartupDevices(void)
 {
+    PublishVelocity(NULL); // 资源撤销后不能再交付旧轮速。
     uint8_t released = 1u; // 汇总所有设备的撤销结果。
 #if MC02_FEATURE_SUPERCAP
     if (!ChassisLegacySuperCapRollbackStartup()) released = 0u; // 旧电容由底盘持有，先撤销它。
@@ -194,13 +207,53 @@ static uint8_t ChassisMotorFeedbackIsHealthy(void)
 }
 #endif
 
-// 实际速度估计尚未实现，保留入口，不把空反馈当作已经测得的车速。
-static void EstimateSpeed()
+uint8_t Chassis_GetVelocityFeedback(ChassisVelocityFeedback_t *output)
 {
-    // 根据电机速度和陀螺仪的角速度进行解算,还可以利用加速度计判断是否打滑(如果有)
-    // chassis_feedback_data.vx vy wz =
-    //  ...
+    if (output == NULL) return 0u;
+    PlatformTaskCriticalEnter(); // 速度、来源时间和有效位来自同一次发布。
+    const ChassisVelocityFeedback_t velocity = chassis_velocity;
+    const uint8_t available = chassis_velocity_valid;
+    PlatformTaskCriticalExit();
+    if (!available || (uint32_t)(PlatformTimeNowMs() - velocity.source_time_ms) > DJI_FEEDBACK_MAX_AGE_MS)
+    {
+        *output = (ChassisVelocityFeedback_t){0}; // 发布者没有再运行时，读者也不能延用旧值。
+        return 0u;
+    }
+    *output = velocity;
+    return 1u;
 }
+
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+// 取四个已经换算到输出轴的轮速；不足四份时整个底盘速度无效。
+static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity)
+{
+    DJIMotorInstance *const motors[CHASSIS_WHEEL_COUNT] = {motor_lf, motor_rf, motor_lb, motor_rb}; // 统一轮序。
+    ChassisWheelSpeeds_t speeds;
+    uint32_t received_at[CHASSIS_WHEEL_COUNT];
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
+    {
+        Motor_Feedback_Snapshot_s feedback = {0};
+        if (DJIMotorGetFeedbackSnapshot(motors[i], PlatformTimeNowMs(), &feedback) != MOTOR_FEEDBACK_OK ||
+            feedback.speed.valid != 1u || feedback.speed.unit != MOTOR_UNIT_RAD_S ||
+            feedback.speed.reference != MOTOR_REFERENCE_OUTPUT_AXIS)
+            return 0u; // 未接收、过期或错误单位的轮速均不能用来估算。
+        speeds.rad_s[i] = feedback.speed.value; // 驱动已按安装方向和减速比换算，不重复处理符号。
+        received_at[i] = feedback.speed.source_time_ms; // 记录原始接收时间，不以本轮执行时间替代。
+    }
+    if (OmniEstimate(&speeds, &chassis_config->omni_geometry, &velocity->twist) != CHASSIS_KINEMATICS_OK)
+        return 0u; // 几何退化或数值异常时不发布部分结果。
+    const uint32_t now = PlatformTimeNowMs(); // 计算后检查最早轮速是否依然有效。
+    uint32_t oldest_age = 0u;
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
+    {
+        const uint32_t age = now - received_at[i]; // 无符号差值处理本机毫秒回绕。
+        if (age > DJI_FEEDBACK_MAX_AGE_MS) return 0u; // 错误的未来时间也无法通过。
+        if (age > oldest_age) oldest_age = age; // 选择剩余有效时间最短的样本。
+    }
+    velocity->source_time_ms = now - oldest_age; // 保留这个样本的原始时刻。
+    return 1u;
+}
+#endif
 
 /* 机器人底盘控制核心任务 */
 void ChassisTask()
@@ -403,8 +456,14 @@ void ChassisTask()
         }
     }
 
-    // 根据电机的反馈速度和IMU(如果有)计算真实速度
-    EstimateSpeed();
+    // 全向轮估计独立于命令许可，停机滑行期间也能读取实测速度。
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+    ChassisVelocityFeedback_t velocity;
+    if (chassis_config->wheel_type == OMNI_WHEEL && EstimateOmniVelocity(&velocity))
+        PublishVelocity(&velocity);
+    else
+        PublishVelocity(NULL); // 当前轮组无估计功能或本轮数据失效。
+#endif
 
     // // 获取裁判系统数据   建议将裁判系统与底盘分离，所以此处数据应使用消息中心发送
     // // 我方颜色id小于7是红色,大于7是蓝色,注意这里发送的是对方的颜色, 0:blue , 1:red
