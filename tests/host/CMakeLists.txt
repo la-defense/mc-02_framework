@@ -57,6 +57,13 @@ add_executable(platform_task_batch_test platform_task_batch_test.c ../../bsp/os/
 target_include_directories(platform_task_batch_test BEFORE PRIVATE task_batch_fakes . ../../bsp/os)
 target_compile_options(platform_task_batch_test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME production_platform_task_batch COMMAND platform_task_batch_test)
+add_executable(platform_periodic_test platform_periodic_test.c
+  ../../bsp/os/platform_periodic.c # 生产固定周期算法。
+  ../../bsp/os/platform_periodic_freertos.c) # 生产等待适配，测试替换底层 RTOS 调用。
+target_include_directories(platform_periodic_test BEFORE PRIVATE task_batch_fakes . ../../bsp/os)
+target_compile_options(platform_periodic_test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME production_platform_periodic_wait COMMAND platform_periodic_test)
+set_tests_properties(production_platform_periodic_wait PROPERTIES TIMEOUT 10)
 set_tests_properties(production_platform_task_batch PROPERTIES TIMEOUT 10)
 
 # 直接编译日志 STM32 端口，用替身核对启动批次中的静态任务创建。
@@ -434,6 +441,7 @@ set(MC02_PLATFORM_PUBLIC_HEADERS
   bsp/os/platform_irq.h # 中断屏蔽状态保存和恢复。
   bsp/os/platform_maintenance.h # 存储等维护期入口。
   bsp/os/platform_os.h # 任务创建和等待。
+  bsp/os/platform_periodic.h # 固定周期、时限结果和等待。
   bsp/os/platform_safety.h # 安全输出平台入口。
   bsp/os/platform_signal.h # 任务信号通知。
   bsp/os/platform_startup_wait.h # 早期启动的有界等待。

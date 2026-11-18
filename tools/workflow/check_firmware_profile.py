@@ -62,6 +62,7 @@ PORTABLE_FRAMEWORK_SOURCES = {
     "modules/safety/robot_control_policy.c",  # 整车安全管理共用的三模式策略。
     "bsp/os/platform_startup_wait.c",  # 启动前的固定期限和检查次数。
     "bsp/os/platform_clock_guard.c",  # 主时钟配置的固定期限和停表兜底。
+    "bsp/os/platform_periodic.c",  # 周期和完成时限只用标准 C，不依赖 RTOS 头。
     "application/init_diagnostic.c",  # 初始化结果及事件记录。
     "application/vehicle_health.c",  # 整车健康信息采集和发布。
     "application/vehicle_health_diag.c",  # 只读诊断应答。

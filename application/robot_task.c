@@ -3,6 +3,9 @@
  */
 #include "robot_task.h"
 #include "platform_os.h"
+#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
+#include "platform_periodic.h"
+#endif
 #include <stddef.h>
 
 #include "robot.h"
@@ -178,12 +181,32 @@ __attribute__((noreturn)) void StartDAEMONTASK(void const *argument)
 __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
 {
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_07);
-    // 200Hz-500Hz,若有额外的控制任务如平衡步兵可能需要提升至1kHz
+#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
+    while (!TaskMonitorRuntimeReleased())
+        PlatformTaskDelayMs(1u); // 诊断周期从启动完成后开始计时。
+    const PlatformPeriodicConfig_t config = {
+        .period_us = 5000u, // 保留裸板整车诊断的名义周期 5 ms。
+        .budget_us = 5000u, // 对应现有单轮耗时告警阈值。
+    };
+    PlatformPeriodicClock_t clock;
+    uint8_t periodic_ready = (uint8_t)(PlatformTaskPeriodicInit(&clock, &config) == PLATFORM_PERIODIC_READY); // 只接受后端能准确表示的周期。
+#endif
     for (;;)
     {
+#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
+        PlatformPeriodicRelease_t release; // 每次只领取最近到期的一拍。
+        if (!periodic_ready || PlatformTaskPeriodicWait(&clock, &release) != PLATFORM_PERIODIC_READY)
+        {
+            periodic_ready = 0u; // 后端错误后停止工作报告，由任务监控按既有规则处理。
+            PlatformTaskDelayMs(5u); // 错误分支仅让出处理器，不继续执行诊断周期。
+            continue;
+        }
+#endif
         if (TaskMonitorBeginWork(TASK_MONITOR_ROBOT) != TASK_MONITOR_RESULT_OK)
         {
+#if !defined(MC02_PROFILE_BENCH_SAFE) && !defined(MC02_PROFILE_COMMISSIONING)
             PlatformTaskDelayMs(5u);
+#endif
             continue;
         }
         uint32_t robot_probe = PlatformProbeStart();
@@ -196,7 +219,9 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
         }
         (void)TaskMonitorCompleteWork(TASK_MONITOR_ROBOT);
         (void)TaskMonitorSetWaiting(TASK_MONITOR_ROBOT, TASK_MONITOR_WAIT_PERIOD);
+#if !defined(MC02_PROFILE_BENCH_SAFE) && !defined(MC02_PROFILE_COMMISSIONING)
         PlatformTaskDelayMs(5);
+#endif
     }
 }
 

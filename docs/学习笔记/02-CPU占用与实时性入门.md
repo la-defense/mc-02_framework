@@ -205,3 +205,11 @@ FreeRTOS 运行计数由 `DWT->CYCCNT / 1000` 产生；480 MHz 时每个计数�
 H723 的主 RAM 99.8% 来自“只映射 128 KB AXI SRAM1”：AXI SRAM2 还有 128–192 KB，DTCM 只用了约 14.7 KB。方案是把 AXI1 留给 DMA 和崩溃记录，AXI2 放普通数据，DTCM 放栈和任务堆；I-Cache 先开，D-Cache 后开且默认关闭。
 
 任务侧最终把全部任务改成静态栈/TCB，只留 newlib 堆；F407 先做 500 Hz、无 Cache、compile-only；C++ 最后用 `bsp/param` 试点。测量口径、风险、证据等级和 TODO 拆分见[调研文档](../workflow/specs/performance-portability-research.md)，本文只解释决策。
+
+## MC02-0088 固定拍点、跳拍和超期
+
+一轮工作花 2 ms，再调用 `osDelay(5)`，两轮开始之间就约有 7 ms。绝对时刻等待先选定 0、5、10、15 ms 等拍点。工作在 2 ms 完成时，只等到 5 ms。若任务到 19 ms 才获得处理器，且还没领取 5 ms 这一拍，就跳过 5 和 10 ms，只运行 15 ms 这一拍。再下一拍仍是 20 ms。见[周期计算](../../bsp/os/platform_periodic.c)和[FreeRTOS 等待适配](../../bsp/os/platform_periodic_freertos.c)。
+
+执行预算和完成截止时间可以给出不同结果。19 ms 开始、21 ms 完成的工作只花了 2 ms。若预算是 2 ms，它仍满足预算，但已经过了 20 ms 的计划截止点。主机测试分别检查这两个结果，也覆盖计数回绕和提前唤醒。见[主机验证](../workflow/tickets/MC02-0088-evidence/README.md)。
+
+裸板诊断用当前 FreeRTOS 的 1 ms 刻度维持名义 5 ms 周期，执行时间仍用 DWT 测量。可移植周期计算能接收更细的计数刻度。要在板上等待 500 μs 拍点，还需要提供能在该分辨率下唤醒任务的硬件后端。

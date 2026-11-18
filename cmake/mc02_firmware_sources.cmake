@@ -73,6 +73,8 @@ set(MC02_BSP_C_SOURCES
     bsp/os/platform_startup_wait.c # 启动前固定期限与检查次数。
     bsp/os/platform_clock_guard.c # 主时钟配置所需的固定上限。
     bsp/os/platform_os_freertos.c # 任务接口的 FreeRTOS 后端。
+    bsp/os/platform_periodic.c # 固定拍点不随任务耗时漂移。
+    bsp/os/platform_periodic_freertos.c # 任务用 FreeRTOS 计数按绝对时刻等待。
     bsp/os/platform_task_batch_freertos.c # 协调任务的短暂创建批次。
     bsp/os/platform_signal_freertos.c # 可合并任务信号位的 FreeRTOS 后端。
     bsp/os/platform_sync_freertos.c # 任务临界区与原有毫秒时钟的后端。
