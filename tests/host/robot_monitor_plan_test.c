@@ -10,6 +10,33 @@ static uint32_t captured_count, init_calls;
 static uint32_t degraded_calls;
 static RobotModule_t degraded_module = ROBOT_MODULE_COUNT;
 
+static PlatformPeriodicCapabilities_t fake_periodic_capabilities = {
+    .rtos_quantum_us = 1000u, // 模拟现有 RTOS 的 1 ms 刻度。
+    .high_res_quantum_us = 1u, // 模拟 TIM5 的 1 μs 刻度。
+    .high_res_channels = 4u, // 模拟裸板启动时空闲的四个比较通道。
+};
+
+PlatformPeriodicCapabilities_t PlatformTaskPeriodicCapabilities(void)
+{
+    return fake_periodic_capabilities;
+}
+
+static void TestDiagnosticAdmission(void)
+{
+    RobotPeriodicDiagnostic_t failed = ROBOT_PERIODIC_COUNT;
+    TEST_CHECK(RobotValidatePeriodicDiagnostics(&failed) == PLATFORM_PERIODIC_READY && failed == ROBOT_PERIODIC_COUNT);
+    TEST_CHECK(RobotGetDiagnosticPeriod(ROBOT_PERIODIC_DIAGNOSTIC)->period_us == 5000u);
+    TEST_CHECK(RobotGetDiagnosticPeriod(ROBOT_PERIODIC_TIM5_PROBE)->period_us == 500u);
+    TEST_CHECK(RobotGetDiagnosticPeriod(ROBOT_PERIODIC_COUNT) == NULL);
+
+    fake_periodic_capabilities.high_res_channels = 0u; // 板级资源被占用，显式定时自测不能悄悄跳过。
+    fake_periodic_capabilities.rtos_quantum_us = 100u; // 即使 RTOS 也能表示自测周期，仍需检验 TIM5。
+    TEST_CHECK(RobotValidatePeriodicDiagnostics(&failed) == PLATFORM_PERIODIC_RESOURCE && failed == ROBOT_PERIODIC_TIM5_PROBE);
+    fake_periodic_capabilities.high_res_channels = 4u;
+    fake_periodic_capabilities.rtos_quantum_us = 2000u; // 普通任务必须使用 RTOS，不能用空闲 TIM5 掩盖配置错误。
+    TEST_CHECK(RobotValidatePeriodicDiagnostics(&failed) == PLATFORM_PERIODIC_CONFIG && failed == ROBOT_PERIODIC_DIAGNOSTIC);
+}
+
 uint8_t RobotBuildMarkFailure(RobotModule_t module)
 {
     ++degraded_calls; degraded_module = module; // 模拟依赖图接收任务故障。
@@ -28,6 +55,11 @@ TaskMonitor_Result_e TaskMonitorInitConfigured(const TaskMonitorTaskConfig_t *co
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2); // 每个车型依赖场景分别执行。
+    if (strcmp(argv[1], "timing") == 0)
+    {
+        TestDiagnosticAdmission(); // 核对实际固件使用的配置和资源分配规则。
+        return 0;
+    }
     const uint32_t safety = ROBOT_MODULE_BIT(ROBOT_MODULE_SAFETY);
     const uint32_t imu = ROBOT_MODULE_BIT(ROBOT_MODULE_IMU);
     const uint32_t gimbal = ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL);

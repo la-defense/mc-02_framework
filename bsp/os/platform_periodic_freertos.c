@@ -15,15 +15,29 @@ static uint8_t TaskContextReady(void)
         xTaskGetSchedulerState() == taskSCHEDULER_RUNNING); // 只在任务上下文和正常调度状态下等待。
 }
 
+// RTOS 只能用于可写成整数微秒的刻度；启动检查与实际等待使用同一换算。
+static uint32_t RtosQuantumUs(void)
+{
+    const uint32_t tick_hz = configTICK_RATE_HZ;
+    if (tick_hz == 0u || 1000000u % tick_hz != 0u) return 0u;
+    return 1000000u / tick_hz;
+}
+
+PlatformPeriodicCapabilities_t PlatformTaskPeriodicCapabilities(void)
+{
+    PlatformPeriodicCapabilities_t capabilities = {.rtos_quantum_us = RtosQuantumUs()}; // 先填入 RTOS 能力。
+#if MC02_BENCH_TIM5_DIAGNOSTICS
+    capabilities.high_res_quantum_us = 1u; // TIM5 以 1 MHz 自由计数。
+    capabilities.high_res_channels = PlatformTaskHighResAvailableChannels(); // 核对板级时钟与中断。
+#endif
+    return capabilities;
+}
+
 PlatformPeriodicResult_t PlatformTaskPeriodicInit(PlatformPeriodicClock_t *clock,
     const PlatformPeriodicConfig_t *config)
 {
     if (!TaskContextReady()) return PLATFORM_PERIODIC_CONTEXT; // 在等待接口可用后建立计数起点。
-    const uint32_t tick_hz = configTICK_RATE_HZ; // 使用后端实际每秒刻度数。
-    if (tick_hz == 0u || 1000000u % tick_hz != 0u)
-        return PLATFORM_PERIODIC_CONFIG; // 一个刻度无法准确写成整数微秒时拒绝此后端。
-    const uint32_t quantum_us = 1000000u / tick_hz; // 换算每刻度的固定时长。
-    return PlatformPeriodicInit(clock, config, quantum_us, xTaskGetTickCount()); // 使用同一 RTOS 计数域。
+    return PlatformPeriodicInit(clock, config, RtosQuantumUs(), xTaskGetTickCount()); // 使用实际 RTOS 计数域。
 }
 
 PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock,

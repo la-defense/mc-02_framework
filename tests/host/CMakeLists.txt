@@ -158,12 +158,15 @@ foreach(scenario success imu-core imu-aux heater-core heater-aux heater-disabled
   set_tests_properties(production_ins_startup_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
 add_executable(robot_monitor_plan_test robot_monitor_plan_test.c ../../application/robot_monitor_plan.c
-  ../../application/config/module_plan.c)
+  ../../application/config/module_plan.c
+  ../../bsp/os/platform_periodic.c) # 复用固件启动时的精度和容量判断。
 target_include_directories(robot_monitor_plan_test BEFORE PRIVATE task_creation_fakes)
-target_include_directories(robot_monitor_plan_test PRIVATE . ../../application ../../modules/task_monitor)
-target_compile_definitions(robot_monitor_plan_test PRIVATE MC02_CONFIG_GENERATED=1)
+target_include_directories(robot_monitor_plan_test PRIVATE . ../../application ../../modules/task_monitor ../../bsp/os)
+target_compile_definitions(robot_monitor_plan_test PRIVATE MC02_CONFIG_GENERATED=1 # 使用车型依赖图。
+  MC02_PROFILE_BENCH_SAFE=1 # 使用禁热诊断配置。
+  MC02_BENCH_TIM5_DIAGNOSTICS=1) # 同时检查普通 RTOS 和显式 TIM5 周期的启动选择。
 target_compile_options(robot_monitor_plan_test PRIVATE -Wall -Wextra -Werror)
-foreach(scenario core transitive aux disabled missing cycle)
+foreach(scenario core transitive aux disabled missing cycle timing)
   add_test(NAME production_robot_monitor_plan_${scenario} COMMAND robot_monitor_plan_test ${scenario})
   set_tests_properties(production_robot_monitor_plan_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()

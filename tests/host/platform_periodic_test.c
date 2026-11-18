@@ -49,6 +49,39 @@ static void TestExactSetup(void)
     TEST_CHECK(clock.period_ticks == 5u && clock.budget_ticks == 2u && clock.next_tick == 0u);
 }
 
+static void TestPlan(void)
+{
+    const PlatformPeriodicRequest_t requests[] = {
+        {{5000u, 2000u}, PLATFORM_PERIODIC_SOURCE_AUTO}, // 允许使用 1 ms 的 RTOS 刻度。
+        {{500u, 200u}, PLATFORM_PERIODIC_SOURCE_AUTO}, // 周期和预算都需要硬件刻度。
+        {{2000u, 250u}, PLATFORM_PERIODIC_SOURCE_AUTO}, // 整毫秒周期的预算仍可能需要硬件。
+        {{3000u, 1000u}, PLATFORM_PERIODIC_SOURCE_HIGH_RES}, // 显式要求用独立比较通道。
+    };
+    PlatformPeriodicCapabilities_t capabilities = PlatformTaskPeriodicCapabilities();
+    TEST_CHECK(capabilities.rtos_quantum_us == 1000u && capabilities.high_res_quantum_us == 0u);
+    uint32_t mask = 0x80u;
+    size_t failed = 99u;
+    TEST_CHECK(PlatformPeriodicPlan(requests, 4u, &capabilities, &mask, &failed) == PLATFORM_PERIODIC_CONFIG);
+    TEST_CHECK(mask == 0x80u && failed == 1u); // 无硬件支持时拒绝首个无法精确表示的任务。
+    capabilities.high_res_quantum_us = 1u;
+    capabilities.high_res_channels = 2u;
+    TEST_CHECK(PlatformPeriodicPlan(requests, 4u, &capabilities, &mask, &failed) == PLATFORM_PERIODIC_RESOURCE);
+    TEST_CHECK(mask == 0x80u && failed == 3u); // 已选择的前几项不能作为部分结果发布。
+    capabilities.high_res_channels = 3u;
+    TEST_CHECK(PlatformPeriodicPlan(requests, 4u, &capabilities, &mask, &failed) == PLATFORM_PERIODIC_READY);
+    TEST_CHECK(mask == 0x0Eu && failed == 3u); // 只有后三项使用硬件，成功不改上次错误索引。
+    TEST_CHECK(PlatformPeriodicPlan(requests, 33u, &capabilities, &mask, &failed) == PLATFORM_PERIODIC_CONFIG);
+    TEST_CHECK(mask == 0x0Eu && failed == 3u); // 拒绝超过位图容量的计划。
+
+    const PlatformPeriodicRequest_t invalid = {{1000u, 1500u}, PLATFORM_PERIODIC_SOURCE_AUTO}; // 预算超出周期。
+    TEST_CHECK(PlatformPeriodicPlan(&invalid, 1u, &capabilities, &mask, &failed) == PLATFORM_PERIODIC_CONFIG);
+    TEST_CHECK(mask == 0x0Eu && failed == 0u);
+    const PlatformPeriodicRequest_t rtos_only = {{4000u, 500u}, PLATFORM_PERIODIC_SOURCE_RTOS}; // 预算不能向整毫秒取整。
+    TEST_CHECK(PlatformPeriodicPlan(&rtos_only, 1u, &capabilities, &mask, NULL) == PLATFORM_PERIODIC_CONFIG);
+    TEST_CHECK(mask == 0x0Eu);
+    TEST_CHECK(PlatformPeriodicPlan(NULL, 0u, &capabilities, &mask, NULL) == PLATFORM_PERIODIC_READY && mask == 0u);
+}
+
 static void TestScheduleAndBudget(void)
 {
     PlatformPeriodicClock_t clock;
@@ -107,6 +140,7 @@ static void TestFreeRtosWait(void)
 int main(void)
 {
     TestExactSetup();
+    TestPlan();
     TestScheduleAndBudget();
     TestFreeRtosWait();
     return 0;

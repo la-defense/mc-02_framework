@@ -305,6 +305,21 @@ uint8_t RobotInit(void)
         RobotFaultReport(ROBOT_FAULT_RESET_LOCKOUT);
     if (recovery_state_valid != 0u && recovery_state.manual_estop_latched != 0u)
         EstopRequest(ESTOP_REASON_MANUAL);
+#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
+    RobotPeriodicDiagnostic_t failed_period; // 预检失败时取得具体诊断项。
+    const PlatformPeriodicResult_t timing_status = RobotValidatePeriodicDiagnostics(&failed_period);
+    if (timing_status != PLATFORM_PERIODIC_READY) // 时基或硬件通道不满足要求时不启动任务。
+    {
+        uint16_t resource = INIT_RESOURCE_TASK_ROBOT; // 普通诊断的周期或预算无法表示。
+#if MC02_BENCH_TIM5_DIAGNOSTICS
+        if (failed_period == ROBOT_PERIODIC_TIM5_PROBE) resource = INIT_RESOURCE_TASK_TIM5_PROBE;
+#endif
+        const InitDiagnosticReason_e reason = timing_status == PLATFORM_PERIODIC_RESOURCE
+            ? INIT_FAILURE_RESOURCE : INIT_FAILURE_TASK_TIMING; // 区分资源不可用与时间配置无效。
+        InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS, reason, resource);
+        goto init_failed; // 沿用现有启动失能路径。
+    }
+#endif
     #if defined(MC02_CONFIG_GENERATED)
     if (RobotConfigureTaskMonitor(RobotBuildGetPlan()) != TASK_MONITOR_RESULT_OK)
 #else

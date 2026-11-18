@@ -263,6 +263,7 @@ int main(void)
     PlatformPeriodicClock_t clock = {.next_tick = 17u}, other;
     PlatformPeriodicRelease_t release = {.observed_tick = 17u};
     pclk = 120000001u; // 无法精确选择 1 MHz 分频。
+    TEST_CHECK(PlatformTaskHighResAvailableChannels() == 0u);
     TEST_CHECK(PlatformTaskHighResOpen(&clock, &config) == PLATFORM_PERIODIC_CONFIG);
     pclk = 120000000u;
     RCC->CFGR = RCC_CFGR_TIMPRE; // 不支持的定时器时钟选择不能静默降级。
@@ -272,11 +273,14 @@ int main(void)
     TEST_CHECK(PlatformTaskHighResOpen(&clock, &config) == PLATFORM_PERIODIC_CONFIG);
     priority_group = NVIC_PRIORITYGROUP_4;
     test_timer_enabled = 1u; // 不能重置已使用的定时器。
+    TEST_CHECK(PlatformTaskHighResAvailableChannels() == 0u);
     TEST_CHECK(PlatformTaskHighResOpen(&clock, &config) == PLATFORM_PERIODIC_RESOURCE && test_timer_enabled);
     test_timer_enabled = 0u;
     irq_enabled = 1u; // 也不能接管已经启用的 IRQ。
+    TEST_CHECK(PlatformTaskHighResAvailableChannels() == 0u);
     TEST_CHECK(PlatformTaskHighResOpen(&clock, &config) == PLATFORM_PERIODIC_RESOURCE && irq_enabled);
     irq_enabled = 0u;
+    TEST_CHECK(PlatformTaskHighResAvailableChannels() == 4u && !test_timer_enabled && !irq_enabled);
     deny_alloc = 1u;
     TEST_CHECK(PlatformTaskHighResOpen(&clock, &config) == PLATFORM_PERIODIC_RESOURCE);
     TEST_CHECK(clock.next_tick == 17u && !test_timer_enabled); // 所有失败都保留调用者和外设状态。

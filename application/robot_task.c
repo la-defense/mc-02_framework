@@ -4,7 +4,7 @@
 #include "robot_task.h"
 #include "platform_os.h"
 #if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
-#include "platform_periodic.h"
+#include "robot_monitor_plan.h"
 #endif
 #include <stddef.h>
 
@@ -185,12 +185,9 @@ volatile uint32_t mc02_tim5_probe_skipped; // 同时记录由于唤醒迟到而�
 
 static void RunTim5Probe(void)
 {
-    const PlatformPeriodicConfig_t config = {
-        .period_us = 500u, // 裸板测试拍点，单位 μs。
-        .budget_us = 500u, // 自测只处理计数，不启动业务任务。
-    };
+    const PlatformPeriodicConfig_t *config = RobotGetDiagnosticPeriod(ROBOT_PERIODIC_TIM5_PROBE); // 复用启动时检查过的配置。
     PlatformPeriodicClock_t clock;
-    PlatformPeriodicResult_t result = PlatformTaskHighResOpen(&clock, &config); // 先确认硬件可独占。
+    PlatformPeriodicResult_t result = PlatformTaskHighResOpen(&clock, config); // 运行时再次核对并取得一个独立通道。
     if (result == PLATFORM_PERIODIC_READY)
     {
         for (unsigned i = 0u; i < 8u; ++i)
@@ -217,12 +214,12 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
 #if MC02_BENCH_TIM5_DIAGNOSTICS
     RunTim5Probe(); // 执行一次有限的硬件时序检查，随后恢复普通裸板诊断。
 #endif
-    const PlatformPeriodicConfig_t config = {
-        .period_us = 5000u, // 保留裸板整车诊断的名义周期 5 ms。
-        .budget_us = 5000u, // 对应现有单轮耗时告警阈值。
-    };
+    const PlatformPeriodicConfig_t *config = RobotGetDiagnosticPeriod(ROBOT_PERIODIC_DIAGNOSTIC);
+    const uint32_t budget_us = config->budget_us; // 诊断告警和等待沿用同一份预算。
     PlatformPeriodicClock_t clock;
-    uint8_t periodic_ready = (uint8_t)(PlatformTaskPeriodicInit(&clock, &config) == PLATFORM_PERIODIC_READY); // 只接受后端能准确表示的周期。
+    uint8_t periodic_ready = (uint8_t)(PlatformTaskPeriodicInit(&clock, config) == PLATFORM_PERIODIC_READY); // 从放行时刻开始运行已检查的周期。
+#else
+    const uint32_t budget_us = 5000u; // 现有整车循环沿用原耗时告警阈值。
 #endif
     for (;;)
     {
@@ -245,7 +242,7 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
         uint32_t robot_probe = PlatformProbeStart();
         RobotTask();
         PlatformProbeDone(&r25_task_robot, robot_probe);
-        if (r25_task_robot.last_us > 5000u)
+        if (r25_task_robot.last_us > budget_us)
         {
             BSP_LOG_EVENT_1(EV_APPLICATION_ROBOT_TASK_H_08,
                             BSP_LOG_FIELD_U32(r25_task_robot.last_us));

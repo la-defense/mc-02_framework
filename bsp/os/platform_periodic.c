@@ -5,6 +5,39 @@
 #include <limits.h>
 #include <stddef.h>
 
+PlatformPeriodicResult_t PlatformPeriodicPlan(const PlatformPeriodicRequest_t *requests, size_t count,
+    const PlatformPeriodicCapabilities_t *capabilities, uint32_t *hardware_mask, size_t *failed_index)
+{
+    if ((requests == NULL && count != 0u) || count > 32u || capabilities == NULL || hardware_mask == NULL)
+        return PLATFORM_PERIODIC_CONFIG; // 参数无效时保留两个输出。
+    uint32_t remaining = capabilities->high_res_channels; // 各任务需要独立比较通道。
+    uint32_t staged_mask = 0u; // 所有任务通过后才向调用者交付选择。
+    for (size_t i = 0; i < count; ++i) // 按配置顺序检查实际启用的任务。
+    {
+        const PlatformPeriodicRequest_t *request = &requests[i]; // 读取本任务声明的时间和允许来源。
+        PlatformPeriodicClock_t example; // 复用正式等待接口使用的精度、预算和回绕检查。
+        if ((request->source == PLATFORM_PERIODIC_SOURCE_AUTO || request->source == PLATFORM_PERIODIC_SOURCE_RTOS) &&
+            PlatformPeriodicInit(&example, &request->timing, capabilities->rtos_quantum_us, 0u) ==
+            PLATFORM_PERIODIC_READY) continue; // RTOS 能精确表示时不占硬件通道。
+        PlatformPeriodicResult_t result = PLATFORM_PERIODIC_CONFIG; // 不支持的来源或刻度均按配置失败。
+        if (request->source == PLATFORM_PERIODIC_SOURCE_AUTO || request->source == PLATFORM_PERIODIC_SOURCE_HIGH_RES)
+        {
+            result = PlatformPeriodicInit(&example, &request->timing, capabilities->high_res_quantum_us, 0u);
+            if (result == PLATFORM_PERIODIC_READY && remaining == 0u)
+                result = PLATFORM_PERIODIC_RESOURCE; // 数值有效但已无独立比较通道。
+        }
+        if (result != PLATFORM_PERIODIC_READY) // 任一任务不可用则整组选择无效。
+        {
+            if (failed_index != NULL) *failed_index = i; // 将具体错项留给启动诊断。
+            return result; // 调用者原有位图保持不变。
+        }
+        --remaining; // 给本任务保留一个计划通道。
+        staged_mask |= UINT32_C(1) << i; // 对应位标记硬件来源。
+    }
+    *hardware_mask = staged_mask; // 一次交付完整选择。
+    return PLATFORM_PERIODIC_READY;
+}
+
 PlatformPeriodicResult_t PlatformPeriodicInit(PlatformPeriodicClock_t *clock,
     const PlatformPeriodicConfig_t *config, uint32_t quantum_us, uint32_t start_tick)
 {

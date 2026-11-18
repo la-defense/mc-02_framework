@@ -17,3 +17,10 @@
 - 主机用生产后端及能够模拟 SR 写 0 行为的寄存器替身。覆盖四通道唤醒、同时到期分别通知、一个通道超时并退出时另一通道保留通知、信号量申请失败、容量用尽、释放后复用，以及首次申请和最后一次释放才改变硬件运行状态。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 覆盖普通裸板、遥控诊断与预期拒绝的正式车型配置。WSL 主机 Debug／Release 各 807/807，两个周期接口专项通过 ASan／UBSan。独立 `timertest_bench_safe` 通过 ARM 构建和隔离检查，ELF 含 TIM5 中断入口及四个诊断观测符号。
 - 与同工具链上一轮 TIM5 自测版相比，FLASH 为 259104 B，增加 464 B。RAM 为 122512 B，增加 280 B。实际唤醒时延、抖动和独立车辆任务的执行预算仍需实测。
+
+## 周期启动预检
+
+- 主机专项覆盖 RTOS 与硬件刻度选择、预算无法精确表示、硬件通道耗尽时保留原选择，以及普通诊断与显式 TIM5 自测各自的失败编号。TIM5 替身同时检查读取可用通道不会启动外设。三项 ASan／UBSan 专项通过。
+- `verify.py --fast` 的 TODO、链接和工具检查通过。WSL Debug／Release 串行回归各 808/808。此前两次并行验证分别遇到编译数据库检查超时，以及健康状态测试的读线程未在主线程结束前取得样本。两项均通过单独复跑及完整串行回归。
+- `verify.py --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。两种普通禁热固件的 FLASH 均增加 308 B，分别为 256740 B 和 260268 B，RAM 用量沿用上一轮。六个正式固件预设仍因核心配置未确认而拒绝。
+- 独立 TIM5 自测和 `commissioning/observe` 遥控观察版通过 ARM 构建及 ELF 隔离检查。与同配置上一轮相比，TIM5 自测版 FLASH 增加 360 B 至 259464 B，RAM 为 122512 B。观察版 FLASH 增加 308 B 至 260300 B，RAM 为 122584 B。两版 RAM 均无变化。现场唤醒时序仍待测。

@@ -8,6 +8,47 @@
 #endif
 #include <stddef.h>
 
+#define ROBOT_DIAGNOSTIC_PERIOD_MS 5u // 保留整车任务的名义周期，也用于监控的毫秒单位。
+
+#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
+static const PlatformPeriodicRequest_t diagnostic_periods[ROBOT_PERIODIC_COUNT] = {
+    [ROBOT_PERIODIC_DIAGNOSTIC] = {
+        .timing = {
+            .period_us = ROBOT_DIAGNOSTIC_PERIOD_MS * 1000u, // 现有诊断周期，从 ms 转为 μs。
+            .budget_us = ROBOT_DIAGNOSTIC_PERIOD_MS * 1000u, // 保留现有单轮耗时告警所用的预算。
+        },
+        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 使用 FreeRTOS 精确表示这一间隔。
+    },
+#if MC02_BENCH_TIM5_DIAGNOSTICS
+    [ROBOT_PERIODIC_TIM5_PROBE] = {
+        .timing = {
+            .period_us = 500u, // 裸板自测拍点，每 500 μs 一拍。
+            .budget_us = 500u, // 自测只读取计数，单轮预算为 500 μs。
+        },
+        .source = PLATFORM_PERIODIC_SOURCE_HIGH_RES, // 显式验证 TIM5 通道及中断，即使 RTOS 刻度改变。
+    },
+#endif
+};
+
+PlatformPeriodicResult_t RobotValidatePeriodicDiagnostics(RobotPeriodicDiagnostic_t *failed)
+{
+    const PlatformPeriodicCapabilities_t capabilities = PlatformTaskPeriodicCapabilities(); // 读取实际唤醒能力。
+    uint32_t hardware_mask; // 计划函数需完成整个分配；诊断项的后端已由配置指定。
+    size_t failed_index = 0u; // 固定表首项用于报告通用配置错误。
+    const PlatformPeriodicResult_t result = PlatformPeriodicPlan(diagnostic_periods, ROBOT_PERIODIC_COUNT,
+        &capabilities, &hardware_mask, &failed_index); // 校验两种来源是否都能满足各自配置。
+    if (result != PLATFORM_PERIODIC_READY && failed != NULL)
+        *failed = (RobotPeriodicDiagnostic_t)failed_index;
+    return result;
+}
+
+const PlatformPeriodicConfig_t *RobotGetDiagnosticPeriod(RobotPeriodicDiagnostic_t diagnostic)
+{
+    if ((unsigned)diagnostic >= ROBOT_PERIODIC_COUNT) return NULL; // 越界时不读取表外数据。
+    return &diagnostic_periods[diagnostic].timing;
+}
+#endif
+
 #if defined(MC02_CONFIG_GENERATED)
 // 辅助姿态任务运行失败时撤销该模块及其下游启动结果。
 static void RobotAuxiliaryInsTaskFailed(TaskMonitor_Id_e id, uint32_t dependencies, void *context)
@@ -27,7 +68,8 @@ static const TaskMonitorTaskConfig_t robot_task_monitor_config[] = {
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 5u, .startup_grace_ms = 100u}, // 电机及通信派发。
 #endif
     {.id = TASK_MONITOR_ROBOT, .name = "ROBOT", .mode = TASK_MONITOR_MODE_PERIODIC,
-     .role = TASK_MONITOR_ROLE_CORE, .period_ms = 5u, .deadline_ms = 20u, .startup_grace_ms = 100u}, // 整车控制。
+     .role = TASK_MONITOR_ROLE_CORE, .period_ms = ROBOT_DIAGNOSTIC_PERIOD_MS,
+     .deadline_ms = 20u, .startup_grace_ms = 100u}, // 整车任务，监控沿用以毫秒表达的期限。
     {.id = TASK_MONITOR_DAEMON, .name = "DAEMON", .mode = TASK_MONITOR_MODE_PERIODIC,
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 10u, .deadline_ms = 30u, .startup_grace_ms = 100u}, // 设备及任务监控。
     {.id = TASK_MONITOR_UART_TX, .name = "UART_TX", .mode = TASK_MONITOR_MODE_PERIODIC,

@@ -3,6 +3,7 @@
  */
 #ifndef MC02_PLATFORM_PERIODIC_H
 #define MC02_PLATFORM_PERIODIC_H
+#include <stddef.h>
 #include <stdint.h>
 
 typedef enum {
@@ -18,6 +19,40 @@ typedef struct {
     uint32_t period_us; /**< 从一拍到下一拍的计划间隔，单位 μs，须可精确换算。 */
     uint32_t budget_us; /**< 从实际开始到完成的允许耗时，单位 μs，须可精确换算。 */
 } PlatformPeriodicConfig_t;
+
+typedef enum {
+    PLATFORM_PERIODIC_SOURCE_AUTO = 0, /**< 优先用能精确表示周期和预算的 RTOS 刻度。 */
+    PLATFORM_PERIODIC_SOURCE_RTOS, /**< 必须使用 RTOS 刻度。 */
+    PLATFORM_PERIODIC_SOURCE_HIGH_RES /**< 必须使用硬件比较通道。 */
+} PlatformPeriodicSource_t;
+
+typedef struct {
+    PlatformPeriodicConfig_t timing; /**< 周期和预算均以 μs 给出。 */
+    PlatformPeriodicSource_t source; /**< 启动时允许选择的计数来源。 */
+} PlatformPeriodicRequest_t;
+
+typedef struct {
+    uint32_t rtos_quantum_us; /**< RTOS 每刻度的 μs 数，0 表示不可用。 */
+    uint32_t high_res_quantum_us; /**< 硬件每刻度的 μs 数，0 表示后端未接入。 */
+    uint32_t high_res_channels; /**< 当前可供独立任务使用的硬件通道数。 */
+} PlatformPeriodicCapabilities_t;
+
+/** @brief 查询周期来源的实际分辨率和可用硬件通道数。
+ * @return 当前平台可用于启动检查的能力。
+ * @note 板级时钟初始化后、周期任务创建前调用；只读，不占用通道。
+ */
+PlatformPeriodicCapabilities_t PlatformTaskPeriodicCapabilities(void);
+
+/** @brief 预检整组已启用任务是否可按要求建立固定周期。
+ * @param[in] requests 按任务顺序提供配置，空计划可传 NULL。
+ * @param[in] count 请求数量，最多 32 项。
+ * @param[in] capabilities 各来源的实际刻度与可用通道数，不可为空。
+ * @param[out] hardware_mask 成功时写入需要硬件通道的任务位图，失败保留原值。
+ * @param[out] failed_index 可选。单项出错时写入其索引，调用参数有误或成功时保持原值。
+ * @return READY 为整组可运行；CONFIG 为配置无法精确表示；RESOURCE 为通道不足。
+ */
+PlatformPeriodicResult_t PlatformPeriodicPlan(const PlatformPeriodicRequest_t *requests, size_t count,
+    const PlatformPeriodicCapabilities_t *capabilities, uint32_t *hardware_mask, size_t *failed_index);
 
 /** @brief 单一任务持有的固定周期状态，初始化后由接口更新。 */
 typedef struct {
@@ -95,6 +130,12 @@ PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock
  */
 PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
     const PlatformPeriodicConfig_t *config);
+
+/** @brief 在创建使用硬件唤醒的任务前查询空闲通道数。
+ * @return 硬件时钟和中断符合要求时的可分配数量，否则为 0。
+ * @note 仅在启用硬件唤醒后端的构建中提供；在创建周期任务前调用，此查询不申请通道。
+ */
+uint32_t PlatformTaskHighResAvailableChannels(void);
 
 /** @brief 用硬件定时器等待下一拍，阻塞由 RTOS 提供有限超时。
  * @param[in,out] clock 已成功申请的任务私有周期状态，失败时保持原值。

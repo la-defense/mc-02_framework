@@ -89,6 +89,25 @@ static uint32_t TimerDivider(void)
     return timer_hz / TIMER_HZ;
 }
 
+// 调用前检验分频和中断分组；运行时申请需要在任务临界区内使用。
+static uint32_t AvailableChannels(uint32_t divider)
+{
+    const uint8_t clock_enabled = (uint8_t)(__HAL_RCC_TIM5_IS_CLK_ENABLED() != 0u); // 核对硬件时钟。
+    const uint8_t irq_enabled = (uint8_t)(NVIC_GetEnableIRQ(TIM5_IRQn) != 0u); // 核对硬件中断。
+    if (owner_count == 0u) return clock_enabled || irq_enabled ? 0u : CHANNEL_COUNT; // 已启用的外部资源不可接管。
+    if (!clock_enabled || !irq_enabled || TIM5->PSC != divider - 1u || (TIM5->CR1 & TIM_CR1_CEN) == 0u)
+        return 0u; // 硬件计数条件已变化，不能接受新的使用者。
+    return (uint32_t)(CHANNEL_COUNT - owner_count); // 共享计数器运行正常时只报告还可分配的通道。
+}
+
+uint32_t PlatformTaskHighResAvailableChannels(void)
+{
+    const uint32_t divider = TimerDivider(); // 确认板级时钟能提供 1 μs 刻度。
+    if (divider == 0u || HAL_NVIC_GetPriorityGrouping() != NVIC_PRIORITYGROUP_4)
+        return 0u; // ISR 优先级必须符合 FreeRTOS 要求。
+    return AvailableChannels(divider);
+}
+
 PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
     const PlatformPeriodicConfig_t *config)
 {
@@ -100,6 +119,11 @@ PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
     if (divider == 0u || HAL_NVIC_GetPriorityGrouping() != NVIC_PRIORITYGROUP_4)
         return PLATFORM_PERIODIC_CONFIG; // 中断优先级必须能调用 FreeRTOS 的 ISR 接口。
     taskENTER_CRITICAL(); // 检查占用与取得资源之间不允许切换任务。
+    if (AvailableChannels(divider) == 0u)
+    {
+        taskEXIT_CRITICAL();
+        return PLATFORM_PERIODIC_RESOURCE; // 硬件被占用、计数条件已改变或通道已用完。
+    }
     const TaskHandle_t task = xTaskGetCurrentTaskHandle(); // 用实际任务身份登记所有权。
     size_t index = CHANNEL_COUNT; // 用越界索引表示尚无可用通道。
     for (size_t i = 0u; i < CHANNEL_COUNT; ++i) // 保留第一个空位，同时检查全部现有申请。
@@ -112,16 +136,6 @@ PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
         if (index == CHANNEL_COUNT && owners[i].task == NULL) index = i; // 优先复用低号空闲通道。
     }
     const uint8_t first = (uint8_t)(owner_count == 0u); // 只在首个申请进入时接管硬件。
-    const uint8_t clock_enabled = (uint8_t)(__HAL_RCC_TIM5_IS_CLK_ENABLED() != 0u); // 查外部是否已开时钟。
-    const uint8_t irq_enabled = (uint8_t)(NVIC_GetEnableIRQ(TIM5_IRQn) != 0u); // 查共享中断是否已经启用。
-    // 首次申请要确认硬件空闲；后续申请要确认共享硬件的计数条件未改变。
-    const uint8_t unavailable = first ? (clock_enabled || irq_enabled)
-        : (!clock_enabled || !irq_enabled || TIM5->PSC != divider - 1u || (TIM5->CR1 & TIM_CR1_CEN) == 0u);
-    if (index == CHANNEL_COUNT || unavailable)
-    {
-        taskEXIT_CRITICAL();
-        return PLATFORM_PERIODIC_RESOURCE; // 无空位、硬件已被占用或现有计数条件已改变。
-    }
     TimerOwner_t *owner = &owners[index]; // 只修改此次取得的通道。
     owner->signal = xSemaphoreCreateBinaryStatic(&owner->storage); // 无需分配堆内存。
     if (owner->signal == NULL) // 申请失败时保留所有已有通道。
