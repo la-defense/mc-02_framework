@@ -139,6 +139,10 @@ const Robot_Config_s *SentinelConfigInit(void)
             .startup_grace_ms = 0u, // 放行后的首次工作宽限待确认，单位 ms。
             .stack_words = 0u, // 独立任务栈容量待确认，单位为字。
         },
+        .motor_periods = {
+            .compute_us = 0u, // 电机计算周期待根据实际反馈和运行耗时确认，单位 μs。
+            .transmit_us = 0u, // CAN 发送服务周期待根据总线负载和截止时间确认，单位 μs。
+        },
         .can_recovery = {
             .feedback_stable_ms = 100u, // 哨兵候选稳定等待时间 100 ms，需结合真实反馈周期验证。
             .confirmed = 0u, // 尚未完成实车故障注入，不能凭此启用自动恢复。

@@ -310,6 +310,14 @@ uint8_t RobotInit(void)
 #else
     const RobotModulePlan_t *task_modules = NULL; // 旧配置保留默认启用组合。
 #endif
+#if MC02_TASK_MOTOR_SPLIT
+    if (RobotPrepareMotorTaskPeriods(&robot_config->motor_periods) != PLATFORM_PERIODIC_READY)
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_TASK_TIMING, INIT_RESOURCE_TASK_MOTOR);
+        goto init_failed; // 两个周期缺失或不可表示时，不启动硬件设备。
+    }
+#endif
 #if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
     static const uint16_t task_resources[ROBOT_PERIODIC_COUNT] = {
         [ROBOT_PERIODIC_DIAGNOSTIC] = INIT_RESOURCE_TASK_ROBOT, // 整车诊断。

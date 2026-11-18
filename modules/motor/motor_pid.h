@@ -7,7 +7,8 @@
 #include "../algorithm/controller.h"
 
 #define MOTOR_PID_DT_MIN_S 0.00001f
-#define MOTOR_PID_DT_MAX_S 0.05f
+#define MOTOR_PID_DT_MAX_US 50000u // 电机控制计时允许的最长计算间隔，单位 μs。
+#define MOTOR_PID_DT_MAX_S (MOTOR_PID_DT_MAX_US / 1000000.0f)
 
 /** @brief 控制调用时间，与 CAN 反馈采样时间分别保存。 */
 typedef struct

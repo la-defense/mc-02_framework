@@ -38,4 +38,12 @@
 #else
 #define MC02_TASK_CHASSIS 0
 #endif
+
+// 正式 DJI 构建使用分开的计算与发送拍点，保留其他电机组合的原周期入口。
+#if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && MC02_FEATURE_MOTOR_CONTROL && \
+    MC02_SELECTED_DRIVER_DJI && !MC02_SELECTED_DRIVER_LK && !MC02_SELECTED_DRIVER_HT && !MC02_SELECTED_DRIVER_DM
+#define MC02_TASK_MOTOR_SPLIT 1
+#else
+#define MC02_TASK_MOTOR_SPLIT 0
+#endif
 #endif

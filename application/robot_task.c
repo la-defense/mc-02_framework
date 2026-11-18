@@ -30,6 +30,9 @@
 #include "task_monitor.h"
 #include "bsp_crash.h"
 #include "init_diagnostic.h"
+#if MC02_TASK_MOTOR_SPLIT
+#include "robot_safety.h"
+#endif
 
 #include "bsp_log.h"
 #include "platform_probe.h"
@@ -163,16 +166,40 @@ __attribute__((noreturn)) void StartINSTASK(void const *argument)
 }
 
 #if MC02_FEATURE_COMM_DISPATCH
+#if MC02_TASK_MOTOR_SPLIT
+static void StopMotorTaskOutputs(void)
+{
+    RobotSafetyRequestDisable(); // 撤销许可；电机任务停止工作和发送。
+}
+#endif
 __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 {
     (void)argument;
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_03);
+#if MC02_TASK_MOTOR_SPLIT
+    const PlatformPeriodicConfig_t *dispatch = RobotGetTaskPeriod(ROBOT_PERIODIC_COMM);
+    RobotTaskCycle_t cycle = OpenConfiguredTaskCycle(dispatch, TASK_MONITOR_MOTOR,
+                                                    1u, StopMotorTaskOutputs); // 统一接收拍点仍为固定周期。
+    MotorTaskSchedule_t schedule; // 两种阶段拍点由当前任务独占。
+    if (cycle.ready && MotorTaskScheduleInit(&schedule, RobotGetMotorTaskPeriods(), dispatch->period_us,
+        dispatch->period_us / cycle.clock.period_ticks, cycle.clock.next_tick) != PLATFORM_PERIODIC_READY)
+        StopTaskClock(&cycle); // 运行时条件与启动预检不一致时不处理计算或队列。
+#else
     RobotTaskCycle_t cycle = OpenTaskCycle(ROBOT_PERIODIC_COMM, TASK_MONITOR_MOTOR);
+#endif
     for (;;)
     {
         if (!BeginTaskCycle(&cycle)) continue; // 时钟或监控失败时不运行本轮派发。
         uint32_t motor_probe = PlatformProbeStart();
+#if MC02_TASK_MOTOR_SPLIT
+        if (MotorTaskRunScheduled(&schedule, cycle.release.observed_tick) != PLATFORM_PERIODIC_READY)
+        {
+            StopTaskClock(&cycle); // 不发布部分拍点或继续发送。
+            continue; // 保留本轮进度，任务监控将发现没有完成报告。
+        }
+#else
         MotorControlTask();
+#endif
         PlatformProbeDone(&r25_task_motor, motor_probe);
         if (r25_task_motor.last_us > cycle.budget_us)
         {

@@ -43,6 +43,56 @@ DaemonStatus_t DaemonProcessTaskEvents(uint8_t consumer_id, uint8_t max_events, 
     return DAEMON_OK;
 }
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
+
+static int CheckSplitPeriods(void)
+{
+    MotorTaskSchedule_t schedule;
+    MotorTaskPeriods_t periods = {
+        .compute_us = 2000u, // 主机试验用 2 ms 计算拍点。
+        .transmit_us = 3000u, // 主机试验用 3 ms 发送拍点。
+    };
+    const uint32_t start = UINT32_MAX - 1u; // 在测试过程中跨越计数回绕。
+    CHECK(MotorTaskScheduleInit(&schedule, &periods, 1000u, 1000u, start) == PLATFORM_PERIODIC_READY);
+    periods.transmit_us = 5000u; // 超出队列生存期应拒绝且保留已经建立的计划。
+    CHECK(MotorTaskScheduleInit(&schedule, &periods, 1000u, 1000u, start) == PLATFORM_PERIODIC_CONFIG);
+    CHECK(schedule.transmit.period_ticks == 3u);
+    periods.transmit_us = 2500u; // 发送必须与最低轮询节拍对齐。
+    CHECK(MotorTaskScheduleInit(&schedule, &periods, 1000u, 1000u, start) == PLATFORM_PERIODIC_CONFIG);
+    periods.transmit_us = 3000u;
+    periods.compute_us = 51000u; // 电机的 PID 计时会拒绝这样长的正常计算间隔。
+    CHECK(MotorTaskScheduleInit(&schedule, &periods, 1000u, 1000u, start) == PLATFORM_PERIODIC_CONFIG);
+
+    const uint32_t release_offsets[] = {0u, 1u, 2u, 3u, 6u}; // 首拍、仅接收、仅计算、仅发送、迟到后同拍。
+    dji_outputs = lk_outputs = can_tx_pumps = daemon_dispatches = 0u;
+#if defined(MC02_CONFIG_GENERATED)
+    communication_started = 1u; // 使用正常启动状态验证发送和接收仍串行。
+#endif
+    for (unsigned i = 0u; i < sizeof(release_offsets) / sizeof(release_offsets[0]); ++i)
+    {
+        order_count = 0u;
+        CHECK(MotorTaskRunScheduled(&schedule, start + release_offsets[i]) == PLATFORM_PERIODIC_READY);
+        // 任意拍先接收 CAN，最后才允许已有的发送端调用。
+        CHECK(order_count >= 4u && order[0] == 'C');
+        const char *compute = memchr(order, 'D', order_count);
+        const char *transmit = memchr(order, 'T', order_count);
+#if defined(MC02_PROFILE_BENCH_SAFE)
+        CHECK(compute == NULL);
+#else
+        CHECK((compute != NULL) == (i == 0u || i == 2u || i == 4u));
+        if (compute != NULL && transmit != NULL) CHECK(compute < transmit);
+#endif
+        CHECK((transmit != NULL) == (i == 0u || i == 3u || i == 4u));
+    }
+    CHECK(can_tx_pumps == 3u && daemon_dispatches == 5u); // 跳过未执行的旧拍，接收在每个轮询运行一次。
+#if !defined(MC02_PROFILE_BENCH_SAFE)
+    CHECK(dji_outputs == 3u && lk_outputs == 3u);
+#endif
+    order_count = 0u;
+    CHECK(MotorTaskRunScheduled(&schedule, start + 5u) == PLATFORM_PERIODIC_CLOCK); // 倒退的时刻不能触发任何访问。
+    CHECK(order_count == 0u && schedule.compute.last_tick == start + 6u);
+    return 0;
+}
+
 int main(void)
 {
     can_pending = uart_pending = usb_pending = 2;
@@ -68,6 +118,7 @@ int main(void)
     CHECK(order_count == 14u && memcmp(order, "CUBEDLTCUBEDLT", 14u) == 0); // 每轮先接收再控制和发送。
 #endif
 #endif
+    CHECK(CheckSplitPeriods() == 0);
     puts("PASS: production motor task keeps receive consumers and respects profile isolation");
     return 0;
 }

@@ -9,6 +9,7 @@
 #include "../../../bsp/os/platform_irq.h"
 #include "bsp_log.h"
 #include "motor_pid.h"
+#include "../motor_task.h"
 #include "dji_motor_diagnostic_internal.h" // 回环诊断只查询已注册的第一个电机。
 #if defined(CHASSIS_BOARD) || defined(ONE_BOARD)
 #include "robot_safety.h"
@@ -1373,7 +1374,7 @@ void DJIMotorControl()
 #if defined(CHASSIS_BOARD)
             (void)PlatformCanSubmitPeriodic(sender_assignment[i].bus,
                                     &sender_assignment[i], 0u, &frame,
-                                    CAN_TX_PRIORITY_CONTROL, 4u, 1000u,
+                                    CAN_TX_PRIORITY_CONTROL, MOTOR_DJI_QUEUE_LIFETIME_MS, 1000u,
                                     DJIMotorPrepareChassisOutput, &request_id);
 #elif defined(ONE_BOARD)
             const uint32_t previous_generation = sender_safety_generation[i]; // 提交失败时恢复旧队列的代际。
@@ -1382,7 +1383,7 @@ void DJIMotorControl()
             sender_feedback[i] = computed_feedback[i]; // 同时保存新目标的反馈依据。
             const CAN_TxSubmitStatus_t submit_status = PlatformCanSubmitPeriodic(sender_assignment[i].bus,
                                     &sender_assignment[i], 0u, &frame,
-                                    CAN_TX_PRIORITY_CONTROL, 4u, 1000u,
+                                    CAN_TX_PRIORITY_CONTROL, MOTOR_DJI_QUEUE_LIFETIME_MS, 1000u,
                                     DJIMotorPrepareSingleOutput, &request_id);
             if (submit_status != CAN_TX_SUBMIT_ACCEPTED && submit_status != CAN_TX_SUBMIT_COALESCED)
             {
@@ -1392,7 +1393,7 @@ void DJIMotorControl()
 #else
             (void)PlatformCanSubmitPeriodic(sender_assignment[i].bus,
                                     &sender_assignment[i], 0u, &frame,
-                                    CAN_TX_PRIORITY_CONTROL, 4u, 1000u, NULL, &request_id);
+                                    CAN_TX_PRIORITY_CONTROL, MOTOR_DJI_QUEUE_LIFETIME_MS, 1000u, NULL, &request_id);
 #endif
 #if defined(CHASSIS_BOARD) || defined(ONE_BOARD)
             PlatformTaskCriticalExit();

@@ -60,6 +60,26 @@ const PlatformPeriodicConfig_t *RobotGetTaskPeriod(RobotPeriodicTask_t task)
     return &task_periods[task].timing;
 }
 
+#if MC02_TASK_MOTOR_SPLIT
+static MotorTaskPeriods_t motor_task_periods; // 统一放行前写入，运行期只读。
+
+PlatformPeriodicResult_t RobotPrepareMotorTaskPeriods(const MotorTaskPeriods_t *periods)
+{
+    const PlatformPeriodicCapabilities_t capabilities = PlatformTaskPeriodicCapabilities(); // 使用实际 RTOS 分辨率。
+    const PlatformPeriodicConfig_t *dispatch = RobotGetTaskPeriod(ROBOT_PERIODIC_COMM); // 接收仍按现有周期派发。
+    MotorTaskSchedule_t schedule; // 检查生产用的阶段计时，任务稍后在自己的上下文建立第一拍。
+    const PlatformPeriodicResult_t result = MotorTaskScheduleInit(&schedule, periods, dispatch->period_us,
+        capabilities.rtos_quantum_us, 0u);
+    if (result == PLATFORM_PERIODIC_READY) motor_task_periods = *periods; // 两项通过后才保存。
+    return result;
+}
+
+const MotorTaskPeriods_t *RobotGetMotorTaskPeriods(void)
+{
+    return motor_task_periods.compute_us != 0u ? &motor_task_periods : NULL;
+}
+#endif
+
 #if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
 PlatformPeriodicResult_t RobotValidateTaskPeriods(const RobotModulePlan_t *modules, RobotPeriodicTask_t *failed)
 {

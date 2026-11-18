@@ -26,7 +26,7 @@ PID_Status_e MotorPIDBegin(MotorPIDClock_t *clock, uint64_t now_us, float *dt_s)
     clock->previous_us = now_us;
     clock->started = 1u;
     // 每次记录当前时刻，异常后下一轮不会继续累计很久以前的间隔。
-    if (!started || now_us < previous || now_us - previous < 10u || now_us - previous > 50000u)
+    if (!started || now_us < previous || now_us - previous < 10u || now_us - previous > MOTOR_PID_DT_MAX_US)
     {
         clock->last_status = PID_BAD_DT;
         return PID_BAD_DT;

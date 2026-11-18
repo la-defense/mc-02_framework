@@ -197,6 +197,8 @@ def main():
     symbols = {line.split()[-1] for line in result.stdout.splitlines() if len(line.split()) >= 3}
     functions = {line.split()[-1] for line in result.stdout.splitlines() if len(line.split()) >= 3 and line.split()[-2] in ("T", "t")}
     missing = CONSUMERS - functions
+    if args.profile == "robot" and "MotorTaskRunScheduled" in functions:
+        missing.discard("MotorControlTask")  # 分开拍点的正式电机任务仍独占通信派发。
     # 当前工程用 ELF 文件名和 CMake 选择报告标识配置；旧的全局标记从未由源码定义。
     missing |= STARTUP_DIAGNOSTICS - symbols
     if args.profile == "robot":
@@ -517,6 +519,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/robot_control_tasks.h",
                         source_root / "application/robot_def.h",
                         source_root / "application/config/config.h",
+                        source_root / "modules/motor/motor_task.h",  # 周期配置与派发接口不依赖厂商头。
                         source_root / "application/config/chassis_task_config.h",  # 只含底盘周期与栈参数。
                         source_root / "application/config/sentinel_robot/sentinel_config.h",
                         source_root / "application/config/shoot_config_types.h",

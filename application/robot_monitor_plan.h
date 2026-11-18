@@ -8,6 +8,9 @@
 #include "config/module_plan.h"
 #include "task_monitor.h"
 #include "platform_periodic.h"
+#if MC02_TASK_MOTOR_SPLIT
+#include "../modules/motor/motor_task.h"
+#endif
 
 typedef enum {
     ROBOT_PERIODIC_DIAGNOSTIC = 0, /**< 整车诊断及状态汇总。 */
@@ -25,6 +28,19 @@ typedef enum {
  * @return 固件运行期间可读的配置，编号无效时返回 NULL。
  */
 const PlatformPeriodicConfig_t *RobotGetTaskPeriod(RobotPeriodicTask_t task);
+
+#if MC02_TASK_MOTOR_SPLIT
+/** @brief 启动时校验并保存两个电机周期。
+ * @param[in] periods 只读车型配置。
+ * @return READY 为已保存；失败保留旧配置。
+ */
+PlatformPeriodicResult_t RobotPrepareMotorTaskPeriods(const MotorTaskPeriods_t *periods);
+
+/** @brief 取得启动时接受的计算和发送周期。
+ * @return 固定只读副本；尚未准备时返回 NULL。
+ */
+const MotorTaskPeriods_t *RobotGetMotorTaskPeriods(void);
+#endif
 
 #if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
 /** @brief 检查本次启动需要的周期和唤醒资源。

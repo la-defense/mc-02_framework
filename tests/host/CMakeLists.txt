@@ -2120,7 +2120,8 @@ if(UNIX AND NOT APPLE)
   foreach(profile IN ITEMS bench_safe robot robot_chassis robot_chassis_generated)
     set(target motor_profile_${profile})
     add_executable(${target} motor_profile_test.c ../../modules/motor/motor_task.c
-      ../../bsp/board/platform_dispatch_stm32.c) # 使用真实派发适配器及测试队列。
+      ../../bsp/board/platform_dispatch_stm32.c # 使用真实派发适配器及测试队列。
+      ../../bsp/os/platform_periodic.c) # 使用生产周期计算验证分开的拍点。
     target_include_directories(${target} BEFORE PRIVATE motor_profile_fakes)
     target_include_directories(${target} PRIVATE ../../modules/motor ../../modules/daemon ../../bsp/usb)
     if(profile STREQUAL "bench_safe")
