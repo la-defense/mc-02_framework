@@ -60,7 +60,10 @@ static uint8_t sender_enable_flag[9] = {0};
 static uint32_t sender_safety_generation[9]; // 每组已排队目标所属的安全代际。
 typedef struct {
     uint32_t source_ms[4]; // 每个电机计算目标时使用的内部反馈时间。
-    uint8_t required_mask; // 对应位置为 1 时，该目标依赖内部反馈。
+    uint32_t gap_generation[4]; // 每个目标使用反馈时看到的间断代次。
+    uint8_t speed_mask; // 对应位置为 1 时，发送前仍需有效的内部速度。
+    uint8_t current_mask; // 对应位置为 1 时，发送前仍需有效的内部电流。
+    uint8_t position_mask; // 对应位置为 1 时，发送前仍需可信的多圈位置。
     uint8_t reference_valid_mask; // 对应拨弹目标的参考属于本次计算使用的安全代际。
 } DJI_Queued_Feedback_s;
 static DJI_Queued_Feedback_s sender_feedback[9]; // 每组当前排队目标的反馈依据。
@@ -166,14 +169,12 @@ static float FeedbackIntervalSeconds(const PlatformCanRxFrame_t *frame, const DJ
 }
 
 static void UpdateFeedbackFilter(DJIMotorInstance *motor, uint8_t is_speed, float raw,
-                                 float dt_s, float legacy_previous, float *effective)
+                                 float dt_s, float legacy_previous, float *effective,
+                                 DJI_Motor_Filter_Status_e *status, uint8_t *valid)
 {
     const DJI_Motor_Filter_Mode_e mode = is_speed ? motor->filter_config.speed_mode
                                                    : motor->filter_config.current_mode;
     SampleFilter_t *sample_filter = is_speed ? &motor->speed_filter : &motor->current_filter;
-    DJI_Motor_Filter_Status_e *status = is_speed ? &motor->speed_filter_status
-                                                  : &motor->current_filter_status;
-    uint8_t *valid = is_speed ? &motor->speed_filter_valid : &motor->current_filter_valid;
     uint8_t *started = is_speed ? &motor->speed_filter_started : &motor->current_filter_started;
     uint8_t *needs_rebuild = is_speed ? &motor->speed_filter_needs_rebuild
                                        : &motor->current_filter_needs_rebuild;
@@ -252,6 +253,7 @@ static void UpdateFeedbackFilter(DJIMotorInstance *motor, uint8_t is_speed, floa
 
 static void InvalidateFeedbackForMissingSample(DJIMotorInstance *motor)
 {
+    PlatformTaskCriticalEnter(); // 使读取者一次看到失效标记和对应的间断代次。
     if (motor->speed_filter_valid || motor->current_filter_valid || motor->output_position_trusted)
         ++motor->feedback_gap_generation; // 主动判定缺样时也留下间断记录，重复失效不重复计数。
     motor->output_position_trusted = 0u;
@@ -277,6 +279,7 @@ static void InvalidateFeedbackForMissingSample(DJIMotorInstance *motor)
         motor->current_filter_status = DJI_FILTER_STATUS_GAP;
         motor->current_filter_needs_rebuild = 1u;
     }
+    PlatformTaskCriticalExit(); // 完成本次失效更新后才允许其他任务读取。
 }
 
 /**
@@ -393,7 +396,14 @@ static void DecodeDJIMotor(void *context, const PlatformCanRxFrame_t *frame)
     const float raw_speed_aps = RPM_2_ANGLE_PER_SEC * (float)raw_rpm;
     float candidate_speed = measure->speed_aps;
     float candidate_current = measure->current_feedback;
+    DJI_Motor_Filter_Status_e speed_status, current_status; // 计算完成后再公布每路滤波结果。
+    uint8_t speed_valid, current_valid; // 临界区外的临时值不供其他任务读取。
+    UpdateFeedbackFilter(motor, 1u, raw_speed_aps, dt_s, measure->speed_aps, &candidate_speed,
+                         &speed_status, &speed_valid); // CAN 接收任务独占滤波器内部状态。
+    UpdateFeedbackFilter(motor, 0u, (float)raw_current, dt_s, (float)measure->real_current, &candidate_current,
+                         &current_status, &current_valid); // 滤波计算留在临界区外。
 
+    PlatformTaskCriticalEnter(); // 本帧的测量值、时间和间断代次在同一次更新中交付。
     // 原始量先独立保存；滤波失败时保留旧有效输出，但控制环会检查有效标记。
     measure->last_ecd = measure->ecd;
     measure->ecd = ((uint16_t)rxbuff[0]) << 8 | rxbuff[1];
@@ -402,9 +412,10 @@ static void DecodeDJIMotor(void *context, const PlatformCanRxFrame_t *frame)
     measure->raw_current = raw_current;
     motor->feedback_dt_s = dt_s;
 
-    UpdateFeedbackFilter(motor, 1u, raw_speed_aps, dt_s, measure->speed_aps, &candidate_speed);
-    UpdateFeedbackFilter(motor, 0u, (float)raw_current, dt_s, (float)measure->real_current, &candidate_current);
-
+    motor->speed_filter_status = speed_status; // 将读数和有效性同时发布给读者。
+    motor->speed_filter_valid = speed_valid; // 此后有效标志对应当前帧。
+    motor->current_filter_status = current_status; // 电流由独立滤波器计算。
+    motor->current_filter_valid = current_valid; // 电流换算失败时下方会撤销该标志。
     if (motor->speed_filter_valid)
         measure->speed_aps = candidate_speed;
     if (motor->current_filter_valid)
@@ -475,6 +486,7 @@ static void DecodeDJIMotor(void *context, const PlatformCanRxFrame_t *frame)
     }
     const uint8_t data_valid = (uint8_t)(motor->speed_filter_valid != 0u &&
                                           motor->current_filter_valid != 0u);
+    PlatformTaskCriticalExit(); // 离线监测上报在完成帧更新后执行。
     (void)DaemonReportAt(motor->daemon, frame->received_ms,
         DAEMON_REPORT_TRANSPORT_VALID | DAEMON_REPORT_DATA_PRESENT |
         (data_valid != 0u ? DAEMON_REPORT_DATA_VALID : 0u));
@@ -728,23 +740,22 @@ Motor_Feedback_Status_e DJIMotorRebaseReference(DJIMotorInstance *motor, uint32_
     if (motor == NULL)
         return MOTOR_FEEDBACK_BAD_ARGUMENT;
 
-    uint32_t timestamp_ms;
-    uint8_t has_sample;
-    PlatformTaskCriticalEnter();
-    timestamp_ms = motor->last_feedback_timestamp_ms;
-    has_sample = motor->has_feedback_timestamp;
-    PlatformTaskCriticalExit();
-    if (has_sample == 0u || DaemonIsOnline(motor->daemon) == 0u ||
-        (uint32_t)(now_ms - timestamp_ms) > DJI_MULTITURN_MAX_GAP_MS)
+    PlatformTaskCriticalEnter(); // 检查并使用同一帧编码器数据设置零点。
+    const uint32_t actual_ms = PlatformTimeNowMs(); // 调用后可能已经收到另一帧反馈。
+    if ((uint32_t)(actual_ms - now_ms) <= INT32_MAX) now_ms = actual_ms; // 使用较新的本机时刻，允许回绕。
+    if (!motor->has_feedback_timestamp || !DaemonIsOnline(motor->daemon) ||
+        (uint32_t)(now_ms - motor->last_feedback_timestamp_ms) > DJI_MULTITURN_MAX_GAP_MS)
+    {
+        PlatformTaskCriticalExit(); // 无法使用当前编码器值重建多圈参考。
         return MOTOR_FEEDBACK_NOT_READY;
-
-    PlatformTaskCriticalEnter();
-    motor->measure.last_ecd = motor->measure.ecd;
-    motor->measure.total_round = 0;
-    motor->measure.total_angle = 0.0f;
-    motor->encoder_baseline_valid = 1u;
-    motor->output_position_trusted = 1u;
-    PlatformTaskCriticalExit();
+    }
+    motor->measure.last_ecd = motor->measure.ecd; // 下一次补圈以当前单圈读数为起点。
+    motor->measure.total_round = 0; // 清除旧参考下累计的圈数。
+    motor->measure.total_angle = 0.0f; // 新相对零点对应当前位置。
+    motor->encoder_baseline_valid = 1u; // 已有可信的补圈起点。
+    motor->output_position_trusted = 1u; // 允许后续控制使用新参考。
+    ++motor->feedback_gap_generation; // 旧参考计算的排队目标不能沿用到新零点。
+    PlatformTaskCriticalExit(); // 原子交付新零点和间断代次。
     return MOTOR_FEEDBACK_OK;
 }
 
@@ -986,16 +997,23 @@ static void DJIMotorPrepareSingleOutput(const void *source, uint32_t now_ms,
         const DJIMotorInstance *motor = dji_motor_instance[index]; // 逐电机核对当前帧中的输出。
         if (motor == NULL || motor->sender_group != group || motor->message_num >= 4u) continue; // 忽略其他帧及非法槽位。
         const uint8_t slot = motor->message_num; // 找到该电机在帧内的两字节位置。
-        const uint8_t feedback_required = (uint8_t)(sender_feedback[group].required_mask & (uint8_t)(1u << slot)); // 仅检查实际使用内部反馈的目标。
-        if (feedback_required != 0u && (uint32_t)(now_ms - sender_feedback[group].source_ms[slot]) > DJI_FEEDBACK_MAX_AGE_MS)
-            continue; // 旧计算依据过期后保持该电机输出为零。
+        const uint8_t slot_bit = (uint8_t)(1u << slot); // 各反馈要求都按帧内槽位保存。
+        const DJI_Queued_Feedback_s *basis = &sender_feedback[group]; // 使用成功入队的依据，不能借新目标更新时间。
+        if (motor->stop_flag == MOTOR_STOP) continue; // 入队后执行器被停止，硬件提交前清零。
+        if (((basis->speed_mask | basis->current_mask | basis->position_mask) & slot_bit) != 0u &&
+            ((uint32_t)(now_ms - basis->source_ms[slot]) > DJI_FEEDBACK_MAX_AGE_MS ||
+             motor->feedback_gap_generation != basis->gap_generation[slot] ||
+             ((basis->speed_mask & slot_bit) && !motor->speed_filter_valid) ||
+             ((basis->current_mask & slot_bit) && !motor->current_filter_valid) ||
+             ((basis->position_mask & slot_bit) && !(motor->encoder_baseline_valid && motor->output_position_trusted))))
+            continue; // 原始反馈过期、期间发生间断或所需测量量失效时都丢弃旧输出。
         if (policy_active == 0u && permits.functions != 0u)
         {
             memcpy(payload + 2u * slot, requested + 2u * slot, 2u); // 旧整车许可仍允许有效电机输出。
             continue; // 旧路径无需检查机构分类。
         }
         if (motor->output_role == MOTOR_OUTPUT_LOADER &&
-            (permits.fire_allowed == 0u || (sender_feedback[group].reference_valid_mask & (uint8_t)(1u << slot)) == 0u))
+            (permits.fire_allowed == 0u || (basis->reference_valid_mask & slot_bit) == 0u))
             continue; // 拨弹还需要击发许可，且参考必须属于本次目标的安全代际。
         uint32_t function = 0u; // 未声明机构时保持禁止。
         switch (motor->output_role)
@@ -1116,6 +1134,7 @@ void DJIMotorControl()
 #if defined(ONE_BOARD)
         uint32_t reference_generation; // 与参考值同时复制其安全代际。
         uint8_t reference_generation_valid; // 复制参考是否具备代际凭据。
+        uint32_t feedback_gap_generation; // 随用于计算的内部反馈一起复制间断代次。
 #endif
         PlatformTaskCriticalEnter();
         setting_snapshot = motor->motor_settings;
@@ -1125,6 +1144,7 @@ void DJIMotorControl()
 #if defined(ONE_BOARD)
         reference_generation = motor->reference_safety_generation; // 与参考值读取同一组数据。
         reference_generation_valid = motor->reference_generation_valid; // 不能把普通参考当作已授权拨弹。
+        feedback_gap_generation = motor->feedback_gap_generation; // 后续发生间断时只撤销用旧依据计算的目标。
 #endif
         speed_filter_valid = motor->speed_filter_valid;
         current_filter_valid = motor->current_filter_valid;
@@ -1172,13 +1192,15 @@ void DJIMotorControl()
         if (motor->output_role == MOTOR_OUTPUT_LOADER && reference_generation_valid &&
             reference_generation == cycle_safety.control_generation)
             computed_feedback[motor->sender_group].reference_valid_mask |= (uint8_t)(1u << motor->message_num); // 记录本次计算真正使用的拨弹代际。
-        if (internal_axis_active != 0u || current_internal_active != 0u)
-        {
-            const uint8_t output_group = motor->sender_group; // 获取当前电机的发送组。
-            const uint8_t output_slot = motor->message_num; // 获取组内对应的目标位置。
-            computed_feedback[output_group].source_ms[output_slot] = feedback_timestamp_ms; // 保存实际用于计算的反馈时间。
-            computed_feedback[output_group].required_mask |= (uint8_t)(1u << output_slot); // 标记发送前需要检查期限。
-        }
+        DJI_Queued_Feedback_s *basis = &computed_feedback[motor->sender_group]; // 计算结果的依据与目标同组。
+        const uint8_t output_slot = motor->message_num; // 在组内对应到电机自己的位置。
+        const uint8_t slot_bit = (uint8_t)(1u << output_slot); // 共用槽位位号标记三种反馈要求。
+        basis->source_ms[output_slot] = feedback_timestamp_ms; // 保留实际用于计算的反馈时间。
+        basis->gap_generation[output_slot] = feedback_gap_generation; // 用相同的代次检查短暂断流。
+        if (speed_internal_active) basis->speed_mask |= slot_bit; // 内部速度环须持续有可信测量。
+        if (current_internal_active) basis->current_mask |= slot_bit; // 内部电流环同样检查结果。
+        if (motor_setting->outer_loop_type == ANGLE_LOOP && (motor_setting->close_loop_type & ANGLE_LOOP) != 0u &&
+            motor_setting->angle_feedback_source == MOTOR_FEED) basis->position_mask |= slot_bit; // 内部位置环还要检查多圈参考。
 #endif
 #if defined(ONE_BOARD)
         if ((motor->output_role == MOTOR_OUTPUT_CHASSIS || motor->output_role == MOTOR_OUTPUT_GIMBAL) &&

@@ -537,6 +537,62 @@ static int single_queued_feedback_expiry(void)
     return EXIT_SUCCESS;
 }
 
+// 即使同组电机仍在线，一台电机的短暂测量异常也必须清掉它的排队目标。
+static int single_queued_feedback_gap(void)
+{
+    now_us = 1000u; // 所有安全条件使用测试本机时间。
+    RobotSafetyInit();
+    RobotSafetySetRcOnline(1u); // 维持整车许可，单独观察电机测量异常。
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate();
+    Motor_Init_Config_s config = motor_config(1u); // 两台测试电机共享同一帧。
+    DJI_Motor_Filter_Config_s filter = filter_config(DJI_MOTOR_FILTER_LEGACY_FRAME);
+    filter.dt_min_s = 0.004f; // 为第一台设置 4 ms 的测试下限，便于注入短间隔错误。
+    DJIMotorInstance *first = DJIMotorInitWithFilter(&config, &filter);
+    config.can_init_config.tx_id = 2u; // 使用组内另一个槽位。
+    DJIMotorInstance *second = DJIMotorInit(&config);
+    TEST_CHECK(first != NULL && second != NULL);
+    receive(first, 960000u, 2u, 0, 0); // 同时收到两台电机的首帧。
+    receive(second, 960000u, 2u, 0, 0);
+    DJIMotorSetRef(first, 10.0f);
+    DJIMotorSetRef(second, 10.0f);
+    DJIMotorEnable(first);
+    DJIMotorEnable(second);
+    control_at(3000u); // 首次调用只建立 PID 时间基准。
+    control_at(4000u); // 用有效反馈生成两个非零目标。
+    TEST_CHECK(deferred_prepare != NULL);
+    uint8_t original[8];
+    memcpy(original, deferred_payload, sizeof(original)); // 留存间断出现前的同一队列副本。
+    TEST_CHECK((original[0] || original[1]) && (original[2] || original[3]));
+
+    now_us = 5000u;
+    receive(first, 2400000u, 5u, 0, 0); // 3 ms 间隔小于滤波下限，只有第一台测量失效。
+    TEST_CHECK(!first->speed_filter_valid && !first->current_filter_valid);
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(!(deferred_payload[0] || deferred_payload[1]) && (deferred_payload[2] || deferred_payload[3]));
+
+    now_us = 10000u;
+    receive(first, 4800000u, 10u, 0, 0); // 5 ms 间隔有效，旧目标的原始时刻也尚未过期。
+    TEST_CHECK(first->speed_filter_valid && first->current_filter_valid);
+    memcpy(deferred_payload, original, sizeof(original)); // 模拟失效期间完全没有发送检查。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(!(deferred_payload[0] || deferred_payload[1]) && (deferred_payload[2] || deferred_payload[3]));
+
+    DJIMotorSetRef(first, 12.0f); // 发送新的测试参考和计算结果，再验证两台都能输出。
+    control_at(11000u);
+    TEST_CHECK((sent[0] || sent[1]) && (sent[2] || sent[3]));
+    DJIMotorStop(second); // 停止操作发生在入队后，到期前仍要将该槽位置零。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK((deferred_payload[0] || deferred_payload[1]) && !(deferred_payload[2] || deferred_payload[3]));
+    TEST_CHECK(DJIMotorRebaseReference(first, HAL_GetTick()) == MOTOR_FEEDBACK_OK); // 新零点不能继承旧目标。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(!(deferred_payload[0] || deferred_payload[1])); // 尚未过期的旧代次目标也须撤销。
+    return EXIT_SUCCESS;
+}
+
 static int single_safety_output_gate(void)
 {
     RobotSafetyInit(); // 初始状态禁止电机输出。
@@ -1232,6 +1288,8 @@ int main(int argc, char **argv)
         return single_loader_fire_permit();
     if (strcmp(argv[1], "single-queued-feedback-expiry") == 0)
         return single_queued_feedback_expiry();
+    if (strcmp(argv[1], "single-queued-feedback-gap") == 0)
+        return single_queued_feedback_gap();
     if (strcmp(argv[1], "single-safety-output") == 0)
         return single_safety_output_gate();
     if (strcmp(argv[1], "single-feedback-roles") == 0)
