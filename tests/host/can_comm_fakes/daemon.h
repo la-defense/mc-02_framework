@@ -1,6 +1,5 @@
 /** @file daemon.h
- * @brief 为 CANComm 主机测试保留来源状态接口所需的最小类型。
- * @note 仅由 can_comm_freshness_test 使用；生产 Daemon 头文件不受影响。
+ * @brief 为 CANComm 与协议校验主机测试保留来源状态接口所需的最小类型。
  * @author MC-02 project contributors
  * @copyright Copyright (c) HNU YueLu EC 2022 all rights reserved
  */
@@ -19,6 +18,7 @@ typedef enum { DAEMON_CONSUMER_BOUND_TASK = 0, DAEMON_CONSUMER_INDEPENDENT_TASK 
     DaemonConsumerMode_t;
 typedef struct daemon_event
 {
+    uint32_t last_detected_ms; // 事件的最近发现时刻，裁判测试需要用它区分晚到离线通知。
     DaemonSourceState_t state;
 } DaemonEvent_t;
 typedef struct

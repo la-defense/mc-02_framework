@@ -508,6 +508,46 @@ static void check_expiry(void)
                snapshot.command[REF_CMD_GAME_STATE].state==REFEREE_DATA_EXPIRED);
 }
 
+static void check_chassis_power_sources(void)
+{
+    RefereeChassisPower_t power;
+    uint8_t robot[LEN_game_robot_state] = {0};
+    uint8_t buffer[LEN_power_heat_data] = {0};
+    uint8_t game[LEN_game_state] = {0};
+    robot[0] = 1u; // 复用主机假设的本机角色。
+    write_u16le(robot + 10u, 80u); // 原始 0x0201 功率上限。
+    robot[16] = REFEREE_OUTPUT_CHASSIS_MASK; // 单独设置许可位。
+    write_u16le(buffer + 8u, 50u); // 原始 0x0202 缓冲能量，单位 J。
+    set_tick(UINT32_MAX - 49u); // 两条来源跨正常毫秒回绕。
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 1u);
+    set_tick(0u);
+    feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 2u);
+    set_tick(250u);
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK);
+    TEST_CHECK(power.limit.state == REFEREE_DATA_FRESH && power.limit.source_rx_ms == UINT32_MAX - 49u &&
+        power.limit.max_age_ms == 300u && power.limit_w == 80u && power.chassis_power_enabled == 1u);
+    TEST_CHECK(power.buffer.state == REFEREE_DATA_FRESH && power.buffer.source_rx_ms == 0u && power.buffer_energy_j == 50u);
+
+    set_tick(251u); // 上限超期，链路和缓冲仍有效。
+    feed_frame(ID_game_state, game, sizeof(game), 3u); // 其他消息发现超期，但不能续期。
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit.state == REFEREE_DATA_EXPIRED &&
+        power.limit_w == 0u && !power.chassis_power_enabled && power.buffer_energy_j == 50u);
+    set_tick(UINT32_MAX - 40u); // 模拟超过一整轮后，旧上限的数值年龄再次落入有效范围。
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit.state == REFEREE_DATA_EXPIRED);
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 4u); // 只有 0x0201 自己能恢复额度。
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit_w == 80u &&
+        power.buffer.state == REFEREE_DATA_EXPIRED);
+    set_tick(UINT32_MAX - 30u);
+    feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 5u); // 恢复缓冲必须收到自己的新帧。
+    const DaemonEvent_t old_offline = {.state = DAEMON_SOURCE_OFFLINE, .last_detected_ms = UINT32_MAX - 41u};
+    daemon_config.event_handler(&old_offline, daemon_config.owner_id); // 晚到的离线通知不能撤销后来恢复的数据。
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit_w == 80u && power.buffer_energy_j == 50u);
+    const DaemonEvent_t current_offline = {.state = DAEMON_SOURCE_OFFLINE, .last_detected_ms = UINT32_MAX - 29u};
+    daemon_config.event_handler(&current_offline, daemon_config.owner_id); // 当前断联立即撤销两条仍未到各自期限的旧数据。
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit.state == REFEREE_DATA_EXPIRED &&
+        power.buffer.state == REFEREE_DATA_EXPIRED && power.limit_w == 0u && power.buffer_energy_j == 0u);
+}
+
 #if defined(REFEREE_TEST_THREADS)
 static void *writer_thread(void *argument)
 {
@@ -608,6 +648,9 @@ int main(void)
     handle.hdmarx=&dma;
     RefereeSnapshot_t snapshot;
     RefereeInteractionRecord_t interaction;
+    RefereeChassisPower_t power = {.limit_w = 123u, .buffer_energy_j = 45u, .chassis_power_enabled = 1u};
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_ERROR_NOT_INITIALIZED && power.limit_w == 0u &&
+        power.buffer_energy_j == 0u && !power.chassis_power_enabled);
     memset(&interaction, 0xff, sizeof(interaction));
     TEST_CHECK(RefereeGetInteraction(&interaction)==REFEREE_ERROR_NOT_INITIALIZED);
     TEST_CHECK(memcmp(&interaction,&(RefereeInteractionRecord_t){0},sizeof(interaction))==0);
@@ -631,6 +674,7 @@ int main(void)
     check_fixed_field_decoding();
     check_failures_and_stream();
     check_expiry();
+    check_chassis_power_sources();
     check_concurrent_snapshots();
     check_interaction_lengths();
     check_interaction_concurrent();

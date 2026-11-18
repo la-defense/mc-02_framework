@@ -153,4 +153,20 @@ typedef struct {
     RefereeCommandSnapshot_t command[REFEREE_COMMAND_COUNT];
 } RefereeSnapshot_t;
 
+/** @brief 一组底盘功率字段的本机接收时刻和使用期限。 */
+typedef struct {
+    RefereeDataState_t state; /**< 从未接收、有效或已经过期。 */
+    uint32_t source_rx_ms; /**< 首个组帧字节的本机时间，0 合法。 */
+    uint32_t max_age_ms; /**< 从原接收时刻计算的有效期，单位 ms。 */
+} RefereePowerSource_t;
+
+/** @brief 一次读取所得的底盘功率数据，额度和缓冲各有自己的来源。 */
+typedef struct {
+    RefereePowerSource_t limit; /**< 0x0201，功率上限和底盘供电许可同时更新。 */
+    RefereePowerSource_t buffer; /**< 0x0202，缓冲能量单独更新。 */
+    uint16_t limit_w; /**< 裁判底盘功率上限，W。 */
+    uint16_t buffer_energy_j; /**< 裁判缓冲能量，J。 */
+    uint8_t chassis_power_enabled; /**< 底盘供电许可位，1 表示开启。 */
+} RefereeChassisPower_t;
+
 #endif

@@ -293,6 +293,22 @@ static uint8_t RefereeIsEventIndex(size_t index)
                      index == REF_CMD_SHOOT_DATA || index == REF_CMD_INTERACTIVE);
 }
 
+// 两个功率来源一旦确认过期，只有同类帧可以恢复，避免毫秒回绕后旧帧重新有效。
+static void RefereeExpirePowerSources(uint32_t now_ms, uint8_t link_lost)
+{
+    const RefereeCommandIndex_t sources[] = {
+        REF_CMD_ROBOT_STATE, // 负责功率上限和供电许可。
+        REF_CMD_POWER_HEAT, // 提供缓冲能量。
+    };
+    for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) // 逐组检查，各自使用原时间。
+    {
+        RefereeCommandSnapshot_t *entry = &referee_published.command[sources[i]]; // 调用者持有任务临界区。
+        if (entry->state == REFEREE_DATA_FRESH &&
+            (link_lost || now_ms - entry->source_rx_ms > RefereeTimeoutForIndex(sources[i])))
+            entry->state = REFEREE_DATA_EXPIRED; // 保留旧字段供诊断，控制读取会清除过期值。
+    }
+}
+
 static void RefereeShift(RefereeStream *stream, size_t count)
 {
     stream->used -= count;
@@ -333,10 +349,19 @@ static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8
         if (referee_interaction.receive_count != UINT32_MAX) ++referee_interaction.receive_count;
     }
     RefereeCommandSnapshot_t *entry = &referee_published.command[index];
+    const uint32_t link_gap_ms = source_rx_ms - referee_last_valid_rx_ms; // 以接收时刻识别重连，中间的排队不算成断线。
+    const uint8_t link_gap = referee_has_valid_frame && link_gap_ms <= INT32_MAX &&
+        link_gap_ms > REFEREE_LINK_TIMEOUT_MS; // 首帧或较早时间不能被误判为跨线间隔。
+    RefereeExpirePowerSources(now_ms, link_gap); // 恢复时先撤销断线前的两组，只让当前同类帧更新自身。
     entry->data = *data;
     entry->source_rx_ms = source_rx_ms;
     entry->wire_sequence = wire_sequence;
     if (entry->receive_count != UINT32_MAX) ++entry->receive_count;
+    if (index == REF_CMD_ROBOT_STATE || index == REF_CMD_POWER_HEAT)
+    {
+        entry->state = now_ms - source_rx_ms <= RefereeTimeoutForIndex((size_t)index) ?
+            REFEREE_DATA_FRESH : REFEREE_DATA_EXPIRED; // 接受用于诊断的迟到帧，但它不能恢复功率资格。
+    }
     referee_last_valid_rx_ms = source_rx_ms;
     referee_has_valid_frame = 1u;
     referee_link_active = 1u;
@@ -434,10 +459,17 @@ static void RefereeLostCallback(const DaemonEvent_t *event, void *arg)
     if (event == NULL || event->state != DAEMON_SOURCE_OFFLINE)
         return;
     PlatformTaskCriticalEnter();
+    const uint32_t after_event_ms = referee_last_valid_rx_ms - event->last_detected_ms; // 判断排队期间是否已经收到恢复帧。
+    if (referee_has_valid_frame && after_event_ms != 0u && after_event_ms <= INT32_MAX)
+    {
+        PlatformTaskCriticalExit(); // 新帧已在发布时处理断线，旧事件不能再次清除数据。
+        return;
+    }
     referee_stream.reset_requested = 1u;
     referee_link_active = 0u;
+    RefereeExpirePowerSources(0u, 1u); // 链路断开立即撤销两组功率数据，只由新同类帧恢复。
     PlatformTaskCriticalExit();
-    // 只撤销链路在线标记；各命令旧值及来源时间保留供诊断。
+    // 各命令的旧值及来源时间保留供诊断。
     PlatformUartRestartReceive(referee_usart_instance);
     BSP_LOG_EVENT_0(EV_MODULES_REFEREE_RM_REFEREE_C_01);
 }
@@ -558,8 +590,10 @@ RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output)
         memset(output, 0, sizeof(*output));
         return REFEREE_ERROR_NOT_INITIALIZED;
     }
-    *output = referee_published;
     uint32_t now_ms = PlatformTimeNowMs();
+    RefereeExpirePowerSources(now_ms, referee_has_valid_frame &&
+        now_ms - referee_last_valid_rx_ms > REFEREE_LINK_TIMEOUT_MS); // 即使离线事件未派发，也检查链路原期限。
+    *output = referee_published;
     uint32_t link_rx_ms = referee_last_valid_rx_ms;
     uint8_t link_has_valid = referee_has_valid_frame;
     uint8_t link_active = referee_link_active;
@@ -578,10 +612,41 @@ RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output)
             entry->age_ms = 0u;
         } else {
             entry->age_ms = (uint32_t)(now_ms-entry->source_rx_ms);
-            entry->state = RefereeIsEventIndex(i) ? REFEREE_DATA_EVENT_RECORDED :
-                (entry->age_ms <= RefereeTimeoutForIndex(i) ? REFEREE_DATA_FRESH : REFEREE_DATA_EXPIRED);
+            if (i != REF_CMD_ROBOT_STATE && i != REF_CMD_POWER_HEAT)
+                entry->state = RefereeIsEventIndex(i) ? REFEREE_DATA_EVENT_RECORDED :
+                    (entry->age_ms <= RefereeTimeoutForIndex(i) ? REFEREE_DATA_FRESH : REFEREE_DATA_EXPIRED);
         }
     }
+    return REFEREE_OK;
+}
+
+RefereeStatus_t RefereeGetChassisPower(RefereeChassisPower_t *output)
+{
+    if (output == NULL) return REFEREE_ERROR_ARGUMENT;
+    *output = (RefereeChassisPower_t){0}; // 缺失和过期的值均不可用于输出许可。
+    PlatformTaskCriticalEnter(); // 两个来源和状态在同一次读取中复制。
+    if (!referee_initialized)
+    {
+        PlatformTaskCriticalExit(); // 未初始化时保留清零输出。
+        return REFEREE_ERROR_NOT_INITIALIZED;
+    }
+    const uint32_t now_ms = PlatformTimeNowMs(); // 两组时间同一次取得。
+    RefereeExpirePowerSources(now_ms, referee_has_valid_frame &&
+        now_ms - referee_last_valid_rx_ms > REFEREE_LINK_TIMEOUT_MS); // 等待离线事件期间也不能使用旧功率。
+    const RefereeCommandSnapshot_t *robot = &referee_published.command[REF_CMD_ROBOT_STATE]; // 功率上限和供电许可来自同一帧。
+    const RefereeCommandSnapshot_t *buffer = &referee_published.command[REF_CMD_POWER_HEAT]; // 缓冲能量独立于上限帧。
+    output->limit = (RefereePowerSource_t){robot->state, robot->source_rx_ms,
+                                          RefereeTimeoutForIndex(REF_CMD_ROBOT_STATE)};
+    output->buffer = (RefereePowerSource_t){buffer->state, buffer->source_rx_ms,
+                                           RefereeTimeoutForIndex(REF_CMD_POWER_HEAT)};
+    if (robot->state == REFEREE_DATA_FRESH)
+    {
+        output->limit_w = robot->data.robot_state.chassis_power_limit_w; // 原始瓦数上限，不含额外预算。
+        output->chassis_power_enabled = (robot->data.robot_state.power_output_bits & REFEREE_OUTPUT_CHASSIS_MASK) != 0u;
+    }
+    if (buffer->state == REFEREE_DATA_FRESH)
+        output->buffer_energy_j = buffer->data.power_heat.buffer_energy_j; // 保持焦耳，不能直接当瓦数使用。
+    PlatformTaskCriticalExit();
     return REFEREE_OK;
 }
 

@@ -27,7 +27,8 @@ static uint8_t pc_valid = 1u;
 static uint8_t vision_online = 1u;
 static uint32_t vision_send_elapsed_ms; // 模拟选好命令后、发布前经过的时间。
 static Vision_Recv_s unused_wire_frame;
-static RefereeSnapshot_t referee_snapshot;
+static RefereeChassisPower_t referee_power;
+static uint8_t referee_fixed_source_times; // 单独注入上限与缓冲的来源时刻。
 
 uint32_t HAL_GetTick(void) { return test_tick; }
 const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port) { (void)port; return &remote_input; }
@@ -60,10 +61,15 @@ void VisionGetSnapshot(Vision_Recv_s *frame, Vision_Status_t *status)
     if (frame != NULL) *frame = unused_wire_frame;
     if (status != NULL) VisionGetStatus(status);
 }
-RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output)
+RefereeStatus_t RefereeGetChassisPower(RefereeChassisPower_t *output)
 {
     if (output == NULL) return REFEREE_ERROR_ARGUMENT;
-    *output = referee_snapshot;
+    *output = referee_power; // 其余场景默认两类裁判帧每轮更新。
+    if (!referee_fixed_source_times)
+    {
+        output->limit.source_rx_ms = test_tick;
+        output->buffer.source_rx_ms = test_tick;
+    }
     return REFEREE_OK;
 }
 
@@ -75,12 +81,13 @@ static int PublishVision(MessagePublisher_t *publisher, const void *message,
 
 static void PrepareReferee(void)
 {
-    memset(&referee_snapshot, 0, sizeof(referee_snapshot));
-    referee_snapshot.command[REF_CMD_ROBOT_STATE].state = REFEREE_DATA_FRESH;
-    referee_snapshot.command[REF_CMD_ROBOT_STATE].data.robot_state.robot_id = 3u;
-    referee_snapshot.command[REF_CMD_ROBOT_STATE].data.robot_state.power_output_bits =
-        REFEREE_OUTPUT_CHASSIS_MASK;
-    referee_snapshot.command[REF_CMD_POWER_HEAT].state = REFEREE_DATA_FRESH;
+    referee_power = (RefereeChassisPower_t){
+        .limit = {REFEREE_DATA_FRESH, 0u, 300u}, // 普通功率上限的测试期限。
+        .buffer = {REFEREE_DATA_FRESH, 0u, 300u}, // 缓冲能量的测试期限。
+        .limit_w = 80u, // 只给主机测试使用的非零上限。
+        .buffer_energy_j = 40u, // 保留焦耳单位。
+        .chassis_power_enabled = 1u, // 初始测试允许供电。
+    };
 }
 
 int main(void)
@@ -197,7 +204,7 @@ int main(void)
     test_tick += 1u;
     navigation.vx_m_s = 0.25f;
     TEST_CHECK(PublishVision(nav_publisher, &navigation, 79u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
-    referee_snapshot.command[REF_CMD_POWER_HEAT].state = REFEREE_DATA_EXPIRED;
+    referee_power.buffer.state = REFEREE_DATA_EXPIRED;
     TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
     RobotCMDTask();
     TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis),
@@ -205,8 +212,8 @@ int main(void)
         chassis.vx == 0.0f && chassis.vy == 0.0f && chassis.wz == 0.0f);
 
     /* 遥控器未选择自主档、PC未就绪或USB链路离线时都不得沿用导航移动。 */
-    referee_snapshot.command[REF_CMD_ROBOT_STATE].state = REFEREE_DATA_FRESH;
-    referee_snapshot.command[REF_CMD_POWER_HEAT].state = REFEREE_DATA_FRESH;
+    referee_power.limit.state = REFEREE_DATA_FRESH;
+    referee_power.buffer.state = REFEREE_DATA_FRESH;
     test_tick += 1u;
     remote_input.rc.switch_left = RC_SW_UP;
     pc_valid = 1u;
@@ -297,6 +304,35 @@ int main(void)
         test_tick, NULL) == MESSAGE_OK && fabsf(gimbal.yaw - 11.4591559f) < 0.0001f);
     TEST_CHECK(MessageReadSnapshot(shoot_subscriber, &shoot, sizeof(shoot),
         test_tick, NULL) == MESSAGE_OK && shoot.shoot_mode == SHOOT_OFF);
+
+    test_tick += 1u;
+    referee_fixed_source_times = 1u; // 不用替身查询时间代替原裁判接收时间。
+    referee_power.limit.source_rx_ms = test_tick - 295u; // 上限剩余 5 ms。
+    referee_power.buffer.source_rx_ms = test_tick;
+    TEST_CHECK(PublishVision(nav_publisher, &navigation, 86u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
+    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick,
+        &navigation_command_time) == MESSAGE_OK && chassis.chassis_mode == CHASSIS_NO_FOLLOW);
+    TEST_CHECK(navigation_command_time.source_time_ms == referee_power.limit.source_rx_ms &&
+        navigation_command_time.source_max_age_ms == 300u); // 保留真正先到期的 0x0201 时间。
+    vision_send_elapsed_ms = 6u; // 导航在选择时有效，发布前裁判数据到期。
+    RobotCMDTask();
+    vision_send_elapsed_ms = 0u;
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_ERR_EMPTY);
+
+    referee_fixed_source_times = 0u;
+    referee_power.limit_w = 0u; // 新帧仍可能明确给出零上限。
+    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_OK &&
+        chassis.chassis_mode == CHASSIS_ZERO_FORCE);
+    referee_power.limit_w = 80u;
+    referee_power.chassis_power_enabled = 0u; // 非零上限也不能代替供电许可。
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_OK &&
+        chassis.chassis_mode == CHASSIS_ZERO_FORCE);
+    referee_power.chassis_power_enabled = 1u;
 
     vision_online = 0u; // 没有视觉目标，本轮只可能生成本地保持命令。
     test_tick += 1u;

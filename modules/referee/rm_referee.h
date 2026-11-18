@@ -79,6 +79,13 @@ RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *conf
  */
 RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output);
 
+/** @brief 在一次短临界区内取得底盘额度、供电许可及缓冲能量。
+ * @param[out] output 非空时接收各组原时间及状态。过期或未收到的一组数据清零，状态仍可查询。
+ * @return REFEREE_OK 或具体参数／未初始化错误。未初始化时清零输出。
+ * @note 任务中使用。查询不会延长期限，两个来源也不会互相续期。值为 0 的新鲜上限不授予非零功率。
+ */
+RefereeStatus_t RefereeGetChassisPower(RefereeChassisPower_t *output);
+
 /**
  * @brief 复制最近一条合法机器人交互内容及其接收信息。
  * @param[out] output 非空时接收副本；未初始化时清零，空指针返回参数错误。

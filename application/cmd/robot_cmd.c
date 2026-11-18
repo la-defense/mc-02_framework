@@ -360,6 +360,14 @@ static VisionControlInput_s GetVisionV2ControlInput(void)
     return input;
 }
 
+// 现有导航要求两组裁判数据都有效。缓冲失效的普通限功率在模型接入后另行启用。
+static uint8_t VisionV2ReadNavigationPower(RefereeChassisPower_t *power)
+{
+    return RefereeGetChassisPower(power) == REFEREE_OK &&
+        power->limit.state == REFEREE_DATA_FRESH && power->limit_w != 0u &&
+        power->chassis_power_enabled && power->buffer.state == REFEREE_DATA_FRESH;
+}
+
 static uint8_t VisionV2NavigationAllowed(uint8_t autonomous_selected)
 {
     float max_yaw_rate_deg_s;
@@ -368,14 +376,8 @@ static uint8_t VisionV2NavigationAllowed(uint8_t autonomous_selected)
         !GetMaximumChassisYawRateDegS(&max_yaw_rate_deg_s))
         return 0u;
 
-    RefereeSnapshot_t referee;
-    if (RefereeGetSnapshot(&referee) != REFEREE_OK)
-        return 0u;
-    const RefereeCommandSnapshot_t *robot = &referee.command[REF_CMD_ROBOT_STATE];
-    const RefereeCommandSnapshot_t *power = &referee.command[REF_CMD_POWER_HEAT];
-    return (uint8_t)(robot->state == REFEREE_DATA_FRESH &&
-        power->state == REFEREE_DATA_FRESH &&
-        (robot->data.robot_state.power_output_bits & REFEREE_OUTPUT_CHASSIS_MASK) != 0u);
+    RefereeChassisPower_t power;
+    return VisionV2ReadNavigationPower(&power);
 }
 
 static void ApplyVisionV2Navigation(void)
@@ -921,6 +923,15 @@ void RobotCMDTask()
     RobotCmdLease_t navigation = manual; // 现有 V2 自主选择还要求无线和键鼠状态有效。
     RobotCmdLeaseInclude(&navigation, navigation_active, vision_v2_navigation_freshness.received_time_ms,
                          VISION_V2_NAV_MAX_AGE_MS, publish_ms);
+    if (navigation_active)
+    {
+        RefereeChassisPower_t power = {0}; // 发布前重读额度与许可，覆盖选择目标后发生的断线或撤权。
+        const uint8_t power_valid = VisionV2ReadNavigationPower(&power); // 没有可信普通限功率时，两组都必须有效。
+        RobotCmdLeaseInclude(&navigation, power_valid, power.limit.source_rx_ms,
+                             power.limit.max_age_ms, publish_ms); // 额度与供电许可共用原始 0x0201 期限。
+        RobotCmdLeaseInclude(&navigation, power_valid, power.buffer.source_rx_ms,
+                             power.buffer.max_age_ms, publish_ms); // 缓冲独立到期，也可缩短本次导航有效期。
+    }
     RobotCmdLease_t local_hold = manual; // 失去瞄准后的本地保持依赖新鲜云台反馈。
     RobotCmdLeaseIncludeGimbalFeedback(&local_hold, feedback_received, &gimbal_feedback_time, publish_ms);
 #else
