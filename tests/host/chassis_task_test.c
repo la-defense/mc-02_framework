@@ -81,6 +81,7 @@ static uint8_t motor_rolled_back[4]; // 记录各电机是否已撤销。
 static unsigned operation_order;
 static uint8_t reject_motion_reference; // 模拟安全代际失效时电机拒绝目标。
 static uint32_t observed_motion_generation; // 保存底盘交给电机的命令代际。
+static uint32_t observed_motion_deadline_ms; // 保存底盘交给电机的原始截止点。
 static SuperCapInstance cap;
 static int fail_cap, fail_motor;
 static unsigned supercap_init_calls;
@@ -126,9 +127,10 @@ uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor)
 }
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 { if (motor) { motor->ref = ref; motor->set_ref_order = ++operation_order; } }
-uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation)
+uint8_t DJIMotorSetChassisRefUntil(DJIMotorInstance *motor, float ref, uint32_t generation, uint32_t deadline_ms)
 {
     observed_motion_generation = generation; // 核对底盘是否传递原命令的代际。
+    observed_motion_deadline_ms = deadline_ms; // 测试期限不会在任务消费时刷新。
     if (motor == NULL) return 0u; // 无实例时不能声称已写入。
     if (reject_motion_reference && motor == &motors[1]) return 0u; // 第一台轮电机已写入后，拒绝第二台。
     DJIMotorSetRef(motor, ref); // 保留已有的参考和调用顺序记录。
@@ -639,6 +641,7 @@ int main(int argc, char **argv)
     MessagePublishNow(commands, &command);
     ChassisTask();
     CHECK(observed_motion_generation == 42u); // 不使用任务当前时刻替换命令的原始代际。
+    CHECK(observed_motion_deadline_ms == test_tick + MESSAGE_DEFAULT_MAX_AGE_MS); // 无额外期限的旧消息使用话题期限。
     reject_motion_reference = 1u; // 模拟命令被读取后许可发生变化。
     ChassisTask();
     for (unsigned i = 0; i < 4; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
@@ -650,12 +653,18 @@ int main(int argc, char **argv)
     test_tick = 0u; // 轮速计算开始时恰好还在来源期限内。
     ChassisTask();
     CHECK(motors[0].enabled && motors[0].ref != 0.0f);
+    CHECK(observed_motion_deadline_ms == 0u); // 跨回绕的来源期限比话题期限更早。
     tick_read_count = 0u; // 本轮第二次取时发生在四轮目标计算之后。
     advance_tick_on_read = 2u;
     advance_tick_by_ms = 1u;
     ChassisTask();
     CHECK(test_tick == 1u); // 话题仍不过期，但短来源期限已到。
     for (unsigned i = 0; i < 4; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+
+    test_tick = 61u;
+    CHECK(MessagePublishAtBounded(commands, &command, 30u, 30u, 60u, MESSAGE_CLOCK_LOCAL, 150u) == MESSAGE_OK);
+    ChassisTask();
+    CHECK(observed_motion_deadline_ms == 60u + MESSAGE_DEFAULT_MAX_AGE_MS); // 话题先到期时，使用原发布时间。
 #endif
     command = (Chassis_Ctrl_Cmd_s){.offset_angle = 0.5f,
                                    .chassis_mode = CHASSIS_FOLLOW_GIMBAL_YAW};

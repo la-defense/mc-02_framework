@@ -537,6 +537,54 @@ static int single_queued_feedback_expiry(void)
     return EXIT_SUCCESS;
 }
 
+// 单板底盘命令即使在新反馈不断到来时也只能使用到自己的截止点。
+static int single_chassis_reference_expiry(void)
+{
+    const uint64_t wrap_us = (UINT64_C(1) << 32u) * UINT64_C(1000); // 转为 32 位毫秒时在这里回到零。
+    now_us = wrap_us - 6000u; // 在回绕前准备许可和电机。
+    RobotSafetyInit();
+    RobotSafetySetRcOnline(1u);
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate();
+    RobotSafetySnapshot_t safety;
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+    Motor_Init_Config_s config = motor_config(1u); // 编号 1 对应测试发送帧中的前两字节。
+    config.output_role = MOTOR_OUTPUT_CHASSIS; // 只测试底盘轮电机。
+    DJIMotorInstance *motor = DJIMotorInit(&config);
+    TEST_CHECK(motor != NULL && DJIMotorSetChassisRefUntil(motor, 10.0f, safety.control_generation, 0u));
+    DJIMotorEnable(motor);
+    now_us = wrap_us - 4000u;
+    receive(motor, 2000u, HAL_GetTick(), 0, 0); // 当前反馈比原命令更晚到期。
+    control_at(wrap_us - 3000u); // 首轮建立 PID 计时。
+    control_at(wrap_us - 2000u); // 原命令仍有效，生成非零 CAN 目标。
+    TEST_CHECK(deferred_prepare != NULL && (deferred_payload[0] || deferred_payload[1]));
+    uint8_t original[8];
+    memcpy(original, deferred_payload, sizeof(original)); // 模拟发送队列保留的旧副本。
+
+    now_us = wrap_us;
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(deferred_payload[0] || deferred_payload[1]); // 截止时刻零仍可使用。
+    now_us = wrap_us + 1000u;
+    receive(motor, 2000u + 5u * 480000u, HAL_GetTick(), 0, 0); // 新帧比上一帧晚 5 ms，按 480 MHz 注入周期数。
+    Motor_Feedback_Snapshot_s feedback;
+    TEST_CHECK(DJIMotorGetFeedbackSnapshot(motor, HAL_GetTick(), &feedback) == MOTOR_FEEDBACK_OK &&
+        feedback.speed.valid && feedback.current.valid); // 排除因反馈失效而清零的情况。
+    memcpy(deferred_payload, original, sizeof(original));
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(deferred_payload[0] == 0u && deferred_payload[1] == 0u); // 队列发送也必须按原命令到期。
+    TEST_CHECK(!DJIMotorSetChassisRefUntil(motor, 10.0f, safety.control_generation, 0u)); // 重复提交过期命令也会失败。
+    control_at(wrap_us + 2000u);
+    TEST_CHECK(sent[0] == 0u && sent[1] == 0u); // 电机计算不能继续用旧参考。
+
+    TEST_CHECK(DJIMotorSetChassisRefUntil(motor, 10.0f, safety.control_generation, 5u)); // 活跃许可不变，接受新的命令期限。
+    control_at(wrap_us + 3000u);
+    TEST_CHECK(sent[0] || sent[1]);
+    return EXIT_SUCCESS;
+}
+
 // 即使同组电机仍在线，一台电机的短暂测量异常也必须清掉它的排队目标。
 static int single_queued_feedback_gap(void)
 {
@@ -1359,6 +1407,8 @@ int main(int argc, char **argv)
         return single_loader_fire_permit();
     if (strcmp(argv[1], "single-queued-feedback-expiry") == 0)
         return single_queued_feedback_expiry();
+    if (strcmp(argv[1], "single-chassis-reference-expiry") == 0)
+        return single_chassis_reference_expiry();
     if (strcmp(argv[1], "single-queued-feedback-gap") == 0)
         return single_queued_feedback_gap();
     if (strcmp(argv[1], "single-queued-external-expiry") == 0)

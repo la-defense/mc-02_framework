@@ -1075,10 +1075,13 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
     PlatformTaskCriticalEnter();
     motor->motor_controller.pid_ref = ref;
     motor->reference_generation_valid = 0u; // 普通参考不具备拨弹所需的代际凭据。
+    motor->reference_has_deadline = 0u; // 清零或其他普通参考不能继承旧目标的期限。
     PlatformTaskCriticalExit();
 }
 
-uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation)
+// 保存参考、安全代际及可选截止点。调用者提供原始命令期限。
+static uint8_t DJIMotorSetGenerationRef(DJIMotorInstance *motor, float ref, uint32_t generation,
+                                        const uint32_t *deadline_ms)
 {
     if (motor == NULL || !isfinite(ref)) return 0u; // 没有实例或参考不是有限数时不能提交。
     if (motor->output_role != MOTOR_OUTPUT_CHASSIS && motor->output_role != MOTOR_OUTPUT_GIMBAL &&
@@ -1095,22 +1098,38 @@ uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t
     const PlatformIrqState_t irq = PlatformIrqSaveAndDisable(); // 许可检查与参考写入之间不允许插入禁止事件。
     RobotControlPermits_t permits = {0}; // 查询失败时默认禁止发射。
     uint8_t policy_active = 0u; // 区分旧整车许可与分功能许可。
-    const uint8_t allowed = (uint8_t)(RobotSafetyGetOutputPermitsForGeneration(PlatformTimeNowMs(), generation, &permits, &policy_active) &&
+    const uint32_t now_ms = PlatformTimeNowMs(); // 许可和期限用同一时刻判断。
+    const uint8_t allowed = (uint8_t)((deadline_ms == NULL || *deadline_ms - now_ms <= INT32_MAX) &&
+        RobotSafetyGetOutputPermitsForGeneration(now_ms, generation, &permits, &policy_active) &&
         (permits.functions & required_function) &&
         (motor->output_role != MOTOR_OUTPUT_LOADER || !policy_active || permits.fire_allowed)); // 拨弹还需要击发许可。
     if (allowed)
     {
         motor->motor_controller.pid_ref = ref; // 原子写入已授权的参考值。
         motor->reference_safety_generation = generation; // 记录参考所属的代际。
+        motor->reference_has_deadline = deadline_ms != NULL; // 区分无期限和截止时刻为零。
+        motor->reference_deadline_ms = deadline_ms != NULL ? *deadline_ms : 0u; // 后续计算和发送不得换成本轮时间。
         motor->reference_generation_valid = 1u; // 完整写入后才标记代际有效。
     }
     PlatformIrqRestore(irq); // 恢复进入前的中断状态。
     return allowed; // 拒绝时保留旧参考，但发送路径不会借新代际重用它。
 #else
+    if (deadline_ms != NULL) return 0u; // 其他板卡的发送路径还不接受此接口。
     (void)generation; // 其他板角色仍由各自既有发送路径约束。
     DJIMotorSetRef(motor, ref); // 沿用现有参考设置。
     return 1u;
 #endif
+}
+
+uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation)
+{
+    return DJIMotorSetGenerationRef(motor, ref, generation, NULL);
+}
+
+uint8_t DJIMotorSetChassisRefUntil(DJIMotorInstance *motor, float ref, uint32_t generation, uint32_t deadline_ms)
+{
+    if (motor == NULL || motor->output_role != MOTOR_OUTPUT_CHASSIS) return 0u; // 只为底盘传递该截止点。
+    return DJIMotorSetGenerationRef(motor, ref, generation, &deadline_ms);
 }
 
 // 为所有电机实例计算三环PID,发送控制报文
@@ -1148,6 +1167,8 @@ void DJIMotorControl()
 #if defined(ONE_BOARD)
         uint32_t reference_generation; // 与参考值同时复制其安全代际。
         uint8_t reference_generation_valid; // 复制参考是否具备代际凭据。
+        uint8_t reference_has_deadline; // 复制截止点是否存在。
+        uint32_t reference_deadline_ms; // 复制该参考的原始截止点。
         uint32_t feedback_gap_generation; // 随用于计算的内部反馈一起复制间断代次。
 #endif
         PlatformTaskCriticalEnter();
@@ -1157,7 +1178,8 @@ void DJIMotorControl()
         pid_ref = motor_controller->pid_ref;
 #if defined(ONE_BOARD)
         reference_generation = motor->reference_safety_generation; // 与参考值读取同一组数据。
-        reference_generation_valid = motor->reference_generation_valid; // 不能把普通参考当作已授权拨弹。
+        reference_has_deadline = motor->reference_has_deadline; // 与参考值在同一临界区读取。
+        reference_deadline_ms = motor->reference_deadline_ms; // 原始截止时刻不会随电机周期刷新。
         feedback_gap_generation = motor->feedback_gap_generation; // 后续发生间断时只撤销用旧依据计算的目标。
 #endif
         speed_filter_valid = motor->speed_filter_valid;
@@ -1166,6 +1188,11 @@ void DJIMotorControl()
         has_feedback_timestamp = motor->has_feedback_timestamp; // 时间戳只有在收到反馈后才有意义。
         feedback_timestamp_ms = motor->last_feedback_timestamp_ms; // 与本轮测量使用同一份接收时间。
         now_ms = PlatformTimeNowMs(); // 在读取同一组数据后取当前时间。
+#if defined(ONE_BOARD)
+        if (reference_has_deadline && reference_deadline_ms - now_ms > INT32_MAX)
+            motor->reference_generation_valid = 0u; // 观察到过期后保持撤销，时钟再次回绕不能恢复旧参考。
+        reference_generation_valid = motor->reference_generation_valid; // 复制经本轮期限检查的代际状态。
+#endif
         PlatformTaskCriticalExit();
         const Motor_Control_Setting_s *motor_setting = &setting_snapshot;
         DJI_Motor_Measure_s *measure = &measure_snapshot;
@@ -1217,6 +1244,11 @@ void DJIMotorControl()
         uint32_t remaining_ms = UINT32_MAX; // 没有读取任何限时信号时保留此值。
         if ((internal_axis_active || current_internal_active) && feedback_fresh)
             remaining_ms = DJI_FEEDBACK_MAX_AGE_MS - (now_ms - feedback_timestamp_ms); // 先计入内部反馈剩余时间。
+        if (reference_has_deadline && reference_generation_valid)
+        {
+            const uint32_t reference_remaining = reference_deadline_ms - now_ms; // 过期已在临界区内撤销。
+            if (reference_remaining < remaining_ms) remaining_ms = reference_remaining; // 同时受原始命令的剩余时间限制。
+        }
         uint32_t *signal_remaining = &remaining_ms; // 外部信号可以缩短上述期限。
 #else
         uint32_t *signal_remaining = NULL; // 其他板角色沿用原发送检查。

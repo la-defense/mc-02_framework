@@ -92,6 +92,8 @@ static uint8_t chassis_inhibit_generation_valid = 0u;
 static uint32_t chassis_rearm_sequence = 0u;
 static uint32_t chassis_rearm_after_ms = 0u;
 static uint32_t chassis_inhibit_generation = 0u;
+#endif
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
 static uint32_t chassis_command_max_age_ms = 0u;
 #endif
 
@@ -112,9 +114,15 @@ uint8_t ChassisInit(void)
 #ifdef CHASSIS_BOARD
     attitude_t *pending_imu = INS_GetStorage(); // 双板底盘需要预先取得姿态存储。
     if (pending_imu == NULL) return 0u; // 没有存储时不注册设备。
+#endif
+#if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     MessageTopicDescriptor_t descriptor = {0}; // 在登记端点之前核对命令话题期限。
     if (MessageTopicGetDescriptor(ROBOT_TOPIC_CHASSIS_COMMAND, &descriptor) != MESSAGE_OK ||
-        descriptor.max_age_ms == 0u) return 0u; // 无效话题不能开始申请电机。
+        descriptor.max_age_ms == 0u || descriptor.max_age_ms > INT32_MAX)
+        return 0u; // 话题期限必须允许用 32 位本机计数比较。
+#if defined(ONE_BOARD)
+    if (descriptor.source_clock != MESSAGE_CLOCK_LOCAL) return 0u; // 单板截止点只采用同一个本机时钟。
+#endif
 #endif
 
 #if defined(MC02_CONFIG_GENERATED)
@@ -152,9 +160,9 @@ uint8_t ChassisInit(void)
         goto rollback; // 两个话题任一不足时不新增端点。
     chassis_sub = pending_sub; // 成功后发布命令订阅句柄。
     chassis_pub = pending_pub; // 同时发布反馈句柄。
+    chassis_command_max_age_ms = descriptor.max_age_ms; // 使用事先检查的命令期限。
 #endif
 #ifdef CHASSIS_BOARD
-    chassis_command_max_age_ms = descriptor.max_age_ms; // 使用事先检查的命令期限。
     Chassis_IMU_data = pending_imu; // 发布已经确认存在的姿态存储。
 #endif
     motor_lf = pending[0]; // 全部成功后发布左前轮。
@@ -334,12 +342,24 @@ static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeed
 
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
 // 轮速计算完成后再核对消息；若已有不同命令，下一轮才用它重新计算。
-static uint8_t ChassisCommandIsSameAndFresh(const MessageFreshness_t *used)
+static uint8_t ChassisCommandIsSameAndFresh(const MessageFreshness_t *used, uint32_t now_ms)
 {
     MessageFreshness_t latest = {0}; // 复制当前命令时一并取得序号和来源时间。
     return MessageReadSnapshot(chassis_sub, &chassis_cmd_recv, sizeof(chassis_cmd_recv),
-                               PlatformTimeNowMs(), &latest) == MESSAGE_OK &&
+                               now_ms, &latest) == MESSAGE_OK &&
         latest.sequence == used->sequence && latest.source_time_ms == used->source_time_ms;
+}
+#endif
+
+#if defined(ONE_BOARD)
+// 仅对刚复核过的本地消息取截止点，减法得出的剩余时间不会跨过半个计数范围。
+static uint32_t ChassisCommandDeadline(const MessageFreshness_t *command, uint32_t now_ms)
+{
+    if (command->source_max_age_ms == 0u)
+        return command->source_time_ms + chassis_command_max_age_ms; // 旧本地消息从原始来源时刻起算话题期限。
+    const uint32_t source_remaining = command->source_max_age_ms - (now_ms - command->source_time_ms); // 来源允许的剩余时间。
+    const uint32_t topic_remaining = chassis_command_max_age_ms - (now_ms - command->published_time_ms); // 本次写入话题的剩余时间。
+    return now_ms + (source_remaining < topic_remaining ? source_remaining : topic_remaining); // 交付更早的截止点。
 }
 #endif
 
@@ -472,12 +492,18 @@ void ChassisTask()
                                     ChassisMotionCalculate(&motion_input, &geometry, &limits,
                                                            &motion_output);
 #if defined(ONE_BOARD)
-    if (command_allowed != 0u && !ChassisCommandIsSameAndFresh(&command_freshness))
-        command_allowed = 0u; // 计算期间超期、撤销或被新命令替换，都须先清除旧轮速目标。
+    uint32_t command_deadline_ms = 0u; // 只有复核通过才用于提交，截止点为零也合法。
+    if (command_allowed != 0u)
+    {
+        const uint32_t checked_at_ms = PlatformTimeNowMs(); // 到期检查和剩余时间使用同一时刻。
+        command_allowed = ChassisCommandIsSameAndFresh(&command_freshness, checked_at_ms); // 拒绝计算期间失效或替换的旧命令。
+        if (command_allowed != 0u)
+            command_deadline_ms = ChassisCommandDeadline(&command_freshness, checked_at_ms); // 保留已复核命令的原始截止点。
+    }
 #elif defined(CHASSIS_BOARD)
     if (command_allowed != 0u)
     {
-        if (!ChassisCommandIsSameAndFresh(&command_freshness) || RobotSafetyIsReadyAt(PlatformTimeNowMs()) == 0u ||
+        if (!ChassisCommandIsSameAndFresh(&command_freshness, PlatformTimeNowMs()) || RobotSafetyIsReadyAt(PlatformTimeNowMs()) == 0u ||
             ChassisMotorFeedbackIsHealthy() == 0u)
         {
             command_allowed = 0u;
@@ -511,10 +537,10 @@ void ChassisTask()
 #if defined(ONE_BOARD)
         // 每台轮电机都用命令原有的代际；任何一台未获许可时清除四轮目标。
         const uint32_t generation = chassis_cmd_recv.safety_generation;
-        const uint8_t lf_ok = DJIMotorSetRefForGeneration(motor_lf, motion_output.motor_speed_deg_s[0] * rotor_to_output, generation);
-        const uint8_t rf_ok = DJIMotorSetRefForGeneration(motor_rf, motion_output.motor_speed_deg_s[1] * rotor_to_output, generation);
-        const uint8_t lb_ok = DJIMotorSetRefForGeneration(motor_lb, motion_output.motor_speed_deg_s[2] * rotor_to_output, generation);
-        const uint8_t rb_ok = DJIMotorSetRefForGeneration(motor_rb, motion_output.motor_speed_deg_s[3] * rotor_to_output, generation);
+        const uint8_t lf_ok = DJIMotorSetChassisRefUntil(motor_lf, motion_output.motor_speed_deg_s[0] * rotor_to_output, generation, command_deadline_ms); // 左前沿用来源期限。
+        const uint8_t rf_ok = DJIMotorSetChassisRefUntil(motor_rf, motion_output.motor_speed_deg_s[1] * rotor_to_output, generation, command_deadline_ms); // 右前沿用同一截止点。
+        const uint8_t lb_ok = DJIMotorSetChassisRefUntil(motor_lb, motion_output.motor_speed_deg_s[2] * rotor_to_output, generation, command_deadline_ms); // 左后沿用同一截止点。
+        const uint8_t rb_ok = DJIMotorSetChassisRefUntil(motor_rb, motion_output.motor_speed_deg_s[3] * rotor_to_output, generation, command_deadline_ms); // 右后沿用同一截止点。
         if (!(lf_ok && rf_ok && lb_ok && rb_ok))
         {
             ChassisStopAndClear(); // 任一参考被拒绝时撤销全部轮组参考。

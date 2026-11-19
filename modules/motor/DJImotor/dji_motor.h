@@ -144,8 +144,10 @@ typedef struct
 {
     DJI_Motor_Measure_s measure;            // 电机测量值
     Motor_Output_Axis_Config_s output_axis; // 控制与公开位置／速度均按此配置换算。
-    uint32_t reference_safety_generation; // 拨弹参考由发射任务确认时的安全代际。
-    uint8_t reference_generation_valid; // 只有显式绑定代际的参考才能在单板新策略下驱动拨弹。
+    uint32_t reference_safety_generation; // 业务提交这条参考时所用的安全代际。
+    uint8_t reference_generation_valid; // 显式绑定代际且尚未撤销时才保持有效。
+    uint8_t reference_has_deadline; // 底盘命令截止点可恰好为零，单独记录是否有期限。
+    uint32_t reference_deadline_ms; // 原始命令的本机截止时刻，允许毫秒计数回绕。
     Motor_Control_Setting_s motor_settings; // 电机设置
     MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
     Motor_Controller_s motor_controller;    // 电机控制器
@@ -250,6 +252,16 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
   * @note 仅支持底盘、云台和拨弹。单板检查对应功能许可，拨弹还检查击发许可；停止时用普通接口清零参考并撤销其代际。其他板角色沿用原路径。
  */
 uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation);
+
+/** @brief 为单板底盘提交同时带安全代际与原始截止时刻的轮速目标。
+ * @param[in,out] motor 已登记的底盘 DJI 电机实例。
+ * @param[in] ref 输出轴速度，rad/s，须为有限数。
+ * @param[in] generation 生产本条命令时的安全代际。
+ * @param[in] deadline_ms 本机毫秒截止点，允许当时刻使用；距现在不得超过 INT32_MAX ms。
+ * @return 接受返回 1。角色、许可、期限或数值不符返回 0，保留原参考。
+ * @note 电机计算及已排队 CAN 帧都使用该期限。调用者重提同一条命令时须传入同一截止时刻。
+ */
+uint8_t DJIMotorSetChassisRefUntil(DJIMotorInstance *motor, float ref, uint32_t generation, uint32_t deadline_ms);
 
 /** @brief 改写角度或速度反馈来源，下一轮控制生效。
 * @param[in,out] motor 有效实例，不能为 NULL。
