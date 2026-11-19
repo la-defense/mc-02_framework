@@ -57,6 +57,7 @@ static Chassis_Config_s chassis_configuration = {
 #endif
     },
     .chassis_motor_config = {
+        .dji_chassis_output_limit_raw = 60u, // 专用于验证四轮继承的测试报文限幅。
         .can_init_config = {.can_bus = PLATFORM_CAN_BUS_1},
         .controller_param_init_config = {.speed_PID = {.Kp = 12.0f}},
         .output_axis = {.gear_ratio = TEST_MECANUM_GEAR_RATIO}, // 公共参数不提供安装方向。
@@ -565,6 +566,8 @@ int main(int argc, char **argv)
     {
         CHECK(motor_configs[wheel].can_init_config.tx_id == chassis_configuration.wheel_motors[wheel].device_id);
         CHECK(motor_configs[wheel].output_axis.direction == chassis_configuration.wheel_motors[wheel].direction);
+        CHECK(motor_configs[wheel].dji_chassis_output_limit_raw ==
+            chassis_configuration.chassis_motor_config.dji_chassis_output_limit_raw); // 四轮继承同一车型输出上限。
     }
     if (argc == 2 && strncmp(argv[1], "release-", 8u) == 0)
     {

@@ -23,6 +23,7 @@ typedef struct {
     Motor_Output_Axis_Config_s output_axis;
     int motor_type;
     MotorOutputRole_t output_role; // 保留生产配置中的机构身份。
+    uint16_t dji_chassis_output_limit_raw; // 记录底盘交给每台轮电机的报文限幅。
 } Motor_Init_Config_s;
 typedef struct {
     float ref;

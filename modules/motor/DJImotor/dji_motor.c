@@ -126,6 +126,9 @@ static uint8_t DjiConfigValid(const Motor_Init_Config_s *config)
     const Motor_Control_Setting_s *setting = &config->controller_setting_init_config;
     const Motor_Controller_Init_s *controller = &config->controller_param_init_config;
     Motor_Capabilities_s capabilities;
+    if (config->dji_chassis_output_limit_raw > DJI_OUTPUT_MAX_RAW ||
+        (config->dji_chassis_output_limit_raw != 0u && config->output_role != MOTOR_OUTPUT_CHASSIS))
+        return 0u; // 专用上限只能用于底盘，且不得超出驱动的报文范围。
     if (MotorFeedbackValidateOutputAxis(&config->output_axis) != MOTOR_FEEDBACK_OK ||
         MotorFeedbackGetCapabilities(config->motor_type, &capabilities) != MOTOR_FEEDBACK_OK ||
         (capabilities.measurement_mask & MOTOR_CAPABILITY_CURRENT) == 0u ||
@@ -551,6 +554,8 @@ DJIMotorInstance *DJIMotorInitWithFilter(const Motor_Init_Config_s *config,
     // motor basic setting 电机基本设置
     instance->motor_type = config->motor_type;                         // 6020 or 2006 or 3508
     instance->output_role = config->output_role; // 记录本电机所属机构，后续对共享帧逐项检查。
+    instance->output_limit_raw = config->dji_chassis_output_limit_raw != 0u ?
+        config->dji_chassis_output_limit_raw : DJI_OUTPUT_MAX_RAW; // 旧驱动调用没有专用上限时沿用原范围。
     instance->motor_can_endpoint = config->can_init_config; // 保存车型逻辑总线和电机编号。
     instance->output_axis = config->output_axis;
     instance->motor_settings = config->controller_setting_init_config; // 正反转,闭环类型等
@@ -1351,20 +1356,19 @@ void DJIMotorControl()
             pid_ref = 0.0f;
         }
 
-        // 获取最终输出,功率限制时直接输出电流值
-        // 先把最终输出限制在本实现采用的 -16384～16384，再转成 int16_t，避免超范围转换。
-        // 不同电调的电流或电压比例另按协议确认，这里没有统一换算为 A。
-        if (pid_ref > 16384.0f)
+        // 所有控制环和方向换算结束后，对报文中的最终有符号值限幅。
+        const float output_limit = (float)motor->output_limit_raw; // 单位是电调原始命令值，各型号量纲不能统一换算为 A。
+        if (pid_ref > output_limit)
         {
-            pid_ref = 16384.0f;
-            dji_current_sat_count++;
+            pid_ref = output_limit; // 正方向最多输出该电机登记的上限。
+            dji_current_sat_count++; // 沿用触及输出上限的诊断计数。
         }
-        else if (pid_ref < -16384.0f)
+        else if (pid_ref < -output_limit)
         {
-            pid_ref = -16384.0f;
-            dji_current_sat_count++;
+            pid_ref = -output_limit; // 反方向也使用同一绝对上限。
+            dji_current_sat_count++; // 反方向限幅计入同一个诊断项。
         }
-        set = (int16_t)pid_ref;
+        set = (int16_t)pid_ref; // 有限值已在可编码范围内，转换为报文整数。
 
 #if defined(ONE_BOARD)
         if (remaining_ms != UINT32_MAX)

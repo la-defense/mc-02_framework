@@ -30,6 +30,7 @@ static void set_valid_config(void)
     chassis->chassis_motor_config.can_init_config.can_bus = PLATFORM_CAN_BUS_1;
     chassis->chassis_motor_config.output_axis.gear_ratio = 19.0f;
     chassis->chassis_motor_config.motor_type = M3508;
+    chassis->chassis_motor_config.dji_chassis_output_limit_raw = 60u; // 仅用于主机车型测试的原始命令上限。
     for (unsigned index = 0u; index < CHASSIS_WHEEL_COUNT; ++index)
     {
         chassis->wheel_motors[index].device_id = (uint8_t)(index + 1u); // 依轮序配置互不重复的测试编号。
@@ -62,6 +63,12 @@ int main(void)
     set_valid_config();
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK);
     TEST_CHECK(selected == &test_config);
+
+    test_config.chassis_param.chassis_motor_config.dji_chassis_output_limit_raw = 0u; // 未确认上限不能选择运动配置。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    test_config.chassis_param.chassis_motor_config.dji_chassis_output_limit_raw = DJI_OUTPUT_MAX_RAW + 1u; // 超出驱动范围也拒绝。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    set_valid_config(); // 为后续轮组测试恢复有效参数。
 
 #if MC02_CHASSIS_IS_OMNI
     test_config.chassis_param.odometry_max_gap_ms = 5u; // 合法的全向轮测试配置。

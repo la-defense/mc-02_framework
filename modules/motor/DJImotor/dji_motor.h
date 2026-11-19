@@ -158,6 +158,7 @@ typedef struct
     // 分组发送设置
     uint8_t sender_group;
     uint8_t message_num;
+    uint16_t output_limit_raw; // 登记时确定，不随 PID 参数变化，单位为电调命令原始值。
 
     Motor_Type_e motor_type;        // 电机类型
     MotorOutputRole_t output_role; // 本电机所属功能，用于共享帧的逐电机许可检查。

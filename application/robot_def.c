@@ -63,6 +63,10 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
         !ChassisOdometryGapIsValid(chassis->odometry_max_gap_ms, chassis->wheel_type == OMNI_WHEEL))
         return 0u;
 #if defined(MC02_PROFILE_ROBOT)
+    const uint16_t output_limit = chassis->chassis_motor_config.dji_chassis_output_limit_raw;
+    if (output_limit == 0u || output_limit > DJI_OUTPUT_MAX_RAW)
+        return 0u; // 运动固件须提供明确的轮组输出上限，不能沿用驱动默认范围。
+
     // 启动校验使用与控制周期相同的计算入口，提前发现滚动方向和轮组秩不足。
     const ChassisTwist_t zero_twist = {0.0f, 0.0f, 0.0f};
     ChassisWheelSpeeds_t wheel_speeds;

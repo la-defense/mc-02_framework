@@ -20,6 +20,7 @@
 #include "stdint.h"
 
 #define LIMIT_MIN_MAX(x, min, max) (x) = (((x) <= (min)) ? (min) : (((x) >= (max)) ? (max) : (x)))
+#define DJI_OUTPUT_MAX_RAW 16384u // 驱动原有报文输出绝对上限，单位为电调命令原始值。
 
 /**
  * @brief 闭环类型,如果需要多个闭环,则使用或运算
@@ -144,6 +145,7 @@ typedef struct
     Motor_Type_e motor_type;
     MotorOutputRole_t output_role; // 电机所属机构；新许可策略启用时未声明的电机禁止输出。
     PlatformCanEndpoint_t can_init_config; // 逻辑总线及协议 ID，硬件句柄由板级适配绑定。
+    uint16_t dji_chassis_output_limit_raw; // DJI 底盘报文的绝对上限；零只保留旧独立驱动调用的默认上限。
 } Motor_Init_Config_s;
 
 #endif // !MOTOR_DEF_H

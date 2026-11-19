@@ -586,6 +586,50 @@ static int single_chassis_reference_expiry(void)
 }
 
 // 即使同组电机仍在线，一台电机的短暂测量异常也必须清掉它的排队目标。
+// 验证底盘上限由配置传到最终 CAN 字节，和 PID 请求的大小独立。
+static int single_chassis_output_limit(void)
+{
+    now_us = 1000u;
+    RobotSafetyInit();
+    RobotSafetySetRcOnline(1u);
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate();
+    RobotSafetySnapshot_t safety;
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+
+    Motor_Init_Config_s config = motor_config(1u); // 使用测试速度环和电流环，原始输出范围大于测试上限。
+    config.output_role = MOTOR_OUTPUT_CHASSIS;
+    config.dji_chassis_output_limit_raw = DJI_OUTPUT_MAX_RAW + 1u;
+    TEST_CHECK(DJIMotorInit(&config) == NULL && registered == 0u); // 范围非法时不得登记 CAN 端点。
+    config.output_role = MOTOR_OUTPUT_UNASSIGNED;
+    config.dji_chassis_output_limit_raw = 5u; // 只用于测试报文的原始整数上限。
+    TEST_CHECK(DJIMotorInit(&config) == NULL && registered == 0u); // 其他角色不能误接底盘配置字段。
+    config.output_role = MOTOR_OUTPUT_CHASSIS;
+    DJIMotorInstance *first = DJIMotorInit(&config);
+    config.can_init_config.tx_id = 2u; // 第二个轮位与第一轮共用发送帧。
+    config.output_axis.direction = MOTOR_AXIS_DIRECTION_REVERSE; // 正轮速在反装轮位应编码为负值。
+    DJIMotorInstance *second = DJIMotorInit(&config);
+    TEST_CHECK(first != NULL && second != NULL && registered == 2u);
+    TEST_CHECK(DJIMotorSetChassisRefUntil(first, 40.0f, safety.control_generation, 20u));
+    TEST_CHECK(DJIMotorSetChassisRefUntil(second, 40.0f, safety.control_generation, 20u));
+    DJIMotorEnable(first);
+    DJIMotorEnable(second);
+    receive(first, 960000u, 2u, 0, 0);
+    receive(second, 960000u, 2u, 0, 0);
+    control_at(3000u); // 首轮建立 PID 时间基准。
+    control_at(4000u); // 速度和电流闭环完成后，最终报文在两方向应用同一上限。
+    TEST_CHECK(sent[0] == 0x00u && sent[1] == 0x05u);
+    TEST_CHECK(sent[2] == 0xffu && sent[3] == 0xfbu);
+
+    TEST_CHECK(DJIMotorSetChassisRefUntil(first, 3.0f, safety.control_generation, 20u));
+    control_at(5000u);
+    TEST_CHECK(sent[0] == 0x00u && sent[1] == 0x03u); // 在上限内保持原输出。
+    return EXIT_SUCCESS;
+}
+
 // 在同一个整车安全代际内复现底盘单轮停止并重新启用。
 static int single_chassis_queued_stop(void)
 {
@@ -1465,6 +1509,8 @@ int main(int argc, char **argv)
         return single_queued_feedback_expiry();
     if (strcmp(argv[1], "single-chassis-reference-expiry") == 0)
         return single_chassis_reference_expiry();
+    if (strcmp(argv[1], "single-chassis-output-limit") == 0)
+        return single_chassis_output_limit();
     if (strcmp(argv[1], "single-chassis-queued-stop") == 0)
         return single_chassis_queued_stop();
     if (strcmp(argv[1], "single-queued-feedback-gap") == 0)

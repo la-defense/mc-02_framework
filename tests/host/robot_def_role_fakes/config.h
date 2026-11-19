@@ -15,7 +15,9 @@ typedef struct {
     PlatformCanEndpoint_t can_init_config; // 车型测试使用与生产代码一致的逻辑端点。
     struct { float gear_ratio; Motor_Axis_Direction_e direction; } output_axis;
     int motor_type;
+    uint16_t dji_chassis_output_limit_raw; // 对应生产底盘配置的报文限幅。
 } Motor_Init_Config_s;
+#define DJI_OUTPUT_MAX_RAW 16384u // 与生产 DJI 报文上限一致。
 enum { GM6020 = 1, M3508 = 2, M2006 = 3 };
 enum { MOTOR_DIRECTION_NORMAL = 0, MOTOR_DIRECTION_REVERSE = 1 };
 

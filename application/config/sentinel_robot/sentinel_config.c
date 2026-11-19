@@ -192,6 +192,7 @@ const Robot_Config_s *SentinelConfigInit(void)
             .omni_geometry = {.wheels = {{0}}},
             .odometry_max_gap_ms = 0u, // 轮速来源间隔待实测；0 关闭本地里程计。
             .chassis_motor_config = {
+                .dji_chassis_output_limit_raw = 0u, // 轮电机最终命令上限待实测，单位为电调原始值。
                 .can_init_config.can_bus = PLATFORM_CAN_BUS_1,
                 .controller_param_init_config = {
                     .speed_PID = {
