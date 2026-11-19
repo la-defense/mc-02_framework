@@ -19,3 +19,11 @@
 - 相关 ASan／UBSan 通过 11 项。使用 Cortex-M7 Debug 选项分别编译单板和底盘板的车型校验、真实哨兵配置、底盘和 DJI 驱动，共 8 个对象。单板和底盘板的 `DJIMotorControl` 静态栈帧分别为 768 B 和 184 B。
 - 带遥控观察的 `commissioning/observe` 通过构建及 ELF、生成配置、源码隔离检查。FLASH 为 260956 B，观察固件未链接执行器代码。三个受限运动目标仍按预期拒绝构建。没有连接硬件，哨兵的实际电调上限保持待确认。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 通过，WSL Debug 和 Release 各通过 828 项。两个禁热固件通过构建和链接隔离检查，FLASH 分别为 257380 B 和 260924 B，均比前一同配置结果增加 24 B。六种生产构建仍因核心配置未确认而拒绝。
+
+## 单板受限底盘软件接线
+
+- 用真实手势、输入适配、安全管理及话题目录联测。没有人工使能动作时保持失能，使能后只接收新的输入。验证仅登记两个底盘话题、发布保留原始期限，以及切档、过期、发布前复核失败、轮组反馈失效和遥控离线撤销。另用真实 DJI 反馈联测无云台的 CAN 恢复，启用云台的专项继续检查缺失或过期姿态反馈。相关 ASan／UBSan 通过 7 项。
+- `commissioning/observe` 的遥控观察固件通过 ARM Debug 构建、源码与链接检查，FLASH 为 260956 B。原仓库配置继续拒绝三个受限运动目标，命令行缓存也不能覆盖哨兵车型声明。
+- 仅在隔离源码副本放开两项构建确认声明，验证 `commissioning/chassis` 能通过 Cortex-M7 Debug 链接与源码、生成头及 ELF 隔离检查。副本的真实机械、映射、输出上限和周期参数依然为空缺或待确认，启动参数校验仍会拒绝。这次检查产物的 text、data、bss 分别为 301252 B、808 B 和 156920 B。没有连接硬件或烧录。运动变化率、实际供电和车型数据不在本次通过范围内。
+- 同一编译选项的静态栈报告中，`CommissioningChassisCmdTask` 为 352 B，`RobotInit` 为 192 B。板上完整调用链及剩余栈空间仍需测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 通过。WSL Debug 和 Release 各通过 829 项。两种禁热固件通过构建与隔离检查，FLASH 仍分别为 257380 B 和 260924 B。六种未确认的生产构建保持拒绝。

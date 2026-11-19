@@ -177,7 +177,9 @@ void StartDefaultTask(void const * argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
   const uint8_t startup_ok = RobotStartupRun(); // 初始化设备、创建任务并检查放行结果。
+#if !defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
   MX_USB_DEVICE_Init(); // 业务先登记回调；没有业务时创建空回调传输用于诊断。
+#endif
   /* Infinite loop */
   for(;;)
   {
@@ -187,8 +189,10 @@ void StartDefaultTask(void const * argument)
       RobotSafetyRequestDisable(); // 整车保持失能，等待修正后重启。
       BSP_WatchdogFeed(); // 沿用已有的初始化失败锁存诊断行为。
     }
+#if !defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     // 唯一USB生命周期推进者；断开／等待主机配置跨多轮处理，不在控制任务内等待。
     (void)USBTransportProcess();
+#endif
 #if MC02_BENCH_USB_DIAGNOSTICS
     USBTransportDiagnosticPoll();
 #endif

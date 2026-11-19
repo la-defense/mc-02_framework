@@ -1972,6 +1972,25 @@ add_test(NAME production_command_generated_manual_invalid_dt COMMAND robot_cmd_g
 add_test(NAME production_command_generated_manual_unsupported_frame COMMAND robot_cmd_generated_manual_test manual-unsupported-frame)
 # 验证大 yaw 参照的平移按编码器来源时间失效，并响应同轮的反馈撤销。
 add_test(NAME production_command_generated_manual_frame_feedback COMMAND robot_cmd_generated_manual_test manual-frame-feedback)
+add_executable(commissioning_chassis_cmd_test commissioning_chassis_cmd_test.c
+  ../../application/cmd/commissioning_chassis_cmd.c # 测试受限调试实际命令入口。
+  ../../application/cmd/robot_manual_motion.c # 沿用实际的本体速度换算。
+  ../../application/topics/robot_topics.c # 只建立底盘话题。
+  ../../modules/message_center/message_center.c # 读取实际发布的命令和来源时间。
+  ../../modules/remote/remote_safety.c # 使用真实的人工使能手势。
+  ../../modules/safety/robot_safety.c # 执行真实许可修改与故障撤销。
+  ../../modules/standard_cmd/std_cmd.c ../../modules/standard_cmd/std_cmd_remote.c) # 复用人工来源适配。
+target_include_directories(commissioning_chassis_cmd_test BEFORE PRIVATE motor_pid_fakes)
+target_include_directories(commissioning_chassis_cmd_test PRIVATE . ../../application ../../application/cmd
+  ../../application/config ../../application/chassis ../../modules ../../modules/standard_cmd ../../modules/remote
+  ../../modules/imu ../../modules/algorithm ../../modules/motor ../../modules/motor/DJImotor ../../modules/daemon
+  ../../modules/alarm ../../modules/referee ../../modules/message_center ../../modules/safety ../../bsp/os
+  ../../bsp/can ../../bsp/board ../../bsp/reset_recovery ../../bsp/crash ../../bsp/usart ../../modules/master_machine)
+target_compile_definitions(commissioning_chassis_cmd_test PRIVATE ONE_BOARD=1 MC02_PROFILE_COMMISSIONING_CHASSIS=1) # 测试编入受限话题目录。
+if(UNIX)
+  target_link_libraries(commissioning_chassis_cmd_test PRIVATE m) # 主机数值换算需要系统数学库。
+endif()
+add_test(NAME production_commissioning_manual_chassis COMMAND commissioning_chassis_cmd_test)
 target_include_directories(robot_cmd_task_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_cmd_task_test PRIVATE ../../application ../../application/cmd ../../application/config
   ../../modules ../../modules/remote ../../modules/imu ../../modules/master_machine ../../modules/message_center

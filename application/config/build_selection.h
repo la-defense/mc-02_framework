@@ -32,15 +32,15 @@
 #define MC02_CHASSIS_IS_OMNI 0
 #endif
 
-// 仅由正式构建的模块选择启用独立底盘；禁热和旧组合保留各自的任务路径。
-#if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && MC02_FEATURE_CHASSIS
+// 有底盘运动任务的生成配置使用独立拍点；观察版与旧组合不启用。
+#if defined(MC02_CONFIG_GENERATED) && (defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)) && MC02_FEATURE_CHASSIS
 #define MC02_TASK_CHASSIS 1
 #else
 #define MC02_TASK_CHASSIS 0
 #endif
 
-// 正式 DJI 构建使用分开的计算与发送拍点，保留其他电机组合的原周期入口。
-#if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && MC02_FEATURE_MOTOR_CONTROL && \
+// DJI 底盘调试与正式控制使用分开的计算与发送拍点。
+#if defined(MC02_CONFIG_GENERATED) && (defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)) && MC02_FEATURE_MOTOR_CONTROL && \
     MC02_SELECTED_DRIVER_DJI && !MC02_SELECTED_DRIVER_LK && !MC02_SELECTED_DRIVER_HT && !MC02_SELECTED_DRIVER_DM
 #define MC02_TASK_MOTOR_SPLIT 1
 #else

@@ -248,7 +248,7 @@ set(MC02_APPLICATION_GIMBAL_C_SOURCES
     application/gimbal/gimbal.c
     application/shoot/shoot.c)
 
-if(MC02_PROFILE STREQUAL "robot")
+if(MC02_PROFILE STREQUAL "robot" OR MC02_COMMISSIONING_CHASSIS)
     list(APPEND MC02_APPLICATION_COMMON_C_SOURCES
         application/topics/chassis_topic_codec.c
         application/topics/robot_topics.c
@@ -332,14 +332,22 @@ if(NOT MC02_FEATURE_REMOTE)
     list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES modules/remote/remote_control.c
         modules/remote/remote_safety.c)
 endif()
-if(MC02_PROFILE STREQUAL "robot" AND MC02_FEATURE_CHASSIS)
+if(MC02_FEATURE_CHASSIS)
     list(APPEND MC02_APPLICATION_COMMON_C_SOURCES application/chassis/chassis_kinematics.c
         "application/chassis/${MC02_CHASSIS_TYPE}.c")
 endif()
 
 # 按配置追加确实被入口调用的可选实现；其他保留模块不进入固件。
 set(MC02_SELECTED_SOURCES ${MC02_PLATFORM_C_SOURCES} ${MC02_BSP_C_SOURCES} ${MC02_COMMON_MODULE_C_SOURCES} ${MC02_APPLICATION_COMMON_C_SOURCES})
-if(MC02_PROFILE STREQUAL "robot")
+if(MC02_COMMISSIONING_CHASSIS)
+    list(APPEND MC02_SELECTED_SOURCES
+        application/cmd/commissioning_chassis_cmd.c # 受限底盘只发布本地人工控制目标。
+        application/cmd/robot_manual_motion.c # 复用既有人工单位换算。
+        application/chassis/chassis.c # 四轮登记与独立底盘任务。
+        application/chassis/chassis_motion.c # 保留车型设定的轮速上限。
+        application/robot_control_feedback.c # 核对每个必需的轮电机。
+        application/robot_control_feedback_runtime.c) # 将轮组反馈期限独立交给安全管理。
+elseif(MC02_PROFILE STREQUAL "robot")
     if(MC02_BOARD_ROLE STREQUAL "single")
         list(APPEND MC02_SELECTED_SOURCES ${MC02_APPLICATION_SINGLE_C_SOURCES})
     elseif(MC02_BOARD_ROLE STREQUAL "chassis")

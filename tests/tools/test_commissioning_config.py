@@ -38,7 +38,11 @@ class CommissioningConfigTest(unittest.TestCase):
             self.assertNotIn("modules/motor/DJImotor/dji_motor.c", sources)
             # 逐个检查运动请求和无效参数，不能沿用上一次成功的配置绕过拒绝。
             for options, reason in (
-                (["-DMC02_COMMISSIONING_TARGET=chassis"], "Commissioning motion requires"),
+                (["-DMC02_COMMISSIONING_TARGET=chassis", "-DMC02_BENCH_RC_DIAGNOSTICS=OFF"],
+                 "Commissioning chassis requires confirmed limits"),
+                (["-DMC02_COMMISSIONING_TARGET=chassis", "-DMC02_BENCH_RC_DIAGNOSTICS=OFF",
+                  "-DMC02_VEHICLE_COMMISSIONING_CHASSIS_CONFIRMED=TRUE",
+                  "-DMC02_VEHICLE_MANUAL_INPUT_CONFIRMED=TRUE"], "Commissioning chassis requires confirmed limits"),
                 (["-DMC02_COMMISSIONING_TARGET=gimbal"], "Commissioning motion requires"),
                 (["-DMC02_COMMISSIONING_TARGET=both"], "Commissioning motion requires"),
                 (["-DMC02_COMMISSIONING_TARGET=invalid"], "Commissioning target is invalid"),

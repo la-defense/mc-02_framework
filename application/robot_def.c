@@ -62,7 +62,7 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
     if ((chassis->wheel_type != MECANUM_WHEEL && chassis->wheel_type != OMNI_WHEEL) ||
         !ChassisOdometryGapIsValid(chassis->odometry_max_gap_ms, chassis->wheel_type == OMNI_WHEEL))
         return 0u;
-#if defined(MC02_PROFILE_ROBOT)
+#if defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     const uint16_t output_limit = chassis->chassis_motor_config.dji_chassis_output_limit_raw;
     if (output_limit == 0u || output_limit > DJI_OUTPUT_MAX_RAW)
         return 0u; // 运动固件须提供明确的轮组输出上限，不能沿用驱动默认范围。

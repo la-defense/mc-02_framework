@@ -39,7 +39,7 @@
 #include "platform_maintenance.h"
 #include "platform_can_diagnostic.h"
 
-#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_ROBOT)
+#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 /* 保留完整任务轮次最大耗时，供固定只读快照与任务栈数据一起核对。 */
 volatile PlatformProbe_t r25_task_ins = {0};
 volatile PlatformProbe_t r25_task_motor = {0};

@@ -91,7 +91,7 @@ static uint8_t Step(RobotCanRecoveryCoordinator_t *state, RemoteControlSnapshot_
 int main(void)
 {
     Robot_Config_s config = {0}; // 未确认候选时间时默认禁止自动恢复。
-    RobotModulePlan_t modules = {0};
+    RobotModulePlan_t modules = {.enabled = ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL)}; // 本场景检查云台失效是否撤销恢复。
     RobotCanRecoveryCoordinator_t state = {0};
     RemoteControlSnapshot_s remote = {.remote_online = 1u, .source_selection_generation = 1u};
     remote.input.rc.switch_left = RC_SW_DOWN;

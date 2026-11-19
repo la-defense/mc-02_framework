@@ -19,6 +19,15 @@ endif()
 mc02_require_production_core("${MC02_PROFILE}" "${MC02_VEHICLE_MECHANICS_CONFIRMED}"
     "${MC02_VEHICLE_GIMBAL_IMPLEMENTED}")
 mc02_require_manual_input("${MC02_PROFILE}" "${MC02_BOARD_ROLE}" "${MC02_VEHICLE_MANUAL_INPUT_CONFIRMED}") # 命令侧必须有已确认的人工作用参数。
+if(MC02_COMMISSIONING_CHASSIS)
+    if(NOT MC02_VEHICLE_COMMISSIONING_CHASSIS_CONFIRMED STREQUAL "TRUE" OR
+       NOT MC02_VEHICLE_MANUAL_INPUT_CONFIRMED STREQUAL "TRUE")
+        message(FATAL_ERROR "Commissioning chassis requires confirmed limits, mechanics, independent power and manual mapping: APP-10 / MC02-0144")
+    endif()
+    if(NOT MC02_MOTOR_DRIVERS STREQUAL "dji")
+        message(FATAL_ERROR "Commissioning chassis requires the validated DJI wheel driver")
+    endif()
+endif()
 mc02_validate_power_plan("${MC02_PROFILE}" "${MC02_VEHICLE_POWER_24V_1}"
     "${MC02_VEHICLE_POWER_24V_2}" "${MC02_VEHICLE_POWER_5V}")
 option(MC02_ENABLE_LCD "启用板载LCD辅助显示" ON)
@@ -55,7 +64,12 @@ endforeach()
 
 set(MC02_ENABLED_MODULES ${MC02_VEHICLE_BASE_MODULES})
 set(MC02_REQUIRED_MODULES)
-if(NOT MC02_PROFILE STREQUAL "robot")
+if(MC02_COMMISSIONING_CHASSIS)
+    # 保留底盘原有的 IMU 与裁判依赖；命令入口只使用本地人工输入。
+    list(APPEND MC02_ENABLED_MODULES COMMAND CHASSIS REMOTE REFEREE)
+    set(MC02_REQUIRED_MODULES SAFETY IMU COMMUNICATION COMMAND CHASSIS REMOTE REFEREE)
+    list(REMOVE_ITEM MC02_DEP_COMMAND VISION) # 专用人工命令不需要初始化上位机链路。
+elseif(NOT MC02_PROFILE STREQUAL "robot")
     list(APPEND MC02_ENABLED_MODULES VISION)
     set(MC02_REQUIRED_MODULES SAFETY IMU COMMUNICATION VISION)
     if(MC02_BENCH_RC_DIAGNOSTICS)
@@ -118,13 +132,13 @@ set(MC02_SELECTED_DRIVER_DJI 0)
 set(MC02_SELECTED_DRIVER_LK 0)
 set(MC02_SELECTED_DRIVER_HT 0)
 set(MC02_SELECTED_DRIVER_DM 0)
-if(MC02_PROFILE STREQUAL "robot")
+if(MC02_PROFILE STREQUAL "robot" OR MC02_COMMISSIONING_CHASSIS)
     foreach(driver IN LISTS MC02_MOTOR_DRIVERS)
         string(TOUPPER "${driver}" upper_driver)
         set(MC02_SELECTED_DRIVER_${upper_driver} 1)
     endforeach()
 endif()
-if(MC02_PROFILE STREQUAL "robot" AND
+if((MC02_PROFILE STREQUAL "robot" OR MC02_COMMISSIONING_CHASSIS) AND
    (MC02_FEATURE_CHASSIS OR MC02_FEATURE_GIMBAL OR MC02_FEATURE_SHOOTER))
     set(MC02_FEATURE_MOTOR_CONTROL 1)
 else()
@@ -141,7 +155,9 @@ else()
     set(MC02_CHASSIS_IS_OMNI 0)
 endif()
 set(MC02_BUILD_ROLE "${MC02_BOARD_ROLE}")
-if(MC02_PROFILE STREQUAL "commissioning")
+if(MC02_COMMISSIONING_CHASSIS)
+    set(MC02_BUILD_ROLE commission_base) # 固定 16 字节身份字段内区分受限底盘与观察。
+elseif(MC02_PROFILE STREQUAL "commissioning")
     set(MC02_BUILD_ROLE commissioning) # 身份记录区分受限调试和裸板。
 elseif(MC02_PROFILE STREQUAL "bench_safe")
     set(MC02_BUILD_ROLE bench)

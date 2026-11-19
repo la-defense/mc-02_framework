@@ -13,7 +13,7 @@
 #include "robot_power.h"
 #include "robot_can_guard.h"
 #include "robot_can_runtime.h"
-#if defined(MC02_CONFIG_GENERATED) && defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
+#if defined(MC02_CONFIG_GENERATED) && (defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
 #include "robot_can_recovery_coordinator.h"
 #include "robot_control_feedback_runtime.h"
 #endif
@@ -60,7 +60,7 @@
 #include "referee_task.h"
 #endif
 #endif
-#if defined(MC02_PROFILE_ROBOT)
+#if defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 #include "topics/robot_topics_diag.h"
 #endif
 #if MC02_BENCH_RC_DIAGNOSTICS
@@ -77,7 +77,9 @@
 #pragma message "check if you have configured the parameters in robot_def.h, IF NOT, please refer to the comments AND DO IT, otherwise the robot will have FATAL ERRORS!!!"
 #endif // !ROBOT_DEF_PARAM_WARNING
 
-#if MC02_FEATURE_COMMAND || defined(ONE_BOARD) || defined(GIMBAL_BOARD)
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+#include "commissioning_chassis_cmd.h"
+#elif MC02_FEATURE_COMMAND || defined(ONE_BOARD) || defined(GIMBAL_BOARD)
 #include "robot_cmd.h"
 #endif
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
@@ -121,7 +123,7 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
         return 0u;
 #endif
     case ROBOT_MODULE_COMMUNICATION:
-#if defined(MC02_PROFILE_ROBOT)
+#if defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 #if defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD)
         if (!PlatformFeatureCanReady(config->can_bridge.can_bus)) return 0u; // 双板桥接必须先有可用总线。
 #endif
@@ -130,7 +132,9 @@ static uint8_t RobotStartConfiguredModule(void *context, unsigned module)
         return 1u;
 #endif
     case ROBOT_MODULE_COMMAND:
-#if MC02_FEATURE_COMMAND
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+        return CommissioningChassisCmdInit(&config->manual_input); // 只登记人工底盘命令。
+#elif MC02_FEATURE_COMMAND
         return RobotCMDInit();
 #else
         return 0u;
@@ -299,6 +303,25 @@ uint8_t RobotInit(void)
                                     (uint16_t)config_status);
         goto init_failed;
     }
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    const RobotModulePlan_t *commissioning_modules = RobotBuildGetPlan(); // 与设备启动共享车型清单。
+    const RobotControlPolicy_t commissioning_policy = {
+        .enabled_functions = ROBOT_CONTROL_CHASSIS, // 仅允许轮组取得许可。
+        .configured = 1u, // 车型配置读取成功后才按此启用策略。
+        .formal_autonomous = 0u, // 受限调试没有自主控制资格。
+        .commissioning = 1u, // 策略只接受人工来源。
+    };
+    RobotCanMotorPlan_t wheel_feedback = {0}; // 在注册设备前准备四轮身份。
+    if (!RobotCanMotorPlanBuild(robot_config, commissioning_modules, &wheel_feedback) ||
+        !RobotControlFeedbackStart(&wheel_feedback) ||
+        !RobotSafetyConfigureControl(&commissioning_policy) ||
+        !RobotCanRecoveryStart(robot_config, commissioning_modules))
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
+                                    INIT_FAILURE_DEPENDENCY, 0u); // 禁止未完整绑定的人工许可进入设备启动。
+        goto init_failed;
+    }
+#endif
     BSP_ResetRecoveryState_t recovery_state = {0};
     const uint8_t recovery_state_valid = BSP_ResetRecoveryGetState(&recovery_state);
     if (recovery_state_valid == 0u || recovery_state.locked_out != 0u)
@@ -367,7 +390,7 @@ uint8_t RobotInit(void)
     };
     ParamSetLongOperationGuard(&param_guard);
 
-#if defined(MC02_PROFILE_ROBOT)
+#if defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     // 日志诊断处理函数须在调度器启动前登记；实际话题仍由后续应用步骤建立。
     (void)RobotTopicsDiagnosticInit();
 #endif
@@ -432,7 +455,7 @@ uint8_t RobotInitializeApplications(void)
         InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, resource); // 记录预检失败。
         goto init_failed; // 核心资源不足时不注册业务设备。
     }
-#if defined(MC02_PROFILE_ROBOT)
+#if defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     if (!RobotCanRuntimeInstall(RobotBuildGetPlan(), can_demands, can_count))
     {
         InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT,
@@ -594,7 +617,10 @@ void RobotTask()
     if (RobotBuildModuleStarted(ROBOT_MODULE_GIMBAL))
         GimbalUpdateFeedback(); // 本轮命令读取刚采集的反馈，避免消耗整个 5 ms 周期。
 #endif
-#if MC02_FEATURE_COMMAND
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    if (RobotBuildModuleStarted(ROBOT_MODULE_COMMAND))
+        CommissioningChassisCmdTask(); // 由同一个整车任务处理人工来源。
+#elif MC02_FEATURE_COMMAND
     if (RobotBuildModuleStarted(ROBOT_MODULE_COMMAND))
         RobotCMDTask();
 #endif

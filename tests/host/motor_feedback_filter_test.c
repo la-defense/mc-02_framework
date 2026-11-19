@@ -258,20 +258,17 @@ static int recovery_coordinator_real_motors(void)
     RemoteControlSnapshot_s remote = {.remote_online = 1u, .radio_sequence = 1u,
         .radio_source_time_ms = 1u, .source_selection_generation = 1u};
     remote.input.rc.switch_left = RC_SW_DOWN;
-    MessageFreshness_t freshness = {.valid = 1u, .timestamp_ms = 1u};
-    TEST_CHECK(!RobotCanRecoveryCoordinatorStep(&coordinator, &remote, 0u, &freshness)); // 总线未恢复先记录基准。
+    TEST_CHECK(!RobotCanRecoveryCoordinatorStep(&coordinator, &remote, 0u, NULL)); // 纯底盘没有云台反馈，总线未恢复时仍先记录基准。
     recovery_bus_ok = 1u; // 测试模拟控制器重新可用。
     for (uint32_t ms = 2u; ms <= 102u; ms += 10u)
     {
         now_us = (uint64_t)ms * 1000u;
         for (unsigned i = 0u; i < 2u; ++i) receive(motors[i], ms * 480000u, ms, 0, 0);
         remote.radio_source_time_ms = ms; ++remote.radio_sequence; // 每轮交付真实意义上的新遥控帧。
-        freshness.timestamp_ms = ms; // 云台反馈同步保持有效。
-        TEST_CHECK(!RobotCanRecoveryCoordinatorStep(&coordinator, &remote, 0u, &freshness)); // 稳定结束时仍不得使用旧命令。
+        TEST_CHECK(!RobotCanRecoveryCoordinatorStep(&coordinator, &remote, 0u, NULL)); // 稳定结束时仍不得使用旧命令。
     }
     now_us = 103000u; remote.radio_source_time_ms = 103u; ++remote.radio_sequence;
-    freshness.timestamp_ms = 103u;
-    TEST_CHECK(RobotCanRecoveryCoordinatorStep(&coordinator, &remote, 0u, &freshness)); // 稳定后的新命令允许尝试解除。
+    TEST_CHECK(RobotCanRecoveryCoordinatorStep(&coordinator, &remote, 0u, NULL)); // 无云台时仍须等待真实的轮组反馈与新命令。
     TEST_CHECK((RobotSafetyGetFaults() & ROBOT_FAULT_CAN_BUSOFF) == 0u); // 真正的安全管理已清除故障。
     return EXIT_SUCCESS;
 }

@@ -25,8 +25,10 @@
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
 #include "chassis.h"
 #endif
-#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
+#if MC02_FEATURE_GIMBAL && (defined(ONE_BOARD) || defined(GIMBAL_BOARD))
 #include "gimbal.h"
+#endif
+#if MC02_FEATURE_SHOOTER && (defined(ONE_BOARD) || defined(GIMBAL_BOARD))
 #include "shoot.h"
 #endif
 #include "platform_can.h"
@@ -530,11 +532,15 @@ static void draw_page0_values(void)
     draw_value_ascii(5, "RC:--");
 #endif
 
+#if MC02_FEATURE_VISION
     Vision_Status_t vs;
     VisionGetStatus(&vs);
     snprintf(buf, sizeof(buf), "%s M:%u A:%lums", vs.online ? "ON" : "OFF",
              (unsigned)vs.mode, (unsigned long)(vs.online ? (PlatformTimeNowMs() - vs.last_rx_ms) : 0u));
     draw_value_ascii(6, buf);
+#else
+    draw_value_ascii(6, "--"); // 当前固件没有视觉来源，只显示占位。
+#endif
 
     snprintf(buf, sizeof(buf), "RUN:%s RST:%s", BSP_WatchdogIsRunning() ? "Y" : "N",
              BSP_WatchdogWasIwdgReset() ? "Y" : "N");
@@ -707,24 +713,25 @@ static void draw_page3_values(void)
     draw_value_ascii(0, "--");
     draw_value_ascii(3, "--");
 #endif
-#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
+#if MC02_FEATURE_GIMBAL && (defined(ONE_BOARD) || defined(GIMBAL_BOARD))
     Gimbal_Motor_Summary_t gs = {0};
-    Shoot_Motor_Summary_t ss = {0};
     Gimbal_GetMotorSummary(&gs);
-    Shoot_GetMotorSummary(&ss);
-
     snprintf(buf, sizeof(buf), "Y:%s P:%s", gs.yaw.online ? "1" : "0", gs.pitch.online ? "1" : "0");
     draw_value_ascii(1, buf);
-    snprintf(buf, sizeof(buf), "FL:%s FR:%s LDR:%s", ss.friction_l.online ? "1" : "0",
-             ss.friction_r.online ? "1" : "0", ss.loader.online ? "1" : "0");
-    draw_value_ascii(2, buf);
     snprintf(buf, sizeof(buf), "spd:%ld cur:%d", (long)gs.yaw.speed_aps, (int)gs.yaw.current);
     draw_value_ascii(4, buf);
 #else
-    // 当前角色不编译云台和发射应用，显示占位并保持其余总线诊断可用。
-    draw_value_ascii(1, "--");
-    draw_value_ascii(2, "--");
+    draw_value_ascii(1, "--"); // 未启用的模块保留页面位置，不读取应用入口。
     draw_value_ascii(4, "--");
+#endif
+#if MC02_FEATURE_SHOOTER && (defined(ONE_BOARD) || defined(GIMBAL_BOARD))
+    Shoot_Motor_Summary_t ss = {0};
+    Shoot_GetMotorSummary(&ss);
+    snprintf(buf, sizeof(buf), "FL:%s FR:%s LDR:%s", ss.friction_l.online ? "1" : "0",
+             ss.friction_r.online ? "1" : "0", ss.loader.online ? "1" : "0");
+    draw_value_ascii(2, buf);
+#else
+    draw_value_ascii(2, "--"); // 发射模块未启用时不链接其诊断入口。
 #endif
 #if defined(ONE_BOARD) || defined(CHASSIS_BOARD)
     snprintf(buf, sizeof(buf), "%s %s %s %s", cs.lf.online ? "1" : "0", cs.rf.online ? "1" : "0",
@@ -741,11 +748,15 @@ static void draw_page3_values(void)
              can_status_str(c2), can_status_str(c3));
     draw_value_ascii(5, buf);
 
+#if MC02_FEATURE_VISION
     Vision_Status_t vs;
     VisionGetStatus(&vs);
     snprintf(buf, sizeof(buf), "%s M:%u BC:%u", vs.online ? "ON" : "OFF",
              (unsigned)vs.mode, (unsigned)vs.bullet_count);
     draw_value_ascii(6, buf);
+#else
+    draw_value_ascii(6, "--"); // 没有视觉链路时不读取状态。
+#endif
 
     /* 五向按键原始 ADC 值: 用于把摇杆方向与阈值对上(按一下即可读出)。
        min 是"上电以来见过的最小原始值" —— 摇杆中键按下时 ADC 会趋近 0,

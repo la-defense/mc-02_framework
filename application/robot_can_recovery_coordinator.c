@@ -28,6 +28,7 @@ uint8_t RobotCanRecoveryCoordinatorInit(RobotCanRecoveryCoordinator_t *state,
         .stable_ms = config->can_recovery.feedback_stable_ms, // 使用车型确认的毫秒值。
     };
     if (!CanRecoveryTimedInit(&candidate.timing, &timing)) return 0u; // 时间或反馈位无效时不交付。
+    candidate.require_gimbal_feedback = (modules->enabled & ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL)) != 0u; // 纯底盘车型只检查已有核心来源。
     candidate.enabled = 1u; // 完整配置通过后才允许运行检查。
     *state = candidate; // 一次交付完整上下文。
     return 1u;
@@ -83,8 +84,8 @@ uint8_t RobotCanRecoveryCoordinatorStep(RobotCanRecoveryCoordinator_t *state,
     input.core.now_ms = PlatformTimeNowMs(); // 反馈和来源均使用本机毫秒。
     input.core.inhibit_generation = state->inhibit_generation; // 短暂禁止不能被跳过。
     input.core.bus_ok = (uint8_t)(bus_read && bus.core_bus_mask != 0u && bus.core_bus_mask == bus.ready_bus_mask); // 每条核心总线都必须可用。
-    input.core.permit_ok = (uint8_t)(MessageFreshnessIsValid(application_feedback, input.core.now_ms,
-        MESSAGE_DEFAULT_MAX_AGE_MS) && !formal_autonomous &&
+    input.core.permit_ok = (uint8_t)((!state->require_gimbal_feedback || MessageFreshnessIsValid(application_feedback, input.core.now_ms,
+        MESSAGE_DEFAULT_MAX_AGE_MS)) && !formal_autonomous &&
         RobotSafetyCanRecover(safety.control_generation)); // 自主来源未接入时也中断已有的人工恢复等待。
     uint32_t registered_mask = 0u; // 最终检查仅覆盖车型的必需设备。
     if (DJIMotorGetRecoveryFeedback(input.core.now_ms, &state->feedback))
@@ -112,8 +113,8 @@ uint8_t RobotCanRecoveryCoordinatorStep(RobotCanRecoveryCoordinator_t *state,
             !PlatformCanRecoveryStillReady((PlatformCanBus_t)((unsigned)PLATFORM_CAN_BUS_1 + index)))
             buses_ready = 0u; // 任何控制器退出、隔离或报错都不能恢复。
     const uint32_t now = PlatformTimeNowMs(); // 控制器检查结束后再次读取期限所用时间。
-    const uint8_t application_current = MessageFreshnessIsValid(application_feedback, now,
-        MESSAGE_DEFAULT_MAX_AGE_MS); // 最终时刻也必须满足原始反馈期限。
+    const uint8_t application_current = (uint8_t)(!state->require_gimbal_feedback ||
+        MessageFreshnessIsValid(application_feedback, now, MESSAGE_DEFAULT_MAX_AGE_MS)); // 需要云台反馈时最后再次校验原期限。
     const uint8_t motors_current = DJIMotorRecoveryStillValid(&state->feedback, registered_mask, now); // 复核当前反馈、间断和设备身份。
     const uint8_t remote_current = RemoteControlRecoveryStillValid(remote, now); // 复核本次人工来源及其期限。
     uint8_t cleared = 0u; // 检查失败默认保持故障。

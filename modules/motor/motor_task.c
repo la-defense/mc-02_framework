@@ -69,7 +69,9 @@ static void MotorTaskStep(uint8_t compute_due, uint8_t transmit_due)
 #endif
     // UART 和 USB 也在这里运行模块解析，避免将协议计算放在中断里；排队过时的数据由 BSP 跳过。
     PlatformDispatchUartRx();
+#if !defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     (void)USBTransportProcessRx();
+#endif
 
     // 裁判 UART 已完成本轮解析后，再由电机任务处理有界离线恢复事件。
     (void)DaemonProcessTaskEvents(DAEMON_CONSUMER_MOTOR_TASK, DAEMON_EVENT_MAX_DEPTH, NULL);

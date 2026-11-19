@@ -13,6 +13,11 @@ ACTUATORS = {
     "DJIMotorInit", "DJIMotorControl", "LKMotorInit", "LKMotorControl",
     "HTMotorInit", "HTMotorControlInit", "DMMotorInit", "DMMotorControlInit",
     "XMMotorInit", "XMMotorControlInit", "ServoInit", "ServoSetAngle",
+    "CommissioningChassisCmdInit", "CommissioningChassisCmdTask",
+}
+COMMISSIONING_CHASSIS_ACTUATORS = {
+    "ChassisInit", "ChassisTask", "DJIMotorInit", "DJIMotorControl",
+    "CommissioningChassisCmdInit", "CommissioningChassisCmdTask",
 }
 CONSUMERS = {"CANProcessRx", "USARTProcessRx", "USBTransportProcessRx", "USBTransportProcess", "MotorControlTask"}
 ROLE_INITIALIZERS = {
@@ -114,6 +119,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/remote/remote_bench.c",  # 裸板遥控诊断。
     "modules/master_machine/vision_protocol_v2.c",  # V2 协议编解码。
     "application/chassis/chassis_motion.c",  # 模式、坐标和轮速目标计算。
+    "application/cmd/commissioning_chassis_cmd.c",  # 受限底盘专用人工命令。
     "application/chassis/chassis_kinematics.c",  # 轮组几何和运动映射。
     "application/chassis/mecanum.c",  # 麦轮几何适配。
     "application/chassis/omni.c",  # 全向轮几何适配。
@@ -139,6 +145,8 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "application/robot_can_runtime.c",  # 按车型核心依赖通知运行期总线故障。
     "application/robot_can_motor_recovery.c",  # 核对车型核心电机的恢复反馈。
     "application/robot_can_recovery_coordinator.c",  # 组合单板人工输入和核心反馈的恢复检查。
+    "application/robot_control_feedback.c",  # 逐台核对来源，按用途交付反馈期限。
+    "application/robot_control_feedback_runtime.c",  # 启动时绑定并在周期中提交反馈。
     "application/robot_can_requirements.c",  # 统计车型声明的设备需求。
     "application/robot_param_guard.c",  # 参数维护与温控、监控的配合。
     "application/robot_power.c",  # 受控电源阶段及模块失败传播。
@@ -170,6 +178,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("elf", type=Path)
     parser.add_argument("--profile", choices=("bench_safe", "commissioning", "robot"), required=True)
+    parser.add_argument("--commissioning-target", choices=("observe", "chassis"), default="observe")
     parser.add_argument("--role", choices=("single", "chassis", "gimbal"), default="single")
     parser.add_argument("--vision-transport", choices=("usb", "uart"), default="usb")
     parser.add_argument("--ui-disabled", action="store_true", help="确认裁判UI源码未进入本配置")
@@ -179,6 +188,11 @@ def main():
     parser.add_argument("--referee-diagnostics", action="store_true")
     parser.add_argument("--usb-diagnostics", action="store_true")
     args = parser.parse_args()
+    chassis_commissioning = args.profile == "commissioning" and args.commissioning_target == "chassis"
+    if args.commissioning_target != "observe" and args.profile != "commissioning":
+        parser.error("commissioning target requires the commissioning profile")
+    if chassis_commissioning and args.rc_diagnostics:
+        parser.error("remote observation cannot be included in the commissioning chassis profile")
     if args.usb_diagnostics and (args.profile != "bench_safe" or args.role != "single" or
                                 args.vision_transport != "usb" or "_usbtest_" not in args.elf.name or
                                 args.rc_diagnostics or args.referee_diagnostics):
@@ -187,7 +201,8 @@ def main():
         parser.error("referee diagnostics require the separate named bench_safe artifact")
     if args.rc_diagnostics and (args.profile not in ("bench_safe", "commissioning") or "rcdiag" not in args.elf.name):
         parser.error("remote diagnostics require the named non-actuating diagnostic artifact")
-    expected_suffix = ("_commissioning_observe_rcdiag.elf" if args.rc_diagnostics
+    expected_suffix = ("_commissioning_chassis.elf" if chassis_commissioning else
+                       "_commissioning_observe_rcdiag.elf" if args.rc_diagnostics
                        else "_commissioning_observe.elf") if args.profile == "commissioning" else "_" + args.profile + ".elf"
     if not args.elf.name.endswith(expected_suffix):
         parser.error("ELF output name does not match the requested profile")
@@ -197,8 +212,12 @@ def main():
     symbols = {line.split()[-1] for line in result.stdout.splitlines() if len(line.split()) >= 3}
     functions = {line.split()[-1] for line in result.stdout.splitlines() if len(line.split()) >= 3 and line.split()[-2] in ("T", "t")}
     missing = CONSUMERS - functions
-    if args.profile == "robot" and "MotorTaskRunScheduled" in functions:
+    if (args.profile == "robot" or chassis_commissioning) and "MotorTaskRunScheduled" in functions:
         missing.discard("MotorControlTask")  # 分开拍点的正式电机任务仍独占通信派发。
+    if chassis_commissioning:
+        missing -= {"USBTransportProcess", "USBTransportProcessRx"}  # 不启动或派发上位机链路。
+        missing |= (COMMISSIONING_CHASSIS_ACTUATORS |
+                    {"MotorTaskRunScheduled", "StartCHASSISTASK", "RobotCanRuntimeInstall"}) - functions
     # 当前工程用 ELF 文件名和 CMake 选择报告标识配置；旧的全局标记从未由源码定义。
     missing |= STARTUP_DIAGNOSTICS - symbols
     if args.profile == "robot":
@@ -218,18 +237,25 @@ def main():
         missing |= {"RefereeBenchInit", "RefereeBenchTask", "RefereeInit", "RefereeSubmit", "referee_bench_diag"} - symbols
     elif "referee_bench_diag" in symbols:
         raise SystemExit("normal profile contains automatic referee diagnostic traffic")
-    forbidden = ACTUATORS & functions if args.profile in ("bench_safe", "commissioning") else ROLE_FORBIDDEN[args.role] & functions
+    if chassis_commissioning:
+        forbidden = ((ACTUATORS - COMMISSIONING_CHASSIS_ACTUATORS) |
+                     {"VisionInit", "VisionSend", "MX_USB_DEVICE_Init", "USBTransportProcess",
+                      "USBTransportProcessRx", "RemoteBenchTask"}) & functions  # 仅链接人工底盘控制。
+    elif args.profile in ("bench_safe", "commissioning"):
+        forbidden = ACTUATORS & functions
+    else:
+        forbidden = (ROLE_FORBIDDEN[args.role] | {"CommissioningChassisCmdInit", "CommissioningChassisCmdTask"}) & functions
     if missing or forbidden:
         raise SystemExit(f"profile check failed: missing={sorted(missing)}, forbidden={sorted(forbidden)}")
 
     if args.build_dir is not None:
         check_source_selection(args.build_dir.resolve(), args.profile, args.role,
-                               args.vision_transport, args.ui_disabled)
+                               args.vision_transport, args.ui_disabled, args.commissioning_target)
     print(f"PASS: {args.profile}/{args.role} linked profile, receive consumers, and selected sources: {args.elf}")
 
 
 def check_source_selection(build_dir: Path, profile: str, role: str,
-                           vision_transport: str, ui_disabled: bool) -> None:
+                           vision_transport: str, ui_disabled: bool, commissioning_target: str = "observe") -> None:
     """与配置报告、编译数据库和 Ninja 命令逐一比较已登记源码。"""
     report = build_dir / "mc02-selected-sources.txt"
     database = build_dir / "compile_commands.json"
@@ -239,17 +265,27 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
     if (f"profile={profile}" not in lines or f"role={role}" not in lines
             or f"vision={vision_transport}" not in lines):
         raise SystemExit("selected-source report does not match the requested profile and role")
+    chassis_commissioning = profile == "commissioning" and commissioning_target == "chassis"
     if profile == "commissioning":
         # 同时检查生成身份与禁止输出的模块，不能只凭产物名称判断用途。
         config = (build_dir / "generated" / "mc02_build_config.h").read_text(encoding="utf-8")
-        if '#define MC02_BUILD_ROLE_NAME "commissioning"' not in config:
+        if f"commissioning_target={commissioning_target}" not in lines:
+            raise SystemExit("commissioning target does not match the selected-source report")
+        identity = "commission_base" if chassis_commissioning else "commissioning"
+        if f'#define MC02_BUILD_ROLE_NAME "{identity}"' not in config:
             raise SystemExit("commissioning build identity is missing")
-        for feature in ("COMMAND", "CHASSIS", "GIMBAL", "SHOOTER", "HEATER", "MOTOR_CONTROL"):
+        motion = ("COMMAND", "CHASSIS", "MOTOR_CONTROL")
+        disabled = ("GIMBAL", "SHOOTER", "HEATER") + (("VISION", "SUPERCAP", "UI") if chassis_commissioning else motion)
+        for feature in disabled:
             if f"#define MC02_FEATURE_{feature} 0" not in config:
-                raise SystemExit(f"commissioning observation unexpectedly enables {feature}")
+                raise SystemExit(f"commissioning unexpectedly enables {feature}")
+        if chassis_commissioning:
+            for feature in motion + ("REMOTE", "IMU", "COMM_DISPATCH"):
+                if f"#define MC02_FEATURE_{feature} 1" not in config:
+                    raise SystemExit(f"commissioning chassis unexpectedly disables {feature}")
         for rail in ("24V_1", "24V_2", "5V"):
             if f"#define MC02_POWER_{rail}_STAGE 0u" not in config:
-                raise SystemExit(f"commissioning observation unexpectedly enables {rail}")
+                raise SystemExit(f"commissioning unexpectedly enables {rail}")
     selected = {line for line in lines if line.endswith(".c")}
     if not PORTABLE_FRAMEWORK_SOURCES <= selected:
         raise SystemExit("selected-source report is missing a portable framework source")
@@ -286,12 +322,18 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         "chassis": {"application/gimbal/gimbal.c", "application/shoot/shoot.c", "application/cmd/robot_cmd.c"},
         "gimbal": {"application/chassis/chassis.c", "application/chassis/chassis_motion.c"},
     }
-    if profile in ("bench_safe", "commissioning"):
+    commissioning_source = "application/cmd/commissioning_chassis_cmd.c"
+    if chassis_commissioning:
+        missing |= {commissioning_source, "application/chassis/chassis.c",
+                    "modules/motor/DJImotor/dji_motor.c"} - compiled
+        unexpected |= (role_sources["chassis"] | {"modules/master_machine/master_process.c",
+                        "modules/master_machine/vision_control.c", "modules/remote/remote_bench.c"}) & compiled
+    elif profile in ("bench_safe", "commissioning"):
         unexpected |= {"application/chassis/chassis.c", "application/chassis/chassis_motion.c",
                        "application/gimbal/gimbal.c", "application/shoot/shoot.c",
-                       "application/cmd/robot_cmd.c"} & compiled
+                       "application/cmd/robot_cmd.c", commissioning_source} & compiled
     else:
-        unexpected |= role_sources[role] & compiled
+        unexpected |= (role_sources[role] | {commissioning_source}) & compiled
     selected_vision_macro = "VISION_USE_VCP" if vision_transport == "usb" else "VISION_USE_UART"
     rejected_vision_macro = "VISION_USE_UART" if vision_transport == "usb" else "VISION_USE_VCP"
     if not any(selected_vision_macro in command for command in compiler_commands):
@@ -530,6 +572,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/chassis/omni.h",
                         source_root / "application/chassis/mecanum.h",
                         source_root / "application/cmd/robot_cmd.h",
+                        source_root / "application/cmd/commissioning_chassis_cmd.h",  # 受限人工底盘发布接口。
                         source_root / "application/cmd/robot_manual_motion.h",  # 人工目标的单位转换接口。
                         source_root / "modules/standard_cmd/std_cmd.h",  # 不依赖平台的人工意图定义。
                         source_root / "modules/standard_cmd/std_cmd_remote.h",  # 遥控输入映射接口。
@@ -544,6 +587,8 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/robot_can_runtime.h",  # 运行期核心总线故障入口。
                         source_root / "application/robot_can_motor_recovery.h",  # 核心电机恢复身份匹配。
                         source_root / "application/robot_can_recovery_coordinator.h",  # 单板人工恢复协调接口。
+                        source_root / "application/robot_control_feedback.h",  # 按用途汇总反馈。
+                        source_root / "application/robot_control_feedback_runtime.h",  # 反馈绑定和周期提交。
                         source_root / "application/robot_can_requirements.h",  # 车型设备需求入口。
                         source_root / "application/robot_param_guard.h",  # 维护操作公开回调。
                         source_root / "application/robot_power.h",  # 模块电源阶段声明。

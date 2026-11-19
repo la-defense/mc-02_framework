@@ -6,8 +6,10 @@
 
 #include "message_center.h"
 #include "../robot_def.h"
+#if !defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 #include "vision_protocol_v2.h"
 #include "vision_imu_sample.h"
+#endif
 
 #define ENDPOINT_MASK(endpoint) (1u << ((endpoint) - 1u))
 #define SNAPSHOT_TOPIC(id, type, age, clock, publisher, subscriber) \
@@ -38,6 +40,7 @@ static const MessageTopicDescriptor_t robot_topics[] = {
                    MESSAGE_CLOCK_LOCAL, ROBOT_TOPIC_ENDPOINT_CHASSIS,
                    ROBOT_TOPIC_ENDPOINT_COMMAND),
 #endif
+#if !defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     SNAPSHOT_TOPIC(ROBOT_TOPIC_GIMBAL_COMMAND, Gimbal_Ctrl_Cmd_s, 50u,
                    MESSAGE_CLOCK_LOCAL, ROBOT_TOPIC_ENDPOINT_COMMAND,
                    ROBOT_TOPIC_ENDPOINT_GIMBAL),
@@ -60,6 +63,7 @@ static const MessageTopicDescriptor_t robot_topics[] = {
     SNAPSHOT_TOPIC(ROBOT_TOPIC_VISION_IMU_SAMPLE, VisionIMUSample_t, 300u,
                    MESSAGE_CLOCK_LOCAL, ROBOT_TOPIC_ENDPOINT_INS,
                    ROBOT_TOPIC_ENDPOINT_VISION),
+#endif
 };
 
 uint8_t RobotTopicsInit(void)

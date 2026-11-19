@@ -8,6 +8,9 @@
 #include "config/build_selection.h"
 #if defined(MC02_CONFIG_GENERATED)
 #include "config/vehicle_selection.h"
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+#include "config.h"
+#endif
 #endif
 #include <stddef.h>
 #include <math.h>
@@ -33,7 +36,8 @@ VehicleHealthStatus_t VehicleHealthGetBuildProfile(VehicleHealthBuildProfile_t *
 #if defined(MC02_CONFIG_GENERATED)
     if (strcmp(MC02_BUILD_ROLE_NAME, "bench") == 0)
         candidate.role = VEHICLE_HEALTH_ROLE_BENCH;
-    else if (strcmp(MC02_BUILD_ROLE_NAME, "commissioning") == 0)
+    else if (strcmp(MC02_BUILD_ROLE_NAME, "commissioning") == 0 ||
+             strcmp(MC02_BUILD_ROLE_NAME, "commission_base") == 0)
         candidate.role = VEHICLE_HEALTH_ROLE_COMMISSIONING;
     else if (strcmp(MC02_BUILD_ROLE_NAME, "chassis") == 0)
         candidate.role = VEHICLE_HEALTH_ROLE_CHASSIS;
@@ -62,19 +66,30 @@ VehicleHealthStatus_t VehicleHealthGetBuildProfile(VehicleHealthBuildProfile_t *
     ADD_IF_ENABLED(MC02_FEATURE_UI, VEHICLE_HEALTH_MODULE_UI);
     ADD_IF_ENABLED(MC02_FEATURE_SUPERCAP, VEHICLE_HEALTH_MODULE_SUPERCAP);
 #undef ADD_IF_ENABLED
-#if defined(VISION_USE_VCP) && \
+#if !defined(MC02_PROFILE_COMMISSIONING_CHASSIS) && defined(VISION_USE_VCP) && \
     (MC02_FEATURE_VISION || MC02_FEATURE_REMOTE || MC02_FEATURE_COMMAND)
     AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_USB);
 #endif
 #if defined(MC02_BENCH_USB_DIAGNOSTICS) && MC02_BENCH_USB_DIAGNOSTICS
     AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_USB);
 #endif
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    const Chassis_Config_s *chassis = ChassisConfigFeed(); // 只显示运动车型实际接到的轮组总线。
+    if (chassis != NULL)
+    {
+        const PlatformCanBus_t bus = chassis->chassis_motor_config.can_init_config.can_bus; // 与预检的逻辑编号一致。
+        if (bus >= PLATFORM_CAN_BUS_1 && bus <= PLATFORM_CAN_BUS_3)
+            AddModule(&candidate.enabled_modules,
+                (VehicleHealthModule_t)(VEHICLE_HEALTH_MODULE_CAN1 + (unsigned)bus - PLATFORM_CAN_BUS_1)); // 三条总线的健康编号连续。
+    }
+#else
     if (candidate.role != VEHICLE_HEALTH_ROLE_BENCH && candidate.role != VEHICLE_HEALTH_ROLE_COMMISSIONING)
     {
         AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_CAN1);
         AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_CAN2);
         AddModule(&candidate.enabled_modules, VEHICLE_HEALTH_MODULE_CAN3);
     }
+#endif
 #else
 #if defined(MC02_PROFILE_BENCH_SAFE)
     candidate.role = VEHICLE_HEALTH_ROLE_BENCH;

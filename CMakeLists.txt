@@ -51,13 +51,18 @@ if(MC02_PROFILE STREQUAL "commissioning")
     if(NOT MC02_COMMISSIONING_TARGET MATCHES "^(observe|chassis|gimbal|both)$")
         message(FATAL_ERROR "Commissioning target is invalid")
     endif()
-    if(NOT MC02_COMMISSIONING_TARGET STREQUAL "observe")
+    if(MC02_COMMISSIONING_TARGET MATCHES "^(gimbal|both)$")
         message(FATAL_ERROR "Commissioning motion requires confirmed mechanical limits and completed control integration: APP-10 / MC02-0144")
     endif()
     if(NOT MC02_BOARD_ROLE STREQUAL "single")
         message(FATAL_ERROR "Commissioning currently supports the single MC-02 only")
     endif()
     add_compile_definitions(MC02_PROFILE_COMMISSIONING=1) # 独立标识，用于身份和后续调试入口。
+endif()
+set(MC02_COMMISSIONING_CHASSIS FALSE) # 只在受限调试中为底盘目标选择独立命令路径。
+if(MC02_PROFILE STREQUAL "commissioning" AND MC02_COMMISSIONING_TARGET STREQUAL "chassis")
+    set(MC02_COMMISSIONING_CHASSIS TRUE) # 模块选择、编译宏与固件名称共用同一个判断。
+    add_compile_definitions(MC02_PROFILE_COMMISSIONING_CHASSIS=1 ONE_BOARD) # 受限底盘只使用单板安全与 CAN 发送路径。
 endif()
 if(NOT MC02_BOARD_ROLE MATCHES "^(single|chassis|gimbal)$")
     message(FATAL_ERROR "MC02_BOARD_ROLE 必须是 single、chassis 或 gimbal")
@@ -101,6 +106,8 @@ if(MC02_PROFILE STREQUAL "robot" AND MC02_ENABLE_HEATER)
 else()
     if(MC02_PROFILE STREQUAL "robot")
         add_compile_definitions(MC02_PROFILE_ROBOT=1 MC02_HEATER_ENABLED=0)
+    elseif(MC02_COMMISSIONING_CHASSIS)
+        add_compile_definitions(MC02_HEATER_ENABLED=0) # 受限底盘不申请 IMU 加热输出。
     else()
         add_compile_definitions(MC02_PROFILE_BENCH_SAFE=1 MC02_HEATER_ENABLED=0)
     endif()
@@ -125,7 +132,7 @@ if(MC02_ENABLE_REFEREE_UI AND (NOT MC02_PROFILE STREQUAL "robot" OR MC02_BOARD_R
     message(FATAL_ERROR "裁判 UI 仅允许 robot 的 single/chassis 角色启用")
 endif()
 
-if(MC02_BENCH_RC_DIAGNOSTICS AND MC02_PROFILE STREQUAL "robot")
+if(MC02_BENCH_RC_DIAGNOSTICS AND (MC02_PROFILE STREQUAL "robot" OR MC02_COMMISSIONING_CHASSIS))
     message(FATAL_ERROR "遥控观察仅允许 bench_safe 或 commissioning 观察配置")
 endif()
 if(MC02_BENCH_REFEREE_DIAGNOSTICS AND (NOT MC02_PROFILE STREQUAL "bench_safe" OR MC02_BENCH_RC_DIAGNOSTICS))
@@ -198,7 +205,9 @@ endif()
 include(cmake/mc02_configure_vehicle.cmake)
 # 源码清单读取已经解析并校验过的配置，确保协议和板级角色只编译所选实现。
 include(cmake/mc02_firmware_sources.cmake)
-if(MC02_PROFILE STREQUAL "commissioning")
+if(MC02_COMMISSIONING_CHASSIS)
+    set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_commissioning_chassis") # 受限运动与只读观察分别命名。
+elseif(MC02_PROFILE STREQUAL "commissioning")
     set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_commissioning_observe") # 产物名称不能与裸板或生产固件混淆。
 elseif(MC02_PROFILE STREQUAL "bench_safe")
     set(MC02_OUTPUT_BASENAME "${PROJECT_NAME}_bench_safe")
@@ -288,6 +297,7 @@ set(MC02_PLATFORM_INCLUDE_DIRS
 set(MC02_INCLUDE_DIRS ${MC02_PLATFORM_INCLUDE_DIRS} ${MC02_EXTRA_INCLUDE_DIRS}
     application/config application/chassis modules/referee modules/remote
     modules/motor/DJImotor modules/motor/HTmotor modules/motor/LKmotor
+    modules/master_machine # 公共消息仍使用头文件中的兼容类型，受限底盘不链接视觉实现。
     modules/super_cap modules/lcd modules/alarm)
 foreach(source IN LISTS MC02_SELECTED_SOURCES)
     get_filename_component(source_dir "${source}" DIRECTORY)
@@ -406,7 +416,8 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/lcd/lcd_referee_rows.c # 裁判数据显示行格式化。
     modules/lcd/lcd_ui.c # LCD 页面只读取框架状态接口。
     modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
-    application/robot_task_create.c) # 已选任务的创建与失败处理。
+    application/robot_task_create.c # 已选任务的创建与失败处理。
+    application/cmd/commissioning_chassis_cmd.c) # 受限底盘的输入与消息均走可移植接口。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
     if(source IN_LIST MC02_SELECTED_SOURCES)
         list(APPEND MC02_PORTABLE_FRAMEWORK_SOURCES "${source}")
@@ -522,7 +533,7 @@ add_custom_command(TARGET ${MC02_OUTPUT_BASENAME}.elf POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${MC02_OUTPUT_BASENAME}.elf> ${PROJECT_BINARY_DIR}/${MC02_OUTPUT_BASENAME}.bin
     COMMAND ${SIZE} $<TARGET_FILE:${MC02_OUTPUT_BASENAME}.elf>)
 
-file(WRITE "${CMAKE_BINARY_DIR}/mc02-selected-sources.txt" "profile=${MC02_PROFILE}\nrole=${MC02_BOARD_ROLE}\nvision=${MC02_VISION_TRANSPORT}\nvision_protocol=${MC02_VISION_PROTOCOL}\nimu_backend=${MC02_IMU_BACKEND}\ntarget=${MC02_OUTPUT_BASENAME}.elf\n")
+file(WRITE "${CMAKE_BINARY_DIR}/mc02-selected-sources.txt" "profile=${MC02_PROFILE}\nrole=${MC02_BOARD_ROLE}\ncommissioning_target=${MC02_COMMISSIONING_TARGET}\nvision=${MC02_VISION_TRANSPORT}\nvision_protocol=${MC02_VISION_PROTOCOL}\nimu_backend=${MC02_IMU_BACKEND}\ntarget=${MC02_OUTPUT_BASENAME}.elf\n")
 foreach(source IN LISTS MC02_SELECTED_SOURCES)
     file(APPEND "${CMAKE_BINARY_DIR}/mc02-selected-sources.txt" "${source}\n")
 endforeach()
