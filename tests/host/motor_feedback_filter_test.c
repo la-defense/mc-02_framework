@@ -586,6 +586,62 @@ static int single_chassis_reference_expiry(void)
 }
 
 // 即使同组电机仍在线，一台电机的短暂测量异常也必须清掉它的排队目标。
+// 在同一个整车安全代际内复现底盘单轮停止并重新启用。
+static int single_chassis_queued_stop(void)
+{
+    now_us = 1000u;
+    RobotSafetyInit();
+    RobotSafetySetRcOnline(1u);
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate();
+    RobotSafetySnapshot_t safety;
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+
+    Motor_Init_Config_s config = motor_config(1u); // 两台底盘电机共享一个发送帧。
+    config.output_role = MOTOR_OUTPUT_CHASSIS;
+    DJIMotorInstance *first = DJIMotorInit(&config);
+    config.can_init_config.tx_id = 2u; // 第二台占用另外两个字节。
+    DJIMotorInstance *second = DJIMotorInit(&config);
+    TEST_CHECK(first != NULL && second != NULL);
+    TEST_CHECK(DJIMotorSetChassisRefUntil(first, 10.0f, safety.control_generation, 15u));
+    TEST_CHECK(DJIMotorSetChassisRefUntil(second, 9.0f, safety.control_generation, 15u));
+    DJIMotorEnable(first);
+    DJIMotorEnable(second);
+    receive(first, 960000u, 2u, 0, 0);
+    receive(second, 960000u, 2u, 0, 0);
+    control_at(3000u); // 建立 PID 时间基准。
+    control_at(4000u); // 生成两个仍有效的非零目标。
+    TEST_CHECK(deferred_prepare != NULL && (deferred_payload[0] || deferred_payload[1]) &&
+        (deferred_payload[2] || deferred_payload[3]));
+
+    DJIMotorStop(first); // 队列尚未发送，也没有经过新的控制周期。
+    DJIMotorEnable(first); // 仅改回运行标记，旧目标应保持撤销。
+    now_us = 5000u;
+    uint8_t queued[8]; // 保留原帧，以便再次模拟同一队列项。
+    memcpy(queued, deferred_payload, sizeof(queued));
+    deferred_prepare(deferred_source, HAL_GetTick(), queued, sizeof(queued));
+    TEST_CHECK(!(queued[0] || queued[1]) && (queued[2] || queued[3])); // 只有被停止的轮位清零。
+
+    reject_periodic = 1u; // 新目标算完后仍可能不能替换队列。
+    TEST_CHECK(DJIMotorSetChassisRefUntil(first, 20.0f, safety.control_generation, 15u));
+    control_at(6000u);
+    memcpy(queued, deferred_payload, sizeof(queued));
+    deferred_prepare(deferred_source, HAL_GetTick(), queued, sizeof(queued));
+    TEST_CHECK(!(queued[0] || queued[1]) && (queued[2] || queued[3])); // 新参考不能重新授权旧帧。
+
+    reject_periodic = 0u;
+    control_at(7000u);
+    TEST_CHECK((sent[0] || sent[1]) && (sent[2] || sent[3])); // 成功入队的新目标可以通过检查。
+    DJIMotorStop(first);
+    DJIMotorEnable(first);
+    control_at(8000u);
+    TEST_CHECK(!(sent[0] || sent[1]) && (sent[2] || sent[3])); // 光重新启用也不能再次计算旧参考。
+    return EXIT_SUCCESS;
+}
+
 static int single_queued_feedback_gap(void)
 {
     now_us = 1000u; // 所有安全条件使用测试本机时间。
@@ -1409,6 +1465,8 @@ int main(int argc, char **argv)
         return single_queued_feedback_expiry();
     if (strcmp(argv[1], "single-chassis-reference-expiry") == 0)
         return single_chassis_reference_expiry();
+    if (strcmp(argv[1], "single-chassis-queued-stop") == 0)
+        return single_chassis_queued_stop();
     if (strcmp(argv[1], "single-queued-feedback-gap") == 0)
         return single_queued_feedback_gap();
     if (strcmp(argv[1], "single-queued-external-expiry") == 0)

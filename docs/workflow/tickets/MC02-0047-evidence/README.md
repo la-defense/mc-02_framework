@@ -62,3 +62,10 @@ DJI 内部反馈期限补充：使用真实电机控制代码和测试 CAN 输�
 - 生产 DJI 驱动在计算前检查该期限，并把它计入排队目标的最早截止点。测试把毫秒计数推过回绕，验证排队目标在边界仍有效，下一毫秒清零，即使此时已有更新且有效的电机反馈。过期命令重提失败，新命令可重新产生输出。
 - 单板和底盘板的底盘与 DJI 驱动通过独立 ARM 编译。单板 `DJIMotorControl` 静态栈帧由 600 B 增至 608 B，`ChassisTask` 和发送前回调仍为 256 B 和 48 B。底盘板对应任务和电机计算栈帧仍为 280 B 和 184 B。未测板上耗时、调用链峰值或物理停止时延。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 通过。WSL Debug 和 Release 各通过 826 项，相关 ASan／UBSan 通过 9 项。普通禁热与遥控诊断 Debug 通过构建和链接隔离检查，FLASH 分别为 257356 B 和 260900 B，两种固件均未链接本次修改的底盘及 DJI 驱动。六种生产构建继续因核心配置未确认而拒绝。
+
+## 单板底盘停止后撤销排队目标
+
+- 修复前，`production_dji_single_chassis_queued_stop` 在停止后立即重新启用的场景失败，旧帧的停止轮位仍为非零。修复后，同帧只撤销受影响的轮位。测试同时验证队列拒绝替换时旧帧仍被拦截、新目标成功入队后可以发送，以及仅重新启用无法继续计算已撤销的参考。
+- WSL Debug 相关场景通过 7 项，ASan／UBSan 通过 8 项。Cortex-M7 使用同一组 Debug 编译选项单独编译基线和当前驱动。单板对象的 text、bss 分别增加 102 B 和 144 B，电机实例的 `sizeof` 仍为 864 B。单板 `DJIMotorControl` 静态栈帧由 608 B 增至 768 B，发送前回调仍为 48 B。底盘板对象的 text、bss 及两个控制相关函数的静态栈帧没有变化。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 通过。WSL Debug 和 Release 各通过 827 项。普通禁热与遥控诊断固件均通过 Debug 构建和链接隔离检查，FLASH 分别为 257356 B 和 260900 B。这两种配置均未链接本次修改的 DJI 驱动。六种生产构建仍因核心配置未确认而拒绝。
+- 检查覆盖仍在软件队列里的帧。已经交给硬件的帧及板上调用链栈峰值仍待现场验证。

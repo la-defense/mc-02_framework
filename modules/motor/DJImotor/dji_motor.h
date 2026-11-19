@@ -148,6 +148,7 @@ typedef struct
     uint8_t reference_generation_valid; // 显式绑定代际且尚未撤销时才保持有效。
     uint8_t reference_has_deadline; // 底盘命令截止点可恰好为零，单独记录是否有期限。
     uint32_t reference_deadline_ms; // 原始命令的本机截止时刻，允许毫秒计数回绕。
+    uint32_t chassis_stop_generation; // 单板底盘每次停止时递增，以撤销已计算的轮位目标。
     Motor_Control_Setting_s motor_settings; // 电机设置
     MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
     Motor_Controller_s motor_controller;    // 电机控制器
@@ -271,12 +272,13 @@ uint8_t DJIMotorSetChassisRefUntil(DJIMotorInstance *motor, float ref, uint32_t 
 void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback_Source_e type);
 
 
-/** @brief 设置停止标记，下一轮控制将该电机对应的发送字节清零，保留原目标值。
-* @param[in,out] motor 有效实例，不能为 NULL；需要清目标时另调用 DJIMotorSetRef()。
+/** @brief 停止电机输出。单板底盘同时撤销当前参考和已计算的轮位目标。
+* @param[in,out] motor 有效实例，不能为 NULL。
+* @note 其他板角色和电机用途保留参考值，确需清零时另调用 DJIMotorSetRef()。
  */
 void DJIMotorStop(DJIMotorInstance *motor);
 
-/** @brief 设置运行标记，下一轮控制重新使用已保存目标，不负责整车许可检查。
+/** @brief 设置运行标记。单板底盘需要停止后提交的有效参考，输出仍检查整车许可。
 * @param[in,out] motor 有效实例，不能为 NULL；初始化成功时默认保持停止。
  */
 void DJIMotorEnable(DJIMotorInstance *motor);

@@ -1350,6 +1350,7 @@ endif()
 add_test(NAME production_dji_single_safety_output_gate COMMAND motor_single_safety_test single-safety-output)
 add_test(NAME production_dji_single_queued_feedback_expiry COMMAND motor_single_safety_test single-queued-feedback-expiry) # 排队目标不能借新反馈续期。
 add_test(NAME production_dji_single_chassis_reference_expiry COMMAND motor_single_safety_test single-chassis-reference-expiry) # 底盘命令跨回绕后仍按原截止点失效。
+add_test(NAME production_dji_single_chassis_queued_stop COMMAND motor_single_safety_test single-chassis-queued-stop) # 轮位停止后再启用也不能发出旧目标。
 add_test(NAME production_dji_single_queued_feedback_gap COMMAND motor_single_safety_test single-queued-feedback-gap) # 单电机反馈间断后只撤销旧槽位。
 add_test(NAME production_dji_single_queued_external_expiry COMMAND motor_single_safety_test single-queued-external-expiry) # 排队目标沿用反馈和前馈最早到期时刻。
 add_test(NAME production_dji_single_loader_fire_permit COMMAND motor_single_safety_test single-loader-fire-permit) # 拨弹独立检查击发许可。

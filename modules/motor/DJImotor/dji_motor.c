@@ -69,6 +69,7 @@ enum {
 typedef struct {
     uint32_t deadline_ms[4]; // 每个槽位按原始采样时间计算的最早到期时刻。
     uint32_t gap_generation[4]; // 每个目标使用反馈时看到的间断代次。
+    uint32_t chassis_stop_generation[4]; // 四个槽位计算时各自看到的底盘停止代次。
     uint8_t requirements[4]; // 每个槽位需要复查的反馈、参考及有效期标记。
 } DJI_Queued_Feedback_s;
 static DJI_Queued_Feedback_s sender_feedback[9]; // 每组当前排队目标的反馈依据。
@@ -662,9 +663,16 @@ void DJIMotorChangeFeed(DJIMotorInstance *motor, Closeloop_Type_e loop, Feedback
 
 void DJIMotorStop(DJIMotorInstance *motor)
 {
-    PlatformTaskCriticalEnter();
-    motor->stop_flag = MOTOR_STOP;
-    PlatformTaskCriticalExit();
+    PlatformTaskCriticalEnter(); // 停止标记、代次和参考一起更新。
+    motor->stop_flag = MOTOR_STOP; // 停止期间发送的槽位直接清零。
+#if defined(ONE_BOARD)
+    if (motor->output_role == MOTOR_OUTPUT_CHASSIS)
+    {
+        ++motor->chassis_stop_generation; // 已计算的轮速目标属于旧代次，重新启用也不能发送。
+        motor->reference_generation_valid = 0u; // 重新计算前要有底盘提交的新参考。
+    }
+#endif
+    PlatformTaskCriticalExit(); // 发送方只能看到更新前或更新后的一组数据。
 }
 
 void DJIMotorEnable(DJIMotorInstance *motor)
@@ -1012,6 +1020,9 @@ static void DJIMotorPrepareSingleOutput(const void *source, uint32_t now_ms,
         const DJI_Queued_Feedback_s *basis = &sender_feedback[group]; // 使用成功入队的依据，不能借新目标更新时间。
         const uint8_t required = basis->requirements[slot]; // 读取计算这一个槽位时记录的条件。
         if (motor->stop_flag == MOTOR_STOP) continue; // 入队后执行器被停止，硬件提交前清零。
+        if (motor->output_role == MOTOR_OUTPUT_CHASSIS &&
+            motor->chassis_stop_generation != basis->chassis_stop_generation[slot])
+            continue; // 即便本轮已再次启用，也丢弃停止前计算的轮位目标。
         const uint32_t after_deadline = now_ms - basis->deadline_ms[slot]; // 无符号差值支持毫秒时钟回绕。
         if ((required & DJI_QUEUED_DEADLINE) && after_deadline != 0u && after_deadline <= INT32_MAX)
             continue; // 在到期时刻仍有效，下一毫秒开始清零。
@@ -1170,6 +1181,7 @@ void DJIMotorControl()
         uint8_t reference_has_deadline; // 复制截止点是否存在。
         uint32_t reference_deadline_ms; // 复制该参考的原始截止点。
         uint32_t feedback_gap_generation; // 随用于计算的内部反馈一起复制间断代次。
+        uint32_t chassis_stop_generation; // 与用于计算的轮速目标一起复制停止代次。
 #endif
         PlatformTaskCriticalEnter();
         setting_snapshot = motor->motor_settings;
@@ -1181,6 +1193,7 @@ void DJIMotorControl()
         reference_has_deadline = motor->reference_has_deadline; // 与参考值在同一临界区读取。
         reference_deadline_ms = motor->reference_deadline_ms; // 原始截止时刻不会随电机周期刷新。
         feedback_gap_generation = motor->feedback_gap_generation; // 后续发生间断时只撤销用旧依据计算的目标。
+        chassis_stop_generation = motor->chassis_stop_generation; // 计算途中发生停止也能在发送时识别。
 #endif
         speed_filter_valid = motor->speed_filter_valid;
         current_filter_valid = motor->current_filter_valid;
@@ -1234,6 +1247,7 @@ void DJIMotorControl()
         const uint8_t output_slot = motor->message_num; // 在组内对应到电机自己的位置。
         uint8_t required = 0u; // 逐项记录这一轮计算实际依赖的信号。
         basis->gap_generation[output_slot] = feedback_gap_generation; // 用相同的代次检查短暂断流。
+        basis->chassis_stop_generation[output_slot] = chassis_stop_generation; // 发送时拒绝停止前算出的轮位目标。
         if (speed_internal_active) required |= DJI_QUEUED_SPEED; // 内部速度环须持续有可信测量。
         if (current_internal_active) required |= DJI_QUEUED_CURRENT; // 内部电流环同样检查结果。
         if (motor_setting->outer_loop_type == ANGLE_LOOP && (motor_setting->close_loop_type & ANGLE_LOOP) != 0u &&
