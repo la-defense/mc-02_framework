@@ -602,6 +602,36 @@ TaskMonitor_Result_e TaskMonitorCompleteWork(TaskMonitor_Id_e id)
     return result;
 }
 
+TaskMonitor_Result_e TaskMonitorReportTimingFailure(TaskMonitor_Id_e id, TaskMonitor_FaultReason_e reason)
+{
+    if (PlatformIrqIsInHandler() != 0u)
+        return TASK_MONITOR_RESULT_CONTEXT; // 中断不执行任务故障的收尾和关断路径。
+    if (reason != TASK_MONITOR_FAULT_PERIOD_CLOCK && reason != TASK_MONITOR_FAULT_WORK_DEADLINE &&
+        reason != TASK_MONITOR_FAULT_PERIOD_DEADLINE)
+        return TASK_MONITOR_RESULT_BAD_ARGUMENT; // 首次启动宽限仍由监控内部判断。
+    if (!PlatformSchedulerIsRunning())
+        return TASK_MONITOR_RESULT_NOT_RUNNING; // 只接受运行期任务自身确认的故障。
+
+    TaskMonitorFaultAction_t action = {0}; // 锁住状态时只准备动作，不在临界区调用外部模块。
+    TaskMonitor_Result_e result = TASK_MONITOR_RESULT_OK; // 首次报告成功才执行故障动作。
+    const uint32_t previous = TaskMonitorEnterCritical(); // 与轮询发现故障的路径共用锁。
+    TaskMonitorItem_t *item = TaskMonitorFindItem(id); // 查找调用者已注册的周期任务。
+    if (!monitor_initialized)
+        result = TASK_MONITOR_RESULT_NOT_INITIALIZED; // 无监控计划时不猜测核心角色。
+    else if (monitor_runtime_deferred)
+        result = TASK_MONITOR_RESULT_NOT_RUNNING; // 放行前仍由启动协调者报告失败。
+    else if (item == NULL || item->config.mode != TASK_MONITOR_MODE_PERIODIC)
+        result = TASK_MONITOR_RESULT_BAD_ARGUMENT; // 无法把事件任务的空闲解释为拍点故障。
+    else if (!TaskMonitorLatchFaultLocked(item, reason, &action))
+        result = TASK_MONITOR_RESULT_BUSY; // 同一任务保留首次原因，不重复记录关断或降级。
+    const uint8_t core_healthy = (uint8_t)(core_fault_latched == 0u); // 保存锁存后的整车核心健康状态。
+    TaskMonitorExitCritical(previous); // 恢复调用前的中断屏蔽状态。
+
+    if (result == TASK_MONITOR_RESULT_OK)
+        TaskMonitorPublishFaultActions(&action, 1u, core_healthy); // 核心直接关断，辅助按配置降级。
+    return result;
+}
+
 TaskMonitor_Result_e TaskMonitorGetProgressState(TaskMonitor_Id_e id,
                                                  TaskMonitorProgressState_t *output)
 {

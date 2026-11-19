@@ -11,6 +11,9 @@
 #include "robot_monitor_plan.h"
 #include "config/vehicle_selection.h"
 #endif
+#if MC02_TASK_MOTOR_SPLIT
+#include "robot_safety.h"
+#endif
 #include <setjmp.h>
 #include <string.h>
 
@@ -21,7 +24,8 @@ static unsigned release_delays, initializations, waits, begins, work, finishes, 
 static unsigned fairness_delays;
 static uint8_t finish_error; // 注入实际工作以后才发生的计数错误。
 #if MC02_TASK_CHASSIS
-static unsigned stops;
+static unsigned stops, timing_faults;
+static TaskMonitor_FaultReason_e expected_fault = TASK_MONITOR_FAULT_PERIOD_CLOCK;
 static RobotChassisTaskConfig_t chassis = {
     .timing = {.period_us = 4000u, .budget_us = 4000u}, // 主机试验依赖的控制拍点，单位 μs。
     .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 整毫秒场景固定使用 RTOS。
@@ -37,6 +41,42 @@ void ChassisStopAndClear(void)
     TEST_CHECK(expected_monitor == TASK_MONITOR_CHASSIS && work == 1u);
     TEST_CHECK(finish_error ? (finishes == 1u && completes == 0u) : (waits == 3u && completes == 1u));
     ++stops; // 时钟故障只撤销一次，下一轮仍禁止工作。
+}
+#endif
+
+#if MC02_TASK_MOTOR_SPLIT
+const PlatformPeriodicConfig_t *RobotGetTaskPeriod(RobotPeriodicTask_t id)
+{
+    static const PlatformPeriodicConfig_t dispatch = {1000u, 1000u}; // 测试沿用电机任务的 RTOS 派发拍点。
+    TEST_CHECK(id == ROBOT_PERIODIC_COMM && expected_monitor == TASK_MONITOR_MOTOR);
+    return &dispatch;
+}
+
+const MotorTaskPeriods_t *RobotGetMotorTaskPeriods(void)
+{
+    static const MotorTaskPeriods_t periods = {2000u, 3000u}; // 主机使用两个独立拍点验证任务正常启动。
+    return &periods;
+}
+
+PlatformPeriodicResult_t MotorTaskScheduleInit(MotorTaskSchedule_t *schedule, const MotorTaskPeriods_t *periods,
+    uint32_t dispatch_us, uint32_t quantum_us, uint32_t first_tick)
+{
+    TEST_CHECK(schedule != NULL && periods == RobotGetMotorTaskPeriods() && first_tick == 0u);
+    TEST_CHECK(dispatch_us == 1000u && quantum_us == 1000u && initializations == 1u);
+    return PLATFORM_PERIODIC_READY; // 电机拍点计算由独立的生产测试验证。
+}
+
+PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, uint32_t now_tick)
+{
+    TEST_CHECK(schedule != NULL && now_tick == 0u && work == 0u && waits == 2u);
+    ++work; // 第一个被允许的拍点只执行一次派发。
+    return PLATFORM_PERIODIC_READY;
+}
+
+void RobotSafetyRequestDisable(void)
+{
+    TEST_CHECK(expected_monitor == TASK_MONITOR_MOTOR && timing_faults == 0u && waits == 3u);
+    ++stops; // 整车许可必须在核心故障上报前撤销。
 }
 #endif
 
@@ -63,7 +103,7 @@ void PlatformTaskDelayMs(uint32_t milliseconds)
     TEST_CHECK(milliseconds == expected_period_ms);
     TEST_CHECK(waits == (finish_error ? 2u : 3u) && completes == (finish_error ? 0u : 1u));
 #if MC02_TASK_CHASSIS
-    TEST_CHECK(stops == 1u); // 首次错误时须先撤销速度参考，再让出处理器。
+    TEST_CHECK(stops == 1u && timing_faults == 1u); // 先清理和报告故障，再进入停等。
 #endif
     if (++fault_delays == 2u) longjmp(task_exit, 1); // 验证错误连续保持两轮后退出常驻循环。
 }
@@ -143,6 +183,20 @@ PlatformPeriodicResult_t PlatformTaskHighResClose(const PlatformPeriodicClock_t 
 }
 #endif
 
+TaskMonitor_Result_e TaskMonitorReportTimingFailure(TaskMonitor_Id_e id, TaskMonitor_FaultReason_e reason)
+{
+#if MC02_TASK_CHASSIS
+    TEST_CHECK(id == expected_monitor && reason == expected_fault && timing_faults == 0u);
+    TEST_CHECK(stops == 1u && tim5_owner == NULL); // 核心关断入口之前已撤销输出并释放比较通道。
+    ++timing_faults;
+#else
+    (void)id;
+    (void)reason;
+    TEST_CHECK(0); // 其他常驻任务仍由监控轮询发现停顿。
+#endif
+    return TASK_MONITOR_RESULT_BUSY; // 模拟监控已锁存时仍不得重启拍点；真实首次关断在独立联测中验证。
+}
+
 TaskMonitor_Result_e TaskMonitorBeginWork(TaskMonitor_Id_e id)
 {
     TEST_CHECK(id == expected_monitor && waits == begins + 1u);
@@ -199,6 +253,9 @@ int main(int argc, char **argv)
 #if MC02_TASK_CHASSIS
         {"chassis", StartCHASSISTASK, TASK_MONITOR_CHASSIS, 4u}, // 正式任务入口使用隔离的主机时间配置。
         {"tim5", StartCHASSISTASK, TASK_MONITOR_CHASSIS, 1u}, // 错误后让出 1 ms，实际拍点为 500 μs。
+#if MC02_TASK_MOTOR_SPLIT
+        {"motor", StartMOTORTASK, TASK_MONITOR_MOTOR, 1u}, // 计时错误时先撤销整车许可。
+#endif
 #else
         {"ins", StartINSTASK, TASK_MONITOR_INS, 1u}, // 姿态采样与解算。
         {"comm", StartMOTORTASK, TASK_MONITOR_MOTOR, 1u}, // 禁热版本只派发通信。
@@ -220,6 +277,7 @@ int main(int argc, char **argv)
             chassis.timing = (PlatformPeriodicConfig_t){.period_us = 500u, .budget_us = 250u};
             chassis.source = PLATFORM_PERIODIC_SOURCE_HIGH_RES; // 模拟启动预检交付的实际来源。
             budget_error = (uint8_t)(argc == 3 && strcmp(argv[2], "budget-error") == 0);
+            if (budget_error) expected_fault = TASK_MONITOR_FAULT_WORK_DEADLINE; // 超预算应有明确原因。
         }
 #endif
         if (setjmp(task_exit) == 0) tasks[i].entry(NULL);

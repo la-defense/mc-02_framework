@@ -60,7 +60,8 @@ typedef enum
     TASK_MONITOR_FAULT_NONE = 0,
     TASK_MONITOR_FAULT_STARTUP_DEADLINE,
     TASK_MONITOR_FAULT_WORK_DEADLINE,
-    TASK_MONITOR_FAULT_PERIOD_DEADLINE
+    TASK_MONITOR_FAULT_PERIOD_DEADLINE,
+    TASK_MONITOR_FAULT_PERIOD_CLOCK /**< 周期时钟无法建立、等待或验证完成时刻。 */
 } TaskMonitor_FaultReason_e;
 
 typedef enum
@@ -211,6 +212,14 @@ TaskMonitor_Result_e TaskMonitorSetWaiting(TaskMonitor_Id_e id,
  * @return 成功；若总期限已超，锁存对应任务故障并返回 BUSY；未开始时返回错误。
  */
 TaskMonitor_Result_e TaskMonitorCompleteWork(TaskMonitor_Id_e id);
+
+/** @brief 周期任务在确认时钟故障或超期后立即锁存故障。
+ * @param[in] id 调用任务已经配置的周期监控编号。
+ * @param[in] reason 时钟错误、执行超期或拍点超期。
+ * @return OK 为首次锁存，BUSY 为已锁存，其余值表示调用位置或参数错误。
+ * @note 放行后从任务调用。先撤销任务自身的参考并释放资源，再报告；核心故障沿用直接关断路径。
+ */
+TaskMonitor_Result_e TaskMonitorReportTimingFailure(TaskMonitor_Id_e id, TaskMonitor_FaultReason_e reason);
 
 /**
  * @brief 读取一项任务的开始、进度、等待和完成记录。

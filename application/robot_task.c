@@ -62,7 +62,7 @@ typedef struct {
 } RobotTaskCycle_t;
 
 // 锁定时钟故障，不继续工作或报告新的任务进度。
-static void StopTaskClock(RobotTaskCycle_t *cycle)
+static void StopTaskClock(RobotTaskCycle_t *cycle, TaskMonitor_FaultReason_e reason)
 {
     if (cycle->clock_fault != NULL) cycle->clock_fault(); // 控制任务先撤销自己的输出。
 #if defined(MC02_PLATFORM_TIM5_PERIODIC)
@@ -70,6 +70,9 @@ static void StopTaskClock(RobotTaskCycle_t *cycle)
         (void)PlatformTaskHighResClose(&cycle->clock); // 只释放当前任务持有的比较通道。
 #endif
     cycle->ready = 0u; // 后续轮次不会重新领取拍点。
+    if (cycle->clock_fault != NULL && reason != TASK_MONITOR_FAULT_NONE &&
+        TaskMonitorReportTimingFailure(cycle->monitor, reason) == TASK_MONITOR_RESULT_OK)
+        for (;;) {} // 底盘和电机均为核心任务；关断已屏蔽中断，只等待看门狗复位。
 }
 
 // 依赖启动协调者先发布监控配置并放行，再建立任务自己的拍点。
@@ -98,7 +101,7 @@ static void OpenConfiguredTaskCycle(RobotTaskCycle_t *cycle, const PlatformPerio
         }
 #endif
         cycle->ready = (uint8_t)(status == PLATFORM_PERIODIC_READY);
-        if (!cycle->ready) StopTaskClock(cycle); // 初始化失败也不能留下有效的轮组目标。
+        if (!cycle->ready) StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 第一次启动失败也立即报告。
     }
 }
 
@@ -129,7 +132,8 @@ static uint8_t BeginTaskCycle(RobotTaskCycle_t *cycle)
 #else
             const PlatformPeriodicResult_t status = PlatformTaskPeriodicWait(&cycle->clock, &cycle->release);
 #endif
-            if (status != PLATFORM_PERIODIC_READY) StopTaskClock(cycle); // 首次时钟错误就撤销轮组参考。
+            if (status != PLATFORM_PERIODIC_READY)
+                StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 等待失败先撤销轮组参考。
         }
         if (!cycle->ready)
         {
@@ -158,12 +162,14 @@ static void CompleteTaskCycle(RobotTaskCycle_t *cycle)
 #endif
         if (status != PLATFORM_PERIODIC_READY)
         {
-            StopTaskClock(cycle); // 时钟不可信时撤销本任务输出并停止报告进度。
+            StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 无法证明完成时刻时不报告进度。
             return;
         }
         if (cycle->monitor == TASK_MONITOR_CHASSIS && (timing.over_budget || timing.missed_deadline))
         {
-            StopTaskClock(cycle); // 底盘不能按配置完成时撤销轮组，并且不续报进度。
+            const TaskMonitor_FaultReason_e reason = timing.over_budget
+                ? TASK_MONITOR_FAULT_WORK_DEADLINE : TASK_MONITOR_FAULT_PERIOD_DEADLINE; // 区分计算超时和拍点错过。
+            StopTaskClock(cycle, reason); // 撤销轮组参考，并立即记录已经确认的超期。
             return;
         }
         const uint32_t start_lag = cycle->release.observed_tick - cycle->release.scheduled_tick; // 开始前已过的刻度。
@@ -223,7 +229,7 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
     MotorTaskSchedule_t schedule; // 两种阶段拍点由当前任务独占。
     if (cycle.ready && MotorTaskScheduleInit(&schedule, RobotGetMotorTaskPeriods(), dispatch->period_us,
         dispatch->period_us / cycle.clock.period_ticks, cycle.clock.next_tick) != PLATFORM_PERIODIC_READY)
-        StopTaskClock(&cycle); // 运行时条件与启动预检不一致时不处理计算或队列。
+        StopTaskClock(&cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 拍点建立失败时禁止再处理电机或队列。
 #else
     RobotTaskCycle_t cycle = OpenTaskCycle(ROBOT_PERIODIC_COMM, TASK_MONITOR_MOTOR);
 #endif
@@ -234,7 +240,7 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 #if MC02_TASK_MOTOR_SPLIT
         if (MotorTaskRunScheduled(&schedule, cycle.release.observed_tick) != PLATFORM_PERIODIC_READY)
         {
-            StopTaskClock(&cycle); // 不发布部分拍点或继续发送。
+            StopTaskClock(&cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 两个阶段失步时撤销许可并锁存故障。
             continue; // 保留本轮进度，任务监控将发现没有完成报告。
         }
 #else
@@ -386,7 +392,7 @@ __attribute__((noreturn)) void StartCHASSISTASK(void const *argument)
     {
         if (!RobotBuildModuleStarted(ROBOT_MODULE_CHASSIS))
         {
-            StopTaskClock(&cycle); // 依赖失效时撤销输出并释放当前硬件通道。
+            StopTaskClock(&cycle, TASK_MONITOR_FAULT_NONE); // 依赖失效由对应模块报告，此处只撤销输出和释放通道。
             for (;;) PlatformTaskDelayMs(cycle.delay_ms);
         }
         if (!BeginTaskCycle(&cycle)) continue; // 本轮需要有效拍点和监控许可。

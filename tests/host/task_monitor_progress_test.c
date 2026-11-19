@@ -477,6 +477,32 @@ int main(void)
     TaskMonitorTick();
     TEST_CHECK(TaskMonitorAllAlive() && watchdog_feed_count == 1u); // 其他核心任务可正常运行和喂狗。
 
+    ResetFakes(300u); // 已确认的周期故障不等待监控轮询或毫秒期限到达。
+    TEST_CHECK(TaskMonitorInitConfigured(core_and_event_configs, 3u) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorDeferRuntime() == TASK_MONITOR_RESULT_OK);
+    scheduler_running = 1u;
+    TEST_CHECK(TaskMonitorReportTimingFailure(TASK_MONITOR_MOTOR, TASK_MONITOR_FAULT_PERIOD_CLOCK) == TASK_MONITOR_RESULT_NOT_RUNNING);
+    TEST_CHECK(!OutputsAreOff()); // 放行前拒绝任务报告，启动协调路径独立处理。
+    TEST_CHECK(TaskMonitorReleaseRuntime() == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorReportTimingFailure(TASK_MONITOR_OPTIONAL_0, TASK_MONITOR_FAULT_PERIOD_CLOCK) == TASK_MONITOR_RESULT_BAD_ARGUMENT);
+    TEST_CHECK(TaskMonitorReportTimingFailure(TASK_MONITOR_MOTOR, TASK_MONITOR_FAULT_NONE) == TASK_MONITOR_RESULT_BAD_ARGUMENT);
+    mc02_test_ipsr = 1u; // 同一请求来自中断时也不能锁存任务故障。
+    TEST_CHECK(TaskMonitorReportTimingFailure(TASK_MONITOR_MOTOR, TASK_MONITOR_FAULT_PERIOD_CLOCK) == TASK_MONITOR_RESULT_CONTEXT);
+    mc02_test_ipsr = 0u;
+    TEST_CHECK(TaskMonitorBeginWork(TASK_MONITOR_MOTOR) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorReportTimingFailure(TASK_MONITOR_MOTOR, TASK_MONITOR_FAULT_PERIOD_CLOCK) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(OutputsAreOff() && !reported_task_health && watchdog_feed_count == 0u); // 同一次调用关断并撤销核心健康。
+    TEST_CHECK(TaskMonitorGetProgressState(TASK_MONITOR_MOTOR, &core_state) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(core_state.state == TASK_MONITOR_STATE_FAULTED && !core_state.work_active &&
+               core_state.fault_reason == TASK_MONITOR_FAULT_PERIOD_CLOCK && core_state.complete_count == 0u);
+    const uint32_t health_before = task_health_calls; // 重复报告既不改原因也不重新执行动作。
+    TEST_CHECK(TaskMonitorReportTimingFailure(TASK_MONITOR_MOTOR, TASK_MONITOR_FAULT_WORK_DEADLINE) == TASK_MONITOR_RESULT_BUSY);
+    TEST_CHECK(task_health_calls == health_before);
+    TEST_CHECK(TaskMonitorGetProgressState(TASK_MONITOR_MOTOR, &core_state) == TASK_MONITOR_RESULT_OK &&
+               core_state.fault_reason == TASK_MONITOR_FAULT_PERIOD_CLOCK);
+    TaskMonitorTick(); // 即使现在没有任何自然超期，已经锁存的故障也禁止继续喂狗。
+    TEST_CHECK(watchdog_feed_count == 0u && TaskMonitorAllAlive() == 0u);
+
     puts("PASS: configured task progress, fixed deadlines, event idle, and role-specific faults");
     return 0;
 }
