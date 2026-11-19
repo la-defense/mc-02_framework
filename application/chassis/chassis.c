@@ -1,8 +1,8 @@
 ﻿/**
  * @file chassis.c
  * @author NeoZeng neozng1@hnu.edu.cn
- * @brief 底盘应用,负责接收robot_cmd的控制命令并根据命令进行运动学解算,得到输出
- *        注意底盘采取右手系,对于平面视图,底盘纵向运动的正前方为x正方向;横向运动的右侧为y正方向
+ * @brief 接收 robot_cmd 的控制命令，计算轮速目标并读取本地底盘反馈。
+ *        旧命令的横向为右，轮组计算和反馈使用前左上坐标。
  *
  * @version 0.1
  * @date 2022-12-04
@@ -459,17 +459,12 @@ void ChassisTask()
         .offset_angle_deg = chassis_cmd_recv.offset_angle,
         .mode = motion_mode,
     };
-    const Wheel_Measure_s *wheel_measure = &chassis_config->wheel_measure;
     const ChassisMotionGeometry_s geometry = {
-        .wheel_base_mm = wheel_measure->wheel_base,
-        .track_width_mm = wheel_measure->track_width,
-        .center_gimbal_offset_x_mm = wheel_measure->center_gimbal_offset_x,
-        .center_gimbal_offset_y_mm = wheel_measure->center_gimbal_offset_y,
-        .wheel_radius_mm = wheel_measure->radius_wheel,
-        .reduction_ratio = wheel_measure->reduction_ratio_wheel,
+        .reduction_ratio = chassis_config->chassis_motor_config.output_axis.gear_ratio, // 与电机反馈使用同一减速比。
         .model = chassis_config->wheel_type == OMNI_WHEEL ?
-                     CHASSIS_MOTION_MODEL_OMNI : CHASSIS_MOTION_MODEL_MECANUM,
-        .omni = chassis_config->omni_geometry,
+                     CHASSIS_MOTION_MODEL_OMNI : CHASSIS_MOTION_MODEL_MECANUM, // 使用本车型已选轮组。
+        .mecanum = chassis_config->mecanum_geometry, // 麦轮半轴距、半轮距、计算中心偏移和轮径，m。
+        .omni = chassis_config->omni_geometry, // 各全向轮相对底盘中心的轮位、方向和轮径，m。
     };
     const ChassisMotionLimits_s limits = chassis_config->motion_limits;
     ChassisMotionOutput_s motion_output;
@@ -515,7 +510,8 @@ void ChassisTask()
     }
     else
     {
-        const float rotor_to_output = -DEGREE_2_RAD / wheel_measure->reduction_ratio_wheel;
+        const float wheel_direction = geometry.model == CHASSIS_MOTION_MODEL_OMNI ? 1.0f : -1.0f; // 全向轮目标与估速共用轴方向，麦轮沿用旧电机映射。
+        const float rotor_to_output = wheel_direction * DEGREE_2_RAD / geometry.reduction_ratio; // 把受限的电机轴 deg/s 还原为输出轴 rad/s。
 #if defined(ONE_BOARD)
         // 每台轮电机都用命令原有的代际；任何一台未获许可时清除四轮目标。
         const uint32_t generation = chassis_cmd_recv.safety_generation;

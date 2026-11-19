@@ -3050,6 +3050,18 @@ target_compile_definitions(robot_def_chassis_config_test PRIVATE MC02_PROFILE_RO
 target_link_libraries(robot_def_chassis_config_test PRIVATE m)
 mc02_apply_format_diagnostics(robot_def_chassis_config_test)
 add_test(NAME production_chassis_config_rejects_invalid_geometry COMMAND robot_def_chassis_config_test)
+# 同一车型校验入口也执行麦轮组合，几何只检查编入的麦轮模型。
+add_executable(robot_def_mecanum_config_test robot_def_chassis_config_test.c
+  ../../application/robot_def.c ../../application/chassis/chassis_kinematics.c
+  ../../application/chassis/mecanum.c)
+target_include_directories(robot_def_mecanum_config_test BEFORE PRIVATE robot_def_role_fakes)
+target_include_directories(robot_def_mecanum_config_test PRIVATE . ../../application/chassis)
+target_compile_definitions(robot_def_mecanum_config_test PRIVATE MC02_PROFILE_ROBOT=1
+  MC02_FEATURE_CHASSIS=1 MC02_FEATURE_GIMBAL=0 MC02_FEATURE_SHOOTER=0
+  MC02_FEATURE_ALARM=0 MC02_FEATURE_UI=0 MC02_CHASSIS_IS_OMNI=0)
+target_link_libraries(robot_def_mecanum_config_test PRIVATE m)
+mc02_apply_format_diagnostics(robot_def_mecanum_config_test)
+add_test(NAME production_mecanum_config_rejects_invalid_geometry COMMAND robot_def_mecanum_config_test)
 if(Python3_EXECUTABLE)
   add_test(NAME production_vehicle_build_selection
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_vehicle_selection.py)

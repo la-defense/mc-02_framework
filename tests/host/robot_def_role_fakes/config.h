@@ -4,6 +4,7 @@
 #ifndef MC02_ROBOT_DEF_ROLE_FAKE_CONFIG_H
 #define MC02_ROBOT_DEF_ROLE_FAKE_CONFIG_H
 #include <stdint.h>
+#include "mecanum.h"
 #include "omni.h"
 #include "../../../application/config/shoot_config_types.h"
 #include "../../../bsp/board/platform_resources.h"
@@ -20,16 +21,12 @@ enum { MOTOR_DIRECTION_NORMAL = 0, MOTOR_DIRECTION_REVERSE = 1 };
 
 typedef enum { MECANUM_WHEEL = 0, OMNI_WHEEL = 1 } Wheel_Type_e;
 typedef struct {
-    float wheel_base, track_width, radius_wheel, reduction_ratio_wheel;
-    float center_gimbal_offset_x, center_gimbal_offset_y;
-} Wheel_Measure_s;
-typedef struct {
     uint8_t configured;
     float max_wz_deg_s, rotate_wz_deg_s, max_motor_speed_deg_s;
 } ChassisMotionLimits_s;
 typedef struct {
     Wheel_Type_e wheel_type;
-    Wheel_Measure_s wheel_measure;
+    MecanumGeometry_t mecanum_geometry; // 使用和生产配置相同的 SI 类型。
     ChassisMotionLimits_s motion_limits;
     OmniGeometry_t omni_geometry;
     uint32_t odometry_max_gap_ms; // 用于检查角色配置的可选里程计间隔，单位 ms。

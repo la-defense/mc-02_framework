@@ -51,29 +51,15 @@ typedef enum
     HALF_STEER_WHEEL
 } Wheel_Type_e;
 
-// 底盘轮组参数
-typedef struct
-{
-    // 云台中心偏移、轴距、轮距和轮半径均用 mm；减速比无单位。
-    float center_gimbal_offset_x;
-    float center_gimbal_offset_y;
-
-    float wheel_base;
-    float track_width;
-    float radius_wheel;
-
-    float reduction_ratio_wheel;
-} Wheel_Measure_s;
-
 typedef struct
 {
     Wheel_Type_e wheel_type;
-    Wheel_Measure_s wheel_measure;
+    MecanumGeometry_t mecanum_geometry; /**< 麦轮尺寸与计算中心，前左上坐标，m。 */
     ChassisMotionLimits_s motion_limits;
     OmniGeometry_t omni_geometry;
     uint32_t odometry_max_gap_ms; /**< 两个来源样本间隔的上限，ms；0 关闭轮速里程计。 */
 
-    Motor_Init_Config_s chassis_motor_config;
+    Motor_Init_Config_s chassis_motor_config; /**< 轮电机共同参数，减速比取 output_axis.gear_ratio。 */
     PID_Init_Config_s chassis_follow_gimbal_PID;
 
     uint8_t chassis_motor_id[8];
@@ -177,7 +163,7 @@ typedef enum {
 } RobotConfigStatus_t;
 /** @brief 选择唯一已实现车型；失败清除活动选择，不退回其他车型。
  * @param[in] id 车型编号，当前仅支持SENTINEL_ROBOT。
- * @param[out] output 长期只读配置，不可为NULL；失败时保持输出对象原值。
+ * @param[out] output 长期只读配置，不可为 NULL。车型不支持或参数无效时清空输出和当前选择。
  * @return OK、ARGUMENT、UNSUPPORTED或BAD_PARAMETERS；调用不操作硬件。
  */
 RobotConfigStatus_t RobotConfigSelect(uint8_t id, const Robot_Config_s **output);

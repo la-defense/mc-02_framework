@@ -21,17 +21,8 @@ typedef enum {
 } Motor_Turn_e;
 
 typedef struct {
-    float center_gimbal_offset_x;
-    float center_gimbal_offset_y;
-    float wheel_base;
-    float track_width;
-    float radius_wheel;
-    float reduction_ratio_wheel;
-} Wheel_Measure_s;
-
-typedef struct {
     Wheel_Type_e wheel_type;
-    Wheel_Measure_s wheel_measure;
+    MecanumGeometry_t mecanum_geometry; // 与生产配置同为 SI 几何。
     ChassisMotionLimits_s motion_limits;
     OmniGeometry_t omni_geometry;
     uint32_t odometry_max_gap_ms; // 与生产配置同义，0 关闭，正值限制积分间隔。

@@ -6,7 +6,6 @@
  * 当前沿用工程原有的四轮计算方式，参数和返回值见 chassis_motion.h。
  */
 #include "chassis_motion.h"
-#include "mecanum.h"
 #include "../config/build_selection.h"
 
 #include "fast_trig.h"
@@ -28,11 +27,6 @@ static uint8_t input_is_valid(const ChassisMotionInput_s *input,
 {
     return input != NULL && geometry != NULL && limits != NULL &&
            limits->configured &&
-           finite_positive(geometry->wheel_base_mm) &&
-           finite_positive(geometry->track_width_mm) &&
-           isfinite(geometry->center_gimbal_offset_x_mm) &&
-           isfinite(geometry->center_gimbal_offset_y_mm) &&
-           finite_positive(geometry->wheel_radius_mm) &&
            finite_positive(geometry->reduction_ratio) &&
            finite_positive(limits->max_wz_deg_s) &&
            finite_positive(limits->max_motor_speed_deg_s) &&
@@ -130,12 +124,7 @@ uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
     else if (geometry->model == CHASSIS_MOTION_MODEL_MECANUM)
     {
 #if !defined(MC02_CONFIG_GENERATED) || !MC02_CHASSIS_IS_OMNI
-        const MecanumGeometry_t mecanum = {
-            geometry->wheel_base_mm * 0.0005f, geometry->track_width_mm * 0.0005f,
-            geometry->center_gimbal_offset_x_mm * 0.001f,
-            -geometry->center_gimbal_offset_y_mm * 0.001f,
-            geometry->wheel_radius_mm * 0.001f};
-        calculation = MecanumCalculate(&twist, &mecanum, &wheels);
+        calculation = MecanumCalculate(&twist, &geometry->mecanum, &wheels); // 直接使用车型的 SI 参数。
         // 旧应用的电机顺序与新轮序不同；保留旧接口的符号和编号结果。
         const ChassisWheelSpeeds_t canonical = wheels;
         wheels.rad_s[0] = -canonical.rad_s[3];

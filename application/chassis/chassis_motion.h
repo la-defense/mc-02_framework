@@ -9,6 +9,7 @@
 #define CHASSIS_MOTION_H
 
 #include <stdint.h>
+#include "mecanum.h"
 #include "omni.h"
 
 /** @brief 选择底盘怎样转动，各有效模式下都计算平移速度。 */
@@ -40,18 +41,13 @@ typedef enum
 } ChassisMotionModel_e;
 
 /**
- * @brief 底盘安装尺寸，长度单位为 mm；轴距、轮距、轮半径和减速比必须大于0。
- * @note 云台中心的两个方向偏移可为负，沿用底盘安装配置中的 x、y 定义。
+ * @brief 底盘模型和公共减速比。只读取选中的轮组几何，尺寸采用前左上坐标下的 m。
  */
 typedef struct
 {
-    float wheel_base_mm;             ///< 前后轮轴之间的距离。
-    float track_width_mm;            ///< 左右轮之间的距离。
-    float center_gimbal_offset_x_mm; ///< 云台转动中心相对底盘几何中心的 x 方向偏移。
-    float center_gimbal_offset_y_mm; ///< 云台转动中心相对底盘几何中心的 y 方向偏移。
-    float wheel_radius_mm;           ///< 轮子半径。
     float reduction_ratio;           ///< 电机轴转速与轮子转速之比。
     ChassisMotionModel_e model;      ///< 当前底盘采用的计算模型。
+    MecanumGeometry_t mecanum;        ///< 麦轮几何，仅麦轮使用，长度单位为米。
     OmniGeometry_t omni;             ///< 全向轮模型使用，长度单位为米。
 } ChassisMotionGeometry_s;
 
@@ -90,7 +86,7 @@ uint8_t ChassisMotionRotateToBody(const ChassisTwist_t *source, float frame_head
  * @param[out] output 计算结果；NULL 时失败。
  * @return 1=成功，output->valid 为1；0=失败，非 NULL 的 output 各项清零。
  * @note 所有浮点参数都不能是 NaN 或无穷大，计算中出现这类结果也会失败。
- *       所有模式都检查全部参数，未用到的字段也要填合法值。
+ *       运动输入和转速配置必须有效，轮组几何按所选模型检查。
  *       有轮子超过转速上限时，四轮和输出 wz_deg_s 按同一比例减小。
  *       若仍无法把结果保持在允许范围内，返回失败。
  */

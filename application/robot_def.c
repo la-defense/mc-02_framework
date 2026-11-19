@@ -42,14 +42,7 @@ static uint8_t IsSupportedDJIMotor(const Motor_Init_Config_s *motor, uint8_t req
 // 确认底盘尺寸、轮电机编号和已编译运动学模型能够共同计算有效轮速。
 static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
 {
-    const Wheel_Measure_s *measure = &chassis->wheel_measure;
-    if (!isfinite(measure->wheel_base) || measure->wheel_base <= 0.0f ||
-        !isfinite(measure->track_width) || measure->track_width <= 0.0f ||
-        !isfinite(measure->radius_wheel) || measure->radius_wheel <= 0.0f ||
-        !isfinite(measure->reduction_ratio_wheel) || measure->reduction_ratio_wheel <= 0.0f ||
-        !isfinite(measure->center_gimbal_offset_x) ||
-        !isfinite(measure->center_gimbal_offset_y) ||
-        chassis->motion_limits.configured == 0u ||
+    if (chassis->motion_limits.configured == 0u ||
         !isfinite(chassis->motion_limits.max_wz_deg_s) ||
         chassis->motion_limits.max_wz_deg_s <= 0.0f ||
         !isfinite(chassis->motion_limits.rotate_wz_deg_s) ||
@@ -72,15 +65,8 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
             CHASSIS_KINEMATICS_OK)
         return 0u;
 #else
-    const MecanumGeometry_t geometry = {
-        .half_base_m = measure->wheel_base * 0.0005f,
-        .half_track_m = measure->track_width * 0.0005f,
-        .center_x_m = measure->center_gimbal_offset_x * 0.001f,
-        .center_y_m = -measure->center_gimbal_offset_y * 0.001f,
-        .radius_m = measure->radius_wheel * 0.001f,
-    };
     if (chassis->wheel_type != MECANUM_WHEEL ||
-        MecanumCalculate(&zero_twist, &geometry, &wheel_speeds) !=
+        MecanumCalculate(&zero_twist, &chassis->mecanum_geometry, &wheel_speeds) !=
             CHASSIS_KINEMATICS_OK)
         return 0u;
 #endif
@@ -189,14 +175,6 @@ RobotConfigStatus_t RobotConfigSelect(uint8_t id, const Robot_Config_s **output)
     const Robot_Config_s *candidate = SentinelConfigInit();
     if (!RobotConfigParametersAreValid(candidate))
         return ROBOT_CONFIG_BAD_PARAMETERS;
-
-#if defined(MC02_PROFILE_ROBOT) && MC02_FEATURE_CHASSIS
-    if (candidate->chassis_param.motion_limits.configured == 0u)
-        return ROBOT_CONFIG_BAD_PARAMETERS;
-    if ((MC02_CHASSIS_IS_OMNI != 0 && candidate->chassis_param.wheel_type != OMNI_WHEEL) ||
-        (MC02_CHASSIS_IS_OMNI == 0 && candidate->chassis_param.wheel_type != MECANUM_WHEEL))
-        return ROBOT_CONFIG_BAD_PARAMETERS;
-#endif
 
     robot_instance = candidate;
     *output = candidate;

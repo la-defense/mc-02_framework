@@ -7,6 +7,8 @@
 #include "topics/robot_topics.h"
 #include "referee_protocol.h"
 
+#define SENTINEL_WHEEL_GEAR_RATIO 19.0f // 沿用历史轮电机减速比，实物确认前仍禁止生产构建。
+
 static const RefereeUIFieldConfig_t sentinel_referee_ui_fields[] = {
     {{'u', '0', '0'}, "stage:", 80u, 150u, 20u, 2u, UI_Color_Cyan,
      REFEREE_UI_SOURCE_GAME_STAGE_REMAIN},
@@ -187,26 +189,16 @@ const Robot_Config_s *SentinelConfigInit(void)
             // 未测量轮位、滚动方向和限速；生产构建由车型确认状态拒绝。
             .omni_geometry = {.wheels = {{0}}},
             .odometry_max_gap_ms = 0u, // 轮速来源间隔待实测；0 关闭本地里程计。
-            // 长度使用 mm，减速比无单位；参数沿用移入版本，启用时仍须按实车核对。
-            .wheel_measure = {
-                .center_gimbal_offset_x = 0.0,
-                .center_gimbal_offset_y = 0.0,
-                .wheel_base = 500,
-                .track_width = 500,
-                .radius_wheel = 150,
-                .reduction_ratio_wheel = 19.0,
-            },
-
             .chassis_motor_config = {
                 .can_init_config.can_bus = PLATFORM_CAN_BUS_1,
                 .controller_param_init_config = {
                     .speed_PID = {
                         .DtMin_s = MOTOR_PID_DT_MIN_S,
                         .DtMax_s = MOTOR_PID_DT_MAX_S,
-                        .Kp = 5.0f * RAD_2_DEGREE * 19.0f,
-                        .Ki = 1.0f * RAD_2_DEGREE * 19.0f,
+                        .Kp = 5.0f * RAD_2_DEGREE * SENTINEL_WHEEL_GEAR_RATIO, // 将原转子速度比例换算到轮轴。
+                        .Ki = 1.0f * RAD_2_DEGREE * SENTINEL_WHEEL_GEAR_RATIO, // 积分系数使用同一减速比换算。
                         .Kd = 0.0,
-                        .IntegralLimit = 3000.0f * DEGREE_2_RAD / 19.0f,
+                        .IntegralLimit = 3000.0f * DEGREE_2_RAD / SENTINEL_WHEEL_GEAR_RATIO, // 历史转子积分限值换算到轮轴。
                         .Improve = PID_Trapezoid_Intergral | PID_Integral_Limit | PID_Derivative_On_Measurement,
                         .MaxOut = 12000,
                     },
@@ -228,7 +220,7 @@ const Robot_Config_s *SentinelConfigInit(void)
                     .close_loop_type = CURRENT_LOOP | SPEED_LOOP,
                     .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
                 },
-                .output_axis = {19.0f, MOTOR_AXIS_DIRECTION_REVERSE},
+                .output_axis = {SENTINEL_WHEEL_GEAR_RATIO, MOTOR_AXIS_DIRECTION_REVERSE}, // 目标与反馈共用的输出轴参数。
                 .motor_type = M3508,
             }
         },

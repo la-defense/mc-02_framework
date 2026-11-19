@@ -38,10 +38,14 @@ uint32_t HAL_GetTick(void)
 }
 CAN_HandleTypeDef hcan1, hcan2;
 UART_HandleTypeDef huart1;
+#define TEST_MECANUM_GEAR_RATIO 19.0f // 只供测试的电机轴与轮轴转速比。
 static Chassis_Config_s chassis_configuration = {
-    .wheel_type = MECANUM_WHEEL,
-    .wheel_measure = {0.0f, 0.0f, 350.0f, 300.0f, RADIUS_WHEEL,
-                      REDUCTION_RATIO_WHEEL},
+    .wheel_type = MECANUM_WHEEL, // 默认覆盖麦轮的历史轮序和符号。
+    .mecanum_geometry = {
+        .half_base_m = 0.175f, // 测试半轴距，m。
+        .half_track_m = 0.150f, // 测试半轮距，m。
+        .radius_m = 0.060f, // 测试轮半径，m，计算中心取轮组几何中心。
+    },
     .motion_limits = {
 #if defined(CHASSIS_MOTION_LIMITS_CONFIGURED)
         .configured = CHASSIS_MOTION_LIMITS_CONFIGURED,
@@ -55,7 +59,7 @@ static Chassis_Config_s chassis_configuration = {
     .chassis_motor_config = {
         .can_init_config = {.can_bus = PLATFORM_CAN_BUS_1},
         .controller_param_init_config = {.speed_PID = {.Kp = 12.0f}},
-        .output_axis = {REDUCTION_RATIO_WHEEL, MOTOR_AXIS_DIRECTION_REVERSE},
+        .output_axis = {TEST_MECANUM_GEAR_RATIO, MOTOR_AXIS_DIRECTION_REVERSE},
         .motor_type = M3508,
     },
     .chassis_motor_id = {1u, 2u, 4u, 3u},
@@ -358,6 +362,7 @@ static void SelectOmniFixture(void)
 {
     const float u = 0.70710678118f;
     chassis_configuration.wheel_type = OMNI_WHEEL;
+    chassis_configuration.mecanum_geometry = (MecanumGeometry_t){0}; // 全向轮配置无须填写麦轮参数。
     chassis_configuration.omni_geometry = (OmniGeometry_t){.wheels = {
         {0.2f, 0.2f, -u, u, 0.1f}, // 左前轮位置、单位滚动方向与轮径。
         {0.2f, -0.2f, u, u, 0.1f}, // 右前轮。
@@ -371,9 +376,27 @@ static int TestOmniVelocity(void)
 {
     SelectOmniFixture();
     const float u = 0.70710678118f;
+    chassis_configuration.chassis_motor_config.output_axis.gear_ratio = 38.0f; // 仅测试，用较高减速比触发轮速上限。
     CHECK(ChassisInit() == 1u);
     ChassisVelocityFeedback_t sample = {0};
     CHECK(Chassis_GetVelocityFeedback(&sample) == 0u); // 启动本身不产生测量。
+
+    MessagePublisher_t *commands = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_COMMAND);
+    const Chassis_Ctrl_Cmd_s command = {.vx = 1000.0f, .chassis_mode = CHASSIS_NO_FOLLOW}; // 本体前进 1 m/s。
+    CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
+    ChassisTask(); // 先检查发布给电机的输出轴速度，再把该速度作为理想反馈。
+    const float output_limit_rad_s = chassis_configuration.motion_limits.max_motor_speed_deg_s * DEGREE_2_RAD / 38.0f;
+    for (unsigned i = 0u; i < 4u; ++i)
+    {
+        CHECK(motors[i].enabled && motor_configs[i].output_axis.gear_ratio == 38.0f); // 驱动和限速使用同一配置。
+        const float expected = i % 2u == 0u ? -output_limit_rad_s : output_limit_rad_s; // 左右轮滚动投影相反。
+        CHECK(fabsf(motors[i].ref - expected) < 0.0001f); // 轮轴目标保留几何的输出轴方向。
+        motors[i].feedback_online = motors[i].feedback_speed_valid = 1u; // 模拟驱动正常跟随目标。
+        motors[i].feedback_speed_rad_s = motors[i].ref; // 反馈与目标都是输出轴 rad/s。
+    }
+    ChassisTask(); // 真实估速入口应恢复前进方向，而非把目标解释为后退。
+    CHECK(Chassis_GetVelocityFeedback(&sample) == 1u && sample.twist.vx_m_s > 0.0f && sample.twist.vx_m_s < 1.0f);
+    CHECK(MessagePublisherInvalidate(commands) == MESSAGE_OK); // 后面的独立反馈检查不使用运动许可。
     test_tick = 4u; // 四份反馈横跨毫秒计数回绕。
     for (unsigned i = 0u; i < 4u; ++i)
     {
@@ -580,7 +603,7 @@ int main(int argc, char **argv)
     return 0;
 #endif
     for (unsigned i = 0; i < 4; ++i) {
-        CHECK(motor_configs[i].output_axis.gear_ratio == REDUCTION_RATIO_WHEEL);
+        CHECK(motor_configs[i].output_axis.gear_ratio == TEST_MECANUM_GEAR_RATIO);
         CHECK(motor_configs[i].output_axis.direction == MOTOR_AXIS_DIRECTION_REVERSE);
         CHECK(motor_configs[i].controller_param_init_config.speed_PID.Kp > 10.0f);
     }
@@ -655,7 +678,7 @@ int main(int argc, char **argv)
         CHECK(motors[i].enable_count > 0);
         CHECK(motors[i].ref != 0.0f);
         const float max_output_rad_s = CHASSIS_MAX_MOTOR_SPEED_DEG_S * DEGREE_2_RAD /
-                                       REDUCTION_RATIO_WHEEL;
+                                       TEST_MECANUM_GEAR_RATIO;
         CHECK(motors[i].ref <= max_output_rad_s && motors[i].ref >= -max_output_rad_s);
     }
     command = (Chassis_Ctrl_Cmd_s){.vx = 20.0f, .chassis_mode = (chassis_mode_e)99};

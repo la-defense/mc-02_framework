@@ -9,12 +9,15 @@
     fprintf(stderr, "FAIL:%d %s\n", __LINE__, #condition); return 1; } } while (0)
 
 static const ChassisMotionGeometry_s geometry = {
-    .wheel_base_mm = 350.0f,
-    .track_width_mm = 300.0f,
-    .center_gimbal_offset_x_mm = 0.0f,
-    .center_gimbal_offset_y_mm = 0.0f,
-    .wheel_radius_mm = 60.0f,
-    .reduction_ratio = 19.0f,
+    .model = CHASSIS_MOTION_MODEL_MECANUM, // 四轮麦轮测试模型。
+    .mecanum = {
+        .half_base_m = 0.175f, // 轴距 0.35 m 的一半。
+        .half_track_m = 0.150f, // 轮距 0.30 m 的一半。
+        .center_x_m = 0.0f, // 未沿前轴偏移。
+        .center_y_m = 0.0f, // 未沿左轴偏移。
+        .radius_m = 0.060f, // 测试轮半径。
+    },
+    .reduction_ratio = 19.0f, // 测试电机轴与轮轴转速之比。
 };
 
 static const ChassisMotionLimits_s limits = {
@@ -176,17 +179,17 @@ int main(void)
     CHECK(rejected(in, geometry, bad_limits) == 0);
     bad_limits = limits; bad_limits.max_wz_deg_s = INFINITY;
     CHECK(rejected(in, geometry, bad_limits) == 0);
-    ChassisMotionGeometry_s bad_geometry = geometry; bad_geometry.wheel_base_mm = 0;
+    ChassisMotionGeometry_s bad_geometry = geometry; bad_geometry.mecanum.half_base_m = 0;
     CHECK(rejected(in, bad_geometry, limits) == 0);
-    bad_geometry = geometry; bad_geometry.track_width_mm = -1;
+    bad_geometry = geometry; bad_geometry.mecanum.half_track_m = -1;
     CHECK(rejected(in, bad_geometry, limits) == 0);
-    bad_geometry = geometry; bad_geometry.wheel_radius_mm = NAN;
+    bad_geometry = geometry; bad_geometry.mecanum.radius_m = NAN;
     CHECK(rejected(in, bad_geometry, limits) == 0);
     bad_geometry = geometry; bad_geometry.reduction_ratio = INFINITY;
     CHECK(rejected(in, bad_geometry, limits) == 0);
     bad_geometry = geometry; bad_geometry.reduction_ratio = 0;
     CHECK(rejected(in, bad_geometry, limits) == 0);
-    bad_geometry = geometry; bad_geometry.center_gimbal_offset_x_mm = NAN;
+    bad_geometry = geometry; bad_geometry.mecanum.center_x_m = NAN;
     CHECK(rejected(in, bad_geometry, limits) == 0);
 
     in = input((ChassisMotionMode_e)99, 0, 0, 0);
