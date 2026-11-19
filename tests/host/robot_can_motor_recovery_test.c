@@ -19,7 +19,10 @@ int main(void)
     Robot_Config_s config = {0}; // 测试参数不进入生产车型。
     config.chassis_param.wheel_type = OMNI_WHEEL; // 使用四轮全向底盘。
     config.chassis_param.chassis_motor_config = motor(PLATFORM_CAN_BUS_1, M3508, 0u);
-    for (uint8_t i = 0u; i < 4u; ++i) config.chassis_param.chassis_motor_id[i] = (uint8_t)(i + 1u);
+    config.chassis_param.wheel_motors[MOTOR_LF] = (ChassisWheelMotorConfig_t){3u, MOTOR_AXIS_DIRECTION_NORMAL}; // 左前自定义编号 3。
+    config.chassis_param.wheel_motors[MOTOR_RF] = (ChassisWheelMotorConfig_t){1u, MOTOR_AXIS_DIRECTION_REVERSE}; // 右前自定义编号 1。
+    config.chassis_param.wheel_motors[MOTOR_LB] = (ChassisWheelMotorConfig_t){4u, MOTOR_AXIS_DIRECTION_NORMAL}; // 左后自定义编号 4。
+    config.chassis_param.wheel_motors[MOTOR_RB] = (ChassisWheelMotorConfig_t){2u, MOTOR_AXIS_DIRECTION_REVERSE}; // 右后自定义编号 2。
     config.gimbal_param.gimbal_type = MINI_GIMBAL; // 测试大 yaw、小 yaw 和 pitch 均不可省略。
     config.gimbal_param.yaw_motor_config = motor(PLATFORM_CAN_BUS_1, GM6020, 5u);
     config.gimbal_param.mini_yaw_motor_config = motor(PLATFORM_CAN_BUS_2, GM6020, 1u);
@@ -32,6 +35,8 @@ int main(void)
                                          ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL);
     RobotCanMotorPlan_t plan = {0}; // 保存按车型声明建立的设备顺序。
     TEST_CHECK(RobotCanMotorPlanBuild(&config, &modules, &plan) && plan.count == 7u);
+    TEST_CHECK(plan.motors[0].id == 3u && plan.motors[1].id == 1u &&
+        plan.motors[2].id == 4u && plan.motors[3].id == 2u); // 恢复计划跟随轮序，编号没有被重新排列。
     TEST_CHECK(plan.motors[5].id == 1u && plan.motors[6].require_position); // 小 yaw 和内部位置需求都存在。
     RobotCanMotorPlan_t saved = plan; // 错误配置不能改写旧结果。
     config.gimbal_param.mini_yaw_motor_config.can_init_config.tx_id = 2u; // 小 yaw 与 pitch 冲突。

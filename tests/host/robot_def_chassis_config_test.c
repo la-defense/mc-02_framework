@@ -29,10 +29,13 @@ static void set_valid_config(void)
     };
     chassis->chassis_motor_config.can_init_config.can_bus = PLATFORM_CAN_BUS_1;
     chassis->chassis_motor_config.output_axis.gear_ratio = 19.0f;
-    chassis->chassis_motor_config.output_axis.direction = MOTOR_AXIS_DIRECTION_NORMAL;
     chassis->chassis_motor_config.motor_type = M3508;
-    for (unsigned index = 0u; index < 4u; ++index)
-        chassis->chassis_motor_id[index] = (uint8_t)(index + 1u);
+    for (unsigned index = 0u; index < CHASSIS_WHEEL_COUNT; ++index)
+    {
+        chassis->wheel_motors[index].device_id = (uint8_t)(index + 1u); // 依轮序配置互不重复的测试编号。
+        chassis->wheel_motors[index].direction = index % 2u == 0u ?
+            MOTOR_AXIS_DIRECTION_NORMAL : MOTOR_AXIS_DIRECTION_REVERSE; // 允许左右轮采用不同安装方向。
+    }
 
 #if MC02_CHASSIS_IS_OMNI
     chassis->wheel_type = OMNI_WHEEL; // 麦轮的几何成员保持为零。
@@ -77,6 +80,16 @@ int main(void)
     test_config.chassis_param.chassis_motor_config.output_axis.gear_ratio = 0.0f; // 缺少唯一的减速比来源则拒绝。
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS);
     TEST_CHECK(selected == NULL);
+
+    set_valid_config();
+    test_config.chassis_param.wheel_motors[2].direction = (Motor_Axis_Direction_e)0; // 左后轮安装方向待确认。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    set_valid_config();
+    test_config.chassis_param.wheel_motors[3].device_id = 0u; // 右后轮没有有效设备编号。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    set_valid_config();
+    test_config.chassis_param.wheel_motors[3].device_id = test_config.chassis_param.wheel_motors[0].device_id; // 右后轮与左前轮争用同一总线编号。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
 
     set_valid_config(); // 后续场景独立验证几何错误。
 #if MC02_CHASSIS_IS_OMNI

@@ -131,15 +131,11 @@ uint8_t ChassisInit(void)
     if (referee_status != REFEREE_OK) return 0u; // 旧主机组合的裁判初始化失败时不申请电机。
     Motor_Init_Config_s chassis_motor_config = chassis_config->chassis_motor_config; // 复制公共电机参数。
     chassis_motor_config.output_role = MOTOR_OUTPUT_CHASSIS; // 四个轮电机使用底盘功能许可。
-    const uint8_t motor_ids[4] = {
-        chassis_config->chassis_motor_id[MOTOR_LF], // 左前轮的设备编号。
-        chassis_config->chassis_motor_id[MOTOR_RF], // 右前轮的设备编号。
-        chassis_config->chassis_motor_id[MOTOR_LB], // 左后轮的设备编号。
-        chassis_config->chassis_motor_id[MOTOR_RB], // 右后轮的设备编号。
-    };
-    for (uint8_t i = 0u; i < 4u; ++i)
+    for (uint8_t i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) // 按左前、右前、左后、右后的固定轮序登记。
     {
-        chassis_motor_config.can_init_config.tx_id = motor_ids[i]; // 每轮使用对应配置编号。
+        const ChassisWheelMotorConfig_t *wheel = &chassis_config->wheel_motors[i]; // 同一轮的编号和方向一起读取。
+        chassis_motor_config.can_init_config.tx_id = wheel->device_id; // 配置的是 DJI 设备编号，由驱动换算帧 ID。
+        chassis_motor_config.output_axis.direction = wheel->direction; // 由驱动在目标和反馈两处使用该安装方向。
         pending[i] = DJIMotorInit(&chassis_motor_config); // 暂存本次取得的实例。
         if (pending[i] == NULL) goto rollback; // 任意轮电机失败时撤销此前实例。
     }

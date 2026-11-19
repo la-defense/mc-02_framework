@@ -21,6 +21,10 @@ enum { MOTOR_DIRECTION_NORMAL = 0, MOTOR_DIRECTION_REVERSE = 1 };
 
 typedef enum { MECANUM_WHEEL = 0, OMNI_WHEEL = 1 } Wheel_Type_e;
 typedef struct {
+    uint8_t device_id; // 车型校验读取每轮电调编号。
+    Motor_Axis_Direction_e direction; // 车型校验读取每轮安装方向。
+} ChassisWheelMotorConfig_t;
+typedef struct {
     uint8_t configured;
     float max_wz_deg_s, rotate_wz_deg_s, max_motor_speed_deg_s;
 } ChassisMotionLimits_s;
@@ -31,7 +35,7 @@ typedef struct {
     OmniGeometry_t omni_geometry;
     uint32_t odometry_max_gap_ms; // 用于检查角色配置的可选里程计间隔，单位 ms。
     Motor_Init_Config_s chassis_motor_config;
-    uint8_t chassis_motor_id[8];
+    ChassisWheelMotorConfig_t wheel_motors[CHASSIS_WHEEL_COUNT];
 } Chassis_Config_s;
 
 typedef enum { SINGLE_GIMBAL = 0 } Gimbal_Type_e;

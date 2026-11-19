@@ -51,9 +51,9 @@ uint8_t RobotCanMotorPlanBuild(const Robot_Config_s *config, const RobotModulePl
     {
         if (config->chassis_param.wheel_type != OMNI_WHEEL &&
             config->chassis_param.wheel_type != MECANUM_WHEEL) return 0u; // 其他底盘尚无对应轮组登记规则。
-        for (uint8_t i = 0u; i < 4u; ++i)
+        for (uint8_t i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) // 恢复顺序与四轮登记顺序一致。
             if (!AddMotor(&candidate, &config->chassis_param.chassis_motor_config, MOTOR_OUTPUT_CHASSIS,
-                          config->chassis_param.chassis_motor_id[i])) return 0u; // 四轮各自核对编号。
+                          config->chassis_param.wheel_motors[i].device_id)) return 0u; // 使用实际登记的设备编号。
     }
     if ((core & ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL)) != 0u)
     {

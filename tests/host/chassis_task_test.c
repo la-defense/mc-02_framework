@@ -59,10 +59,15 @@ static Chassis_Config_s chassis_configuration = {
     .chassis_motor_config = {
         .can_init_config = {.can_bus = PLATFORM_CAN_BUS_1},
         .controller_param_init_config = {.speed_PID = {.Kp = 12.0f}},
-        .output_axis = {TEST_MECANUM_GEAR_RATIO, MOTOR_AXIS_DIRECTION_REVERSE},
+        .output_axis = {.gear_ratio = TEST_MECANUM_GEAR_RATIO}, // 公共参数不提供安装方向。
         .motor_type = M3508,
     },
-    .chassis_motor_id = {1u, 2u, 4u, 3u},
+    .wheel_motors = {
+        [MOTOR_LF] = {1u, MOTOR_AXIS_DIRECTION_REVERSE}, // 左前测试电调 1，反向安装。
+        [MOTOR_RF] = {2u, MOTOR_AXIS_DIRECTION_NORMAL}, // 右前测试电调 2，同向安装。
+        [MOTOR_LB] = {4u, MOTOR_AXIS_DIRECTION_NORMAL}, // 左后测试电调 4，同向安装。
+        [MOTOR_RB] = {3u, MOTOR_AXIS_DIRECTION_REVERSE}, // 右后测试电调 3，反向安装。
+    },
 };
 const Chassis_Config_s *ChassisConfigFeed(void) { return &chassis_configuration; }
 static DJIMotorInstance motors[4];
@@ -554,6 +559,11 @@ int main(int argc, char **argv)
     if (fail_cap || fail_motor) { CHECK(initialized == 0u); return 0; }
     CHECK(initialized != 0u);
     CHECK(motor_count == 4);
+    for (unsigned wheel = 0u; wheel < CHASSIS_WHEEL_COUNT; ++wheel)
+    {
+        CHECK(motor_configs[wheel].can_init_config.tx_id == chassis_configuration.wheel_motors[wheel].device_id);
+        CHECK(motor_configs[wheel].output_axis.direction == chassis_configuration.wheel_motors[wheel].direction);
+    }
     if (argc == 2 && strncmp(argv[1], "release-", 8u) == 0)
     {
         rollback_failed = (uint8_t)(strcmp(argv[1], "release-failure") == 0); // 初始化完成后再拒绝电机回退。
@@ -604,7 +614,6 @@ int main(int argc, char **argv)
 #endif
     for (unsigned i = 0; i < 4; ++i) {
         CHECK(motor_configs[i].output_axis.gear_ratio == TEST_MECANUM_GEAR_RATIO);
-        CHECK(motor_configs[i].output_axis.direction == MOTOR_AXIS_DIRECTION_REVERSE);
         CHECK(motor_configs[i].controller_param_init_config.speed_PID.Kp > 10.0f);
     }
     MessagePublisher_t *commands = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_COMMAND);

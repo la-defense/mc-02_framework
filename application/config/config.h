@@ -51,6 +51,12 @@ typedef enum
     HALF_STEER_WHEEL
 } Wheel_Type_e;
 
+/** @brief 一只驱动轮的电机接线编号及输出轴安装方向。 */
+typedef struct {
+    uint8_t device_id; /**< DJI 设备编号，1～8；总线来自公共轮电机配置。 */
+    Motor_Axis_Direction_e direction; /**< 轮轴正方向相对电机轴的符号，0 表示待确认。 */
+} ChassisWheelMotorConfig_t;
+
 typedef struct
 {
     Wheel_Type_e wheel_type;
@@ -59,10 +65,10 @@ typedef struct
     OmniGeometry_t omni_geometry;
     uint32_t odometry_max_gap_ms; /**< 两个来源样本间隔的上限，ms；0 关闭轮速里程计。 */
 
-    Motor_Init_Config_s chassis_motor_config; /**< 轮电机共同参数，减速比取 output_axis.gear_ratio。 */
+    Motor_Init_Config_s chassis_motor_config; /**< 共用总线、减速比与控制参数。设备编号和方向从 wheel_motors 读取。 */
     PID_Init_Config_s chassis_follow_gimbal_PID;
 
-    uint8_t chassis_motor_id[8];
+    ChassisWheelMotorConfig_t wheel_motors[CHASSIS_WHEEL_COUNT]; /**< 左前、右前、左后、右后。 */
 } Chassis_Config_s;
 
 // 机器人云台类型

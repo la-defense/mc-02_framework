@@ -179,10 +179,12 @@ const Robot_Config_s *SentinelConfigInit(void)
         },
 #endif
         .chassis_param = {
-            .chassis_motor_id[MOTOR_LF] = 3,
-            .chassis_motor_id[MOTOR_RF] = 2,
-            .chassis_motor_id[MOTOR_RB] = 1,
-            .chassis_motor_id[MOTOR_LB] = 4,
+            .wheel_motors = {
+                [MOTOR_LF] = {.device_id = 3u, .direction = 0}, // 左前保留历史编号，安装方向待实测。
+                [MOTOR_RF] = {.device_id = 2u, .direction = 0}, // 右前保留历史编号，安装方向待实测。
+                [MOTOR_LB] = {.device_id = 4u, .direction = 0}, // 左后保留历史编号，安装方向待实测。
+                [MOTOR_RB] = {.device_id = 1u, .direction = 0}, // 右后保留历史编号，安装方向待实测。
+            },
 
             .wheel_type = OMNI_WHEEL,
             .motion_limits = {.configured = 0u},
@@ -220,7 +222,7 @@ const Robot_Config_s *SentinelConfigInit(void)
                     .close_loop_type = CURRENT_LOOP | SPEED_LOOP,
                     .motor_reverse_flag = MOTOR_DIRECTION_NORMAL,
                 },
-                .output_axis = {SENTINEL_WHEEL_GEAR_RATIO, MOTOR_AXIS_DIRECTION_REVERSE}, // 目标与反馈共用的输出轴参数。
+                .output_axis = {.gear_ratio = SENTINEL_WHEEL_GEAR_RATIO}, // 这里只声明公共减速比，方向分别由四轮声明。
                 .motor_type = M3508,
             }
         },

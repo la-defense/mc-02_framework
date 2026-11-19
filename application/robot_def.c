@@ -18,23 +18,30 @@
 
 static const Robot_Config_s *robot_instance;
 
-#if MC02_FEATURE_CHASSIS || MC02_FEATURE_GIMBAL || MC02_FEATURE_SHOOTER || \
-    defined(MC02_PROFILE_ROBOT)
-// 校验配置中的 DJI 电机类型、安装方向和本场景要求的发送 ID。
+#if MC02_FEATURE_CHASSIS || MC02_FEATURE_GIMBAL || MC02_FEATURE_SHOOTER
+// 检查公共总线、减速比和驱动型号，不读取需要按实例填入的方向和编号。
+static uint8_t DJIHardwareConfigIsValid(const Motor_Init_Config_s *motor)
+{
+    return motor->can_init_config.can_bus >= PLATFORM_CAN_BUS_1 && // 识别工程已声明的逻辑 CAN 总线。
+        motor->can_init_config.can_bus <= PLATFORM_CAN_BUS_3 && // 超出平台总线范围时拒绝。
+        motor->can_init_config.identifier_type == CAN_TX_ID_STANDARD && // DJI 设备使用标准 ID。
+        isfinite(motor->output_axis.gear_ratio) && motor->output_axis.gear_ratio > 0.0f && // 杜绝非法换算比例。
+        (motor->motor_type == GM6020 || motor->motor_type == M3508 || motor->motor_type == M2006); // 这三种型号已有 DJI 驱动。
+}
+
+// 安装方向须显式给出，零表示待确认。
+static uint8_t DJIOutputDirectionIsValid(Motor_Axis_Direction_e direction)
+{
+    return direction == MOTOR_AXIS_DIRECTION_NORMAL || direction == MOTOR_AXIS_DIRECTION_REVERSE;
+}
+#endif
+
+#if MC02_FEATURE_GIMBAL || MC02_FEATURE_SHOOTER
+// 其他机构的安装方向仍从完整电机配置取得。
 static uint8_t IsSupportedDJIMotor(const Motor_Init_Config_s *motor, uint8_t require_id)
 {
-    if (motor == NULL || motor->can_init_config.can_bus < PLATFORM_CAN_BUS_1 ||
-        motor->can_init_config.can_bus > PLATFORM_CAN_BUS_3 ||
-        motor->can_init_config.identifier_type != CAN_TX_ID_STANDARD ||
-        !isfinite(motor->output_axis.gear_ratio) || motor->output_axis.gear_ratio <= 0.0f ||
-        (motor->output_axis.direction != MOTOR_AXIS_DIRECTION_NORMAL &&
-         motor->output_axis.direction != MOTOR_AXIS_DIRECTION_REVERSE) ||
-        (motor->motor_type != GM6020 && motor->motor_type != M3508 && motor->motor_type != M2006))
-        return 0u;
-    if (require_id != 0u &&
-        (motor->can_init_config.tx_id == 0u || motor->can_init_config.tx_id > 8u))
-        return 0u;
-    return 1u;
+    return DJIHardwareConfigIsValid(motor) && DJIOutputDirectionIsValid(motor->output_axis.direction) &&
+        (require_id == 0u || (motor->can_init_config.tx_id >= 1u && motor->can_init_config.tx_id <= 8u));
 }
 #endif
 
@@ -49,7 +56,7 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
         fabsf(chassis->motion_limits.rotate_wz_deg_s) > chassis->motion_limits.max_wz_deg_s ||
         !isfinite(chassis->motion_limits.max_motor_speed_deg_s) ||
         chassis->motion_limits.max_motor_speed_deg_s <= 0.0f ||
-        !IsSupportedDJIMotor(&chassis->chassis_motor_config, 0u))
+        !DJIHardwareConfigIsValid(&chassis->chassis_motor_config))
         return 0u;
 
     if ((chassis->wheel_type != MECANUM_WHEEL && chassis->wheel_type != OMNI_WHEEL) ||
@@ -71,14 +78,15 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
         return 0u;
 #endif
 #endif
-    // 检查四个驱动轮都有合法且互不重复的电调编号。
-    for (unsigned index = 0u; index < 4u; ++index)
+    // 四台轮电机共用型号和总线，各自声明编号与安装方向。
+    for (unsigned index = 0u; index < CHASSIS_WHEEL_COUNT; ++index)
     {
-        if (chassis->chassis_motor_id[index] == 0u || chassis->chassis_motor_id[index] > 8u)
-            return 0u;
-        for (unsigned previous = 0u; previous < index; ++previous)
-            if (chassis->chassis_motor_id[previous] == chassis->chassis_motor_id[index])
-                return 0u;
+        const ChassisWheelMotorConfig_t *wheel = &chassis->wheel_motors[index]; // 按轮序读取同一份设备配置。
+        if (wheel->device_id < 1u || wheel->device_id > 8u || !DJIOutputDirectionIsValid(wheel->direction))
+            return 0u; // 未确认方向或非法编号不能启动轮组。
+        for (unsigned previous = 0u; previous < index; ++previous) // 同一总线不能把同一设备分配给两轮。
+            if (chassis->wheel_motors[previous].device_id == wheel->device_id)
+                return 0u; // 两轮收到相同设备反馈会使速度计算无效。
     }
     return 1u;
 }
