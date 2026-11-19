@@ -53,8 +53,14 @@ static uint8_t chassis_velocity_valid; // 时间戳零也可有效，单独记�
 static ChassisOdometryFeedback_t chassis_odometry; // 与速度在同一临界区交付。
 static uint8_t chassis_odometry_valid;
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+typedef struct {
+    uint32_t time_ms; // 轮速的原始接收时刻，允许毫秒回绕。
+    uint32_t sequence; // 该轮本次反馈序号，零表示没有样本。
+} ChassisWheelObservation_t;
+
 static ChassisOdometryFeedback_t odometry_anchor; // 只由底盘任务更新，启动阶段负责清理。
 static ChassisTwist_t odometry_anchor_twist; // 上一个不同来源时刻对应的底盘自身速度。
+static ChassisWheelObservation_t odometry_anchor_wheels[CHASSIS_WHEEL_COUNT]; // 上次积分使用的四轮原始反馈身份。
 static uint8_t odometry_anchor_known; // 时间为零也能成为有效样本。
 static uint8_t odometry_integrating; // 收到无效数据后等待下一个新样本开启新段。
 #endif
@@ -266,11 +272,11 @@ uint8_t Chassis_GetOdometry(ChassisOdometryFeedback_t *output)
 
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
 // 取四个已经换算到输出轴的轮速；不足四份时整个底盘速度无效。
-static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity)
+static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity,
+                                    ChassisWheelObservation_t wheels[CHASSIS_WHEEL_COUNT])
 {
     DJIMotorInstance *const motors[CHASSIS_WHEEL_COUNT] = {motor_lf, motor_rf, motor_lb, motor_rb}; // 统一轮序。
     ChassisWheelSpeeds_t speeds;
-    uint32_t received_at[CHASSIS_WHEEL_COUNT];
     for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
     {
         Motor_Feedback_Snapshot_s feedback = {0};
@@ -279,7 +285,8 @@ static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity)
             feedback.speed.reference != MOTOR_REFERENCE_OUTPUT_AXIS)
             return 0u; // 未接收、过期或错误单位的轮速均不能用来估算。
         speeds.rad_s[i] = feedback.speed.value; // 驱动已按安装方向和减速比换算，不重复处理符号。
-        received_at[i] = feedback.speed.source_time_ms; // 记录原始接收时间，不以本轮执行时间替代。
+        wheels[i].time_ms = feedback.speed.source_time_ms; // 记录原始接收时间，不以本轮执行时间替代。
+        wheels[i].sequence = feedback.speed.sequence; // 每轮单独保留驱动报告的原始反馈身份。
     }
     if (OmniEstimate(&speeds, &chassis_config->omni_geometry, &velocity->twist) != CHASSIS_KINEMATICS_OK)
         return 0u; // 几何退化或数值异常时不发布部分结果。
@@ -287,7 +294,7 @@ static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity)
     uint32_t oldest_age = 0u;
     for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
     {
-        const uint32_t age = now - received_at[i]; // 无符号差值处理本机毫秒回绕。
+        const uint32_t age = now - wheels[i].time_ms; // 无符号差值处理本机毫秒回绕。
         if (age > DJI_FEEDBACK_MAX_AGE_MS) return 0u; // 错误的未来时间也无法通过。
         if (age > oldest_age) oldest_age = age; // 选择剩余有效时间最短的样本。
     }
@@ -296,7 +303,8 @@ static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity)
 }
 
 // 只用不同来源时刻的有效速度积分；计算期间不占用发布临界区。
-static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeedback_t *velocity)
+static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeedback_t *velocity,
+    const ChassisWheelObservation_t wheels[CHASSIS_WHEEL_COUNT])
 {
     if (velocity == NULL || chassis_config->odometry_max_gap_ms == 0u)
     {
@@ -311,13 +319,24 @@ static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeed
     }
     const uint8_t anchor_recent = odometry_anchor_known &&
         now - odometry_anchor.source_time_ms <= DJI_FEEDBACK_MAX_AGE_MS; // 来源失效后只允许重新起算。
-    const uint32_t elapsed_ms = velocity->source_time_ms - odometry_anchor.source_time_ms; // 无符号差同时适用于时间回绕。
-    if (anchor_recent && elapsed_ms == 0u)
-        return odometry_integrating ? &odometry_anchor : NULL; // 部分轮刷新并不代表最早时刻前进。
-    if (anchor_recent && elapsed_ms > INT32_MAX)
+    uint8_t all_new = 1u; // 只有四轮都离开上次积分使用的样本，才推进位姿。
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
     {
-        odometry_integrating = 0u; // 近期样本倒退，保留原时刻作为同一批数据的比较基准。
-        return NULL;
+        const uint32_t sequence_step = wheels[i].sequence - odometry_anchor_wheels[i].sequence; // 允许非零序号跨回绕。
+        const uint32_t time_step = wheels[i].time_ms - odometry_anchor_wheels[i].time_ms; // 同一毫秒可以收到多帧。
+        if (wheels[i].sequence == 0u || (anchor_recent && (sequence_step > INT32_MAX || time_step > INT32_MAX)))
+        {
+            odometry_integrating = 0u; // 任一轮缺少身份或近期样本倒退时中断当前段。
+            return NULL;
+        }
+        if (odometry_anchor_known && sequence_step == 0u)
+            all_new = 0u; // 另外几轮更新也不能让该轮的旧反馈再次参与积分。
+    }
+    const uint32_t elapsed_ms = velocity->source_time_ms - odometry_anchor.source_time_ms; // 无符号差同时适用于时间回绕。
+    if (!all_new || (anchor_recent && elapsed_ms == 0u))
+    {
+        if (!anchor_recent) odometry_integrating = 0u; // 未等齐新反馈前也不能延长旧位姿期限。
+        return odometry_integrating ? &odometry_anchor : NULL; // 样本未齐或毫秒时间未前进，保留原积分基准。
     }
 
     if (!odometry_integrating || !anchor_recent || elapsed_ms > chassis_config->odometry_max_gap_ms)
@@ -334,6 +353,7 @@ static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeed
 
     odometry_anchor.source_time_ms = velocity->source_time_ms; // 不用任务执行时间延长有效期。
     odometry_anchor_twist = velocity->twist; // 作为下一段区间中较早一端的速度。
+    memcpy(odometry_anchor_wheels, wheels, sizeof(odometry_anchor_wheels)); // 四轮身份与这次积分一起推进。
     odometry_anchor_known = 1u; // 只有可信的新样本可以更新比较基准。
     odometry_integrating = 1u; // 当前段已有可发布位姿。
     return &odometry_anchor;
@@ -565,9 +585,10 @@ void ChassisTask()
     // 全向轮估计独立于命令许可，停机滑行期间也能读取实测速度。
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
     ChassisVelocityFeedback_t velocity;
+    ChassisWheelObservation_t wheels[CHASSIS_WHEEL_COUNT]; // 里程计对照上次积分使用的四轮反馈。
     const ChassisVelocityFeedback_t *feedback = chassis_config->wheel_type == OMNI_WHEEL &&
-        EstimateOmniVelocity(&velocity) ? &velocity : NULL; // 不支持或轮速失效时，两个本地结果都撤销。
-    PublishMotionFeedback(feedback, UpdateOdometry(feedback));
+        EstimateOmniVelocity(&velocity, wheels) ? &velocity : NULL; // 不支持或轮速失效时，两个本地结果都撤销。
+    PublishMotionFeedback(feedback, UpdateOdometry(feedback, wheels));
 #endif
 
     // // 获取裁判系统数据   建议将裁判系统与底盘分离，所以此处数据应使用消息中心发送

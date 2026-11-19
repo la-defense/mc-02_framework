@@ -39,7 +39,8 @@ typedef struct {
 /** @brief 复制可选的本地轮速里程计，供任务上下文使用。
  * @param[out] output 位姿、来源时间及段号；失败时非空输出清零。
  * @return 1 表示已启用且轮速来源有效；0 表示关闭、未取得样本或已失效。
- * @note 首个有效样本的位姿为零。发生断流时不用旧位姿接续；本地位姿会受轮组打滑影响。
+ * @note 首批有效反馈的位姿为零。之后四轮都收到新样本且最早时刻前进才积分。
+ *       发生断流时不用旧位姿接续；本地位姿会受轮组打滑影响。
  */
 uint8_t Chassis_GetOdometry(ChassisOdometryFeedback_t *output);
 

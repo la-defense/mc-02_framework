@@ -153,6 +153,7 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uin
     snapshot->speed.reference = MOTOR_REFERENCE_OUTPUT_AXIS; // 该替身提供减速器输出轴数据。
     snapshot->speed.value = motor->feedback_speed_rad_s;
     snapshot->speed.source_time_ms = motor->feedback_source_time_ms;
+    snapshot->speed.sequence = motor->feedback_sequence;
     snapshot->current.valid = motor->feedback_current_valid;
     if (motor->feedback_online == 0u) return MOTOR_FEEDBACK_NOT_READY;
     if (motor->feedback_age_ms > 20u) return MOTOR_FEEDBACK_STALE;
@@ -442,17 +443,21 @@ static int TestOmniVelocity(void)
     return 0;
 }
 
-// 注入纯前进的同一批轮速，调用真实的底盘周期入口。
-static void PublishForwardWheels(uint32_t time_ms)
+// 只刷新指定轮速，可在主机分别模拟同步和异步到达。
+static void PublishForwardWheel(unsigned i, uint32_t time_ms)
 {
     const float u = 0.70710678118f;
+    motors[i].feedback_online = 1u; // 该轮反馈在线。
+    motors[i].feedback_speed_valid = 1u; // 替身按输出轴 rad/s 交付。
+    motors[i].feedback_speed_rad_s = i % 2u == 0u ? -10.0f * u : 10.0f * u; // 四轮等方向投影合成前进 1 m/s。
+    motors[i].feedback_source_time_ms = time_ms; // 采样时间独立于执行任务的时刻。
+    if (++motors[i].feedback_sequence == 0u) ++motors[i].feedback_sequence; // 同驱动一样跳过保留的零序号。
+}
+
+static void PublishForwardWheels(uint32_t time_ms)
+{
     for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
-    {
-        motors[i].feedback_online = 1u; // 本批反馈四轮均在线。
-        motors[i].feedback_speed_valid = 1u; // 替身按输出轴 rad/s 交付。
-        motors[i].feedback_speed_rad_s = i % 2u == 0u ? -10.0f * u : 10.0f * u; // 四轮合成前进 1 m/s。
-        motors[i].feedback_source_time_ms = time_ms; // 采样时间独立于执行任务的时刻。
-    }
+        PublishForwardWheel(i, time_ms); // 同一毫秒为四轮交付独立样本。
 }
 
 static int TestOmniOdometry(void)
@@ -518,10 +523,63 @@ static int TestOmniOdometry(void)
     return 0;
 }
 
+static int TestOmniOdometryBatch(void)
+{
+    SelectOmniFixture();
+    chassis_configuration.odometry_max_gap_ms = 15u; // 主机用值，覆盖异步到达和倒退场景。
+    CHECK(ChassisInit() == 1u);
+    ChassisOdometryFeedback_t pose;
+    ChassisVelocityFeedback_t velocity;
+    test_tick = 12u;
+    motors[0].feedback_sequence = UINT32_MAX - 1u; // 最早轮的首样本为最后一个非零序号。
+    PublishForwardWheel(0u, 10u);
+    for (unsigned i = 1u; i < CHASSIS_WHEEL_COUNT; ++i)
+        PublishForwardWheel(i, 12u);
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&pose) == 1u && pose.source_time_ms == 10u);
+    const uint32_t segment = pose.segment;
+
+    test_tick = 15u;
+    PublishForwardWheel(0u, 15u); // 只更新最早轮，序号回绕且四轮估速时刻已经前进。
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u && velocity.source_time_ms == 12u);
+    CHECK(Chassis_GetOdometry(&pose) == 1u && pose.source_time_ms == 10u && pose.pose.x_m == 0.0f);
+    test_tick = 17u;
+    for (unsigned i = 1u; i < CHASSIS_WHEEL_COUNT; ++i)
+        PublishForwardWheel(i, 17u); // 等齐后才消耗四轮身份，最早新反馈仍在 15 ms。
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&pose) == 1u && pose.source_time_ms == 15u && pose.segment == segment);
+    CHECK(fabsf(pose.pose.x_m - 0.005f) < 0.00001f);
+
+    test_tick = 19u;
+    PublishForwardWheels(19u);
+    motors[1].feedback_source_time_ms = 16u; // 最早时刻仍前进，但单轮时间倒退。
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u && velocity.source_time_ms == 16u);
+    CHECK(Chassis_GetOdometry(&pose) == 0u);
+    test_tick = 22u;
+    PublishForwardWheels(test_tick); // 确认全部样本刷新后从新段起算。
+    motors[0].feedback_source_time_ms = 20u; // 留出两毫秒的轮速到达差。
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&pose) == 1u && pose.segment == segment + 1u && pose.pose.x_m == 0.0f);
+
+    test_tick = 41u; // 上次位姿已过期，但只刷新最早轮后，当前四轮仍可估速。
+    PublishForwardWheel(0u, test_tick);
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u && Chassis_GetOdometry(&pose) == 0u);
+    test_tick = 42u;
+    for (unsigned i = 1u; i < CHASSIS_WHEEL_COUNT; ++i)
+        PublishForwardWheel(i, test_tick);
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&pose) == 1u && pose.segment == segment + 2u && pose.pose.x_m == 0.0f);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "velocity") == 0) return TestOmniVelocity();
     if (argc == 2 && strcmp(argv[1], "odometry") == 0) return TestOmniOdometry();
+    if (argc == 2 && strcmp(argv[1], "odometry-batch") == 0) return TestOmniOdometryBatch();
     if (argc == 2 && strncmp(argv[1], "motor-at-", 9u) == 0)
         fail_motor_attempt = (unsigned)(argv[1][9] - '0'); // 注入指定轮电机注册失败。
     if (argc == 2 && strcmp(argv[1], "rollback-failure") == 0)
