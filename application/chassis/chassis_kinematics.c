@@ -72,26 +72,51 @@ ChassisKinematicsStatus_t ChassisKinematicsEstimate(const ChassisWheelSpeeds_t *
     const ChassisWheelGeometry_t wheels[CHASSIS_WHEEL_COUNT], ChassisTwist_t *output)
 {
     if (output == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
-    *output = (ChassisTwist_t){0}; // 任一轮或任一方向无效时清掉整组结果。
-    if (input == NULL || wheels == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
+    ChassisVelocityEstimator_t estimator; // 单次调用也复用相同的几何和估速步骤。
+    if (input != NULL && ChassisKinematicsPrepareEstimator(wheels, &estimator) == CHASSIS_KINEMATICS_OK)
+        return ChassisKinematicsEstimatePrepared(input, &estimator, output);
+    *output = (ChassisTwist_t){0}; // 参数无效时清掉整组结果。
+    return CHASSIS_KINEMATICS_ARGUMENT;
+}
+
+ChassisKinematicsStatus_t ChassisKinematicsPrepareEstimator(
+    const ChassisWheelGeometry_t wheels[CHASSIS_WHEEL_COUNT], ChassisVelocityEstimator_t *estimator)
+{
+    if (estimator == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
+    estimator->ready = 0u; // 重配失败时也不能继续沿用旧几何的系数。
+    if (wheels == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
     double projection[CHASSIS_WHEEL_COUNT][3], gram[3][3] = {{0}}, adj[3][3];
     if (!BuildProjection(wheels, projection, gram)) return CHASSIS_KINEMATICS_ARGUMENT;
     const double determinant = ProjectionDeterminant(gram, adj); // 满秩才可求三个速度分量。
     if (determinant == 0.0) return CHASSIS_KINEMATICS_ARGUMENT;
 
-    double projected_speed[3] = {0}; // 正规方程右侧 Aᵀv。
+    for (unsigned axis = 0u; axis < 3u; ++axis) // 按输出方向生成系数矩阵的每一行。
+        for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) // 每列表示一个轮速对该方向的贡献。
+        {
+            const double projected = adj[axis][0] * projection[i][0] + adj[axis][1] * projection[i][1] +
+                                     adj[axis][2] * projection[i][2]; // 对应 (AᵀA) 伴随矩阵乘 Aᵀ。
+            const double gain = (projected / determinant) * wheels[i].radius_m; // 求逆并计入轮轴角速度到轮缘速度的换算。
+            if (!isfinite(gain)) return CHASSIS_KINEMATICS_ARGUMENT; // 所有系数须可用，部分结果保持不可读。
+            estimator->gain[axis][i] = gain; // 按固定轮序保存，周期计算无须再读取几何。
+        }
+    estimator->ready = 1u; // 全部结果有效后才开放读取。
+    return CHASSIS_KINEMATICS_OK;
+}
+
+ChassisKinematicsStatus_t ChassisKinematicsEstimatePrepared(const ChassisWheelSpeeds_t *input,
+    const ChassisVelocityEstimator_t *estimator, ChassisTwist_t *output)
+{
+    if (output == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
+    *output = (ChassisTwist_t){0}; // 任一输入或分量错误时清掉整组结果。
+    if (input == NULL || estimator == NULL || estimator->ready != 1u) return CHASSIS_KINEMATICS_ARGUMENT;
     for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
-    {
-        if (!isfinite(input->rad_s[i])) return CHASSIS_KINEMATICS_ARGUMENT;
-        const double linear_speed = (double)input->rad_s[i] * wheels[i].radius_m; // 轮轴角速度变为轮缘 m/s。
-        for (unsigned axis = 0u; axis < 3u; ++axis)
-            projected_speed[axis] += projection[i][axis] * linear_speed; // 四个实测轮速共同估计三个自由度。
-    }
+        if (!isfinite(input->rad_s[i])) return CHASSIS_KINEMATICS_ARGUMENT; // 一轮无效就不执行矩阵乘法。
     float estimate[3]; // 在三个分量都通过有限数检查后一次交付。
     for (unsigned axis = 0u; axis < 3u; ++axis)
     {
-        const double speed = (adj[axis][0] * projected_speed[0] + adj[axis][1] * projected_speed[1] +
-                              adj[axis][2] * projected_speed[2]) / determinant; // 用伴随矩阵求解 AᵀA x = Aᵀv。
+        double speed = 0.0; // 从零累加四个轮速的贡献。
+        for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
+            speed += estimator->gain[axis][i] * input->rad_s[i]; // 每个轴只需计算固定系数与轮速的点积。
         if (!isfinite(speed) || fabs(speed) > FLT_MAX) return CHASSIS_KINEMATICS_ARGUMENT;
         estimate[axis] = (float)speed;
     }

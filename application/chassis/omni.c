@@ -27,11 +27,25 @@ ChassisKinematicsStatus_t OmniCalculate(const ChassisTwist_t *input,
     return ChassisKinematicsCalculate(input, g->wheels, output);
 }
 
+ChassisKinematicsStatus_t OmniPrepareEstimator(const OmniGeometry_t *geometry, ChassisVelocityEstimator_t *estimator)
+{
+    if (estimator == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
+    if (!OmniDirectionsValid(geometry))
+    {
+        estimator->ready = 0u; // 方向检查失败时也放弃已有的系数。
+        return CHASSIS_KINEMATICS_ARGUMENT;
+    }
+    return ChassisKinematicsPrepareEstimator(geometry->wheels, estimator);
+}
+
 ChassisKinematicsStatus_t OmniEstimate(const ChassisWheelSpeeds_t *input,
     const OmniGeometry_t *geometry, ChassisTwist_t *output)
 {
     if (output == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
-    *output = (ChassisTwist_t){0};
-    if (!OmniDirectionsValid(geometry)) return CHASSIS_KINEMATICS_ARGUMENT;
+    if (!OmniDirectionsValid(geometry))
+    {
+        *output = (ChassisTwist_t){0}; // 方向不合法时不把旧结果留给调用者。
+        return CHASSIS_KINEMATICS_ARGUMENT;
+    }
     return ChassisKinematicsEstimate(input, geometry->wheels, output);
 }

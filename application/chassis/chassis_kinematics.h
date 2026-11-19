@@ -35,6 +35,12 @@ typedef struct {
     float drive_x, drive_y; /**< 滚动方向投影；麦轮还计入滚子带来的投影比例。 */
     float radius_m;
 } ChassisWheelGeometry_t;
+
+/** @brief 轮组几何固定后即可提前算好的轮速到车体速度系数。 */
+typedef struct {
+    double gain[3][CHASSIS_WHEEL_COUNT]; /**< 每行分别输出前进、左移或转动速度。 */
+    uint8_t ready; /**< 准备成功置 1，失败或清零后不能用于估速。 */
+} ChassisVelocityEstimator_t;
 /** @brief 将底盘中心速度投影到四轮，拒绝不能独立控制三个平面自由度的轮组。
  * @param[in] input 速度要求；各数值须有限。
  * @param[in] wheels 四个轮位、投影比例和正轮径；仅计算期间读取。
@@ -51,6 +57,23 @@ ChassisKinematicsStatus_t ChassisKinematicsCalculate(const ChassisTwist_t *input
  */
 ChassisKinematicsStatus_t ChassisKinematicsEstimate(const ChassisWheelSpeeds_t *input,
     const ChassisWheelGeometry_t wheels[CHASSIS_WHEEL_COUNT], ChassisTwist_t *output);
+
+/** @brief 检查轮组几何并提前计算估速系数。
+ * @param[in] wheels 四轮位置、滚动投影和正轮径。
+ * @param[out] estimator 要准备的系数，非空且须与 wheels 分开存放；失败时标为不可用。
+ * @return OK 或 ARGUMENT；更换几何后必须重新准备。
+ */
+ChassisKinematicsStatus_t ChassisKinematicsPrepareEstimator(
+    const ChassisWheelGeometry_t wheels[CHASSIS_WHEEL_COUNT], ChassisVelocityEstimator_t *estimator);
+
+/** @brief 用已准备的系数把四轮速度换算为底盘速度。
+ * @param[in] input 固定轮序的实测轮轴 rad/s，须为有限数。
+ * @param[in] estimator 按当前几何准备成功的系数。
+ * @param[out] output 底盘中心速度，m/s、rad/s；失败时非空输出清零。
+ * @return OK 或 ARGUMENT；所有指针必须非空。
+ */
+ChassisKinematicsStatus_t ChassisKinematicsEstimatePrepared(const ChassisWheelSpeeds_t *input,
+    const ChassisVelocityEstimator_t *estimator, ChassisTwist_t *output);
 /** @brief 将一段底盘速度积分到本地位姿，假定区间内为两端速度的平均值。
  * @param[in,out] pose 起始位姿与积分结果；失败时保持原值。
  * @param[in] previous 较早样本的底盘速度，m/s、rad/s。

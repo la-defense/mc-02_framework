@@ -59,4 +59,12 @@
 - 隔离的 `commissioning/chassis` 通过 Cortex-M7 Debug 构建和 ELF／源码检查，FLASH 306796 B、主 RAM 125936 B，分别增加 144 B 和 32 B。哨兵仍关闭里程计，未连接硬件，轮速反馈时差和实车里程计精度待测。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 834 项；两种禁热固件通过构建与 ELF 检查，六种未确认的生产配置按预期拒绝。
 
+## 启动时准备全向轮估速系数
+
+- 轮组方向、尺寸和轮径固定后，启动一次求出三行四列的系数。周期估速仍逐轮检查单位、数值和原始接收时刻，每个速度分量通过四个乘积相加得到。非法几何使底盘初始化在轮电机登记前失败，重新准备失败后也不会继续使用旧系数。
+- 四项 ASan／UBSan 专项通过。手算轮速验证前进、左移和旋转，另一组验证同一系数可处理不同方向的反馈。另覆盖未准备、几何退化、非有限输入和原有反馈超期、异步积分行为。
+- 隔离的 `commissioning/chassis` 通过 Cortex-M7 Debug 构建及 ELF／源码隔离。反汇编确认准备先于电机登记，周期估速仍读取实际轮速，应用系数的函数没有矩阵求逆或除法。FLASH 为 306924 B、主 RAM 为 126032 B，较上次分别增加 128 B 和 96 B。未连接硬件，板上执行耗时和反馈精度仍待测量。
+- 相同 ARM Debug 编译选项下，`-fstack-usage` 报告原周期估速函数占用 296 B 静态栈帧，改后的周期点积函数为 24 B。启动准备函数为 256 B。这些数值只描述单个函数的静态栈帧，任务峰值栈水位仍待测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 834 项，普通禁热和遥控诊断固件的内存用量与上轮相同，六种未确认的生产配置仍按预期拒绝。
+
 见[本底盘接口](../../../../application/chassis/chassis.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

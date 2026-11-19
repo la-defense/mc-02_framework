@@ -59,6 +59,7 @@ typedef struct {
 } ChassisWheelObservation_t;
 
 static ChassisOdometryFeedback_t odometry_anchor; // 只由底盘任务更新，启动阶段负责清理。
+static ChassisVelocityEstimator_t omni_estimator; // 当前只读车型几何对应的固定估速系数。
 static ChassisTwist_t odometry_anchor_twist; // 上一个不同来源时刻对应的底盘自身速度。
 static ChassisWheelObservation_t odometry_anchor_wheels[CHASSIS_WHEEL_COUNT]; // 上次积分使用的四轮原始反馈身份。
 static uint8_t odometry_anchor_known; // 时间为零也能成为有效样本。
@@ -80,6 +81,7 @@ static void PublishMotionFeedback(const ChassisVelocityFeedback_t *velocity, con
 static void ResetMotionFeedback(void)
 {
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+    omni_estimator.ready = 0u; // 启动或撤销设备后，旧几何的系数不能再使用。
     odometry_anchor_known = 0u; // 初始化前的时间不再用于比较。
     odometry_integrating = 0u; // 下一个可信样本从零开始。
 #endif
@@ -111,6 +113,11 @@ uint8_t ChassisInit(void)
     if (chassis_config == NULL || !ChassisOdometryGapIsValid(chassis_config->odometry_max_gap_ms,
                                                             chassis_config->wheel_type == OMNI_WHEEL))
         return 0u;
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+    if (chassis_config->wheel_type == OMNI_WHEEL &&
+        OmniPrepareEstimator(&chassis_config->omni_geometry, &omni_estimator) != CHASSIS_KINEMATICS_OK)
+        return 0u; // 几何退化时在登记话题和轮电机前退出。
+#endif
     if (!RobotTopicsInit())
         return 0u;
     DJIMotorInstance *pending[4] = {NULL}; // 申请完成之前不发布轮电机实例。
@@ -288,8 +295,8 @@ static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity,
         wheels[i].time_ms = feedback.speed.source_time_ms; // 记录原始接收时间，不以本轮执行时间替代。
         wheels[i].sequence = feedback.speed.sequence; // 每轮单独保留驱动报告的原始反馈身份。
     }
-    if (OmniEstimate(&speeds, &chassis_config->omni_geometry, &velocity->twist) != CHASSIS_KINEMATICS_OK)
-        return 0u; // 几何退化或数值异常时不发布部分结果。
+    if (ChassisKinematicsEstimatePrepared(&speeds, &omni_estimator, &velocity->twist) != CHASSIS_KINEMATICS_OK)
+        return 0u; // 只使用启动时的有效系数，轮速数值异常时整组结果作废。
     const uint32_t now = PlatformTimeNowMs(); // 计算后检查最早轮速是否依然有效。
     uint32_t oldest_age = 0u;
     for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)

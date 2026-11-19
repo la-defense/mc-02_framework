@@ -26,7 +26,20 @@ static void TestOmniEstimate(void)
     TEST_CHECK(OmniEstimate(&wheels, &geometry, &result) == CHASSIS_KINEMATICS_OK);
     TEST_CHECK(close_to(result.vx_m_s, 1.0f) && close_to(result.vy_m_s, -2.0f) && close_to(result.wz_rad_s, 3.0f));
 
+    ChassisVelocityEstimator_t estimator = {0};
+    TEST_CHECK(ChassisKinematicsEstimatePrepared(&wheels, &estimator, &result) == CHASSIS_KINEMATICS_ARGUMENT);
+    TEST_CHECK(OmniPrepareEstimator(&geometry, &estimator) == CHASSIS_KINEMATICS_OK);
+    TEST_CHECK(ChassisKinematicsEstimatePrepared(&wheels, &estimator, &result) == CHASSIS_KINEMATICS_OK);
+    TEST_CHECK(close_to(result.vx_m_s, 1.0f) && close_to(result.vy_m_s, -2.0f) && close_to(result.wz_rad_s, 3.0f));
+    const ChassisTwist_t reverse = {-2.0f, 0.5f, -1.0f}; // 同一组系数处理另一批不同方向的反馈。
+    ChassisWheelSpeeds_t reverse_feedback;
+    TEST_CHECK(OmniCalculate(&reverse, &geometry, &reverse_feedback) == CHASSIS_KINEMATICS_OK);
+    TEST_CHECK(ChassisKinematicsEstimatePrepared(&reverse_feedback, &estimator, &result) == CHASSIS_KINEMATICS_OK);
+    TEST_CHECK(close_to(result.vx_m_s, -2.0f) && close_to(result.vy_m_s, 0.5f) && close_to(result.wz_rad_s, -1.0f));
+
     wheels.rad_s[1] = NAN; // 无效轮速使整组输出清零。
+    TEST_CHECK(ChassisKinematicsEstimatePrepared(&wheels, &estimator, &result) == CHASSIS_KINEMATICS_ARGUMENT);
+    TEST_CHECK(result.vx_m_s == 0.0f && result.vy_m_s == 0.0f && result.wz_rad_s == 0.0f);
     TEST_CHECK(OmniEstimate(&wheels, &geometry, &result) == CHASSIS_KINEMATICS_ARGUMENT);
     TEST_CHECK(result.vx_m_s == 0.0f && result.vy_m_s == 0.0f && result.wz_rad_s == 0.0f);
     wheels.rad_s[1] = -8.5f;
@@ -35,6 +48,8 @@ static void TestOmniEstimate(void)
         geometry.wheels[i].drive_x = 1.0f; // 所有轮方向平行，无法推断横移。
         geometry.wheels[i].drive_y = 0.0f;
     }
+    TEST_CHECK(OmniPrepareEstimator(&geometry, &estimator) == CHASSIS_KINEMATICS_ARGUMENT);
+    TEST_CHECK(ChassisKinematicsEstimatePrepared(&wheels, &estimator, &result) == CHASSIS_KINEMATICS_ARGUMENT); // 重配失败时旧系数不可用。
     TEST_CHECK(OmniEstimate(&wheels, &geometry, &result) == CHASSIS_KINEMATICS_ARGUMENT);
     TEST_CHECK(OmniEstimate(NULL, &geometry, &result) == CHASSIS_KINEMATICS_ARGUMENT);
 }

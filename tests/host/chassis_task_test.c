@@ -384,6 +384,9 @@ static void SelectOmniFixture(void)
 static int TestOmniVelocity(void)
 {
     SelectOmniFixture();
+    chassis_configuration.omni_geometry.wheels[0].radius_m = 0.0f; // 唯一几何无效时，实际启动入口不得登记电机。
+    CHECK(ChassisInit() == 0u && motor_attempt == 0u);
+    SelectOmniFixture();
     const float u = 0.70710678118f;
     chassis_configuration.chassis_motor_config.output_axis.gear_ratio = 38.0f; // 仅测试，用较高减速比触发轮速上限。
     CHECK(ChassisInit() == 1u);

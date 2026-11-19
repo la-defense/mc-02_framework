@@ -15,6 +15,12 @@ typedef struct {
  */
 ChassisKinematicsStatus_t OmniCalculate(const ChassisTwist_t *input,
     const OmniGeometry_t *geometry, ChassisWheelSpeeds_t *output);
+/** @brief 按全向轮几何准备周期估速需要的固定系数。
+ * @param[in] geometry 实物位置、单位滚动方向和轮径。
+ * @param[out] estimator 由调用者保存到几何改变或底盘停止；失败时标为不可用。
+ * @return OK 或 ARGUMENT；无效方向、轮径或退化几何均拒绝。
+ */
+ChassisKinematicsStatus_t OmniPrepareEstimator(const OmniGeometry_t *geometry, ChassisVelocityEstimator_t *estimator);
 /** @brief 用全向轮输出轴速度估计底盘中心速度。
  * @param[in] input 统一轮序的实测轮轴 rad/s。
  * @param[in] geometry 实物位置、单位滚动方向和轮径。
