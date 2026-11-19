@@ -56,34 +56,50 @@ typedef struct {
     PlatformPeriodicRelease_t release; // 等待成功取得的拍点，用于完成检查。
     uint8_t fixed; // 1 使用固定拍点，0 保留轮间相对延迟。
     uint8_t ready; // 时钟初始化或等待失败后保持为 0。
+#if defined(MC02_PLATFORM_TIM5_PERIODIC)
+    uint8_t high_res; // 只在预检选中硬件时使用 TIM5 等待和完成检查。
+#endif
 } RobotTaskCycle_t;
 
 // 锁定时钟故障，不继续工作或报告新的任务进度。
 static void StopTaskClock(RobotTaskCycle_t *cycle)
 {
-    cycle->ready = 0u; // 后续轮次不会重新领取拍点。
     if (cycle->clock_fault != NULL) cycle->clock_fault(); // 控制任务先撤销自己的输出。
+#if defined(MC02_PLATFORM_TIM5_PERIODIC)
+    if (cycle->high_res && cycle->ready)
+        (void)PlatformTaskHighResClose(&cycle->clock); // 只释放当前任务持有的比较通道。
+#endif
+    cycle->ready = 0u; // 后续轮次不会重新领取拍点。
 }
 
 // 依赖启动协调者先发布监控配置并放行，再建立任务自己的拍点。
-static RobotTaskCycle_t OpenConfiguredTaskCycle(const PlatformPeriodicConfig_t *config,
-    TaskMonitor_Id_e monitor, uint8_t fixed, void (*clock_fault)(void))
+static void OpenConfiguredTaskCycle(RobotTaskCycle_t *cycle, const PlatformPeriodicConfig_t *config,
+    TaskMonitor_Id_e monitor, uint8_t fixed, PlatformPeriodicSource_t source, void (*clock_fault)(void))
 {
     while (!TaskMonitorRuntimeReleased())
         PlatformTaskDelayMs(1u); // 等待期间不执行任务业务，也不报告一轮工作完成。
-    RobotTaskCycle_t cycle = {
+    *cycle = (RobotTaskCycle_t){
         .monitor = monitor, // 后续进度统一报告给此监控项。
-        .delay_ms = config->period_us / 1000u, // 现有任务均使用整毫秒的名义间隔。
+        .delay_ms = config->period_us / 1000u + (config->period_us % 1000u != 0u), // 错误后至少让出一个刻度。
         .budget_us = config->budget_us, // 耗时告警复用启动时检查的配置。
         .clock_fault = clock_fault, // 记录本任务的计时故障处理。
         .fixed = fixed, // 本次启动后不改变等待方式。
     };
-    if (cycle.fixed)
+    if (cycle->fixed)
     {
-        cycle.ready = (uint8_t)(PlatformTaskPeriodicInit(&cycle.clock, config) == PLATFORM_PERIODIC_READY);
-        if (!cycle.ready) StopTaskClock(&cycle); // 初始化失败也不能留下有效的轮组目标。
+        PlatformPeriodicResult_t status = PLATFORM_PERIODIC_CONFIG; // 预检选择不匹配时禁止领取任何拍点。
+        if (source == PLATFORM_PERIODIC_SOURCE_RTOS)
+            status = PlatformTaskPeriodicInit(&cycle->clock, config); // 使用当前调度器时刻建立第一拍。
+#if defined(MC02_PLATFORM_TIM5_PERIODIC)
+        else if (source == PLATFORM_PERIODIC_SOURCE_HIGH_RES)
+        {
+            cycle->high_res = 1u; // 后续等待和完成都使用同一计数器。
+            status = PlatformTaskHighResOpen(&cycle->clock, config); // 后端保存地址，周期状态必须留在任务栈上。
+        }
+#endif
+        cycle->ready = (uint8_t)(status == PLATFORM_PERIODIC_READY);
+        if (!cycle->ready) StopTaskClock(cycle); // 初始化失败也不能留下有效的轮组目标。
     }
-    return cycle;
 }
 
 // 保留既有常驻任务的配置选择；独立底盘单独指定固定拍点。
@@ -94,7 +110,9 @@ static RobotTaskCycle_t OpenTaskCycle(RobotPeriodicTask_t task, TaskMonitor_Id_e
 #else
     const uint8_t fixed = 0u; // 未独立迁移的正式任务继续相对等待。
 #endif
-    return OpenConfiguredTaskCycle(RobotGetTaskPeriod(task), monitor, fixed, NULL);
+    RobotTaskCycle_t cycle;
+    OpenConfiguredTaskCycle(&cycle, RobotGetTaskPeriod(task), monitor, fixed, PLATFORM_PERIODIC_SOURCE_RTOS, NULL);
+    return cycle; // 这些常驻任务只使用 RTOS，不登记周期状态地址。
 }
 
 // 固定周期任务先领取拍点，再向监控请求执行；失败时让出处理器。
@@ -102,8 +120,17 @@ static uint8_t BeginTaskCycle(RobotTaskCycle_t *cycle)
 {
     if (cycle->fixed)
     {
-        if (cycle->ready && PlatformTaskPeriodicWait(&cycle->clock, &cycle->release) != PLATFORM_PERIODIC_READY)
-            StopTaskClock(cycle); // 只在首次失败时调用输出撤销。
+        if (cycle->ready)
+        {
+#if defined(MC02_PLATFORM_TIM5_PERIODIC)
+            const PlatformPeriodicResult_t status = cycle->high_res
+                ? PlatformTaskHighResWait(&cycle->clock, &cycle->release) // 按 TIM5 计数等待原定拍点。
+                : PlatformTaskPeriodicWait(&cycle->clock, &cycle->release); // 常驻任务使用 RTOS 刻度。
+#else
+            const PlatformPeriodicResult_t status = PlatformTaskPeriodicWait(&cycle->clock, &cycle->release);
+#endif
+            if (status != PLATFORM_PERIODIC_READY) StopTaskClock(cycle); // 首次时钟错误就撤销轮组参考。
+        }
         if (!cycle->ready)
         {
             PlatformTaskDelayMs(cycle->delay_ms); // 仅让出处理器，监控会观察到工作停止。
@@ -122,9 +149,21 @@ static void CompleteTaskCycle(RobotTaskCycle_t *cycle)
     if (cycle->fixed)
     {
         PlatformPeriodicTiming_t timing; // 完成检查使用与等待相同的时钟。
-        if (PlatformTaskPeriodicFinish(&cycle->clock, &cycle->release, &timing) != PLATFORM_PERIODIC_READY)
+#if defined(MC02_PLATFORM_TIM5_PERIODIC)
+        const PlatformPeriodicResult_t status = cycle->high_res
+            ? PlatformTaskHighResFinish(&cycle->clock, &cycle->release, &timing) // 硬件拍点只能与硬件完成时刻比较。
+            : PlatformTaskPeriodicFinish(&cycle->clock, &cycle->release, &timing);
+#else
+        const PlatformPeriodicResult_t status = PlatformTaskPeriodicFinish(&cycle->clock, &cycle->release, &timing);
+#endif
+        if (status != PLATFORM_PERIODIC_READY)
         {
             StopTaskClock(cycle); // 时钟不可信时撤销本任务输出并停止报告进度。
+            return;
+        }
+        if (cycle->monitor == TASK_MONITOR_CHASSIS && (timing.over_budget || timing.missed_deadline))
+        {
+            StopTaskClock(cycle); // 底盘不能按配置完成时撤销轮组，并且不续报进度。
             return;
         }
         const uint32_t start_lag = cycle->release.observed_tick - cycle->release.scheduled_tick; // 开始前已过的刻度。
@@ -178,8 +217,9 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
     BSP_LOG_EVENT_0(EV_APPLICATION_ROBOT_TASK_H_03);
 #if MC02_TASK_MOTOR_SPLIT
     const PlatformPeriodicConfig_t *dispatch = RobotGetTaskPeriod(ROBOT_PERIODIC_COMM);
-    RobotTaskCycle_t cycle = OpenConfiguredTaskCycle(dispatch, TASK_MONITOR_MOTOR,
-                                                    1u, StopMotorTaskOutputs); // 统一接收拍点仍为固定周期。
+    RobotTaskCycle_t cycle;
+    OpenConfiguredTaskCycle(&cycle, dispatch, TASK_MONITOR_MOTOR, 1u,
+                            PLATFORM_PERIODIC_SOURCE_RTOS, StopMotorTaskOutputs); // 接收仍按 RTOS 刻度运行。
     MotorTaskSchedule_t schedule; // 两种阶段拍点由当前任务独占。
     if (cycle.ready && MotorTaskScheduleInit(&schedule, RobotGetMotorTaskPeriods(), dispatch->period_us,
         dispatch->period_us / cycle.clock.period_ticks, cycle.clock.next_tick) != PLATFORM_PERIODIC_READY)
@@ -339,13 +379,14 @@ __attribute__((noreturn)) void StartCHASSISTASK(void const *argument)
     const RobotChassisTaskConfig_t *config = RobotGetChassisTaskConfig(); // 创建者已检查统一监控配置。
     if (config == NULL)
         for (;;) PlatformTaskDelayMs(1u); // 启动契约未满足时不访问设备，也不代报进度。
-    RobotTaskCycle_t cycle = OpenConfiguredTaskCycle(&config->timing, TASK_MONITOR_CHASSIS,
-                                                    1u, ChassisStopAndClear); // 放行后使用底盘私有时钟。
+    RobotTaskCycle_t cycle;
+    OpenConfiguredTaskCycle(&cycle, &config->timing, TASK_MONITOR_CHASSIS, 1u,
+                            config->source, ChassisStopAndClear); // 周期状态地址在整个任务内保持稳定。
     for (;;)
     {
         if (!RobotBuildModuleStarted(ROBOT_MODULE_CHASSIS))
         {
-            ChassisStopAndClear(); // 运行期间的依赖失效永久停止本任务工作。
+            StopTaskClock(&cycle); // 依赖失效时撤销输出并释放当前硬件通道。
             for (;;) PlatformTaskDelayMs(cycle.delay_ms);
         }
         if (!BeginTaskCycle(&cycle)) continue; // 本轮需要有效拍点和监控许可。

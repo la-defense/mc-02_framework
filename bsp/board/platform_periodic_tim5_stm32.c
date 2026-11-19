@@ -220,6 +220,27 @@ PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
     return result;
 }
 
+PlatformPeriodicResult_t PlatformTaskHighResFinish(const PlatformPeriodicClock_t *clock,
+    const PlatformPeriodicRelease_t *release, PlatformPeriodicTiming_t *timing)
+{
+    if (clock == NULL || release == NULL || timing == NULL) return PLATFORM_PERIODIC_CONFIG;
+    if (!TaskContextReady()) return PLATFORM_PERIODIC_CONTEXT;
+    taskENTER_CRITICAL(); // 在同一短临界区核对任务所有权并取得完成时刻。
+    if (OwnerChannel(clock) == CHANNEL_COUNT)
+    {
+        taskEXIT_CRITICAL();
+        return PLATFORM_PERIODIC_CONTEXT; // 未持有通道时不访问硬件寄存器。
+    }
+    if (!__HAL_RCC_TIM5_IS_CLK_ENABLED() || (TIM5->CR1 & TIM_CR1_CEN) == 0u)
+    {
+        taskEXIT_CRITICAL();
+        return PLATFORM_PERIODIC_CLOCK; // 外设被关停后不能用残留计数报告完成。
+    }
+    const uint32_t now = TIM5->CNT; // 在与拍点相同的计数域内读取完成时刻。
+    taskEXIT_CRITICAL();
+    return PlatformPeriodicFinish(clock, release, now, timing); // 复用回绕、预算和截止时间计算。
+}
+
 PlatformPeriodicResult_t PlatformTaskHighResClose(const PlatformPeriodicClock_t *clock)
 {
     if (clock == NULL || !TaskContextReady()) return PLATFORM_PERIODIC_CONTEXT;

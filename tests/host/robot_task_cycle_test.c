@@ -22,8 +22,9 @@ static unsigned fairness_delays;
 static uint8_t finish_error; // 注入实际工作以后才发生的计数错误。
 #if MC02_TASK_CHASSIS
 static unsigned stops;
-static const RobotChassisTaskConfig_t chassis = {
+static RobotChassisTaskConfig_t chassis = {
     .timing = {.period_us = 4000u, .budget_us = 4000u}, // 主机试验依赖的控制拍点，单位 μs。
+    .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 整毫秒场景固定使用 RTOS。
 };
 const RobotChassisTaskConfig_t *RobotGetChassisTaskConfig(void) { return &chassis; }
 uint8_t RobotBuildModuleStarted(RobotModule_t module)
@@ -97,6 +98,51 @@ PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock
     return PLATFORM_PERIODIC_READY;
 }
 
+#if MC02_TASK_CHASSIS
+static PlatformPeriodicClock_t *tim5_owner; // 硬件后端按实际任务栈地址记录所有权。
+static unsigned tim5_closes;
+static uint8_t budget_error;
+
+PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
+    const PlatformPeriodicConfig_t *config)
+{
+    TEST_CHECK(clock != NULL && tim5_owner == NULL && release_delays == 1u && initializations == 0u);
+    TEST_CHECK(config->period_us == 500u && config->budget_us == 250u); // 不把实际周期向上取整。
+    tim5_owner = clock; // 后续接口须传入同一个地址。
+    clock->period_ticks = 500u;
+    ++initializations;
+    return PLATFORM_PERIODIC_READY;
+}
+
+PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
+    PlatformPeriodicRelease_t *release)
+{
+    TEST_CHECK(clock == tim5_owner && tim5_closes == 0u);
+    return PlatformTaskPeriodicWait(clock, release); // 使用相同的假等待事件，硬件入口仍单独计数。
+}
+
+PlatformPeriodicResult_t PlatformTaskHighResFinish(const PlatformPeriodicClock_t *clock,
+    const PlatformPeriodicRelease_t *release, PlatformPeriodicTiming_t *timing)
+{
+    TEST_CHECK(clock == tim5_owner && tim5_closes == 0u);
+    const PlatformPeriodicResult_t result = PlatformTaskPeriodicFinish(clock, release, timing);
+    if (budget_error)
+    {
+        *timing = (PlatformPeriodicTiming_t){.work_ticks = 251u, .over_budget = 1u}; // 只超出执行预算。
+        return PLATFORM_PERIODIC_READY; // 后端正确报告超期，任务负责停止并释放通道。
+    }
+    return result;
+}
+
+PlatformPeriodicResult_t PlatformTaskHighResClose(const PlatformPeriodicClock_t *clock)
+{
+    TEST_CHECK(clock == tim5_owner && stops == 1u && tim5_closes == 0u); // 撤销轮组输出后才能释放。
+    ++tim5_closes;
+    tim5_owner = NULL;
+    return PLATFORM_PERIODIC_READY;
+}
+#endif
+
 TaskMonitor_Result_e TaskMonitorBeginWork(TaskMonitor_Id_e id)
 {
     TEST_CHECK(id == expected_monitor && waits == begins + 1u);
@@ -152,6 +198,7 @@ int main(int argc, char **argv)
     } tasks[] = {
 #if MC02_TASK_CHASSIS
         {"chassis", StartCHASSISTASK, TASK_MONITOR_CHASSIS, 4u}, // 正式任务入口使用隔离的主机时间配置。
+        {"tim5", StartCHASSISTASK, TASK_MONITOR_CHASSIS, 1u}, // 错误后让出 1 ms，实际拍点为 500 μs。
 #else
         {"ins", StartINSTASK, TASK_MONITOR_INS, 1u}, // 姿态采样与解算。
         {"comm", StartMOTORTASK, TASK_MONITOR_MOTOR, 1u}, // 禁热版本只派发通信。
@@ -159,18 +206,30 @@ int main(int argc, char **argv)
         {"robot", StartROBOTTASK, TASK_MONITOR_ROBOT, 5u}, // 整车诊断。
 #endif
     };
-    TEST_CHECK(argc == 2 || (argc == 3 && strcmp(argv[2], "finish-error") == 0));
+    TEST_CHECK(argc == 2 || (argc == 3 && (strcmp(argv[2], "finish-error") == 0 || strcmp(argv[2], "budget-error") == 0)));
     finish_error = (uint8_t)(argc == 3);
     for (size_t i = 0u; i < sizeof(tasks) / sizeof(tasks[0]); ++i)
     {
         if (strcmp(tasks[i].name, argv[1]) != 0) continue;
         expected_monitor = tasks[i].monitor;
         expected_period_ms = tasks[i].period_ms;
+#if MC02_TASK_CHASSIS
+        const uint8_t tim5 = (uint8_t)(strcmp(argv[1], "tim5") == 0);
+        if (tim5)
+        {
+            chassis.timing = (PlatformPeriodicConfig_t){.period_us = 500u, .budget_us = 250u};
+            chassis.source = PLATFORM_PERIODIC_SOURCE_HIGH_RES; // 模拟启动预检交付的实际来源。
+            budget_error = (uint8_t)(argc == 3 && strcmp(argv[2], "budget-error") == 0);
+        }
+#endif
         if (setjmp(task_exit) == 0) tasks[i].entry(NULL);
         TEST_CHECK(initializations == 1u && begins == 2u && work == 1u && finishes == 1u && fault_delays == 2u);
         TEST_CHECK(waits == (finish_error ? 2u : 3u));
         const unsigned reported = finish_error ? 0u : 1u; // 完成时钟失败时保持监控进度不变。
         TEST_CHECK(completes == reported && idle_reports == reported && fairness_delays == reported);
+#if MC02_TASK_CHASSIS
+        TEST_CHECK(tim5_closes == tim5 && tim5_owner == NULL); // 故障后只释放一次硬件通道。
+#endif
         return 0;
     }
     TEST_CHECK(0);

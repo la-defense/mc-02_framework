@@ -155,6 +155,15 @@ uint32_t PlatformTaskHighResAvailableChannels(void);
 PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
     PlatformPeriodicRelease_t *release);
 
+/** @brief 用硬件计数检查本任务刚完成一拍的耗时和截止时间。
+ * @param[in] clock 当前任务持有的硬件周期状态地址。
+ * @param[in] release 最近一次成功领取的拍点。
+ * @param[out] timing 成功时写入实际耗时和超期情况，失败时保留原值。
+ * @return READY 为成功，未持有通道、计数器关闭或拍点无效时返回具体错误。
+ */
+PlatformPeriodicResult_t PlatformTaskHighResFinish(const PlatformPeriodicClock_t *clock,
+    const PlatformPeriodicRelease_t *release, PlatformPeriodicTiming_t *timing);
+
 /** @brief 停止本任务的硬件比较并释放通道，最后一次释放才停止共享计数器。
  * @param[in] clock 本任务申请的状态地址，不可为空。
  * @return READY 为成功，错误调用不会释放其他任务的资源。

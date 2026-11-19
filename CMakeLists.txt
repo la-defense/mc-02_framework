@@ -166,15 +166,6 @@ if(MC02_BENCH_TIM5_DIAGNOSTICS AND
     MC02_BENCH_CRASH_DIAGNOSTICS OR MC02_BENCH_LCD_DIAGNOSTICS OR MC02_BENCH_USB_DIAGNOSTICS))
     message(FATAL_ERROR "TIM5诊断仅允许禁热、无冲突诊断的bench_safe/single配置")
 endif()
-if(MC02_BENCH_TIM5_DIAGNOSTICS)
-    # 诊断只接管未交给 CubeMX 的 TIM5；未来增加用途时须先调整资源选择。
-    file(STRINGS "${CMAKE_SOURCE_DIR}/Basic_Framework_MC02.ioc" tim5_claims
-        REGEX "^Mcu[.]IP[0-9]+=TIM5$|^NVIC[.]TIM5_IRQn=|^TIM5[.]|^SH[.]S_TIM5_|[.]Signal=(S_)?TIM5_")
-    if(tim5_claims)
-        message(FATAL_ERROR "TIM5诊断与 CubeMX 中的 TIM5 配置冲突")
-    endif()
-endif()
-
 foreach(option_name IN ITEMS MC02_BENCH_RC_DIAGNOSTICS MC02_BENCH_REFEREE_DIAGNOSTICS MC02_LOG_TEST MC02_ENABLE_REFEREE_UI MC02_BENCH_CRASH_DIAGNOSTICS MC02_BENCH_LCD_DIAGNOSTICS MC02_BENCH_USB_DIAGNOSTICS MC02_BENCH_TIM5_DIAGNOSTICS)
     if(${option_name})
         if(option_name STREQUAL "MC02_LOG_TEST")
@@ -203,6 +194,17 @@ endif()
 
 # 先检查车型、核心资料和模块依赖，再决定实际参与构建的源码。
 include(cmake/mc02_configure_vehicle.cmake)
+set(MC02_PLATFORM_TIM5_PERIODIC FALSE) # 资源选择仅由已校验的车型功能和裸板诊断决定。
+if(MC02_BENCH_TIM5_DIAGNOSTICS OR MC02_FEATURE_CHASSIS)
+    # 只接管未交给 CubeMX 的 TIM5；底盘运行时仍要按车型周期选择是否申请通道。
+    file(STRINGS "${CMAKE_SOURCE_DIR}/Basic_Framework_MC02.ioc" tim5_claims
+        REGEX "^Mcu[.]IP[0-9]+=TIM5$|^NVIC[.]TIM5_IRQn=|^TIM5[.]|^SH[.]S_TIM5_|[.]Signal=(S_)?TIM5_")
+    if(tim5_claims)
+        message(FATAL_ERROR "框架周期唤醒与 CubeMX 中的 TIM5 配置冲突")
+    endif()
+    set(MC02_PLATFORM_TIM5_PERIODIC TRUE) # 由车型模块选择或裸板自测引入 H723 硬件后端。
+    add_compile_definitions(MC02_PLATFORM_TIM5_PERIODIC=1) # 声明该后端同时可供平台和任务使用。
+endif()
 # 源码清单读取已经解析并校验过的配置，确保协议和板级角色只编译所选实现。
 include(cmake/mc02_firmware_sources.cmake)
 if(MC02_COMMISSIONING_CHASSIS)

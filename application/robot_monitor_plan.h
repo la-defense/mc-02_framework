@@ -62,9 +62,9 @@ TaskMonitor_Result_e RobotConfigureTaskMonitor(const RobotModulePlan_t *plan,
     const RobotChassisTaskConfig_t *chassis);
 
 #if MC02_TASK_CHASSIS
-/** @brief 检查底盘周期能否由当前 RTOS 表示，以及监控和栈参数是否完整。
+/** @brief 检查允许的时钟来源能否精确表示底盘周期和预算，以及监控和栈参数是否完整。
  * @param[in] config 车型的只读底盘任务配置。
- * @return READY 为可用，CONFIG 为缺失或非法配置。
+ * @return READY 为可用，CONFIG 为非法配置，RESOURCE 为所需硬件通道不足。
  */
 PlatformPeriodicResult_t RobotValidateChassisTask(const RobotChassisTaskConfig_t *config);
 

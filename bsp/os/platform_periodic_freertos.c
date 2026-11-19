@@ -26,7 +26,7 @@ static uint32_t RtosQuantumUs(void)
 PlatformPeriodicCapabilities_t PlatformTaskPeriodicCapabilities(void)
 {
     PlatformPeriodicCapabilities_t capabilities = {.rtos_quantum_us = RtosQuantumUs()}; // 先填入 RTOS 能力。
-#if MC02_BENCH_TIM5_DIAGNOSTICS
+#if defined(MC02_PLATFORM_TIM5_PERIODIC)
     capabilities.high_res_quantum_us = 1u; // TIM5 以 1 MHz 自由计数。
     capabilities.high_res_channels = PlatformTaskHighResAvailableChannels(); // 核对板级时钟与中断。
 #endif

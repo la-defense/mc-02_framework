@@ -138,16 +138,32 @@ static const TaskMonitorTaskConfig_t robot_task_monitor_config[] = {
 static RobotChassisTaskConfig_t chassis_task_config; // 由启动者填写，放行后保持只读。
 static uint8_t chassis_task_prepared; // 监控接受底盘配置后才允许创建任务。
 
-PlatformPeriodicResult_t RobotValidateChassisTask(const RobotChassisTaskConfig_t *config)
+// 监控以整毫秒显示名义周期；实际任务保持原来的微秒拍点。
+static uint32_t ChassisMonitorPeriodMs(uint32_t period_us)
 {
-    if (config == NULL || config->timing.period_us % 1000u != 0u || config->deadline_ms == 0u ||
-        config->timing.period_us / 1000u > config->deadline_ms || config->deadline_ms >= (uint32_t)INT32_MAX ||
+    return period_us / 1000u + (period_us % 1000u != 0u); // 避免亚毫秒周期在监控中被记为 0。
+}
+
+static PlatformPeriodicResult_t ResolveChassisTask(const RobotChassisTaskConfig_t *config,
+    PlatformPeriodicSource_t *source)
+{
+    if (config == NULL || config->deadline_ms == 0u ||
+        ChassisMonitorPeriodMs(config->timing.period_us) > config->deadline_ms || config->deadline_ms >= (uint32_t)INT32_MAX ||
         config->startup_grace_ms == 0u || config->startup_grace_ms >= (uint32_t)INT32_MAX ||
         config->stack_words == 0u || config->stack_words > UINT16_MAX)
         return PLATFORM_PERIODIC_CONFIG; // 监控仍用毫秒，缺参数或超出 OS 容量时不启动底盘。
-    const PlatformPeriodicCapabilities_t capabilities = PlatformTaskPeriodicCapabilities(); // 读取实际 RTOS 刻度。
-    PlatformPeriodicClock_t validated; // 使用生产等待算法检查周期及预算。
-    return PlatformPeriodicInit(&validated, &config->timing, capabilities.rtos_quantum_us, 0u);
+    const PlatformPeriodicCapabilities_t capabilities = PlatformTaskPeriodicCapabilities(); // 检查两种来源的实际分辨率与通道。
+    const PlatformPeriodicRequest_t request = {.timing = config->timing, .source = config->source}; // 保留原始周期和预算。
+    uint32_t hardware_mask = 0u; // 当前底盘和独立 TIM5 裸板自测配置互斥，车上只有底盘申请通道。
+    const PlatformPeriodicResult_t result = PlatformPeriodicPlan(&request, 1u, &capabilities, &hardware_mask, NULL);
+    if (result == PLATFORM_PERIODIC_READY && source != NULL)
+        *source = hardware_mask != 0u ? PLATFORM_PERIODIC_SOURCE_HIGH_RES : PLATFORM_PERIODIC_SOURCE_RTOS; // 放行后固定来源。
+    return result;
+}
+
+PlatformPeriodicResult_t RobotValidateChassisTask(const RobotChassisTaskConfig_t *config)
+{
+    return ResolveChassisTask(config, NULL); // 只报告检查结果，不改运行配置。
 }
 
 const RobotChassisTaskConfig_t *RobotGetChassisTaskConfig(void)
@@ -195,16 +211,17 @@ TaskMonitor_Result_e RobotConfigureTaskMonitor(const RobotModulePlan_t *plan,
     }
 #if MC02_TASK_CHASSIS
     const uint8_t chassis_enabled = (uint8_t)((plan->enabled & ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS)) != 0u);
+    PlatformPeriodicSource_t chassis_source = PLATFORM_PERIODIC_SOURCE_RTOS; // 底盘启用后才由预检决定实际来源。
     if (chassis_enabled)
     {
-        if (RobotValidateChassisTask(chassis) != PLATFORM_PERIODIC_READY)
+        if (ResolveChassisTask(chassis, &chassis_source) != PLATFORM_PERIODIC_READY)
             return TASK_MONITOR_RESULT_BAD_CONFIGURATION; // 没有有效时间和容量时不注册任何监控。
         selected[count++] = (TaskMonitorTaskConfig_t){
             .id = TASK_MONITOR_CHASSIS, // 由底盘任务自己报告进度。
             .name = "CHASSIS", // 健康查询和故障日志使用的名称。
             .mode = TASK_MONITOR_MODE_PERIODIC, // 预期周期性取得进度。
             .role = TASK_MONITOR_ROLE_CORE, // 底盘工作停滞时按既有核心路径停输出。
-            .period_ms = chassis->timing.period_us / 1000u, // 已确认可整毫秒表示。
+            .period_ms = ChassisMonitorPeriodMs(chassis->timing.period_us), // 只用于毫秒级任务监控。
             .deadline_ms = chassis->deadline_ms, // 使用车型确认的完成期限。
             .startup_grace_ms = chassis->startup_grace_ms, // 从统一放行开始计算首次宽限。
         };
@@ -212,7 +229,11 @@ TaskMonitor_Result_e RobotConfigureTaskMonitor(const RobotModulePlan_t *plan,
     const TaskMonitor_Result_e result = TaskMonitorInitConfigured(selected, count); // 集中发布监控配置。
     if (result == TASK_MONITOR_RESULT_OK)
     {
-        if (chassis_enabled) chassis_task_config = *chassis; // 复制一份运行期固定配置。
+        if (chassis_enabled)
+        {
+            chassis_task_config = *chassis; // 复制周期、监控与栈配置。
+            chassis_task_config.source = chassis_source; // 记录实际来源，任务不重新选择或降级。
+        }
         chassis_task_prepared = chassis_enabled; // 只有整表成功才发布底盘任务配置。
     }
     return result;

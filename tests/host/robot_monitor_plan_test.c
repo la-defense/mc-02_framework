@@ -71,6 +71,7 @@ static void TestChassisAdmission(void)
     };
     RobotChassisTaskConfig_t chassis = {
         .timing = {.period_us = 4000u, .budget_us = 2000u}, // 主机假时钟的周期和单轮预算。
+        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 先检查仅允许 RTOS 的配置。
         .deadline_ms = 12u, // 主机试验用监控期限。
         .startup_grace_ms = 50u, // 主机试验用首次工作宽限。
         .stack_words = 192u, // 替身不分配或运行真实栈。
@@ -94,6 +95,21 @@ static void TestChassisAdmission(void)
     TEST_CHECK(prepared != NULL && prepared != &chassis && prepared->stack_words == 192u);
     chassis.timing.period_us = 0u;
     TEST_CHECK(prepared->timing.period_us == 4000u); // 调用者临时数据改写后，任务仍使用已经接受的值。
+
+    chassis.timing = (PlatformPeriodicConfig_t){.period_us = 500u, .budget_us = 250u}; // 主机测试精确到微秒的拍点。
+    TEST_CHECK(RobotValidateChassisTask(&chassis) == PLATFORM_PERIODIC_CONFIG); // 强制 RTOS 时不改用硬件。
+    chassis.source = PLATFORM_PERIODIC_SOURCE_AUTO; // 自动模式才允许后备的硬件来源。
+    fake_periodic_capabilities.high_res_channels = 0u; // 模拟定时器已被占用。
+    TEST_CHECK(RobotValidateChassisTask(&chassis) == PLATFORM_PERIODIC_RESOURCE);
+    TEST_CHECK(RobotConfigureTaskMonitor(&plan, &chassis) == TASK_MONITOR_RESULT_BAD_CONFIGURATION);
+    TEST_CHECK(init_calls == 1u && prepared->source == PLATFORM_PERIODIC_SOURCE_RTOS); // 保留上次成功的副本。
+    fake_periodic_capabilities.high_res_channels = 1u;
+    TEST_CHECK(RobotConfigureTaskMonitor(&plan, &chassis) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(prepared->source == PLATFORM_PERIODIC_SOURCE_HIGH_RES && prepared->timing.period_us == 500u);
+    TEST_CHECK(captured[captured_count - 1u].period_ms == 1u); // 只在监控中向上取整。
+    chassis.timing = (PlatformPeriodicConfig_t){.period_us = 4000u, .budget_us = 2000u};
+    TEST_CHECK(RobotConfigureTaskMonitor(&plan, &chassis) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(prepared->source == PLATFORM_PERIODIC_SOURCE_RTOS); // 两种来源都可用时不占硬件。
 
     plan.enabled = plan.required = ROBOT_MODULE_BIT(ROBOT_MODULE_SAFETY);
     TEST_CHECK(RobotConfigureTaskMonitor(&plan, NULL) == TASK_MONITOR_RESULT_OK);

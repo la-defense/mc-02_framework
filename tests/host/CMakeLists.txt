@@ -206,17 +206,22 @@ foreach(target IN ITEMS robot_chassis_monitor_test robot_chassis_create_test rob
     DISABLE_LOG_SYSTEM=1) # 主机检查诊断结果及调用顺序。
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
 endforeach()
-target_compile_definitions(robot_chassis_cycle_test PRIVATE MC02_FEATURE_UI=0) # 不编译与此测试无关的裁判界面。
+target_compile_definitions(robot_chassis_cycle_test PRIVATE
+  MC02_FEATURE_UI=0 # 不编译与此测试无关的裁判界面。
+  MC02_PLATFORM_TIM5_PERIODIC=1) # 用替身检查高分辨率任务入口和资源生命周期。
 target_compile_options(robot_chassis_cycle_test PRIVATE -ffunction-sections -fdata-sections)
 target_link_options(robot_chassis_cycle_test PRIVATE -Wl,--gc-sections)
 add_test(NAME production_chassis_task_monitor COMMAND robot_chassis_monitor_test chassis)
 add_test(NAME production_chassis_task_cycle COMMAND robot_chassis_cycle_test chassis)
 add_test(NAME production_chassis_task_clock_failure COMMAND robot_chassis_cycle_test chassis finish-error)
+add_test(NAME production_chassis_task_tim5_cycle COMMAND robot_chassis_cycle_test tim5)
+add_test(NAME production_chassis_task_tim5_budget COMMAND robot_chassis_cycle_test tim5 budget-error)
 foreach(scenario IN ITEMS normal create missing not-started disabled)
   add_test(NAME production_chassis_task_create_${scenario} COMMAND robot_chassis_create_test chassis-${scenario})
   set_tests_properties(production_chassis_task_create_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
 set_tests_properties(production_chassis_task_monitor production_chassis_task_cycle production_chassis_task_clock_failure
+  production_chassis_task_tim5_cycle production_chassis_task_tim5_budget
   PROPERTIES TIMEOUT 10)
 # 直接运行生成代码中的 FDCAN MSP，模拟重复初始化和跨总线退出。
 add_executable(fdcan_msp_test fdcan_msp_test.c ../../Core/Src/fdcan.c)

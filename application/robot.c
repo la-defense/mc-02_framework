@@ -364,11 +364,14 @@ uint8_t RobotInit(void)
     if (RobotConfigureTaskMonitor(task_modules, &robot_config->chassis_task) != TASK_MONITOR_RESULT_OK)
     {
 #if MC02_TASK_CHASSIS
-        if ((task_modules->enabled & ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS)) != 0u &&
-            RobotValidateChassisTask(&robot_config->chassis_task) != PLATFORM_PERIODIC_READY)
+        const PlatformPeriodicResult_t chassis_status = (task_modules->enabled & ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS)) != 0u
+            ? RobotValidateChassisTask(&robot_config->chassis_task) : PLATFORM_PERIODIC_READY; // 仅为启用的底盘细分错误。
+        if (chassis_status != PLATFORM_PERIODIC_READY)
         {
+            const InitDiagnosticReason_e reason = chassis_status == PLATFORM_PERIODIC_RESOURCE
+                ? INIT_FAILURE_RESOURCE : INIT_FAILURE_TASK_TIMING; // 区分定时器通道不足与周期或预算无效。
             InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
-                                        INIT_FAILURE_TASK_TIMING, INIT_RESOURCE_TASK_CHASSIS);
+                                        reason, INIT_RESOURCE_TASK_CHASSIS);
             goto init_failed; // 底盘时限缺失时不进入设备初始化。
         }
 #endif

@@ -137,6 +137,7 @@ const Robot_Config_s *SentinelConfigInit(void)
                 .period_us = 0u, // 底盘周期待根据实车端到端时限确认，单位 μs。
                 .budget_us = 0u, // 单轮执行预算待配合周期确认，单位 μs。
             },
+            .source = PLATFORM_PERIODIC_SOURCE_AUTO, // 优先使用能精确表示时间配置的 RTOS 刻度。
             .deadline_ms = 0u, // 底盘进度监控期限待确认，单位 ms。
             .startup_grace_ms = 0u, // 放行后的首次工作宽限待确认，单位 ms。
             .stack_words = 0u, // 独立任务栈容量待确认，单位为字。

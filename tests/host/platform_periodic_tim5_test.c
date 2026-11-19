@@ -194,9 +194,16 @@ static void TestSharedTimer(const PlatformPeriodicConfig_t *config)
     current = &first_task;
     TEST_CHECK(PlatformTaskHighResOpen(&first, config) == PLATFORM_PERIODIC_READY);
     TEST_CHECK(PlatformTaskHighResWait(&first, &release) == PLATFORM_PERIODIC_READY && release.scheduled_tick == 0u);
+    TIM5->CNT = 10u; // 先使用持有者的计数检查本轮完成。
+    PlatformPeriodicTiming_t timing = {0};
+    TEST_CHECK(PlatformTaskHighResFinish(&first, &release, &timing) == PLATFORM_PERIODIC_READY && timing.work_ticks == 10u);
+    TIM5->CR1 = 0u; // 模拟完成前计数器被关闭，原输出必须保留。
+    TEST_CHECK(PlatformTaskHighResFinish(&first, &release, &timing) == PLATFORM_PERIODIC_CLOCK && timing.work_ticks == 10u);
+    TIM5->CR1 = TIM_CR1_CEN;
 
     current = &second_task;
     TIM5->CNT = 40u; // 原有计数不能因另一任务申请而回到零。
+    TEST_CHECK(PlatformTaskHighResFinish(&first, &release, &timing) == PLATFORM_PERIODIC_CONTEXT && timing.work_ticks == 10u);
     deny_alloc = 1u;
     TEST_CHECK(PlatformTaskHighResOpen(&second, config) == PLATFORM_PERIODIC_RESOURCE && TIM5->CNT == 40u);
     deny_alloc = 0u;
