@@ -152,6 +152,8 @@ const Robot_Config_s *SentinelConfigInit(void)
         .manual_input = {
             .map = 0, // 操作映射、方向和输出上限尚未按实车确认。
             .max_dt_ms = 0u, // 任务周期和允许的最大计算间隔尚未确认。
+            .commissioning_linear_accel_m_s2 = 0.0f, // 受限调试平移变化率待实车确认，单位 m/s²。
+            .commissioning_angular_accel_rad_s2 = 0.0f, // 受限调试绕上轴变化率待实车确认，单位 rad/s²。
         },
         .alarm_config = &sentinel_alarm_config,
         .referee_ui_config = &sentinel_referee_ui_config,

@@ -27,3 +27,10 @@
 - 仅在隔离源码副本放开两项构建确认声明，验证 `commissioning/chassis` 能通过 Cortex-M7 Debug 链接与源码、生成头及 ELF 隔离检查。副本的真实机械、映射、输出上限和周期参数依然为空缺或待确认，启动参数校验仍会拒绝。这次检查产物的 text、data、bss 分别为 301252 B、808 B 和 156920 B。没有连接硬件或烧录。运动变化率、实际供电和车型数据不在本次通过范围内。
 - 同一编译选项的静态栈报告中，`CommissioningChassisCmdTask` 为 352 B，`RobotInit` 为 192 B。板上完整调用链及剩余栈空间仍需测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 通过。WSL Debug 和 Release 各通过 829 项。两种禁热固件通过构建与隔离检查，FLASH 仍分别为 257380 B 和 260924 B。六种未确认的生产构建保持拒绝。
+
+## 受限底盘速度变化率
+
+- 使用生产命令入口验证平移向量总变化量及独立的转动变化量，覆盖斜向、反向、同毫秒重复调用及毫秒回绕。旧命令过期、任务间隔超限、输入复核失败、轮组反馈失效和急停均撤销旧目标。重新取得有效输入和许可后，首条命令为零。两项专项通过 ASan／UBSan。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 通过。WSL Debug 和 Release 各通过 830 项。普通禁热和遥控诊断固件通过构建与链接隔离检查，FLASH 分别为 257388 B 和 260932 B，均比上次同配置结果增加 8 B。带遥控的 `commissioning/observe` 也通过构建、源码和 ELF 隔离检查。六种未确认的生产构建仍按预期拒绝。
+- 隔离源码副本暂时放开底盘构建确认，用于检查 Cortex-M7 Debug 链接与执行器源码隔离。副本保留待确认的车型参数，启动参数检查仍会拒绝。text、data、bss 分别为 302396 B、808 B 和 156984 B，较前次同配置增加 1144 B、0 B 和 64 B。链接报告的 FLASH 为 303224 B，RAM 为 125528 B（95.77%）。`CommissioningChassisCmdTask` 与 `LimitMotion` 的静态栈帧分别为 368 B 和 32 B。
+- 未连接硬件。上述测试验证已发布的速度命令及撤销行为。哨兵实车的两项变化率、任务栈水位和实际停止时延仍待现场测量。

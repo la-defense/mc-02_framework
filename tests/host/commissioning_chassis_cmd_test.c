@@ -14,8 +14,10 @@
 #include "test_check.h"
 #include "topics/robot_topics.h"
 #include <math.h>
+#include <string.h>
 
 static uint32_t tick;
+static uint32_t time_offset; // 复用同一场景验证毫秒回绕。
 static RemoteControlSnapshot_s radio;
 static uint8_t wheel_feedback_available = 1u;
 static uint8_t reject_remote_final_check;
@@ -51,7 +53,7 @@ uint8_t RobotControlFeedbackPoll(const MessageFreshness_t *pose)
 {
     TEST_CHECK(pose == NULL); // 纯底盘无云台话题。
     const RobotControlLease_t feedback[3] = {
-        {tick, 20u, 1u}, // 用本机测试时间模拟有效四轮反馈。
+        {tick, 80u, 1u}, // 让长间隔场景与轮组反馈过期相互独立。
         {0}, // 本构建没有云台反馈。
         {0}, // 本构建没有发射反馈。
     };
@@ -69,14 +71,22 @@ uint8_t RobotCanRecoveryPoll(const RemoteControlSnapshot_s *remote, uint8_t keyb
 
 static void NewRadio(uint32_t time_ms)
 {
-    tick = time_ms;
+    tick = time_ms + time_offset;
     ++radio.radio_sequence;
     radio.radio_source_time_ms = tick;
 }
 
-int main(void)
+static void NewKeyboard(uint32_t time_ms)
 {
-    tick = 1u;
+    NewRadio(time_ms); // 键盘使用独立序号，同时需要在线无线输入。
+    ++radio.pc_sample_sequence;
+    radio.pc_source_time_ms = tick;
+}
+
+int main(int argc, char **argv)
+{
+    time_offset = argc == 2 && strcmp(argv[1], "wrap") == 0 ? UINT32_MAX - 1015u : 0u; // 让同一速度段跨过零。
+    tick = 1u + time_offset;
     RobotSafetyInit();
     TEST_CHECK(RobotSafetyBindVehicleFeedback());
     const RobotControlPolicy_t policy = {
@@ -110,16 +120,31 @@ int main(void)
         map.keyboard_map.axis[axis] = (StdCmdAxisMap_t){1.0f, 0.1f, 1.0f}; // 测试键盘比例与范围。
     }
     map.remote_axis[STD_CMD_VX] = STD_CMD_RC_RIGHT_Y; // 测试右摇杆控制前向。
+    map.remote_axis[STD_CMD_VY] = STD_CMD_RC_RIGHT_X; // 同时给出左移以检查平移总步长。
+    map.remote_axis[STD_CMD_WZ] = STD_CMD_RC_LEFT_X; // 给出独立的绕上轴请求。
     map.keyboard_positive[STD_CMD_VX] = (uint16_t)(1u << Key_W); // 测试 W 键控制前向。
-    const RobotManualInputConfig_s input = {.map = &map, .max_dt_ms = 20u};
+    RobotManualInputConfig_s input = {
+        .map = &map, // 只使用本场景的映射。
+        .max_dt_ms = 20u, // 配置超过 20 ms 时撤销。
+        .commissioning_linear_accel_m_s2 = 2.0f, // 主机用平移步长。
+        .commissioning_angular_accel_rad_s2 = 3.0f, // 主机用绕上轴步长。
+    };
     TEST_CHECK(!CommissioningChassisCmdInit(&input));
     map.remote_frame = STD_CMD_FRAME_CHASSIS;
+    input.commissioning_linear_accel_m_s2 = 0.0f; // 缺少平移上限时不能登记。
+    TEST_CHECK(!CommissioningChassisCmdInit(&input));
+    input.commissioning_linear_accel_m_s2 = 2.0f;
+    input.commissioning_angular_accel_rad_s2 = NAN; // 拒绝非有限的转动上限。
+    TEST_CHECK(!CommissioningChassisCmdInit(&input));
+    input.commissioning_angular_accel_rad_s2 = 3.0f;
     TEST_CHECK(CommissioningChassisCmdInit(&input));
 
     radio.remote_online = 1u;
     radio.input.rc.switch_left = RC_SW_DOWN;
     radio.input.rc.switch_right = RC_SW_MID;
     radio.input.rc.rocker_r1 = 100;
+    radio.input.rc.rocker_r_ = 100; // 与前向请求相同，形成斜向移动。
+    radio.input.rc.rocker_l_ = 100; // 独立请求正向转动。
     NewRadio(2u);
     CommissioningChassisCmdTask(); // 新鲜输入本身不得使能。
     Chassis_Ctrl_Cmd_s command;
@@ -134,53 +159,79 @@ int main(void)
     NewRadio(1011u);
     CommissioningChassisCmdTask();
     TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, &freshness) == MESSAGE_OK);
-    TEST_CHECK(command.chassis_mode == CHASSIS_NO_FOLLOW && fabsf(command.vx - 100.0f) < 0.01f);
-    TEST_CHECK(freshness.source_time_ms == 1011u && freshness.source_max_age_ms == 15u);
+    TEST_CHECK(command.chassis_mode == CHASSIS_NO_FOLLOW && command.vx == 0.0f &&
+        command.vy == 0.0f && command.wz == 0.0f); // 首份获准目标只建立零基准。
+    TEST_CHECK(freshness.source_time_ms == 1011u + time_offset && freshness.source_max_age_ms == 15u);
 
-    tick = 1020u;
+    tick = 1020u + time_offset;
     CommissioningChassisCmdTask(); // 重发也保留原始来源期限。
     TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, &freshness) == MESSAGE_OK &&
-        freshness.source_time_ms == 1011u && freshness.source_max_age_ms == 15u);
-    tick = 1027u;
-    CommissioningChassisCmdTask();
-    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) != MESSAGE_OK);
+        freshness.source_time_ms == 1011u + time_offset && freshness.source_max_age_ms == 15u);
+    TEST_CHECK(fabsf(hypotf(command.vx, command.vy) - 18.0f) < 0.01f && command.vx > 0.0f &&
+        fabsf(command.vx + command.vy) < 0.01f); // 9 ms 的总步长为 18 mm/s，左移在旧消息里为负。
+    TEST_CHECK(fabsf(command.wz - 1.546986f) < 0.001f); // 9 ms 的独立角速度步长换成 deg/s。
+    const float unchanged_vx = command.vx;
+    CommissioningChassisCmdTask(); // 同一毫秒重复运行没有额外变化预算。
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK &&
+        command.vx == unchanged_vx);
 
-    NewRadio(1028u);
-    CommissioningChassisCmdTask(); // 新无线数据允许恢复。
+    radio.input.rc.rocker_r1 = -100;
+    radio.input.rc.rocker_r_ = -100;
+    radio.input.rc.rocker_l_ = -100;
+    NewRadio(1022u);
+    CommissioningChassisCmdTask(); // 反向请求先减速，不能一步跳成反方向。
     TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK);
+    TEST_CHECK(fabsf(hypotf(command.vx, command.vy) - 14.0f) < 0.01f && command.vx > 0.0f &&
+        fabsf(command.wz - 1.203211f) < 0.001f); // 2 ms 只允许分别减少 4 mm/s 和 0.006 rad/s。
+
+    NewRadio(1038u); // 新输入到达时旧目标已超过 15 ms，期间任务没有观察到失效。
+    CommissioningChassisCmdTask();
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) != MESSAGE_OK); // 新输入不能继承过期的速度基准。
+
+    NewRadio(1039u);
+    CommissioningChassisCmdTask(); // 新无线数据允许恢复。
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK &&
+        command.vx == 0.0f && command.wz == 0.0f);
     ++radio.source_selection_generation;
     radio.input.rc.switch_left = RC_SW_UP;
     radio.pc_valid = 1u;
     radio.input.key[KEY_PRESS].keys = (uint16_t)(1u << Key_W);
-    radio.pc_sample_sequence = 1u;
-    radio.pc_source_time_ms = 1029u;
-    NewRadio(1029u);
+    NewKeyboard(1040u);
     CommissioningChassisCmdTask(); // 切档这一轮先撤销，不沿用旧目标。
     TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) != MESSAGE_OK);
-    ++radio.pc_sample_sequence;
-    radio.pc_source_time_ms = 1030u;
-    NewRadio(1030u);
+    NewKeyboard(1041u);
     CommissioningChassisCmdTask();
     TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK);
     const uint32_t old_generation = command.safety_generation; // 发送方不能重用检查失败前的代际。
     reject_remote_final_check = 1u;
-    NewRadio(1031u);
+    NewKeyboard(1042u);
     CommissioningChassisCmdTask();
     TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) != MESSAGE_OK);
     TEST_CHECK(!RobotSafetyIsReadyForGeneration(tick, old_generation) && IrqRestored());
     reject_remote_final_check = 0u;
 
-    ++radio.pc_sample_sequence;
-    radio.pc_source_time_ms = 1032u;
-    NewRadio(1032u);
+    NewKeyboard(1043u);
     CommissioningChassisCmdTask();
-    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK);
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.vx == 0.0f);
+    NewKeyboard(1048u);
+    CommissioningChassisCmdTask();
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK &&
+        fabsf(command.vx - 10.0f) < 0.01f);
+    NewKeyboard(1070u); // 任务间隔超过配置，仍有新鲜键盘和轮组反馈。
+    CommissioningChassisCmdTask();
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) != MESSAGE_OK);
+    NewKeyboard(1071u);
+    CommissioningChassisCmdTask();
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.vx == 0.0f);
+    NewKeyboard(1073u);
+    CommissioningChassisCmdTask();
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.vx > 0.0f);
     wheel_feedback_available = 0u;
-    NewRadio(1033u);
+    NewKeyboard(1074u);
     CommissioningChassisCmdTask(); // 仍有人工输入，缺少轮组反馈也必须禁止。
     TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) != MESSAGE_OK);
     radio.remote_online = 0u;
-    NewRadio(1034u);
+    NewRadio(1075u);
     CommissioningChassisCmdTask(); // 无线离线锁存急停。
     TEST_CHECK(EstopIsLatched() && EstopGetReason() == ESTOP_REASON_RC_OFFLINE && IrqRestored());
     return 0;

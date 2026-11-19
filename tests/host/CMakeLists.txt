@@ -1991,6 +1991,7 @@ if(UNIX)
   target_link_libraries(commissioning_chassis_cmd_test PRIVATE m) # 主机数值换算需要系统数学库。
 endif()
 add_test(NAME production_commissioning_manual_chassis COMMAND commissioning_chassis_cmd_test)
+add_test(NAME production_commissioning_chassis_rate_wrap COMMAND commissioning_chassis_cmd_test wrap) # 速度步长不受毫秒回绕影响。
 target_include_directories(robot_cmd_task_test BEFORE PRIVATE robot_cmd_fakes)
 target_include_directories(robot_cmd_task_test PRIVATE ../../application ../../application/cmd ../../application/config
   ../../modules ../../modules/remote ../../modules/imu ../../modules/master_machine ../../modules/message_center

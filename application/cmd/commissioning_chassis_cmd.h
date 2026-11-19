@@ -8,7 +8,7 @@
 
 /** @brief 登记底盘命令发布者，保存已确认的人工作用配置。
  * @param[in] input 启动结束后仍可只读访问的车型输入配置。
- * @return 1 为成功；无效映射、非底盘参照或登记失败时返回 0。
+ * @return 1 为成功；映射、参照、变化率或最大间隔无效，或登记失败时返回 0。
  */
 uint8_t CommissioningChassisCmdInit(const RobotManualInputConfig_s *input);
 

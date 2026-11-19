@@ -121,7 +121,9 @@ typedef struct {
 struct StdCmdRemoteMap; // 人工输入映射由 standard_cmd 定义，配置只保留只读指针。
 typedef struct {
     const struct StdCmdRemoteMap *map; // 实际摇杆、键盘比例和方向；未确认时为 NULL。
-    uint32_t max_dt_ms; // 云台角速度积分允许的最大实测间隔，单位 ms；未确认时为 0。
+    uint32_t max_dt_ms; // 人工运动计算允许的最大实测间隔，单位 ms；未确认时为 0。
+    float commissioning_linear_accel_m_s2; // 受限底盘平移目标向量的变化率上限，单位 m/s²；待确认时填 0。
+    float commissioning_angular_accel_rad_s2; // 受限底盘绕上轴目标的变化率上限，单位 rad/s²；待确认时填 0。
 } RobotManualInputConfig_s;
 
 // 机器人参数结构体
