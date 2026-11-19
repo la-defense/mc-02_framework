@@ -1973,6 +1973,9 @@ add_test(NAME production_command_generated_manual_unsupported_frame COMMAND robo
 # 验证大 yaw 参照的平移按编码器来源时间失效，并响应同轮的反馈撤销。
 add_test(NAME production_command_generated_manual_frame_feedback COMMAND robot_cmd_generated_manual_test manual-frame-feedback)
 add_executable(commissioning_chassis_cmd_test commissioning_chassis_cmd_test.c
+  ../../application/robot_def.c # 车型选择通过实际预检，确认启动前拒绝非法输入参数。
+  ../../application/config/commissioning_chassis_config.c # 车型选择和命令登记共用这套检查。
+  ../../application/chassis/chassis_kinematics.c ../../application/chassis/omni.c # 使用真实的全向轮几何预检。
   ../../application/cmd/commissioning_chassis_cmd.c # 测试受限调试实际命令入口。
   ../../application/cmd/robot_manual_motion.c # 沿用实际的本体速度换算。
   ../../application/topics/robot_topics.c # 只建立底盘话题。
@@ -1980,13 +1983,16 @@ add_executable(commissioning_chassis_cmd_test commissioning_chassis_cmd_test.c
   ../../modules/remote/remote_safety.c # 使用真实的人工使能手势。
   ../../modules/safety/robot_safety.c # 执行真实许可修改与故障撤销。
   ../../modules/standard_cmd/std_cmd.c ../../modules/standard_cmd/std_cmd_remote.c) # 复用人工来源适配。
-target_include_directories(commissioning_chassis_cmd_test BEFORE PRIVATE motor_pid_fakes)
+target_include_directories(commissioning_chassis_cmd_test BEFORE PRIVATE commissioning_chassis_fakes motor_pid_fakes)
 target_include_directories(commissioning_chassis_cmd_test PRIVATE . ../../application ../../application/cmd
-  ../../application/config ../../application/chassis ../../modules ../../modules/standard_cmd ../../modules/remote
+  ../../application/config ../../application/config/sentinel_robot ../../application/chassis ../../modules ../../modules/standard_cmd ../../modules/remote
   ../../modules/imu ../../modules/algorithm ../../modules/motor ../../modules/motor/DJImotor ../../modules/daemon
   ../../modules/alarm ../../modules/referee ../../modules/message_center ../../modules/safety ../../bsp/os
   ../../bsp/can ../../bsp/board ../../bsp/reset_recovery ../../bsp/crash ../../bsp/usart ../../modules/master_machine)
-target_compile_definitions(commissioning_chassis_cmd_test PRIVATE ONE_BOARD=1 MC02_PROFILE_COMMISSIONING_CHASSIS=1) # 测试编入受限话题目录。
+target_compile_definitions(commissioning_chassis_cmd_test PRIVATE
+  ONE_BOARD=1 # 只检查当前哨兵的单板选择。
+  MC02_CONFIG_GENERATED=1 # 读取主机联测的机构选择。
+  MC02_PROFILE_COMMISSIONING_CHASSIS=1) # 测试编入受限话题目录和人工参数预检。
 if(UNIX)
   target_link_libraries(commissioning_chassis_cmd_test PRIVATE m) # 主机数值换算需要系统数学库。
 endif()

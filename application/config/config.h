@@ -126,6 +126,14 @@ typedef struct {
     float commissioning_angular_accel_rad_s2; // 受限底盘绕上轴目标的变化率上限，单位 rad/s²；待确认时填 0。
 } RobotManualInputConfig_s;
 
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+/** @brief 检查受限底盘的人工参数，不访问设备或话题。
+ * @param[in] input 车型提供的只读映射、最大间隔与变化率，不能为空。
+ * @return 1 表示本体映射完整、间隔有效且最大速度步长可计算；否则返回 0。
+ */
+uint8_t RobotCommissioningChassisInputIsValid(const RobotManualInputConfig_s *input);
+#endif
+
 // 机器人参数结构体
 typedef struct
 {
@@ -167,12 +175,13 @@ typedef enum
 /* 配置入口(在 robot_def.c 中实现) */
 typedef enum {
     ROBOT_CONFIG_OK = 0, ROBOT_CONFIG_ARGUMENT, ROBOT_CONFIG_UNSUPPORTED,
-    ROBOT_CONFIG_BAD_PARAMETERS
+    ROBOT_CONFIG_BAD_PARAMETERS, // 机构配置无效。
+    ROBOT_CONFIG_BAD_MANUAL_INPUT // 受限底盘人工映射、间隔或变化率无效。
 } RobotConfigStatus_t;
 /** @brief 选择唯一已实现车型；失败清除活动选择，不退回其他车型。
  * @param[in] id 车型编号，当前仅支持SENTINEL_ROBOT。
  * @param[out] output 长期只读配置，不可为 NULL。车型不支持或参数无效时清空输出和当前选择。
- * @return OK、ARGUMENT、UNSUPPORTED或BAD_PARAMETERS；调用不操作硬件。
+ * @return 成功为 OK，失败区分参数空缺、不支持、机构配置无效及受限底盘人工配置无效。调用不操作硬件。
  */
 RobotConfigStatus_t RobotConfigSelect(uint8_t id, const Robot_Config_s **output);
 /** @brief 选择车型并返回其只读配置，兼容历史调用接口。

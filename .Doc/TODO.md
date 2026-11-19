@@ -12,7 +12,7 @@
 
 按[近期／中期路线](../docs/workflow/specs/sentinel-software-delivery.md)依赖推进本机软件切片，原任务的硬件条件仍保留；本段不复制各任务状态。
 
-- [ ] **MC02-0144** [enhancement] [ready-for-agent] 建立独立受限上车调试配置的软件入口。验收：与 bench_safe 及 robot 区分构建身份，按确认模块选择依赖，默认失能、仅人工新鲜输入显式使能、发射关闭。缺少机械参数、输出限制或运动变化率时拒绝运动配置，主机故障及 ARM 构建验证通过。单板受限底盘已接入人工命令、轮组许可、CAN 撤销、报文限幅和平移与转动变化率限制。哨兵底盘参数仍待确认，其他受限运动入口及现场验收继续按[交付路线](../docs/workflow/specs/sentinel-software-delivery.md)与[实施记录](../docs/workflow/tickets/MC02-0144.md)推进。
+- [ ] **MC02-0144** [enhancement] [ready-for-agent] 建立独立受限上车调试配置的软件入口。验收：与 bench_safe 及 robot 区分构建身份，按确认模块选择依赖，默认失能、仅人工新鲜输入显式使能、发射关闭。缺少机械参数、输出限制或运动变化率时拒绝运动配置，主机故障及 ARM 构建验证通过。单板受限底盘已接入人工命令、轮组许可、CAN 撤销、报文限幅和平移与转动变化率限制，人工映射及变化率在车型选择时检查。哨兵底盘参数仍待确认，其他受限运动入口及现场验收继续按[交付路线](../docs/workflow/specs/sentinel-software-delivery.md)与[实施记录](../docs/workflow/tickets/MC02-0144.md)推进。
 
 ## 2026-11-15：WSL 会话僵死与验证入口超时
 

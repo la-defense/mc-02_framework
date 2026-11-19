@@ -417,6 +417,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/lcd/lcd_ui.c # LCD 页面只读取框架状态接口。
     modules/lcd/lcd_task.c # LCD 按键、页面、标定提示及任务统计。
     application/robot_task_create.c # 已选任务的创建与失败处理。
+    application/config/commissioning_chassis_config.c # 受限底盘车型校验不访问厂商或 RTOS 接口。
     application/cmd/commissioning_chassis_cmd.c) # 受限底盘的输入与消息均走可移植接口。
 foreach(source IN LISTS MC02_OPTIONAL_PORTABLE_SOURCES)
     if(source IN_LIST MC02_SELECTED_SOURCES)

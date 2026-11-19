@@ -38,13 +38,8 @@ static uint32_t chassis_topic_max_age_ms; // 话题本身的有效期独立于�
 
 uint8_t CommissioningChassisCmdInit(const RobotManualInputConfig_s *input)
 {
-    if (chassis_publisher != NULL || input == NULL || input->max_dt_ms == 0u || input->max_dt_ms > INT32_MAX ||
-        !StdCmdRemoteMapIsValid(input->map) ||
-        input->map->remote_frame != STD_CMD_FRAME_CHASSIS || input->map->keyboard_frame != STD_CMD_FRAME_CHASSIS)
-        return 0u; // 无法验证两个输入方向都基于底盘时不登记发布者。
-    if (!isfinite(input->commissioning_linear_accel_m_s2) || input->commissioning_linear_accel_m_s2 <= 0.0f ||
-        !isfinite(input->commissioning_angular_accel_rad_s2) || input->commissioning_angular_accel_rad_s2 <= 0.0f)
-        return 0u; // 平移和转动都必须有明确的正上限。
+    if (chassis_publisher != NULL || !RobotCommissioningChassisInputIsValid(input))
+        return 0u; // 使用车型预检的同一规则，参数无效时不登记发布者。
     MessageTopicDescriptor_t topic; // 取得底盘话题自身的有效期。
     if (MessageTopicGetDescriptor(ROBOT_TOPIC_CHASSIS_COMMAND, &topic) != MESSAGE_OK ||
         topic.source_clock != MESSAGE_CLOCK_LOCAL || topic.max_age_ms == 0u || topic.max_age_ms > INT32_MAX)

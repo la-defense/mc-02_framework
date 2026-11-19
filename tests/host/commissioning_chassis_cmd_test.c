@@ -10,9 +10,11 @@
 #include "robot_control_feedback_runtime.h"
 #include "robot_def.h"
 #include "robot_safety.h"
+#include "sentinel_config.h"
 #include "std_cmd_remote.h"
 #include "test_check.h"
 #include "topics/robot_topics.h"
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
@@ -21,6 +23,9 @@ static uint32_t time_offset; // 复用同一场景验证毫秒回绕。
 static RemoteControlSnapshot_s radio;
 static uint8_t wheel_feedback_available = 1u;
 static uint8_t reject_remote_final_check;
+static Robot_Config_s vehicle; // 主机提供隔离的只读车型候选，预检仍走真实入口。
+
+const Robot_Config_s *SentinelConfigInit(void) { return &vehicle; }
 
 uint32_t HAL_GetTick(void) { return tick; }
 
@@ -83,6 +88,45 @@ static void NewKeyboard(uint32_t time_ms)
     radio.pc_source_time_ms = tick;
 }
 
+// 先配置一组合法的主机轮组，再单独验证人工参数错误和重复选择。
+static void CheckVehicleSelection(const RobotManualInputConfig_s *valid_input)
+{
+    Chassis_Config_s *chassis = &vehicle.chassis_param;
+    chassis->wheel_type = OMNI_WHEEL;
+    chassis->motion_limits = (ChassisMotionLimits_s){
+        .configured = 1u, // 主机使用已知有效的运动范围。
+        .max_wz_deg_s = 180.0f, // 本体最大绕上轴速度，deg/s。
+        .max_motor_speed_deg_s = 720.0f, // 测试轮轴速度上限，deg/s。
+    };
+    chassis->chassis_motor_config.can_init_config.can_bus = PLATFORM_CAN_BUS_1;
+    chassis->chassis_motor_config.output_axis.gear_ratio = 19.0f;
+    chassis->chassis_motor_config.motor_type = M3508;
+    chassis->chassis_motor_config.dji_chassis_output_limit_raw = 60u; // 主机专用电调原始命令上限。
+    const float diagonal = 0.70710678118f; // 测试轮的 45 度滚动方向分量。
+    chassis->omni_geometry.wheels[0] = (ChassisWheelGeometry_t){0.2f, 0.2f, diagonal, -diagonal, 0.08f}; // 左前轮位置、方向和半径。
+    chassis->omni_geometry.wheels[1] = (ChassisWheelGeometry_t){0.2f, -0.2f, diagonal, diagonal, 0.08f}; // 右前轮。
+    chassis->omni_geometry.wheels[2] = (ChassisWheelGeometry_t){-0.2f, 0.2f, diagonal, diagonal, 0.08f}; // 左后轮。
+    chassis->omni_geometry.wheels[3] = (ChassisWheelGeometry_t){-0.2f, -0.2f, diagonal, -diagonal, 0.08f}; // 右后轮。
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
+        chassis->wheel_motors[i] = (ChassisWheelMotorConfig_t){(uint8_t)(i + 1u), MOTOR_AXIS_DIRECTION_NORMAL}; // 四个编号互异。
+
+    const Robot_Config_s *selected = NULL;
+    vehicle.manual_input = *valid_input;
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &vehicle);
+    vehicle.manual_input.map = NULL; // 未提供人工映射时清除上一次成功选择。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_MANUAL_INPUT);
+    TEST_CHECK(selected == NULL && RobotConfigFeed() == NULL);
+    vehicle.manual_input = *valid_input;
+    vehicle.manual_input.max_dt_ms = 0u; // 缺少最大允许间隔，不能启动轮组。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_MANUAL_INPUT);
+    vehicle.manual_input.max_dt_ms = 2000u; // 用 2 秒重现有限速率换算后溢出的情况。
+    vehicle.manual_input.commissioning_linear_accel_m_s2 = FLT_MAX;
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_MANUAL_INPUT);
+    TEST_CHECK(selected == NULL && RobotConfigFeed() == NULL);
+    vehicle.manual_input = *valid_input; // 只允许重新选中已修正的配置。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &vehicle);
+}
+
 int main(int argc, char **argv)
 {
     time_offset = argc == 2 && strcmp(argv[1], "wrap") == 0 ? UINT32_MAX - 1015u : 0u; // 让同一速度段跨过零。
@@ -137,6 +181,7 @@ int main(int argc, char **argv)
     input.commissioning_angular_accel_rad_s2 = NAN; // 拒绝非有限的转动上限。
     TEST_CHECK(!CommissioningChassisCmdInit(&input));
     input.commissioning_angular_accel_rad_s2 = 3.0f;
+    CheckVehicleSelection(&input);
     TEST_CHECK(CommissioningChassisCmdInit(&input));
 
     radio.remote_online = 1u;

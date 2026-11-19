@@ -187,6 +187,10 @@ RobotConfigStatus_t RobotConfigSelect(uint8_t id, const Robot_Config_s **output)
     const Robot_Config_s *candidate = SentinelConfigInit();
     if (!RobotConfigParametersAreValid(candidate))
         return ROBOT_CONFIG_BAD_PARAMETERS;
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    if (!RobotCommissioningChassisInputIsValid(&candidate->manual_input))
+        return ROBOT_CONFIG_BAD_MANUAL_INPUT; // 在设备和受控电源注册前拒绝错误的人工运动参数。
+#endif
 
     robot_instance = candidate;
     *output = candidate;

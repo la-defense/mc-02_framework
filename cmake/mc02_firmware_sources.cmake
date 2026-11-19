@@ -341,6 +341,7 @@ endif()
 set(MC02_SELECTED_SOURCES ${MC02_PLATFORM_C_SOURCES} ${MC02_BSP_C_SOURCES} ${MC02_COMMON_MODULE_C_SOURCES} ${MC02_APPLICATION_COMMON_C_SOURCES})
 if(MC02_COMMISSIONING_CHASSIS)
     list(APPEND MC02_SELECTED_SOURCES
+        application/config/commissioning_chassis_config.c # 启动前检查受限底盘的人工配置。
         application/cmd/commissioning_chassis_cmd.c # 受限底盘只发布本地人工控制目标。
         application/cmd/robot_manual_motion.c # 复用既有人工单位换算。
         application/chassis/chassis.c # 四轮登记与独立底盘任务。

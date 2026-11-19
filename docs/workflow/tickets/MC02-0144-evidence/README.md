@@ -34,3 +34,10 @@
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 通过。WSL Debug 和 Release 各通过 830 项。普通禁热和遥控诊断固件通过构建与链接隔离检查，FLASH 分别为 257388 B 和 260932 B，均比上次同配置结果增加 8 B。带遥控的 `commissioning/observe` 也通过构建、源码和 ELF 隔离检查。六种未确认的生产构建仍按预期拒绝。
 - 隔离源码副本暂时放开底盘构建确认，用于检查 Cortex-M7 Debug 链接与执行器源码隔离。副本保留待确认的车型参数，启动参数检查仍会拒绝。text、data、bss 分别为 302396 B、808 B 和 156984 B，较前次同配置增加 1144 B、0 B 和 64 B。链接报告的 FLASH 为 303224 B，RAM 为 125528 B（95.77%）。`CommissioningChassisCmdTask` 与 `LimitMotion` 的静态栈帧分别为 368 B 和 32 B。
 - 未连接硬件。上述测试验证已发布的速度命令及撤销行为。哨兵实车的两项变化率、任务栈水位和实际停止时延仍待现场测量。
+
+## 人工参数提前检查
+
+- 主机联合真实车型选择与底盘命令入口，覆盖合法配置、人工映射为空、最大间隔为零、有限变化率乘以最长间隔后溢出，以及配置修正后的重新选择。失败时没有活动车型可供业务读取。两项受限底盘联测通过 ASan／UBSan。
+- 隔离源码副本的 `commissioning/chassis` 通过 Cortex-M7 Debug 构建和 ELF／源码隔离检查。人工配置检查编入可移植框架目标，只在受限底盘配置中选用。FLASH 为 303336 B，较前次同配置增加 112 B，RAM 仍为 125528 B。真实车型参数仍待确认，未烧录或连接硬件。
+- 带遥控的 `commissioning/observe` 通过构建和隔离检查，FLASH 为 260964 B。该观察固件没有编入受限底盘人工配置检查或命令入口。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 通过。WSL Debug 和 Release 各通过 830 项，工具回归执行 188 项（1 项跳过）。普通禁热和遥控诊断固件通过构建和隔离检查，FLASH 分别为 257388 B 和 260932 B，与上次同配置一致。六种未确认的生产构建均按预期拒绝。

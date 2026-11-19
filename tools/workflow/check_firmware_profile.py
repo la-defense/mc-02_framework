@@ -120,6 +120,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/master_machine/vision_protocol_v2.c",  # V2 协议编解码。
     "application/chassis/chassis_motion.c",  # 模式、坐标和轮速目标计算。
     "application/cmd/commissioning_chassis_cmd.c",  # 受限底盘专用人工命令。
+    "application/config/commissioning_chassis_config.c",  # 受限底盘人工配置预检。
     "application/chassis/chassis_kinematics.c",  # 轮组几何和运动映射。
     "application/chassis/mecanum.c",  # 麦轮几何适配。
     "application/chassis/omni.c",  # 全向轮几何适配。
@@ -322,18 +323,24 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         "chassis": {"application/gimbal/gimbal.c", "application/shoot/shoot.c", "application/cmd/robot_cmd.c"},
         "gimbal": {"application/chassis/chassis.c", "application/chassis/chassis_motion.c"},
     }
-    commissioning_source = "application/cmd/commissioning_chassis_cmd.c"
+    commissioning_sources = {
+        "application/cmd/commissioning_chassis_cmd.c",  # 只发布本地人工底盘命令。
+        "application/config/commissioning_chassis_config.c",  # 只在受限底盘构建中检查人工参数。
+    }
     if chassis_commissioning:
-        missing |= {commissioning_source, "application/chassis/chassis.c",
-                    "modules/motor/DJImotor/dji_motor.c"} - compiled
+        required_chassis_sources = commissioning_sources | {
+            "application/chassis/chassis.c",  # 四轮登记和底盘周期计算。
+            "modules/motor/DJImotor/dji_motor.c",  # 受限轮组使用的 CAN 电机驱动。
+        }
+        missing |= required_chassis_sources - compiled
         unexpected |= (role_sources["chassis"] | {"modules/master_machine/master_process.c",
                         "modules/master_machine/vision_control.c", "modules/remote/remote_bench.c"}) & compiled
     elif profile in ("bench_safe", "commissioning"):
-        unexpected |= {"application/chassis/chassis.c", "application/chassis/chassis_motion.c",
+        unexpected |= (commissioning_sources | {"application/chassis/chassis.c", "application/chassis/chassis_motion.c",
                        "application/gimbal/gimbal.c", "application/shoot/shoot.c",
-                       "application/cmd/robot_cmd.c", commissioning_source} & compiled
+                       "application/cmd/robot_cmd.c"}) & compiled
     else:
-        unexpected |= (role_sources[role] | {commissioning_source}) & compiled
+        unexpected |= (role_sources[role] | commissioning_sources) & compiled
     selected_vision_macro = "VISION_USE_VCP" if vision_transport == "usb" else "VISION_USE_UART"
     rejected_vision_macro = "VISION_USE_UART" if vision_transport == "usb" else "VISION_USE_VCP"
     if not any(selected_vision_macro in command for command in compiler_commands):
