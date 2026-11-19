@@ -22,3 +22,18 @@ uint8_t RobotCommissioningChassisInputIsValid(const RobotManualInputConfig_s *in
     const float max_dt_s = (float)input->max_dt_ms * 0.001f; // 用运行时相同的毫秒换算计算最大单次步长。
     return (uint8_t)(isfinite(linear_rate * max_dt_s) && isfinite(angular_rate * max_dt_s)); // 两项上限必须在允许的最长周期内仍可计算。
 }
+
+uint8_t RobotCommissioningChassisInputFitsPeriod(const RobotManualInputConfig_s *input,
+                                               uint32_t command_period_us)
+{
+    if (input == NULL || input->map == NULL || command_period_us == 0u)
+        return 0u; // 尚未选择输入或任务周期时无法比较期限。
+
+    const uint32_t period_ms = command_period_us / 1000u + (command_period_us % 1000u != 0u); // 毫秒期限须覆盖整个微秒周期。
+    const StdCmdRemoteMap_t *map = input->map; // 两种人工来源可能使用不同的车型期限。
+    return (uint8_t)(period_ms <= input->max_dt_ms && // 下一次发布前须保留计算速度变化的时间基准。
+        period_ms <= map->remote_map.max_age_ms && // 无线来源必须同时满足车型期限和协议期限。
+        period_ms <= map->keyboard_map.max_age_ms && // 键鼠来源也受自身映射期限限制。
+        period_ms <= REMOTE_RADIO_LEASE_MS && // 两种模式都需要无线在线。
+        period_ms <= REMOTE_PC_LEASE_MS); // 键鼠还需独立的 PC 来源在线。
+}

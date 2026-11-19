@@ -41,3 +41,9 @@
 - 隔离源码副本的 `commissioning/chassis` 通过 Cortex-M7 Debug 构建和 ELF／源码隔离检查。人工配置检查编入可移植框架目标，只在受限底盘配置中选用。FLASH 为 303336 B，较前次同配置增加 112 B，RAM 仍为 125528 B。真实车型参数仍待确认，未烧录或连接硬件。
 - 带遥控的 `commissioning/observe` 通过构建和隔离检查，FLASH 为 260964 B。该观察固件没有编入受限底盘人工配置检查或命令入口。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 通过。WSL Debug 和 Release 各通过 830 项，工具回归执行 188 项（1 项跳过）。普通禁热和遥控诊断固件通过构建和隔离检查，FLASH 分别为 257388 B 和 260932 B，与上次同配置一致。六种未确认的生产构建均按预期拒绝。
+
+## 人工期限和发布任务周期
+
+- 受限底盘主机联测覆盖 5 ms 等值边界、计算间隔少 1 μs、摇杆或键鼠映射期限分别过短，以及映射不能延长无线协议期限。两项 ASan／UBSan 专项通过，原来的过期和毫秒回绕场景保留。
+- 隔离的 `commissioning/chassis` 通过 ARM 构建及 ELF、源码隔离检查。反汇编确认 `RobotInit` 从整车任务表读取周期，在建立轮组反馈计划前检查输入期限，失败进入原有关断路径。FLASH 为 306652 B，较上次同配置增加 128 B，主 RAM 仍为 125904 B。未连接硬件，实际输入抖动和停止时延待现场测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 833 项。普通禁热和遥控诊断通过构建及 ELF 检查，FLASH 分别为 257664 B 和 261208 B，与上次同配置一致。六个生产预设仍因核心配置未确认而拒绝。

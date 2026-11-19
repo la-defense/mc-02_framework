@@ -132,6 +132,15 @@ typedef struct {
  * @return 1 表示本体映射完整、间隔有效且最大速度步长可计算；否则返回 0。
  */
 uint8_t RobotCommissioningChassisInputIsValid(const RobotManualInputConfig_s *input);
+
+/** @brief 检查受限底盘的人工输入期限是否至少覆盖一个名义命令周期。
+ * @param[in] input 已通过车型参数检查的人工输入配置。
+ * @param[in] command_period_us 实际命令发布任务的名义周期，单位 μs。
+ * @return 1 表示最大计算间隔与两种来源的最长有效时间均覆盖一个周期；否则返回 0。
+ * @note 这是启动检查。运行时仍按帧的原始时间和实测间隔撤销过期目标。
+ */
+uint8_t RobotCommissioningChassisInputFitsPeriod(const RobotManualInputConfig_s *input,
+                                               uint32_t command_period_us);
 #endif
 
 // 机器人参数结构体

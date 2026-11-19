@@ -127,6 +127,31 @@ static void CheckVehicleSelection(const RobotManualInputConfig_s *valid_input)
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &vehicle);
 }
 
+// 用独立副本检查名义周期边界，保留后续运行场景原有的时限。
+static void CheckPublisherTiming(const RobotManualInputConfig_s *valid_input)
+{
+    StdCmdRemoteMap_t map = *valid_input->map; // 测试可分别缩短摇杆和键鼠期限。
+    RobotManualInputConfig_s input = *valid_input; // 使用已经通过车型检查的数值。
+    input.map = &map;
+    input.max_dt_ms = 5u;
+    TEST_CHECK(RobotCommissioningChassisInputFitsPeriod(&input, 5000u)); // 等于运行期允许的时差仍可启动。
+    TEST_CHECK(!RobotCommissioningChassisInputFitsPeriod(&input, 5001u)); // 不能把不足的 1 μs 向下舍去。
+    TEST_CHECK(!RobotCommissioningChassisInputFitsPeriod(&input, 0u)); // 没有拍点时不授予启动条件。
+    input.max_dt_ms = valid_input->max_dt_ms;
+    map.remote_map.max_age_ms = 4u; // 无线映射可以单独低于 5 ms 发布周期。
+    TEST_CHECK(!RobotCommissioningChassisInputFitsPeriod(&input, 5000u));
+    map.remote_map.max_age_ms = 5u;
+    map.keyboard_map.max_age_ms = 4u; // 键鼠配置也按同一发布周期复核。
+    TEST_CHECK(!RobotCommissioningChassisInputFitsPeriod(&input, 5000u));
+    map.keyboard_map.max_age_ms = 5u;
+    TEST_CHECK(RobotCommissioningChassisInputFitsPeriod(&input, 5000u));
+
+    const uint32_t radio_period_us = REMOTE_RADIO_LEASE_MS * 1000u; // 把两种车型期限放宽，仅验证协议上限。
+    map.remote_map.max_age_ms = map.keyboard_map.max_age_ms = input.max_dt_ms = UINT32_MAX / 2u;
+    TEST_CHECK(RobotCommissioningChassisInputFitsPeriod(&input, radio_period_us));
+    TEST_CHECK(!RobotCommissioningChassisInputFitsPeriod(&input, radio_period_us + 1u)); // 配置不能延长无线期限。
+}
+
 int main(int argc, char **argv)
 {
     time_offset = argc == 2 && strcmp(argv[1], "wrap") == 0 ? UINT32_MAX - 1015u : 0u; // 让同一速度段跨过零。
@@ -182,6 +207,7 @@ int main(int argc, char **argv)
     TEST_CHECK(!CommissioningChassisCmdInit(&input));
     input.commissioning_angular_accel_rad_s2 = 3.0f;
     CheckVehicleSelection(&input);
+    CheckPublisherTiming(&input);
     TEST_CHECK(CommissioningChassisCmdInit(&input));
 
     radio.remote_online = 1u;

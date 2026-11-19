@@ -304,6 +304,13 @@ uint8_t RobotInit(void)
         goto init_failed;
     }
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    const PlatformPeriodicConfig_t *command_timing = RobotGetTaskPeriod(ROBOT_PERIODIC_DIAGNOSTIC); // 整车任务也是受限底盘的命令发布者。
+    if (!RobotCommissioningChassisInputFitsPeriod(&robot_config->manual_input, command_timing->period_us))
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_TASK_TIMING, INIT_RESOURCE_TASK_ROBOT); // 人工期限短于命令拍点，不能进入设备启动。
+        goto init_failed;
+    }
     const RobotModulePlan_t *commissioning_modules = RobotBuildGetPlan(); // 与设备启动共享车型清单。
     const RobotControlPolicy_t commissioning_policy = {
         .enabled_functions = ROBOT_CONTROL_CHASSIS, // 仅允许轮组取得许可。
