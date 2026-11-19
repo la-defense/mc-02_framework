@@ -27,6 +27,17 @@ ChassisKinematicsStatus_t OmniCalculate(const ChassisTwist_t *input,
     return ChassisKinematicsCalculate(input, g->wheels, output);
 }
 
+ChassisKinematicsStatus_t OmniPrepareProjector(const OmniGeometry_t *geometry, ChassisWheelProjector_t *projector)
+{
+    if (projector == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
+    if (!OmniDirectionsValid(geometry))
+    {
+        projector->ready = 0u; // 方向检查失败时也不能沿用旧系数。
+        return CHASSIS_KINEMATICS_ARGUMENT;
+    }
+    return ChassisKinematicsPrepareProjector(geometry->wheels, projector);
+}
+
 ChassisKinematicsStatus_t OmniPrepareEstimator(const OmniGeometry_t *geometry, ChassisVelocityEstimator_t *estimator)
 {
     if (estimator == NULL) return CHASSIS_KINEMATICS_ARGUMENT;

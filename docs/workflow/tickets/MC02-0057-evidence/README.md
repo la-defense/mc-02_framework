@@ -67,4 +67,12 @@
 - 相同 ARM Debug 编译选项下，`-fstack-usage` 报告原周期估速函数占用 296 B 静态栈帧，改后的周期点积函数为 24 B。启动准备函数为 256 B。这些数值只描述单个函数的静态栈帧，任务峰值栈水位仍待测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 834 项，普通禁热和遥控诊断固件的内存用量与上轮相同，六种未确认的生产配置仍按预期拒绝。
 
+## 启动时准备目标轮速投影
+
+- 麦轮和全向轮在登记轮电机前检查几何和减速比，将轮位、方向与轮径换算为固定系数。底盘任务使用每轮三个乘积求转速，继续按原轮序进行共同限速和减速比换算，并在提交前复核命令期限和许可。准备失败会清除已有系数。
+- 底盘运动、轮速估计、里程计、双板话题及桥接过期等共 9 项通过 ASan／UBSan。用例覆盖未准备、连续复用、重新准备失败和非有限输入，也验证麦轮与全向轮的转向和限速。
+- 隔离的 `commissioning/chassis` 通过 Cortex-M7 Debug 构建及 ELF／源码检查。比同配置基线增加 352 B Flash 和 128 B 主 RAM，分别为 307276 B 和 126160 B。该构建用于本机检查，实车几何和限值仍待确认。
+- 相同 ARM Debug 编译选项下，`-fstack-usage` 显示 `ChassisTask` 自身静态栈帧从 288 B 降至 160 B，`ChassisInit` 从 336 B 增至 440 B。单次轮速计算入口的静态栈帧为 272 B，周期使用的 `ChassisKinematicsCalculatePrepared` 为 16 B。板上执行耗时和任务峰值栈水位仍待测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 834 项。普通禁热和遥控诊断通过 ARM 构建及 ELF 隔离检查，Flash／主 RAM 分别为 257664 B／122168 B 和 261208 B／122680 B。六种生产预设因核心配置未确认而按预期拒绝。
+
 见[本底盘接口](../../../../application/chassis/chassis.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

@@ -49,20 +49,44 @@ ChassisKinematicsStatus_t ChassisKinematicsCalculate(const ChassisTwist_t *input
     const ChassisWheelGeometry_t wheels[CHASSIS_WHEEL_COUNT], ChassisWheelSpeeds_t *output)
 {
     if (output == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
+    ChassisWheelProjector_t projector; // 保留单次计算入口，复用启动和运行时各自的检查。
+    if (input != NULL && ChassisKinematicsPrepareProjector(wheels, &projector) == CHASSIS_KINEMATICS_OK)
+        return ChassisKinematicsCalculatePrepared(input, &projector, output);
     *output = (ChassisWheelSpeeds_t){0};
-    if (input == NULL || wheels == NULL || !isfinite(input->vx_m_s) ||
-        !isfinite(input->vy_m_s) || !isfinite(input->wz_rad_s))
-        return CHASSIS_KINEMATICS_ARGUMENT;
+    return CHASSIS_KINEMATICS_ARGUMENT;
+}
+
+ChassisKinematicsStatus_t ChassisKinematicsPrepareProjector(
+    const ChassisWheelGeometry_t wheels[CHASSIS_WHEEL_COUNT], ChassisWheelProjector_t *projector)
+{
+    if (projector == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
+    projector->ready = 0u; // 重配失败时不允许使用旧系数。
+    if (wheels == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
     double projection[CHASSIS_WHEEL_COUNT][3], gram[3][3] = {{0}}, adj[3][3];
     if (!BuildProjection(wheels, projection, gram) || ProjectionDeterminant(gram, adj) == 0.0)
+        return CHASSIS_KINEMATICS_ARGUMENT; // 保留三个自由度的几何检查。
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) // 每一轮的系数按自身轮径换算。
+        for (unsigned axis = 0u; axis < 3u; ++axis)
+            projector->gain[i][axis] = projection[i][axis] / wheels[i].radius_m; // 启动时完成轮缘到轮轴的换算。
+    projector->ready = 1u; // 几何采用有限的 float、轮径为正，除法在 double 范围内。
+    return CHASSIS_KINEMATICS_OK;
+}
+
+ChassisKinematicsStatus_t ChassisKinematicsCalculatePrepared(const ChassisTwist_t *input,
+    const ChassisWheelProjector_t *projector, ChassisWheelSpeeds_t *output)
+{
+    if (output == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
+    *output = (ChassisWheelSpeeds_t){0}; // 只有四轮均可用时才替换这份清零结果。
+    if (input == NULL || projector == NULL || projector->ready != 1u || !isfinite(input->vx_m_s) ||
+        !isfinite(input->vy_m_s) || !isfinite(input->wz_rad_s))
         return CHASSIS_KINEMATICS_ARGUMENT;
     ChassisWheelSpeeds_t candidate = {0};
     for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
     {
-        const double speed = (projection[i][0] * input->vx_m_s + projection[i][1] * input->vy_m_s +
-                              projection[i][2] * input->wz_rad_s) / wheels[i].radius_m;
-        if (!isfinite(speed) || fabs(speed) > FLT_MAX) return CHASSIS_KINEMATICS_ARGUMENT;
-        candidate.rad_s[i] = (float)speed;
+        const double *gain = projector->gain[i]; // 当前轮的三个速度系数。
+        const double speed = gain[0] * input->vx_m_s + gain[1] * input->vy_m_s + gain[2] * input->wz_rad_s;
+        if (!isfinite(speed) || fabs(speed) > FLT_MAX) return CHASSIS_KINEMATICS_ARGUMENT; // 转回 float 前检查范围。
+        candidate.rad_s[i] = (float)speed; // 仍按固定轮序交付输出轴速度。
     }
     *output = candidate;
     return CHASSIS_KINEMATICS_OK;

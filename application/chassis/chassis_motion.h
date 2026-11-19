@@ -2,7 +2,7 @@
  * @file chassis_motion.h
  * @brief 四轮底盘运动计算所用的模式、安装参数、速度范围和输出。
  *
- * ChassisTask 提供本次运动要求，调用 ChassisMotionCalculate 取回四轮目标。
+ * ChassisTask 提供本次运动要求，使用启动时准备好的几何取回四轮目标。
  * 输入、设置和输出要分开存放，计算期间不能改写输入和设置。
  */
 #ifndef CHASSIS_MOTION_H
@@ -51,6 +51,14 @@ typedef struct
     OmniGeometry_t omni;             ///< 全向轮模型使用，长度单位为米。
 } ChassisMotionGeometry_s;
 
+/** @brief 由只读车型配置准备的轮速投影、模型和减速比。 */
+typedef struct
+{
+    ChassisWheelProjector_t projector; ///< 四轮输出轴投影，准备失败时不可用。
+    ChassisMotionModel_e model;        ///< 选择对应的轮序和符号约定。
+    float reduction_ratio;             ///< 电机轴转速与轮轴转速之比。
+} ChassisMotionPrepared_s;
+
 /** @brief 底盘和电机轴的转速设置，单位均为 deg/s（度/秒）。 */
 typedef struct
 {
@@ -94,5 +102,22 @@ uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
                                const ChassisMotionGeometry_s *geometry,
                                const ChassisMotionLimits_s *limits,
                                ChassisMotionOutput_s *output);
+
+/** @brief 启动或更换车型几何时检查参数并准备轮速投影。
+ * @param[in] geometry 按当前固件编译选项提供的安装尺寸和减速比。
+ * @param[out] prepared 调用者提供的只读运行配置；失败时投影标为不可用。
+ * @return 1 成功，0 为指针、几何或选择的模型无效。
+ */
+uint8_t ChassisMotionPrepare(const ChassisMotionGeometry_s *geometry, ChassisMotionPrepared_s *prepared);
+
+/** @brief 使用启动时的投影计算目标，保留原有模式、单位与限速检查。
+ * @param[in] input 本次运动要求。
+ * @param[in] prepared 与当前车辆几何一致的运行配置。
+ * @param[in] limits 车型的转速限制。
+ * @param[out] output 计算结果；失败时非空输出清零。
+ * @return 1 表示全部四轮目标有效，0 表示参数或计算结果无效。
+ */
+uint8_t ChassisMotionCalculatePrepared(const ChassisMotionInput_s *input,
+    const ChassisMotionPrepared_s *prepared, const ChassisMotionLimits_s *limits, ChassisMotionOutput_s *output);
 
 #endif

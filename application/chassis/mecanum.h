@@ -17,4 +17,10 @@ typedef struct {
  */
 ChassisKinematicsStatus_t MecanumCalculate(const ChassisTwist_t *input,
     const MecanumGeometry_t *geometry, ChassisWheelSpeeds_t *output);
+/** @brief 把麦轮尺寸转成固定轮序的目标轮速投影。
+ * @param[in] geometry 正半轴距、正半轮距、有限偏移及正轮径。
+ * @param[out] projector 保存到几何改变或底盘停止；失败时标为不可用。
+ * @return OK 或 ARGUMENT。
+ */
+ChassisKinematicsStatus_t MecanumPrepareProjector(const MecanumGeometry_t *geometry, ChassisWheelProjector_t *projector);
 #endif

@@ -46,6 +46,7 @@ static Chassis_Upload_Data_s chassis_feedback_data; // 底盘回传的反馈数�
 #endif
 
 static const Chassis_Config_s *chassis_config;
+static ChassisMotionPrepared_s chassis_motion; // 启动后只读的轮速投影和减速比。
 static DJIMotorInstance *motor_lf, *motor_rf, *motor_lb, *motor_rb; // left right forward back
 static uint8_t chassis_rollback_failed; // 记录启动时无法撤销的设备资源。
 static ChassisVelocityFeedback_t chassis_velocity; // 底盘任务更新，其他任务只读取完整副本。
@@ -108,11 +109,21 @@ static uint32_t chassis_command_max_age_ms = 0u;
 uint8_t ChassisInit(void)
 {
     ResetMotionFeedback(); // 重新初始化时清除旧轮组估计及位姿。
+    chassis_motion.projector.ready = 0u; // 准备失败时不能沿用上次的轮组投影。
     chassis_rollback_failed = 0u; // 本次初始化从无回退故障开始。
     chassis_config = ChassisConfigFeed();
-    if (chassis_config == NULL || !ChassisOdometryGapIsValid(chassis_config->odometry_max_gap_ms,
+    if (chassis_config == NULL || (chassis_config->wheel_type != OMNI_WHEEL && chassis_config->wheel_type != MECANUM_WHEEL) ||
+        !ChassisOdometryGapIsValid(chassis_config->odometry_max_gap_ms,
                                                             chassis_config->wheel_type == OMNI_WHEEL))
-        return 0u;
+        return 0u; // 轮组不支持时不登记设备或退回其他模型。
+    const ChassisMotionGeometry_s geometry = {
+        .reduction_ratio = chassis_config->chassis_motor_config.output_axis.gear_ratio, // 与电机反馈使用同一减速比。
+        .model = chassis_config->wheel_type == OMNI_WHEEL ?
+                     CHASSIS_MOTION_MODEL_OMNI : CHASSIS_MOTION_MODEL_MECANUM, // 使用本车型已选轮组。
+        .mecanum = chassis_config->mecanum_geometry, // 麦轮半轴距、半轮距、计算中心偏移和轮径，m。
+        .omni = chassis_config->omni_geometry, // 各全向轮相对底盘中心的轮位、方向和轮径，m。
+    };
+    if (!ChassisMotionPrepare(&geometry, &chassis_motion)) return 0u; // 启动时检查完整几何，再登记轮电机。
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
     if (chassis_config->wheel_type == OMNI_WHEEL &&
         OmniPrepareEstimator(&chassis_config->omni_geometry, &omni_estimator) != CHASSIS_KINEMATICS_OK)
@@ -198,6 +209,7 @@ rollback:
 uint8_t ChassisReleaseStartupDevices(void)
 {
     ResetMotionFeedback(); // 资源撤销后不能再交付旧轮速或位姿。
+    chassis_motion.projector.ready = 0u; // 撤销设备时同步撤销轮组投影。
     uint8_t released = 1u; // 汇总所有设备的撤销结果。
 #if MC02_FEATURE_SUPERCAP
     if (!ChassisLegacySuperCapRollbackStartup()) released = 0u; // 旧电容由底盘持有，先撤销它。
@@ -502,22 +514,14 @@ void ChassisTask()
         .offset_angle_deg = chassis_cmd_recv.offset_angle,
         .mode = motion_mode,
     };
-    const ChassisMotionGeometry_s geometry = {
-        .reduction_ratio = chassis_config->chassis_motor_config.output_axis.gear_ratio, // 与电机反馈使用同一减速比。
-        .model = chassis_config->wheel_type == OMNI_WHEEL ?
-                     CHASSIS_MOTION_MODEL_OMNI : CHASSIS_MOTION_MODEL_MECANUM, // 使用本车型已选轮组。
-        .mecanum = chassis_config->mecanum_geometry, // 麦轮半轴距、半轮距、计算中心偏移和轮径，m。
-        .omni = chassis_config->omni_geometry, // 各全向轮相对底盘中心的轮位、方向和轮径，m。
-    };
-    const ChassisMotionLimits_s limits = chassis_config->motion_limits;
     ChassisMotionOutput_s motion_output;
     uint8_t command_allowed = command_fresh != 0u &&
 #ifdef CHASSIS_BOARD
                                     local_permit != 0u &&
 #endif
                                     chassis_cmd_recv.chassis_mode != CHASSIS_ZERO_FORCE &&
-                                    ChassisMotionCalculate(&motion_input, &geometry, &limits,
-                                                           &motion_output);
+                                    ChassisMotionCalculatePrepared(&motion_input, &chassis_motion,
+                                        &chassis_config->motion_limits, &motion_output);
 #if defined(ONE_BOARD)
     uint32_t command_deadline_ms = 0u; // 只有复核通过才用于提交，截止点为零也合法。
     if (command_allowed != 0u)
@@ -559,8 +563,8 @@ void ChassisTask()
     }
     else
     {
-        const float wheel_direction = geometry.model == CHASSIS_MOTION_MODEL_OMNI ? 1.0f : -1.0f; // 全向轮目标与估速共用轴方向，麦轮沿用旧电机映射。
-        const float rotor_to_output = wheel_direction * DEGREE_2_RAD / geometry.reduction_ratio; // 把受限的电机轴 deg/s 还原为输出轴 rad/s。
+        const float wheel_direction = chassis_motion.model == CHASSIS_MOTION_MODEL_OMNI ? 1.0f : -1.0f; // 全向轮目标与估速共用轴方向，麦轮沿用旧电机映射。
+        const float rotor_to_output = wheel_direction * DEGREE_2_RAD / chassis_motion.reduction_ratio; // 把受限的电机轴 deg/s 还原为输出轴 rad/s。
 #if defined(ONE_BOARD)
         // 每台轮电机都用命令原有的代际；任何一台未获许可时清除四轮目标。
         const uint32_t generation = chassis_cmd_recv.safety_generation;

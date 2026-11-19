@@ -22,12 +22,13 @@ static uint8_t finite_positive(float value)
 
 /* 核对尺寸、速度范围和输入，避免除零或按未知模式计算。 */
 static uint8_t input_is_valid(const ChassisMotionInput_s *input,
-                              const ChassisMotionGeometry_s *geometry,
+                              const ChassisMotionPrepared_s *prepared,
                               const ChassisMotionLimits_s *limits)
 {
-    return input != NULL && geometry != NULL && limits != NULL &&
+    return input != NULL && prepared != NULL && prepared->projector.ready == 1u && limits != NULL &&
+           (prepared->model == CHASSIS_MOTION_MODEL_OMNI || prepared->model == CHASSIS_MOTION_MODEL_MECANUM) &&
            limits->configured &&
-           finite_positive(geometry->reduction_ratio) &&
+           finite_positive(prepared->reduction_ratio) &&
            finite_positive(limits->max_wz_deg_s) &&
            finite_positive(limits->max_motor_speed_deg_s) &&
            isfinite(limits->rotate_wz_deg_s) &&
@@ -66,11 +67,42 @@ uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
                                const ChassisMotionLimits_s *limits,
                                ChassisMotionOutput_s *output)
 {
+    if (output == NULL) return 0u;
+    ChassisMotionPrepared_s prepared; // 单次计算调用者仍可直接提供几何。
+    if (ChassisMotionPrepare(geometry, &prepared))
+        return ChassisMotionCalculatePrepared(input, &prepared, limits, output);
+    *output = (ChassisMotionOutput_s){0}; // 启动式检查失败也交付清零输出。
+    return 0u;
+}
+
+uint8_t ChassisMotionPrepare(const ChassisMotionGeometry_s *geometry, ChassisMotionPrepared_s *prepared)
+{
+    if (prepared == NULL) return 0u;
+    prepared->projector.ready = 0u; // 不允许在准备失败后沿用旧车型。
+    if (geometry == NULL || !finite_positive(geometry->reduction_ratio)) return 0u;
+    ChassisKinematicsStatus_t status = CHASSIS_KINEMATICS_UNSUPPORTED; // 只使用已经编入的轮组模型。
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+    if (geometry->model == CHASSIS_MOTION_MODEL_OMNI)
+        status = OmniPrepareProjector(&geometry->omni, &prepared->projector); // 保留每轮的单位滚动方向检查。
+#endif
+#if !defined(MC02_CONFIG_GENERATED) || !MC02_CHASSIS_IS_OMNI
+    if (geometry->model == CHASSIS_MOTION_MODEL_MECANUM)
+        status = MecanumPrepareProjector(&geometry->mecanum, &prepared->projector); // 半轴距、半轮距和偏移采用车型 SI 参数。
+#endif
+    if (status != CHASSIS_KINEMATICS_OK) return 0u;
+    prepared->model = geometry->model; // 保留该车型需要的输出轮序。
+    prepared->reduction_ratio = geometry->reduction_ratio; // 与反馈使用同一装车参数。
+    return 1u;
+}
+
+uint8_t ChassisMotionCalculatePrepared(const ChassisMotionInput_s *input,
+    const ChassisMotionPrepared_s *prepared, const ChassisMotionLimits_s *limits, ChassisMotionOutput_s *output)
+{
     if (output == NULL)
         return 0;
     // 先清零，后面的检查失败时就不会留下上一次的轮速目标。
     memset(output, 0, sizeof(*output));
-    if (!input_is_valid(input, geometry, limits))
+    if (!input_is_valid(input, prepared, limits))
         return 0;
 
     const float radians_per_degree = 0.01745329252f;
@@ -113,28 +145,19 @@ uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
         fabsf(twist.vx_m_s) > legacy_speed_limit_m_s || fabsf(twist.vy_m_s) > legacy_speed_limit_m_s)
         return 0; // 旧消息数值越界时保留清零输出。
 
-    ChassisWheelSpeeds_t wheels = {0};
-    ChassisKinematicsStatus_t calculation = CHASSIS_KINEMATICS_UNSUPPORTED;
-    if (geometry->model == CHASSIS_MOTION_MODEL_OMNI)
+    ChassisWheelSpeeds_t wheels;
+    if (ChassisKinematicsCalculatePrepared(&twist, &prepared->projector, &wheels) != CHASSIS_KINEMATICS_OK)
+        return 0u; // 无法计算全部轮速时保留清零结果。
+    if (prepared->model == CHASSIS_MOTION_MODEL_MECANUM)
     {
-#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
-        calculation = OmniCalculate(&twist, &geometry->omni, &wheels);
-#endif
-    }
-    else if (geometry->model == CHASSIS_MOTION_MODEL_MECANUM)
-    {
-#if !defined(MC02_CONFIG_GENERATED) || !MC02_CHASSIS_IS_OMNI
-        calculation = MecanumCalculate(&twist, &geometry->mecanum, &wheels); // 直接使用车型的 SI 参数。
         // 旧应用的电机顺序与新轮序不同；保留旧接口的符号和编号结果。
         const ChassisWheelSpeeds_t canonical = wheels;
         wheels.rad_s[0] = -canonical.rad_s[3];
         wheels.rad_s[1] = -canonical.rad_s[1];
         wheels.rad_s[2] = canonical.rad_s[2];
         wheels.rad_s[3] = canonical.rad_s[0];
-#endif
     }
-    if (calculation != CHASSIS_KINEMATICS_OK) return 0;
-    const float wheel_to_motor_deg_s = degrees_per_radian * geometry->reduction_ratio;
+    const float wheel_to_motor_deg_s = degrees_per_radian * prepared->reduction_ratio;
     float motor_deg_s[4];
     float largest = 0.0f;
     // 逐轮换算，找出绝对值最大的电机轴转速。

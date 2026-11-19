@@ -36,6 +36,12 @@ typedef struct {
     float radius_m;
 } ChassisWheelGeometry_t;
 
+/** @brief 将车体速度投影到四轮输出轴的固定系数。 */
+typedef struct {
+    double gain[CHASSIS_WHEEL_COUNT][3]; /**< 每轮的前向、左向和转动速度系数。 */
+    uint8_t ready; /**< 只有几何检查和全部系数通过后才置 1。 */
+} ChassisWheelProjector_t;
+
 /** @brief 轮组几何固定后即可提前算好的轮速到车体速度系数。 */
 typedef struct {
     double gain[3][CHASSIS_WHEEL_COUNT]; /**< 每行分别输出前进、左移或转动速度。 */
@@ -49,6 +55,23 @@ typedef struct {
  */
 ChassisKinematicsStatus_t ChassisKinematicsCalculate(const ChassisTwist_t *input,
     const ChassisWheelGeometry_t wheels[CHASSIS_WHEEL_COUNT], ChassisWheelSpeeds_t *output);
+
+/** @brief 用可独立控制三个平面自由度的轮组几何准备目标轮速系数。
+ * @param[in] wheels 四轮位置、滚动投影和正轮径。
+ * @param[out] projector 由调用者保存，须与输入分开存放；失败时标为不可用。
+ * @return OK 或 ARGUMENT；更换几何后须重新准备。
+ */
+ChassisKinematicsStatus_t ChassisKinematicsPrepareProjector(
+    const ChassisWheelGeometry_t wheels[CHASSIS_WHEEL_COUNT], ChassisWheelProjector_t *projector);
+
+/** @brief 将有限的车体速度投影到已经准备好的四轮模型。
+ * @param[in] input 前向、左向和转动速度，单位 m/s、rad/s。
+ * @param[in] projector 按当前几何准备成功的系数。
+ * @param[out] output 轮轴 rad/s；失败时非空输出清零。
+ * @return OK 或 ARGUMENT；所有指针必须非空。
+ */
+ChassisKinematicsStatus_t ChassisKinematicsCalculatePrepared(const ChassisTwist_t *input,
+    const ChassisWheelProjector_t *projector, ChassisWheelSpeeds_t *output);
 /** @brief 用四轮的实测输出轴速度估计三个底盘速度分量。
  * @param[in] input 四轮统一编号的输出轴速度，rad/s。
  * @param[in] wheels 四轮位置、滚动投影和正轮径，和目标轮速计算使用同一套几何。

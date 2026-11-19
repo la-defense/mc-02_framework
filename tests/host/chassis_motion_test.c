@@ -146,10 +146,16 @@ int main(void)
     tight.max_motor_speed_deg_s = 1000.0f;
     in = input(CHASSIS_MOTION_MODE_NO_FOLLOW, 1000.0f, 250.0f, 0.0f);
     CHECK(ChassisMotionCalculate(&in, &geometry, &tight, &out));
+    ChassisMotionPrepared_s prepared = {0};
+    ChassisMotionOutput_s replay;
+    CHECK(!ChassisMotionCalculatePrepared(&in, &prepared, &tight, &replay) && !replay.valid); // 未准备的轮组不能交付目标。
+    CHECK(ChassisMotionPrepare(&geometry, &prepared));
+    CHECK(ChassisMotionCalculatePrepared(&in, &prepared, &tight, &replay));
     float largest = 0.0f;
     for (unsigned i = 0; i < 4; ++i) {
         CHECK(isfinite(out.motor_speed_deg_s[i]));
         CHECK(fabsf(out.motor_speed_deg_s[i]) <= tight.max_motor_speed_deg_s);
+        CHECK(replay.motor_speed_deg_s[i] == out.motor_speed_deg_s[i]); // 周期入口保留旧轮序和共同限速结果。
         if (fabsf(out.motor_speed_deg_s[i]) > largest) largest = fabsf(out.motor_speed_deg_s[i]);
     }
     CHECK(near(largest, tight.max_motor_speed_deg_s, 1e-4f));
@@ -158,6 +164,7 @@ int main(void)
     in = input(CHASSIS_MOTION_MODE_ROTATE, 1000.0f, 250.0f, 0.0f);
     CHECK(ChassisMotionCalculate(&in, &geometry, &tight, &out));
     CHECK(fabsf(out.wz_deg_s) < fabsf(limits.rotate_wz_deg_s));
+    CHECK(ChassisMotionCalculatePrepared(&in, &prepared, &tight, &replay) && replay.wz_deg_s == out.wz_deg_s);
 
     /* Reject missing limits and malformed configuration/commands. */
     in = input(CHASSIS_MOTION_MODE_NO_FOLLOW, 0, 0, 0);
@@ -181,6 +188,8 @@ int main(void)
     CHECK(rejected(in, geometry, bad_limits) == 0);
     ChassisMotionGeometry_s bad_geometry = geometry; bad_geometry.mecanum.half_base_m = 0;
     CHECK(rejected(in, bad_geometry, limits) == 0);
+    CHECK(!ChassisMotionPrepare(&bad_geometry, &prepared)); // 几何重配失败后不能继续沿用上一组速度投影。
+    CHECK(!ChassisMotionCalculatePrepared(&in, &prepared, &limits, &replay) && !replay.valid);
     bad_geometry = geometry; bad_geometry.mecanum.half_track_m = -1;
     CHECK(rejected(in, bad_geometry, limits) == 0);
     bad_geometry = geometry; bad_geometry.mecanum.radius_m = NAN;
