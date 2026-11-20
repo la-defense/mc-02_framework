@@ -1900,6 +1900,7 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
   endif()
   add_test(NAME production_chassis_task_${chassis_limits_profile} COMMAND ${target})
 endforeach()
+add_test(NAME production_chassis_direction_revocation COMMAND chassis_task_configured_test direction-revocation) # 旧方向撤销后不能通过新反馈恢复运动命令。
 add_test(NAME production_chassis_mecanum_velocity_feedback COMMAND chassis_task_configured_test mecanum-velocity) # 用各方向的已知轮速校验旧轮序和正负号。
 add_test(NAME production_chassis_omni_velocity_feedback COMMAND chassis_task_configured_test velocity)
 # 验证轮速里程计按新样本积分，断流后开始新的本地坐标段。

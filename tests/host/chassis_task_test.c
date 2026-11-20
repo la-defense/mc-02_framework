@@ -650,8 +650,61 @@ static int TestOmniOdometryBatch(void)
     return 0;
 }
 
+#if defined(ONE_BOARD)
+static int TestChassisDirectionRevocation(void)
+{
+    CHECK(ChassisInit() == 1u); // 使用实际底盘初始化和话题实现。
+    MessagePublisher_t *commands = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_COMMAND);
+    MessagePublisher_t *feedback = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_GIMBAL);
+    MessageSubscriber_t *direction_reader = MessageSubscriberRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_COMMAND);
+    CHECK(commands != NULL && feedback != NULL && direction_reader != NULL);
+    Gimbal_Upload_Data_s direction = {0}; // 零角度也有方向依赖，不能靠下发角度的正负识别。
+    MessageFreshness_t direction_time;
+    test_tick = 100u;
+    CHECK(MessagePublishNow(feedback, &direction) == MESSAGE_OK);
+    CHECK(MessageReadSnapshot(direction_reader, &direction, sizeof(direction), test_tick, &direction_time) == MESSAGE_OK);
+    Chassis_Ctrl_Cmd_s command = {.vx = 100.0f, .chassis_mode = CHASSIS_NO_FOLLOW,
+        .local_direction_sequence = direction_time.sequence}; // 绑定本次人工方向的来源序号。
+    CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
+    ChassisTask();
+    CHECK(motors[0].enabled && motors[0].ref != 0.0f);
+
+    ++test_tick;
+    CHECK(MessagePublishNow(feedback, &direction) == MESSAGE_OK); // 连续来源的新样本不用等待命令任务重算。
+    ChassisTask();
+    CHECK(motors[0].enabled && motors[0].ref != 0.0f);
+    ++test_tick;
+    CHECK(MessagePublisherInvalidate(feedback) == MESSAGE_OK);
+    ChassisTask(); // 底盘命令自己仍未到期，但其方向已明确撤销。
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+
+    ++test_tick;
+    CHECK(MessagePublishAtBounded(feedback, &direction, test_tick, test_tick, test_tick,
+        MESSAGE_CLOCK_LOCAL, 2u) == MESSAGE_OK);
+    ChassisTask(); // 方向恢复也不能恢复撤销前发出的命令。
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+    CHECK(MessageReadSnapshot(direction_reader, &direction, sizeof(direction), test_tick, &direction_time) == MESSAGE_OK);
+    command.local_direction_sequence = direction_time.sequence; // 新命令与恢复后的有效方向绑定。
+    CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
+    ChassisTask();
+    CHECK(motors[0].enabled && motors[0].ref != 0.0f);
+    test_tick += 3u;
+    ChassisTask(); // 方向期限到期，底盘命令本身仍在话题期限内。
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+
+    command.local_direction_sequence = 0u; // 本体参照在同一轮不依赖这份方向。
+    CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
+    ChassisTask();
+    CHECK(motors[0].enabled && motors[0].ref != 0.0f);
+    return 0;
+}
+#endif
+
 int main(int argc, char **argv)
 {
+#if defined(ONE_BOARD)
+    if (argc == 2 && strcmp(argv[1], "direction-revocation") == 0) return TestChassisDirectionRevocation();
+#endif
     if (argc == 2 && strcmp(argv[1], "mecanum-velocity") == 0) return TestMecanumVelocity();
     if (argc == 2 && strcmp(argv[1], "velocity") == 0) return TestOmniVelocity();
     if (argc == 2 && strcmp(argv[1], "odometry") == 0) return TestOmniOdometry();

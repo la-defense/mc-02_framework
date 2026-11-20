@@ -166,6 +166,7 @@ typedef struct
     chassis_mode_e chassis_mode;
     int chassis_speed_buff;
     uint32_t safety_generation; // 单板命令所属安全代际，不进入双板线协议。
+    uint32_t local_direction_sequence; // 单板使用的大 yaw 反馈序号，0 表示无此依赖，不进入双板线协议。
     // UI部分
     //  ...
 

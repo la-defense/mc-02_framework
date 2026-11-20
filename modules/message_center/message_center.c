@@ -48,6 +48,7 @@ typedef struct
     uint8_t active;
     MessageTopicDescriptor_t descriptor;
     uint32_t sequence;
+    uint32_t first_snapshot_sequence; // 本次撤销后发布的第一份快照；0 表示没有可用区间。
     MessageTopicStats_t stats;
 } MessageTopicStorage_t;
 
@@ -363,6 +364,7 @@ MessageStatus_t MessagePublisherInvalidate(MessagePublisher_t *publisher)
     if (index<0) { PlatformTaskCriticalExit(); return MESSAGE_ERR_TOPIC; }
     const uint32_t mask=topics[index].descriptor.publisher_mask;
     if (mask==0u || (mask & (mask-1u))!=0u) { PlatformTaskCriticalExit(); return MESSAGE_ERR_RELATION; }
+    topics[index].first_snapshot_sequence = 0u; // 撤销前的序号不随下一次发布重新有效。
     // 只撤销该单一来源的订阅数据；其他话题和发布顺序不变。
     for (size_t i=0u;i<MESSAGE_CENTER_MAX_SUBSCRIBERS;++i)
         if (subscribers[i].active && subscribers[i].topic_index==(uint8_t)index) {
@@ -422,6 +424,13 @@ static MessageStatus_t MessagePublishInternal(MessagePublisher_t *publisher, con
     topic->sequence++;
     if (topic->sequence == 0u)
         topic->sequence = 1u;
+    if (topic->descriptor.delivery == MESSAGE_DELIVERY_SNAPSHOT)
+    {
+        if (topic->first_snapshot_sequence == 0u)
+            topic->first_snapshot_sequence = topic->sequence; // 首次发布或撤销后的新发布开启下一段。
+        else if (topic->sequence - topic->first_snapshot_sequence > INT32_MAX)
+            topic->first_snapshot_sequence = topic->sequence - (uint32_t)INT32_MAX; // 只保留最近可比较的序号区间。
+    }
     CountOnce(&topic->stats.published);
 
     for (size_t i = 0u; i < MESSAGE_CENTER_MAX_SUBSCRIBERS; ++i)
@@ -508,6 +517,33 @@ static uint8_t IsMessageFresh(const MessageTopicDescriptor_t *descriptor,
                                 freshness->received_time_ms : freshness->source_time_ms;
     return (uint8_t)(freshness->valid &&
         (uint32_t)(now_ms - age_origin) <= descriptor->max_age_ms);
+}
+
+uint8_t MessageSnapshotSourceIsCurrent(MessageTopicId_t topic_id, uint32_t source_sequence, uint32_t now_ms)
+{
+    if (!directory_ready || source_sequence == 0u) return 0u; // 未取得的序号不可能证明来源仍有效。
+    uint8_t current = 0u; // 只有属于当前发布区间且仍有有效快照时才通过。
+    PlatformTaskCriticalEnter(); // 取序号、检查最新数据时，发布或撤销不能插入。
+    const int index = FindTopicIndex(topic_id); // 目录只允许已经声明的话题。
+    if (index >= 0)
+    {
+        const MessageTopicStorage_t *topic = &topics[index]; // 对同一话题读取发布与撤销边界。
+        const uint32_t distance = topic->sequence - source_sequence; // 无符号差值允许发布序号回绕。
+        if (topic->descriptor.delivery == MESSAGE_DELIVERY_SNAPSHOT && topic->first_snapshot_sequence != 0u &&
+            distance <= INT32_MAX && distance <= topic->sequence - topic->first_snapshot_sequence)
+        {
+            for (size_t i = 0u; i < MESSAGE_CENTER_MAX_SUBSCRIBERS; ++i) // 同一快照发布给所有已登记读者。
+            {
+                const struct MessageSubscriber *reader = &subscribers[i]; // 利用现有订阅数据，不新增复制。
+                if (!reader->active || reader->topic_index != (uint8_t)index || reader->count == 0u)
+                    continue; // 跳过其他话题、空槽和尚未收到快照的读者。
+                current = IsMessageFresh(&topic->descriptor, GetSlotMetadata(reader, reader->head), now_ms); // 检查最新反馈是否仍有效。
+                break; // 同一个话题的有数据读者持有同一份最新快照。
+            }
+        }
+    }
+    PlatformTaskCriticalExit(); // 检查没有消费消息，也没有更新任何期限。
+    return current;
 }
 
 static MessageStatus_t ValidateRead(MessageSubscriber_t *subscriber, void *output,

@@ -332,6 +332,9 @@ static void PublishManualChassisWithDirection(const RobotCmdLease_t *manual)
         MessageReadSnapshot(gimbal_feed_sub, &gimbal_fetch_data, sizeof(gimbal_fetch_data), now_ms, &direction_time) == MESSAGE_OK &&
         CalcOffsetAngle(); // 有效反馈才计算角度，编码器超范围也会拒绝。
     RobotCmdLeaseIncludeGimbalFeedback(&combined, direction_valid, &direction_time, now_ms); // 方向与人工输入谁先到期就采用谁的期限。
+#if defined(ONE_BOARD)
+    chassis_cmd_send.local_direction_sequence = direction_time.sequence; // 让单板底盘验证计算所用的方向有没有被撤销。
+#endif
     (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &combined, now_ms, 0u); // 发布整份目标，失败时撤销旧目标。
     PlatformTaskCriticalExit(); // 允许方向任务更新或撤销下一轮会读取的数据。
 }
@@ -678,6 +681,7 @@ static void EmergencyHandler(uint8_t remote_online)
 /* 机器人核心控制任务,200Hz频率运行(必须高于视觉发送频率) */
 void RobotCMDTask()
 {
+    chassis_cmd_send.local_direction_sequence = 0u; // 每轮先按独立命令处理，选择大 yaw 方向后才附上反馈序号。
 #if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
     manual_intent_valid = 0u; // 每轮必须重新验证实际输入。
 #endif

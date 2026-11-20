@@ -19,6 +19,11 @@ int main(void)
     TEST_CHECK(ChassisCommandDecode(wire,sizeof(wire),&decoded)==CHASSIS_CODEC_OK);
     TEST_CHECK(decoded.vx==1.0f && decoded.vy==-2.0f && decoded.wz==0.5f &&
         decoded.chassis_mode==CHASSIS_NO_FOLLOW && decoded.chassis_speed_buff==-1);
+    command.local_direction_sequence = 17u; // 该序号只标识本板话题，不能作为跨板依赖。
+    TEST_CHECK(ChassisCommandEncode(&command,wire,sizeof(wire))==CHASSIS_CODEC_OK);
+    TEST_CHECK(memcmp(wire,expected,sizeof(wire))==0);
+    TEST_CHECK(ChassisCommandDecode(wire,sizeof(wire),&decoded)==CHASSIS_CODEC_OK && decoded.local_direction_sequence==0u);
+    command.local_direction_sequence = 0u; // 以下测试继续比较跨板可完整往返的字段。
     uint8_t unaligned_input[sizeof(command)+1u], unaligned_output[sizeof(command)+1u];
     memcpy(unaligned_input+1u,&command,sizeof(command));
     TEST_CHECK(ChassisCommandBridgeEncode(NULL,unaligned_input+1u,sizeof(command),wire,sizeof(wire)));

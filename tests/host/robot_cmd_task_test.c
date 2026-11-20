@@ -367,6 +367,7 @@ int main(int argc, char **argv)
         RobotCMDTask();
         CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, &applied_time) == MESSAGE_OK);
         CHECK(driving.chassis_mode != CHASSIS_ZERO_FORCE && driving.vx == 1000.0f && driving.offset_angle == 90.0f);
+        CHECK(driving.local_direction_sequence != 0u); // 单板底盘可以复核本次采用的方向是否仍有效。
         CHECK(applied_time.source_time_ms == source_ms && applied_time.source_max_age_ms == 20u);
         CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), 0u, NULL) == MESSAGE_OK);
         CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), 1u, NULL) == MESSAGE_ERR_EXPIRED);
@@ -432,6 +433,7 @@ int main(int argc, char **argv)
         CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
         CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK);
         CHECK(driving.vx == 1000.0f && driving.vy == 500.0f && driving.offset_angle == 0.0f && aiming.yaw == 12.0f);
+        CHECK(driving.local_direction_sequence == 0u); // 本体控制不依赖方向话题的有效性。
         tick += 10u; ++pc_sample_sequence; MessagePublishNow(feedback, &pose); RobotCMDTask();
         CHECK(MessageReadSnapshot(gimbal, &aiming, sizeof(aiming), tick, NULL) == MESSAGE_OK);
         CHECK(fabsf(aiming.yaw - 12.572958f) < 0.001f); // 以实际 10 ms 积分配置的 1 rad/s。

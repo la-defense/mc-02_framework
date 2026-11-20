@@ -539,10 +539,16 @@ void ChassisTask()
                                         &chassis_config->motion_limits, &motion_output);
 #if defined(ONE_BOARD)
     uint32_t command_deadline_ms = 0u; // 只有复核通过才用于提交，截止点为零也合法。
+    const uint32_t direction_sequence = chassis_cmd_recv.local_direction_sequence; // 计算使用的方向来源，0 表示独立于方向反馈。
+    const uint8_t check_direction = command_allowed && direction_sequence != 0u;
+    if (check_direction) PlatformTaskCriticalEnter(); // 防止方向在复核之后、四轮目标提交之前被撤销。
     if (command_allowed != 0u)
     {
         const uint32_t checked_at_ms = PlatformTimeNowMs(); // 到期检查和剩余时间使用同一时刻。
         command_allowed = ChassisCommandIsSameAndFresh(&command_freshness, checked_at_ms); // 拒绝计算期间失效或替换的旧命令。
+        if (command_allowed && check_direction &&
+            !MessageSnapshotSourceIsCurrent(ROBOT_TOPIC_GIMBAL_FEEDBACK, direction_sequence, checked_at_ms))
+            command_allowed = 0u; // 新反馈若属于撤销后的区间，也不能恢复旧命令。
         if (command_allowed != 0u)
             command_deadline_ms = ChassisCommandDeadline(&command_freshness, checked_at_ms); // 保留已复核命令的原始截止点。
     }
@@ -606,6 +612,9 @@ void ChassisTask()
             chassis_cmd_recv.wz = motion_output.wz_deg_s;
         }
     }
+#if defined(ONE_BOARD)
+    if (check_direction) PlatformTaskCriticalExit(); // 依赖方向的轮组目标已提交或清除，可以继续处理反馈。
+#endif
 
     // 速度估计独立于命令许可，停机滑行期间也能读取有效轮速。
     ChassisVelocityFeedback_t velocity;
