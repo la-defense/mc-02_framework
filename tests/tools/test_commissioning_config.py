@@ -37,24 +37,31 @@ class CommissioningConfigTest(unittest.TestCase):
             self.assertNotIn("application/shoot/shoot.c", sources)
             self.assertNotIn("modules/motor/DJImotor/dji_motor.c", sources)
             # 逐个检查运动请求和无效参数，不能沿用上一次成功的配置绕过拒绝。
-            for options, reason in (
+            missing_chassis_confirmations = (
+                "Commissioning chassis requires confirmation",
+                "MC02_VEHICLE_COMMISSIONING_CHASSIS_CONFIRMED:",
+                "MC02_VEHICLE_MANUAL_INPUT_CONFIRMED:",
+            )
+            for options, reasons in (
                 (["-DMC02_COMMISSIONING_TARGET=chassis", "-DMC02_BENCH_RC_DIAGNOSTICS=OFF"],
-                 "Commissioning chassis requires confirmed limits"),
+                 missing_chassis_confirmations),
                 (["-DMC02_COMMISSIONING_TARGET=chassis", "-DMC02_BENCH_RC_DIAGNOSTICS=OFF",
                   "-DMC02_VEHICLE_COMMISSIONING_CHASSIS_CONFIRMED=TRUE",
-                  "-DMC02_VEHICLE_MANUAL_INPUT_CONFIRMED=TRUE"], "Commissioning chassis requires confirmed limits"),
-                (["-DMC02_COMMISSIONING_TARGET=gimbal"], "Commissioning motion requires"),
-                (["-DMC02_COMMISSIONING_TARGET=both"], "Commissioning motion requires"),
-                (["-DMC02_COMMISSIONING_TARGET=invalid"], "Commissioning target is invalid"),
-                (["-DMC02_COMMISSIONING_TARGET=observe", "-DMC02_ENABLE_HEATER=ON"], "IMU"),
+                  "-DMC02_VEHICLE_MANUAL_INPUT_CONFIRMED=TRUE"], missing_chassis_confirmations),
+                (["-DMC02_COMMISSIONING_TARGET=gimbal"], ("Commissioning motion requires",)),
+                (["-DMC02_COMMISSIONING_TARGET=both"], ("Commissioning motion requires",)),
+                (["-DMC02_COMMISSIONING_TARGET=invalid"], ("Commissioning target is invalid",)),
+                (["-DMC02_COMMISSIONING_TARGET=observe", "-DMC02_ENABLE_HEATER=ON"], ("IMU",)),
                 (["-DMC02_COMMISSIONING_TARGET=observe", "-DMC02_ENABLE_HEATER=OFF",
-                  "-DMC02_BOARD_ROLE=chassis"], "single MC-02"),
+                  "-DMC02_BOARD_ROLE=chassis"], ("single MC-02",)),
             ):
                 with self.subTest(options=options):
                     result = subprocess.run(base + options, cwd=ROOT, capture_output=True,
                                             text=True, timeout=90)
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertIn(reason, result.stdout + result.stderr)
+                    # 命令行尝试覆盖两项确认时，仍应完整报告车型源码里缺少的两项。
+                    for reason in reasons:
+                        self.assertIn(reason, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

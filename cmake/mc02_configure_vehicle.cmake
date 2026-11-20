@@ -20,9 +20,18 @@ mc02_require_production_core("${MC02_PROFILE}" "${MC02_VEHICLE_MECHANICS_CONFIRM
     "${MC02_VEHICLE_GIMBAL_IMPLEMENTED}")
 mc02_require_manual_input("${MC02_PROFILE}" "${MC02_BOARD_ROLE}" "${MC02_VEHICLE_MANUAL_INPUT_CONFIRMED}") # 命令侧必须有已确认的人工作用参数。
 if(MC02_COMMISSIONING_CHASSIS)
-    if(NOT MC02_VEHICLE_COMMISSIONING_CHASSIS_CONFIRMED STREQUAL "TRUE" OR
-       NOT MC02_VEHICLE_MANUAL_INPUT_CONFIRMED STREQUAL "TRUE")
-        message(FATAL_ERROR "Commissioning chassis requires confirmed limits, mechanics, independent power and manual mapping: APP-10 / MC02-0144")
+    # 一次报告所有未确认项，避免确认一组后重新配置才看到下一组。
+    set(commissioning_unconfirmed "")
+    if(NOT MC02_VEHICLE_COMMISSIONING_CHASSIS_CONFIRMED STREQUAL "TRUE")
+        string(APPEND commissioning_unconfirmed
+            "\n  MC02_VEHICLE_COMMISSIONING_CHASSIS_CONFIRMED: wheel geometry, motor IDs/directions, reduction, output limits and independent power")
+    endif()
+    if(NOT MC02_VEHICLE_MANUAL_INPUT_CONFIRMED STREQUAL "TRUE")
+        string(APPEND commissioning_unconfirmed
+            "\n  MC02_VEHICLE_MANUAL_INPUT_CONFIRMED: manual mapping, input age, command timing and speed slew limits")
+    endif()
+    if(NOT commissioning_unconfirmed STREQUAL "")
+        message(FATAL_ERROR "Commissioning chassis requires confirmation in application/config/sentinel_robot/sentinel_build.cmake (APP-10 / MC02-0144):${commissioning_unconfirmed}")
     endif()
     if(NOT MC02_MOTOR_DRIVERS STREQUAL "dji")
         message(FATAL_ERROR "Commissioning chassis requires the validated DJI wheel driver")
