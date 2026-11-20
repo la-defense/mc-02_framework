@@ -154,6 +154,7 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uin
     snapshot->speed.value = motor->feedback_speed_rad_s;
     snapshot->speed.source_time_ms = motor->feedback_source_time_ms;
     snapshot->speed.sequence = motor->feedback_sequence;
+    snapshot->continuity_generation = motor->feedback_continuity_generation; // 模拟已恢复的有效轮速仍携带间断记录。
     snapshot->current.valid = motor->feedback_current_valid;
     if (motor->feedback_online == 0u) return MOTOR_FEEDBACK_NOT_READY;
     if (motor->feedback_age_ms > 20u) return MOTOR_FEEDBACK_STALE;
@@ -575,6 +576,30 @@ static int TestOmniOdometryBatch(void)
         PublishForwardWheel(i, test_tick);
     ChassisTask();
     CHECK(Chassis_GetOdometry(&pose) == 1u && pose.segment == segment + 2u && pose.pose.x_m == 0.0f);
+
+    test_tick = 44u;
+    PublishForwardWheels(test_tick); // 先在当前段积出非零位移。
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&pose) == 1u && pose.segment == segment + 2u && pose.pose.x_m > 0.0f);
+    test_tick = 46u;
+    ++motors[2].feedback_continuity_generation; // 单轮在任务未运行时失效又恢复，收到的轮速仍有效。
+    PublishForwardWheel(2u, test_tick);
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u && Chassis_GetOdometry(&pose) == 0u); // 另外三轮未更新，撤销旧位姿。
+    test_tick = 47u;
+    PublishForwardWheels(test_tick);
+    motors[0].feedback_source_time_ms = 45u; // 序号已更新，但这个样本来自断流轮恢复前。
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u && Chassis_GetOdometry(&pose) == 0u); // 防止从恢复前的时刻开始积分。
+    test_tick = 48u;
+    PublishForwardWheel(0u, test_tick); // 现在四轮都取得达到重建时刻的样本。
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&pose) == 1u && pose.segment == segment + 3u && pose.pose.x_m == 0.0f);
+    test_tick = 49u;
+    PublishForwardWheels(test_tick);
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&pose) == 1u && pose.segment == segment + 3u);
+    CHECK(fabsf(pose.pose.x_m - 0.002f) < 0.00001f); // 仅对新段内的两毫秒积分。
     return 0;
 }
 

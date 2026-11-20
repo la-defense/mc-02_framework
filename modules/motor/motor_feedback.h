@@ -69,6 +69,7 @@ typedef struct
     Motor_Signal_Snapshot_s current; /**< 设备电流量纲，不保证为A。 */
     Motor_Signal_Snapshot_s torque; /**< 设备力矩数值，不保证为N·m。 */
     Motor_Signal_Snapshot_s voltage; /**< 设备电压，V；驱动不支持时无效。 */
+    uint32_t continuity_generation; /**< 驱动记录的反馈间断或参考重建代次。0 是合法代次，未提供该记录的驱动保持 0。 */
 } Motor_Feedback_Snapshot_s;
 
 /** @brief 当前驱动可提供的测量字段。 */

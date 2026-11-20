@@ -75,4 +75,11 @@
 - 相同 ARM Debug 编译选项下，`-fstack-usage` 显示 `ChassisTask` 自身静态栈帧从 288 B 降至 160 B，`ChassisInit` 从 336 B 增至 440 B。单次轮速计算入口的静态栈帧为 272 B，周期使用的 `ChassisKinematicsCalculatePrepared` 为 16 B。板上执行耗时和任务峰值栈水位仍待测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 834 项。普通禁热和遥控诊断通过 ARM 构建及 ELF 隔离检查，Flash／主 RAM 分别为 257664 B／122168 B 和 261208 B／122680 B。六种生产预设因核心配置未确认而按预期拒绝。
 
+## 短暂断流后的里程计分段
+
+- DJI 同时复制轮速、原接收时刻、样本序号和间断代次。恢复汇总会比对当前序号和代次，避免换算期间出现新帧或失效时把不同时间的状态拼在一起。
+- 回归复现了两次底盘任务之间单轮失效又恢复时旧位姿仍可读取的问题。修复后，轮组速度仍可读取，旧位姿立即失效。即使四轮序号都已更新，只要还有一份轮速采样早于恢复样本，里程计就继续等待。四轮都达到重建时刻后，检查新段从零位姿开始，之后的积分只使用新段的时间间隔。
+- 8 项相关 ASan／UBSan 回归通过，覆盖实际 DJI 读口、反馈恢复以及全向轮估速和里程计。隔离 `commissioning/chassis` 通过 Cortex-M7 Debug 构建与 ELF／源码检查，FLASH 为 307612 B，较同配置基线增加 176 B。主 RAM 保持 126160 B。实车反馈与里程计精度仍待现场验证。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 839 项，普通禁热及遥控诊断通过构建和 ELF 隔离检查，六种生产预设因核心配置未确认而按预期拒绝。
+
 见[本底盘接口](../../../../application/chassis/chassis.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

@@ -34,6 +34,7 @@ typedef struct {
     uint32_t feedback_age_ms;      // 测试指定的反馈年龄，超过20ms视为过期。
     uint32_t feedback_source_time_ms; // 估速测试提供的原始轮速接收时刻。
     uint32_t feedback_sequence; // 每轮独立推进，模拟驱动的反馈序号。
+    uint32_t feedback_continuity_generation; // 注入两轮底盘任务之间出现的反馈间断。
     float feedback_speed_rad_s; // 已换算到输出轴的测试速度。
     uint8_t feedback_wrong_unit; // 注入不符合接口的速度单位。
     unsigned stop_count, enable_count, set_ref_order, enable_order;
@@ -42,6 +43,7 @@ typedef struct { uint8_t online; } DJIMotorSummary_t;
 #define DJI_FEEDBACK_MAX_AGE_MS 20u // 与生产 DJI 反馈期限一致，单位 ms。
 enum { MOTOR_UNIT_RAD_S = 1, MOTOR_REFERENCE_OUTPUT_AXIS = 1 };
 typedef struct {
+    uint32_t continuity_generation; // 与生产接口一样，零也是合法代次。
     struct {
         uint8_t valid, unit, reference;
         float value;

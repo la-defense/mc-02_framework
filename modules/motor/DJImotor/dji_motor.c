@@ -805,6 +805,7 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     Motor_Output_Axis_Config_s output_axis;
     uint32_t timestamp_ms;
     uint32_t sequence;
+    uint32_t continuity_generation; // 反馈间断记录必须与时间和序号同时复制。
     uint32_t feedback_read_time_ms;
     uint8_t has_sample;
     uint8_t position_trusted;
@@ -815,6 +816,7 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     output_axis = motor->output_axis;
     timestamp_ms = motor->last_feedback_timestamp_ms;
     sequence = motor->feedback_sequence;
+    continuity_generation = motor->feedback_gap_generation; // 即使读到的速度已经恢复，也保留此前发生的间断。
     has_sample = motor->has_feedback_timestamp;
     position_trusted = motor->encoder_baseline_valid && motor->output_position_trusted;
     speed_valid = motor->speed_filter_valid;
@@ -838,6 +840,7 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
         ((uint32_t)(effective_now_ms - timestamp_ms) <= DJI_FEEDBACK_MAX_AGE_MS);
     Motor_Feedback_Snapshot_s candidate = {0};
     candidate.sample_sequence = sequence;
+    candidate.continuity_generation = continuity_generation; // 同一份反馈及其间断记录一起交付。
     StoreSignal(&candidate.position, position_rad, MOTOR_UNIT_RAD, MOTOR_REFERENCE_OUTPUT_AXIS,
                 timestamp_ms, sequence, (uint8_t)(fresh && position_trusted));
     StoreSignal(&candidate.speed, speed_rad_s, MOTOR_UNIT_RAD_S, MOTOR_REFERENCE_OUTPUT_AXIS,
@@ -926,13 +929,13 @@ uint8_t DJIMotorGetRecoveryFeedback(uint32_t now_ms, DJI_RecoveryFeedback_s *out
         item->motor_id = motor->motor_can_endpoint.tx_id; // 使用登记时的设备编号。
         Motor_Feedback_Snapshot_s feedback = {0}; // 每台电机按实际接收时间取得反馈。
         if (DJIMotorGetFeedbackSnapshot(motor, now_ms, &feedback) != MOTOR_FEEDBACK_OK) continue; // 没有合法样本时保持序号零和无效标志。
-        PlatformTaskCriticalEnter(); // 序号与间断代次必须属于同一份样本。
-        const uint8_t same_sample = (uint8_t)(motor->feedback_sequence == feedback.sample_sequence); // 读取期间有新帧时拒绝组合。
-        const uint32_t gap_generation = motor->feedback_gap_generation; // 记录最近一次反馈间断。
+        PlatformTaskCriticalEnter(); // 读回当前身份，防止换算期间发生失效或收到新帧。
+        const uint8_t same_sample = (uint8_t)(motor->feedback_sequence == feedback.sample_sequence &&
+            motor->feedback_gap_generation == feedback.continuity_generation); // 失效可以发生在两份反馈之间，序号未必改变。
         PlatformTaskCriticalExit(); // 不在保护内进行后续数据转换。
         if (!same_sample) continue; // 下轮重读，不能混合两次反馈。
         item->sequence = feedback.sample_sequence; // 保存这份原始样本的序号。
-        item->gap_generation = gap_generation; // 间断代次随样本一起交付。
+        item->gap_generation = feedback.continuity_generation; // 使用与本次有效标志一同读取的间断记录。
         item->source_time_ms = feedback.speed.source_time_ms; // 三种反馈来自同一帧的接收时刻。
         item->speed_valid = feedback.speed.valid; // 不把过期的速度视为可用。
         item->current_valid = feedback.current.valid; // 电流有效性单独报告。

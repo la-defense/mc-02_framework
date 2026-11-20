@@ -714,6 +714,9 @@ static int single_queued_feedback_gap(void)
     uint8_t original[8];
     memcpy(original, deferred_payload, sizeof(original)); // 留存间断出现前的同一队列副本。
     TEST_CHECK((original[0] || original[1]) && (original[2] || original[3]));
+    Motor_Feedback_Snapshot_s snapshot = {0}; // 记录失效前的实际驱动读口。
+    TEST_CHECK(DJIMotorGetFeedbackSnapshot(first, HAL_GetTick(), &snapshot) == MOTOR_FEEDBACK_OK && snapshot.speed.valid);
+    const uint32_t previous_generation = snapshot.continuity_generation;
 
     now_us = 5000u;
     receive(first, 2400000u, 5u, 0, 0); // 3 ms 间隔小于滤波下限，只有第一台测量失效。
@@ -724,6 +727,9 @@ static int single_queued_feedback_gap(void)
     now_us = 10000u;
     receive(first, 4800000u, 10u, 0, 0); // 5 ms 间隔有效，旧目标的原始时刻也尚未过期。
     TEST_CHECK(first->speed_filter_valid && first->current_filter_valid);
+    TEST_CHECK(DJIMotorGetFeedbackSnapshot(first, HAL_GetTick(), &snapshot) == MOTOR_FEEDBACK_OK &&
+        snapshot.speed.valid && snapshot.speed.source_time_ms == 10u &&
+        snapshot.continuity_generation != previous_generation); // 新轮速和此前的间断记录一起返回。
     memcpy(deferred_payload, original, sizeof(original)); // 模拟失效期间完全没有发送检查。
     deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
     TEST_CHECK(!(deferred_payload[0] || deferred_payload[1]) && (deferred_payload[2] || deferred_payload[3]));

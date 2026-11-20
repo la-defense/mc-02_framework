@@ -57,12 +57,15 @@ static uint8_t chassis_odometry_valid;
 typedef struct {
     uint32_t time_ms; // 轮速的原始接收时刻，允许毫秒回绕。
     uint32_t sequence; // 该轮本次反馈序号，零表示没有样本。
+    uint32_t continuity_generation; // 短暂断流恢复后仍保留变化记录。
 } ChassisWheelObservation_t;
 
 static ChassisOdometryFeedback_t odometry_anchor; // 只由底盘任务更新，启动阶段负责清理。
 static ChassisVelocityEstimator_t omni_estimator; // 当前只读车型几何对应的固定估速系数。
 static ChassisTwist_t odometry_anchor_twist; // 上一个不同来源时刻对应的底盘自身速度。
-static ChassisWheelObservation_t odometry_anchor_wheels[CHASSIS_WHEEL_COUNT]; // 上次积分使用的四轮原始反馈身份。
+static ChassisWheelObservation_t odometry_anchor_wheels[CHASSIS_WHEEL_COUNT]; // 上次积分使用的时刻和序号，以及最近处理的间断代次。
+static uint32_t odometry_restart_ms; // 新段的每轮采样都必须达到这个时刻。
+static uint8_t odometry_restart_pending; // 时刻 0 也可以作为重建起点。
 static uint8_t odometry_anchor_known; // 时间为零也能成为有效样本。
 static uint8_t odometry_integrating; // 收到无效数据后等待下一个新样本开启新段。
 #endif
@@ -85,6 +88,7 @@ static void ResetMotionFeedback(void)
     omni_estimator.ready = 0u; // 启动或撤销设备后，旧几何的系数不能再使用。
     odometry_anchor_known = 0u; // 初始化前的时间不再用于比较。
     odometry_integrating = 0u; // 下一个可信样本从零开始。
+    odometry_restart_pending = 0u; // 新实例没有上一段的重建要求。
 #endif
     PublishMotionFeedback(NULL, NULL);
 }
@@ -306,6 +310,7 @@ static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity,
         speeds.rad_s[i] = feedback.speed.value; // 驱动已按安装方向和减速比换算，不重复处理符号。
         wheels[i].time_ms = feedback.speed.source_time_ms; // 记录原始接收时间，不以本轮执行时间替代。
         wheels[i].sequence = feedback.speed.sequence; // 每轮单独保留驱动报告的原始反馈身份。
+        wheels[i].continuity_generation = feedback.continuity_generation; // 与该轮速度来自同一次复制。
     }
     if (ChassisKinematicsEstimatePrepared(&speeds, &omni_estimator, &velocity->twist) != CHASSIS_KINEMATICS_OK)
         return 0u; // 只使用启动时的有效系数，轮速数值异常时整组结果作废。
@@ -341,8 +346,17 @@ static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeed
     uint8_t all_new = 1u; // 只有四轮都离开上次积分使用的样本，才推进位姿。
     for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
     {
-        const uint32_t sequence_step = wheels[i].sequence - odometry_anchor_wheels[i].sequence; // 允许非零序号跨回绕。
-        const uint32_t time_step = wheels[i].time_ms - odometry_anchor_wheels[i].time_ms; // 同一毫秒可以收到多帧。
+        ChassisWheelObservation_t *anchor_wheel = &odometry_anchor_wheels[i]; // 各轮独立比较，不能用其他轮的刷新抵消本轮断流。
+        if (odometry_anchor_known && wheels[i].continuity_generation != anchor_wheel->continuity_generation)
+        {
+            anchor_wheel->continuity_generation = wheels[i].continuity_generation; // 同一断流只记录一次，先保留上次积分的时刻和序号。
+            if (!odometry_restart_pending || wheels[i].time_ms - odometry_restart_ms <= INT32_MAX)
+                odometry_restart_ms = wheels[i].time_ms; // 多轮断流时使用较晚的恢复样本时刻。
+            odometry_restart_pending = 1u; // 先等四轮原始时刻都达到重建时刻。
+            odometry_integrating = 0u; // 旧位姿立即失效，不能跨过断流继续积分。
+        }
+        const uint32_t sequence_step = wheels[i].sequence - anchor_wheel->sequence; // 允许非零序号跨回绕。
+        const uint32_t time_step = wheels[i].time_ms - anchor_wheel->time_ms; // 同一毫秒可以收到多帧。
         if (wheels[i].sequence == 0u || (anchor_recent && (sequence_step > INT32_MAX || time_step > INT32_MAX)))
         {
             odometry_integrating = 0u; // 任一轮缺少身份或近期样本倒退时中断当前段。
@@ -351,6 +365,8 @@ static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeed
         if (odometry_anchor_known && sequence_step == 0u)
             all_new = 0u; // 另外几轮更新也不能让该轮的旧反馈再次参与积分。
     }
+    if (odometry_restart_pending && velocity->source_time_ms - odometry_restart_ms > INT32_MAX)
+        return NULL; // 最早的轮速仍来自恢复前，先交付速度，继续等待新段。
     const uint32_t elapsed_ms = velocity->source_time_ms - odometry_anchor.source_time_ms; // 无符号差同时适用于时间回绕。
     if (!all_new || (anchor_recent && elapsed_ms == 0u))
     {
@@ -373,6 +389,7 @@ static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeed
     odometry_anchor.source_time_ms = velocity->source_time_ms; // 不用任务执行时间延长有效期。
     odometry_anchor_twist = velocity->twist; // 作为下一段区间中较早一端的速度。
     memcpy(odometry_anchor_wheels, wheels, sizeof(odometry_anchor_wheels)); // 四轮身份与这次积分一起推进。
+    odometry_restart_pending = 0u; // 四轮都通过时才能结束等待。
     odometry_anchor_known = 1u; // 只有可信的新样本可以更新比较基准。
     odometry_integrating = 1u; // 当前段已有可发布位姿。
     return &odometry_anchor;
