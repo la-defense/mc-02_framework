@@ -182,6 +182,15 @@ void GimbalUpdateFeedback(void)
         (void)MessagePublisherInvalidate(gimbal_pub); // 发布失败时撤销此前的反馈，避免继续使用旧参考。
 }
 
+void GimbalStopAndClear(void)
+{
+    (void)MessagePublisherInvalidate(gimbal_pub); // 底盘等其他任务不能继续使用停更的方向。
+    DJIMotorStop(yaw_motor);
+    DJIMotorStop(pitch_motor);
+    DJIMotorSetRef(yaw_motor, 0.0f);
+    DJIMotorSetRef(pitch_motor, 0.0f);
+}
+
 /* 机器人云台控制核心任务 */
 void GimbalTask()
 {

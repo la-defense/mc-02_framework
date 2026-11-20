@@ -144,6 +144,17 @@ uint8_t ShootReleaseStartupDevices(void)
     return released; // 协调者根据失败结果决定是否关断整车。
 }
 
+void ShootStopAndClear(void)
+{
+    DJIMotorStop(loader); // 先撤销供弹输出，再清除旧参考。
+    DJIMotorSetRef(loader, 0.0f);
+    for (uint8_t i = 0u; i < friction_count; ++i)
+    {
+        DJIMotorStop(friction_motors[i]); // 只访问已经登记的摩擦轮。
+        DJIMotorSetRef(friction_motors[i], 0.0f);
+    }
+}
+
 /* 机器人发射机构控制核心任务 */
 void ShootTask()
 {

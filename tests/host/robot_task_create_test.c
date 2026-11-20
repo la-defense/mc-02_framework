@@ -11,7 +11,7 @@
 #include "bsp_log.h"
 #include "daemon.h"
 #include "task_monitor.h"
-#if MC02_TASK_CHASSIS
+#if MC02_TASK_CONTROL
 #include "robot_monitor_plan.h"
 #endif
 #include <stdint.h>
@@ -23,7 +23,7 @@ static uint8_t remove_monitor_ok = 1u; // 模拟辅助 INS 监控能否安全撤
 static RobotModule_t core_failure = ROBOT_MODULE_COUNT;
 static unsigned created, failures, degraded;
 static uint16_t last_failure, last_degraded;
-static int handle_storage[7]; // 包括最多一个独立底盘任务。
+static int handle_storage[9]; // 包括三个独立控制任务。
 static DaemonStatus_t daemon_result = DAEMON_OK;
 static BSPLogStatus_t log_result = BSP_LOG_STATUS_OK;
 #if defined(TEST_HT_TASK)
@@ -38,16 +38,28 @@ void StartDAEMONTASK(void const *arg) {(void)arg;}
 void StartROBOTTASK(void const *arg) {(void)arg;}
 void StartUITASK(void const *arg) {(void)arg;}
 void StartLCDTASK(void const *arg) {(void)arg;}
-#if MC02_TASK_CHASSIS
+#if MC02_TASK_CONTROL
 static uint8_t chassis_started = 1u, chassis_prepared = 1u;
-static const RobotChassisTaskConfig_t chassis_config = {
-    .stack_words = 192u, // 主机替身只核对传给创建接口的配置。
+static uint8_t additional_controls; // 新任务只在专项场景启用。
+static const RobotControlTaskConfig_t control_config[ROBOT_CONTROL_TASK_COUNT] = {
+    [ROBOT_CONTROL_TASK_CHASSIS] = {.stack_words = 192u}, // 底盘试验栈容量，单位为字。
+    [ROBOT_CONTROL_TASK_GIMBAL] = {.stack_words = 208u}, // 云台试验栈容量，单位为字。
+    [ROBOT_CONTROL_TASK_SHOOTER] = {.stack_words = 224u}, // 发射模块试验栈容量，单位为字。
 };
-const RobotChassisTaskConfig_t *RobotGetChassisTaskConfig(void)
+const RobotControlTaskConfig_t *RobotGetControlTaskConfig(RobotControlTaskId_t task)
 {
-    return chassis_prepared ? &chassis_config : NULL;
+    const uint8_t prepared = task == ROBOT_CONTROL_TASK_CHASSIS ? chassis_prepared : additional_controls;
+    return prepared ? &control_config[task] : NULL;
 }
+#endif
+#if MC02_TASK_CHASSIS
 void StartCHASSISTASK(void const *arg) {(void)arg;}
+#endif
+#if MC02_TASK_GIMBAL
+void StartGIMBALTASK(void const *arg) {(void)arg;}
+#endif
+#if MC02_TASK_SHOOTER
+void StartSHOOTERTASK(void const *arg) {(void)arg;}
 #endif
 
 uint8_t PlatformTaskCreateTracked(const PlatformTaskConfig_t *config, PlatformTaskHandle_t *handle)
@@ -62,13 +74,25 @@ uint8_t PlatformTaskCreateTracked(const PlatformTaskConfig_t *config, PlatformTa
 #if MC02_TASK_CHASSIS
         {"chassistask", 192u, PLATFORM_TASK_NORMAL}, // 底盘独立任务使用试验栈字数。
 #endif
+#if MC02_TASK_GIMBAL
+        {"gimbaltask", 208u, PLATFORM_TASK_NORMAL}, // 云台独立任务使用试验栈字数。
+#endif
+#if MC02_TASK_SHOOTER
+        {"shootertask", 224u, PLATFORM_TASK_NORMAL}, // 发射模块独立任务使用试验栈字数。
+#endif
     };
     const unsigned limit = sizeof(expected) / sizeof(expected[0]);
     unsigned index = 0u;
     while (index < limit && strcmp(config->name, expected[index].name) != 0) ++index; // 根据名称核对对应配置。
     TEST_CHECK(index < limit && config->entry != NULL && config->argument == NULL);
 #if MC02_TASK_CHASSIS
-    if (index == 6u) TEST_CHECK(config->entry == StartCHASSISTASK);
+    if (strcmp(config->name, "chassistask") == 0) TEST_CHECK(config->entry == StartCHASSISTASK);
+#endif
+#if MC02_TASK_GIMBAL
+    if (strcmp(config->name, "gimbaltask") == 0) TEST_CHECK(config->entry == StartGIMBALTASK);
+#endif
+#if MC02_TASK_SHOOTER
+    if (strcmp(config->name, "shootertask") == 0) TEST_CHECK(config->entry == StartSHOOTERTASK);
 #endif
     TEST_CHECK(config->stack_words == expected[index].stack && config->priority == expected[index].priority);
     ++created; // 即使后端拒绝，也记录框架尝试创建的任务数。
@@ -89,6 +113,9 @@ uint8_t RobotBuildModuleStarted(RobotModule_t module)
 {
 #if MC02_TASK_CHASSIS
     if (module == ROBOT_MODULE_CHASSIS) return chassis_started;
+#endif
+#if MC02_TASK_GIMBAL || MC02_TASK_SHOOTER
+    if (module == ROBOT_MODULE_GIMBAL || module == ROBOT_MODULE_SHOOTER) return additional_controls;
 #endif
     return module == ROBOT_MODULE_UI ? ui_started : module == ROBOT_MODULE_LCD ? lcd_started :
            module == ROBOT_MODULE_IMU ? imu_started : 0u; // 分别模拟模块启动结果。
@@ -135,6 +162,26 @@ static int TestChassisCreation(const char *scenario)
 int main(int argc, char **argv)
 {
     TEST_CHECK(argc == 2);
+#if MC02_TASK_GIMBAL && MC02_TASK_SHOOTER
+    if (strncmp(argv[1], "controls-", 9u) == 0)
+    {
+        additional_controls = 1u; // 三个机构都已完成初始化。
+        uint16_t resource = 0u;
+        if (strcmp(argv[1], "controls-gimbal-fail") == 0)
+        {
+            failure_name = "gimbaltask"; // 创建失败必须定位到云台。
+            resource = INIT_RESOURCE_TASK_GIMBAL;
+        }
+        else if (strcmp(argv[1], "controls-shooter-fail") == 0)
+        {
+            failure_name = "shootertask"; // 创建失败必须定位到发射模块。
+            resource = INIT_RESOURCE_TASK_SHOOTER;
+        }
+        else TEST_CHECK(strcmp(argv[1], "controls-normal") == 0);
+        TEST_CHECK(OSTaskInit() == (resource == 0u) && created == 9u && last_failure == resource);
+        return 0;
+    }
+#endif
 #if MC02_TASK_CHASSIS
     if (strncmp(argv[1], "chassis-", 8u) == 0) return TestChassisCreation(argv[1]);
 #endif

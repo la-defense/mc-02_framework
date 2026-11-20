@@ -14,9 +14,8 @@
 #include "task_monitor.h"
 #include "init_diagnostic.h"
 #include <stddef.h>
-#if MC02_TASK_CHASSIS
+#if MC02_TASK_CONTROL
 #include "robot_monitor_plan.h"
-static PlatformTaskHandle_t chassisTaskHandle; // 创建成功后随统一启动结果放行。
 #endif
 #if !defined(MC02_PROFILE_BENCH_SAFE) && MC02_SELECTED_DRIVER_HT
 #include "../modules/motor/HTmotor/ht_motor_task.h"
@@ -44,6 +43,25 @@ static void CreateTask(const char *name, PlatformTaskEntry_t entry, uint32_t sta
     *handle = NULL; // 每次创建前清空，避免旧句柄掩盖本次失败。
     (void)PlatformTaskCreateTracked(&config, handle); // 调用后由原检查集中报告失败。
 }
+
+#if MC02_TASK_CONTROL
+static uint8_t CreateControlTask(RobotControlTaskId_t task, RobotModule_t module, const char *name,
+    PlatformTaskEntry_t entry, InitDiagnosticResource_e resource)
+{
+    const RobotControlTaskConfig_t *config = RobotGetControlTaskConfig(task); // 只读取联合预检接受的配置。
+    const uint8_t started = RobotBuildModuleStarted(module); // 设备完整初始化后才允许创建业务任务。
+    if (config == NULL && !started) return 1u; // 未启用的任务不占资源。
+    if (config != NULL && started)
+    {
+        PlatformTaskHandle_t handle;
+        CreateTask(name, entry, config->stack_words, PLATFORM_TASK_NORMAL, &handle); // 使用车型配置的栈容量。
+        if (handle != NULL) return 1u; // 成功后由启动协调者统一放行。
+    }
+    const InitDiagnosticReason_e reason = config != NULL && started ? INIT_FAILURE_TASK_CREATE : INIT_FAILURE_DEPENDENCY;
+    InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS, reason, resource); // 记录具体任务。
+    return 0u; // 任一核心控制任务缺失时禁止运行。
+}
+#endif
 
 #if MC02_FEATURE_HEATER
 uint8_t RobotReportHeaterInitFailure(void)
@@ -119,21 +137,16 @@ uint8_t OSTaskInit(void)
     CreateTask("robottask", StartROBOTTASK, 1024u, PLATFORM_TASK_NORMAL, &robotTaskHandle); // 整车控制与诊断。
 
 #if MC02_TASK_CHASSIS
-    const RobotChassisTaskConfig_t *chassis = RobotGetChassisTaskConfig(); // 只读启动时监控接受的配置。
-    const uint8_t chassis_started = RobotBuildModuleStarted(ROBOT_MODULE_CHASSIS); // 必须完成底盘设备初始化。
-    if (chassis != NULL && chassis_started)
-    {
-        CreateTask("chassistask", StartCHASSISTASK, chassis->stack_words,
-                   PLATFORM_TASK_NORMAL, &chassisTaskHandle); // 沿用拆分前的普通优先级。
-    }
-    if ((chassis != NULL || chassis_started) && chassisTaskHandle == NULL)
-    {
-        // 计划、设备状态或任务创建不完整时，使用独立底盘资源编号，阻止统一放行。
-        const InitDiagnosticReason_e reason = chassis != NULL && chassis_started
-            ? INIT_FAILURE_TASK_CREATE : INIT_FAILURE_DEPENDENCY;
-        InitDiagnosticReportFailure(INIT_STAGE_TASKS, INIT_MODULE_TASKS, reason, INIT_RESOURCE_TASK_CHASSIS);
-        all_created = 0u;
-    }
+    all_created &= CreateControlTask(ROBOT_CONTROL_TASK_CHASSIS, ROBOT_MODULE_CHASSIS,
+        "chassistask", StartCHASSISTASK, INIT_RESOURCE_TASK_CHASSIS); // 底盘独立周期。
+#endif
+#if MC02_TASK_GIMBAL
+    all_created &= CreateControlTask(ROBOT_CONTROL_TASK_GIMBAL, ROBOT_MODULE_GIMBAL,
+        "gimbaltask", StartGIMBALTASK, INIT_RESOURCE_TASK_GIMBAL); // 云台反馈及控制周期。
+#endif
+#if MC02_TASK_SHOOTER
+    all_created &= CreateControlTask(ROBOT_CONTROL_TASK_SHOOTER, ROBOT_MODULE_SHOOTER,
+        "shootertask", StartSHOOTERTASK, INIT_RESOURCE_TASK_SHOOTER); // 发射模块独立周期。
 #endif
 
 #if MC02_FEATURE_UI

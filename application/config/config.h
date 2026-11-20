@@ -5,7 +5,7 @@
 #pragma once
 
 #include "build_selection.h"
-#include "chassis_task_config.h"
+#include "control_task_config.h"
 #include "chassis_motion.h"
 #include "controller.h"
 #include "motor_def.h"
@@ -160,7 +160,7 @@ uint8_t RobotCommissioningChassisTimingFits(const RobotManualInputConfig_s *inpu
 typedef struct
 {
     Chassis_Config_s chassis_param;
-    RobotChassisTaskConfig_t chassis_task; // 独立底盘任务按此配置建立拍点和监控。
+    RobotControlTaskConfig_t control_tasks[ROBOT_CONTROL_TASK_COUNT]; // 各控制任务的拍点、监控期限及栈容量。
     MotorTaskPeriods_t motor_periods; // 电机计算与队列发送拍点，启动后不可改变。
     Gimbal_Config_s gimbal_param;
     Shoot_Config_s shoot_param;

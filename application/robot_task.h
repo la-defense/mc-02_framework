@@ -32,6 +32,18 @@ void StartROBOTTASK(void const *argument);
  */
 void StartCHASSISTASK(void const *argument);
 #endif
+#if MC02_TASK_GIMBAL
+/** @brief 等待统一放行，再在独立拍点发布反馈并调用云台控制。
+ * @param[in] argument 未使用，创建时传 NULL。
+ */
+void StartGIMBALTASK(void const *argument);
+#endif
+#if MC02_TASK_SHOOTER
+/** @brief 等待统一放行，再独立调用已初始化的发射模块。
+ * @param[in] argument 未使用，创建时传 NULL。
+ */
+void StartSHOOTERTASK(void const *argument);
+#endif
 #if MC02_FEATURE_UI
 /** @brief 等待新鲜裁判机器人编号并周期运行 UI；每次循环至少等待 1 ms。
 * @param[in] argument 未使用的 RTOS 任务参数，可以为 NULL；仅用作任务入口。

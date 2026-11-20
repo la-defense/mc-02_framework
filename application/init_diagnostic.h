@@ -72,6 +72,8 @@ typedef enum
     INIT_RESOURCE_TASK_TIM5_PROBE,    ///< 显式启用的 TIM5 裸板自测。
     INIT_RESOURCE_TASK_CHASSIS,       ///< 独立底盘任务。
     INIT_RESOURCE_TASK_CHASSIS_PIPELINE, ///< 人工命令、底盘和电机的组合时限。
+    INIT_RESOURCE_TASK_GIMBAL,        ///< 独立云台任务。
+    INIT_RESOURCE_TASK_SHOOTER,       ///< 独立发射任务。
 } InitDiagnosticResource_e;
 
 /** @brief 看门狗模块失败时区分启动与正常运行窗口。 */

@@ -465,6 +465,18 @@ mc02_apply_format_diagnostics(mc02_board_backend)
 add_library(mc02_vendor_system OBJECT ${MC02_VENDOR_SYSTEM_SOURCES})
 target_include_directories(mc02_vendor_system PRIVATE ${MC02_INCLUDE_DIRS} "${CMAKE_BINARY_DIR}/generated") # 上游实现沿用当前平台配置。
 add_library(mc02_portable_framework OBJECT ${MC02_PORTABLE_FRAMEWORK_SOURCES})
+# 基础五项对应 INS、通信／电机、整车、设备维护和 UART 发送。
+set(mc02_monitor_capacity 5)
+if((MC02_PROFILE STREQUAL "robot" OR MC02_COMMISSIONING_CHASSIS) AND MC02_FEATURE_CHASSIS)
+    math(EXPR mc02_monitor_capacity "${mc02_monitor_capacity} + 1") # 独立底盘。
+endif()
+if(MC02_PROFILE STREQUAL "robot" AND MC02_FEATURE_GIMBAL)
+    math(EXPR mc02_monitor_capacity "${mc02_monitor_capacity} + 1") # 独立云台。
+endif()
+if(MC02_PROFILE STREQUAL "robot" AND MC02_FEATURE_SHOOTER)
+    math(EXPR mc02_monitor_capacity "${mc02_monitor_capacity} + 1") # 独立发射模块。
+endif()
+target_compile_definitions(mc02_portable_framework PRIVATE MC02_MONITOR_CONFIGURED_CAPACITY=${mc02_monitor_capacity})
 target_include_directories(mc02_portable_framework PRIVATE
     modules/daemon # 来源监控的公开类型。
     modules/message_center # 消息目录和新鲜度类型。

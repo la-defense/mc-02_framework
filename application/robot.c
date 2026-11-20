@@ -313,7 +313,7 @@ uint8_t RobotInit(void)
     }
     const PlatformPeriodicConfig_t *dispatch_timing = RobotGetTaskPeriod(ROBOT_PERIODIC_COMM); // 电机计算和发送共用此任务的执行预算。
     if (!RobotCommissioningChassisTimingFits(&robot_config->manual_input, command_timing,
-            &robot_config->chassis_task.timing, &robot_config->motor_periods, dispatch_timing))
+            &robot_config->control_tasks[ROBOT_CONTROL_TASK_CHASSIS].timing, &robot_config->motor_periods, dispatch_timing))
     {
         InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
                                     INIT_FAILURE_TASK_TIMING, INIT_RESOURCE_TASK_CHASSIS_PIPELINE); // 各段组合超出原期限时保持失能。
@@ -376,18 +376,22 @@ uint8_t RobotInit(void)
         goto init_failed; // 沿用现有启动失能路径。
     }
 #endif
-    if (RobotConfigureTaskMonitor(task_modules, &robot_config->chassis_task) != TASK_MONITOR_RESULT_OK)
+    RobotControlTimingFailure_t control_failure; // 保留联合预检返回的具体失败任务。
+    if (RobotConfigureTaskMonitor(task_modules, robot_config->control_tasks, &control_failure) != TASK_MONITOR_RESULT_OK)
     {
-#if MC02_TASK_CHASSIS
-        const PlatformPeriodicResult_t chassis_status = (task_modules->enabled & ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS)) != 0u
-            ? RobotValidateChassisTask(&robot_config->chassis_task) : PLATFORM_PERIODIC_READY; // 仅为启用的底盘细分错误。
-        if (chassis_status != PLATFORM_PERIODIC_READY)
+#if MC02_TASK_CONTROL
+        static const uint16_t control_resources[ROBOT_CONTROL_TASK_COUNT] = {
+            [ROBOT_CONTROL_TASK_CHASSIS] = INIT_RESOURCE_TASK_CHASSIS, // 底盘独立任务。
+            [ROBOT_CONTROL_TASK_GIMBAL] = INIT_RESOURCE_TASK_GIMBAL, // 云台独立任务。
+            [ROBOT_CONTROL_TASK_SHOOTER] = INIT_RESOURCE_TASK_SHOOTER, // 发射模块独立任务。
+        };
+        if ((unsigned)control_failure.task < ROBOT_CONTROL_TASK_COUNT)
         {
-            const InitDiagnosticReason_e reason = chassis_status == PLATFORM_PERIODIC_RESOURCE
+            const InitDiagnosticReason_e reason = control_failure.reason == PLATFORM_PERIODIC_RESOURCE
                 ? INIT_FAILURE_RESOURCE : INIT_FAILURE_TASK_TIMING; // 区分定时器通道不足与周期或预算无效。
             InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
-                                        reason, INIT_RESOURCE_TASK_CHASSIS);
-            goto init_failed; // 底盘时限缺失时不进入设备初始化。
+                                        reason, control_resources[control_failure.task]);
+            goto init_failed; // 不通过时不进入设备初始化。
         }
 #endif
         InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
@@ -631,7 +635,7 @@ void RobotTask()
 #else
 #if defined(MC02_CONFIG_GENERATED)
 // 只调度启动计划已接受的模块；被依赖失败阻断或初始化失败的模块保持不调用。
-#if MC02_FEATURE_GIMBAL
+#if MC02_FEATURE_GIMBAL && !MC02_TASK_GIMBAL
     if (RobotBuildModuleStarted(ROBOT_MODULE_GIMBAL))
         GimbalUpdateFeedback(); // 本轮命令读取刚采集的反馈，避免消耗整个 5 ms 周期。
 #endif
@@ -642,11 +646,11 @@ void RobotTask()
     if (RobotBuildModuleStarted(ROBOT_MODULE_COMMAND))
         RobotCMDTask();
 #endif
-#if MC02_FEATURE_GIMBAL
+#if MC02_FEATURE_GIMBAL && !MC02_TASK_GIMBAL
     if (RobotBuildModuleStarted(ROBOT_MODULE_GIMBAL))
         GimbalTask();
 #endif
-#if MC02_FEATURE_SHOOTER
+#if MC02_FEATURE_SHOOTER && !MC02_TASK_SHOOTER
     if (RobotBuildModuleStarted(ROBOT_MODULE_SHOOTER))
         ShootTask();
 #endif

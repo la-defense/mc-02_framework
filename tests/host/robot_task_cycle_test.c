@@ -7,7 +7,7 @@
 #include "platform_probe.h"
 #include "task_monitor.h"
 #include "test_check.h"
-#if MC02_TASK_CHASSIS
+#if MC02_TASK_CONTROL
 #include "robot_monitor_plan.h"
 #include "config/vehicle_selection.h"
 #endif
@@ -23,31 +23,49 @@ static uint32_t expected_period_ms;
 static unsigned release_delays, initializations, waits, begins, work, finishes, completes, idle_reports, fault_delays;
 static unsigned fairness_delays;
 static uint8_t finish_error; // 注入实际工作以后才发生的计数错误。
-#if MC02_TASK_CHASSIS || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+#if MC02_TASK_CONTROL || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 static unsigned stops, timing_faults;
 static TaskMonitor_FaultReason_e expected_fault = TASK_MONITOR_FAULT_PERIOD_CLOCK;
 #endif
-#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS) || MC02_TASK_CONTROL
 static uint8_t skipped_release; // 注入等待成功但漏过了上一拍的结果。
 static uint8_t deadline_error; // 注入工作完成时已经越过下一计划拍。
 #endif
-#if MC02_TASK_CHASSIS
-static RobotChassisTaskConfig_t chassis = {
+#if MC02_TASK_CONTROL
+static RobotControlTaskConfig_t control = {
     .timing = {.period_us = 4000u, .budget_us = 4000u}, // 主机试验依赖的控制拍点，单位 μs。
     .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 整毫秒场景固定使用 RTOS。
 };
-const RobotChassisTaskConfig_t *RobotGetChassisTaskConfig(void) { return &chassis; }
+const RobotControlTaskConfig_t *RobotGetControlTaskConfig(RobotControlTaskId_t task)
+{
+    TEST_CHECK((task == ROBOT_CONTROL_TASK_CHASSIS && expected_monitor == TASK_MONITOR_CHASSIS) ||
+        (task == ROBOT_CONTROL_TASK_GIMBAL && expected_monitor == TASK_MONITOR_GIMBAL) ||
+        (task == ROBOT_CONTROL_TASK_SHOOTER && expected_monitor == TASK_MONITOR_SHOOTER));
+    return &control;
+}
 uint8_t RobotBuildModuleStarted(RobotModule_t module)
 {
-    TEST_CHECK(module == ROBOT_MODULE_CHASSIS && release_delays == 1u);
+    TEST_CHECK(release_delays == 1u && ((module == ROBOT_MODULE_CHASSIS && expected_monitor == TASK_MONITOR_CHASSIS) ||
+        (module == ROBOT_MODULE_GIMBAL && expected_monitor == TASK_MONITOR_GIMBAL) ||
+        (module == ROBOT_MODULE_SHOOTER && expected_monitor == TASK_MONITOR_SHOOTER)));
     return 1u; // 设备接线和资源初始化由替身代替。
 }
-void ChassisStopAndClear(void)
+static void StopControl(TaskMonitor_Id_e monitor)
 {
-    TEST_CHECK(expected_monitor == TASK_MONITOR_CHASSIS && work == 1u);
+    TEST_CHECK(expected_monitor == monitor && work == 1u);
     TEST_CHECK(finish_error ? (finishes == 1u && completes == 0u) : (waits == 3u && completes == 1u));
     ++stops; // 时钟故障只撤销一次，下一轮仍禁止工作。
 }
+#endif
+#if MC02_TASK_CHASSIS
+void ChassisStopAndClear(void) { StopControl(TASK_MONITOR_CHASSIS); }
+#endif
+#if MC02_TASK_GIMBAL
+static unsigned gimbal_feedback;
+void GimbalStopAndClear(void) { StopControl(TASK_MONITOR_GIMBAL); }
+#endif
+#if MC02_TASK_SHOOTER
+void ShootStopAndClear(void) { StopControl(TASK_MONITOR_SHOOTER); }
 #endif
 
 #if MC02_TASK_MOTOR_SPLIT
@@ -116,7 +134,7 @@ void PlatformTaskDelayMs(uint32_t milliseconds)
     // 发生错误后，仅可让出处理器。完成检查失败时不会报告已完成的工作。
     TEST_CHECK(milliseconds == expected_period_ms);
     TEST_CHECK(waits == (finish_error ? 2u : 3u) && completes == (finish_error ? 0u : 1u));
-#if MC02_TASK_CHASSIS || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+#if MC02_TASK_CONTROL || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     TEST_CHECK(stops == 1u && timing_faults == 1u); // 先清理和报告故障，再进入停等。
 #endif
     if (++fault_delays == 2u) longjmp(task_exit, 1); // 验证错误连续保持两轮后退出常驻循环。
@@ -138,7 +156,7 @@ PlatformPeriodicResult_t PlatformTaskPeriodicFinish(const PlatformPeriodicClock_
     TEST_CHECK(work == 1u && waits == 2u && begins == 2u && finishes == 0u);
     TEST_CHECK(release->scheduled_tick == 0u && release->observed_tick == 0u);
     ++finishes;
-#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS) || MC02_TASK_CONTROL
     if (deadline_error)
     {
         *timing = (PlatformPeriodicTiming_t){.work_ticks = clock->period_ticks, .missed_deadline = 1u}; // 迟到使本拍错过截止点。
@@ -155,7 +173,7 @@ PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock
 {
     TEST_CHECK(clock != NULL && release != NULL && initializations == 1u && waits < 3u);
     ++waits;
-#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS) || MC02_TASK_CONTROL
     if (waits == 3u && skipped_release)
     {
         *release = (PlatformPeriodicRelease_t){.skipped = 1u}; // 最近拍已就绪，但上一拍未执行。
@@ -167,7 +185,7 @@ PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock
     return PLATFORM_PERIODIC_READY;
 }
 
-#if MC02_TASK_CHASSIS
+#if MC02_TASK_CONTROL
 static PlatformPeriodicClock_t *tim5_owner; // 硬件后端按实际任务栈地址记录所有权。
 static unsigned tim5_closes;
 static uint8_t budget_error;
@@ -214,7 +232,7 @@ PlatformPeriodicResult_t PlatformTaskHighResClose(const PlatformPeriodicClock_t 
 
 TaskMonitor_Result_e TaskMonitorReportTimingFailure(TaskMonitor_Id_e id, TaskMonitor_FaultReason_e reason)
 {
-#if MC02_TASK_CHASSIS
+#if MC02_TASK_CONTROL
     TEST_CHECK(id == expected_monitor && reason == expected_fault && timing_faults == 0u);
     TEST_CHECK(stops == 1u && tim5_owner == NULL); // 核心关断入口之前已撤销输出并释放比较通道。
     ++timing_faults;
@@ -263,6 +281,21 @@ void DaemonTask(void) { RunWork(TASK_MONITOR_DAEMON); }
 #if MC02_TASK_CHASSIS
 void ChassisTask(void) { RunWork(TASK_MONITOR_CHASSIS); }
 #endif
+#if MC02_TASK_GIMBAL
+void GimbalUpdateFeedback(void)
+{
+    TEST_CHECK(expected_monitor == TASK_MONITOR_GIMBAL && begins == 2u && work == 0u);
+    ++gimbal_feedback; // 只有取得云台自己的拍点后才允许发布反馈。
+}
+void GimbalTask(void)
+{
+    TEST_CHECK(gimbal_feedback == 1u); // 先取得反馈，再执行该轮业务。
+    RunWork(TASK_MONITOR_GIMBAL);
+}
+#endif
+#if MC02_TASK_SHOOTER
+void ShootTask(void) { RunWork(TASK_MONITOR_SHOOTER); }
+#endif
 void TaskMonitorTick(void) { TEST_CHECK(expected_monitor == TASK_MONITOR_DAEMON && work == 1u); }
 void PlatformMaintainSpi(void) { TEST_CHECK(expected_monitor == TASK_MONITOR_DAEMON && begins == 2u); }
 void PlatformMaintainAnalog(void) { TEST_CHECK(expected_monitor == TASK_MONITOR_DAEMON && begins == 2u); }
@@ -283,9 +316,18 @@ int main(int argc, char **argv)
         TaskMonitor_Id_e monitor; // 入口应报告的监控项。
         uint32_t period_ms; // 入口应从配置取得的名义周期。
     } tasks[] = {
+#if MC02_TASK_CONTROL
 #if MC02_TASK_CHASSIS
         {"chassis", StartCHASSISTASK, TASK_MONITOR_CHASSIS, 4u}, // 正式任务入口使用隔离的主机时间配置。
         {"tim5", StartCHASSISTASK, TASK_MONITOR_CHASSIS, 1u}, // 错误后让出 1 ms，实际拍点为 500 μs。
+#endif
+#if MC02_TASK_GIMBAL
+        {"gimbal", StartGIMBALTASK, TASK_MONITOR_GIMBAL, 4u}, // 云台在独立拍点发布反馈和计算。
+        {"gimbal-tim5", StartGIMBALTASK, TASK_MONITOR_GIMBAL, 1u}, // TIM5 超预算时释放该任务的通道。
+#endif
+#if MC02_TASK_SHOOTER
+        {"shooter", StartSHOOTERTASK, TASK_MONITOR_SHOOTER, 4u}, // 发射模块任务独立报告进度。
+#endif
 #if MC02_TASK_MOTOR_SPLIT
         {"motor", StartMOTORTASK, TASK_MONITOR_MOTOR, 1u}, // 计时错误时先撤销整车许可。
 #endif
@@ -296,10 +338,11 @@ int main(int argc, char **argv)
         {"robot", StartROBOTTASK, TASK_MONITOR_ROBOT, 5u}, // 整车诊断。
 #endif
     };
-#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS) || MC02_TASK_CONTROL
     skipped_release = (uint8_t)(argc == 3 && strcmp(argv[2], "skip-release") == 0);
     deadline_error = (uint8_t)(argc == 3 && strcmp(argv[2], "deadline-error") == 0);
-    TEST_CHECK(argc == 2 || (argc == 3 && (skipped_release || deadline_error || strcmp(argv[2], "finish-error") == 0)));
+    TEST_CHECK(argc == 2 || (argc == 3 && (skipped_release || deadline_error ||
+        strcmp(argv[2], "finish-error") == 0 || strcmp(argv[2], "budget-error") == 0)));
     finish_error = (uint8_t)(argc == 3 && !skipped_release); // 跳拍在第一轮成功完成后注入。
     if (skipped_release || deadline_error) expected_fault = TASK_MONITOR_FAULT_PERIOD_DEADLINE;
 #else
@@ -311,12 +354,12 @@ int main(int argc, char **argv)
         if (strcmp(tasks[i].name, argv[1]) != 0) continue;
         expected_monitor = tasks[i].monitor;
         expected_period_ms = tasks[i].period_ms;
-#if MC02_TASK_CHASSIS
-        const uint8_t tim5 = (uint8_t)(strcmp(argv[1], "tim5") == 0);
+#if MC02_TASK_CONTROL
+        const uint8_t tim5 = (uint8_t)(strcmp(argv[1], "tim5") == 0 || strcmp(argv[1], "gimbal-tim5") == 0);
         if (tim5)
         {
-            chassis.timing = (PlatformPeriodicConfig_t){.period_us = 500u, .budget_us = 250u};
-            chassis.source = PLATFORM_PERIODIC_SOURCE_HIGH_RES; // 模拟启动预检交付的实际来源。
+            control.timing = (PlatformPeriodicConfig_t){.period_us = 500u, .budget_us = 250u};
+            control.source = PLATFORM_PERIODIC_SOURCE_HIGH_RES; // 模拟启动预检交付的实际来源。
             budget_error = (uint8_t)(argc == 3 && strcmp(argv[2], "budget-error") == 0);
             if (budget_error) expected_fault = TASK_MONITOR_FAULT_WORK_DEADLINE; // 超预算应有明确原因。
         }
@@ -326,7 +369,7 @@ int main(int argc, char **argv)
         TEST_CHECK(waits == (finish_error ? 2u : 3u));
         const unsigned reported = finish_error ? 0u : 1u; // 完成时钟失败时保持监控进度不变。
         TEST_CHECK(completes == reported && idle_reports == reported && fairness_delays == reported);
-#if MC02_TASK_CHASSIS
+#if MC02_TASK_CONTROL
         TEST_CHECK(tim5_closes == tim5 && tim5_owner == NULL); // 故障后只释放一次硬件通道。
 #endif
         return 0;

@@ -4,7 +4,7 @@
 #include "robot_task.h"
 #include "platform_os.h"
 #include "robot_monitor_plan.h"
-#if MC02_TASK_CHASSIS
+#if MC02_TASK_CONTROL
 #include "robot_control_tasks.h"
 #endif
 #include <stddef.h>
@@ -118,6 +118,16 @@ static RobotTaskCycle_t OpenTaskCycle(RobotPeriodicTask_t task, TaskMonitor_Id_e
     return cycle; // 这些常驻任务只使用 RTOS，不登记周期状态地址。
 }
 
+// 独立控制任务使用硬完成期限；受限底盘的人工命令任务也使用同样的规则。
+static uint8_t UsesHardCycleDeadline(TaskMonitor_Id_e monitor)
+{
+    return monitor == TASK_MONITOR_CHASSIS || monitor == TASK_MONITOR_GIMBAL || monitor == TASK_MONITOR_SHOOTER
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+        || monitor == TASK_MONITOR_ROBOT
+#endif
+        ;
+}
+
 // 固定周期任务先领取拍点，再向监控请求执行；失败时让出处理器。
 static uint8_t BeginTaskCycle(RobotTaskCycle_t *cycle)
 {
@@ -134,10 +144,8 @@ static uint8_t BeginTaskCycle(RobotTaskCycle_t *cycle)
 #endif
             if (status != PLATFORM_PERIODIC_READY)
                 StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 等待失败先执行当前任务的关断处理。
-#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
-            else if (cycle->monitor == TASK_MONITOR_ROBOT && cycle->release.skipped != 0u)
-                StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_DEADLINE); // 人工命令任务漏过整拍，禁止发布本轮目标。
-#endif
+            else if (UsesHardCycleDeadline(cycle->monitor) && cycle->release.skipped != 0u)
+                StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_DEADLINE); // 控制任务漏过整拍，禁止执行本轮业务。
         }
         if (!cycle->ready)
         {
@@ -169,11 +177,7 @@ static void CompleteTaskCycle(RobotTaskCycle_t *cycle)
             StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 无法证明完成时刻时不报告进度。
             return;
         }
-        uint8_t enforce_deadline = (uint8_t)(cycle->monitor == TASK_MONITOR_CHASSIS); // 底盘原有的硬时限。
-#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
-        enforce_deadline |= (uint8_t)(cycle->monitor == TASK_MONITOR_ROBOT); // 受限调试的整车任务发布人工底盘命令。
-#endif
-        if (enforce_deadline && (timing.over_budget || timing.missed_deadline))
+        if (UsesHardCycleDeadline(cycle->monitor) && (timing.over_budget || timing.missed_deadline))
         {
             const TaskMonitor_FaultReason_e reason = timing.over_budget
                 ? TASK_MONITOR_FAULT_WORK_DEADLINE : TASK_MONITOR_FAULT_PERIOD_DEADLINE; // 区分计算超时和拍点错过。
@@ -392,27 +396,59 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
     }
 }
 
-#if MC02_TASK_CHASSIS
-__attribute__((noreturn)) void StartCHASSISTASK(void const *argument)
+#if MC02_TASK_CONTROL
+static __attribute__((noreturn)) void RunControlTask(RobotControlTaskId_t task, RobotModule_t module,
+    TaskMonitor_Id_e monitor, void (*run)(void), void (*stop)(void))
 {
-    (void)argument;
-    const RobotChassisTaskConfig_t *config = RobotGetChassisTaskConfig(); // 创建者已检查统一监控配置。
+    const RobotControlTaskConfig_t *config = RobotGetControlTaskConfig(task); // 创建者已检查联合预检配置。
     if (config == NULL)
         for (;;) PlatformTaskDelayMs(1u); // 启动契约未满足时不访问设备，也不代报进度。
     RobotTaskCycle_t cycle;
-    OpenConfiguredTaskCycle(&cycle, &config->timing, TASK_MONITOR_CHASSIS, 1u,
-                            config->source, ChassisStopAndClear); // 周期状态地址在整个任务内保持稳定。
+    OpenConfiguredTaskCycle(&cycle, &config->timing, monitor, 1u,
+                            config->source, stop); // 周期状态地址在整个任务内保持稳定。
     for (;;)
     {
-        if (!RobotBuildModuleStarted(ROBOT_MODULE_CHASSIS))
+        const uint8_t still_started = RobotBuildModuleStarted(module); // 已撤销的模块不等待下一次拍点才停机。
+        const uint8_t work_allowed = still_started && BeginTaskCycle(&cycle); // 放行后才从所属时钟领取拍点。
+        if (!still_started || !RobotBuildModuleStarted(module))
         {
             StopTaskClock(&cycle, TASK_MONITOR_FAULT_NONE); // 依赖失效由对应模块报告，此处只撤销输出和释放通道。
             for (;;) PlatformTaskDelayMs(cycle.delay_ms);
         }
-        if (!BeginTaskCycle(&cycle)) continue; // 本轮需要有效拍点和监控许可。
-        ChassisTask(); // 独立任务是本构建中唯一的底盘命令消费者。
+        if (!work_allowed) continue; // 拍点或监控未许可时不访问机构。
+        run(); // 由一个固定的任务入口调用机构业务。
         CompleteTaskCycle(&cycle); // 完成时钟有效后才提交监控进度。
     }
+}
+#endif
+
+#if MC02_TASK_CHASSIS
+__attribute__((noreturn)) void StartCHASSISTASK(void const *argument)
+{
+    (void)argument;
+    RunControlTask(ROBOT_CONTROL_TASK_CHASSIS, ROBOT_MODULE_CHASSIS, TASK_MONITOR_CHASSIS, ChassisTask, ChassisStopAndClear);
+}
+#endif
+
+#if MC02_TASK_GIMBAL
+static void RunGimbalCycle(void)
+{
+    GimbalUpdateFeedback(); // 只有云台任务发布方向反馈，命令任务读取其原始时刻。
+    GimbalTask();
+}
+
+__attribute__((noreturn)) void StartGIMBALTASK(void const *argument)
+{
+    (void)argument;
+    RunControlTask(ROBOT_CONTROL_TASK_GIMBAL, ROBOT_MODULE_GIMBAL, TASK_MONITOR_GIMBAL, RunGimbalCycle, GimbalStopAndClear);
+}
+#endif
+
+#if MC02_TASK_SHOOTER
+__attribute__((noreturn)) void StartSHOOTERTASK(void const *argument)
+{
+    (void)argument;
+    RunControlTask(ROBOT_CONTROL_TASK_SHOOTER, ROBOT_MODULE_SHOOTER, TASK_MONITOR_SHOOTER, ShootTask, ShootStopAndClear);
 }
 #endif
 

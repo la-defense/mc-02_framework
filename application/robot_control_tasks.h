@@ -42,11 +42,13 @@ uint8_t GimbalInitRollbackFailed(void);
  */
 uint8_t GimbalReleaseStartupDevices(void);
 /** @brief 读取并发布当前云台姿态和 yaw 单圈角度，任一路无效时清除上一份反馈。
- * @note 只在云台初始化成功后调用。整车任务应在本轮命令选择之前刷新反馈。
+ * @note 只在云台初始化成功后调用。独立任务配置由云台任务自己发布；兼容配置由整车任务发布。
  */
 void GimbalUpdateFeedback(void);
 /** @brief 在成功初始化后执行一轮云台控制；超过 50 ms 的命令失效并停止相应输出。 */
 void GimbalTask(void);
+/** @brief 停止云台并撤销原反馈，供任务故障或依赖失效时使用。 */
+void GimbalStopAndClear(void);
 /** @brief 初始化发射机构资源。
  * @return 成功返回 1，资源或话题注册失败返回 0。
  * @note 由启动协调任务调用一次，须先准备车型发射配置。
@@ -64,4 +66,6 @@ uint8_t ShootInitRollbackFailed(void);
 uint8_t ShootReleaseStartupDevices(void);
 /** @brief 在成功初始化后执行一轮发射控制；超过 50 ms 的命令失效并停止相应输出。 */
 void ShootTask(void);
+/** @brief 停止发射模块的电机并清除参考，供独立任务故障时使用。 */
+void ShootStopAndClear(void);
 #endif

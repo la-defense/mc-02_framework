@@ -14,6 +14,11 @@
 #define ROBOT_COMM_PERIOD_MS 1u // 通信派发的名义周期，单位 ms。
 #define ROBOT_DAEMON_PERIOD_MS 10u // 设备维护与监控的名义周期，单位 ms。
 
+#if defined(MC02_MONITOR_CONFIGURED_CAPACITY)
+_Static_assert(MC02_MONITOR_CONFIGURED_CAPACITY == TASK_MONITOR_COUNT + MC02_TASK_CHASSIS + MC02_TASK_GIMBAL + MC02_TASK_SHOOTER,
+               "firmware task monitor capacity must match its task selection");
+#endif
+
 static const PlatformPeriodicRequest_t task_periods[ROBOT_PERIODIC_COUNT] = {
     [ROBOT_PERIODIC_DIAGNOSTIC] = {
         .timing = {
@@ -134,52 +139,87 @@ static const TaskMonitorTaskConfig_t robot_task_monitor_config[] = {
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 30u, .startup_grace_ms = 100u}, // 串口发送。
 };
 
+#if MC02_TASK_CONTROL
+static RobotControlTaskConfig_t control_config[ROBOT_CONTROL_TASK_COUNT]; // 放行后保持只读。
+static uint32_t prepared_tasks; // 只有监控接受的任务才允许创建。
+
+static const struct {
+    const char *name;
+    RobotModule_t module;
+    TaskMonitor_Id_e monitor;
+} control_monitor[ROBOT_CONTROL_TASK_COUNT] = {
 #if MC02_TASK_CHASSIS
-static RobotChassisTaskConfig_t chassis_task_config; // 由启动者填写，放行后保持只读。
-static uint8_t chassis_task_prepared; // 监控接受底盘配置后才允许创建任务。
+    [ROBOT_CONTROL_TASK_CHASSIS] = {"CHASSIS", ROBOT_MODULE_CHASSIS, TASK_MONITOR_CHASSIS}, // 底盘任务独立报告进度。
+#endif
+#if MC02_TASK_GIMBAL
+    [ROBOT_CONTROL_TASK_GIMBAL] = {"GIMBAL", ROBOT_MODULE_GIMBAL, TASK_MONITOR_GIMBAL}, // 反馈发布及控制共用云台监控。
+#endif
+#if MC02_TASK_SHOOTER
+    [ROBOT_CONTROL_TASK_SHOOTER] = {"SHOOTER", ROBOT_MODULE_SHOOTER, TASK_MONITOR_SHOOTER}, // 发射模块由自己的任务报告进度。
+#endif
+};
 
 // 监控以整毫秒显示名义周期；实际任务保持原来的微秒拍点。
-static uint32_t ChassisMonitorPeriodMs(uint32_t period_us)
+static uint32_t ControlMonitorPeriodMs(uint32_t period_us)
 {
     return period_us / 1000u + (period_us % 1000u != 0u); // 避免亚毫秒周期在监控中被记为 0。
 }
 
-static PlatformPeriodicResult_t ResolveChassisTask(const RobotChassisTaskConfig_t *config,
-    PlatformPeriodicSource_t *source)
+static uint8_t ControlMonitorConfigValid(const RobotControlTaskConfig_t *config)
 {
-    if (config == NULL || config->deadline_ms == 0u ||
-        ChassisMonitorPeriodMs(config->timing.period_us) > config->deadline_ms || config->deadline_ms >= (uint32_t)INT32_MAX ||
-        config->startup_grace_ms == 0u || config->startup_grace_ms >= (uint32_t)INT32_MAX ||
-        config->stack_words == 0u || config->stack_words > UINT16_MAX)
-        return PLATFORM_PERIODIC_CONFIG; // 监控仍用毫秒，缺参数或超出 OS 容量时不启动底盘。
-    const PlatformPeriodicCapabilities_t capabilities = PlatformTaskPeriodicCapabilities(); // 检查两种来源的实际分辨率与通道。
-    const PlatformPeriodicRequest_t request = {.timing = config->timing, .source = config->source}; // 保留原始周期和预算。
-    uint32_t hardware_mask = 0u; // 当前底盘和独立 TIM5 裸板自测配置互斥，车上只有底盘申请通道。
-    const PlatformPeriodicResult_t result = PlatformPeriodicPlan(&request, 1u, &capabilities, &hardware_mask, NULL);
-    if (result == PLATFORM_PERIODIC_READY && source != NULL)
-        *source = hardware_mask != 0u ? PLATFORM_PERIODIC_SOURCE_HIGH_RES : PLATFORM_PERIODIC_SOURCE_RTOS; // 放行后固定来源。
-    return result;
+    return config != NULL && config->deadline_ms != 0u &&
+        ControlMonitorPeriodMs(config->timing.period_us) <= config->deadline_ms && config->deadline_ms < (uint32_t)INT32_MAX &&
+        config->startup_grace_ms != 0u && config->startup_grace_ms < (uint32_t)INT32_MAX &&
+        config->stack_words != 0u && config->stack_words <= UINT16_MAX; // 此处检查毫秒监控与栈，平台另检查拍点和预算。
 }
 
-PlatformPeriodicResult_t RobotValidateChassisTask(const RobotChassisTaskConfig_t *config)
+// 用同一张平台资源表检查本次启用的机构，保留实际时钟来源供运行阶段使用。
+static RobotControlTimingFailure_t ResolveControlTasks(const RobotModulePlan_t *plan,
+    const RobotControlTaskConfig_t *control, PlatformPeriodicSource_t sources[ROBOT_CONTROL_TASK_COUNT], uint32_t *enabled)
 {
-    return ResolveChassisTask(config, NULL); // 只报告检查结果，不改运行配置。
+    PlatformPeriodicRequest_t requests[ROBOT_CONTROL_TASK_COUNT]; // 合并所有需要平台时钟的请求。
+    RobotControlTaskId_t tasks[ROBOT_CONTROL_TASK_COUNT]; // 用于把压缩后的下标换回任务编号。
+    size_t count = 0u;
+    *enabled = 0u; // 未启用的任务不占监控和定时器通道。
+    for (unsigned i = 0u; i < ROBOT_CONTROL_TASK_COUNT; ++i)
+    {
+        if (control_monitor[i].name == NULL || !(plan->enabled & ROBOT_MODULE_BIT(control_monitor[i].module)))
+            continue; // 同时检查编译选择和本次车型模块计划。
+        if (control == NULL || !ControlMonitorConfigValid(&control[i]))
+            return (RobotControlTimingFailure_t){(RobotControlTaskId_t)i, PLATFORM_PERIODIC_CONFIG}; // 缺少栈或监控参数时拒绝整组。
+        requests[count] = (PlatformPeriodicRequest_t){.timing = control[i].timing, .source = control[i].source}; // 保留微秒值和允许的来源。
+        tasks[count++] = (RobotControlTaskId_t)i; // 保留原编号供结果定位。
+        *enabled |= UINT32_C(1) << i; // 记录本次计划的任务。
+    }
+    if (count == 0u) return (RobotControlTimingFailure_t){ROBOT_CONTROL_TASK_COUNT, PLATFORM_PERIODIC_READY};
+    const PlatformPeriodicCapabilities_t capabilities = PlatformTaskPeriodicCapabilities(); // 所有请求共享同一份平台容量。
+    uint32_t hardware_mask; // 只在平台检查通过后读取。
+    size_t failed_index = 0u; // 平台失败时返回对应请求下标。
+    const PlatformPeriodicResult_t result = PlatformPeriodicPlan(requests, count, &capabilities, &hardware_mask, &failed_index);
+    if (result != PLATFORM_PERIODIC_READY)
+        return (RobotControlTimingFailure_t){tasks[failed_index], result}; // 报告具体机构的时间或资源错误。
+    for (size_t i = 0u; i < count; ++i)
+        sources[tasks[i]] = (hardware_mask & (UINT32_C(1) << i))
+            ? PLATFORM_PERIODIC_SOURCE_HIGH_RES : PLATFORM_PERIODIC_SOURCE_RTOS; // 保存方案选中的来源，不在运行中重新选择。
+    return (RobotControlTimingFailure_t){ROBOT_CONTROL_TASK_COUNT, PLATFORM_PERIODIC_READY};
 }
 
-const RobotChassisTaskConfig_t *RobotGetChassisTaskConfig(void)
+const RobotControlTaskConfig_t *RobotGetControlTaskConfig(RobotControlTaskId_t task)
 {
-    return chassis_task_prepared ? &chassis_task_config : NULL;
+    if ((unsigned)task >= ROBOT_CONTROL_TASK_COUNT || !(prepared_tasks & (UINT32_C(1) << task))) return NULL;
+    return &control_config[task];
 }
 #endif
 
 TaskMonitor_Result_e RobotConfigureTaskMonitor(const RobotModulePlan_t *plan,
-    const RobotChassisTaskConfig_t *chassis)
+    const RobotControlTaskConfig_t *control, RobotControlTimingFailure_t *failure)
 {
-#if MC02_TASK_CHASSIS
+    if (failure != NULL) *failure = (RobotControlTimingFailure_t){ROBOT_CONTROL_TASK_COUNT, PLATFORM_PERIODIC_READY};
+#if MC02_TASK_CONTROL
     TaskMonitorTaskConfig_t selected[sizeof(robot_task_monitor_config) /
-                                      sizeof(robot_task_monitor_config[0]) + 1u]; // 额外保留一个底盘监控项。
+                                      sizeof(robot_task_monitor_config[0]) + ROBOT_CONTROL_TASK_COUNT]; // 给独立控制任务留出容量。
 #else
-    (void)chassis; // 此构建不会启动独立底盘。
+    (void)control; // 此构建不会启动独立控制任务。
     TaskMonitorTaskConfig_t selected[sizeof(robot_task_monitor_config) /
                                       sizeof(robot_task_monitor_config[0])]; // 使用固定容量。
 #endif
@@ -209,32 +249,38 @@ TaskMonitor_Result_e RobotConfigureTaskMonitor(const RobotModulePlan_t *plan,
 #endif
         selected[count++] = item; // 只交付该车型实际需要的监控。
     }
-#if MC02_TASK_CHASSIS
-    const uint8_t chassis_enabled = (uint8_t)((plan->enabled & ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS)) != 0u);
-    PlatformPeriodicSource_t chassis_source = PLATFORM_PERIODIC_SOURCE_RTOS; // 底盘启用后才由预检决定实际来源。
-    if (chassis_enabled)
+#if MC02_TASK_CONTROL
+    PlatformPeriodicSource_t sources[ROBOT_CONTROL_TASK_COUNT]; // 本次预检得到的时钟来源。
+    uint32_t enabled; // 成功时表示所选控制任务。
+    const RobotControlTimingFailure_t timing = ResolveControlTasks(plan, control, sources, &enabled);
+    if (timing.reason != PLATFORM_PERIODIC_READY)
     {
-        if (ResolveChassisTask(chassis, &chassis_source) != PLATFORM_PERIODIC_READY)
-            return TASK_MONITOR_RESULT_BAD_CONFIGURATION; // 没有有效时间和容量时不注册任何监控。
+        if (failure != NULL) *failure = timing; // 不发布部分监控或部分时钟方案。
+        return TASK_MONITOR_RESULT_BAD_CONFIGURATION;
+    }
+    for (unsigned i = 0u; i < ROBOT_CONTROL_TASK_COUNT; ++i)
+    {
+        if (!(enabled & (UINT32_C(1) << i))) continue;
         selected[count++] = (TaskMonitorTaskConfig_t){
-            .id = TASK_MONITOR_CHASSIS, // 由底盘任务自己报告进度。
-            .name = "CHASSIS", // 健康查询和故障日志使用的名称。
+            .id = control_monitor[i].monitor, // 由对应任务自己报告进度。
+            .name = control_monitor[i].name, // 用于健康查询和故障日志。
             .mode = TASK_MONITOR_MODE_PERIODIC, // 预期周期性取得进度。
-            .role = TASK_MONITOR_ROLE_CORE, // 底盘工作停滞时按既有核心路径停输出。
-            .period_ms = ChassisMonitorPeriodMs(chassis->timing.period_us), // 只用于毫秒级任务监控。
-            .deadline_ms = chassis->deadline_ms, // 使用车型确认的完成期限。
-            .startup_grace_ms = chassis->startup_grace_ms, // 从统一放行开始计算首次宽限。
+            .role = TASK_MONITOR_ROLE_CORE, // 当前运动模块按核心任务关断输出。
+            .period_ms = ControlMonitorPeriodMs(control[i].timing.period_us), // 仅监控显示向上取整，拍点仍用原单位。
+            .deadline_ms = control[i].deadline_ms, // 使用车型确认的完成期限。
+            .startup_grace_ms = control[i].startup_grace_ms, // 从统一放行开始计算宽限。
         };
     }
     const TaskMonitor_Result_e result = TaskMonitorInitConfigured(selected, count); // 集中发布监控配置。
     if (result == TASK_MONITOR_RESULT_OK)
     {
-        if (chassis_enabled)
+        for (unsigned i = 0u; i < ROBOT_CONTROL_TASK_COUNT; ++i)
         {
-            chassis_task_config = *chassis; // 复制周期、监控与栈配置。
-            chassis_task_config.source = chassis_source; // 记录实际来源，任务不重新选择或降级。
+            if (!(enabled & (UINT32_C(1) << i))) continue;
+            control_config[i] = control[i]; // 保存周期、监控与栈配置。
+            control_config[i].source = sources[i]; // 保存预检选中的实际来源。
         }
-        chassis_task_prepared = chassis_enabled; // 只有整表成功才发布底盘任务配置。
+        prepared_tasks = enabled; // 整表成功后才发布任务配置。
     }
     return result;
 #else

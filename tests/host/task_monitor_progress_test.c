@@ -503,6 +503,18 @@ int main(void)
     TaskMonitorTick(); // 即使现在没有任何自然超期，已经锁存的故障也禁止继续喂狗。
     TEST_CHECK(watchdog_feed_count == 0u && TaskMonitorAllAlive() == 0u);
 
+    ResetFakes(300u); // 记录容量按编译配置收紧后，任务编号仍使用原有范围。
+    TaskMonitorTaskConfig_t compact[MC02_MONITOR_CONFIGURED_CAPACITY + 1u];
+    for (unsigned i = 0u; i < sizeof(compact) / sizeof(compact[0]); ++i)
+    {
+        compact[i] = startup_configs[0]; // 复用已经通过的核心周期参数。
+        compact[i].id = (TaskMonitor_Id_e)i; // 每个测试项使用独立编号。
+    }
+    compact[MC02_MONITOR_CONFIGURED_CAPACITY - 1u].id = TASK_MONITOR_SHOOTER; // 该编号大于固件记录表的下标范围。
+    TEST_CHECK(TaskMonitorInitConfigured(compact, MC02_MONITOR_CONFIGURED_CAPACITY) == TASK_MONITOR_RESULT_OK);
+    TEST_CHECK(TaskMonitorInitConfigured(compact, MC02_MONITOR_CONFIGURED_CAPACITY + 1u) == TASK_MONITOR_RESULT_BAD_ARGUMENT);
+    TEST_CHECK(TaskMonitorGetProgressState(TASK_MONITOR_SHOOTER, &core_state) == TASK_MONITOR_RESULT_OK); // 超容量重配后保留旧表。
+
     puts("PASS: configured task progress, fixed deadlines, event idle, and role-specific faults");
     return 0;
 }

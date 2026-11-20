@@ -213,7 +213,9 @@ foreach(target IN ITEMS robot_chassis_monitor_test robot_chassis_create_test rob
   target_compile_definitions(${target} PRIVATE
     MC02_CONFIG_GENERATED=1 # 用主机替身提供编译模块定义。
     MC02_PROFILE_ROBOT=1 # 运行正式底盘任务选择路径。
-    MC02_FEATURE_CHASSIS=1 # 仅在这些隔离目标中接入底盘任务。
+    MC02_FEATURE_CHASSIS=1 # 使用正式独立底盘入口。
+    MC02_FEATURE_GIMBAL=1 # 使用正式独立云台入口。
+    MC02_FEATURE_SHOOTER=1 # 使用正式独立发射模块入口。
     DISABLE_LOG_SYSTEM=1) # 主机检查诊断结果及调用顺序。
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
 endforeach()
@@ -228,6 +230,16 @@ target_include_directories(robot_chassis_cycle_test PRIVATE
 target_compile_options(robot_chassis_cycle_test PRIVATE -ffunction-sections -fdata-sections)
 target_link_options(robot_chassis_cycle_test PRIVATE -Wl,--gc-sections)
 add_test(NAME production_chassis_task_monitor COMMAND robot_chassis_monitor_test chassis)
+add_test(NAME production_control_tasks_shared_channels COMMAND robot_chassis_monitor_test shared-control) # 检查三个任务共享定时器容量。
+add_test(NAME production_gimbal_task_skip COMMAND robot_chassis_cycle_test gimbal skip-release) # 漏拍不执行机构业务。
+add_test(NAME production_gimbal_task_tim5_budget COMMAND robot_chassis_cycle_test gimbal-tim5 budget-error) # 超预算先停止并释放通道。
+add_test(NAME production_shooter_task_finish_deadline COMMAND robot_chassis_cycle_test shooter deadline-error) # 越过截止点不提交完成进度。
+foreach(scenario IN ITEMS normal gimbal-fail shooter-fail)
+  add_test(NAME production_control_tasks_create_${scenario} COMMAND robot_chassis_create_test controls-${scenario})
+  set_tests_properties(production_control_tasks_create_${scenario} PROPERTIES TIMEOUT 10)
+endforeach()
+set_tests_properties(production_control_tasks_shared_channels production_gimbal_task_skip
+  production_gimbal_task_tim5_budget production_shooter_task_finish_deadline PROPERTIES TIMEOUT 10)
 add_test(NAME production_chassis_task_cycle COMMAND robot_chassis_cycle_test chassis)
 add_test(NAME production_chassis_task_clock_failure COMMAND robot_chassis_cycle_test chassis finish-error)
 add_test(NAME production_chassis_task_tim5_cycle COMMAND robot_chassis_cycle_test tim5)
@@ -2328,6 +2340,7 @@ add_executable(
   ../../bsp/safety/bsp_safety.c)
 target_include_directories(task_monitor_progress_test BEFORE PRIVATE task_monitor_fakes fakes)
 target_include_directories(task_monitor_progress_test PRIVATE ../../modules/task_monitor ../../bsp/safety)
+target_compile_definitions(task_monitor_progress_test PRIVATE MC02_MONITOR_CONFIGURED_CAPACITY=8) # 用固件容量检查高编号仍可使用。
 add_test(NAME task_monitor_progress_deadlines_and_auxiliary_degrade COMMAND task_monitor_progress_test)
 set_tests_properties(task_monitor_progress_deadlines_and_auxiliary_degrade PROPERTIES TIMEOUT 10)
 

@@ -569,7 +569,7 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/robot_def.h",
                         source_root / "application/config/config.h",
                         source_root / "modules/motor/motor_task.h",  # 周期配置与派发接口不依赖厂商头。
-                        source_root / "application/config/chassis_task_config.h",  # 只含底盘周期与栈参数。
+                        source_root / "application/config/control_task_config.h",  # 公用周期、监控和栈参数。
                         source_root / "application/config/sentinel_robot/sentinel_config.h",
                         source_root / "application/config/shoot_config_types.h",
                         source_root / "application/chassis/chassis_motion.h",

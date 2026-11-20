@@ -132,15 +132,37 @@ static const RobotAlarmConfig_t sentinel_alarm_config = {
 const Robot_Config_s *SentinelConfigInit(void)
 {
     static const Robot_Config_s sentinel_config = {
-        .chassis_task = {
-            .timing = {
-                .period_us = 0u, // 底盘周期待根据实车端到端时限确认，单位 μs。
-                .budget_us = 0u, // 单轮执行预算待配合周期确认，单位 μs。
+        .control_tasks = {
+            [ROBOT_CONTROL_TASK_CHASSIS] = {
+                .timing = {
+                    .period_us = 0u, // 底盘周期待根据实车端到端时限确认，单位 μs。
+                    .budget_us = 0u, // 单轮执行预算待配合周期确认，单位 μs。
+                },
+                .source = PLATFORM_PERIODIC_SOURCE_AUTO, // 优先使用能精确表示时间配置的 RTOS 刻度。
+                .deadline_ms = 0u, // 底盘进度监控期限待确认，单位 ms。
+                .startup_grace_ms = 0u, // 放行后的首次工作宽限待确认，单位 ms。
+                .stack_words = 0u, // 独立任务栈容量待确认，单位为字。
             },
-            .source = PLATFORM_PERIODIC_SOURCE_AUTO, // 优先使用能精确表示时间配置的 RTOS 刻度。
-            .deadline_ms = 0u, // 底盘进度监控期限待确认，单位 ms。
-            .startup_grace_ms = 0u, // 放行后的首次工作宽限待确认，单位 ms。
-            .stack_words = 0u, // 独立任务栈容量待确认，单位为字。
+            [ROBOT_CONTROL_TASK_GIMBAL] = {
+                .timing = {
+                    .period_us = 0u, // 云台周期待结合反馈周期确认，单位 μs。
+                    .budget_us = 0u, // 包含反馈发布及控制的单轮预算待确认，单位 μs。
+                },
+                .source = PLATFORM_PERIODIC_SOURCE_AUTO, // 优先使用能精确表示时间配置的 RTOS 刻度。
+                .deadline_ms = 0u, // 云台任务进度监控期限待确认，单位 ms。
+                .startup_grace_ms = 0u, // 云台放行到首次工作的宽限待确认，单位 ms。
+                .stack_words = 0u, // 云台独立任务栈容量待确认，单位为字。
+            },
+            [ROBOT_CONTROL_TASK_SHOOTER] = {
+                .timing = {
+                    .period_us = 0u, // 发射模块任务周期待实测确认，单位 μs。
+                    .budget_us = 0u, // 发射模块单轮预算待实测确认，单位 μs。
+                },
+                .source = PLATFORM_PERIODIC_SOURCE_AUTO, // 优先使用能精确表示时间配置的 RTOS 刻度。
+                .deadline_ms = 0u, // 发射模块的进度监控期限待确认，单位 ms。
+                .startup_grace_ms = 0u, // 发射模块放行到首次工作的宽限待确认，单位 ms。
+                .stack_words = 0u, // 发射模块任务栈容量待确认，单位为字。
+            },
         },
         .motor_periods = {
             .compute_us = 0u, // 电机计算周期待根据实际反馈和运行耗时确认，单位 μs。

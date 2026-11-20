@@ -4,7 +4,7 @@
 #ifndef MC02_ROBOT_MONITOR_PLAN_H
 #define MC02_ROBOT_MONITOR_PLAN_H
 #include "config/build_selection.h"
-#include "config/chassis_task_config.h"
+#include "config/control_task_config.h"
 #include "config/module_plan.h"
 #include "task_monitor.h"
 #include "platform_periodic.h"
@@ -52,25 +52,27 @@ const MotorTaskPeriods_t *RobotGetMotorTaskPeriods(void);
 PlatformPeriodicResult_t RobotValidateTaskPeriods(const RobotModulePlan_t *modules, RobotPeriodicTask_t *failed);
 #endif
 
-/** @brief 将车型依赖映射到已选择任务的核心／辅助监控。
+/** @brief 独立控制任务的启动检查失败原因。 */
+typedef struct {
+    RobotControlTaskId_t task; /**< 失败的任务；未定位到控制任务时为 ROBOT_CONTROL_TASK_COUNT。 */
+    PlatformPeriodicResult_t reason; /**< 该任务的时间配置无效或缺少平台资源。 */
+} RobotControlTimingFailure_t;
+
+/** @brief 将车型依赖映射到任务监控，并为独立控制任务统一分配唤醒资源。
  * @param[in] plan 车型模块计划；生成配置必须非空，旧配置可传 NULL。
- * @param[in] chassis 独立底盘任务配置；未选择独立底盘任务时忽略。
- * @return 任务监控初始化结果；依赖或底盘配置无效时不初始化监控。
- * @note 只在调度器启动前调用；监控实现会复制临时配置。
+ * @param[in] control 按 RobotControlTaskId_t 排列的车型配置；没有启用独立控制任务时可为 NULL。
+ * @param[out] failure 具体控制任务及失败原因，可以为 NULL。
+ * @return 任务监控初始化结果；依赖或时钟配置无效时不更新当前监控和任务配置。
+ * @note 仅在启动准备阶段调用。监控和任务运行配置各自持有一份副本。
  */
 TaskMonitor_Result_e RobotConfigureTaskMonitor(const RobotModulePlan_t *plan,
-    const RobotChassisTaskConfig_t *chassis);
+    const RobotControlTaskConfig_t *control, RobotControlTimingFailure_t *failure);
 
-#if MC02_TASK_CHASSIS
-/** @brief 检查允许的时钟来源能否精确表示底盘周期和预算，以及监控和栈参数是否完整。
- * @param[in] config 车型的只读底盘任务配置。
- * @return READY 为可用，CONFIG 为非法配置，RESOURCE 为所需硬件通道不足。
+#if MC02_TASK_CONTROL
+/** @brief 取得启动时接受的独立控制任务配置。
+ * @param[in] task 独立控制任务编号。
+ * @return 固定只读副本；未选择该任务时返回 NULL。
  */
-PlatformPeriodicResult_t RobotValidateChassisTask(const RobotChassisTaskConfig_t *config);
-
-/** @brief 取得启动时经监控接受的底盘任务配置。
- * @return 成功配置后指向本次运行使用的只读副本；未计划底盘时返回 NULL。
- */
-const RobotChassisTaskConfig_t *RobotGetChassisTaskConfig(void);
+const RobotControlTaskConfig_t *RobotGetControlTaskConfig(RobotControlTaskId_t task);
 #endif
 #endif

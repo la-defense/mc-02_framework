@@ -14,6 +14,13 @@
 #include <limits.h>
 #include <string.h>
 
+#ifndef MC02_MONITOR_CONFIGURED_CAPACITY
+#define MC02_MONITOR_CONFIGURED_CAPACITY TASK_MONITOR_MAX_TASKS // 独立使用时保留完整能力。
+#endif
+_Static_assert(MC02_MONITOR_CONFIGURED_CAPACITY >= TASK_MONITOR_COUNT &&
+               MC02_MONITOR_CONFIGURED_CAPACITY <= TASK_MONITOR_MAX_TASKS,
+               "task monitor storage must fit the configured task plan");
+
 typedef struct
 {
     TaskMonitorTaskConfig_t config;
@@ -65,7 +72,7 @@ static const TaskMonitorTaskConfig_t default_configs[TASK_MONITOR_COUNT] = {
      .role = TASK_MONITOR_ROLE_CORE, .period_ms = 1u, .deadline_ms = 30u},
 };
 
-static TaskMonitorItem_t monitor_items[TASK_MONITOR_MAX_TASKS];
+static TaskMonitorItem_t monitor_items[MC02_MONITOR_CONFIGURED_CAPACITY]; // 保留已声明任务的记录，任务编号范围另行检查。
 static uint32_t monitor_configured_count;
 static uint32_t monitor_started_ms;
 static uint8_t monitor_initialized;
@@ -79,7 +86,7 @@ static uint32_t monitor_tick_count;
 static uint32_t startup_sample_sequence; // 全工程唯一 INS 启动标定的有效样本编号。
 static uint32_t startup_last_feed_ms; // 上次因有效启动样本喂狗的时间。
 static TaskMonitor_LongOperationWindow_t
-    long_operation_windows[TASK_MONITOR_MAX_TASKS][TASK_MONITOR_LONG_OPERATION_COUNT];
+    long_operation_windows[TASK_MONITOR_LONG_OPERATION_COUNT]; // 标定和 Flash 维护只能由 INS 申请。
 
 static void TaskMonitorNoteRuntimeStartLocked(uint32_t now, uint8_t scheduler_running)
 {
@@ -139,7 +146,7 @@ static uint8_t TaskMonitorHasActiveLongOperation(TaskMonitor_Id_e id, uint32_t n
     for (uint32_t operation = 0u; operation < TASK_MONITOR_LONG_OPERATION_COUNT; ++operation)
     {
         const TaskMonitor_LongOperationWindow_t *window =
-            &long_operation_windows[TASK_MONITOR_INS][operation];
+            &long_operation_windows[operation];
         if (window->active == 0u)
             continue;
 
@@ -156,7 +163,7 @@ static uint8_t TaskMonitorHasAnyActiveLongOperation(void)
 {
     for (uint32_t operation = 0u; operation < TASK_MONITOR_LONG_OPERATION_COUNT; ++operation)
     {
-        if (long_operation_windows[TASK_MONITOR_INS][operation].active != 0u)
+        if (long_operation_windows[operation].active != 0u)
             return 1u;
     }
     return 0u;
@@ -258,7 +265,7 @@ static uint8_t TaskMonitorValidateConfig(const TaskMonitorTaskConfig_t *configs,
                                          uint32_t count)
 {
     uint8_t seen[TASK_MONITOR_MAX_TASKS] = {0u};
-    if (configs == NULL || count == 0u || count > TASK_MONITOR_MAX_TASKS)
+    if (configs == NULL || count == 0u || count > MC02_MONITOR_CONFIGURED_CAPACITY)
         return 0u;
 
     for (uint32_t index = 0u; index < count; ++index)
@@ -291,12 +298,12 @@ TaskMonitor_Result_e TaskMonitorInitConfigured(const TaskMonitorTaskConfig_t *co
     // 运行后重新初始化会清除已锁存的故障，必须在创建任务前完成配置。
     if (PlatformSchedulerIsRunning() != 0u)
         return TASK_MONITOR_RESULT_SCHEDULER_RUNNING;
-    if (configs == NULL || count == 0u || count > TASK_MONITOR_MAX_TASKS)
+    if (configs == NULL || count == 0u || count > MC02_MONITOR_CONFIGURED_CAPACITY)
         return TASK_MONITOR_RESULT_BAD_ARGUMENT;
     if (TaskMonitorValidateConfig(configs, count) == 0u)
         return TASK_MONITOR_RESULT_BAD_CONFIGURATION;
 
-    TaskMonitorItem_t candidate[TASK_MONITOR_MAX_TASKS] = {0};
+    TaskMonitorItem_t candidate[MC02_MONITOR_CONFIGURED_CAPACITY] = {0}; // 一次接受完整且可存下的监控表。
     const uint32_t now = PlatformTimeNowMs();
     for (uint32_t index = 0u; index < count; ++index)
     {
@@ -823,7 +830,7 @@ uint8_t TaskMonitorBeginLongOperation(TaskMonitor_Id_e id,
     const uint8_t scheduler_running = PlatformSchedulerIsRunning();
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
-    TaskMonitor_LongOperationWindow_t *window = &long_operation_windows[id][operation];
+    TaskMonitor_LongOperationWindow_t *window = &long_operation_windows[operation]; // 入口已核对 INS 和操作编号。
     if (window->active != 0u)
         allowed = 0u;
 
@@ -880,7 +887,7 @@ TaskMonitor_Result_e TaskMonitorStartupCalibrationSample(uint32_t sequence)
     const uint32_t now = PlatformTimeNowMs(); // 每次只读取一次原有毫秒时基。
     const uint32_t previous = TaskMonitorEnterCritical(); // 与故障锁存和窗口结束同步。
     TaskMonitor_LongOperationWindow_t *window =
-        &long_operation_windows[TASK_MONITOR_INS][TASK_MONITOR_LONG_OPERATION_CALIBRATION]; // 只检查启动标定窗口。
+        &long_operation_windows[TASK_MONITOR_LONG_OPERATION_CALIBRATION]; // 只检查启动标定窗口。
     TaskMonitor_Result_e result = TASK_MONITOR_RESULT_OK; // 先假定该样本可接受。
     uint8_t expired = 0u; // 记录是否需要在退出临界区后报告超时。
     if (!monitor_initialized || !monitor_runtime_deferred || !window->active)
@@ -932,7 +939,7 @@ uint8_t TaskMonitorEndLongOperation(TaskMonitor_Id_e id,
     const uint32_t previous = TaskMonitorEnterCritical();
     TaskMonitorNoteRuntimeStartLocked(now, scheduler_running);
     const uint8_t startup_deferred = monitor_runtime_deferred; // 启动标定结束不代表周期任务已健康运行。
-    TaskMonitor_LongOperationWindow_t *window = &long_operation_windows[id][operation];
+    TaskMonitor_LongOperationWindow_t *window = &long_operation_windows[operation]; // 入口已核对 INS 和操作编号。
     if (window->active == 0u)
     {
         TaskMonitorExitCritical(previous);

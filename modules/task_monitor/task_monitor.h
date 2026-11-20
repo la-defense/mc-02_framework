@@ -19,6 +19,8 @@ typedef enum
     TASK_MONITOR_OPTIONAL_1,
     TASK_MONITOR_OPTIONAL_2,
     TASK_MONITOR_CHASSIS, /**< 底盘独立任务，既有编号保持原值。 */
+    TASK_MONITOR_GIMBAL, /**< 云台独立任务。 */
+    TASK_MONITOR_SHOOTER, /**< 发射独立任务。 */
     TASK_MONITOR_ID_LIMIT
 } TaskMonitor_Id_e;
 
