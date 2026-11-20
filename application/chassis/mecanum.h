@@ -23,4 +23,10 @@ ChassisKinematicsStatus_t MecanumCalculate(const ChassisTwist_t *input,
  * @return OK 或 ARGUMENT。
  */
 ChassisKinematicsStatus_t MecanumPrepareProjector(const MecanumGeometry_t *geometry, ChassisWheelProjector_t *projector);
+/** @brief 根据麦轮几何准备从四轮轮速估算底盘速度的系数。
+ * @param[in] geometry 与目标计算相同的几何，尺寸为米。
+ * @param[out] estimator 接受左前、右前、左后、右后的轮轴 rad/s；失败时标为不可用。
+ * @return OK 或 ARGUMENT。
+ */
+ChassisKinematicsStatus_t MecanumPrepareEstimator(const MecanumGeometry_t *geometry, ChassisVelocityEstimator_t *estimator);
 #endif

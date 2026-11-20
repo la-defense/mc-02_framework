@@ -110,6 +110,20 @@ uint8_t ChassisMotionCalculate(const ChassisMotionInput_s *input,
  */
 uint8_t ChassisMotionPrepare(const ChassisMotionGeometry_s *geometry, ChassisMotionPrepared_s *prepared);
 
+/** @brief 为电机反馈准备底盘速度估算系数。
+ * @param[in] geometry 与目标计算共用的轮组安装尺寸，长度为米。
+ * @param[out] estimator 按电机槽位接受左前、右前、左后、右后的驱动输出轴 rad/s；失败时标为不可用。
+ * @return OK，或表示几何无效、模型未编入的错误。
+ */
+ChassisKinematicsStatus_t ChassisMotionPrepareVelocityEstimator(const ChassisMotionGeometry_s *geometry,
+    ChassisVelocityEstimator_t *estimator);
+
+/** @brief 取得旧电机轴转速接口到驱动输出轴转速的换算系数。
+ * @param[in] prepared 已成功准备的运动配置，不可为 NULL。
+ * @return 旧接口的电机轴 deg/s 乘此值，得到驱动输出轴 rad/s。
+ */
+float ChassisMotionRotorToOutputScale(const ChassisMotionPrepared_s *prepared);
+
 /** @brief 使用启动时的投影计算目标，保留原有模式、单位与限速检查。
  * @param[in] input 本次运动要求。
  * @param[in] prepared 与当前车辆几何一致的运行配置。

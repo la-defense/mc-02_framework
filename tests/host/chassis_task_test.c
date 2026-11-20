@@ -368,6 +368,53 @@ static int test_bridge_to_chassis(void)
 #endif
 
 // 仅在软件测试使用尺寸已知的切向轮组。
+static int TestMecanumVelocity(void)
+{
+    CHECK(ChassisInit() == 1u); // 沿用有 19:1 减速比的默认麦轮配置。
+    ChassisVelocityFeedback_t velocity = {0};
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 0u); // 注册电机不等于收到实际轮速。
+
+    const struct {
+        float wheel_edge_m_s[CHASSIS_WHEEL_COUNT]; // 左前、右前、左后、右后电机槽位的有符号轮缘速度。
+        ChassisTwist_t expected; // 以底盘前、左和绕上轴为正。
+    } cases[] = {
+        {{1.0f, 1.0f, -1.0f, -1.0f}, {1.0f, 0.0f, 0.0f}}, // 前进 1 m/s。
+        {{-1.0f, 1.0f, -1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}}, // 左移 1 m/s。
+        {{0.325f, 0.325f, 0.325f, 0.325f}, {0.0f, 0.0f, 1.0f}}, // 以两段半尺寸之和 0.325 m 换算左转 1 rad/s。
+        {{0.625f, 1.225f, -0.575f, 0.025f}, {0.6f, 0.3f, 1.0f}}, // 混合三轴，轮速各异，用来查出轮位互换。
+    };
+    for (unsigned c = 0u; c < sizeof(cases) / sizeof(cases[0]); ++c)
+    {
+        test_tick = 100u + c; // 每组样本使用不同的接收时刻。
+        for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
+        {
+            motors[i].feedback_online = 1u; // 电调已收到反馈。
+            motors[i].feedback_speed_valid = 1u; // 反馈是驱动换算后的输出轴转速。
+            motors[i].feedback_speed_rad_s = cases[c].wheel_edge_m_s[i] / 0.060f; // 手工给出轮缘速度，不调用目标计算生成期望。
+            motors[i].feedback_source_time_ms = test_tick; // 记录本轮各电机原始采样时间。
+        }
+        motors[MOTOR_RF].feedback_source_time_ms = test_tick - 2u; // 右前轮最旧，决定整组反馈期限。
+        ChassisTask(); // 不发布命令也应保留滑行时的测量。
+        CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u && velocity.source_time_ms == test_tick - 2u);
+        CHECK(fabsf(velocity.twist.vx_m_s - cases[c].expected.vx_m_s) < 0.0001f);
+        CHECK(fabsf(velocity.twist.vy_m_s - cases[c].expected.vy_m_s) < 0.0001f);
+        CHECK(fabsf(velocity.twist.wz_rad_s - cases[c].expected.wz_rad_s) < 0.0001f);
+    }
+    ChassisOdometryFeedback_t pose;
+    CHECK(Chassis_GetOdometry(&pose) == 0u); // 麦轮仍只报告速度。
+    test_tick += 18u; // 最早轮速刚好达到允许的 20 ms。
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u);
+    ++test_tick; // 任务尚未刷新时，读者也必须拒绝过期数据。
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 0u && velocity.twist.vx_m_s == 0.0f);
+    motors[MOTOR_RF].feedback_source_time_ms = test_tick; // 其余三轮仍在有效期内。
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u);
+    motors[MOTOR_LB].feedback_wrong_unit = 1u; // 一轮的单位错误会撤销整组速度。
+    ChassisTask();
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 0u);
+    return 0;
+}
+
 static void SelectOmniFixture(void)
 {
     const float u = 0.70710678118f;
@@ -605,6 +652,7 @@ static int TestOmniOdometryBatch(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "mecanum-velocity") == 0) return TestMecanumVelocity();
     if (argc == 2 && strcmp(argv[1], "velocity") == 0) return TestOmniVelocity();
     if (argc == 2 && strcmp(argv[1], "odometry") == 0) return TestOmniOdometry();
     if (argc == 2 && strcmp(argv[1], "odometry-batch") == 0) return TestOmniOdometryBatch();

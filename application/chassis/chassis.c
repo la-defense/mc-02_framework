@@ -53,15 +53,15 @@ static ChassisVelocityFeedback_t chassis_velocity; // 底盘任务更新，其�
 static uint8_t chassis_velocity_valid; // 时间戳零也可有效，单独记录。
 static ChassisOdometryFeedback_t chassis_odometry; // 与速度在同一临界区交付。
 static uint8_t chassis_odometry_valid;
-#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+static ChassisVelocityEstimator_t velocity_estimator; // 启动时按车型准备，底盘任务只读。
 typedef struct {
     uint32_t time_ms; // 轮速的原始接收时刻，允许毫秒回绕。
     uint32_t sequence; // 该轮本次反馈序号，零表示没有样本。
     uint32_t continuity_generation; // 短暂断流恢复后仍保留变化记录。
 } ChassisWheelObservation_t;
 
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
 static ChassisOdometryFeedback_t odometry_anchor; // 只由底盘任务更新，启动阶段负责清理。
-static ChassisVelocityEstimator_t omni_estimator; // 当前只读车型几何对应的固定估速系数。
 static ChassisTwist_t odometry_anchor_twist; // 上一个不同来源时刻对应的底盘自身速度。
 static ChassisWheelObservation_t odometry_anchor_wheels[CHASSIS_WHEEL_COUNT]; // 上次积分使用的时刻和序号，以及最近处理的间断代次。
 static uint32_t odometry_restart_ms; // 新段的每轮采样都必须达到这个时刻。
@@ -84,8 +84,8 @@ static void PublishMotionFeedback(const ChassisVelocityFeedback_t *velocity, con
 // 底盘尚未运行时调用；保留段号，使重启底盘模块后的新段可以识别。
 static void ResetMotionFeedback(void)
 {
+    velocity_estimator.ready = 0u; // 启动或撤销设备后，旧几何的系数不能再使用。
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
-    omni_estimator.ready = 0u; // 启动或撤销设备后，旧几何的系数不能再使用。
     odometry_anchor_known = 0u; // 初始化前的时间不再用于比较。
     odometry_integrating = 0u; // 下一个可信样本从零开始。
     odometry_restart_pending = 0u; // 新实例没有上一段的重建要求。
@@ -128,11 +128,8 @@ uint8_t ChassisInit(void)
         .omni = chassis_config->omni_geometry, // 各全向轮相对底盘中心的轮位、方向和轮径，m。
     };
     if (!ChassisMotionPrepare(&geometry, &chassis_motion)) return 0u; // 启动时检查完整几何，再登记轮电机。
-#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
-    if (chassis_config->wheel_type == OMNI_WHEEL &&
-        OmniPrepareEstimator(&chassis_config->omni_geometry, &omni_estimator) != CHASSIS_KINEMATICS_OK)
+    if (ChassisMotionPrepareVelocityEstimator(&geometry, &velocity_estimator) != CHASSIS_KINEMATICS_OK)
         return 0u; // 几何退化时在登记话题和轮电机前退出。
-#endif
     if (!RobotTopicsInit())
         return 0u;
     DJIMotorInstance *pending[4] = {NULL}; // 申请完成之前不发布轮电机实例。
@@ -293,12 +290,12 @@ uint8_t Chassis_GetOdometry(ChassisOdometryFeedback_t *output)
     return 1u;
 }
 
-#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
 // 取四个已经换算到输出轴的轮速；不足四份时整个底盘速度无效。
-static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity,
-                                    ChassisWheelObservation_t wheels[CHASSIS_WHEEL_COUNT])
+static uint8_t EstimateChassisVelocity(ChassisVelocityFeedback_t *velocity,
+                                       ChassisWheelObservation_t wheels[CHASSIS_WHEEL_COUNT])
 {
-    DJIMotorInstance *const motors[CHASSIS_WHEEL_COUNT] = {motor_lf, motor_rf, motor_lb, motor_rb}; // 统一轮序。
+    if (!velocity_estimator.ready) return 0u; // 尚未准备好时不读取轮电机。
+    DJIMotorInstance *const motors[CHASSIS_WHEEL_COUNT] = {motor_lf, motor_rf, motor_lb, motor_rb}; // 与启动准备的电机槽位顺序相同。
     ChassisWheelSpeeds_t speeds;
     for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
     {
@@ -307,12 +304,12 @@ static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity,
             feedback.speed.valid != 1u || feedback.speed.unit != MOTOR_UNIT_RAD_S ||
             feedback.speed.reference != MOTOR_REFERENCE_OUTPUT_AXIS)
             return 0u; // 未接收、过期或错误单位的轮速均不能用来估算。
-        speeds.rad_s[i] = feedback.speed.value; // 驱动已按安装方向和减速比换算，不重复处理符号。
+        speeds.rad_s[i] = feedback.speed.value; // 直接使用驱动输出轴转速，估速系数已处理模型对应的轮序和方向。
         wheels[i].time_ms = feedback.speed.source_time_ms; // 记录原始接收时间，不以本轮执行时间替代。
         wheels[i].sequence = feedback.speed.sequence; // 每轮单独保留驱动报告的原始反馈身份。
         wheels[i].continuity_generation = feedback.continuity_generation; // 与该轮速度来自同一次复制。
     }
-    if (ChassisKinematicsEstimatePrepared(&speeds, &omni_estimator, &velocity->twist) != CHASSIS_KINEMATICS_OK)
+    if (ChassisKinematicsEstimatePrepared(&speeds, &velocity_estimator, &velocity->twist) != CHASSIS_KINEMATICS_OK)
         return 0u; // 只使用启动时的有效系数，轮速数值异常时整组结果作废。
     const uint32_t now = PlatformTimeNowMs(); // 计算后检查最早轮速是否依然有效。
     uint32_t oldest_age = 0u;
@@ -326,6 +323,7 @@ static uint8_t EstimateOmniVelocity(ChassisVelocityFeedback_t *velocity,
     return 1u;
 }
 
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
 // 只用不同来源时刻的有效速度积分；计算期间不占用发布临界区。
 static const ChassisOdometryFeedback_t *UpdateOdometry(const ChassisVelocityFeedback_t *velocity,
     const ChassisWheelObservation_t wheels[CHASSIS_WHEEL_COUNT])
@@ -580,8 +578,7 @@ void ChassisTask()
     }
     else
     {
-        const float wheel_direction = chassis_motion.model == CHASSIS_MOTION_MODEL_OMNI ? 1.0f : -1.0f; // 全向轮目标与估速共用轴方向，麦轮沿用旧电机映射。
-        const float rotor_to_output = wheel_direction * DEGREE_2_RAD / chassis_motion.reduction_ratio; // 把受限的电机轴 deg/s 还原为输出轴 rad/s。
+        const float rotor_to_output = ChassisMotionRotorToOutputScale(&chassis_motion); // 用估速共用的方向约定将电机轴 deg/s 换成输出轴 rad/s。
 #if defined(ONE_BOARD)
         // 每台轮电机都用命令原有的代际；任何一台未获许可时清除四轮目标。
         const uint32_t generation = chassis_cmd_recv.safety_generation;
@@ -610,13 +607,14 @@ void ChassisTask()
         }
     }
 
-    // 全向轮估计独立于命令许可，停机滑行期间也能读取实测速度。
-#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+    // 速度估计独立于命令许可，停机滑行期间也能读取有效轮速。
     ChassisVelocityFeedback_t velocity;
-    ChassisWheelObservation_t wheels[CHASSIS_WHEEL_COUNT]; // 里程计对照上次积分使用的四轮反馈。
-    const ChassisVelocityFeedback_t *feedback = chassis_config->wheel_type == OMNI_WHEEL &&
-        EstimateOmniVelocity(&velocity, wheels) ? &velocity : NULL; // 不支持或轮速失效时，两个本地结果都撤销。
+    ChassisWheelObservation_t wheels[CHASSIS_WHEEL_COUNT]; // 保留原始时刻，供速度期限和可选里程计使用。
+    const ChassisVelocityFeedback_t *feedback = EstimateChassisVelocity(&velocity, wheels) ? &velocity : NULL; // 任一轮失效时撤销速度。
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
     PublishMotionFeedback(feedback, UpdateOdometry(feedback, wheels));
+#else
+    PublishMotionFeedback(feedback, NULL); // 当前麦轮车型只交付速度。
 #endif
 
     // // 获取裁判系统数据   建议将裁判系统与底盘分离，所以此处数据应使用消息中心发送

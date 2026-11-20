@@ -14,6 +14,21 @@
 #include <math.h>
 #include <string.h>
 
+static const float mecanum_rotor_to_output_sign = -1.0f; // 麦轮旧转速接口换到驱动输出轴时反向。
+
+#if !defined(MC02_CONFIG_GENERATED) || !MC02_CHASSIS_IS_OMNI
+// 从固定运动学轮序映射到旧电机转速接口，数组下标是旧接口的电机槽位。
+static const struct {
+    uint8_t canonical_index; // 运动学使用的左前、右前、左后、右后编号。
+    float sign; // 固定轮轴正向换到旧接口的正向。
+} mecanum_legacy_wheel[CHASSIS_WHEEL_COUNT] = {
+    {3u, -1.0f}, // 左前槽位使用反向的运动学右后轮。
+    {1u, -1.0f}, // 右前槽位使用反向的运动学右前轮。
+    {2u,  1.0f}, // 左后槽位使用同向的运动学左后轮。
+    {0u,  1.0f}, // 右后槽位使用同向的运动学左前轮。
+};
+#endif
+
 /* 数字大于0且不是 NaN 或无穷大才通过。 */
 static uint8_t finite_positive(float value)
 {
@@ -95,6 +110,43 @@ uint8_t ChassisMotionPrepare(const ChassisMotionGeometry_s *geometry, ChassisMot
     return 1u;
 }
 
+ChassisKinematicsStatus_t ChassisMotionPrepareVelocityEstimator(const ChassisMotionGeometry_s *geometry,
+    ChassisVelocityEstimator_t *estimator)
+{
+    if (estimator == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
+    estimator->ready = 0u; // 车型变更或检查失败时清除旧系数的可用标记。
+    if (geometry == NULL) return CHASSIS_KINEMATICS_ARGUMENT;
+#if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
+    if (geometry->model == CHASSIS_MOTION_MODEL_OMNI)
+        return OmniPrepareEstimator(&geometry->omni, estimator); // 全向轮的驱动反馈已采用固定轮序和正向。
+#endif
+#if !defined(MC02_CONFIG_GENERATED) || !MC02_CHASSIS_IS_OMNI
+    if (geometry->model == CHASSIS_MOTION_MODEL_MECANUM)
+    {
+        ChassisVelocityEstimator_t canonical; // 先按固定轮序生成麦轮几何的估速系数。
+        const ChassisKinematicsStatus_t status = MecanumPrepareEstimator(&geometry->mecanum, &canonical);
+        if (status != CHASSIS_KINEMATICS_OK) return status; // 几何失败时不交付部分结果。
+        for (unsigned axis = 0u; axis < 3u; ++axis) // 分别调整前向、左向和绕上轴的系数。
+            for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) // 每列对应一台电机的反馈。
+            {
+                const unsigned wheel = mecanum_legacy_wheel[i].canonical_index; // 找到这台电机在固定轮序里的位置。
+                const float sign = mecanum_legacy_wheel[i].sign * mecanum_rotor_to_output_sign; // 将驱动输出轴方向还原为该轮正向。
+                estimator->gain[axis][i] = canonical.gain[axis][wheel] * sign; // 预先换算，周期内将反馈直接乘系数。
+            }
+        estimator->ready = 1u; // 全部轮位和方向已换算，可按电机槽位读取。
+        return CHASSIS_KINEMATICS_OK;
+    }
+#endif
+    return CHASSIS_KINEMATICS_UNSUPPORTED;
+}
+
+float ChassisMotionRotorToOutputScale(const ChassisMotionPrepared_s *prepared)
+{
+    const float radians_per_degree = 0.01745329252f;
+    const float sign = prepared->model == CHASSIS_MOTION_MODEL_MECANUM ? mecanum_rotor_to_output_sign : 1.0f;
+    return sign * radians_per_degree / prepared->reduction_ratio; // 把旧接口的电机轴 deg/s 换到驱动输出轴 rad/s。
+}
+
 uint8_t ChassisMotionCalculatePrepared(const ChassisMotionInput_s *input,
     const ChassisMotionPrepared_s *prepared, const ChassisMotionLimits_s *limits, ChassisMotionOutput_s *output)
 {
@@ -148,15 +200,18 @@ uint8_t ChassisMotionCalculatePrepared(const ChassisMotionInput_s *input,
     ChassisWheelSpeeds_t wheels;
     if (ChassisKinematicsCalculatePrepared(&twist, &prepared->projector, &wheels) != CHASSIS_KINEMATICS_OK)
         return 0u; // 无法计算全部轮速时保留清零结果。
+#if !defined(MC02_CONFIG_GENERATED) || !MC02_CHASSIS_IS_OMNI
     if (prepared->model == CHASSIS_MOTION_MODEL_MECANUM)
     {
         // 旧应用的电机顺序与新轮序不同；保留旧接口的符号和编号结果。
         const ChassisWheelSpeeds_t canonical = wheels;
-        wheels.rad_s[0] = -canonical.rad_s[3];
-        wheels.rad_s[1] = -canonical.rad_s[1];
-        wheels.rad_s[2] = canonical.rad_s[2];
-        wheels.rad_s[3] = canonical.rad_s[0];
+        for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) // 依次填充旧接口的各电机槽位。
+        {
+            const unsigned wheel = mecanum_legacy_wheel[i].canonical_index; // 找到这一槽位关联的运动学轮位。
+            wheels.rad_s[i] = mecanum_legacy_wheel[i].sign * canonical.rad_s[wheel]; // 写入旧接口要求的方向。
+        }
     }
+#endif
     const float wheel_to_motor_deg_s = degrees_per_radian * prepared->reduction_ratio;
     float motor_deg_s[4];
     float largest = 0.0f;

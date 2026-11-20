@@ -22,7 +22,7 @@ typedef struct {
     uint32_t source_time_ms; /**< 参与计算的最早轮速接收时间，0 是合法时间。 */
 } ChassisVelocityFeedback_t;
 
-/** @brief 读取本板最近一次有效的全向底盘速度估计。
+/** @brief 读取本板最近一次有效的麦轮或四轮全向轮底盘速度估计。
  * @param[out] output 底盘中心速度及最早来源时间；失败时非空输出清零。
  * @return 1 表示四轮估计仍在原有效期内，0 表示缺少估计、配置不支持或已过期。
  * @note 任务上下文使用；四轮估计以滚动模型为依据，无法单独识别打滑。

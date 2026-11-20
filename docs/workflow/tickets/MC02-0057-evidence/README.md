@@ -89,4 +89,11 @@
 - 隔离 `commissioning/chassis` 通过 Cortex-M7 Debug 构建、ELF 与源码隔离检查。FLASH 为 307740 B，较同配置基线增加 128 B。主 RAM 仍为 126160 B。V2 命令源文件通过独立 ARM 对象编译，未链接生产 V2 固件。这组验证覆盖命令发布和撤销，已交给电机发送的帧及实车功耗仍需单独验证。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 839 项，普通禁热及遥控诊断通过构建和 ELF 隔离检查，六种生产预设按预期拒绝。
 
+## 麦轮与全向轮共用速度查询
+
+- 麦轮的目标与速度估算共用车型几何、旧电机轮序和方向。启动时按轮序重排估速系数并修正正负号，周期计算读取驱动提供的输出轴速度。两种底盘都按最早一轮的原始时间判断有效期，四轮全向轮继续提供可选里程计。
+- 主机用手算的四轮速度验证麦轮前进、左移、左转和混合运动，并检查无命令时的速度、最早轮速到期、单轮单位错误及麦轮位姿关闭。`production_chassis_` 下 34 项通过 ASan／UBSan。
+- 两种 `commissioning/chassis` 隔离源码副本均通过 Cortex-M7 Debug 构建、ELF 与源码检查。符号检查确认两版各自只链接所选轮型的估速准备函数，全向轮版还链接了里程计积分。全向轮 Flash 为 308092 B，较上轮同配置减少 32 B，主 RAM 保持 126160 B。麦轮 Flash／主 RAM 为 306948 B／126064 B。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 840 项。普通禁热和遥控诊断通过构建与 ELF 检查，Flash 分别增加 16 B，主 RAM 不变。六种生产预设仍按预期拒绝。未连接硬件，轮序映射以当前软件为准，实际安装方向、滑移时的速度误差和板上执行时间仍待测。
+
 见[本底盘接口](../../../../application/chassis/chassis.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。
