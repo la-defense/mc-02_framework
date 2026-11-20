@@ -17,6 +17,14 @@ static Robot_Config_s test_robot_config; // 只提供命令任务读取的测试
 static uint32_t test_source_generation = 1u;
 static uint32_t advance_during_send_ms; // 测试这一次发送期间经过的毫秒数。
 static MessagePublisher_t *invalidate_feedback_during_send; // 在计算完成、发布之前撤销反馈。
+static MessagePublisher_t *feedback_at_next_yield; // 在下一个允许切换任务的位置撤销反馈。
+static MessageSubscriber_t *chassis_at_next_yield; // 查看撤销发生前已经发布的底盘命令。
+static Chassis_Ctrl_Cmd_s chassis_seen_at_yield;
+static MessageStatus_t chassis_status_at_yield;
+static MessageStatus_t feedback_revoke_at_yield;
+static unsigned command_critical_depth;
+static uint8_t take_yield_after_send; // 等命令计算结束后才启动该次任务交错。
+static uint8_t yield_armed;
 const Robot_Config_s *RobotConfigFeed(void) { return &test_robot_config; }
 uint8_t RobotBuildModuleStarted(RobotModule_t module) { (void)module; return 1u; }
 #endif
@@ -30,6 +38,22 @@ static uint32_t consumed_pc_sequence; // 每份替身位移最多交付一次。
 static uint8_t fixed_source_enabled; // 双板期限场景固定来源时间。
 static uint32_t fixed_source_ms;
 static uint32_t tick=100;
+#if defined(MC02_MANUAL_GENERATED_TEST)
+void RobotCmdTestCriticalEnter(void)
+{
+    ++command_critical_depth; // 嵌套消息中心读写时仍保留外层临界区。
+}
+
+void RobotCmdTestCriticalExit(void)
+{
+    --command_critical_depth; // 退出内层只减少深度，暂不模拟切换。
+    if (command_critical_depth != 0u || !yield_armed) return;
+    yield_armed = 0u; // 下面的生产消息接口也会进入临界区，本次只切换一次。
+    chassis_status_at_yield = MessageReadSnapshot(chassis_at_next_yield, &chassis_seen_at_yield,
+        sizeof(chassis_seen_at_yield), tick, NULL); // 记录其他任务能看到的已发布目标。
+    feedback_revoke_at_yield = MessagePublisherInvalidate(feedback_at_next_yield); // 模拟方向反馈任务同时撤销本轮数据。
+}
+#endif
 static Vision_Recv_s wire;
 static Vision_Status_t status;
 static unsigned snapshots;
@@ -66,6 +90,8 @@ void VisionSend(void)
         (void)MessagePublisherInvalidate(invalidate_feedback_during_send); // 复用消息中心的真实撤销接口。
         invalidate_feedback_during_send = NULL; // 下一轮由测试自行提供新反馈。
     }
+    yield_armed = take_yield_after_send; // 在计算以后、发布阶段的首次外层解锁模拟抢占。
+    take_yield_after_send = 0u;
 #endif
 }
 void VisionGetSnapshot(Vision_Recv_s *frame,Vision_Status_t *link)
@@ -374,6 +400,22 @@ int main(int argc, char **argv)
         CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
         RobotCMDTask();
         CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK && driving.offset_angle == -90.0f);
+
+        ++pc_sample_sequence;
+        ++tick;
+        pose.yaw_motor_single_round_angle = 50u; // 这轮的 45 度须在允许反馈撤销前完整发布。
+        CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+        chassis_at_next_yield = chassis;
+        feedback_at_next_yield = feedback;
+        take_yield_after_send = 1u; // 读／发之间若解锁，就会读到上轮 -90 度并先撤销反馈。
+        RobotCMDTask();
+        CHECK(!yield_armed && command_critical_depth == 0u && feedback_revoke_at_yield == MESSAGE_OK);
+        CHECK(chassis_status_at_yield == MESSAGE_OK && chassis_seen_at_yield.offset_angle == 45.0f);
+        ++pc_sample_sequence;
+        ++tick;
+        RobotCMDTask(); // 反馈已由另一任务撤销，下一轮不能续用 45 度。
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK &&
+              driving.chassis_mode == CHASSIS_ZERO_FORCE); // 周期开始就缺少反馈时发布明确停止。
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "manual-mapping"))

@@ -319,6 +319,24 @@ static uint8_t CalcOffsetAngle(void)
     return 1u; // 本轮有合法方向角。
 }
 
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && (defined(ONE_BOARD) || defined(GIMBAL_BOARD))
+// 读入本轮方向和发布目标之间，不允许反馈任务撤销或换掉方向。
+static void PublishManualChassisWithDirection(const RobotCmdLease_t *manual)
+{
+    PlatformTaskCriticalEnter(); // 与消息中心对方向反馈的发布和撤销共用任务临界区。
+    const uint32_t now_ms = PlatformTimeNowMs(); // 进入临界区后取时，计入等候期间经过的时间。
+    RobotCmdLease_t combined = {.remaining_ms = UINT32_MAX, .valid = 1u}; // 重新计算本轮最先到期的依赖。
+    RobotCmdLeaseInclude(&combined, manual->valid, manual->source_ms, manual->max_age_ms, now_ms); // 人工来源仍使用原来的时刻与期限。
+    MessageFreshness_t direction_time = {0}; // 方向和该份反馈的时间从同一次读取取得。
+    const uint8_t direction_valid = combined.valid &&
+        MessageReadSnapshot(gimbal_feed_sub, &gimbal_fetch_data, sizeof(gimbal_fetch_data), now_ms, &direction_time) == MESSAGE_OK &&
+        CalcOffsetAngle(); // 有效反馈才计算角度，编码器超范围也会拒绝。
+    RobotCmdLeaseIncludeGimbalFeedback(&combined, direction_valid, &direction_time, now_ms); // 方向与人工输入谁先到期就采用谁的期限。
+    (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &combined, now_ms, 0u); // 发布整份目标，失败时撤销旧目标。
+    PlatformTaskCriticalExit(); // 允许方向任务更新或撤销下一轮会读取的数据。
+}
+#endif
+
 #if !defined(MC02_VISION_PROTOCOL_V2)
 // 将本轮一起读取的旧协议帧和链路状态配成输入。
 static VisionControlInput_s GetVisionControlInput(void)
@@ -906,21 +924,6 @@ void RobotCMDTask()
         RobotCmdLeaseInclude(&manual, manual_intent_valid, manual_intent.source_time_ms,
                              manual_intent.max_age_ms, publish_ms); // 配置期限不能因转成旧消息而丢失。
 #endif
-#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
-    RobotCmdLease_t manual_chassis = manual; // 底盘方向依赖单独检查，保留其余人工模块自己的期限。
-#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
-    if (manual_allowed && manual_control_active && manual_intent_valid && manual_intent.frame == STD_CMD_FRAME_BIG_YAW &&
-        chassis_cmd_send.chassis_mode != CHASSIS_ZERO_FORCE)
-    {
-        MessageFreshness_t direction_time = {0}; // 发布前重读方向，保留同一份反馈的原始时间。
-        const uint8_t direction_valid = MessageReadSnapshot(gimbal_feed_sub, &gimbal_fetch_data,
-            sizeof(gimbal_fetch_data), publish_ms, &direction_time) == MESSAGE_OK &&
-            CalcOffsetAngle(); // 同轮收到新反馈时改用新角度；已撤销或角度异常时不能继续平移。
-        RobotCmdLeaseIncludeGimbalFeedback(&manual_chassis, direction_valid, &direction_time,
-                                           publish_ms); // 方向与人工输入采用最先到期的时间。
-    }
-#endif
-#endif
     RobotCmdLease_t manual_gimbal = manual; // 本轮若使用了鼠标事件，还须检查最早事件的期限。
     if (manual_allowed && !vision_active && switch_is_up(rc_data[TEMP].rc.switch_left) && mouse_batch.count != 0u)
         RobotCmdLeaseInclude(&manual_gimbal, mouse_status == REMOTE_MOUSE_OK, mouse_batch.oldest_source_ms,
@@ -959,7 +962,14 @@ void RobotCMDTask()
         }
         else
 #endif
-            (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual_chassis, publish_ms, 0u);
+        {
+#if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
+            if (manual_allowed && manual_control_active && manual_intent_valid && manual_intent.frame == STD_CMD_FRAME_BIG_YAW)
+                PublishManualChassisWithDirection(&manual); // 只有大 yaw 参照需要把方向复核与发布放在一起。
+            else
+#endif
+                (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual, publish_ms, 0u); // 本体参照沿用原人工期限。
+        }
     }
 #endif // ONE_BOARD
     if (shoot_cmd_send.shoot_mode == SHOOT_OFF && shoot_cmd_send.friction_mode == FRICTION_OFF && shoot_cmd_send.load_mode == LOAD_STOP)
