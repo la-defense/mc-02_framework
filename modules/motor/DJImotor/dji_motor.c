@@ -59,6 +59,7 @@ static DJISendGroup_t sender_assignment[9] = {
 static uint8_t sender_enable_flag[9] = {0};
 #if defined(ONE_BOARD)
 static uint32_t sender_safety_generation[9]; // 每组已排队目标所属的安全代际。
+static DJIChassisReferenceSourceCheck_t chassis_source_check; // 底盘启动时登记，同一固件运行期间使用同一检查函数。
 enum {
     DJI_QUEUED_SPEED = 1u << 0, // 依赖本电机的速度反馈。
     DJI_QUEUED_CURRENT = 1u << 1, // 依赖本电机的电流反馈。
@@ -70,6 +71,7 @@ typedef struct {
     uint32_t deadline_ms[4]; // 每个槽位按原始采样时间计算的最早到期时刻。
     uint32_t gap_generation[4]; // 每个目标使用反馈时看到的间断代次。
     uint32_t chassis_stop_generation[4]; // 四个槽位计算时各自看到的底盘停止代次。
+    uint32_t source_sequence[4]; // 保存各槽位计算时的外部底盘来源序号，0 表示无此依赖。
     uint8_t requirements[4]; // 每个槽位需要复查的反馈、参考及有效期标记。
 } DJI_Queued_Feedback_s;
 static DJI_Queued_Feedback_s sender_feedback[9]; // 每组当前排队目标的反馈依据。
@@ -1030,6 +1032,8 @@ static void DJIMotorPrepareSingleOutput(const void *source, uint32_t now_ms,
     uint8_t requested[8]; // 保存待复核目标，再以全零构造最终报文。
     memcpy(requested, payload, sizeof(requested)); // 只读取本次队列副本中的目标。
     memset(payload, 0, length); // 未注册或未获许可的槽位保持零输出。
+    uint32_t checked_source = 0u; // 同一帧的四轮通常使用同一个来源，只检查一次。
+    uint8_t source_current = 0u; // 保存最近一次来源检查结果。
     for (size_t index = 0u; index < idx; ++index)
     {
         const DJIMotorInstance *motor = dji_motor_instance[index]; // 逐电机核对当前帧中的输出。
@@ -1041,6 +1045,16 @@ static void DJIMotorPrepareSingleOutput(const void *source, uint32_t now_ms,
         if (motor->output_role == MOTOR_OUTPUT_CHASSIS &&
             motor->chassis_stop_generation != basis->chassis_stop_generation[slot])
             continue; // 即便本轮已再次启用，也丢弃停止前计算的轮位目标。
+        const uint32_t source_sequence = basis->source_sequence[slot]; // 使用计算入队时的来源，不能借用后来提交的新参考。
+        if (source_sequence != 0u)
+        {
+            if (source_sequence != checked_source)
+            {
+                checked_source = source_sequence; // 下一个槽位可复用同一序号的结果。
+                source_current = chassis_source_check != NULL && chassis_source_check(source_sequence, now_ms); // 在交给 HAL 前检查原方向。
+            }
+            if (!source_current) continue; // 来源撤销或过期时保留本槽位的零输出。
+        }
         const uint32_t after_deadline = now_ms - basis->deadline_ms[slot]; // 无符号差值支持毫秒时钟回绕。
         if ((required & DJI_QUEUED_DEADLINE) && after_deadline != 0u && after_deadline <= INT32_MAX)
             continue; // 在到期时刻仍有效，下一毫秒开始清零。
@@ -1105,12 +1119,13 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
     motor->motor_controller.pid_ref = ref;
     motor->reference_generation_valid = 0u; // 普通参考不具备拨弹所需的代际凭据。
     motor->reference_has_deadline = 0u; // 清零或其他普通参考不能继承旧目标的期限。
+    motor->reference_source_sequence = 0u; // 普通参考不继承此前的外部来源。
     PlatformTaskCriticalExit();
 }
 
 // 保存参考、安全代际及可选截止点。调用者提供原始命令期限。
 static uint8_t DJIMotorSetGenerationRef(DJIMotorInstance *motor, float ref, uint32_t generation,
-                                        const uint32_t *deadline_ms)
+                                        const uint32_t *deadline_ms, uint32_t source_sequence)
 {
     if (motor == NULL || !isfinite(ref)) return 0u; // 没有实例或参考不是有限数时不能提交。
     if (motor->output_role != MOTOR_OUTPUT_CHASSIS && motor->output_role != MOTOR_OUTPUT_GIMBAL &&
@@ -1129,6 +1144,7 @@ static uint8_t DJIMotorSetGenerationRef(DJIMotorInstance *motor, float ref, uint
     uint8_t policy_active = 0u; // 区分旧整车许可与分功能许可。
     const uint32_t now_ms = PlatformTimeNowMs(); // 许可和期限用同一时刻判断。
     const uint8_t allowed = (uint8_t)((deadline_ms == NULL || *deadline_ms - now_ms <= INT32_MAX) &&
+        (source_sequence == 0u || chassis_source_check != NULL) &&
         RobotSafetyGetOutputPermitsForGeneration(now_ms, generation, &permits, &policy_active) &&
         (permits.functions & required_function) &&
         (motor->output_role != MOTOR_OUTPUT_LOADER || !policy_active || permits.fire_allowed)); // 拨弹还需要击发许可。
@@ -1138,12 +1154,13 @@ static uint8_t DJIMotorSetGenerationRef(DJIMotorInstance *motor, float ref, uint
         motor->reference_safety_generation = generation; // 记录参考所属的代际。
         motor->reference_has_deadline = deadline_ms != NULL; // 区分无期限和截止时刻为零。
         motor->reference_deadline_ms = deadline_ms != NULL ? *deadline_ms : 0u; // 后续计算和发送不得换成本轮时间。
+        motor->reference_source_sequence = source_sequence; // 后续检查本参考自身的依赖。
         motor->reference_generation_valid = 1u; // 完整写入后才标记代际有效。
     }
     PlatformIrqRestore(irq); // 恢复进入前的中断状态。
     return allowed; // 拒绝时保留旧参考，但发送路径不会借新代际重用它。
 #else
-    if (deadline_ms != NULL) return 0u; // 其他板卡的发送路径还不接受此接口。
+    if (deadline_ms != NULL || source_sequence != 0u) return 0u; // 其他板卡的发送路径不接受此接口。
     (void)generation; // 其他板角色仍由各自既有发送路径约束。
     DJIMotorSetRef(motor, ref); // 沿用现有参考设置。
     return 1u;
@@ -1152,13 +1169,31 @@ static uint8_t DJIMotorSetGenerationRef(DJIMotorInstance *motor, float ref, uint
 
 uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t generation)
 {
-    return DJIMotorSetGenerationRef(motor, ref, generation, NULL);
+    return DJIMotorSetGenerationRef(motor, ref, generation, NULL, 0u);
 }
 
 uint8_t DJIMotorSetChassisRefUntil(DJIMotorInstance *motor, float ref, uint32_t generation, uint32_t deadline_ms)
 {
+    return DJIMotorSetChassisRefUntilWithSource(motor, ref, generation, deadline_ms, 0u);
+}
+
+uint8_t DJIMotorBindChassisReferenceSource(DJIChassisReferenceSourceCheck_t check)
+{
+#if defined(ONE_BOARD)
+    if (check == NULL || (chassis_source_check != NULL && chassis_source_check != check)) return 0u;
+    chassis_source_check = check; // 启动时绑定一次，排队报文不会改用另一个函数。
+    return 1u;
+#else
+    (void)check;
+    return 0u;
+#endif
+}
+
+uint8_t DJIMotorSetChassisRefUntilWithSource(DJIMotorInstance *motor, float ref, uint32_t generation,
+                                            uint32_t deadline_ms, uint32_t source_sequence)
+{
     if (motor == NULL || motor->output_role != MOTOR_OUTPUT_CHASSIS) return 0u; // 只为底盘传递该截止点。
-    return DJIMotorSetGenerationRef(motor, ref, generation, &deadline_ms);
+    return DJIMotorSetGenerationRef(motor, ref, generation, &deadline_ms, source_sequence);
 }
 
 // 为所有电机实例计算三环PID,发送控制报文
@@ -1198,6 +1233,7 @@ void DJIMotorControl()
         uint8_t reference_generation_valid; // 复制参考是否具备代际凭据。
         uint8_t reference_has_deadline; // 复制截止点是否存在。
         uint32_t reference_deadline_ms; // 复制该参考的原始截止点。
+        uint32_t reference_source_sequence; // 复制该参考实际采用的外部来源序号。
         uint32_t feedback_gap_generation; // 随用于计算的内部反馈一起复制间断代次。
         uint32_t chassis_stop_generation; // 与用于计算的轮速目标一起复制停止代次。
 #endif
@@ -1210,6 +1246,7 @@ void DJIMotorControl()
         reference_generation = motor->reference_safety_generation; // 与参考值读取同一组数据。
         reference_has_deadline = motor->reference_has_deadline; // 与参考值在同一临界区读取。
         reference_deadline_ms = motor->reference_deadline_ms; // 原始截止时刻不会随电机周期刷新。
+        reference_source_sequence = motor->reference_source_sequence; // 参考、来源和安全代际在同一次复制中取得。
         feedback_gap_generation = motor->feedback_gap_generation; // 后续发生间断时只撤销用旧依据计算的目标。
         chassis_stop_generation = motor->chassis_stop_generation; // 计算途中发生停止也能在发送时识别。
 #endif
@@ -1222,6 +1259,9 @@ void DJIMotorControl()
 #if defined(ONE_BOARD)
         if (reference_has_deadline && reference_deadline_ms - now_ms > INT32_MAX)
             motor->reference_generation_valid = 0u; // 观察到过期后保持撤销，时钟再次回绕不能恢复旧参考。
+        if (motor->reference_generation_valid && reference_source_sequence != 0u &&
+            (chassis_source_check == NULL || !chassis_source_check(reference_source_sequence, now_ms)))
+            motor->reference_generation_valid = 0u; // 来源失效后停止使用此参考，须重新提交。
         reference_generation_valid = motor->reference_generation_valid; // 复制经本轮期限检查的代际状态。
 #endif
         PlatformTaskCriticalExit();
@@ -1266,6 +1306,7 @@ void DJIMotorControl()
         uint8_t required = 0u; // 逐项记录这一轮计算实际依赖的信号。
         basis->gap_generation[output_slot] = feedback_gap_generation; // 用相同的代次检查短暂断流。
         basis->chassis_stop_generation[output_slot] = chassis_stop_generation; // 发送时拒绝停止前算出的轮位目标。
+        basis->source_sequence[output_slot] = reference_source_sequence; // 后续发送也要用本次计算的原来源。
         if (speed_internal_active) required |= DJI_QUEUED_SPEED; // 内部速度环须持续有可信测量。
         if (current_internal_active) required |= DJI_QUEUED_CURRENT; // 内部电流环同样检查结果。
         if (motor_setting->outer_loop_type == ANGLE_LOOP && (motor_setting->close_loop_type & ANGLE_LOOP) != 0u &&

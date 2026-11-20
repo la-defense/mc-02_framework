@@ -584,6 +584,98 @@ static int single_chassis_reference_expiry(void)
     return EXIT_SUCCESS;
 }
 
+// 使用消息中心和实际排队回调，不运行底盘任务也能发现方向丢失。
+static uint8_t direction_source_is_current(uint32_t sequence, uint32_t now_ms)
+{
+    return MessageSnapshotSourceIsCurrent(1u, sequence, now_ms);
+}
+
+static int single_chassis_queued_direction(void)
+{
+    now_us = 1000u;
+    RobotSafetyInit();
+    RobotSafetySetRcOnline(1u);
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate();
+    RobotSafetySnapshot_t safety;
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+    const MessageTopicDescriptor_t topic = {
+        .topic_id = 1u, // 自定义测试方向话题编号。
+        .payload_size = sizeof(uint8_t), // 电机只需核对来源身份，内容用单字节替代。
+        .max_age_ms = 7u, // 方向比测试命令更早失效。
+        .capacity = 1u, // 只保留最新方向。
+        .delivery = MESSAGE_DELIVERY_SNAPSHOT, // 普通更新允许旧命令继续使用原期限。
+        .overflow = MESSAGE_OVERFLOW_REPLACE_OLDEST, // 保留最新发布。
+        .source_clock = MESSAGE_CLOCK_LOCAL, // 方向与驱动使用同一毫秒时钟。
+        .publisher_mask = 1u << 0, // 发布端点 1。
+        .subscriber_mask = 1u << 1, // 订阅端点 2。
+    };
+    TEST_CHECK(MessageCenterInit(&topic, 1u) == MESSAGE_OK);
+    MessagePublisher_t *publisher = MessagePublisherRegister(1u, 1u);
+    MessageSubscriber_t *reader = MessageSubscriberRegister(1u, 2u);
+    TEST_CHECK(publisher != NULL && reader != NULL);
+    uint8_t direction = 1u;
+    MessageFreshness_t freshness;
+    TEST_CHECK(MessagePublishNow(publisher, &direction) == MESSAGE_OK);
+    TEST_CHECK(MessageReadSnapshot(reader, &direction, sizeof(direction), HAL_GetTick(), &freshness) == MESSAGE_OK);
+
+    Motor_Init_Config_s config = motor_config(1u);
+    config.output_role = MOTOR_OUTPUT_CHASSIS;
+    DJIMotorInstance *dependent = DJIMotorInit(&config); // 本帧第一槽依赖方向。
+    Motor_Init_Config_s second = motor_config(2u);
+    second.output_role = MOTOR_OUTPUT_CHASSIS;
+    DJIMotorInstance *independent = DJIMotorInit(&second); // 同一帧第二槽验证独立目标不会被撤销。
+    TEST_CHECK(dependent != NULL && independent != NULL);
+    TEST_CHECK(!DJIMotorSetChassisRefUntilWithSource(dependent, 9.0f, safety.control_generation, 25u, freshness.sequence)); // 依赖来源时须先绑定检查函数。
+    TEST_CHECK(DJIMotorBindChassisReferenceSource(direction_source_is_current));
+    TEST_CHECK(DJIMotorSetChassisRefUntilWithSource(dependent, 9.0f, safety.control_generation, 25u, freshness.sequence));
+    TEST_CHECK(DJIMotorSetChassisRefUntil(independent, 10.0f, safety.control_generation, 25u));
+    DJIMotorEnable(dependent);
+    DJIMotorEnable(independent);
+    receive(dependent, 1000u, HAL_GetTick(), 0, 0); // 两轮反馈保持有效，避免其他保护遮盖测试。
+    receive(independent, 1000u, HAL_GetTick(), 0, 0);
+    control_at(2000u); // 先建立 PID 计时。
+    control_at(3000u); // 两个槽位都有非零排队目标。
+    TEST_CHECK(deferred_prepare != NULL && (deferred_payload[0] || deferred_payload[1]) &&
+               (deferred_payload[2] || deferred_payload[3]));
+    uint8_t original[8];
+    memcpy(original, deferred_payload, sizeof(original)); // 保留原排队数据用于替换失败回归。
+
+    now_us = 4000u;
+    TEST_CHECK(MessagePublisherInvalidate(publisher) == MESSAGE_OK);
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(deferred_payload[0] == 0u && deferred_payload[1] == 0u &&
+               (deferred_payload[2] || deferred_payload[3])); // 不运行电机计算，发送前仍只清依赖方向的槽位。
+
+    now_us = 5000u;
+    TEST_CHECK(MessagePublishNow(publisher, &direction) == MESSAGE_OK); // 新方向开启新的发布区间。
+    TEST_CHECK(MessageReadSnapshot(reader, &direction, sizeof(direction), HAL_GetTick(), &freshness) == MESSAGE_OK);
+    TEST_CHECK(DJIMotorSetChassisRefUntilWithSource(dependent, 9.0f, safety.control_generation, 25u, freshness.sequence));
+    reject_periodic = 1u;
+    control_at(6000u); // 新方向已算出新参考，但软件队列拒绝替换旧目标。
+    reject_periodic = 0u;
+    memcpy(deferred_payload, original, sizeof(original));
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(deferred_payload[0] == 0u && deferred_payload[1] == 0u); // 旧帧不能借用替换失败的新方向。
+    control_at(7000u);
+    TEST_CHECK(sent[0] || sent[1]); // 成功排队的新参考可以发送。
+
+    now_us = 13000u; // 方向已到期，轮速反馈、整车许可及命令期限均仍有效。
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(deferred_payload[0] == 0u && deferred_payload[1] == 0u &&
+               (deferred_payload[2] || deferred_payload[3]));
+    control_at(13000u); // 电机计算也会撤销这份已经确认过期的参考。
+    TEST_CHECK(!dependent->reference_generation_valid);
+    now_us = 14000u;
+    TEST_CHECK(MessagePublishNow(publisher, &direction) == MESSAGE_OK);
+    control_at(14000u);
+    TEST_CHECK(sent[0] == 0u && sent[1] == 0u); // 补来方向也不能继续计算已经撤销的参考。
+    return EXIT_SUCCESS;
+}
+
 // 即使同组电机仍在线，一台电机的短暂测量异常也必须清掉它的排队目标。
 // 验证底盘上限由配置传到最终 CAN 字节，和 PID 请求的大小独立。
 static int single_chassis_output_limit(void)
@@ -1596,6 +1688,8 @@ int main(int argc, char **argv)
         return single_queued_feedback_expiry();
     if (strcmp(argv[1], "single-chassis-reference-expiry") == 0)
         return single_chassis_reference_expiry();
+    if (strcmp(argv[1], "single-chassis-queued-direction") == 0)
+        return single_chassis_queued_direction();
     if (strcmp(argv[1], "single-chassis-output-limit") == 0)
         return single_chassis_output_limit();
     if (strcmp(argv[1], "single-chassis-queued-stop") == 0)

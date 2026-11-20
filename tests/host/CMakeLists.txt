@@ -1351,7 +1351,8 @@ add_executable(motor_single_safety_test motor_feedback_filter_test.c
   ../../bsp/board/platform_can_periodic_stm32.c dji_can_unregister_fake.c
   ../../modules/motor/motor_feedback.c ../../modules/algorithm/controller.c
   ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c
-  ../../modules/safety/robot_safety.c ../../modules/safety/can_recovery.c) # 单板使用真实安全管理、恢复计算与电机发送实现。
+  ../../modules/safety/robot_safety.c ../../modules/safety/can_recovery.c
+  ../../modules/message_center/message_center.c) # 使用实际方向发布、撤销和队列发送前检查。
 target_include_directories(motor_single_safety_test BEFORE PRIVATE motor_safety_fakes motor_pid_fakes)
 target_include_directories(motor_single_safety_test PRIVATE ../../modules/motor
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/safety
@@ -1372,6 +1373,7 @@ endif()
 add_test(NAME production_dji_single_safety_output_gate COMMAND motor_single_safety_test single-safety-output)
 add_test(NAME production_dji_single_queued_feedback_expiry COMMAND motor_single_safety_test single-queued-feedback-expiry) # 排队目标不能借新反馈续期。
 add_test(NAME production_dji_single_chassis_reference_expiry COMMAND motor_single_safety_test single-chassis-reference-expiry) # 底盘命令跨回绕后仍按原截止点失效。
+add_test(NAME production_dji_single_chassis_queued_direction COMMAND motor_single_safety_test single-chassis-queued-direction) # 队列按原方向复核，不能被恢复后的新方向延用。
 add_test(NAME production_dji_single_chassis_output_limit COMMAND motor_single_safety_test single-chassis-output-limit) # 两个安装方向的最终报文都受车型上限限制。
 add_test(NAME production_dji_single_chassis_queued_stop COMMAND motor_single_safety_test single-chassis-queued-stop) # 轮位停止后再启用也不能发出旧目标。
 add_test(NAME production_dji_single_queued_feedback_gap COMMAND motor_single_safety_test single-queued-feedback-gap) # 单电机反馈间断后只撤销旧槽位。

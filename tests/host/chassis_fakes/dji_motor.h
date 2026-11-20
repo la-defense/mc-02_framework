@@ -63,7 +63,10 @@ enum { MOTOR_FEED = 0, SPEED_LOOP = 1, CURRENT_LOOP = 2, M3508 = 1,
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config);
 uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor);
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
-uint8_t DJIMotorSetChassisRefUntil(DJIMotorInstance *motor, float ref, uint32_t generation, uint32_t deadline_ms); // 测试替身记录代际和原截止点。
+typedef uint8_t (*DJIChassisReferenceSourceCheck_t)(uint32_t sequence, uint32_t now_ms);
+uint8_t DJIMotorBindChassisReferenceSource(DJIChassisReferenceSourceCheck_t check);
+uint8_t DJIMotorSetChassisRefUntilWithSource(DJIMotorInstance *motor, float ref, uint32_t generation,
+                                            uint32_t deadline_ms, uint32_t source_sequence); // 测试替身记录代际、期限和方向来源。
 void DJIMotorStop(DJIMotorInstance *motor);
 void DJIMotorEnable(DJIMotorInstance *motor);
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);

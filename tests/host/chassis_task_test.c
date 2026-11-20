@@ -83,6 +83,8 @@ static unsigned operation_order;
 static uint8_t reject_motion_reference; // 模拟安全代际失效时电机拒绝目标。
 static uint32_t observed_motion_generation; // 保存底盘交给电机的命令代际。
 static uint32_t observed_motion_deadline_ms; // 保存底盘交给电机的原始截止点。
+static uint32_t observed_direction_sequence; // 保存底盘交给电机的原方向来源。
+static DJIChassisReferenceSourceCheck_t direction_check; // 保存底盘启动时绑定的生产检查函数。
 static SuperCapInstance cap;
 static int fail_cap, fail_motor;
 static unsigned supercap_init_calls;
@@ -128,10 +130,17 @@ uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor)
 }
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 { if (motor) { motor->ref = ref; motor->set_ref_order = ++operation_order; } }
-uint8_t DJIMotorSetChassisRefUntil(DJIMotorInstance *motor, float ref, uint32_t generation, uint32_t deadline_ms)
+uint8_t DJIMotorBindChassisReferenceSource(DJIChassisReferenceSourceCheck_t check)
+{
+    direction_check = check; // 后续由用例直接核对驱动能读取到的来源状态。
+    return check != NULL;
+}
+uint8_t DJIMotorSetChassisRefUntilWithSource(DJIMotorInstance *motor, float ref, uint32_t generation,
+                                            uint32_t deadline_ms, uint32_t source_sequence)
 {
     observed_motion_generation = generation; // 核对底盘是否传递原命令的代际。
     observed_motion_deadline_ms = deadline_ms; // 测试期限不会在任务消费时刷新。
+    observed_direction_sequence = source_sequence; // 保存这一轮真正提交的方向序号。
     if (motor == NULL) return 0u; // 无实例时不能声称已写入。
     if (reject_motion_reference && motor == &motors[1]) return 0u; // 第一台轮电机已写入后，拒绝第二台。
     DJIMotorSetRef(motor, ref); // 保留已有的参考和调用顺序记录。
@@ -668,6 +677,8 @@ static int TestChassisDirectionRevocation(void)
     CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
     ChassisTask();
     CHECK(motors[0].enabled && motors[0].ref != 0.0f);
+    CHECK(observed_direction_sequence == direction_time.sequence && direction_check != NULL &&
+          direction_check(observed_direction_sequence, test_tick)); // 驱动拿到原序号及对应业务检查函数。
 
     ++test_tick;
     CHECK(MessagePublishNow(feedback, &direction) == MESSAGE_OK); // 连续来源的新样本不用等待命令任务重算。
@@ -675,6 +686,7 @@ static int TestChassisDirectionRevocation(void)
     CHECK(motors[0].enabled && motors[0].ref != 0.0f);
     ++test_tick;
     CHECK(MessagePublisherInvalidate(feedback) == MESSAGE_OK);
+    CHECK(!direction_check(observed_direction_sequence, test_tick)); // 发送前检查可以独立于底盘任务发现撤销。
     ChassisTask(); // 底盘命令自己仍未到期，但其方向已明确撤销。
     for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
 

@@ -148,6 +148,7 @@ typedef struct
     uint8_t reference_generation_valid; // 显式绑定代际且尚未撤销时才保持有效。
     uint8_t reference_has_deadline; // 底盘命令截止点可恰好为零，单独记录是否有期限。
     uint32_t reference_deadline_ms; // 原始命令的本机截止时刻，允许毫秒计数回绕。
+    uint32_t reference_source_sequence; // 底盘参考使用的外部来源序号，0 表示无此依赖。
     uint32_t chassis_stop_generation; // 单板底盘每次停止时递增，以撤销已计算的轮位目标。
     Motor_Control_Setting_s motor_settings; // 电机设置
     MotorPIDClock_t pid_clock; // 独立记录控制调用时刻，不复用反馈计时。
@@ -264,6 +265,27 @@ uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t
  * @note 电机计算及已排队 CAN 帧都使用该期限。调用者重提同一条命令时须传入同一截止时刻。
  */
 uint8_t DJIMotorSetChassisRefUntil(DJIMotorInstance *motor, float ref, uint32_t generation, uint32_t deadline_ms);
+
+/** @brief 给出一个底盘来源序号在本机时刻是否仍有效，1 为可用。 */
+typedef uint8_t (*DJIChassisReferenceSourceCheck_t)(uint32_t sequence, uint32_t now_ms);
+
+/** @brief 在单板底盘启动时登记参考来源的检查函数。
+ * @param[in] check 长期有效的非空函数。电机计算及 CAN 提交前会在任务临界区调用，不得等待或发报文。
+ * @return 首次绑定或重复绑定同一函数返回 1，其他情况返回 0。
+ */
+uint8_t DJIMotorBindChassisReferenceSource(DJIChassisReferenceSourceCheck_t check);
+
+/** @brief 提交还依赖一份外部来源的单板轮速目标。
+ * @param[in,out] motor 已登记的底盘 DJI 电机。
+ * @param[in] ref 输出轴速度，rad/s，须为有限数。
+ * @param[in] generation 产生本条命令时的安全代际。
+ * @param[in] deadline_ms 该命令原有的本机毫秒截止点，允许当时刻使用。
+ * @param[in] source_sequence 传给已绑定的检查函数。0 表示无需外部来源检查。
+ * @return 接受返回 1。缺少检查函数、角色、许可、期限或数值不符时返回 0，保留原参考。
+ * @note 计算与软件队列提交前均复核来源；新参考不能改写旧排队目标的来源序号。
+ */
+uint8_t DJIMotorSetChassisRefUntilWithSource(DJIMotorInstance *motor, float ref, uint32_t generation,
+                                            uint32_t deadline_ms, uint32_t source_sequence);
 
 /** @brief 改写角度或速度反馈来源，下一轮控制生效。
 * @param[in,out] motor 有效实例，不能为 NULL。
