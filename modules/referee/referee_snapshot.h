@@ -167,6 +167,8 @@ typedef struct {
     uint16_t limit_w; /**< 裁判底盘功率上限，W。 */
     uint16_t buffer_energy_j; /**< 裁判缓冲能量，J。 */
     uint8_t chassis_power_enabled; /**< 底盘供电许可位，1 表示开启。 */
+    uint8_t recovery_recorded; /**< 1 表示两组数据在一次中断后恢复，recovered_ms 可用。 */
+    uint32_t recovered_ms; /**< 最近一次恢复的本机处理时刻，单位 ms，0 合法。 */
 } RefereeChassisPower_t;
 
 #endif

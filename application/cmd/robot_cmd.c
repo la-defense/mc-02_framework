@@ -363,9 +363,18 @@ static VisionControlInput_s GetVisionV2ControlInput(void)
 // 现有导航要求两组裁判数据都有效。缓冲失效的普通限功率在模型接入后另行启用。
 static uint8_t VisionV2ReadNavigationPower(RefereeChassisPower_t *power)
 {
-    return RefereeGetChassisPower(power) == REFEREE_OK &&
-        power->limit.state == REFEREE_DATA_FRESH && power->limit_w != 0u &&
-        power->chassis_power_enabled && power->buffer.state == REFEREE_DATA_FRESH;
+    if (RefereeGetChassisPower(power) != REFEREE_OK || power->limit.state != REFEREE_DATA_FRESH ||
+        power->limit_w == 0u || !power->chassis_power_enabled || power->buffer.state != REFEREE_DATA_FRESH)
+        return 0u; // 当前缺少任一必需功率数据时撤销导航目标。
+    if (power->recovery_recorded)
+    {
+        const uint32_t now_ms = PlatformTimeNowMs(); // 导航接收与裁判恢复使用同一本机时钟。
+        const uint32_t recovery_age_ms = now_ms - power->recovered_ms; // 正常回绕时仍能比较两者的年龄。
+        const uint32_t navigation_age_ms = now_ms - vision_v2_navigation_freshness.received_time_ms; // 使用导航的本机接收时间。
+        if (recovery_age_ms <= VISION_V2_NAV_MAX_AGE_MS && navigation_age_ms >= recovery_age_ms)
+            return 0u; // 恢复前或同一毫秒接收的旧命令都不能接管。
+    }
+    return 1u; // 更早的恢复已超过命令的最长有效期，无须再比较。
 }
 
 static uint8_t VisionV2NavigationAllowed(uint8_t autonomous_selected)
@@ -923,15 +932,6 @@ void RobotCMDTask()
     RobotCmdLease_t navigation = manual; // 现有 V2 自主选择还要求无线和键鼠状态有效。
     RobotCmdLeaseInclude(&navigation, navigation_active, vision_v2_navigation_freshness.received_time_ms,
                          VISION_V2_NAV_MAX_AGE_MS, publish_ms);
-    if (navigation_active)
-    {
-        RefereeChassisPower_t power = {0}; // 发布前重读额度与许可，覆盖选择目标后发生的断线或撤权。
-        const uint8_t power_valid = VisionV2ReadNavigationPower(&power); // 没有可信普通限功率时，两组都必须有效。
-        RobotCmdLeaseInclude(&navigation, power_valid, power.limit.source_rx_ms,
-                             power.limit.max_age_ms, publish_ms); // 额度与供电许可共用原始 0x0201 期限。
-        RobotCmdLeaseInclude(&navigation, power_valid, power.buffer.source_rx_ms,
-                             power.buffer.max_age_ms, publish_ms); // 缓冲独立到期，也可缩短本次导航有效期。
-    }
     RobotCmdLease_t local_hold = manual; // 失去瞄准后的本地保持依赖新鲜云台反馈。
     RobotCmdLeaseIncludeGimbalFeedback(&local_hold, feedback_received, &gimbal_feedback_time, publish_ms);
 #else
@@ -943,11 +943,24 @@ void RobotCMDTask()
     if (chassis_cmd_send.chassis_mode == CHASSIS_ZERO_FORCE)
         (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
     else
+    {
 #if defined(MC02_VISION_PROTOCOL_V2)
-        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, navigation_active ? &navigation : &manual_chassis, publish_ms, 0u);
-#else
-        (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual_chassis, publish_ms, 0u);
+        if (navigation_active)
+        {
+            PlatformTaskCriticalEnter(); // 只保护裁判复核和发布，接收任务不能在两步之间插入撤权。
+            RefereeChassisPower_t power = {0}; // 发布前重读额度与许可，覆盖本轮计算期间发生的变化。
+            const uint8_t power_valid = VisionV2ReadNavigationPower(&power); // 两组都有效且输入通过恢复检查才续用本轮目标。
+            RobotCmdLeaseInclude(&navigation, power_valid, power.limit.source_rx_ms,
+                                 power.limit.max_age_ms, publish_ms); // 额度与供电许可共用原始 0x0201 期限。
+            RobotCmdLeaseInclude(&navigation, power_valid, power.buffer.source_rx_ms,
+                                 power.buffer.max_age_ms, publish_ms); // 缓冲独立到期，也可缩短本次导航有效期。
+            (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &navigation, publish_ms, 0u); // 复核失败会撤销已发布目标。
+            PlatformTaskCriticalExit(); // 复核和发布结束后允许接收任务继续。
+        }
+        else
 #endif
+            (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &manual_chassis, publish_ms, 0u);
+    }
 #endif // ONE_BOARD
     if (shoot_cmd_send.shoot_mode == SHOOT_OFF && shoot_cmd_send.friction_mode == FRICTION_OFF && shoot_cmd_send.load_mode == LOAD_STOP)
         (void)MessagePublishNow(shoot_cmd_pub, &shoot_cmd_send);

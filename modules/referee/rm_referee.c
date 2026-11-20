@@ -37,6 +37,9 @@ static uint8_t referee_initialized;
 static uint8_t referee_has_valid_frame;
 static uint8_t referee_link_active;
 static uint32_t referee_last_valid_rx_ms;
+static uint32_t referee_power_recovered_ms; // 两组额度恢复时的本机处理时刻。
+static uint8_t referee_power_available; // 最近一次检查，两组都可用于现有底盘许可。
+static uint8_t referee_power_interrupted; // 至少有一次从可用变为不可用。
 
 // 接收、离线和发送回调均由任务派发；共享状态使用可嵌套的任务临界区保护。
 // 此处不从中断调用平台任务锁，也不改变原来的毫秒时基和无符号回绕计算。
@@ -293,6 +296,21 @@ static uint8_t RefereeIsEventIndex(size_t index)
                      index == REF_CMD_SHOOT_DATA || index == REF_CMD_INTERACTIVE);
 }
 
+// 在裁判任务锁内记录可用性，即使外部没有读取也能保留一次短暂中断。
+static void RefereeTrackChassisPower(uint32_t now_ms)
+{
+    const RefereeCommandSnapshot_t *robot = &referee_published.command[REF_CMD_ROBOT_STATE]; // 上限与许可取自同一状态帧。
+    const RefereeCommandSnapshot_t *buffer = &referee_published.command[REF_CMD_POWER_HEAT]; // 缓冲帧单独检查。
+    const uint8_t available = (uint8_t)(robot->state == REFEREE_DATA_FRESH && buffer->state == REFEREE_DATA_FRESH &&
+        robot->data.robot_state.chassis_power_limit_w != 0u &&
+        (robot->data.robot_state.power_output_bits & REFEREE_OUTPUT_CHASSIS_MASK) != 0u); // 与现有双来源许可规则一致。
+    if (!available && referee_power_available)
+        referee_power_interrupted = 1u; // 记录已获准后发生的中断。
+    if (available && !referee_power_available && referee_power_interrupted)
+        referee_power_recovered_ms = now_ms; // 用实际恢复处理时刻，不接受先前已接收的旧命令。
+    referee_power_available = available; // 连续有效的帧不会改写恢复时刻。
+}
+
 // 两个功率来源一旦确认过期，只有同类帧可以恢复，避免毫秒回绕后旧帧重新有效。
 static void RefereeExpirePowerSources(uint32_t now_ms, uint8_t link_lost)
 {
@@ -307,6 +325,7 @@ static void RefereeExpirePowerSources(uint32_t now_ms, uint8_t link_lost)
             (link_lost || now_ms - entry->source_rx_ms > RefereeTimeoutForIndex(sources[i])))
             entry->state = REFEREE_DATA_EXPIRED; // 保留旧字段供诊断，控制读取会清除过期值。
     }
+    RefereeTrackChassisPower(now_ms); // 在写入恢复帧前先记录过期造成的中断。
 }
 
 static void RefereeShift(RefereeStream *stream, size_t count)
@@ -318,11 +337,12 @@ static void RefereeShift(RefereeStream *stream, size_t count)
 }
 
 static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8_t wire_sequence,
-                              uint32_t source_rx_ms, uint32_t now_ms,
+                              uint32_t source_rx_ms,
                               const uint8_t *payload, size_t payload_length)
 {
     if (data == NULL || index < 0 || index >= REFEREE_COMMAND_COUNT) return 0u;
     PlatformTaskCriticalEnter();
+    const uint32_t now_ms = PlatformTimeNowMs(); // 取实际提交时刻，解码期间的等待也会消耗期限。
     if (referee_stream.reset_requested || (uint32_t)(now_ms-source_rx_ms) > REFEREE_ASSEMBLY_TIMEOUT_MS) {
         PlatformTaskCriticalExit();
         return 0u;
@@ -361,6 +381,7 @@ static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8
     {
         entry->state = now_ms - source_rx_ms <= RefereeTimeoutForIndex((size_t)index) ?
             REFEREE_DATA_FRESH : REFEREE_DATA_EXPIRED; // 接受用于诊断的迟到帧，但它不能恢复功率资格。
+        RefereeTrackChassisPower(now_ms); // 合法帧也可能明确关闭供电或使两组额度恢复。
     }
     referee_last_valid_rx_ms = source_rx_ms;
     referee_has_valid_frame = 1u;
@@ -380,7 +401,7 @@ static uint8_t RefereeAccept(const uint8_t *frame, size_t frame_length, uint32_t
     RefereeCommandData_t candidate;
     uint32_t now_ms = PlatformTimeNowMs();
     if (!RefereeDecode(index, frame+DATA_Offset, payload_length, &candidate, now_ms)) return 0u;
-    return RefereePublish(index, &candidate, frame[3], source_rx_ms, now_ms,
+    return RefereePublish(index, &candidate, frame[3], source_rx_ms,
                           frame+DATA_Offset, payload_length);
 }
 
@@ -551,6 +572,9 @@ RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *conf
     referee_last_valid_rx_ms = 0u;
     referee_has_valid_frame = 0u;
     referee_link_active = 0u;
+    referee_power_recovered_ms = 0u; // 上电后还未发生恢复。
+    referee_power_available = 0u; // 必须先取得两组合法信息。
+    referee_power_interrupted = 0u; // 初始化后第一次取得信息沿用首次接收规则。
     referee_daemon = daemon;
     PlatformTaskCriticalExit();
     PlatformUartConfig uart_conf = {0}; // 未启用的可选回调保持空值。
@@ -646,6 +670,9 @@ RefereeStatus_t RefereeGetChassisPower(RefereeChassisPower_t *output)
     }
     if (buffer->state == REFEREE_DATA_FRESH)
         output->buffer_energy_j = buffer->data.power_heat.buffer_energy_j; // 保持焦耳，不能直接当瓦数使用。
+    output->recovery_recorded = (uint8_t)(referee_power_available && referee_power_interrupted); // 有效恢复才交付重接管时刻。
+    if (output->recovery_recorded)
+        output->recovered_ms = referee_power_recovered_ms; // 读取不会推进这个时刻。
     PlatformTaskCriticalExit();
     return REFEREE_OK;
 }

@@ -29,6 +29,7 @@ static uint32_t vision_send_elapsed_ms; // 模拟选好命令后、发布前经�
 static Vision_Recv_s unused_wire_frame;
 static RefereeChassisPower_t referee_power;
 static uint8_t referee_fixed_source_times; // 单独注入上限与缓冲的来源时刻。
+static uint8_t referee_recover_during_send; // 注入目标选定后出现的新恢复记录。
 
 uint32_t HAL_GetTick(void) { return test_tick; }
 const RC_ctrl_t *RemoteControlInit(PlatformUartPort_t port) { (void)port; return &remote_input; }
@@ -48,7 +49,15 @@ RemoteMouseStatus_t RemoteControlConsumeMouse(uint32_t through, RemoteMouseBatch
     return REMOTE_MOUSE_EMPTY;
 }
 Vision_Recv_s *VisionInit(PlatformUartPort_t handle) { (void)handle; return &unused_wire_frame; }
-void VisionSend(void) { test_tick += vision_send_elapsed_ms; }
+void VisionSend(void)
+{
+    test_tick += vision_send_elapsed_ms; // 模拟其它处理经过的时间。
+    if (referee_recover_during_send)
+    {
+        referee_power.recovery_recorded = 1u; // 模拟裁判接收任务先撤权、后恢复。
+        referee_power.recovered_ms = test_tick; // 待发布的导航已经在此之前接收。
+    }
+}
 void VisionGetStatus(Vision_Status_t *status)
 {
     memset(status, 0, sizeof(*status));
@@ -333,6 +342,28 @@ int main(void)
     TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_OK &&
         chassis.chassis_mode == CHASSIS_ZERO_FORCE);
     referee_power.chassis_power_enabled = 1u;
+
+    test_tick += 1u;
+    TEST_CHECK(PublishVision(nav_publisher, &navigation, 87u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
+    TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+    referee_recover_during_send = 1u; // 选定时裁判有效，发布前完成一次短暂撤权和恢复。
+    vision_send_elapsed_ms = 2u;
+    RobotCMDTask();
+    referee_recover_during_send = 0u;
+    vision_send_elapsed_ms = 0u;
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_ERR_EMPTY);
+    RobotCMDTask(); // 后续读取同一命令仍不得接管。
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_OK &&
+        chassis.chassis_mode == CHASSIS_ZERO_FORCE);
+    TEST_CHECK(PublishVision(nav_publisher, &navigation, 88u, MESSAGE_CLOCK_REMOTE_RAW) == 0); // 恢复同毫秒还有先后歧义。
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_OK &&
+        chassis.chassis_mode == CHASSIS_ZERO_FORCE);
+    test_tick += 1u;
+    TEST_CHECK(PublishVision(nav_publisher, &navigation, 89u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_OK &&
+        chassis.chassis_mode == CHASSIS_NO_FOLLOW); // 恢复之后接收的新导航可重新通过原有许可。
 
     vision_online = 0u; // 没有视觉目标，本轮只可能生成本地保持命令。
     test_tick += 1u;

@@ -82,4 +82,11 @@
 - 8 项相关 ASan／UBSan 回归通过，覆盖实际 DJI 读口、反馈恢复以及全向轮估速和里程计。隔离 `commissioning/chassis` 通过 Cortex-M7 Debug 构建与 ELF／源码检查，FLASH 为 307612 B，较同配置基线增加 176 B。主 RAM 保持 126160 B。实车反馈与里程计精度仍待现场验证。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 839 项，普通禁热及遥控诊断通过构建和 ELF 隔离检查，六种生产预设因核心配置未确认而按预期拒绝。
 
+## 裁判供电恢复后等待新导航（R25-15）
+
+- 生产解析器记录两组数据中断后重新可用的本机时刻。测试覆盖无需读口轮询的供电许可关闭／恢复、零功率上限、单组超期、链接中断、晚到离线事件及恢复时刻回绕到零。持续收到合法帧时，恢复时刻保持原值。
+- 在生产命令入口选择目标后注入裁判短暂撤权并恢复。发布前复核撤销该轮旧目标。下一轮也拒绝恢复同毫秒及之前接收的导航，更晚接收的新导航仍可按原有条件接管。两项相关回归通过 ASan／UBSan。
+- 隔离 `commissioning/chassis` 通过 Cortex-M7 Debug 构建、ELF 与源码隔离检查。FLASH 为 307740 B，较同配置基线增加 128 B。主 RAM 仍为 126160 B。V2 命令源文件通过独立 ARM 对象编译，未链接生产 V2 固件。这组验证覆盖命令发布和撤销，已交给电机发送的帧及实车功耗仍需单独验证。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 839 项，普通禁热及遥控诊断通过构建和 ELF 隔离检查，六种生产预设按预期拒绝。
+
 见[本底盘接口](../../../../application/chassis/chassis.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

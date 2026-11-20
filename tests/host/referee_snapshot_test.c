@@ -542,10 +542,36 @@ static void check_chassis_power_sources(void)
     const DaemonEvent_t old_offline = {.state = DAEMON_SOURCE_OFFLINE, .last_detected_ms = UINT32_MAX - 41u};
     daemon_config.event_handler(&old_offline, daemon_config.owner_id); // 晚到的离线通知不能撤销后来恢复的数据。
     TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit_w == 80u && power.buffer_energy_j == 50u);
+    TEST_CHECK(power.recovery_recorded && power.recovered_ms == UINT32_MAX - 30u); // 以最后恢复的一组为准，晚到的离线事件不能改写。
     const DaemonEvent_t current_offline = {.state = DAEMON_SOURCE_OFFLINE, .last_detected_ms = UINT32_MAX - 29u};
     daemon_config.event_handler(&current_offline, daemon_config.owner_id); // 当前断联立即撤销两条仍未到各自期限的旧数据。
     TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit.state == REFEREE_DATA_EXPIRED &&
         power.buffer.state == REFEREE_DATA_EXPIRED && power.limit_w == 0u && power.buffer_energy_j == 0u);
+    set_tick(UINT32_MAX);
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 6u); // 链路已恢复，但缓冲尚无新数据。
+    set_tick(0u);
+    feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 7u); // 完整恢复时刻恰好回绕到零。
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.recovery_recorded && power.recovered_ms == 0u);
+
+    set_tick(4u);
+    robot[16] = 0u; // 合法帧关闭供电许可，两次状态变化之间不调用读口。
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 8u);
+    set_tick(6u);
+    robot[16] = REFEREE_OUTPUT_CHASSIS_MASK;
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 9u);
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.chassis_power_enabled &&
+        power.recovery_recorded && power.recovered_ms == 6u);
+    set_tick(7u);
+    feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 10u); // 正常帧只更新自己的期限。
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.recovered_ms == 6u);
+
+    set_tick(8u);
+    write_u16le(robot + 10u, 0u); // 许可位仍开，零瓦上限也会中断资格。
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 11u);
+    set_tick(9u);
+    write_u16le(robot + 10u, 80u);
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 12u);
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.recovery_recorded && power.recovered_ms == 9u);
 }
 
 #if defined(REFEREE_TEST_THREADS)
