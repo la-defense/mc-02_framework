@@ -311,6 +311,14 @@ uint8_t RobotInit(void)
                                     INIT_FAILURE_TASK_TIMING, INIT_RESOURCE_TASK_ROBOT); // 人工期限短于命令拍点，不能进入设备启动。
         goto init_failed;
     }
+    const PlatformPeriodicConfig_t *dispatch_timing = RobotGetTaskPeriod(ROBOT_PERIODIC_COMM); // 电机计算和发送共用此任务的执行预算。
+    if (!RobotCommissioningChassisTimingFits(&robot_config->manual_input, command_timing,
+            &robot_config->chassis_task.timing, &robot_config->motor_periods, dispatch_timing))
+    {
+        InitDiagnosticReportFailure(INIT_STAGE_BSP, INIT_MODULE_TASKS,
+                                    INIT_FAILURE_TASK_TIMING, INIT_RESOURCE_TASK_CHASSIS_PIPELINE); // 各段组合超出原期限时保持失能。
+        goto init_failed;
+    }
     const RobotModulePlan_t *commissioning_modules = RobotBuildGetPlan(); // 与设备启动共享车型清单。
     const RobotControlPolicy_t commissioning_policy = {
         .enabled_functions = ROBOT_CONTROL_CHASSIS, // 仅允许轮组取得许可。

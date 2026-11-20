@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 
+#define ROBOT_CHASSIS_COMMAND_MAX_AGE_MS 50u // 底盘命令话题的最长保留时间，单位 ms。
+
 enum
 {
     ROBOT_TOPIC_CHASSIS_COMMAND = 0x0101,

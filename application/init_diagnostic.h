@@ -34,7 +34,7 @@ typedef enum
     INIT_FAILURE_DEPENDENCY,          ///< 依赖模块未能完成初始化
     INIT_FAILURE_WATCHDOG_CONFIG,     ///< 看门狗时限未能确认生效
     INIT_FAILURE_CLOCK,               ///< 主时钟启动未能完成
-    INIT_FAILURE_TASK_TIMING,         ///< 任务周期或预算无法用指定时钟表示
+    INIT_FAILURE_TASK_TIMING,         ///< 任务周期或预算无效，或组合时限不满足要求。
 } InitDiagnosticReason_e;
 
 /** @brief 失败所属模块的编号；0 表示尚未记录模块。 */
@@ -71,6 +71,7 @@ typedef enum
     INIT_RESOURCE_TASK_LOG,
     INIT_RESOURCE_TASK_TIM5_PROBE,    ///< 显式启用的 TIM5 裸板自测。
     INIT_RESOURCE_TASK_CHASSIS,       ///< 独立底盘任务。
+    INIT_RESOURCE_TASK_CHASSIS_PIPELINE, ///< 人工命令、底盘和电机的组合时限。
 } InitDiagnosticResource_e;
 
 /** @brief 看门狗模块失败时区分启动与正常运行窗口。 */

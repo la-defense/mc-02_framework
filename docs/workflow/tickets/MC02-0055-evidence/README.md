@@ -40,3 +40,10 @@
 - 生产任务入口与时钟替身联测覆盖等待失败、读取完成时间失败、整拍跳过和完成超期。跳拍用例验证未启动本轮工作，各用例均核对撤销先于上报。新增四项与既有裸板、底盘和电机任务用例合计 14 项通过 ASan／UBSan。
 - Cortex-M7 Debug 的隔离 `commissioning/chassis` 通过构建与 ELF／源码隔离检查。FLASH 为 307324 B，比同配置基线多 48 B。主 RAM 仍为 126160 B。实际调度抖动、停止时延和轮组响应留待现场测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过，WSL Debug／Release 各通过 838 项。普通裸板与遥控诊断的 Flash 和主 RAM 用量与基线一致。六种生产预设仍因核心配置未确认而按预期拒绝。
+
+## 受限底盘命令到软件 CAN 发送的组合时限
+
+- 启动检查累计合法输入可读取之后的各段名义等待和预算。最短人工来源期限约束整条路径，底盘话题期限单独约束发布后的时间。组合超限记录 `INIT_RESOURCE_TASK_CHASSIS_PIPELINE`。
+- 主机检查恰好达到期限、超出 1 μs、键鼠期限不足、话题期限、协议期限、缺失预算和大整数累加。相关人工命令、底盘及电机的 11 项通过 ASan／UBSan。
+- 隔离 `commissioning/chassis` 通过 Cortex-M7 Debug 构建、ELF 与源码检查。反汇编确认组合检查发生在反馈绑定前。FLASH 为 308124 B，较同配置基线增加 384 B，主 RAM 仍为 126160 B。到达软件发送服务的名义时限只用于筛除不合适的配置，实际接收排队、调度抖动、CAN 仲裁和物理停车仍待现场验证。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug／Release 各通过 839 项，普通禁热及遥控诊断通过构建和 ELF 隔离检查，两种固件的 Flash 和主 RAM 用量与上次一致。六种生产预设仍按预期拒绝。

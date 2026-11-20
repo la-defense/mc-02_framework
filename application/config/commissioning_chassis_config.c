@@ -3,6 +3,7 @@
  */
 #include "config.h"
 #include "std_cmd_remote.h"
+#include "topics/robot_topics.h"
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
@@ -36,4 +37,26 @@ uint8_t RobotCommissioningChassisInputFitsPeriod(const RobotManualInputConfig_s 
         period_ms <= map->keyboard_map.max_age_ms && // 键鼠来源也受自身映射期限限制。
         period_ms <= REMOTE_RADIO_LEASE_MS && // 两种模式都需要无线在线。
         period_ms <= REMOTE_PC_LEASE_MS); // 键鼠还需独立的 PC 来源在线。
+}
+
+uint8_t RobotCommissioningChassisTimingFits(const RobotManualInputConfig_s *input,
+    const PlatformPeriodicConfig_t *command, const PlatformPeriodicConfig_t *chassis,
+    const MotorTaskPeriods_t *motor, const PlatformPeriodicConfig_t *dispatch)
+{
+    if (input == NULL || input->map == NULL || command == NULL || chassis == NULL ||
+        motor == NULL || dispatch == NULL || command->budget_us == 0u || chassis->budget_us == 0u ||
+        dispatch->budget_us == 0u || command->budget_us > command->period_us ||
+        chassis->budget_us > chassis->period_us || dispatch->budget_us > dispatch->period_us ||
+        motor->compute_us == 0u || motor->transmit_us == 0u)
+        return 0u; // 缺少任一拍点或预算时不能估算整条路径。
+
+    const uint64_t after_publish_us = (uint64_t)chassis->period_us + chassis->budget_us + // 等待底盘任务并提交轮速参考。
+        motor->compute_us + motor->transmit_us + dispatch->budget_us; // 等待两个电机阶段，再给最终发送轮次留执行预算。
+    const uint64_t from_input_us = (uint64_t)command->period_us + command->budget_us + after_publish_us; // 从合法输入可读取时算起，逐段相加避免溢出。
+    const StdCmdRemoteMap_t *map = input->map; // 人工摇杆和键鼠各有配置期限。
+    return (uint8_t)(after_publish_us <= (uint64_t)ROBOT_CHASSIS_COMMAND_MAX_AGE_MS * 1000u && // 话题期限从发布起算。
+        from_input_us <= (uint64_t)map->remote_map.max_age_ms * 1000u && // 摇杆使用车型期限。
+        from_input_us <= (uint64_t)map->keyboard_map.max_age_ms * 1000u && // 键鼠也必须能走完这条路径。
+        from_input_us <= (uint64_t)REMOTE_RADIO_LEASE_MS * 1000u && // 两种来源都受无线帧期限限制。
+        from_input_us <= (uint64_t)REMOTE_PC_LEASE_MS * 1000u); // 键鼠同时依赖 PC 帧的原始期限。
 }

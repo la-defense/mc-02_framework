@@ -152,6 +152,41 @@ static void CheckPublisherTiming(const RobotManualInputConfig_s *valid_input)
     TEST_CHECK(!RobotCommissioningChassisInputFitsPeriod(&input, radio_period_us + 1u)); // 配置不能延长无线期限。
 }
 
+// 使用主机时间参数验证各段都合法但合计太长的情况。
+static void CheckChassisPipelineTiming(const RobotManualInputConfig_s *valid_input)
+{
+    StdCmdRemoteMap_t map = *valid_input->map; // 独立调整摇杆和键鼠期限。
+    RobotManualInputConfig_s input = *valid_input;
+    input.map = &map;
+    PlatformPeriodicConfig_t command = {.period_us = 5000u, .budget_us = 5000u}; // 发布任务每 5 ms 执行，预算同周期。
+    PlatformPeriodicConfig_t chassis = {.period_us = 1000u, .budget_us = 1000u}; // 测试用底盘拍点和预算各 1 ms。
+    const MotorTaskPeriods_t motor = {.compute_us = 1000u, .transmit_us = 1000u}; // 计算和发送名义等待各 1 ms。
+    const PlatformPeriodicConfig_t dispatch = {.period_us = 1000u, .budget_us = 1000u}; // 发送轮次另留 1 ms 处理。
+    map.remote_map.max_age_ms = 15u; // 五个阶段的名义合计恰好 15 ms。
+    map.keyboard_map.max_age_ms = 15u;
+    TEST_CHECK(RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
+    ++chassis.period_us;
+    TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch)); // 多 1 μs 也不能向下舍入。
+    --chassis.period_us;
+    map.keyboard_map.max_age_ms = 14u; // 旧单任务检查可以通过，但键鼠不能满足整条路径。
+    TEST_CHECK(RobotCommissioningChassisInputFitsPeriod(&input, command.period_us));
+    TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
+    map.keyboard_map.max_age_ms = map.remote_map.max_age_ms = 150u; // 放宽车型期限，分别验证话题和协议上限。
+    chassis.period_us = 46000u;
+    TEST_CHECK(RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch)); // 发布后恰好 50 ms。
+    ++chassis.period_us;
+    TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
+    --chassis.period_us;
+    command = (PlatformPeriodicConfig_t){.period_us = 25000u, .budget_us = 25000u}; // 输入可读取后合计恰好达到无线期限。
+    TEST_CHECK(RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
+    ++command.period_us;
+    TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
+    chassis.period_us = UINT32_MAX; // 用宽整数保留真实大小，不能绕回合法时限。
+    TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
+    chassis = (PlatformPeriodicConfig_t){.period_us = 1000u}; // 缺少执行预算，不能判断组合时限。
+    TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
+}
+
 int main(int argc, char **argv)
 {
     time_offset = argc == 2 && strcmp(argv[1], "wrap") == 0 ? UINT32_MAX - 1015u : 0u; // 让同一速度段跨过零。
@@ -208,6 +243,7 @@ int main(int argc, char **argv)
     input.commissioning_angular_accel_rad_s2 = 3.0f;
     CheckVehicleSelection(&input);
     CheckPublisherTiming(&input);
+    CheckChassisPipelineTiming(&input);
     TEST_CHECK(CommissioningChassisCmdInit(&input));
 
     radio.remote_online = 1u;
