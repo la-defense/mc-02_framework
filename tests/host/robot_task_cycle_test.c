@@ -11,7 +11,7 @@
 #include "robot_monitor_plan.h"
 #include "config/vehicle_selection.h"
 #endif
-#if MC02_TASK_MOTOR_SPLIT
+#if MC02_TASK_MOTOR_SPLIT || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 #include "robot_safety.h"
 #endif
 #include <setjmp.h>
@@ -23,9 +23,15 @@ static uint32_t expected_period_ms;
 static unsigned release_delays, initializations, waits, begins, work, finishes, completes, idle_reports, fault_delays;
 static unsigned fairness_delays;
 static uint8_t finish_error; // 注入实际工作以后才发生的计数错误。
-#if MC02_TASK_CHASSIS
+#if MC02_TASK_CHASSIS || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 static unsigned stops, timing_faults;
 static TaskMonitor_FaultReason_e expected_fault = TASK_MONITOR_FAULT_PERIOD_CLOCK;
+#endif
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+static uint8_t skipped_release; // 注入等待成功但漏过了上一拍的结果。
+static uint8_t deadline_error; // 注入工作完成时已经越过下一计划拍。
+#endif
+#if MC02_TASK_CHASSIS
 static RobotChassisTaskConfig_t chassis = {
     .timing = {.period_us = 4000u, .budget_us = 4000u}, // 主机试验依赖的控制拍点，单位 μs。
     .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 整毫秒场景固定使用 RTOS。
@@ -80,6 +86,14 @@ void RobotSafetyRequestDisable(void)
 }
 #endif
 
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+void RobotSafetyRequestDisable(void)
+{
+    TEST_CHECK(expected_monitor == TASK_MONITOR_ROBOT && work == 1u && timing_faults == 0u);
+    ++stops; // 人工许可必须在监控故障报告前撤销。
+}
+#endif
+
 uint8_t TaskMonitorRuntimeReleased(void)
 {
     return (uint8_t)(release_delays != 0u); // 初次让出处理器后才由协调者放行。
@@ -102,7 +116,7 @@ void PlatformTaskDelayMs(uint32_t milliseconds)
     // 发生错误后，仅可让出处理器。完成检查失败时不会报告已完成的工作。
     TEST_CHECK(milliseconds == expected_period_ms);
     TEST_CHECK(waits == (finish_error ? 2u : 3u) && completes == (finish_error ? 0u : 1u));
-#if MC02_TASK_CHASSIS
+#if MC02_TASK_CHASSIS || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     TEST_CHECK(stops == 1u && timing_faults == 1u); // 先清理和报告故障，再进入停等。
 #endif
     if (++fault_delays == 2u) longjmp(task_exit, 1); // 验证错误连续保持两轮后退出常驻循环。
@@ -124,6 +138,13 @@ PlatformPeriodicResult_t PlatformTaskPeriodicFinish(const PlatformPeriodicClock_
     TEST_CHECK(work == 1u && waits == 2u && begins == 2u && finishes == 0u);
     TEST_CHECK(release->scheduled_tick == 0u && release->observed_tick == 0u);
     ++finishes;
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    if (deadline_error)
+    {
+        *timing = (PlatformPeriodicTiming_t){.work_ticks = clock->period_ticks, .missed_deadline = 1u}; // 迟到使本拍错过截止点。
+        return PLATFORM_PERIODIC_READY; // 时钟正常，任务自己报告已确认的超期。
+    }
+#endif
     if (finish_error) return PLATFORM_PERIODIC_CLOCK; // 事件已运行，但时钟失效使完成时刻不可信。
     *timing = (PlatformPeriodicTiming_t){.work_ticks = clock->period_ticks}; // 恰好到下一拍。
     return PLATFORM_PERIODIC_READY;
@@ -133,7 +154,15 @@ PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock
     PlatformPeriodicRelease_t *release)
 {
     TEST_CHECK(clock != NULL && release != NULL && initializations == 1u && waits < 3u);
-    if (++waits == 3u) return PLATFORM_PERIODIC_CLOCK; // 模拟唤醒失败；之后不得再调用此接口。
+    ++waits;
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    if (waits == 3u && skipped_release)
+    {
+        *release = (PlatformPeriodicRelease_t){.skipped = 1u}; // 最近拍已就绪，但上一拍未执行。
+        return PLATFORM_PERIODIC_READY; // 在任务领取监控许可之前发现漏拍。
+    }
+#endif
+    if (waits == 3u) return PLATFORM_PERIODIC_CLOCK; // 模拟唤醒失败；之后不得再调用此接口。
     *release = (PlatformPeriodicRelease_t){0};
     return PLATFORM_PERIODIC_READY;
 }
@@ -188,6 +217,10 @@ TaskMonitor_Result_e TaskMonitorReportTimingFailure(TaskMonitor_Id_e id, TaskMon
 #if MC02_TASK_CHASSIS
     TEST_CHECK(id == expected_monitor && reason == expected_fault && timing_faults == 0u);
     TEST_CHECK(stops == 1u && tim5_owner == NULL); // 核心关断入口之前已撤销输出并释放比较通道。
+    ++timing_faults;
+#elif defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    TEST_CHECK(id == TASK_MONITOR_ROBOT && reason == expected_fault && timing_faults == 0u);
+    TEST_CHECK(stops == 1u && begins == 2u && work == 1u); // 已撤销许可，漏掉的拍没有触发工作。
     ++timing_faults;
 #else
     (void)id;
@@ -263,8 +296,16 @@ int main(int argc, char **argv)
         {"robot", StartROBOTTASK, TASK_MONITOR_ROBOT, 5u}, // 整车诊断。
 #endif
     };
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    skipped_release = (uint8_t)(argc == 3 && strcmp(argv[2], "skip-release") == 0);
+    deadline_error = (uint8_t)(argc == 3 && strcmp(argv[2], "deadline-error") == 0);
+    TEST_CHECK(argc == 2 || (argc == 3 && (skipped_release || deadline_error || strcmp(argv[2], "finish-error") == 0)));
+    finish_error = (uint8_t)(argc == 3 && !skipped_release); // 跳拍在第一轮成功完成后注入。
+    if (skipped_release || deadline_error) expected_fault = TASK_MONITOR_FAULT_PERIOD_DEADLINE;
+#else
     TEST_CHECK(argc == 2 || (argc == 3 && (strcmp(argv[2], "finish-error") == 0 || strcmp(argv[2], "budget-error") == 0)));
     finish_error = (uint8_t)(argc == 3);
+#endif
     for (size_t i = 0u; i < sizeof(tasks) / sizeof(tasks[0]); ++i)
     {
         if (strcmp(tasks[i].name, argv[1]) != 0) continue;

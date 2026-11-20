@@ -33,3 +33,10 @@
 - 12 项 ASan／UBSan 专项通过。底盘和电机入口联测校验清理先于上报；生产监控替身用例在毫秒期限尚未到达时验证直接关断、首次原因保留、完成次数不增加，以及已锁存时停止喂狗。也覆盖放行前和中断内的错误调用。
 - 隔离的 `commissioning/chassis` 通过 ARM 构建与 ELF、源码隔离检查。反汇编确认 TIM5 通道释放位于故障报告之前，核心故障成功锁存后不再调用 RTOS 延时。FLASH 为 306524 B，较上次同配置增加 224 B，主 RAM 仍为 125904 B。无硬件连接，电调收到最后一帧的时刻和实际停止时延留待现场测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过，WSL Debug／Release 各通过 833 项。普通禁热和遥控诊断固件通过构建及隔离检查，FLASH 分别为 257664 B 和 261208 B，均增加 208 B。六个生产预设仍按未确认的核心配置拒绝。
+
+## 受限底盘人工命令的计时故障
+
+- `StartROBOTTASK` 在受限底盘配置中使用原有 RTOS 拍点。等待失败或漏过整拍时先撤销人工运行许可，随后上报核心故障。本轮已经运行、完成时才确认时钟失败或超期时，同样先撤销许可，并停止提交完成进度。
+- 生产任务入口与时钟替身联测覆盖等待失败、读取完成时间失败、整拍跳过和完成超期。跳拍用例验证未启动本轮工作，各用例均核对撤销先于上报。新增四项与既有裸板、底盘和电机任务用例合计 14 项通过 ASan／UBSan。
+- Cortex-M7 Debug 的隔离 `commissioning/chassis` 通过构建与 ELF／源码隔离检查。FLASH 为 307324 B，比同配置基线多 48 B。主 RAM 仍为 126160 B。实际调度抖动、停止时延和轮组响应留待现场测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过，WSL Debug／Release 各通过 838 项。普通裸板与遥控诊断的 Flash 和主 RAM 用量与基线一致。六种生产预设仍因核心配置未确认而按预期拒绝。

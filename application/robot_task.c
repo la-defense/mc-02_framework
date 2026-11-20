@@ -30,7 +30,7 @@
 #include "task_monitor.h"
 #include "bsp_crash.h"
 #include "init_diagnostic.h"
-#if MC02_TASK_MOTOR_SPLIT
+#if MC02_TASK_MOTOR_SPLIT || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 #include "robot_safety.h"
 #endif
 
@@ -72,7 +72,7 @@ static void StopTaskClock(RobotTaskCycle_t *cycle, TaskMonitor_FaultReason_e rea
     cycle->ready = 0u; // 后续轮次不会重新领取拍点。
     if (cycle->clock_fault != NULL && reason != TASK_MONITOR_FAULT_NONE &&
         TaskMonitorReportTimingFailure(cycle->monitor, reason) == TASK_MONITOR_RESULT_OK)
-        for (;;) {} // 底盘和电机均为核心任务；关断已屏蔽中断，只等待看门狗复位。
+        for (;;) {} // 这些控制任务都是核心任务；关断已屏蔽中断，只等待看门狗复位。
 }
 
 // 依赖启动协调者先发布监控配置并放行，再建立任务自己的拍点。
@@ -133,7 +133,11 @@ static uint8_t BeginTaskCycle(RobotTaskCycle_t *cycle)
             const PlatformPeriodicResult_t status = PlatformTaskPeriodicWait(&cycle->clock, &cycle->release);
 #endif
             if (status != PLATFORM_PERIODIC_READY)
-                StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 等待失败先撤销轮组参考。
+                StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 等待失败先执行当前任务的关断处理。
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+            else if (cycle->monitor == TASK_MONITOR_ROBOT && cycle->release.skipped != 0u)
+                StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_DEADLINE); // 人工命令任务漏过整拍，禁止发布本轮目标。
+#endif
         }
         if (!cycle->ready)
         {
@@ -165,11 +169,15 @@ static void CompleteTaskCycle(RobotTaskCycle_t *cycle)
             StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 无法证明完成时刻时不报告进度。
             return;
         }
-        if (cycle->monitor == TASK_MONITOR_CHASSIS && (timing.over_budget || timing.missed_deadline))
+        uint8_t enforce_deadline = (uint8_t)(cycle->monitor == TASK_MONITOR_CHASSIS); // 底盘原有的硬时限。
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+        enforce_deadline |= (uint8_t)(cycle->monitor == TASK_MONITOR_ROBOT); // 受限调试的整车任务发布人工底盘命令。
+#endif
+        if (enforce_deadline && (timing.over_budget || timing.missed_deadline))
         {
             const TaskMonitor_FaultReason_e reason = timing.over_budget
                 ? TASK_MONITOR_FAULT_WORK_DEADLINE : TASK_MONITOR_FAULT_PERIOD_DEADLINE; // 区分计算超时和拍点错过。
-            StopTaskClock(cycle, reason); // 撤销轮组参考，并立即记录已经确认的超期。
+            StopTaskClock(cycle, reason); // 先撤销控制，再立即记录已确认的超期。
             return;
         }
         const uint32_t start_lag = cycle->release.observed_tick - cycle->release.scheduled_tick; // 开始前已过的刻度。
@@ -362,7 +370,13 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
         PlatformTaskDelayMs(1u); // 自测本身也要等待统一放行。
     RunTim5Probe(); // 执行一次有限的硬件时序检查，随后恢复普通裸板诊断。
 #endif
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    RobotTaskCycle_t cycle;
+    OpenConfiguredTaskCycle(&cycle, RobotGetTaskPeriod(ROBOT_PERIODIC_DIAGNOSTIC), TASK_MONITOR_ROBOT, 1u,
+                            PLATFORM_PERIODIC_SOURCE_RTOS, RobotSafetyRequestDisable); // 计时故障立即撤销人工运行许可。
+#else
     RobotTaskCycle_t cycle = OpenTaskCycle(ROBOT_PERIODIC_DIAGNOSTIC, TASK_MONITOR_ROBOT);
+#endif
     for (;;)
     {
         if (!BeginTaskCycle(&cycle)) continue; // 放行、拍点与监控许可全部通过才执行。

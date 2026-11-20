@@ -170,26 +170,37 @@ foreach(scenario core transitive aux disabled missing cycle timing)
   add_test(NAME production_robot_monitor_plan_${scenario} COMMAND robot_monitor_plan_test ${scenario})
   set_tests_properties(production_robot_monitor_plan_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
-# 用实际常驻入口运行一拍，检查未放行、监控拒绝和唤醒故障都不能执行。
-add_executable(robot_task_cycle_test robot_task_cycle_test.c ../../application/robot_task.c
-  ../../application/robot_monitor_plan.c)
-target_include_directories(robot_task_cycle_test PRIVATE task_creation_fakes . ../../application
-  ../../modules/task_monitor ../../modules/imu ../../modules/motor ../../modules/daemon
-  ../../bsp/os ../../bsp/log ../../bsp/dwt ../../bsp/crash)
-target_compile_definitions(robot_task_cycle_test PRIVATE
-  MC02_CONFIG_GENERATED=1 # 复用主机车型配置替身。
-  MC02_PROFILE_BENCH_SAFE=1 # 执行固定周期分支。
-  MC02_FEATURE_UI=0 # 只运行四个纳入预检的任务。
-  DISABLE_LOG_SYSTEM=1) # 主机只检查任务工作和进度。
-target_compile_options(robot_task_cycle_test PRIVATE -Wall -Wextra -Werror
-  -ffunction-sections -fdata-sections)
-target_link_options(robot_task_cycle_test PRIVATE -Wl,--gc-sections)
+# 用实际常驻入口检查放行、监控拒绝和计时故障；分别编译裸板与受限人工命令。
+foreach(target IN ITEMS robot_task_cycle_test commissioning_command_cycle_test)
+  add_executable(${target} robot_task_cycle_test.c ../../application/robot_task.c
+    ../../application/robot_monitor_plan.c)
+  target_include_directories(${target} PRIVATE task_creation_fakes . ../../application
+    ../../modules/task_monitor ../../modules/imu ../../modules/motor ../../modules/daemon
+    ../../bsp/os ../../bsp/log ../../bsp/dwt ../../bsp/crash)
+  target_compile_definitions(${target} PRIVATE
+    MC02_CONFIG_GENERATED=1 # 复用主机车型配置替身。
+    MC02_FEATURE_UI=0 # 不编译本组无需执行的裁判界面。
+    DISABLE_LOG_SYSTEM=1) # 主机只检查任务工作、进度和关断顺序。
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Werror -ffunction-sections -fdata-sections)
+  target_link_options(${target} PRIVATE -Wl,--gc-sections)
+endforeach()
+target_compile_definitions(robot_task_cycle_test PRIVATE MC02_PROFILE_BENCH_SAFE=1) # 裸板诊断沿用普通固定周期。
+target_compile_definitions(commissioning_command_cycle_test PRIVATE
+  MC02_PROFILE_COMMISSIONING=1 # 受限调试共用常驻周期配置。
+  MC02_PROFILE_COMMISSIONING_CHASSIS=1) # 人工命令的跳拍和超期立即撤销许可。
+target_include_directories(commissioning_command_cycle_test PRIVATE ../../modules/safety) # 替身实现公开失能接口。
 foreach(task IN ITEMS ins comm daemon robot)
   add_test(NAME production_robot_task_cycle_${task} COMMAND robot_task_cycle_test ${task})
   set_tests_properties(production_robot_task_cycle_${task} PROPERTIES TIMEOUT 10)
 endforeach()
 add_test(NAME production_robot_task_cycle_finish_error COMMAND robot_task_cycle_test daemon finish-error)
 set_tests_properties(production_robot_task_cycle_finish_error PROPERTIES TIMEOUT 10)
+add_test(NAME production_commissioning_command_wait_error COMMAND commissioning_command_cycle_test robot)
+foreach(failure IN ITEMS finish-error skip-release deadline-error)
+  add_test(NAME production_commissioning_command_${failure} COMMAND commissioning_command_cycle_test robot ${failure})
+endforeach()
+set_tests_properties(production_commissioning_command_wait_error production_commissioning_command_finish-error
+  production_commissioning_command_skip-release production_commissioning_command_deadline-error PROPERTIES TIMEOUT 10)
 # 在主机替身上编译正式底盘分支，分别检查监控、创建和实际任务入口。
 add_executable(robot_chassis_monitor_test robot_monitor_plan_test.c ../../application/robot_monitor_plan.c
   ../../application/config/module_plan.c ../../bsp/os/platform_periodic.c)
