@@ -69,3 +69,9 @@ DJI 内部反馈期限补充：使用真实电机控制代码和测试 CAN 输�
 - WSL Debug 相关场景通过 7 项，ASan／UBSan 通过 8 项。Cortex-M7 使用同一组 Debug 编译选项单独编译基线和当前驱动。单板对象的 text、bss 分别增加 102 B 和 144 B，电机实例的 `sizeof` 仍为 864 B。单板 `DJIMotorControl` 静态栈帧由 608 B 增至 768 B，发送前回调仍为 48 B。底盘板对象的 text、bss 及两个控制相关函数的静态栈帧没有变化。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug` 通过。WSL Debug 和 Release 各通过 827 项。普通禁热与遥控诊断固件均通过 Debug 构建和链接隔离检查，FLASH 分别为 257356 B 和 260900 B。这两种配置均未链接本次修改的 DJI 驱动。六种生产构建仍因核心配置未确认而拒绝。
 - 检查覆盖仍在软件队列里的帧。已经交给硬件的帧及板上调用链栈峰值仍待现场验证。
+
+## 单轮反馈失效时撤销整组底盘许可
+
+- 使用生产 DJI 驱动、反馈采集和安全管理，把四轮分到 `0x1ff`、`0x200` 两组。`0x1ff` 组一个轮位短暂失效，随后在反馈汇总前恢复。修复前安全代次未推进。修复后，驱动发现失效立即撤销底盘许可，仍在软件队列里的 `0x200` 旧目标发送前清零。汇总重新确认完整轮组后，输入和目标都要更新才能恢复输出。
+- 相关 18 项通过 ASan／UBSan。隔离 `commissioning/chassis` 通过 Cortex-M7 Debug 构建与 ELF／源码检查，反汇编确认轮位断流处理已调用安全撤销入口。FLASH 为 307436 B，较同配置基线增加 112 B。主 RAM 仍为 126160 B。未连接硬件，旧帧验证范围限于软件队列。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过，WSL Debug／Release 各通过 839 项。普通禁热和遥控诊断通过 ARM 构建及 ELF 检查，FLASH 分别为 257680 B 和 261224 B，均增加 16 B，主 RAM 用量持平。六种生产预设仍按预期拒绝。

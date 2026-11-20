@@ -42,10 +42,23 @@ static uint8_t control_vehicle_feedback; // 绑定后只有整车采集者可以
 static RobotControlPolicy_t control_policy;
 static RobotSafetyControlInputs_t control_inputs;
 
-// 调用前已进入安全状态临界区；超期后保留各功能的恢复屏障。
+// 调用前已进入安全状态临界区；无论由驱动发现还是到期，都记录同一类反馈失效。
+static void ControlRevokeFeedbackLocked(uint32_t functions, uint32_t now_ms)
+{
+    const uint32_t lost = functions & control_inputs.feedback_valid_functions &
+        control_policy.enabled_functions & ~control_inputs.blocked_functions; // 只记录原先反馈有效且未被单独禁止的功能。
+    control_inputs.feedback_valid_functions &= ~functions; // 清除有效位后，查询不会继续使用旧反馈。
+    if (lost == 0u) return; // 重复报告不推进代次，也不延长等待。
+    control_local_wait |= lost; // 反馈恢复后仍需该功能的新控制输入。
+    for (unsigned i = 0u; i < 3u; ++i)
+        if (lost & (1u << i)) control_local_barrier[i] = now_ms; // 各功能保存实际发现失效的时刻。
+    control_generation++; // 所有等待发送的旧代次目标都失效。
+}
+
+// 查询时也检查期限，覆盖驱动没有收到任何新数据的情况。
 static void ControlExpireFeedbackLocked(uint32_t now_ms)
 {
-    uint32_t lost = 0u; // 记录本轮因过期而新丢失的功能。
+    uint32_t expired = 0u; // 收集所有已过期的功能，统一撤销一次。
     for (unsigned i = 0u; i < 3u; ++i)
     {
         const uint32_t bit = 1u << i; // 每组反馈对应一个功能位。
@@ -53,15 +66,9 @@ static void ControlExpireFeedbackLocked(uint32_t now_ms)
         const RobotControlLease_t *lease = &control_inputs.feedback[i]; // 检查对应机构自己的期限。
         if (lease->valid && lease->max_age_ms > 0u && lease->max_age_ms <= INT32_MAX &&
             (uint32_t)(now_ms - lease->source_time_ms) <= lease->max_age_ms) continue; // 恰好达到期限仍有效。
-        control_inputs.feedback_valid_functions &= ~bit; // 撤销已过期的反馈，避免后续查询继续使用。
-        if ((control_policy.enabled_functions & bit) && !(control_inputs.blocked_functions & bit))
-            lost |= bit; // 仅对之前可用的功能记录新的禁止边沿。
+        expired |= bit; // 过期或非法的反馈不能保留有效位。
     }
-    if (lost == 0u) return; // 没有新失效时不改变代际或接管时间。
-    control_local_wait |= lost; // 这些功能恢复后需要各自的新来源。
-    for (unsigned i = 0u; i < 3u; ++i)
-        if (lost & (1u << i)) control_local_barrier[i] = now_ms; // 保存实际发现过期的时刻。
-    control_generation++; // 已排队目标必须因反馈过期而失效。
+    if (expired) ControlRevokeFeedbackLocked(expired, now_ms); // 保留实际发现过期的时刻。
 }
 
 // 同一原始时间不能通过加长期限续期；时间回绕时只接受半区间内向前的样本。
@@ -323,6 +330,14 @@ uint8_t RobotSafetyPublishVehicleFeedback(uint32_t valid_functions, const RobotC
     }
     RobotSafetyExitCritical(previous); // 发布结束后恢复进入前的屏蔽状态。
     return accepted;
+}
+
+void RobotSafetyRevokeVehicleFeedback(uint32_t functions)
+{
+    const uint32_t previous = RobotSafetyEnterCritical(); // 禁止插入新的汇总或发送许可查询。
+    if (control_configured && control_vehicle_feedback && (functions & ~ROBOT_CONTROL_ALL) == 0u)
+        ControlRevokeFeedbackLocked(functions, PlatformTimeNowMs()); // 驱动只能撤销，恢复仍由整车采集入口提交。
+    RobotSafetyExitCritical(previous); // 在已有保护内调用时保留原中断状态。
 }
 
 uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs)

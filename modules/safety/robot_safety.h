@@ -87,6 +87,11 @@ uint8_t RobotSafetyBindVehicleFeedback(void);
  * @return 1 为接受；0 为未配置或者数据错误。数据错误时撤销旧反馈。
  */
 uint8_t RobotSafetyPublishVehicleFeedback(uint32_t valid_functions, const RobotControlLease_t feedback[3]);
+/** @brief 驱动发现必需反馈失效时立即撤销对应功能的反馈许可。
+ * @param[in] functions 已确认失效的功能位，可用 0 表示无失效项。
+ * @note 仅在已配置并绑定整车反馈时生效，重复报告不改变恢复时刻。任务调用可嵌套中断保护。
+ */
+void RobotSafetyRevokeVehicleFeedback(uint32_t functions);
 /** @brief 同时读取分功能许可；当前来源过期或立即禁止会在查询时再次撤销。
  * @param[in] now_ms 本机毫秒时刻。
  * @param[out] output 非空，仅返回1时整份改写；未进入READY时返回成功的全零许可。

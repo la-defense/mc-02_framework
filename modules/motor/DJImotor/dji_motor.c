@@ -260,11 +260,21 @@ static void UpdateFeedbackFilter(DJIMotorInstance *motor, uint8_t is_speed, floa
     *status = DJI_FILTER_STATUS_VALID;
 }
 
+// 调用方已保护电机反馈数据；底盘轮位共用整组许可。
+static void RecordFeedbackGap(DJIMotorInstance *motor)
+{
+    ++motor->feedback_gap_generation; // 发送前复核和反馈汇总都能识别已恢复的短断流。
+#if defined(ONE_BOARD)
+    if (motor->output_role == MOTOR_OUTPUT_CHASSIS)
+        RobotSafetyRevokeVehicleFeedback(ROBOT_CONTROL_CHASSIS); // 单轮失效立即撤销整组，覆盖其他 CAN 分组的旧帧。
+#endif
+}
+
 static void InvalidateFeedbackForMissingSample(DJIMotorInstance *motor)
 {
     PlatformTaskCriticalEnter(); // 使读取者一次看到失效标记和对应的间断代次。
     if (motor->speed_filter_valid || motor->current_filter_valid || motor->output_position_trusted)
-        ++motor->feedback_gap_generation; // 主动判定缺样时也留下间断记录，重复失效不重复计数。
+        RecordFeedbackGap(motor); // 主动判定缺样也留下间断记录，重复失效不重复计数。
     motor->output_position_trusted = 0u;
     if (motor->speed_filter_valid)
     {
@@ -447,7 +457,7 @@ static void DecodeDJIMotor(void *context, const PlatformCanRxFrame_t *frame)
 
     if ((!first_feedback && elapsed_ms > DJI_FEEDBACK_MAX_AGE_MS) ||
         !motor->speed_filter_valid || !motor->current_filter_valid)
-        ++motor->feedback_gap_generation; // 检查周期之间曾断流或质量失效也须重新计时。
+        RecordFeedbackGap(motor); // 检查周期之间曾断流或质量失效也须重新计时。
     motor->feedback_dt_s = dt_s;
     motor->last_feedback_cycles = frame->received_ticks;
     motor->last_feedback_timestamp_ms = frame->received_ms;

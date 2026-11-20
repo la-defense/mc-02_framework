@@ -45,6 +45,7 @@ unsigned motor_safety_test_critical_depth;
 #if defined(ONE_BOARD)
 static CAN_TxPeriodicPrepareFn_t deferred_prepare; // 模拟目标已排队但尚未交给硬件。
 static const void *deferred_source; // 保存与排队目标关联的发送来源。
+static uint32_t deferred_identifier; // 区分最后保留的帧属于哪个 CAN 组。
 static uint8_t deferred_payload[8]; // 测试副本，延后执行发送前检查。
 static uint8_t reject_periodic; // 模拟队列拒绝替换旧目标。
 static PlatformCanFaultObserver_t recovery_fault_observer; // 保存测试使用的总线故障回调。
@@ -126,6 +127,7 @@ CAN_TxSubmitStatus_t CANSubmitPeriodicPrepared(FDCAN_HandleTypeDef *hcan, const 
 #if defined(ONE_BOARD)
     deferred_prepare = prepare; // 保留真实回调，用于模拟队列等待期间失能。
     deferred_source = source;
+    deferred_identifier = frame->identifier;
     memcpy(deferred_payload, payload, sizeof(deferred_payload));
 #endif
     if (prepare != NULL)
@@ -1028,6 +1030,86 @@ static int single_control_feedback_to_safety(void)
     return EXIT_SUCCESS;
 }
 
+static int single_chassis_gap_revokes_group(void)
+{
+    now_us = 1000u;
+    RobotSafetyInit();
+    RobotSafetySetRcOnline(1u);
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    const uint8_t ids[] = {1u, 2u, 5u, 6u}; // 轮组跨两个 CAN 组，后发送的组不含故障轮位。
+    DJIMotorInstance *wheels[4] = {0}; // 保留四轮实例以注入不同的接收时刻。
+    RobotCanMotorPlan_t plan = {.count = 4u}; // 使用实际分功能采集入口绑定四轮。
+    for (unsigned i = 0u; i < 4u; ++i)
+    {
+        Motor_Init_Config_s config = motor_config(ids[i]); // 所有轮位使用同一种测试电调。
+        config.output_role = MOTOR_OUTPUT_CHASSIS; // 同组许可覆盖四轮。
+        DJI_Motor_Filter_Config_s filter = filter_config(DJI_MOTOR_FILTER_LEGACY_FRAME);
+        if (i == 2u) filter.dt_min_s = 0.004f; // 用 3 ms 间隔让 0x1ff 组中的编号 5 滤波失效。
+        wheels[i] = DJIMotorInitWithFilter(&config, &filter);
+        TEST_CHECK(wheels[i] != NULL);
+        plan.motors[i] = (RobotCanMotorRequirement_t){.bus = PLATFORM_CAN_BUS_1, .role = MOTOR_OUTPUT_CHASSIS,
+            .type = M3508, .id = ids[i]}; // 采集计划与注册电机一一对应。
+    }
+    TEST_CHECK(RobotControlFeedbackStart(&plan));
+    const RobotControlPolicy_t policy = {.enabled_functions = ROBOT_CONTROL_CHASSIS, .configured = 1u,
+        .commissioning = 1u}; // 只给底盘提供人工控制许可。
+    TEST_CHECK(RobotSafetyConfigureControl(&policy));
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate();
+
+    now_us = 2000u;
+    for (unsigned i = 0u; i < 4u; ++i) receive(wheels[i], 960000u, 2u, 0, 0); // 轮组反馈从同一时刻开始有效。
+    TEST_CHECK(RobotControlFeedbackPoll(NULL));
+    RobotSafetyControlInputs_t input = {.mode = ROBOT_CONTROL_MANUAL, .manual = {2u, 100u, 1u}};
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input));
+    RobotSafetyUpdate();
+    now_us = 3000u;
+    input.manual.source_time_ms = 3u; // 新人工输入跨过首次使能起点。
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input));
+    RobotSafetyUpdate();
+    RobotSafetySnapshot_t safety = {0};
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+    const uint32_t previous_generation = safety.control_generation;
+    for (unsigned i = 0u; i < 4u; ++i)
+    {
+        TEST_CHECK(DJIMotorSetChassisRefUntil(wheels[i], 10.0f, previous_generation, 20u)); // 保留同一份尚未过期的人工期限。
+        DJIMotorEnable(wheels[i]);
+    }
+    control_at(3000u); // 先建立 PID 时间基准。
+    control_at(4000u); // 生成非零帧，替身保留最后提交的第二组。
+    TEST_CHECK(deferred_prepare != NULL && deferred_identifier == 0x200u && (deferred_payload[0] || deferred_payload[1]) &&
+        (deferred_payload[2] || deferred_payload[3]));
+
+    now_us = 5000u;
+    receive(wheels[2], 2400000u, 5u, 0, 0); // 第一组单轮失效，尚未再次调用反馈汇总。
+    TEST_CHECK(!wheels[2]->speed_filter_valid);
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety) && safety.control_generation != previous_generation); // 验证驱动立即撤销了整组许可。
+    now_us = 10000u;
+    receive(wheels[2], 4800000u, 10u, 0, 0); // 短故障已恢复，旧反馈汇总尚未到期。
+    TEST_CHECK(wheels[2]->speed_filter_valid);
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK(!(deferred_payload[0] || deferred_payload[1] || deferred_payload[2] || deferred_payload[3])); // 第二组也不能发送旧目标。
+
+    TEST_CHECK(RobotControlFeedbackPoll(NULL)); // 第一次仍报告采集周期之间发生过的断流。
+    now_us = 11000u;
+    TEST_CHECK(RobotControlFeedbackPoll(NULL)); // 复查通过后建立恢复时刻。
+    RobotControlPermits_t permits = {0};
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(11u, &permits) && permits.functions == 0u); // 旧人工输入不能接管。
+    now_us = 12000u;
+    input.manual.source_time_ms = 12u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input));
+    RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(12u, &permits) && permits.functions == ROBOT_CONTROL_CHASSIS); // 新输入恢复对应许可。
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety)); // 使用恢复后的代次提交新的轮速参考。
+    for (unsigned i = 0u; i < 4u; ++i)
+        TEST_CHECK(DJIMotorSetChassisRefUntil(wheels[i], 10.0f, safety.control_generation, 20u));
+    control_at(13000u);
+    TEST_CHECK((sent[0] || sent[1]) && (sent[2] || sent[3])); // 新参考与新许可共同恢复这组轮位。
+    return EXIT_SUCCESS;
+}
+
 static int single_feedback_expired_frame(void)
 {
     now_us = 1000u; RobotSafetyInit(); // 建立允许人工运行的核心条件。
@@ -1500,6 +1582,8 @@ int main(int argc, char **argv)
         return recovery_coordinator_real_motors();
     if (strcmp(argv[1], "control-feedback-safety") == 0)
         return single_control_feedback_to_safety();
+    if (strcmp(argv[1], "single-chassis-gap-revokes-group") == 0)
+        return single_chassis_gap_revokes_group();
     if (strcmp(argv[1], "single-loader-fire-permit") == 0)
         return single_loader_fire_permit();
     if (strcmp(argv[1], "single-queued-feedback-expiry") == 0)
