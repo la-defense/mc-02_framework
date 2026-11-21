@@ -53,6 +53,7 @@ static ChassisVelocityFeedback_t chassis_velocity; // 底盘任务更新，其�
 static uint8_t chassis_velocity_valid; // 时间戳零也可有效，单独记录。
 static ChassisOdometryFeedback_t chassis_odometry; // 与速度在同一临界区交付。
 static uint8_t chassis_odometry_valid;
+static uint32_t chassis_feedback_generations[CHASSIS_WHEEL_COUNT]; // 与发布的估计一同记录各轮是否连续。
 static ChassisVelocityEstimator_t velocity_estimator; // 启动时按车型准备，底盘任务只读。
 typedef struct {
     uint32_t time_ms; // 轮速的原始接收时刻，允许毫秒回绕。
@@ -71,13 +72,17 @@ static uint8_t odometry_integrating; // 收到无效数据后等待下一个新�
 #endif
 
 // 在同一个短临界区交付速度、里程计和各自有效位。
-static void PublishMotionFeedback(const ChassisVelocityFeedback_t *velocity, const ChassisOdometryFeedback_t *odometry)
+static void PublishMotionFeedback(const ChassisVelocityFeedback_t *velocity, const ChassisOdometryFeedback_t *odometry,
+                                  const ChassisWheelObservation_t wheels[CHASSIS_WHEEL_COUNT])
 {
     PlatformTaskCriticalEnter(); // 计算已完成，此处只复制数据。
     chassis_velocity = velocity != NULL ? *velocity : (ChassisVelocityFeedback_t){0}; // 无效时一起清除三个分量。
     chassis_velocity_valid = (uint8_t)(velocity != NULL); // 读者不会误用已清除的值。
     chassis_odometry = odometry != NULL ? *odometry : (ChassisOdometryFeedback_t){0}; // 断流时撤销已发布位姿。
     chassis_odometry_valid = (uint8_t)(odometry != NULL); // 单独标记，关闭里程计不影响速度。
+    if (velocity != NULL)
+        for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i)
+            chassis_feedback_generations[i] = wheels[i].continuity_generation; // 四轮身份随同一次发布复制。
     PlatformTaskCriticalExit(); // 读者现在可取得完整副本。
 }
 
@@ -90,7 +95,7 @@ static void ResetMotionFeedback(void)
     odometry_integrating = 0u; // 下一个可信样本从零开始。
     odometry_restart_pending = 0u; // 新实例没有上一段的重建要求。
 #endif
-    PublishMotionFeedback(NULL, NULL);
+    PublishMotionFeedback(NULL, NULL, NULL);
 }
 
 uint8_t ChassisInitRollbackFailed(void)
@@ -276,36 +281,37 @@ static uint8_t ChassisMotorFeedbackIsHealthy(void)
 }
 #endif
 
+// 调用者已进入临界区，先复核估计的原始期限，再检查四轮有无中断。
+static uint8_t PublishedMotionFeedbackIsCurrent(uint32_t source_ms)
+{
+    const uint32_t now_ms = PlatformTimeNowMs(); // 原始估计与当前轮速使用同一读出时刻。
+    if (now_ms - source_ms > DJI_FEEDBACK_MAX_AGE_MS)
+        return 0u; // 新反馈不能延长已经发布的估计。
+    DJIMotorInstance *const motors[CHASSIS_WHEEL_COUNT] = {motor_lf, motor_rf, motor_lb, motor_rb};
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) // 每轮都必须与估计所用的连续区间一致。
+        if (!DJIMotorSpeedFeedbackIsContinuous(motors[i], chassis_feedback_generations[i], now_ms))
+            return 0u;
+    return 1u;
+}
+
 uint8_t Chassis_GetVelocityFeedback(ChassisVelocityFeedback_t *output)
 {
     if (output == NULL) return 0u;
-    PlatformTaskCriticalEnter(); // 速度、来源时间和有效位来自同一次发布。
-    const ChassisVelocityFeedback_t velocity = chassis_velocity;
-    const uint8_t available = chassis_velocity_valid;
+    PlatformTaskCriticalEnter(); // 检查和复制期间不能切换到底盘任务或轮速派发任务。
+    const uint8_t available = chassis_velocity_valid && PublishedMotionFeedbackIsCurrent(chassis_velocity.source_time_ms);
+    *output = available ? chassis_velocity : (ChassisVelocityFeedback_t){0}; // 已失效的估计整组清零。
     PlatformTaskCriticalExit();
-    if (!available || (uint32_t)(PlatformTimeNowMs() - velocity.source_time_ms) > DJI_FEEDBACK_MAX_AGE_MS)
-    {
-        *output = (ChassisVelocityFeedback_t){0}; // 发布者没有再运行时，读者也不能延用旧值。
-        return 0u;
-    }
-    *output = velocity;
-    return 1u;
+    return available;
 }
 
 uint8_t Chassis_GetOdometry(ChassisOdometryFeedback_t *output)
 {
     if (output == NULL) return 0u;
-    PlatformTaskCriticalEnter(); // 位姿、来源时间和段号必须取自同一份结果。
-    const ChassisOdometryFeedback_t odometry = chassis_odometry;
-    const uint8_t available = chassis_odometry_valid;
+    PlatformTaskCriticalEnter(); // 位姿、段号与间断记录从同一次发布复制。
+    const uint8_t available = chassis_odometry_valid && PublishedMotionFeedbackIsCurrent(chassis_odometry.source_time_ms);
+    *output = available ? chassis_odometry : (ChassisOdometryFeedback_t){0}; // 等底盘处理间断后再交付位姿。
     PlatformTaskCriticalExit();
-    if (!available || (uint32_t)(PlatformTimeNowMs() - odometry.source_time_ms) > DJI_FEEDBACK_MAX_AGE_MS)
-    {
-        *output = (ChassisOdometryFeedback_t){0}; // 底盘任务停更时也按轮速的原期限失效。
-        return 0u;
-    }
-    *output = odometry;
-    return 1u;
+    return available;
 }
 
 // 取四个已经换算到输出轴的轮速；不足四份时整个底盘速度无效。
@@ -650,9 +656,9 @@ void ChassisTask()
     ChassisWheelObservation_t wheels[CHASSIS_WHEEL_COUNT]; // 保留原始时刻，供速度期限和可选里程计使用。
     const ChassisVelocityFeedback_t *feedback = EstimateChassisVelocity(&velocity, wheels) ? &velocity : NULL; // 任一轮失效时撤销速度。
 #if !defined(MC02_CONFIG_GENERATED) || MC02_CHASSIS_IS_OMNI
-    PublishMotionFeedback(feedback, UpdateOdometry(feedback, wheels));
+    PublishMotionFeedback(feedback, UpdateOdometry(feedback, wheels), wheels);
 #else
-    PublishMotionFeedback(feedback, NULL); // 当前麦轮车型只交付速度。
+    PublishMotionFeedback(feedback, NULL, wheels); // 当前麦轮车型只交付速度。
 #endif
 
     // // 获取裁判系统数据   建议将裁判系统与底盘分离，所以此处数据应使用消息中心发送

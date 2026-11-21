@@ -24,7 +24,7 @@ typedef struct {
 
 /** @brief 读取本板最近一次有效的麦轮或四轮全向轮底盘速度估计。
  * @param[out] output 底盘中心速度及最早来源时间；失败时非空输出清零。
- * @return 1 表示四轮估计仍在原有效期内，0 表示缺少估计、配置不支持或已过期。
+ * @return 1 表示仍在原有效期内且四轮反馈连续，0 表示缺少估计或任一来源失效。
  * @note 任务上下文使用；四轮估计以滚动模型为依据，无法单独识别打滑。
  */
 uint8_t Chassis_GetVelocityFeedback(ChassisVelocityFeedback_t *output);
@@ -40,7 +40,7 @@ typedef struct {
  * @param[out] output 位姿、来源时间及段号；失败时非空输出清零。
  * @return 1 表示已启用且轮速来源有效；0 表示关闭、未取得样本或已失效。
  * @note 首批有效反馈的位姿为零。之后四轮都收到新样本且最早时刻前进才积分。
- *       发生断流时不用旧位姿接续；本地位姿会受轮组打滑影响。
+ *       任一轮断流后会立即停止读出旧位姿，恢复后从新段起算。本地位姿会受轮组打滑影响。
  */
 uint8_t Chassis_GetOdometry(ChassisOdometryFeedback_t *output);
 

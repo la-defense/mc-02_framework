@@ -364,6 +364,16 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
                                                      uint32_t now_ms,
                                                      Motor_Feedback_Snapshot_s *snapshot);
 
+/** @brief 检查驱动速度反馈仍有效并且与已取得的样本处于同一连续区间。
+ * @param[in] motor 已登记的实例，NULL 时返回0。
+ * @param[in] generation 先前有效样本的 continuity_generation。
+ * @param[in] now_ms 本机毫秒时刻，允许回绕。
+ * @return 1 表示当前轮速可用且未发生间断，0 表示缺样、失效、过期、离线或间断。
+ * @note 由任务调用。复核间断期间也必须使用先前样本自己的有效期。
+ */
+uint8_t DJIMotorSpeedFeedbackIsContinuous(const DJIMotorInstance *motor,
+                                          uint32_t generation, uint32_t now_ms);
+
 /** @brief 读取仍在有效期内的转子单圈角度与原始接收时刻。
  * @param[in] motor 已登记的 DJI 电机。
  * @param[out] angle_deg 同一帧的转子角度，范围 [0, 360) 度。

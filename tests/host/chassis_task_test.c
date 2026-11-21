@@ -186,6 +186,14 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uin
     if (motor->feedback_age_ms > 20u) return MOTOR_FEEDBACK_STALE;
     return MOTOR_FEEDBACK_OK;
 }
+uint8_t DJIMotorSpeedFeedbackIsContinuous(const DJIMotorInstance *motor,
+                                          uint32_t generation, uint32_t now_ms)
+{
+    return motor != NULL && motor->feedback_online && motor->feedback_speed_valid &&
+        motor->feedback_continuity_generation == generation && // 保留测试注入的短暂间断。
+        motor->feedback_age_ms <= DJI_FEEDBACK_MAX_AGE_MS &&
+        now_ms - motor->feedback_source_time_ms <= DJI_FEEDBACK_MAX_AGE_MS; // 使用轮速的原始时刻核对期限。
+}
 SuperCapInstance *SuperCapInit(const SuperCap_Init_Config_s *config) { (void)config; ++supercap_init_calls; return fail_cap ? NULL : &cap; }
 uint8_t SuperCapRollbackStartup(SuperCapInstance *instance)
 {
@@ -654,9 +662,16 @@ static int TestOmniOdometryBatch(void)
     PublishForwardWheels(test_tick); // 先在当前段积出非零位移。
     ChassisTask();
     CHECK(Chassis_GetOdometry(&pose) == 1u && pose.segment == segment + 2u && pose.pose.x_m > 0.0f);
+    test_tick = 45u;
+    PublishForwardWheel(3u, test_tick); // 同一连续区间的新样本不撤销已发布的估计。
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u && Chassis_GetOdometry(&pose) == 1u);
+    motors[2].feedback_speed_valid = 0u; // 在两次底盘任务之间使一轮反馈失效。
+    ++motors[2].feedback_continuity_generation; // 驱动记录这次间断。
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 0u && velocity.twist.vx_m_s == 0.0f);
+    CHECK(Chassis_GetOdometry(&pose) == 0u && pose.segment == 0u);
     test_tick = 46u;
-    ++motors[2].feedback_continuity_generation; // 单轮在任务未运行时失效又恢复，收到的轮速仍有效。
-    PublishForwardWheel(2u, test_tick);
+    PublishForwardWheel(2u, test_tick); // 同一轮已恢复，底盘尚未重新处理这次间断。
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 0u && Chassis_GetOdometry(&pose) == 0u);
     ChassisTask();
     CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u && Chassis_GetOdometry(&pose) == 0u); // 另外三轮未更新，撤销旧位姿。
     test_tick = 47u;

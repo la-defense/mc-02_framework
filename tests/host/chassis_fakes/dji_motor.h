@@ -78,4 +78,6 @@ void DJIMotorEnable(DJIMotorInstance *motor);
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);
 Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uint32_t now_ms,
                                                      Motor_Feedback_Snapshot_s *snapshot);
+uint8_t DJIMotorSpeedFeedbackIsContinuous(const DJIMotorInstance *motor,
+                                          uint32_t generation, uint32_t now_ms);
 #endif

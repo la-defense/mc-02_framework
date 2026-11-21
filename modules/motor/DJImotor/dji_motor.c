@@ -860,6 +860,20 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(const DJIMotorInstance *moto
     return MOTOR_FEEDBACK_OK;
 }
 
+uint8_t DJIMotorSpeedFeedbackIsContinuous(const DJIMotorInstance *motor,
+                                          uint32_t generation, uint32_t now_ms)
+{
+    if (motor == NULL) return 0u; // 没有登记的电机就没有可复核的轮速。
+    PlatformTaskCriticalEnter(); // 将有效位、时间和间断记录作为一组读取。
+    const uint8_t valid = (uint8_t)(motor->has_feedback_timestamp != 0u &&
+        motor->speed_filter_valid != 0u && // 滤波拒绝当前样本后，旧估计不能再读取。
+        motor->feedback_gap_generation == generation && // 即使新反馈已恢复，旧估计也不能跨越间断。
+        now_ms - motor->last_feedback_timestamp_ms <= DJI_FEEDBACK_MAX_AGE_MS &&
+        DaemonIsOnline(motor->daemon) != 0u); // 设备离线时一并拒绝。
+    PlatformTaskCriticalExit(); // 只查询状态，保持原始读数和滤波状态。
+    return valid;
+}
+
 uint8_t DJIMotorGetSingleTurnAngle(const DJIMotorInstance *motor, float *angle_deg, uint32_t *source_time_ms)
 {
     if (motor == NULL || angle_deg == NULL || source_time_ms == NULL)

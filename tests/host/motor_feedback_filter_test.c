@@ -830,10 +830,12 @@ static int single_queued_feedback_gap(void)
     Motor_Feedback_Snapshot_s snapshot = {0}; // 记录失效前的实际驱动读口。
     TEST_CHECK(DJIMotorGetFeedbackSnapshot(first, HAL_GetTick(), &snapshot) == MOTOR_FEEDBACK_OK && snapshot.speed.valid);
     const uint32_t previous_generation = snapshot.continuity_generation;
+    TEST_CHECK(DJIMotorSpeedFeedbackIsContinuous(first, previous_generation, HAL_GetTick()) == 1u); // 复核刚读取的有效反馈。
 
     now_us = 5000u;
     receive(first, 2400000u, 5u, 0, 0); // 3 ms 间隔小于滤波下限，只有第一台测量失效。
     TEST_CHECK(!first->speed_filter_valid && !first->current_filter_valid);
+    TEST_CHECK(DJIMotorSpeedFeedbackIsContinuous(first, previous_generation, HAL_GetTick()) == 0u); // 单轮失效时读口立即拒绝。
     deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
     TEST_CHECK(!(deferred_payload[0] || deferred_payload[1]) && (deferred_payload[2] || deferred_payload[3]));
 
@@ -843,6 +845,10 @@ static int single_queued_feedback_gap(void)
     TEST_CHECK(DJIMotorGetFeedbackSnapshot(first, HAL_GetTick(), &snapshot) == MOTOR_FEEDBACK_OK &&
         snapshot.speed.valid && snapshot.speed.source_time_ms == 10u &&
         snapshot.continuity_generation != previous_generation); // 新轮速和此前的间断记录一起返回。
+    TEST_CHECK(DJIMotorSpeedFeedbackIsContinuous(first, previous_generation, HAL_GetTick()) == 0u); // 恢复后旧区间仍失效。
+    TEST_CHECK(DJIMotorSpeedFeedbackIsContinuous(first, snapshot.continuity_generation, HAL_GetTick()) == 1u); // 只接受新区间。
+    TEST_CHECK(DJIMotorSpeedFeedbackIsContinuous(first, snapshot.continuity_generation,
+        snapshot.speed.source_time_ms + DJI_FEEDBACK_MAX_AGE_MS + 1u) == 0u); // 在线状态不能让过期轮速继续有效。
     memcpy(deferred_payload, original, sizeof(original)); // 模拟失效期间完全没有发送检查。
     deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
     TEST_CHECK(!(deferred_payload[0] || deferred_payload[1]) && (deferred_payload[2] || deferred_payload[3]));
