@@ -948,7 +948,8 @@ target_compile_options(robot_control_feedback_test PRIVATE -Wall -Wextra -Werror
 add_test(NAME production_control_feedback_by_function COMMAND robot_control_feedback_test)
 
 add_executable(robot_can_recovery_coordinator_test robot_can_recovery_coordinator_test.c
-  ../../application/robot_can_recovery_coordinator.c ../../modules/safety/can_recovery.c) # 验证实际协调逻辑。
+  ../../application/robot_can_recovery_coordinator.c ../../modules/safety/can_recovery.c # 验证实际协调逻辑。
+  ../../modules/message_center/message_center.c) # 由实际话题记录撤销和恢复后的新发布区间。
 target_include_directories(robot_can_recovery_coordinator_test PRIVATE . ../../application ../../application/config
   ../../application/chassis ../../modules ../../modules/motor ../../modules/motor/DJImotor
   ../../modules/algorithm ../../modules/daemon ../../modules/safety ../../modules/alarm ../../modules/referee

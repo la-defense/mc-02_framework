@@ -4,7 +4,9 @@
 #include "robot_can_recovery_coordinator.h"
 #include "robot_can_runtime.h"
 #include "robot_safety.h"
+#include "message_center.h"
 #include "platform_irq.h"
+#include "topics/robot_topics.h"
 #include "test_check.h"
 #include <string.h>
 
@@ -13,8 +15,24 @@ static uint8_t bus_ready = 1u, permit = 1u, final_feedback = 1u, final_remote = 
 static uint8_t final_bus_ready = 1u, formal_mode; // 分别模拟最终总线状态和控制模式。
 static uint32_t final_check_delay; // 模拟最终检查前反馈期限恰好到期。
 static uint32_t irq_state; // 保留调用前的中断状态。
+static uint8_t invalidate_before_final_lock; // 模拟取到应用反馈后、最终保护前的撤销。
+static MessagePublisher_t *application_publisher;
+static MessageSubscriber_t *application_subscriber;
+static uint32_t last_application_publish_ms;
 uint32_t PlatformTimeNowMs(void) { return tick; }
-PlatformIrqState_t PlatformIrqSaveAndDisable(void) { const uint32_t old = irq_state; irq_state = 1u; return old; }
+void PlatformTaskCriticalEnter(void) {} // 用例在同一主机线程控制事件顺序。
+void PlatformTaskCriticalExit(void) {}
+PlatformIrqState_t PlatformIrqSaveAndDisable(void)
+{
+    if (invalidate_before_final_lock)
+    {
+        invalidate_before_final_lock = 0u; // 一次性模拟更高优先级任务撤销反馈。
+        TEST_CHECK(MessagePublisherInvalidate(application_publisher) == MESSAGE_OK);
+    }
+    const uint32_t old = irq_state;
+    irq_state = 1u;
+    return old;
+}
 void PlatformIrqRestore(PlatformIrqState_t old) { irq_state = old; }
 uint8_t RobotSafetyIsFormalAutonomous(void) { return formal_mode; }
 uint8_t RobotSafetyGetSnapshot(RobotSafetySnapshot_t *out)
@@ -77,19 +95,46 @@ uint8_t RemoteControlRecoveryStillValid(const RemoteControlSnapshot_s *remote, u
     return (uint8_t)(final_remote && remote->radio_sequence != 0u);
 }
 
-// 每轮均模拟一份当前输入及反馈，避免把重复读取当成新接收。
+static void PublishApplicationAt(uint32_t time)
+{
+    const uint8_t feedback = 1u; // 内容由命令任务判定，此处只测试来源期限。
+    TEST_CHECK(MessagePublishAt(application_publisher, &feedback, time, time, time, MESSAGE_CLOCK_LOCAL) == MESSAGE_OK);
+    last_application_publish_ms = time;
+}
+
+// 发布者通常比恢复检查快，在两次检查之间补足连续有效的应用反馈。
 static uint8_t Step(RobotCanRecoveryCoordinator_t *state, RemoteControlSnapshot_s *remote, uint32_t time)
 {
+    while (time - last_application_publish_ms > 25u && time - last_application_publish_ms <= INT32_MAX)
+        PublishApplicationAt(last_application_publish_ms + 25u); // 让上一份反馈存续到下一次发布。
     tick = time; // 控制恢复判断使用的本机时间。
+    PublishApplicationAt(time);
     ++sequence; // 模拟新电机反馈。
     ++remote->radio_sequence; // 模拟新遥控帧。
     remote->radio_source_time_ms = time; // 来源时间随实际新帧推进。
-    const MessageFreshness_t freshness = {.valid = 1u, .timestamp_ms = time}; // 模拟当前云台反馈。
+    uint8_t feedback;
+    MessageFreshness_t freshness;
+    TEST_CHECK(MessageReadSnapshot(application_subscriber, &feedback, sizeof(feedback), time, &freshness) == MESSAGE_OK);
     return RobotCanRecoveryCoordinatorStep(state, remote, 0u, &freshness);
 }
 
 int main(void)
 {
+    const MessageTopicDescriptor_t application_topic = {
+        .topic_id = ROBOT_TOPIC_GIMBAL_FEEDBACK, // 与固件使用同一话题编号。
+        .payload_size = sizeof(uint8_t), // 测试只消费消息时间和发布序号。
+        .max_age_ms = MESSAGE_DEFAULT_MAX_AGE_MS, // 使用固件的云台反馈期限。
+        .capacity = 1u, // 只保留最新反馈。
+        .delivery = MESSAGE_DELIVERY_SNAPSHOT, // 自然过期或撤销后重新划分连续区间。
+        .overflow = MESSAGE_OVERFLOW_REPLACE_OLDEST, // 连续更新可以覆盖旧值。
+        .source_clock = MESSAGE_CLOCK_LOCAL, // 接收、发布和检查都使用本机毫秒。
+        .publisher_mask = UINT32_C(1) << (ROBOT_TOPIC_ENDPOINT_GIMBAL - 1u), // 仅云台发布。
+        .subscriber_mask = UINT32_C(1) << (ROBOT_TOPIC_ENDPOINT_COMMAND - 1u), // 仅命令端读反馈。
+    };
+    TEST_CHECK(MessageCenterInit(&application_topic, 1u) == MESSAGE_OK);
+    application_publisher = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_GIMBAL);
+    application_subscriber = MessageSubscriberRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_COMMAND);
+    TEST_CHECK(application_publisher != NULL && application_subscriber != NULL);
     Robot_Config_s config = {0}; // 未确认候选时间时默认禁止自动恢复。
     RobotModulePlan_t modules = {.enabled = ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL)}; // 本场景检查云台失效是否撤销恢复。
     RobotCanRecoveryCoordinator_t state = {0};
@@ -143,5 +188,24 @@ int main(void)
     TEST_CHECK(!Step(&state, &remote, tick + 1u)); // 反馈到期后必须重新开始计时。
     TEST_CHECK(!Step(&state, &remote, tick + 100u)); // 新的稳定周期结束后仍等待命令。
     TEST_CHECK(Step(&state, &remote, tick + 1u) && clears == 3u); // 稳定后的新输入才可恢复。
+
+    TEST_CHECK(RobotCanRecoveryCoordinatorInit(&state, &config, &modules));
+    TEST_CHECK(!Step(&state, &remote, 1000u) && !Step(&state, &remote, 1001u));
+    TEST_CHECK(!Step(&state, &remote, 1101u)); // 已达到稳定时间，正在等待新人工输入。
+    TEST_CHECK(MessagePublisherInvalidate(application_publisher) == MESSAGE_OK); // 短暂撤销，两轮检查之间恢复。
+    TEST_CHECK(!Step(&state, &remote, 1102u) && clears == 3u); // 新应用反馈不能沿用上一区间的稳定时间。
+    TEST_CHECK(!Step(&state, &remote, 1103u) && !Step(&state, &remote, 1203u));
+    invalidate_before_final_lock = 1u; // 本轮已读过合法反馈，最后一次复核前撤销。
+    TEST_CHECK(!Step(&state, &remote, 1204u) && clears == 3u && !invalidate_before_final_lock);
+    TEST_CHECK(!Step(&state, &remote, 1205u) && !Step(&state, &remote, 1305u));
+    TEST_CHECK(Step(&state, &remote, 1306u) && clears == 4u);
+
+    TEST_CHECK(RobotCanRecoveryCoordinatorInit(&state, &config, &modules));
+    TEST_CHECK(!Step(&state, &remote, 1400u) && !Step(&state, &remote, 1401u));
+    TEST_CHECK(!Step(&state, &remote, 1501u));
+    PublishApplicationAt(1552u); // 上一份已自然过期，跳过正常的中间发布。
+    TEST_CHECK(!Step(&state, &remote, 1552u) && clears == 4u); // 新样本的年龄为零，仍需重新等待。
+    TEST_CHECK(!Step(&state, &remote, 1553u) && !Step(&state, &remote, 1653u));
+    TEST_CHECK(Step(&state, &remote, 1654u) && clears == 5u);
     return 0;
 }

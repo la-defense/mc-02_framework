@@ -15,6 +15,7 @@ typedef struct {
     uint32_t can_generation; /**< 上一轮观察到的核心 CAN 故障代次。 */
     uint32_t safety_generation; /**< 上一轮观察到的整车禁止代次。 */
     uint32_t inhibit_generation; /**< 任一禁止代次变化时推进。 */
+    uint32_t gimbal_feedback_sequence; /**< 上轮云台反馈序号，用于识别两轮之间已结束的发布区间。 */
     uint32_t feedback_gap[DJI_MOTOR_CNT]; /**< 各实际登记设备上次观察到的反馈间断代次。 */
     uint8_t feedback_gap_seen; /**< 区分首次读取与代次恰好为零。 */
     uint8_t generation_seen; /**< 区分尚未读取和代次恰好为零。 */
@@ -35,7 +36,7 @@ uint8_t RobotCanRecoveryCoordinatorInit(RobotCanRecoveryCoordinator_t *state,
  * @param[in,out] state 启动时初始化、由当前任务独占的上下文。
  * @param[in] remote 本轮已读取的遥控与键鼠状态，不能为空。
  * @param[in] keyboard_allowed 1 表示当前协议允许键鼠档为人工运动来源。
- * @param[in] application_feedback 云台反馈原始期限；只有不启用云台的车型允许没有该数据。
+ * @param[in] application_feedback 从云台反馈话题读取的原始期限和发布序号；只有不启用云台的车型允许没有该数据。
  * @return 1 为本轮成功清除 CAN 故障；其他情况返回 0 并继续禁止。
  * @note 应用反馈失效时仍须调用以中断连续等待；正式自主来源尚未接入本入口。
  */
@@ -52,7 +53,7 @@ uint8_t RobotCanRecoveryStart(const Robot_Config_s *config, const RobotModulePla
 /** @brief 由单一命令任务推进启动时创建的恢复上下文。
  * @param[in] remote 当前人工输入。
  * @param[in] keyboard_allowed 1 表示键鼠档是人工来源。
- * @param[in] application_feedback 云台反馈原始期限；只有不启用云台的车型允许没有该数据。
+ * @param[in] application_feedback 从云台反馈话题读取的原始期限和发布序号；只有不启用云台的车型允许没有该数据。
  * @return 1 为本轮清除 CAN 故障，0 为继续等待。
  */
 uint8_t RobotCanRecoveryPoll(const RemoteControlSnapshot_s *remote, uint8_t keyboard_allowed,

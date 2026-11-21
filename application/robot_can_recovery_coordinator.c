@@ -4,6 +4,8 @@
 #include "robot_can_recovery_coordinator.h"
 #include "robot_can_runtime.h"
 #include "robot_safety.h"
+#include "message_center.h"
+#include "topics/robot_topics.h"
 #include "platform_can.h"
 #include "platform_irq.h"
 #include "platform_sync.h"
@@ -57,6 +59,13 @@ static void SelectManualSource(CanRecoveryTimedInput_t *input, const RemoteContr
     }
 }
 
+// 同时检查命令任务复制的原期限，以及消息中心是否仍保留这一段有效反馈。
+static uint8_t GimbalFeedbackIsCurrent(const MessageFreshness_t *feedback, uint32_t now_ms)
+{
+    return (uint8_t)(MessageFreshnessIsValid(feedback, now_ms, MESSAGE_DEFAULT_MAX_AGE_MS) &&
+        MessageSnapshotSourceIsCurrent(ROBOT_TOPIC_GIMBAL_FEEDBACK, feedback->sequence, now_ms));
+}
+
 uint8_t RobotCanRecoveryCoordinatorStep(RobotCanRecoveryCoordinator_t *state,
     const RemoteControlSnapshot_s *remote, uint8_t keyboard_allowed, const MessageFreshness_t *application_feedback)
 {
@@ -67,6 +76,7 @@ uint8_t RobotCanRecoveryCoordinatorStep(RobotCanRecoveryCoordinator_t *state,
     {
         state->generation_seen = 0u; // 下次故障必须重新捕获禁止前的反馈。
         state->feedback_gap_seen = 0u; // 下次故障重新读取设备间断代次。
+        state->gimbal_feedback_sequence = 0u; // 不把本次故障的应用反馈带到下一次恢复。
         return 0u;
     }
     const uint8_t formal_autonomous = RobotSafetyIsFormalAutonomous(); // 本入口尚无自主命令来源。
@@ -82,10 +92,19 @@ uint8_t RobotCanRecoveryCoordinatorStep(RobotCanRecoveryCoordinator_t *state,
     }
     CanRecoveryTimedInput_t input = {0}; // 任何读取失败默认无效。
     input.core.now_ms = PlatformTimeNowMs(); // 反馈和来源均使用本机毫秒。
+    uint8_t application_ok = 1u; // 纯底盘车型不等待未启用的云台反馈。
+    if (state->require_gimbal_feedback)
+    {
+        application_ok = GimbalFeedbackIsCurrent(application_feedback, input.core.now_ms); // 复制后撤销的反馈也会被拒绝。
+        if (application_ok && state->gimbal_feedback_sequence != 0u &&
+            state->gimbal_feedback_sequence != application_feedback->sequence &&
+            !MessageSnapshotSourceIsCurrent(ROBOT_TOPIC_GIMBAL_FEEDBACK, state->gimbal_feedback_sequence, input.core.now_ms))
+            ++state->inhibit_generation; // 两轮之间短暂中断时重新等待各路反馈。
+        state->gimbal_feedback_sequence = application_ok ? application_feedback->sequence : 0u; // 记住本轮用于比较的区间。
+    }
     input.core.inhibit_generation = state->inhibit_generation; // 短暂禁止不能被跳过。
     input.core.bus_ok = (uint8_t)(bus_read && bus.core_bus_mask != 0u && bus.core_bus_mask == bus.ready_bus_mask); // 每条核心总线都必须可用。
-    input.core.permit_ok = (uint8_t)((!state->require_gimbal_feedback || MessageFreshnessIsValid(application_feedback, input.core.now_ms,
-        MESSAGE_DEFAULT_MAX_AGE_MS)) && !formal_autonomous &&
+    input.core.permit_ok = (uint8_t)(application_ok && !formal_autonomous &&
         RobotSafetyCanRecover(safety.control_generation)); // 自主来源未接入时也中断已有的人工恢复等待。
     uint32_t registered_mask = 0u; // 最终检查仅覆盖车型的必需设备。
     if (DJIMotorGetRecoveryFeedback(input.core.now_ms, &state->feedback))
@@ -114,7 +133,7 @@ uint8_t RobotCanRecoveryCoordinatorStep(RobotCanRecoveryCoordinator_t *state,
             buses_ready = 0u; // 任何控制器退出、隔离或报错都不能恢复。
     const uint32_t now = PlatformTimeNowMs(); // 控制器检查结束后再次读取期限所用时间。
     const uint8_t application_current = (uint8_t)(!state->require_gimbal_feedback ||
-        MessageFreshnessIsValid(application_feedback, now, MESSAGE_DEFAULT_MAX_AGE_MS)); // 需要云台反馈时最后再次校验原期限。
+        GimbalFeedbackIsCurrent(application_feedback, now)); // 原期限和发布区间都必须保持有效。
     const uint8_t motors_current = DJIMotorRecoveryStillValid(&state->feedback, registered_mask, now); // 复核当前反馈、间断和设备身份。
     const uint8_t remote_current = RemoteControlRecoveryStillValid(remote, now); // 复核本次人工来源及其期限。
     uint8_t cleared = 0u; // 检查失败默认保持故障。
@@ -123,6 +142,7 @@ uint8_t RobotCanRecoveryCoordinatorStep(RobotCanRecoveryCoordinator_t *state,
     PlatformIrqRestore(irq); // 恢复调用者原来的中断状态。
     if (!buses_ready || !application_current || !motors_current || !remote_current)
     {
+        if (!application_current) state->gimbal_feedback_sequence = 0u; // 状态机重新等待，新区间从下一轮开始记录。
         input.core.bus_ok = 0u; // 硬件或应用反馈失效立即中断连续有效计时。
         (void)CanRecoveryTimedStep(&state->timing, &input); // 保存当前反馈作为新的比较起点。
     }
