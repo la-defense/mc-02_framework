@@ -210,11 +210,11 @@ MessageStatus_t MessageReadSnapshot(MessageSubscriber_t *subscriber, void *outpu
                                     size_t output_size, uint32_t now_ms,
                                     MessageFreshness_t *freshness);
 
-/** @brief 检查派生数据所用的快照序号是否仍属于当前未撤销的发布区间。
+/** @brief 检查派生数据所用的快照序号是否仍属于当前连续有效的发布区间。
  * @param[in] topic_id 已声明的快照话题，至少有一个已登记的读者。
  * @param[in] source_sequence 读取来源时取得的非零序号。
  * @param[in] now_ms 检查最新快照期限使用的本机时刻，单位 ms。
- * @return 1 表示该序号未跨撤销，且至少有一份当前有效的最新快照；否则返回 0。
+ * @return 1 表示该序号未跨撤销或发布间断，且至少有一份当前有效的最新快照；否则返回 0。
  * @note 派生数据仍须检查自己继承的原始期限。序号距离须小于 2^31；查询不续期。
  */
 uint8_t MessageSnapshotSourceIsCurrent(MessageTopicId_t topic_id, uint32_t source_sequence, uint32_t now_ms);

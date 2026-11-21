@@ -381,7 +381,11 @@ int main(int argc, char **argv)
         ++pc_sample_sequence;
         ++tick;
         CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
-        RobotCMDTask(); // 新的有效反馈允许继续使用已选方向。
+        RobotCMDTask(); // 恢复同一毫秒的人工输入仍不接管。
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_ERR_EMPTY);
+        ++pc_sample_sequence;
+        ++tick;
+        RobotCMDTask(); // 更新的人工帧才能使用已恢复的方向。
         CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK && driving.offset_angle == 90.0f);
         ++pc_sample_sequence;
         ++tick;
@@ -400,6 +404,29 @@ int main(int argc, char **argv)
         pose.yaw_motor_single_round_angle = 275u; // 270 度应换成等价的 -90 度。
         CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
         RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_ERR_EMPTY);
+        ++pc_sample_sequence;
+        ++tick;
+        RobotCMDTask(); // 反馈恢复后到达的新人工帧使用同一方向。
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK && driving.offset_angle == -90.0f);
+
+        ++pc_sample_sequence;
+        ++tick;
+        CHECK(MessagePublishAtBounded(feedback, &pose, tick, tick, tick, MESSAGE_CLOCK_LOCAL, 3u) == MESSAGE_OK);
+        RobotCMDTask(); // 建立期限只有 3 ms 的原方向及其人工输入。
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
+        fixed_source_enabled = 1u;
+        fixed_source_ms = tick; // 模拟后续几轮只读到同一份原始人工帧。
+        tick += 4u;
+        CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+        RobotCMDTask(); // 方向在两次命令任务之间过期并恢复。
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_ERR_EMPTY);
+        ++tick;
+        RobotCMDTask(); // 重读旧人工帧也不能恢复速度。
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_ERR_EMPTY);
+        fixed_source_enabled = 0u;
+        ++pc_sample_sequence;
+        RobotCMDTask(); // 此时才收到恢复后的新帧。
         CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK && driving.offset_angle == -90.0f);
 
         ++pc_sample_sequence;

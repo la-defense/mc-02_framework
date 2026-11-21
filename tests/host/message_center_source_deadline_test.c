@@ -50,5 +50,14 @@ int main(void)
     TEST_CHECK(MessagePublishAtBounded(publisher, &input, UINT32_MAX - 4u, UINT32_MAX - 4u, 2u, MESSAGE_CLOCK_LOCAL, 10u) == MESSAGE_OK);
     TEST_CHECK(MessageReadSnapshot(subscriber, &output, sizeof(output), 5u, NULL) == MESSAGE_OK); // 原始时间跨回绕仍可比较。
     TEST_CHECK(MessageReadSnapshot(subscriber, &output, sizeof(output), 6u, NULL) == MESSAGE_ERR_EXPIRED);
+    TEST_CHECK(MessagePublishAtBounded(publisher, &input, 20u, 20u, 20u, MESSAGE_CLOCK_LOCAL, 5u) == MESSAGE_OK);
+    TEST_CHECK(MessageReadSnapshot(subscriber, &output, sizeof(output), 20u, &freshness) == MESSAGE_OK);
+    const uint32_t initial_sequence = freshness.sequence; // 派生结果引用这次发布。
+    TEST_CHECK(MessagePublishAtBounded(publisher, &input, 25u, 25u, 25u, MESSAGE_CLOCK_LOCAL, 5u) == MESSAGE_OK);
+    TEST_CHECK(MessageSnapshotSourceIsCurrent(1u, initial_sequence, 25u)); // 恰好到期时发布，连续区间仍相同。
+    TEST_CHECK(MessagePublishAtBounded(publisher, &input, 31u, 31u, 31u, MESSAGE_CLOCK_LOCAL, 5u) == MESSAGE_OK);
+    TEST_CHECK(!MessageSnapshotSourceIsCurrent(1u, initial_sequence, 31u)); // 无人读取过期帧，新鲜数据也不能恢复旧区间。
+    TEST_CHECK(MessageReadSnapshot(subscriber, &output, sizeof(output), 31u, &freshness) == MESSAGE_OK);
+    TEST_CHECK(MessageSnapshotSourceIsCurrent(1u, freshness.sequence, 31u)); // 新区间可正常派生。
     return 0;
 }

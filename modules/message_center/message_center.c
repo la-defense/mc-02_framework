@@ -48,7 +48,7 @@ typedef struct
     uint8_t active;
     MessageTopicDescriptor_t descriptor;
     uint32_t sequence;
-    uint32_t first_snapshot_sequence; // 本次撤销后发布的第一份快照；0 表示没有可用区间。
+    uint32_t first_snapshot_sequence; // 连续有效区间的首个发布序号；0 表示没有可用区间。
     MessageTopicStats_t stats;
 } MessageTopicStorage_t;
 
@@ -67,6 +67,8 @@ static MessageSlot_t *GetSlotMetadata(const struct MessageSubscriber *subscriber
 static uint8_t *GetSlotData(const struct MessageSubscriber *subscriber,
                             const MessageTopicDescriptor_t *descriptor,
                             uint8_t slot_index);
+static uint8_t IsMessageFresh(const MessageTopicDescriptor_t *descriptor,
+                              const MessageSlot_t *slot, uint32_t now_ms);
 
 static uint8_t IsEndpointValid(MessageEndpointId_t endpoint_id)
 {
@@ -433,6 +435,7 @@ static MessageStatus_t MessagePublishInternal(MessagePublisher_t *publisher, con
     }
     CountOnce(&topic->stats.published);
 
+    uint8_t check_previous = topic->descriptor.delivery == MESSAGE_DELIVERY_SNAPSHOT; // 只有保留最新值的话题需要划分连续区间。
     for (size_t i = 0u; i < MESSAGE_CENTER_MAX_SUBSCRIBERS; ++i)
     {
         struct MessageSubscriber *subscriber = &subscribers[i];
@@ -442,6 +445,13 @@ static MessageStatus_t MessagePublishInternal(MessagePublisher_t *publisher, con
         const uint8_t capacity = topic->descriptor.capacity;
         if (subscriber->count == capacity)
         {
+            if (check_previous) // 各读者收到同一份最新数据，只需检查其中一份。
+            {
+                const MessageSlot_t *previous = GetSlotMetadata(subscriber, subscriber->head); // 覆盖前读取原消息的时间和期限。
+                if (!IsMessageFresh(&topic->descriptor, previous, published_time_ms))
+                    topic->first_snapshot_sequence = topic->sequence; // 上一份已到期，新发布开启新段，旧命令仍不能使用。
+                check_previous = 0u; // 其余读者无需重复检查。
+            }
             if (topic->descriptor.overflow == MESSAGE_OVERFLOW_REJECT_NEWEST)
             {
                 PlatformTaskCriticalExit();

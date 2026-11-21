@@ -212,6 +212,12 @@ static uint32_t manual_max_dt_ms, manual_last_ms, manual_source_generation; // �
 static uint32_t manual_safety_generation; // 故障恢复后不能沿用禁止事件前的枪口参考。
 static uint8_t manual_clock_valid, manual_intent_valid, manual_safety_generation_seen; // 区分尚未读取和代次恰好为零。
 static StdCmdManualIntent_t manual_intent; // 保存本轮来源及期限，发布时再次检查。
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
+static uint32_t manual_direction_sequence; // 上轮采用的大 yaw 反馈编号，用于识别两轮之间的短暂断流。
+static uint32_t manual_direction_recovered_ms; // 命令任务首次重新确认方向的本机时间，单位 ms。
+static enum { MANUAL_DIRECTION_READY, MANUAL_DIRECTION_LOST, MANUAL_DIRECTION_WAIT_INPUT }
+    manual_direction_state; // 方向恢复后等待比恢复时刻更新的原始人工输入。
+#endif
 #endif
 
 static MessagePublisher_t *shoot_cmd_pub;           // 发射控制消息发布者
@@ -234,6 +240,10 @@ uint8_t RobotCMDInit(void)
         (manual_input_map->keyboard_frame != STD_CMD_FRAME_CHASSIS && manual_input_map->keyboard_frame != STD_CMD_FRAME_BIG_YAW))
         return 0u; // 缺少有效映射、积分上限或旧应用尚不支持的参照时不能启动命令模块。
     manual_clock_valid = manual_intent_valid = manual_safety_generation_seen = 0u; // 启动不继承旧命令、时间或安全代次。
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
+    manual_direction_sequence = 0u; // 启动时尚未使用方向，不能继承之前的编号。
+    manual_direction_state = MANUAL_DIRECTION_READY; // 首次配置有效时照常接管。
+#endif
 #endif
     // 云台和底盘机械偏置从本车型唯一配置读取。
 #if defined(MC02_VISION_PROTOCOL_V2)
@@ -328,10 +338,31 @@ static void PublishManualChassisWithDirection(const RobotCmdLease_t *manual)
     RobotCmdLease_t combined = {.remaining_ms = UINT32_MAX, .valid = 1u}; // 重新计算本轮最先到期的依赖。
     RobotCmdLeaseInclude(&combined, manual->valid, manual->source_ms, manual->max_age_ms, now_ms); // 人工来源仍使用原来的时刻与期限。
     MessageFreshness_t direction_time = {0}; // 方向和该份反馈的时间从同一次读取取得。
-    const uint8_t direction_valid = combined.valid &&
+    const uint8_t direction_valid =
         MessageReadSnapshot(gimbal_feed_sub, &gimbal_fetch_data, sizeof(gimbal_fetch_data), now_ms, &direction_time) == MESSAGE_OK &&
         CalcOffsetAngle(); // 有效反馈才计算角度，编码器超范围也会拒绝。
     RobotCmdLeaseIncludeGimbalFeedback(&combined, direction_valid, &direction_time, now_ms); // 方向与人工输入谁先到期就采用谁的期限。
+    if (!direction_valid)
+        manual_direction_state = MANUAL_DIRECTION_LOST; // 方向无效时立即撤销目标，并等待再次确认方向。
+    else
+    {
+        if (manual_direction_sequence != 0u &&
+            !MessageSnapshotSourceIsCurrent(ROBOT_TOPIC_GIMBAL_FEEDBACK, manual_direction_sequence, now_ms))
+            manual_direction_state = MANUAL_DIRECTION_LOST; // 两轮之间的撤销或过期也必须重新接管。
+        manual_direction_sequence = direction_time.sequence; // 在同一临界区记下所见方向供下一轮复核。
+        if (manual_direction_state == MANUAL_DIRECTION_LOST)
+        {
+            manual_direction_recovered_ms = now_ms; // 记录首次确认连续方向的时刻，后续周期不移后此记录。
+            manual_direction_state = MANUAL_DIRECTION_WAIT_INPUT; // 当前仍可能读到恢复以前的人工输入。
+        }
+        if (manual_direction_state == MANUAL_DIRECTION_WAIT_INPUT)
+        {
+            if (!combined.valid || now_ms - manual_intent.source_time_ms >= now_ms - manual_direction_recovered_ms)
+                combined.valid = 0u; // 恢复前和同一毫秒的输入都不发布，差值允许计时回绕。
+            else
+                manual_direction_state = MANUAL_DIRECTION_READY; // 收到恢复后的新输入才允许交付方向目标。
+        }
+    }
 #if defined(ONE_BOARD)
     chassis_cmd_send.local_direction_sequence = direction_time.sequence; // 让单板底盘验证计算所用的方向有没有被撤销。
 #endif
@@ -738,6 +769,10 @@ void RobotCMDTask()
     {
 #if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
         manual_clock_valid = 0u; // 失去姿态后不能跨失效间隔积分。
+#if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
+        if (manual_direction_sequence != 0u)
+            manual_direction_state = MANUAL_DIRECTION_LOST; // 已经使用过的方向也需要新输入才能恢复。
+#endif
 #endif
         manual_reference_ready = 0u;
         previous_vision_active = 0u;
