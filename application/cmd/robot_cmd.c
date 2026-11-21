@@ -511,6 +511,7 @@ static void ApplyVisionGimbal(const VisionControlGimbalCommand_s *command)
 static void RemoteControlSet(uint8_t vision_active)
 {
     chassis_cmd_send.wz = 0.0f;
+    chassis_cmd_send.chassis_mode = CHASSIS_ZERO_FORCE; // 右开关上档没有底盘动作，不能沿用上一轮自转。
 #if !defined(MC02_CONFIG_GENERATED)
     if (!vision_active)
     {
@@ -564,6 +565,7 @@ static void RemoteControlSet(uint8_t vision_active)
 static void MouseKeySet(uint8_t vision_active, const RemoteMouseBatch_t *mouse)
 {
     chassis_cmd_send.wz = 0.0f;
+    chassis_cmd_send.chassis_mode = CHASSIS_NO_FOLLOW; // 键鼠执行自己的速度输入，不读取摇杆的自转档位。
     // 键盘模式直接使用陀螺仪反馈模式控制云台, 避免初值 GIMBAL_ZERO_FORCE 导致云台停电机
     gimbal_cmd_send.gimbal_mode = GIMBAL_GYRO_MODE;
 #if !defined(MC02_CONFIG_GENERATED)
@@ -983,7 +985,13 @@ void RobotCMDTask()
     // 停止命令是本机新决定；运动目标需要保留实际来源期限。
 #if defined(ONE_BOARD) || defined(GIMBAL_BOARD)
     if (chassis_cmd_send.chassis_mode == CHASSIS_ZERO_FORCE)
+    {
+        chassis_cmd_send.vx = 0.0f; // 停止消息不交付本轮已经计算的前向速度。
+        chassis_cmd_send.vy = 0.0f; // 横向速度也清零，读者可直接看到停止目标。
+        chassis_cmd_send.wz = 0.0f; // 停止不带上个模式的角速度。
+        chassis_cmd_send.offset_angle = 0.0f; // 停止动作没有方向变换。
         (void)MessagePublishNow(chassis_cmd_pub, &chassis_cmd_send);
+    }
     else
     {
 #if defined(MC02_VISION_PROTOCOL_V2)

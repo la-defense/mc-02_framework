@@ -349,6 +349,53 @@ int main(int argc, char **argv)
     CHECK(RobotSafetyIsReady());
     CHECK(RobotCMDInit());
 #if defined(MC02_MANUAL_GENERATED_TEST)
+    if (argc > 1 && !strcmp(argv[1], "manual-drive-modes"))
+    {
+        MessagePublisher_t *feedback = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_GIMBAL);
+        MessageSubscriber_t *chassis = MessageSubscriberRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_CHASSIS);
+        CHECK(feedback != NULL && chassis != NULL);
+        const Gimbal_Upload_Data_s pose = {0}; // 底盘本体遥控使用有效姿态即可。
+        Chassis_Ctrl_Cmd_s driving;
+
+        remote[0].rc.switch_left = RC_SW_UP; // 启动后直接进入键鼠，无上一轮底盘模式可继承。
+        remote[0].rc.switch_right = RC_SW_DOWN; // 右开关的自转命令只属于摇杆模式。
+        remote[0].key[KEY_PRESS].keys = (uint16_t)(1u << Key_W);
+        CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+        RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
+        CHECK(driving.chassis_mode == CHASSIS_NO_FOLLOW && driving.vx == 1000.0f && driving.wz == 0.0f);
+
+        remote[0].rc.switch_left = RC_SW_DOWN; // 切到摇杆后才接受右开关选出的自转模式。
+        ++test_source_generation; ++pc_sample_sequence; tick += 5u;
+        CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+        RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
+        CHECK(driving.chassis_mode == CHASSIS_ROTATE);
+
+        remote[0].rc.switch_right = RC_SW_UP; // 上档未分配底盘控制，即使摇杆有输入也应停止。
+        remote[0].rc.rocker_r1 = 100;
+        ++pc_sample_sequence; tick += 5u;
+        CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+        RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
+        CHECK(driving.chassis_mode == CHASSIS_ZERO_FORCE && driving.vx == 0.0f && driving.vy == 0.0f &&
+              driving.wz == 0.0f && driving.offset_angle == 0.0f && driving.local_direction_sequence == 0u);
+
+        remote[0].rc.switch_right = RC_SW_DOWN; // 再次显式选自转，验证随后的直接切换。
+        ++pc_sample_sequence; tick += 5u;
+        CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+        RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
+        CHECK(driving.chassis_mode == CHASSIS_ROTATE);
+
+        remote[0].rc.switch_left = RC_SW_UP; // 键鼠接管时必须脱离上一轮的自转。
+        ++test_source_generation; ++pc_sample_sequence; tick += 5u;
+        CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);
+        RobotCMDTask();
+        CHECK(MessageReadSnapshot(chassis, &driving, sizeof(driving), tick, NULL) == MESSAGE_OK);
+        CHECK(driving.chassis_mode == CHASSIS_NO_FOLLOW && driving.vx == 1000.0f && driving.wz == 0.0f);
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "manual-frame-feedback"))
     {
         MessagePublisher_t *feedback = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_GIMBAL);

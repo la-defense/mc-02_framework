@@ -2007,6 +2007,7 @@ if(UNIX)
   target_link_libraries(robot_cmd_generated_manual_test PRIVATE m)
 endif()
 add_test(NAME production_command_generated_manual_mapping COMMAND robot_cmd_generated_manual_test manual-mapping)
+add_test(NAME production_command_generated_manual_drive_modes COMMAND robot_cmd_generated_manual_test manual-drive-modes) # 核对摇杆与键鼠切换时的底盘模式。
 add_test(NAME production_command_generated_manual_unconfigured COMMAND robot_cmd_generated_manual_test manual-unconfigured)
 add_test(NAME production_command_generated_manual_invalid_dt COMMAND robot_cmd_generated_manual_test manual-invalid-dt)
 add_test(NAME production_command_generated_manual_unsupported_frame COMMAND robot_cmd_generated_manual_test manual-unsupported-frame)
