@@ -1902,7 +1902,11 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
     target_link_libraries(${target} PRIVATE m)
   endif()
   if(chassis_limits_profile STREQUAL "configured")
+    target_include_directories(${target} PRIVATE
+      ../../modules/referee # 使用生产裁判读口声明测试 V2 底盘。
+      ../../bsp/usart) # 裁判公共声明引用 UART 发送状态。
     target_compile_definitions(${target} PRIVATE CHASSIS_TASK_EXPECT_CONFIGURED=1
+      MC02_VISION_PROTOCOL_V2=1 # 同一目标回归方向和裁判两种依赖。
       CHASSIS_MOTION_LIMITS_CONFIGURED=1 CHASSIS_MAX_WZ_DEG_S=10.0f
       CHASSIS_ROTATE_WZ_DEG_S=8.0f CHASSIS_MAX_MOTOR_SPEED_DEG_S=10000.0f)
   else()
@@ -1915,6 +1919,7 @@ foreach(chassis_limits_profile IN ITEMS configured unconfigured)
   add_test(NAME production_chassis_task_${chassis_limits_profile} COMMAND ${target})
 endforeach()
 add_test(NAME production_chassis_direction_revocation COMMAND chassis_task_configured_test direction-revocation) # 旧方向撤销后不能通过新反馈恢复运动命令。
+add_test(NAME production_chassis_power_revocation COMMAND chassis_task_configured_test power-revocation) # 新供电区间不能恢复旧导航目标。
 add_test(NAME production_chassis_mecanum_velocity_feedback COMMAND chassis_task_configured_test mecanum-velocity) # 用各方向的已知轮速校验旧轮序和正负号。
 add_test(NAME production_chassis_omni_velocity_feedback COMMAND chassis_task_configured_test velocity)
 # 验证轮速里程计按新样本积分，断流后开始新的本地坐标段。

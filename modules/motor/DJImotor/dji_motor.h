@@ -147,6 +147,7 @@ typedef struct
     uint32_t reference_safety_generation; // 业务提交这条参考时所用的安全代际。
     uint8_t reference_generation_valid; // 显式绑定代际且尚未撤销时才保持有效。
     uint8_t reference_has_deadline; // 底盘命令截止点可恰好为零，单独记录是否有期限。
+    uint8_t reference_source_kind; // 有非零来源序号时，标记它属于方向反馈还是裁判供电。
     uint32_t reference_deadline_ms; // 原始命令的本机截止时刻，允许毫秒计数回绕。
     uint32_t reference_source_sequence; // 底盘参考使用的外部来源序号，0 表示无此依赖。
     uint32_t chassis_stop_generation; // 单板底盘每次停止时递增，以撤销已计算的轮位目标。
@@ -266,8 +267,14 @@ uint8_t DJIMotorSetRefForGeneration(DJIMotorInstance *motor, float ref, uint32_t
  */
 uint8_t DJIMotorSetChassisRefUntil(DJIMotorInstance *motor, float ref, uint32_t generation, uint32_t deadline_ms);
 
-/** @brief 给出一个底盘来源序号在本机时刻是否仍有效，1 为可用。 */
-typedef uint8_t (*DJIChassisReferenceSourceCheck_t)(uint32_t sequence, uint32_t now_ms);
+/** @brief 需要随底盘目标复核的外部数据类型。 */
+typedef enum {
+    DJI_CHASSIS_SOURCE_DIRECTION = 0, /**< 大 yaw 方向反馈序号。 */
+    DJI_CHASSIS_SOURCE_REFEREE_POWER, /**< 裁判供电连续区间编号。 */
+} DJIChassisReferenceKind_t;
+
+/** @brief 给出一个指定类型的底盘来源在本机时刻是否仍有效，1 为可用。 */
+typedef uint8_t (*DJIChassisReferenceSourceCheck_t)(DJIChassisReferenceKind_t kind, uint32_t sequence, uint32_t now_ms);
 
 /** @brief 在单板底盘启动时登记参考来源的检查函数。
  * @param[in] check 长期有效的非空函数。电机计算及 CAN 提交前会在任务临界区调用，不得等待或发报文。
@@ -286,6 +293,17 @@ uint8_t DJIMotorBindChassisReferenceSource(DJIChassisReferenceSourceCheck_t chec
  */
 uint8_t DJIMotorSetChassisRefUntilWithSource(DJIMotorInstance *motor, float ref, uint32_t generation,
                                             uint32_t deadline_ms, uint32_t source_sequence);
+
+/** @brief 提交依赖原裁判供电区间的单板轮速目标。
+ * @param[in,out] motor 已登记的底盘 DJI 电机。
+ * @param[in] ref 输出轴速度，rad/s，须为有限数。
+ * @param[in] generation 本次命令的安全代际。
+ * @param[in] deadline_ms 命令原有的本机毫秒截止点。
+ * @param[in] power_generation 命令引用的非零裁判供电区间编号。
+ * @return 参数和许可有效并接受目标时为 1，否则为 0，保持原参考。
+ */
+uint8_t DJIMotorSetChassisRefUntilWithPower(DJIMotorInstance *motor, float ref, uint32_t generation,
+                                           uint32_t deadline_ms, uint32_t power_generation);
 
 /** @brief 改写角度或速度反馈来源，下一轮控制生效。
 * @param[in,out] motor 有效实例，不能为 NULL。

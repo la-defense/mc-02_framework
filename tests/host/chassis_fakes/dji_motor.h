@@ -63,10 +63,16 @@ enum { MOTOR_FEED = 0, SPEED_LOOP = 1, CURRENT_LOOP = 2, M3508 = 1,
 DJIMotorInstance *DJIMotorInit(const Motor_Init_Config_s *config);
 uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor);
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref);
-typedef uint8_t (*DJIChassisReferenceSourceCheck_t)(uint32_t sequence, uint32_t now_ms);
+typedef enum {
+    DJI_CHASSIS_SOURCE_DIRECTION = 0, // 大 yaw 方向反馈的发布编号。
+    DJI_CHASSIS_SOURCE_REFEREE_POWER, // 裁判供电区间的编号。
+} DJIChassisReferenceKind_t;
+typedef uint8_t (*DJIChassisReferenceSourceCheck_t)(DJIChassisReferenceKind_t kind, uint32_t sequence, uint32_t now_ms);
 uint8_t DJIMotorBindChassisReferenceSource(DJIChassisReferenceSourceCheck_t check);
 uint8_t DJIMotorSetChassisRefUntilWithSource(DJIMotorInstance *motor, float ref, uint32_t generation,
                                             uint32_t deadline_ms, uint32_t source_sequence); // 测试替身记录代际、期限和方向来源。
+uint8_t DJIMotorSetChassisRefUntilWithPower(DJIMotorInstance *motor, float ref, uint32_t generation,
+                                           uint32_t deadline_ms, uint32_t power_generation); // 记录同一轮的裁判供电来源。
 void DJIMotorStop(DJIMotorInstance *motor);
 void DJIMotorEnable(DJIMotorInstance *motor);
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary);

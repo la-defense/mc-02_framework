@@ -84,7 +84,16 @@ static uint8_t reject_motion_reference; // 模拟安全代际失效时电机拒�
 static uint32_t observed_motion_generation; // 保存底盘交给电机的命令代际。
 static uint32_t observed_motion_deadline_ms; // 保存底盘交给电机的原始截止点。
 static uint32_t observed_direction_sequence; // 保存底盘交给电机的原方向来源。
-static DJIChassisReferenceSourceCheck_t direction_check; // 保存底盘启动时绑定的生产检查函数。
+static uint32_t observed_power_generation; // 保存交给轮电机的原供电区间。
+static DJIChassisReferenceSourceCheck_t source_check; // 保存底盘启动时绑定的生产检查函数。
+#if defined(MC02_VISION_PROTOCOL_V2)
+static uint32_t referee_power_generation; // 模拟当前裁判供电区间，零代表撤权。
+
+uint8_t RefereeBufferedPowerIsCurrent(uint32_t generation, uint32_t now_ms)
+{
+    return now_ms == test_tick && generation != 0u && generation == referee_power_generation;
+}
+#endif
 static SuperCapInstance cap;
 static int fail_cap, fail_motor;
 static unsigned supercap_init_calls;
@@ -132,7 +141,7 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
 { if (motor) { motor->ref = ref; motor->set_ref_order = ++operation_order; } }
 uint8_t DJIMotorBindChassisReferenceSource(DJIChassisReferenceSourceCheck_t check)
 {
-    direction_check = check; // 后续由用例直接核对驱动能读取到的来源状态。
+    source_check = check; // 后续由用例直接核对驱动能读取到的来源状态。
     return check != NULL;
 }
 uint8_t DJIMotorSetChassisRefUntilWithSource(DJIMotorInstance *motor, float ref, uint32_t generation,
@@ -141,10 +150,18 @@ uint8_t DJIMotorSetChassisRefUntilWithSource(DJIMotorInstance *motor, float ref,
     observed_motion_generation = generation; // 核对底盘是否传递原命令的代际。
     observed_motion_deadline_ms = deadline_ms; // 测试期限不会在任务消费时刷新。
     observed_direction_sequence = source_sequence; // 保存这一轮真正提交的方向序号。
+    observed_power_generation = 0u; // 方向提交没有裁判依赖。
     if (motor == NULL) return 0u; // 无实例时不能声称已写入。
     if (reject_motion_reference && motor == &motors[1]) return 0u; // 第一台轮电机已写入后，拒绝第二台。
     DJIMotorSetRef(motor, ref); // 保留已有的参考和调用顺序记录。
     return 1u;
+}
+uint8_t DJIMotorSetChassisRefUntilWithPower(DJIMotorInstance *motor, float ref, uint32_t generation,
+                                           uint32_t deadline_ms, uint32_t power_generation)
+{
+    uint8_t accepted = DJIMotorSetChassisRefUntilWithSource(motor, ref, generation, deadline_ms, 0u);
+    observed_power_generation = power_generation; // 复用参考记录，仅改变来源类型。
+    return accepted;
 }
 void DJIMotorStop(DJIMotorInstance *motor)
 { if (motor) { motor->enabled = 0; ++motor->stop_count; } }
@@ -677,8 +694,8 @@ static int TestChassisDirectionRevocation(void)
     CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
     ChassisTask();
     CHECK(motors[0].enabled && motors[0].ref != 0.0f);
-    CHECK(observed_direction_sequence == direction_time.sequence && direction_check != NULL &&
-          direction_check(observed_direction_sequence, test_tick)); // 驱动拿到原序号及对应业务检查函数。
+    CHECK(observed_direction_sequence == direction_time.sequence && source_check != NULL &&
+          source_check(DJI_CHASSIS_SOURCE_DIRECTION, observed_direction_sequence, test_tick)); // 驱动拿到原序号及对应业务检查函数。
 
     ++test_tick;
     CHECK(MessagePublishNow(feedback, &direction) == MESSAGE_OK); // 连续来源的新样本不用等待命令任务重算。
@@ -686,7 +703,7 @@ static int TestChassisDirectionRevocation(void)
     CHECK(motors[0].enabled && motors[0].ref != 0.0f);
     ++test_tick;
     CHECK(MessagePublisherInvalidate(feedback) == MESSAGE_OK);
-    CHECK(!direction_check(observed_direction_sequence, test_tick)); // 发送前检查可以独立于底盘任务发现撤销。
+    CHECK(!source_check(DJI_CHASSIS_SOURCE_DIRECTION, observed_direction_sequence, test_tick)); // 发送前检查可以独立于底盘任务发现撤销。
     ChassisTask(); // 底盘命令自己仍未到期，但其方向已明确撤销。
     for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
 
@@ -710,12 +727,46 @@ static int TestChassisDirectionRevocation(void)
     CHECK(motors[0].enabled && motors[0].ref != 0.0f);
     return 0;
 }
+#if defined(MC02_VISION_PROTOCOL_V2)
+static int TestChassisPowerRevocation(void)
+{
+    CHECK(ChassisInit() == 1u); // 使用生产任务及本地话题。
+    MessagePublisher_t *commands = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_COMMAND);
+    CHECK(commands != NULL && source_check != NULL);
+    test_tick = 100u;
+    referee_power_generation = 7u; // 主机输入模拟首次有效的裁判区间。
+    Chassis_Ctrl_Cmd_s command = {.vx = 100.0f, .chassis_mode = CHASSIS_NO_FOLLOW, .local_power_generation = 7u};
+    CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
+    ChassisTask();
+    CHECK(observed_power_generation == 7u && observed_direction_sequence == 0u);
+    CHECK(motors[0].enabled && motors[0].ref != 0.0f);
+    referee_power_generation = 0u; // 命令未到期，但供电先撤销。
+    ++test_tick;
+    ChassisTask();
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+    referee_power_generation = 8u;
+    ChassisTask(); // 供电恢复时，旧命令仍绑定第 7 个区间。
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+    command.local_power_generation = referee_power_generation;
+    CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
+    ChassisTask();
+    CHECK(observed_power_generation == 8u && motors[0].enabled && motors[0].ref != 0.0f);
+    command.local_direction_sequence = 1u; // 不能把两种依赖误当成其中一种通过。
+    CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
+    ChassisTask();
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+    return 0;
+}
+#endif
 #endif
 
 int main(int argc, char **argv)
 {
 #if defined(ONE_BOARD)
     if (argc == 2 && strcmp(argv[1], "direction-revocation") == 0) return TestChassisDirectionRevocation();
+#if defined(MC02_VISION_PROTOCOL_V2)
+    if (argc == 2 && strcmp(argv[1], "power-revocation") == 0) return TestChassisPowerRevocation();
+#endif
 #endif
     if (argc == 2 && strcmp(argv[1], "mecanum-velocity") == 0) return TestMecanumVelocity();
     if (argc == 2 && strcmp(argv[1], "velocity") == 0) return TestOmniVelocity();

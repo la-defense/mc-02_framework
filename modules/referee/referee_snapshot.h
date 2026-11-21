@@ -171,6 +171,7 @@ typedef struct {
     uint8_t limit_recovery_recorded; /**< 1 表示上限和供电许可已从中断恢复，不依赖缓冲。 */
     uint32_t recovered_ms; /**< 最近一次恢复的本机处理时刻，单位 ms，0 合法。 */
     uint32_t limit_recovered_ms; /**< 0x0201 最近一次恢复的本机处理时刻，单位 ms，0 合法。 */
+    uint32_t buffered_generation; /**< 当前两组功率数据的连续区间编号；不可用时为 0。 */
 } RefereeChassisPower_t;
 
 #endif

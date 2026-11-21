@@ -585,8 +585,11 @@ static int single_chassis_reference_expiry(void)
 }
 
 // 使用消息中心和实际排队回调，不运行底盘任务也能发现方向丢失。
-static uint8_t direction_source_is_current(uint32_t sequence, uint32_t now_ms)
+static uint32_t simulated_power_generation; // 只模拟裁判区间变化，使用实际电机计算和软件队列准备回调。
+static uint8_t chassis_source_is_current(DJIChassisReferenceKind_t kind, uint32_t sequence, uint32_t now_ms)
 {
+    if (kind == DJI_CHASSIS_SOURCE_REFEREE_POWER)
+        return sequence == simulated_power_generation;
     return MessageSnapshotSourceIsCurrent(1u, sequence, now_ms);
 }
 
@@ -630,7 +633,7 @@ static int single_chassis_queued_direction(void)
     DJIMotorInstance *independent = DJIMotorInit(&second); // 同一帧第二槽验证独立目标不会被撤销。
     TEST_CHECK(dependent != NULL && independent != NULL);
     TEST_CHECK(!DJIMotorSetChassisRefUntilWithSource(dependent, 9.0f, safety.control_generation, 25u, freshness.sequence)); // 依赖来源时须先绑定检查函数。
-    TEST_CHECK(DJIMotorBindChassisReferenceSource(direction_source_is_current));
+    TEST_CHECK(DJIMotorBindChassisReferenceSource(chassis_source_is_current));
     TEST_CHECK(DJIMotorSetChassisRefUntilWithSource(dependent, 9.0f, safety.control_generation, 25u, freshness.sequence));
     TEST_CHECK(DJIMotorSetChassisRefUntil(independent, 10.0f, safety.control_generation, 25u));
     DJIMotorEnable(dependent);
@@ -673,6 +676,24 @@ static int single_chassis_queued_direction(void)
     TEST_CHECK(MessagePublishNow(publisher, &direction) == MESSAGE_OK);
     control_at(14000u);
     TEST_CHECK(sent[0] == 0u && sent[1] == 0u); // 补来方向也不能继续计算已经撤销的参考。
+
+    TEST_CHECK(MessageReadSnapshot(reader, &direction, sizeof(direction), HAL_GetTick(), &freshness) == MESSAGE_OK);
+    simulated_power_generation = freshness.sequence; // 两种来源碰巧使用同一个编号。
+    TEST_CHECK(!DJIMotorSetChassisRefUntilWithPower(independent, 10.0f, safety.control_generation, 25u, 0u));
+    TEST_CHECK(DJIMotorSetChassisRefUntilWithSource(dependent, 9.0f, safety.control_generation, 25u, freshness.sequence));
+    TEST_CHECK(DJIMotorSetChassisRefUntilWithPower(independent, 10.0f, safety.control_generation, 25u, simulated_power_generation));
+    control_at(15000u);
+    TEST_CHECK((deferred_payload[0] || deferred_payload[1]) && (deferred_payload[2] || deferred_payload[3]));
+    ++simulated_power_generation; // 供电中断后恢复，队列仍保存旧区间。
+    now_us = 16000u;
+    deferred_prepare(deferred_source, HAL_GetTick(), deferred_payload, sizeof(deferred_payload));
+    TEST_CHECK((deferred_payload[0] || deferred_payload[1]) &&
+               deferred_payload[2] == 0u && deferred_payload[3] == 0u); // 同号方向的有效结果不能复用于供电槽位。
+    control_at(16000u);
+    TEST_CHECK(!independent->reference_generation_valid && sent[2] == 0u && sent[3] == 0u);
+    TEST_CHECK(DJIMotorSetChassisRefUntilWithPower(independent, 10.0f, safety.control_generation, 25u, simulated_power_generation));
+    control_at(17000u);
+    TEST_CHECK(sent[2] || sent[3]); // 只有提交带新区间的目标才可恢复该槽位。
     return EXIT_SUCCESS;
 }
 

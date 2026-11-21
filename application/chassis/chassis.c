@@ -111,10 +111,16 @@ static uint32_t chassis_command_max_age_ms = 0u;
 #endif
 
 #if defined(ONE_BOARD)
-// 车身与电机驱动共用同一个方向来源校验，驱动无需知道业务话题编号。
-static uint8_t ChassisDirectionReferenceIsCurrent(uint32_t sequence, uint32_t now_ms)
+// 底盘和驱动共用一套来源检查，驱动无需读取业务话题或裁判数据。
+static uint8_t ChassisReferenceIsCurrent(DJIChassisReferenceKind_t kind, uint32_t sequence, uint32_t now_ms)
 {
-    return MessageSnapshotSourceIsCurrent(ROBOT_TOPIC_GIMBAL_FEEDBACK, sequence, now_ms);
+    if (kind == DJI_CHASSIS_SOURCE_DIRECTION)
+        return MessageSnapshotSourceIsCurrent(ROBOT_TOPIC_GIMBAL_FEEDBACK, sequence, now_ms); // 人工平移依赖原方向。
+#if defined(MC02_VISION_PROTOCOL_V2) && MC02_FEATURE_REFEREE
+    if (kind == DJI_CHASSIS_SOURCE_REFEREE_POWER)
+        return RefereeBufferedPowerIsCurrent(sequence, now_ms); // V2 本体导航依赖两组裁判数据。
+#endif
+    return 0u; // 未接入的来源不能授权轮组。
 }
 #endif
 
@@ -141,7 +147,7 @@ uint8_t ChassisInit(void)
     if (!RobotTopicsInit())
         return 0u;
 #if defined(ONE_BOARD)
-    if (!DJIMotorBindChassisReferenceSource(ChassisDirectionReferenceIsCurrent))
+    if (!DJIMotorBindChassisReferenceSource(ChassisReferenceIsCurrent))
         return 0u; // 无法确定轮速依赖的检查函数时不登记电机。
 #endif
     DJIMotorInstance *pending[4] = {NULL}; // 申请完成之前不发布轮电机实例。
@@ -551,15 +557,20 @@ void ChassisTask()
                                         &chassis_config->motion_limits, &motion_output);
 #if defined(ONE_BOARD)
     uint32_t command_deadline_ms = 0u; // 只有复核通过才用于提交，截止点为零也合法。
-    const uint32_t direction_sequence = chassis_cmd_recv.local_direction_sequence; // 计算使用的方向来源，0 表示独立于方向反馈。
-    const uint8_t check_direction = command_allowed && direction_sequence != 0u;
-    if (check_direction) PlatformTaskCriticalEnter(); // 防止方向在复核之后、四轮目标提交之前被撤销。
+    const uint32_t power_generation = chassis_cmd_recv.local_power_generation; // 本体导航使用的裁判供电区间。
+    const uint32_t direction_sequence = chassis_cmd_recv.local_direction_sequence; // 人工相对方向使用的反馈序号。
+    const uint32_t source_sequence = power_generation != 0u ? power_generation : direction_sequence; // 当前命令至多依赖一种外部来源。
+    const DJIChassisReferenceKind_t source_kind = power_generation != 0u
+        ? DJI_CHASSIS_SOURCE_REFEREE_POWER : DJI_CHASSIS_SOURCE_DIRECTION; // 相同数字也要按类型分别检查。
+    if (power_generation != 0u && direction_sequence != 0u)
+        command_allowed = 0u; // 当前协议没有同时携带两种来源的命令，不能遗漏其中一种检查。
+    const uint8_t check_source = command_allowed && source_sequence != 0u;
+    if (check_source) PlatformTaskCriticalEnter(); // 防止来源在复核之后、四轮目标提交之前被撤销。
     if (command_allowed != 0u)
     {
         const uint32_t checked_at_ms = PlatformTimeNowMs(); // 到期检查和剩余时间使用同一时刻。
         command_allowed = ChassisCommandIsSameAndFresh(&command_freshness, checked_at_ms); // 拒绝计算期间失效或替换的旧命令。
-        if (command_allowed && check_direction &&
-            !ChassisDirectionReferenceIsCurrent(direction_sequence, checked_at_ms))
+        if (command_allowed && check_source && !ChassisReferenceIsCurrent(source_kind, source_sequence, checked_at_ms))
             command_allowed = 0u; // 新反馈若属于撤销后的区间，也不能恢复旧命令。
         if (command_allowed != 0u)
             command_deadline_ms = ChassisCommandDeadline(&command_freshness, checked_at_ms); // 保留已复核命令的原始截止点。
@@ -600,14 +611,16 @@ void ChassisTask()
 #if defined(ONE_BOARD)
         // 每台轮电机都用命令原有的代际；任何一台未获许可时清除四轮目标。
         const uint32_t generation = chassis_cmd_recv.safety_generation;
-        const uint8_t lf_ok = DJIMotorSetChassisRefUntilWithSource(motor_lf, motion_output.motor_speed_deg_s[0] * rotor_to_output,
-            generation, command_deadline_ms, direction_sequence); // 左前保留命令截止点与方向来源。
-        const uint8_t rf_ok = DJIMotorSetChassisRefUntilWithSource(motor_rf, motion_output.motor_speed_deg_s[1] * rotor_to_output,
-            generation, command_deadline_ms, direction_sequence); // 右前沿用同一截止点和方向。
-        const uint8_t lb_ok = DJIMotorSetChassisRefUntilWithSource(motor_lb, motion_output.motor_speed_deg_s[2] * rotor_to_output,
-            generation, command_deadline_ms, direction_sequence); // 左后沿用同一截止点和方向。
-        const uint8_t rb_ok = DJIMotorSetChassisRefUntilWithSource(motor_rb, motion_output.motor_speed_deg_s[3] * rotor_to_output,
-            generation, command_deadline_ms, direction_sequence); // 右后沿用同一截止点和方向。
+        uint8_t (*const submit)(DJIMotorInstance *, float, uint32_t, uint32_t, uint32_t) = power_generation != 0u
+            ? DJIMotorSetChassisRefUntilWithPower : DJIMotorSetChassisRefUntilWithSource; // 为整组目标保留统一的来源类型。
+        const uint8_t lf_ok = submit(motor_lf, motion_output.motor_speed_deg_s[0] * rotor_to_output,
+            generation, command_deadline_ms, source_sequence); // 左前保留命令原期限和来源。
+        const uint8_t rf_ok = submit(motor_rf, motion_output.motor_speed_deg_s[1] * rotor_to_output,
+            generation, command_deadline_ms, source_sequence); // 右前沿用同一截止点和来源。
+        const uint8_t lb_ok = submit(motor_lb, motion_output.motor_speed_deg_s[2] * rotor_to_output,
+            generation, command_deadline_ms, source_sequence); // 左后沿用同一截止点和来源。
+        const uint8_t rb_ok = submit(motor_rb, motion_output.motor_speed_deg_s[3] * rotor_to_output,
+            generation, command_deadline_ms, source_sequence); // 右后沿用同一截止点和来源。
         if (!(lf_ok && rf_ok && lb_ok && rb_ok))
         {
             ChassisStopAndClear(); // 任一参考被拒绝时撤销全部轮组参考。
@@ -629,7 +642,7 @@ void ChassisTask()
         }
     }
 #if defined(ONE_BOARD)
-    if (check_direction) PlatformTaskCriticalExit(); // 依赖方向的轮组目标已提交或清除，可以继续处理反馈。
+    if (check_source) PlatformTaskCriticalExit(); // 已提交或清除轮组目标，可以继续处理外部数据。
 #endif
 
     // 速度估计独立于命令许可，停机滑行期间也能读取有效轮速。

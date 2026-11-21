@@ -424,7 +424,8 @@ static uint8_t VisionV2NavigationAfterRecovery(uint32_t now_ms, uint32_t navigat
 static uint8_t VisionV2ReadNavigationPower(RefereeChassisPower_t *power)
 {
     if (RefereeGetChassisPower(power) != REFEREE_OK || power->limit.state != REFEREE_DATA_FRESH ||
-        power->limit_w == 0u || !power->chassis_power_enabled || power->buffer.state != REFEREE_DATA_FRESH)
+        power->limit_w == 0u || !power->chassis_power_enabled || power->buffer.state != REFEREE_DATA_FRESH ||
+        power->buffered_generation == 0u)
         return 0u; // 当前缺少任一必需功率数据时撤销导航目标。
     const uint32_t now_ms = PlatformTimeNowMs(); // 两种恢复条件使用同一次检查时间。
     const uint32_t navigation_age_ms = now_ms - vision_v2_navigation_freshness.received_time_ms; // 保留导航的原接收时刻。
@@ -720,6 +721,7 @@ static void EmergencyHandler(uint8_t remote_online)
 void RobotCMDTask()
 {
     chassis_cmd_send.local_direction_sequence = 0u; // 每轮先按独立命令处理，选择大 yaw 方向后才附上反馈序号。
+    chassis_cmd_send.local_power_generation = 0u; // 只有通过发布前复核的 V2 导航才携带裁判区间。
 #if defined(MC02_CONFIG_GENERATED) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE
     manual_intent_valid = 0u; // 每轮必须重新验证实际输入。
 #endif
@@ -1009,6 +1011,7 @@ void RobotCMDTask()
                                  power.limit.max_age_ms, publish_ms); // 额度与供电许可共用原始 0x0201 期限。
             RobotCmdLeaseInclude(&navigation, power_valid, power.buffer.source_rx_ms,
                                  power.buffer.max_age_ms, publish_ms); // 缓冲独立到期，也可缩短本次导航有效期。
+            chassis_cmd_send.local_power_generation = power_valid ? power.buffered_generation : 0u; // 只传递本次复核有效的区间。
             (void)RobotCmdPublishBounded(chassis_cmd_pub, &chassis_cmd_send, &navigation, publish_ms, 0u); // 复核失败会撤销已发布目标。
             PlatformTaskCriticalExit(); // 复核和发布结束后允许接收任务继续。
         }

@@ -293,9 +293,9 @@ static void *ReadPublishedSnapshots(void *context)
     VehicleHealthSnapshot_t snapshot;
     while (!atomic_load_explicit(&reader_done, memory_order_acquire))
     {
-        if ((VehicleHealthGetSnapshot(&snapshot) == VEHICLE_HEALTH_OK) &&
-            ((uint32_t)snapshot.temperature_c != snapshot.imu_sequence ||
-             snapshot.remote_last_valid_ms != snapshot.imu_sequence))
+        if (VehicleHealthGetSnapshot(&snapshot) != VEHICLE_HEALTH_OK ||
+            (uint32_t)snapshot.temperature_c != snapshot.imu_sequence ||
+            snapshot.remote_last_valid_ms != snapshot.imu_sequence)
             (void)atomic_fetch_add_explicit(&reader_errors, 1u, memory_order_relaxed);
         else
             (void)atomic_fetch_add_explicit(&reader_samples, 1u, memory_order_relaxed);
@@ -324,7 +324,6 @@ static void TestConcurrentReaders(void)
     source.remote_last_valid_ms = 0u;
     source.temperature_c = 0.0f;
     TEST_CHECK(VehicleHealthProcess() == VEHICLE_HEALTH_OK);
-    TEST_CHECK(pthread_create(&reader, NULL, ReadPublishedSnapshots, NULL) == 0);
     for (uint32_t sequence = 1u; sequence <= 5000u; ++sequence)
     {
         now_ms += VEHICLE_HEALTH_UPDATE_PERIOD_MS;
@@ -332,6 +331,13 @@ static void TestConcurrentReaders(void)
         source.remote_last_valid_ms = sequence;
         source.temperature_c = (float)sequence;
         TEST_CHECK(VehicleHealthProcess() == VEHICLE_HEALTH_OK);
+        if (sequence == 1u)
+        {
+            TEST_CHECK(pthread_create(&reader, NULL, ReadPublishedSnapshots, NULL) == 0); // 开始读取本轮发布的数据。
+            // 确认读线程有机会实际读取一次，再由调度器交错运行余下的写入。
+            while (atomic_load(&reader_samples) == 0u && atomic_load(&reader_errors) == 0u)
+                (void)sched_yield(); // 读取失败也结束等待，交由结尾断言报告。
+        }
         if ((sequence & 31u) == 0u)
             (void)sched_yield();
     }

@@ -44,6 +44,7 @@ typedef struct {
 } RefereePowerContinuity_t;
 static RefereePowerContinuity_t referee_base_power; // 上限和供电许可，不依赖缓冲。
 static RefereePowerContinuity_t referee_buffered_power; // 需要上限、供电许可和缓冲的现有模式。
+static uint32_t referee_buffered_generation; // 每个可用区间使用不同且非零的编号。
 
 // 接收、离线和发送回调均由任务派发；共享状态使用可嵌套的任务临界区保护。
 // 此处不从中断调用平台任务锁，也不改变原来的毫秒时基和无符号回绕计算。
@@ -319,8 +320,13 @@ static void RefereeTrackChassisPower(uint32_t now_ms)
         robot->data.robot_state.chassis_power_limit_w != 0u &&
         (robot->data.robot_state.power_output_bits & REFEREE_OUTPUT_CHASSIS_MASK) != 0u); // 普通供电必须具备这两项。
     RefereeTrackPowerContinuity(&referee_base_power, base_available, now_ms); // 缓冲的更新或失效都不改变此区间。
-    RefereeTrackPowerContinuity(&referee_buffered_power,
-        (uint8_t)(base_available && buffer->state == REFEREE_DATA_FRESH), now_ms); // 同时需要缓冲的模式独立记录。
+    const uint8_t buffered_available = (uint8_t)(base_available && buffer->state == REFEREE_DATA_FRESH); // 同时需要两组数据。
+    if (buffered_available && !referee_buffered_power.available)
+    {
+        ++referee_buffered_generation; // 首次可用或中断后恢复时开启新区间，旧目标不能接管。
+        if (referee_buffered_generation == 0u) ++referee_buffered_generation; // 回绕时跳过保留的无效值。
+    }
+    RefereeTrackPowerContinuity(&referee_buffered_power, buffered_available, now_ms); // 更新两组共同恢复的时间。
 }
 
 // 两个功率来源一旦确认过期，只有同类帧可以恢复，避免毫秒回绕后旧帧重新有效。
@@ -586,6 +592,7 @@ RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *conf
     referee_link_active = 0u;
     referee_base_power = (RefereePowerContinuity_t){0}; // 重新初始化后先等待上限与供电许可。
     referee_buffered_power = (RefereePowerContinuity_t){0}; // 依赖缓冲的路径也从首次接收开始。
+    // 保留区间编号，避免重新初始化后计算或队列里的旧目标和新区间重号。
     referee_daemon = daemon;
     PlatformTaskCriticalExit();
     PlatformUartConfig uart_conf = {0}; // 未启用的可选回调保持空值。
@@ -687,8 +694,21 @@ RefereeStatus_t RefereeGetChassisPower(RefereeChassisPower_t *output)
     output->limit_recovery_recorded = (uint8_t)(referee_base_power.available && referee_base_power.interrupted);
     if (output->limit_recovery_recorded)
         output->limit_recovered_ms = referee_base_power.recovered_ms; // 缓冲过期时仍可取得这组有效记录。
+    output->buffered_generation = referee_buffered_power.available ? referee_buffered_generation : 0u; // 不可用时不能授权目标。
     PlatformTaskCriticalExit();
     return REFEREE_OK;
+}
+
+uint8_t RefereeBufferedPowerIsCurrent(uint32_t generation, uint32_t now_ms)
+{
+    if (generation == 0u) return 0u; // 没有原始区间编号时不能放行。
+    PlatformTaskCriticalEnter(); // 防止裁判任务在检查期限与编号之间插入状态变化。
+    RefereeExpirePowerSources(now_ms, referee_has_valid_frame &&
+        now_ms - referee_last_valid_rx_ms > REFEREE_LINK_TIMEOUT_MS); // 发布者停更时也按原期限撤销。
+    const uint8_t current = (uint8_t)(referee_initialized && referee_buffered_power.available &&
+        generation == referee_buffered_generation); // 恢复后的新编号不能授权旧目标。
+    PlatformTaskCriticalExit(); // 结果已经取得，保留调用者原来的临界区层级。
+    return current;
 }
 
 // UI只开放现有六类；服务器自主决策等子命令不随共享调度接入。

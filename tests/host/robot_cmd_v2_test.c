@@ -56,6 +56,7 @@ void VisionSend(void)
     {
         referee_power.recovery_recorded = 1u; // 模拟裁判接收任务先撤权、后恢复。
         referee_power.recovered_ms = test_tick; // 待发布的导航已经在此之前接收。
+        ++referee_power.buffered_generation; // 恢复后的区间和旧区间不同。
     }
 }
 void VisionGetStatus(Vision_Status_t *status)
@@ -96,6 +97,7 @@ static void PrepareReferee(void)
         .limit_w = 80u, // 只给主机测试使用的非零上限。
         .buffer_energy_j = 40u, // 保留焦耳单位。
         .chassis_power_enabled = 1u, // 初始测试允许供电。
+        .buffered_generation = 1u, // 首条合成导航依赖的裁判区间。
     };
 }
 
@@ -323,6 +325,8 @@ int main(void)
     RobotCMDTask();
     TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick,
         &navigation_command_time) == MESSAGE_OK && chassis.chassis_mode == CHASSIS_NO_FOLLOW);
+    TEST_CHECK(chassis.local_power_generation == referee_power.buffered_generation &&
+        chassis.local_direction_sequence == 0u); // 本地轮组收到发布时复核的裁判来源。
     TEST_CHECK(navigation_command_time.source_time_ms == referee_power.limit.source_rx_ms &&
         navigation_command_time.source_max_age_ms == 300u); // 保留真正先到期的 0x0201 时间。
     vision_send_elapsed_ms = 6u; // 导航在选择时有效，发布前裁判数据到期。

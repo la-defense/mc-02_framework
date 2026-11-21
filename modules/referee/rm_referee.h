@@ -86,6 +86,14 @@ RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output);
  */
 RefereeStatus_t RefereeGetChassisPower(RefereeChassisPower_t *output);
 
+/** @brief 检查底盘目标使用的两组裁判数据是否仍处于同一连续有效区间。
+ * @param[in] generation 由 RefereeGetChassisPower 交付的非零编号。
+ * @param[in] now_ms 本机检查时刻，单位 ms。
+ * @return 1 表示区间未中断、上限和供电许可有效、缓冲仍新鲜；否则为 0。
+ * @note 任务上下文调用，可在已有任务临界区中使用，不等待，也不发送报文。
+ */
+uint8_t RefereeBufferedPowerIsCurrent(uint32_t generation, uint32_t now_ms);
+
 /**
  * @brief 复制最近一条合法机器人交互内容及其接收信息。
  * @param[out] output 非空时接收副本；未初始化时清零，空指针返回参数错误。
