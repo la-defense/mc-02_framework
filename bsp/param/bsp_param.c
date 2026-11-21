@@ -401,10 +401,16 @@ static uint16_t ParamFindEntry(uint16_t key, uint16_t *out_len)
     return ParamFindEntryInPayload(s_payload, s_payload_len, key, out_len);
 }
 
+// CAN 和轮组参数只走车型配置；旧记录中的对应字节可随其他参数原样保存。
+static uint8_t ParamKeyReservedForVehicleConfig(uint16_t key)
+{
+    return key >= 0x0200u && key <= 0x03ffu; // CAN 段为 0x02xx，底盘段为 0x03xx。
+}
+
 uint8_t ParamGet(uint16_t key, void *buf, uint16_t len)
 {
-    if (buf == NULL)
-        return 0;
+    if (buf == NULL || ParamKeyReservedForVehicleConfig(key))
+        return 0; // 即使旧记录留有该编号，也不作为可读参数交付。
     uint16_t entry_len = 0;
     uint16_t data_off = ParamFindEntry(key, &entry_len);
     // 只有编号和长度都匹配才复制，失败时调用方的接收空间保持原样。
@@ -416,6 +422,9 @@ uint8_t ParamGet(uint16_t key, void *buf, uint16_t len)
 
 uint8_t ParamSet(uint16_t key, const void *buf, uint16_t len)
 {
+    if (ParamKeyReservedForVehicleConfig(key))
+        return 0; // 调整 CAN 或轮组配置时须使用车型配置入口。
+
     // 已描述的 BMI088 字段必须一起写入，避免三个独立调用留下半组数据。
     if (buf == NULL || len == 0u || len > (PARAM_MAX_PAYLOAD - sizeof(ParamEntry_t)) ||
         key == PARAM_KEY_IMU_GYRO_OFFSET || key == PARAM_KEY_IMU_G_NORM ||

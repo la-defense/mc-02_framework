@@ -278,6 +278,57 @@ static int test_parameter_group_legacy_load(void)
     return 0;
 }
 
+static int test_vehicle_reserved_ranges(void)
+{
+    const uint16_t reserved_keys[] = {
+        0x0200u, // CAN 段首键。
+        0x02ffu, // CAN 段末键。
+        0x0300u, // 底盘段首键。
+        0x03ffu, // 底盘段末键。
+    };
+    const uint32_t saved_value = 0x12345678u; // 模拟旧工具曾在预留段留下的原始字节。
+    uint8_t payload[PARAM_MAX_PAYLOAD] = {0};
+    uint16_t payload_size = make_calibration_payload(payload, 9.7f, 0u, 0u);
+    for (size_t i = 0u; i < sizeof(reserved_keys) / sizeof(reserved_keys[0]); ++i)
+        payload_size = append_parameter(payload, payload_size, reserved_keys[i], &saved_value, sizeof(saved_value));
+    CHECK(write_test_record(0u, 11u, payload, payload_size));
+    CHECK(ParamInit() == 1u); // 预留字节与有效的旧标定共存，整条记录仍可加载。
+    CHECK(param_active_region == 0u && param_seq == 11u && event_count == 0u);
+
+    const uint32_t new_value = 0x87654321u; // 便于检查拒绝写入后是否替换了旧字节。
+    for (size_t i = 0u; i < sizeof(reserved_keys) / sizeof(reserved_keys[0]); ++i)
+    {
+        uint32_t output = new_value; // 读取失败时调用者的原值应保留。
+        CHECK(ParamGetU32(reserved_keys[i], &output) == 0u && output == new_value);
+        CHECK(ParamSetU32(reserved_keys[i], new_value) == 0u);
+    }
+    CHECK(ParamSetU32(0x0242u, new_value) == 0u); // 旧记录没有此键，新增也须被拒绝。
+    CHECK(ParamSetU32(0x0342u, new_value) == 0u);
+    CHECK(event_count == 0u);
+    ParamImuCalibrationGroup_t group;
+    uint32_t source_version;
+    CHECK(ParamImuCalibrationRead(&group, &source_version) == PARAM_RESULT_OK);
+    CHECK(source_version == 1u && group.g_norm_m_s2 == 9.7f);
+
+    CHECK(ParamSetU32(0x01ffu, new_value) == 1u); // 前一段的普通键仍可写。
+    CHECK(ParamSetU32(0x0400u, new_value) == 1u); // 拒绝范围截止到 0x03ff。
+    uint32_t output = 0u;
+    CHECK(ParamGetU32(0x0400u, &output) == 1u && output == new_value);
+    const ParamLongOperationGuard_t guard = {
+        .begin = ParamOperationGuardBegin, // 模拟维护授权进入。
+        .end = ParamOperationGuardEnd, // 模拟维护结束并恢复正常监控。
+    };
+    ParamSetLongOperationGuard(&guard);
+    CHECK(ParamCommit() == 1u && param_active_region == 1u && param_seq == 12u);
+    const uint8_t *region_a = (const uint8_t *)(uintptr_t)PARAM_FLASH_BASE;
+    const uint8_t *region_b = region_a + 0x20000u; // 新记录写入 B，旧记录仍在 A。
+    const uint16_t saved_size = (uint16_t)(region_b[6] | ((uint16_t)region_b[7] << 8));
+    CHECK(saved_size == payload_size + 16u); // 仅添加两条各占 8 B 的普通键。
+    CHECK(memcmp(region_a + 32u, payload, payload_size) == 0);
+    CHECK(memcmp(region_b + 32u, payload, payload_size) == 0); // 保存时原样保留旧字节。
+    return 0;
+}
+
 static int test_parameter_group_capacity_failure(void)
 {
     CHECK(ParamInit() == 0u);
@@ -570,6 +621,12 @@ int main(int argc, char **argv)
     if (argc > 1 && strcmp(argv[1], "legacy-bmi") == 0)
     {
         int result = test_parameter_group_legacy_load();
+        munmap(flash, FLASH_BYTES);
+        return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc > 1 && strcmp(argv[1], "vehicle-reserved-ranges") == 0)
+    {
+        int result = test_vehicle_reserved_ranges();
         munmap(flash, FLASH_BYTES);
         return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }

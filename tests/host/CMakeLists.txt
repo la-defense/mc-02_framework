@@ -2497,6 +2497,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND UNIX AND NOT APPLE)
   add_test(NAME production_parameter_group_transaction COMMAND param_operation_test group)
   add_test(NAME production_parameter_group_requires_initialization COMMAND param_operation_test group-uninitialized)
   add_test(NAME production_parameter_group_v1_compatibility COMMAND param_operation_test legacy-bmi)
+  # 验证车型专属参数段拒绝通用读写，另存参数时保留旧记录字节。
+  add_test(NAME production_parameter_vehicle_reserved_ranges COMMAND param_operation_test vehicle-reserved-ranges)
   add_test(NAME production_parameter_group_semantic_ab_fallback COMMAND param_operation_test semantic-fallback)
   add_test(NAME production_parameter_group_capacity_failure COMMAND param_operation_test group-capacity)
   add_test(NAME production_parameter_group_flash_failure_preserves_old COMMAND param_operation_test group-commit-failure)

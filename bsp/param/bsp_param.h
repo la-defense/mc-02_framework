@@ -46,7 +46,9 @@ typedef enum
     PARAM_KEY_IMU_G_NORM = 0x0101,      /* float：静止时的加速度大小，单位 m/s² */
     PARAM_KEY_IMU_CALIB_META = 0x0102,  /* u32 结果/状态 | float 标定温度 | u32 标定时刻(s) */
     PARAM_KEY_IMU_CALIB_SCHEMA_VERSION = 0x0103, /* u32：BMI088 标定参数组逻辑版本 */
-    /* 0x0200~ 仍预留给 CAN；0x0300~ 仍预留给底盘；0x0400~ 仍预留给配置描述。 */
+    /* 0x0200~0x02ff 预留给 CAN，设备参数由车型配置提供。 */
+    /* 0x0300~0x03ff 预留给底盘，轮组参数由车型配置提供。 */
+    /* 0x0400~ 预留给配置描述。 */
 } Param_Key_e;
 
 /** @brief BMI088 标定组当前逻辑版本；与 Flash 记录容器版本分开。 */
@@ -227,7 +229,8 @@ void ParamSetLongOperationGuard(const ParamLongOperationGuard_t *guard);
  * @param[in] key 参数编号。
  * @param[out] buf 接收数据的空间，至少有 len 字节；NULL 时返回0。
  * @param[in] len 要读取的字节数，必须等于该条目保存的长度。
- * @return 1 表示复制成功；0 表示空指针、未找到参数或长度不符，buf 内容保持原样。
+ * @return 1 表示复制成功；0 表示空指针、车型预留编号、未找到参数或长度不符，buf 保持原样。
+ * @note 0x0200～0x03ff 的旧条目只保留原始字节，通用接口不交付其内容。
  */
 uint8_t ParamGet(uint16_t key, void *buf, uint16_t len);
 
@@ -236,8 +239,9 @@ uint8_t ParamGet(uint16_t key, void *buf, uint16_t len);
  * @param[in] key 参数编号；已有同编号时替换内容。
  * @param[in] buf 待复制数据，至少有 len 字节；返回后可改写或释放，NULL 时返回0。
  * @param[in] len 数据字节数，1～508；所有条目连同编号、长度及补齐字节共用512字节。
- * @return 1 表示暂存成功；0 表示参数不符、属于受描述参数组或空间不足。
+ * @return 1 表示暂存成功；0 表示参数不符、车型预留编号、受描述参数组或空间不足。
  * @note 本函数先在候选缓冲中计算完整新条目表；空间不足时旧 RAM 参数保持原样。
+ *       0x0200～0x03ff 由车型配置提供，不能通过本接口新增或替换。
  *       已描述的 BMI088 标定字段和组版本只能通过 ParamImuCalibrationStage/Accept 修改。
  *       Flash 中的记录在本函数内保持原样。
  */
