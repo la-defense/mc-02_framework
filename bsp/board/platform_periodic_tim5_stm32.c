@@ -173,6 +173,14 @@ static uint8_t Reached(uint32_t now, uint32_t deadline)
     return (uint8_t)((uint32_t)(now - deadline) <= INT32_MAX);
 }
 
+// 已取得通道后，任务在临界区内核对运行所需的硬件状态。
+static uint8_t TimerCanWake(void)
+{
+    return (uint8_t)(__HAL_RCC_TIM5_IS_CLK_ENABLED() && // 时钟门关闭时不能读取外设寄存器。
+        (TIM5->CR1 & TIM_CR1_CEN) != 0u && // 停转的计数不能用来领取拍点。
+        NVIC_GetEnableIRQ(TIM5_IRQn) != 0u); // 比较中断必须能到达任务。
+}
+
 PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
     PlatformPeriodicRelease_t *release)
 {
@@ -180,17 +188,32 @@ PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
     if (!TaskContextReady()) return PLATFORM_PERIODIC_CONTEXT;
     taskENTER_CRITICAL(); // 查找时不与其他任务的申请或释放交错。
     const size_t index = OwnerChannel(clock);
+    if (index == CHANNEL_COUNT)
+    {
+        taskEXIT_CRITICAL();
+        return PLATFORM_PERIODIC_CONTEXT; // 无权使用时不得读写 TIM5。
+    }
+    if (!TimerCanWake())
+    {
+        taskEXIT_CRITICAL();
+        return PLATFORM_PERIODIC_CLOCK; // 计数停止时，即使旧计数已达到拍点也拒绝领取。
+    }
+    const uint32_t initial_tick = TIM5->CNT; // 在确认可用的同一临界区读取。
     taskEXIT_CRITICAL();
-    if (index == CHANNEL_COUNT) return PLATFORM_PERIODIC_CONTEXT; // 无权使用时不得读写 TIM5。
     const TimerChannel_t *channel = &channels[index]; // 该通道只允许当前任务释放。
     const SemaphoreHandle_t signal = owners[index].signal; // 任务等待和 ISR 交付用同一个信号量。
     PlatformPeriodicClock_t candidate = *clock; // 等待失败不会移动原拍点。
     PlatformPeriodicRelease_t observed;
-    PlatformPeriodicResult_t result = PlatformPeriodicPoll(&candidate, TIM5->CNT, &observed);
+    PlatformPeriodicResult_t result = PlatformPeriodicPoll(&candidate, initial_tick, &observed); // 按刚取得的可用时刻判断。
     if (result == PLATFORM_PERIODIC_WAIT)
     {
         (void)xSemaphoreTake(signal, 0u); // 清掉上次结束后可能留在信号量中的通知。
         taskENTER_CRITICAL(); // 写入比较值期间禁止本定时器中断介入。
+        if (!TimerCanWake())
+        {
+            taskEXIT_CRITICAL();
+            return PLATFORM_PERIODIC_CLOCK; // 读取计数后失去定时器时，不再打开本次比较中断。
+        }
         DisarmCompare(channel); // 清掉本通道旧比较，保留其他任务的等待。
         *channel->compare = observed.scheduled_tick; // 通道只比较计数，不驱动引脚。
         ClearMatch(channel); // 去掉改写 CCR 前可能刚到期的旧比较；下面用 CNT 复查新拍点。
@@ -206,10 +229,16 @@ PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
         const TickType_t limit = ticks >= portMAX_DELAY ? portMAX_DELAY - 1u : (TickType_t)ticks; // 绝不无限等待丢失的中断。
         const uint8_t signaled = (uint8_t)(!armed || xSemaphoreTake(signal, limit) == pdTRUE); // 已到期的竞态可直接复查。
         taskENTER_CRITICAL(); // 防止清比较时中断再次向本任务发通知。
-        DisarmCompare(channel); // 超时或唤醒后只取消本通道的比较。
+        if (__HAL_RCC_TIM5_IS_CLK_ENABLED())
+            DisarmCompare(channel); // 外设寄存器仍可访问时，只取消本通道的比较。
+        if (!signaled || !TimerCanWake())
+        {
+            taskEXIT_CRITICAL();
+            return PLATFORM_PERIODIC_CLOCK; // 通知丢失或恢复运行前时钟已失效，拒绝推进周期。
+        }
+        const uint32_t wake_tick = TIM5->CNT; // 定时器仍可用时才读取唤醒计数。
         taskEXIT_CRITICAL(); // 允许其他已到期通道继续交付通知。
-        if (!signaled) return PLATFORM_PERIODIC_CLOCK; // 计数前进也不能掩盖预期中断丢失。
-        result = PlatformPeriodicPoll(&candidate, TIM5->CNT, &observed); // 只接受硬件时刻已经到期的结果。
+        result = PlatformPeriodicPoll(&candidate, wake_tick, &observed); // 只接受硬件时刻已经到期的结果。
         if (result == PLATFORM_PERIODIC_WAIT) return PLATFORM_PERIODIC_CLOCK; // 提前通知不能运行新一拍。
     }
     if (result == PLATFORM_PERIODIC_READY)
@@ -231,10 +260,10 @@ PlatformPeriodicResult_t PlatformTaskHighResFinish(const PlatformPeriodicClock_t
         taskEXIT_CRITICAL();
         return PLATFORM_PERIODIC_CONTEXT; // 未持有通道时不访问硬件寄存器。
     }
-    if (!__HAL_RCC_TIM5_IS_CLK_ENABLED() || (TIM5->CR1 & TIM_CR1_CEN) == 0u)
+    if (!TimerCanWake())
     {
         taskEXIT_CRITICAL();
-        return PLATFORM_PERIODIC_CLOCK; // 外设被关停后不能用残留计数报告完成。
+        return PLATFORM_PERIODIC_CLOCK; // 外设或比较中断失效时不能用残留计数报告完成。
     }
     const uint32_t now = TIM5->CNT; // 在与拍点相同的计数域内读取完成时刻。
     taskEXIT_CRITICAL();
@@ -252,13 +281,20 @@ PlatformPeriodicResult_t PlatformTaskHighResClose(const PlatformPeriodicClock_t 
         return PLATFORM_PERIODIC_CONTEXT;
     }
     TimerOwner_t *owner = &owners[index]; // 只释放本任务的通道。
-    DisarmCompare(&channels[index]); // 停止本通道通知后才删除信号量。
+    const uint8_t register_accessible = (uint8_t)(__HAL_RCC_TIM5_IS_CLK_ENABLED() != 0u); // 时钟门关闭时只清理软件与 NVIC。
+    if (register_accessible)
+        DisarmCompare(&channels[index]); // 停止本通道通知后才删除信号量。
     if (--owner_count == 0u) // 最后一个任务离开时才关闭共享硬件。
     {
         HAL_NVIC_DisableIRQ(TIM5_IRQn); // 先停止来自 TIM5 的异常入口。
-        TIM5->CR1 = 0u; // 停止计数，不再产生新标志。
-        ClearTimerInterrupts(); // 清掉留在定时器和 NVIC 内的旧请求。
-        __HAL_RCC_TIM5_CLK_DISABLE(); // 无后续寄存器访问时再关时钟。
+        if (register_accessible)
+        {
+            TIM5->CR1 = 0u; // 停止计数，不再产生新标志。
+            ClearTimerInterrupts(); // 清掉留在定时器和 NVIC 内的旧请求。
+            __HAL_RCC_TIM5_CLK_DISABLE(); // 无后续寄存器访问时再关时钟。
+        }
+        else
+            NVIC_ClearPendingIRQ(TIM5_IRQn); // 时钟已关闭，下一次申请时复位外设。
     }
     vSemaphoreDelete(owner->signal); // 本通道已经关闭，ISR 不会再访问它。
     owner->signal = NULL; // 下次分配时重新初始化信号量。
@@ -270,6 +306,7 @@ PlatformPeriodicResult_t PlatformTaskHighResClose(const PlatformPeriodicClock_t 
 
 void TIM5_IRQHandler(void)
 {
+    if (!__HAL_RCC_TIM5_IS_CLK_ENABLED()) return; // 时钟关闭时不能读取挂起的外设标志。
     const uint32_t pending = TIM5->SR; // 记录进入时已经到期的通道，稍后到期的由下次 IRQ 处理。
     const uint32_t enabled = TIM5->DIER; // 忽略尚未等待的通道留下的比较标志。
     BaseType_t reschedule = pdFALSE; // 任一通知唤醒更高优先级任务时，退出前请求调度。
@@ -278,6 +315,7 @@ void TIM5_IRQHandler(void)
         const TimerChannel_t *channel = &channels[i]; // 使用同一通道的开关、标志和信号量。
         if ((pending & channel->flag) == 0u || (enabled & channel->enable) == 0u) continue; // 未打开或未到期时不交付。
         DisarmCompare(channel); // 每次设置只产生一次通知，保留其他通道的状态位。
+        if (owners[i].signal == NULL) continue; // 时钟恢复后，已释放的通道可能仍残留比较请求。
         if (xSemaphoreGiveFromISR(owners[i].signal, &reschedule) == pdTRUE)
             ++mc02_tim5_irq_notifications; // 只记录成功写入信号量的通知。
     }

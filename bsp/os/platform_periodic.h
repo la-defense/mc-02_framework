@@ -11,7 +11,7 @@ typedef enum {
     PLATFORM_PERIODIC_WAIT, /**< 下一拍尚未到期。 */
     PLATFORM_PERIODIC_CONFIG, /**< 周期、预算或计数分辨率无效。 */
     PLATFORM_PERIODIC_CONTEXT, /**< 当前无法在任务中等待。 */
-    PLATFORM_PERIODIC_CLOCK, /**< 计数倒退、后端提前结束等待或唤醒超时。 */
+    PLATFORM_PERIODIC_CLOCK, /**< 时钟不可用、计数倒退、提前唤醒或等待超时。 */
     PLATFORM_PERIODIC_RESOURCE /**< 计时资源已占用或无法建立等待。 */
 } PlatformPeriodicResult_t;
 
@@ -159,7 +159,7 @@ PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
  * @param[in] clock 当前任务持有的硬件周期状态地址。
  * @param[in] release 最近一次成功领取的拍点。
  * @param[out] timing 成功时写入实际耗时和超期情况，失败时保留原值。
- * @return READY 为成功，未持有通道、计数器关闭或拍点无效时返回具体错误。
+ * @return READY 为成功，未持有通道、计数或唤醒资源不可用、拍点无效时返回具体错误。
  */
 PlatformPeriodicResult_t PlatformTaskHighResFinish(const PlatformPeriodicClock_t *clock,
     const PlatformPeriodicRelease_t *release, PlatformPeriodicTiming_t *timing);
