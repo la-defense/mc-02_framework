@@ -6,6 +6,7 @@
 #include "message_center.h"
 #include "platform_irq.h"
 #include "platform_sync.h"
+#include "robot.h"
 #include "robot_can_recovery_coordinator.h"
 #include "robot_control_feedback_runtime.h"
 #include "robot_def.h"
@@ -333,12 +334,29 @@ int main(int argc, char **argv)
     NewKeyboard(1073u);
     CommissioningChassisCmdTask();
     TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.vx > 0.0f);
-    wheel_feedback_available = 0u;
+    const uint32_t before_stop = command.safety_generation; // 保存故障发生前已交给消费者的旧代次。
+    RobotStopCommissioningCommand(); // 模拟命令任务收到时钟故障，此时原目标仍在有效期内。
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) != MESSAGE_OK);
+    TEST_CHECK(!RobotSafetyIsReadyForGeneration(tick, before_stop) && IrqRestored());
+
     NewKeyboard(1074u);
+    CommissioningChassisCmdTask(); // 新输入不能替代重新使能。
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) != MESSAGE_OK);
+    RobotSafetyRequestEnable(); // 直接模拟一次新的人工使能，验证接管的时间边界。
+    CommissioningChassisCmdTask();
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) != MESSAGE_OK);
+    NewKeyboard(1075u);
+    CommissioningChassisCmdTask();
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.vx == 0.0f);
+    NewKeyboard(1077u);
+    CommissioningChassisCmdTask();
+    TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) == MESSAGE_OK && command.vx > 0.0f);
+    wheel_feedback_available = 0u;
+    NewKeyboard(1078u);
     CommissioningChassisCmdTask(); // 仍有人工输入，缺少轮组反馈也必须禁止。
     TEST_CHECK(MessageReadSnapshot(subscriber, &command, sizeof(command), tick, NULL) != MESSAGE_OK);
     radio.remote_online = 0u;
-    NewRadio(1075u);
+    NewRadio(1079u);
     CommissioningChassisCmdTask(); // 无线离线锁存急停。
     TEST_CHECK(EstopIsLatched() && EstopGetReason() == ESTOP_REASON_RC_OFFLINE && IrqRestored());
     return 0;

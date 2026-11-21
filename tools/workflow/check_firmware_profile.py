@@ -7,18 +7,21 @@ import re
 import shlex
 import subprocess
 
+COMMISSIONING_CHASSIS_COMMANDS = {
+    "CommissioningChassisCmdInit",  # 登记受限人工话题。
+    "CommissioningChassisCmdTask",  # 发布受限人工目标。
+    "RobotStopCommissioningCommand",  # 任务故障时撤销人工话题和许可。
+}
 ACTUATORS = {
     "ChassisInit", "GimbalInit", "ShootInit", "RobotCMDInit",
     "ChassisTask", "GimbalTask", "ShootTask", "RobotCMDTask",
     "DJIMotorInit", "DJIMotorControl", "LKMotorInit", "LKMotorControl",
     "HTMotorInit", "HTMotorControlInit", "DMMotorInit", "DMMotorControlInit",
     "XMMotorInit", "XMMotorControlInit", "ServoInit", "ServoSetAngle",
-    "CommissioningChassisCmdInit", "CommissioningChassisCmdTask",
-}
+} | COMMISSIONING_CHASSIS_COMMANDS
 COMMISSIONING_CHASSIS_ACTUATORS = {
     "ChassisInit", "ChassisTask", "DJIMotorInit", "DJIMotorControl",
-    "CommissioningChassisCmdInit", "CommissioningChassisCmdTask",
-}
+} | COMMISSIONING_CHASSIS_COMMANDS
 CONSUMERS = {"CANProcessRx", "USARTProcessRx", "USBTransportProcessRx", "USBTransportProcess", "MotorControlTask"}
 ROLE_INITIALIZERS = {
     "single": {"ChassisInit", "GimbalInit", "ShootInit", "RobotCMDInit"},
@@ -245,7 +248,7 @@ def main():
     elif args.profile in ("bench_safe", "commissioning"):
         forbidden = ACTUATORS & functions
     else:
-        forbidden = (ROLE_FORBIDDEN[args.role] | {"CommissioningChassisCmdInit", "CommissioningChassisCmdTask"}) & functions
+        forbidden = (ROLE_FORBIDDEN[args.role] | COMMISSIONING_CHASSIS_COMMANDS) & functions
     if missing or forbidden:
         raise SystemExit(f"profile check failed: missing={sorted(missing)}, forbidden={sorted(forbidden)}")
 

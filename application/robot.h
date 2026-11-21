@@ -30,4 +30,9 @@ uint8_t RobotRecheckCanAfterDiagnostics(void);
  */
 void RobotTask();
 
+/** @brief 受限底盘命令任务失败时，立即失能并撤销已发布的人工目标。
+ * @note 仅由受限底盘配置的整车任务在报告时序故障前调用。
+ */
+void RobotStopCommissioningCommand(void);
+
 #endif

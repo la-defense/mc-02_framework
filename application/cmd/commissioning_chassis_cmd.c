@@ -7,6 +7,7 @@
 #include "platform_irq.h"
 #include "platform_sync.h"
 #include "remote_safety.h"
+#include "robot.h"
 #include "robot_can_recovery_coordinator.h"
 #include "robot_control_feedback_runtime.h"
 #include "robot_def.h"
@@ -61,6 +62,14 @@ static void ClearManualCommand(void)
     manual_lease_published = 0u;
     last_motion.valid = 0u; // 下一条获准的人工命令从零开始。
     (void)MessagePublisherInvalidate(chassis_publisher); // 不把旧速度留给底盘任务继续使用。
+}
+
+void RobotStopCommissioningCommand(void)
+{
+    const PlatformIrqState_t saved = PlatformIrqSaveAndDisable(); // 失能和清除旧命令之间不能处理新的人工输入。
+    RobotSafetyRequestDisable(); // 先撤销运行许可，已进入电机软件队列的旧代次同时失效。
+    ClearManualCommand(); // 清除人工来源、限速基准和底盘话题。
+    PlatformIrqRestore(saved); // 调度任务随后记录时序故障。
 }
 
 // 同时核对之前目标的原始输入期限和话题期限。

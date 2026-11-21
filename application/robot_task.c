@@ -30,7 +30,7 @@
 #include "task_monitor.h"
 #include "bsp_crash.h"
 #include "init_diagnostic.h"
-#if MC02_TASK_MOTOR_SPLIT || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+#if MC02_TASK_MOTOR_SPLIT
 #include "robot_safety.h"
 #endif
 
@@ -377,7 +377,7 @@ __attribute__((noreturn)) void StartROBOTTASK(void const *argument)
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     RobotTaskCycle_t cycle;
     OpenConfiguredTaskCycle(&cycle, RobotGetTaskPeriod(ROBOT_PERIODIC_DIAGNOSTIC), TASK_MONITOR_ROBOT, 1u,
-                            PLATFORM_PERIODIC_SOURCE_RTOS, RobotSafetyRequestDisable); // 计时故障立即撤销人工运行许可。
+                            PLATFORM_PERIODIC_SOURCE_RTOS, RobotStopCommissioningCommand); // 在报告时序故障前失能并撤销人工命令。
 #else
     RobotTaskCycle_t cycle = OpenTaskCycle(ROBOT_PERIODIC_DIAGNOSTIC, TASK_MONITOR_ROBOT);
 #endif

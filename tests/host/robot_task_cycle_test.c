@@ -5,6 +5,7 @@
 #include "platform_os.h"
 #include "platform_periodic.h"
 #include "platform_probe.h"
+#include "robot.h"
 #include "task_monitor.h"
 #include "test_check.h"
 #if MC02_TASK_CONTROL
@@ -116,8 +117,13 @@ void RobotSafetyRequestDisable(void)
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 void RobotSafetyRequestDisable(void)
 {
+    TEST_CHECK(0); // 受限命令任务的故障入口还须撤销已发布的话题。
+}
+
+void RobotStopCommissioningCommand(void)
+{
     TEST_CHECK(expected_monitor == TASK_MONITOR_ROBOT && work == 1u && timing_faults == 0u);
-    ++stops; // 人工许可必须在监控故障报告前撤销。
+    ++stops; // 人工许可和旧命令必须在监控故障报告前撤销。
 }
 #endif
 
