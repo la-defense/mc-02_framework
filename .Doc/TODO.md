@@ -300,7 +300,7 @@
 
 Unicom
 
-- [ ] **MC02-0003** [enhancement] [ready-for-agent] 建立 standard_cmd 输入适配与三种模式来源接口。验收：来源模块解析合法输入后按车型映射 SI 单位、明确参考系与源期限的控制意图，连续目标与离散事件分开，不重发续期；robot_cmd 唯一仲裁模式／来源，safety 唯一计算许可。安全手势统一，其余按车型配置，辅助人工击发，健康切换平滑接管。关联0054／0056／0070，不新增其他输入设备。鼠标位移已使用有界事件队列，迟到的无线离线已按模式处理；生成配置命令路径已接入人工映射与实际间隔积分。键鼠和摇杆每轮明确选择底盘模式，未分配底盘动作的摇杆档位发布零速度停止。哨兵参数待确认，完整模式许可、枪口／场地参照及跨板期限仍待接线。详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)与[实施记录](../docs/workflow/tickets/MC02-0003.md)。
+- [ ] **MC02-0003** [enhancement] [ready-for-agent] 建立 standard_cmd 输入适配与三种模式来源接口。验收：来源模块解析合法输入后按车型映射 SI 单位、明确参考系与源期限的控制意图，连续目标与离散事件分开，不重发续期；robot_cmd 唯一仲裁模式／来源，safety 唯一计算许可。安全手势统一，其余按车型配置，辅助人工击发，健康切换平滑接管。关联0054／0056／0070，不新增其他输入设备。鼠标位移已使用有界事件队列，迟到的无线离线已按模式处理。DBUS 帧提交时重新检查原始接收期限；生成配置命令路径已接入人工映射与实际间隔积分。键鼠和摇杆每轮明确选择底盘模式，未分配底盘动作的摇杆档位发布零速度停止。哨兵参数待确认，完整模式许可、枪口／场地参照及跨板期限仍待接线。详见[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)与[实施记录](../docs/workflow/tickets/MC02-0003.md)。
 
 - [x] **MC02-0004** [enhancement] [ready-for-agent] 统一编译日志上限与模块运行等级。验收：来源默认STATUS、普通事件过滤先于渲染，等级不超过`MC02_LOG_COMPILED_MAX_LEVEL`；USART10用CRC保护命令临时设置／查询来源等级，并支持MC02-0065按需健康快照；日志只走RTT，不作串口镜像；状态可查询串口及命令错误。异步管线复用MC02-0066，范围与验证边界见[任务记录](../docs/workflow/tickets/MC02-0004.md)和[范围规格](../docs/workflow/specs/robomaster-framework-evolution.md)。
 

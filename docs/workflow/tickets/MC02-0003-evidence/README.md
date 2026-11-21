@@ -50,3 +50,10 @@ WSL Debug／Release 的遥控相关定向用例各14/14、键鼠相关各7/7通�
 - 切档用例及其相关输入、失效和独立导航用例共 16 项，通过 ASan／UBSan。单板 SP／V2 隔离 Debug 均通过 ARM 构建、源码与 ELF 检查，主 RAM 分别为 130032 B、130768 B，与 `8b24506` 一致。Flash 分别为 333184 B、339744 B，两版均增加 16 B。仅在隔离源码中使用测试确认条件，未连接硬件。
 - 首次全量 Debug 回归中，独立的 `production_vehicle_health_gimbal` 读线程未在写线程结束前取得样本。该目标未链接 `robot_cmd.c`。单独复跑 12 次均通过。
 - 重跑 `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 850 项；普通禁热和遥控诊断通过 ARM 构建及 ELF 检查，六种未确认车型的正式预设仍按预期拒绝。
+
+## 遥控帧提交时复核派发期限
+
+- 主机使用真实 UART 队列和 DBUS 解析器。在 UART 与遥控入口均通过 50 ms 检查后注入 1 ms 调度延迟。旧实现错误接受过期切档帧，改写了已有键盘状态和无线来源。修复后，写入前会复核原接收时刻。超期帧保持原档位、键鼠状态、无线和键鼠样本号及来源代次，只增加拒绝统计。恰好 50 ms 的合法帧仍按原时间更新。
+- 遥控接收、输入适配、来源代次、键鼠心跳、原接收时间回绕和并发读取等 16 项回归通过 ASan／UBSan。[真实接收回归](../../../../tests/host/remote_control_test.c)
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 859 项。普通禁热和遥控诊断通过 ARM 构建与 ELF 检查，六种实际车型的正式预设仍按未确认条件拒绝。
+- 隔离受限底盘、正式单板 SP 和 V2 通过 ARM Debug 构建、源码与 ELF 检查，均链接生产 DBUS 回调。三种配置和遥控诊断的 Flash 各增加 16 B，主 RAM 均持平。本轮未连接硬件，现场接收和停止时延仍待测。

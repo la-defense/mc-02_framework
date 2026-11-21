@@ -12,6 +12,7 @@
 #include "platform_sync.h"
 
 #define REMOTE_CONTROL_FRAME_SIZE 18u
+#define REMOTE_RX_DISPATCH_MAX_AGE_MS 50u // 从 UART 原始接收到提交遥控状态的最长间隔。
 static RC_ctrl_t rc_ctrl[2];
 static uint8_t rc_init_flag;
 static PlatformUartInstance *rc_usart_instance;
@@ -194,7 +195,7 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
     if (controls == NULL || block == NULL) return;
     const uint8_t *frame = block->data;
     if (block->length != REMOTE_CONTROL_FRAME_SIZE || frame == NULL ||
-        (uint32_t)(PlatformTimeNowMs() - block->received_ms) > 50u)
+        (uint32_t)(PlatformTimeNowMs() - block->received_ms) > REMOTE_RX_DISPATCH_MAX_AGE_MS)
     {
         const uint32_t primask = PlatformIrqSaveAndDisable();
         remote_control_diag.rejected_length++;
@@ -210,7 +211,13 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
         return;
     }
     uint32_t primask = PlatformIrqSaveAndDisable();
-    uint32_t now = PlatformTimeNowMs();
+    uint32_t now = PlatformTimeNowMs(); // 解码期间可能被抢占，提交前重新取时。
+    if ((uint32_t)(now - block->received_ms) > REMOTE_RX_DISPATCH_MAX_AGE_MS)
+    {
+        ++remote_control_diag.rejected_length; // 沿用超出派发期限的诊断项。
+        PlatformIrqRestore(primask); // 不改写档位、按键或来源序号。
+        return;
+    }
     if (remote_control_diag.has_valid_frame != 0u)
     {
         const uint32_t gap = block->received_ms - remote_control_diag.last_valid_tick; // 比较实际接收时刻，不用延迟派发时刻。
@@ -232,7 +239,7 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
             if (!RobotSafetyIsFormalAutonomous()) EstopRequest(ESTOP_REASON_RC_OFFLINE); // 调试和手动模式锁存急停。
             primask = PlatformIrqSaveAndDisable(); // USART 单一派发者尚未返回；重新保护状态后处理本帧。
             now = PlatformTimeNowMs(); // 重新取时，避免中途抢占后接受过期帧。
-            if ((uint32_t)(now - block->received_ms) > 50u)
+            if ((uint32_t)(now - block->received_ms) > REMOTE_RX_DISPATCH_MAX_AGE_MS)
             {
                 ++remote_control_diag.rejected_length; // 已过接收处理期限的帧不重新授权。
                 PlatformIrqRestore(primask);

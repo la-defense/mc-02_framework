@@ -27,13 +27,21 @@
 UART_HandleTypeDef huart5, huart9;
 static DMA_HandleTypeDef huart5_dma, huart9_dma;
 static uint32_t now;
+static unsigned tick_reads_before_delay; // 测试指定在第几次取时后插入一次调度延迟。
+static uint32_t tick_after_delay; // 延迟结束后的本机时刻。
 static uint8_t *dma_buffer;
 static RemoteControlDiagnostics_s remote_diag_snapshot;
 #define DIAG(field) (RemoteControlGetDiagnostics(&remote_diag_snapshot), remote_diag_snapshot.field)
 static RemoteControlSnapshot_s remote_input_snapshot;
 #define RC_INPUT (RemoteControlGetSnapshot(&remote_input_snapshot), remote_input_snapshot.input)
 extern volatile uint32_t usart_rx_oversize_total;
-uint32_t HAL_GetTick(void) { return now; }
+uint32_t HAL_GetTick(void)
+{
+    const uint32_t snapshot = now;
+    if (tick_reads_before_delay != 0u && --tick_reads_before_delay == 0u)
+        now = tick_after_delay; // 本次返回旧时刻，下一次取时模拟任务恢复执行。
+    return snapshot;
+}
 
 static void daemon_cycle(void)
 {
@@ -354,6 +362,30 @@ int main(int argc, char **argv)
         frame[12] = 2u; now = 40u; receive(frame, sizeof(frame)); // 非法鼠标字段不得更新任何来源信息。
         RemoteControlGetSnapshot(&value);
         CHECK(value.radio_sequence == 4u && value.pc_sample_sequence == 3u && value.radio_source_time_ms == 30u);
+
+        encode(frame, ch, RC_SW_DOWN, RC_SW_MID); // 一帧合法切档，若过期则不能撤销当前来源。
+        set_heartbeat(frame, 4u);
+        now = 45u; memcpy(dma_buffer, frame, sizeof(frame));
+        HAL_UARTEx_RxEventCallback(&huart5, sizeof(frame)); // 在 45 ms 保存原始接收时刻。
+        const uint32_t previous_selection = value.source_selection_generation;
+        const uint32_t before_drop = DIAG(rejected_length);
+        now = 95u; // UART 派发与遥控解码入口均恰好位于 50 ms 边界。
+        tick_reads_before_delay = 2u; // 越过 UART 检查与遥控入口检查后，模拟被抢占。
+        tick_after_delay = 96u;
+        USARTProcessRx();
+        CHECK(tick_reads_before_delay == 0u && now == 96u);
+        RemoteControlGetSnapshot(&value);
+        CHECK(value.remote_online && value.pc_valid && value.input.key[0].w);
+        CHECK(value.radio_sequence == 4u && value.pc_sample_sequence == 3u);
+        CHECK(value.input.rc.switch_left == RC_SW_UP && value.source_selection_generation == previous_selection);
+        CHECK(DIAG(rejected_length) == before_drop + 1u);
+
+        now = 100u; memcpy(dma_buffer, frame, sizeof(frame));
+        HAL_UARTEx_RxEventCallback(&huart5, sizeof(frame));
+        now = 150u; USARTProcessRx(); // 提交检查也处于 50 ms，仍可正常切档。
+        RemoteControlGetSnapshot(&value);
+        CHECK(value.remote_online && value.radio_source_time_ms == 100u && value.radio_sequence == 5u);
+        CHECK(value.input.rc.switch_left == RC_SW_DOWN && value.source_selection_generation == previous_selection + 1u);
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "source-epoch")) {
