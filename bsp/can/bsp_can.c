@@ -171,7 +171,7 @@ typedef struct
 } CANBusState_t;
 
 #if defined(__arm__) && defined(__GNUC__)
-/* H723主RAM余量很小；CAN收发只由CPU访问，可把固定工作区放到未使用的RAM_D2。 */
+/* H723 的 CAN 软件队列和接收索引只由 CPU 访问，放入板级 RAM_D2 工作区。 */
 #define CAN_BUS_WORKSPACE __attribute__((section(".can_workspace"), aligned(32), used))
 #else
 #define CAN_BUS_WORKSPACE
@@ -179,7 +179,7 @@ typedef struct
 static CANBusState_t can_bus[DEVICE_CAN_CNT] CAN_BUS_WORKSPACE;
 static volatile uint8_t can_bus_state_initialized; // 中断只在工作区完整发布后访问它。
 static void CANBusStateEnsureInitialized(void);
-static CANInstance *rx_lookup[DEVICE_CAN_CNT][CAN_RX_LOOKUP_SIZE];
+static CANInstance *rx_lookup[DEVICE_CAN_CNT][CAN_RX_LOOKUP_SIZE] CAN_BUS_WORKSPACE;
 /* 每条总线的标准与扩展过滤器各自记录已用槽；注册表最多16项。 */
 static uint32_t can_filter_used[DEVICE_CAN_CNT][2];
 
@@ -247,8 +247,10 @@ static void CANBusStateEnsureInitialized(void)
     if (can_bus_state_initialized != 0u)
         return;
 
-    // RAM_D2工作区为NOLOAD，首次使用时显式清零并恢复各总线的默认配置。
+    // RAM_D2 工作区为 NOLOAD，先清除旧队列和索引中的残留地址。
     memset(can_bus, 0, sizeof(can_bus));
+    memset(rx_lookup, 0, sizeof(rx_lookup));
+    // 恢复各总线的默认配置，再允许中断访问工作区。
     can_bus[0].handle = &hfdcan1;
     can_bus[1].handle = &hfdcan2;
     can_bus[2].handle = &hfdcan3;
