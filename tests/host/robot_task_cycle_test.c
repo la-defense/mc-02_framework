@@ -22,6 +22,7 @@ static TaskMonitor_Id_e expected_monitor;
 static uint32_t expected_period_ms;
 static unsigned release_delays, initializations, waits, begins, work, finishes, completes, idle_reports, fault_delays;
 static unsigned fairness_delays;
+static uint8_t hard_deadline; // 区分硬期限控制和普通常驻任务的完成策略。
 static uint8_t finish_error; // 注入实际工作以后才发生的计数错误。
 #if MC02_TASK_CONTROL || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 static unsigned stops, timing_faults;
@@ -73,8 +74,14 @@ void ShootStopAndClear(void) { StopControl(TASK_MONITOR_SHOOTER); }
 const PlatformPeriodicConfig_t *RobotGetTaskPeriod(RobotPeriodicTask_t id)
 {
     static const PlatformPeriodicConfig_t dispatch = {1000u, 1000u}; // 测试沿用电机任务的 RTOS 派发拍点。
+    static const PlatformPeriodicConfig_t ins = {1000u, 1000u}; // 姿态任务名义周期和预算。
+    static const PlatformPeriodicConfig_t robot = {5000u, 5000u}; // 整车任务名义周期和预算。
+    static const PlatformPeriodicConfig_t daemon = {10000u, 10000u}; // 设备维护任务名义周期和预算。
+    if (id == ROBOT_PERIODIC_INS && expected_monitor == TASK_MONITOR_INS) return &ins;
+    if (id == ROBOT_PERIODIC_DIAGNOSTIC && expected_monitor == TASK_MONITOR_ROBOT) return &robot;
+    if (id == ROBOT_PERIODIC_DAEMON && expected_monitor == TASK_MONITOR_DAEMON) return &daemon;
     TEST_CHECK(id == ROBOT_PERIODIC_COMM && expected_monitor == TASK_MONITOR_MOTOR);
-    return &dispatch;
+    return &dispatch; // 独立电机任务从整车周期表取得通信的拍点。
 }
 
 const MotorTaskPeriods_t *RobotGetMotorTaskPeriods(void)
@@ -137,7 +144,7 @@ void PlatformTaskDelayMs(uint32_t milliseconds)
     TEST_CHECK(milliseconds == expected_period_ms);
     TEST_CHECK(waits == (finish_error ? 2u : 3u) && completes == (finish_error ? 0u : 1u));
 #if MC02_TASK_CONTROL || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
-    TEST_CHECK(stops == 1u && timing_faults == 1u); // 先清理和报告故障，再进入停等。
+    TEST_CHECK(stops == hard_deadline && timing_faults == hard_deadline); // 硬期限任务先清理和报告故障，再进入停等。
 #endif
     if (++fault_delays == 2u) longjmp(task_exit, 1); // 验证错误连续保持两轮后退出常驻循环。
 }
@@ -342,11 +349,11 @@ int main(int argc, char **argv)
         {"motor", StartMOTORTASK, TASK_MONITOR_MOTOR, 1u}, // 计时错误时先撤销整车许可。
 #endif
 #else
-        {"ins", StartINSTASK, TASK_MONITOR_INS, 1u}, // 姿态采样与解算。
         {"comm", StartMOTORTASK, TASK_MONITOR_MOTOR, 1u}, // 禁热版本只派发通信。
+#endif
+        {"ins", StartINSTASK, TASK_MONITOR_INS, 1u}, // 姿态采样与解算。
         {"daemon", StartDAEMONTASK, TASK_MONITOR_DAEMON, 10u}, // 维护及监控。
         {"robot", StartROBOTTASK, TASK_MONITOR_ROBOT, 5u}, // 整车诊断。
-#endif
     };
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS) || MC02_TASK_CONTROL
     skipped_release = (uint8_t)(argc == 3 && strcmp(argv[2], "skip-release") == 0);
@@ -366,6 +373,12 @@ int main(int argc, char **argv)
         if (strcmp(tasks[i].name, argv[1]) != 0) continue;
         expected_monitor = tasks[i].monitor;
         expected_period_ms = tasks[i].period_ms;
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+        hard_deadline = expected_monitor == TASK_MONITOR_ROBOT; // 受限配置中的整车任务发布人工命令。
+#elif MC02_TASK_CONTROL
+        hard_deadline = expected_monitor != TASK_MONITOR_INS && expected_monitor != TASK_MONITOR_DAEMON &&
+            expected_monitor != TASK_MONITOR_ROBOT; // 正式配置区分独立控制与普通常驻任务。
+#endif
 #if MC02_TASK_CONTROL
         const uint8_t tim5_selected = (uint8_t)(strcmp(argv[1], "tim5") == 0 || strcmp(argv[1], "gimbal-tim5") == 0);
         if (tim5_selected)
@@ -379,11 +392,7 @@ int main(int argc, char **argv)
         TEST_CHECK(waits == (finish_error ? 2u : 3u));
         const unsigned reported = finish_error ? 0u : 1u; // 完成时钟失败时保持监控进度不变。
         TEST_CHECK(completes == reported && idle_reports == reported);
-#if MC02_TASK_CONTROL || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
-        TEST_CHECK(fairness_delays == 0u); // 截止点恰好满足时，硬期限任务不能再睡过下一拍。
-#else
-        TEST_CHECK(fairness_delays == reported); // 常驻诊断仍主动为其他任务让出一个刻度。
-#endif
+        TEST_CHECK(fairness_delays == (hard_deadline ? 0u : reported)); // 硬期限任务按原拍点等待，普通任务主动让出一个刻度。
 #if MC02_TASK_CONTROL
         TEST_CHECK(tim5_closes == tim5_selected && tim5_owner == NULL); // 故障后只释放一次硬件通道。
 #endif

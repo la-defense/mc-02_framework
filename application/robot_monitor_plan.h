@@ -15,7 +15,7 @@
 typedef enum {
     ROBOT_PERIODIC_DIAGNOSTIC = 0, /**< 整车诊断及状态汇总。 */
     ROBOT_PERIODIC_INS, /**< 姿态采样与解算。 */
-    ROBOT_PERIODIC_COMM, /**< 裸板通信派发。 */
+    ROBOT_PERIODIC_COMM, /**< 通信派发，分开的电机计算和发送也用此拍点轮询。 */
     ROBOT_PERIODIC_DAEMON, /**< 设备维护及任务监控。 */
 #if MC02_BENCH_TIM5_DIAGNOSTICS
     ROBOT_PERIODIC_TIM5_PROBE, /**< 独立裸板自测使用 TIM5 比较通道。 */
@@ -42,7 +42,7 @@ PlatformPeriodicResult_t RobotPrepareMotorTaskPeriods(const MotorTaskPeriods_t *
 const MotorTaskPeriods_t *RobotGetMotorTaskPeriods(void);
 #endif
 
-#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
+#if MC02_TASK_FIXED_REGULAR_PERIODS
 /** @brief 检查本次启动需要的周期和唤醒资源。
  * @param[in] modules 启用模块的计划；旧配置可传 NULL。
  * @param[out] failed 失败时写入具体诊断项，成功时保留原值；可以为 NULL。

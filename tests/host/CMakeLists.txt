@@ -231,6 +231,11 @@ target_compile_options(robot_chassis_cycle_test PRIVATE -ffunction-sections -fda
 target_link_options(robot_chassis_cycle_test PRIVATE -Wl,--gc-sections)
 add_test(NAME production_chassis_task_monitor COMMAND robot_chassis_monitor_test chassis)
 add_test(NAME production_control_tasks_shared_channels COMMAND robot_chassis_monitor_test shared-control) # 检查三个任务共享定时器容量。
+add_test(NAME production_robot_regular_task_period_admission COMMAND robot_chassis_monitor_test timing) # 正式配置拒绝 RTOS 无法表达的常驻周期。
+foreach(task IN ITEMS ins daemon robot)
+  add_test(NAME production_robot_formal_cycle_${task} COMMAND robot_chassis_cycle_test ${task}) # 生产常驻任务领取原相位的 RTOS 拍点。
+  set_tests_properties(production_robot_formal_cycle_${task} PROPERTIES TIMEOUT 10)
+endforeach()
 add_test(NAME production_gimbal_task_skip COMMAND robot_chassis_cycle_test gimbal skip-release) # 漏拍不执行机构业务。
 add_test(NAME production_gimbal_task_tim5_budget COMMAND robot_chassis_cycle_test gimbal-tim5 budget-error) # 超预算先停止并释放通道。
 add_test(NAME production_shooter_task_finish_deadline COMMAND robot_chassis_cycle_test shooter deadline-error) # 越过截止点不提交完成进度。
@@ -238,7 +243,7 @@ foreach(scenario IN ITEMS normal gimbal-fail shooter-fail)
   add_test(NAME production_control_tasks_create_${scenario} COMMAND robot_chassis_create_test controls-${scenario})
   set_tests_properties(production_control_tasks_create_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
-set_tests_properties(production_control_tasks_shared_channels production_gimbal_task_skip
+set_tests_properties(production_control_tasks_shared_channels production_robot_regular_task_period_admission production_gimbal_task_skip
   production_gimbal_task_tim5_budget production_shooter_task_finish_deadline PROPERTIES TIMEOUT 10)
 add_test(NAME production_chassis_task_cycle COMMAND robot_chassis_cycle_test chassis)
 add_test(NAME production_chassis_task_clock_failure COMMAND robot_chassis_cycle_test chassis finish-error)

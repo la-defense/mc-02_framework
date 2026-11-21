@@ -32,6 +32,13 @@
 #define MC02_CHASSIS_IS_OMNI 0
 #endif
 
+// 已登记的固件配置在启动时检查常驻任务的固定拍点，并在运行中使用同一规则。
+#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING) || defined(MC02_PROFILE_ROBOT)
+#define MC02_TASK_FIXED_REGULAR_PERIODS 1
+#else
+#define MC02_TASK_FIXED_REGULAR_PERIODS 0
+#endif
+
 // 有底盘运动任务的生成配置使用独立拍点；观察版与旧组合不启用。
 #if defined(MC02_CONFIG_GENERATED) && (defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)) && MC02_FEATURE_CHASSIS
 #define MC02_TASK_CHASSIS 1

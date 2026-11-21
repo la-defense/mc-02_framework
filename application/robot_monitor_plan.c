@@ -32,21 +32,21 @@ static const PlatformPeriodicRequest_t task_periods[ROBOT_PERIODIC_COUNT] = {
             .period_us = ROBOT_INS_PERIOD_MS * 1000u, // 保留原姿态名义间隔，单位 μs。
             .budget_us = ROBOT_INS_PERIOD_MS * 1000u, // 保留原姿态耗时告警阈值。
         },
-        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 禁热固件使用 RTOS 刻度。
+        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 姿态任务使用 RTOS 刻度。
     },
     [ROBOT_PERIODIC_COMM] = {
         .timing = {
             .period_us = ROBOT_COMM_PERIOD_MS * 1000u, // 保留原通信名义间隔，单位 μs。
             .budget_us = ROBOT_COMM_PERIOD_MS * 1000u, // 保留原通信耗时告警阈值。
         },
-        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 禁热固件使用 RTOS 刻度。
+        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 通信派发使用 RTOS 刻度。
     },
     [ROBOT_PERIODIC_DAEMON] = {
         .timing = {
             .period_us = ROBOT_DAEMON_PERIOD_MS * 1000u, // 保留原设备维护名义间隔，单位 μs。
             .budget_us = ROBOT_DAEMON_PERIOD_MS * 1000u, // 保留原设备维护耗时告警阈值。
         },
-        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 禁热固件使用 RTOS 刻度。
+        .source = PLATFORM_PERIODIC_SOURCE_RTOS, // 设备维护使用 RTOS 刻度。
     },
 #if MC02_BENCH_TIM5_DIAGNOSTICS
     [ROBOT_PERIODIC_TIM5_PROBE] = {
@@ -85,7 +85,7 @@ const MotorTaskPeriods_t *RobotGetMotorTaskPeriods(void)
 }
 #endif
 
-#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
+#if MC02_TASK_FIXED_REGULAR_PERIODS
 PlatformPeriodicResult_t RobotValidateTaskPeriods(const RobotModulePlan_t *modules, RobotPeriodicTask_t *failed)
 {
     PlatformPeriodicRequest_t enabled[ROBOT_PERIODIC_COUNT];

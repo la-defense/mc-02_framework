@@ -1,5 +1,5 @@
 /** @file robot_task.c
- * @brief 运行已放行的常驻任务，并在禁热配置中使用固定拍点。
+ * @brief 运行已放行的常驻任务，按启动时检查的固定拍点等待。
  */
 #include "robot_task.h"
 #include "platform_os.h"
@@ -105,16 +105,12 @@ static void OpenConfiguredTaskCycle(RobotTaskCycle_t *cycle, const PlatformPerio
     }
 }
 
-// 保留既有常驻任务的配置选择；独立底盘单独指定固定拍点。
+// 常驻任务复用启动检查的固定拍点选择，使用 RTOS 的同一计数器。
 static RobotTaskCycle_t OpenTaskCycle(RobotPeriodicTask_t task, TaskMonitor_Id_e monitor)
 {
-#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
-    const uint8_t fixed = 1u; // 禁热和观察版使用固定拍点。
-#else
-    const uint8_t fixed = 0u; // 未独立迁移的正式任务继续相对等待。
-#endif
     RobotTaskCycle_t cycle;
-    OpenConfiguredTaskCycle(&cycle, RobotGetTaskPeriod(task), monitor, fixed, PLATFORM_PERIODIC_SOURCE_RTOS, NULL);
+    OpenConfiguredTaskCycle(&cycle, RobotGetTaskPeriod(task), monitor,
+                            MC02_TASK_FIXED_REGULAR_PERIODS, PLATFORM_PERIODIC_SOURCE_RTOS, NULL);
     return cycle; // 这些常驻任务只使用 RTOS，不登记周期状态地址。
 }
 

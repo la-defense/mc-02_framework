@@ -356,7 +356,7 @@ uint8_t RobotInit(void)
         goto init_failed; // 两个周期缺失或不可表示时，不启动硬件设备。
     }
 #endif
-#if defined(MC02_PROFILE_BENCH_SAFE) || defined(MC02_PROFILE_COMMISSIONING)
+#if MC02_TASK_FIXED_REGULAR_PERIODS
     static const uint16_t task_resources[ROBOT_PERIODIC_COUNT] = {
         [ROBOT_PERIODIC_DIAGNOSTIC] = INIT_RESOURCE_TASK_ROBOT, // 整车诊断。
         [ROBOT_PERIODIC_INS] = INIT_RESOURCE_TASK_INS, // 姿态采样。
