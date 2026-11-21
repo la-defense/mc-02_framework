@@ -4,6 +4,7 @@
 #include "config.h"
 #include "test_check.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,7 @@ const Robot_Config_s *SentinelConfigInit(void)
 }
 
 RobotConfigStatus_t RobotConfigSelect(uint8_t id, const Robot_Config_s **output);
+const Chassis_Config_s *ChassisConfigFeed(void);
 
 static void set_valid_config(void)
 {
@@ -87,6 +89,36 @@ int main(void)
     test_config.chassis_param.chassis_motor_config.output_axis.gear_ratio = 0.0f; // 缺少唯一的减速比来源则拒绝。
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS);
     TEST_CHECK(selected == NULL);
+
+    set_valid_config();
+    test_config.chassis_param.chassis_motor_config.output_axis.gear_ratio = FLT_MAX; // 正值本身有限，轮轴 rad/s 转电机轴 deg/s 会溢出。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    set_valid_config();
+    test_config.chassis_param.chassis_motor_config.output_axis.gear_ratio = FLT_MIN; // 换回轮轴的系数有限，但最大速度乘以该系数会溢出。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    set_valid_config();
+    test_config.chassis_param.motion_limits.max_motor_speed_deg_s = FLT_TRUE_MIN; // 名义转速为正，换成轮轴 rad/s 后会被舍入为零。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    set_valid_config();
+    test_config.chassis_param.motion_limits.max_wz_deg_s = FLT_TRUE_MIN; // 底盘角速度从 deg/s 换成 rad/s 后会被舍入为零。
+    test_config.chassis_param.motion_limits.rotate_wz_deg_s = 0.0f; // 旋转档设置有效，只检查总角速度上限的换算。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    set_valid_config();
+    test_config.chassis_param.chassis_motor_config.output_axis.gear_ratio = 1e36f; // 转换系数有限，乘上实际投影的轮速会溢出。
+    test_config.chassis_param.motion_limits.max_wz_deg_s = 3600.0f; // 触发软件限速前的电机轴换算。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    set_valid_config();
+#if MC02_CHASSIS_IS_OMNI
+    test_config.chassis_param.omni_geometry.wheels[0].radius_m = FLT_MIN; // 零速度时几何可解，最大转速时该轮的速度会溢出。
+#else
+    test_config.chassis_param.mecanum_geometry.radius_m = FLT_MIN; // 相同的极小轮半径也会使麦轮原地转向溢出。
+#endif
+    test_config.chassis_param.motion_limits.max_wz_deg_s = 3600.0f; // 仅用主机边界值触发溢出。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS &&
+               selected == NULL && ChassisConfigFeed() == NULL);
+    set_valid_config();
+    test_config.chassis_param.motion_limits.max_motor_speed_deg_s = 1.0f; // 允许用正常限速压低可计算的旋转目标。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
 
     set_valid_config();
     test_config.chassis_param.wheel_motors[2].direction = (Motor_Axis_Direction_e)0; // 左后轮安装方向待确认。

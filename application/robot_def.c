@@ -4,6 +4,7 @@
  */
 #include "config.h"
 #include "sentinel_config.h"
+#include "../modules/general_def.h"
 
 #if MC02_FEATURE_CHASSIS
 #if MC02_CHASSIS_IS_OMNI
@@ -67,20 +68,38 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
     if (output_limit == 0u || output_limit > DJI_OUTPUT_MAX_RAW)
         return 0u; // 运动固件须提供明确的轮组输出上限，不能沿用驱动默认范围。
 
-    // 启动校验使用与控制周期相同的计算入口，提前发现滚动方向和轮组秩不足。
-    const ChassisTwist_t zero_twist = {0.0f, 0.0f, 0.0f};
-    ChassisWheelSpeeds_t wheel_speeds;
+    const float reduction = chassis->chassis_motor_config.output_axis.gear_ratio; // 轮轴和电机轴共用车型声明的减速比。
+    const float motor_deg_per_wheel_rad = RAD_2_DEGREE * reduction; // 按控制周期的算法将轮轴 rad/s 换成电机轴 deg/s。
+    const float wheel_rad_per_motor_deg = DEGREE_2_RAD / reduction; // 驱动接收轮轴 rad/s，按同一减速比换回。
+    const float max_wheel_rad_s = chassis->motion_limits.max_motor_speed_deg_s * wheel_rad_per_motor_deg; // 核对换回轮轴后的有效上限。
+    if (!isfinite(motor_deg_per_wheel_rad) || motor_deg_per_wheel_rad <= 0.0f ||
+        !isfinite(max_wheel_rad_s) || max_wheel_rad_s <= 0.0f)
+        return 0u; // 系数溢出、上限溢出或上限被舍入为零时拒绝启动。
+
+    const ChassisTwist_t max_spin = {
+        .wz_rad_s = chassis->motion_limits.max_wz_deg_s * DEGREE_2_RAD, // 用配置的最大旋转速度检查从底盘到轮轴的换算。
+    };
+    if (max_spin.wz_rad_s <= 0.0f)
+        return 0u; // 配置给出的正角速度换算后必须仍可表示。
+
+    ChassisWheelSpeeds_t wheel_speeds; // 由已编译的模型按固定轮序返回轮轴 rad/s。
 #if MC02_CHASSIS_IS_OMNI
     if (chassis->wheel_type != OMNI_WHEEL ||
-        OmniCalculate(&zero_twist, &chassis->omni_geometry, &wheel_speeds) !=
+        OmniCalculate(&max_spin, &chassis->omni_geometry, &wheel_speeds) !=
             CHASSIS_KINEMATICS_OK)
-        return 0u;
+        return 0u; // 拒绝全向轮几何不可用或该转速无法表示的配置。
 #else
     if (chassis->wheel_type != MECANUM_WHEEL ||
-        MecanumCalculate(&zero_twist, &chassis->mecanum_geometry, &wheel_speeds) !=
+        MecanumCalculate(&max_spin, &chassis->mecanum_geometry, &wheel_speeds) !=
             CHASSIS_KINEMATICS_OK)
-        return 0u;
+        return 0u; // 拒绝麦轮几何不可用或该转速无法表示的配置。
 #endif
+    for (unsigned index = 0u; index < CHASSIS_WHEEL_COUNT; ++index) // 逐轮核对限速前的电机轴转速。
+    {
+        const float rotor_speed_deg_s = wheel_speeds.rad_s[index] * motor_deg_per_wheel_rad; // 旧接口先换算再按比例限速。
+        if (!isfinite(rotor_speed_deg_s))
+            return 0u; // 换算已溢出时，限速无法恢复有效轮速。
+    }
 #endif
     // 四台轮电机共用型号和总线，各自声明编号与安装方向。
     for (unsigned index = 0u; index < CHASSIS_WHEEL_COUNT; ++index)

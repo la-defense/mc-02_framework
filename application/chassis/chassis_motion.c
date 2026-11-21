@@ -7,6 +7,7 @@
  */
 #include "chassis_motion.h"
 #include "../config/build_selection.h"
+#include "../../modules/general_def.h"
 
 #include "fast_trig.h"
 
@@ -142,9 +143,8 @@ ChassisKinematicsStatus_t ChassisMotionPrepareVelocityEstimator(const ChassisMot
 
 float ChassisMotionRotorToOutputScale(const ChassisMotionPrepared_s *prepared)
 {
-    const float radians_per_degree = 0.01745329252f;
     const float sign = prepared->model == CHASSIS_MOTION_MODEL_MECANUM ? mecanum_rotor_to_output_sign : 1.0f;
-    return sign * radians_per_degree / prepared->reduction_ratio; // 把旧接口的电机轴 deg/s 换到驱动输出轴 rad/s。
+    return sign * DEGREE_2_RAD / prepared->reduction_ratio; // 把旧接口的电机轴 deg/s 换到驱动输出轴 rad/s。
 }
 
 uint8_t ChassisMotionCalculatePrepared(const ChassisMotionInput_s *input,
@@ -157,8 +157,6 @@ uint8_t ChassisMotionCalculatePrepared(const ChassisMotionInput_s *input,
     if (!input_is_valid(input, prepared, limits))
         return 0;
 
-    const float radians_per_degree = 0.01745329252f;
-    const float degrees_per_radian = 57.2957795f;
     float wz_deg_s;
     switch (input->mode)
     {
@@ -188,9 +186,9 @@ uint8_t ChassisMotionCalculatePrepared(const ChassisMotionInput_s *input,
     const ChassisTwist_t source = {
         .vx_m_s = input->vx_mm_s * meters_per_millimeter, // 旧消息的前向 mm/s 换为 m/s。
         .vy_m_s = -input->vy_mm_s * meters_per_millimeter, // 旧消息向右为正，先换为左向再旋转。
-        .wz_rad_s = wz_deg_s * radians_per_degree, // 使用本轮模式选择的底盘转速。
+        .wz_rad_s = wz_deg_s * DEGREE_2_RAD, // 使用本轮模式选择的底盘转速。
     };
-    const float frame_heading_rad = -input->offset_angle_deg * radians_per_degree; // 旧方向角向右转为正。
+    const float frame_heading_rad = -input->offset_angle_deg * DEGREE_2_RAD; // 旧方向角向右转为正。
     ChassisTwist_t twist; // 麦轮与全向轮都使用同一个底盘本体速度。
     const float legacy_speed_limit_m_s = FLT_MAX * meters_per_millimeter; // 沿用旧接口旋转结果能表达为 mm/s 的范围。
     if (!ChassisMotionRotateToBody(&source, frame_heading_rad, &twist) ||
@@ -212,7 +210,7 @@ uint8_t ChassisMotionCalculatePrepared(const ChassisMotionInput_s *input,
         }
     }
 #endif
-    const float wheel_to_motor_deg_s = degrees_per_radian * prepared->reduction_ratio;
+    const float wheel_to_motor_deg_s = RAD_2_DEGREE * prepared->reduction_ratio; // 沿用启动校验使用的电机轴转速换算。
     float motor_deg_s[4];
     float largest = 0.0f;
     // 逐轮换算，找出绝对值最大的电机轴转速。
