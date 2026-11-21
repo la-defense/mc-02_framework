@@ -477,6 +477,17 @@ uint8_t RobotInitializeApplications(void)
         InitDiagnosticReportFailure(INIT_STAGE_APPLICATION, INIT_MODULE_ROBOT, INIT_FAILURE_RESOURCE, resource); // 记录预检失败。
         goto init_failed; // 核心资源不足时不注册业务设备。
     }
+#if defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
+    RobotModulePlan_t feedback_modules = *RobotBuildGetPlan(); // 复制配置，保留原有启动依赖分类。
+    const uint32_t motor_modules = ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS) |
+        ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL) | ROBOT_MODULE_BIT(ROBOT_MODULE_SHOOTER); // 已启用的机构都纳入身份核对。
+    feedback_modules.required |= feedback_modules.enabled & motor_modules; // 此处核对设备身份，之后仍按原配置启动模块。
+    RobotCanMotorPlan_t feedback_plan = {0}; // 先检查总线、型号和反馈编号，再建立实际反馈采集入口。
+    ROBOT_INIT_CHECK(RobotCanMotorPlanBuild(robot_config, &feedback_modules, &feedback_plan) &&
+                     RobotControlFeedbackStart(&feedback_plan) &&
+                     RobotCanRecoveryStart(robot_config, RobotBuildGetPlan()), INIT_STAGE_APPLICATION,
+                     INIT_MODULE_ROBOT, INIT_FAILURE_DEPENDENCY, 0u); // 核心配置或绑定有误，直接保持关断，尚未开启电源或注册设备。
+#endif
 #if defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     if (!RobotCanRuntimeInstall(RobotBuildGetPlan(), can_demands, can_count))
     {
@@ -504,18 +515,6 @@ uint8_t RobotInitializeApplications(void)
                                         robot_module_startup.failed_module);
         goto init_failed;
     }
-#if defined(MC02_PROFILE_ROBOT) && defined(ONE_BOARD) && MC02_FEATURE_COMMAND && MC02_FEATURE_REMOTE && MC02_SELECTED_DRIVER_DJI
-    ROBOT_INIT_CHECK(RobotCanRecoveryStart(robot_config, RobotBuildGetPlan()), INIT_STAGE_APPLICATION,
-                     INIT_MODULE_ROBOT, INIT_FAILURE_DEPENDENCY, 0u); // 配置确认后不能跳过核心电机清单检查。
-    RobotModulePlan_t feedback_modules = *RobotBuildGetPlan(); // 不改变车型的启动依赖分类。
-    const uint32_t motor_modules = ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS) |
-        ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL) | ROBOT_MODULE_BIT(ROBOT_MODULE_SHOOTER); // 这些功能启用后都必须提供对应设备反馈。
-    feedback_modules.required |= feedback_modules.enabled & motor_modules; // 汇总范围覆盖每个启用机构。
-    RobotCanMotorPlan_t feedback_plan = {0}; // 启动阶段构造的电机身份表。
-    ROBOT_INIT_CHECK(RobotCanMotorPlanBuild(robot_config, &feedback_modules, &feedback_plan) &&
-                     RobotControlFeedbackStart(&feedback_plan), INIT_STAGE_APPLICATION,
-                     INIT_MODULE_ROBOT, INIT_FAILURE_DEPENDENCY, 0u); // 清单或采集者绑定失败时禁止放行任务。
-#endif
     for (unsigned module = 0u; module < ROBOT_MODULE_COUNT; ++module)
     {
         const uint32_t bit = ROBOT_MODULE_BIT(module);

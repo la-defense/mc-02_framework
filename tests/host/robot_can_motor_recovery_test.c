@@ -39,6 +39,14 @@ int main(void)
         plan.motors[2].id == 4u && plan.motors[3].id == 2u); // 恢复计划跟随轮序，编号没有被重新排列。
     TEST_CHECK(plan.motors[5].id == 1u && plan.motors[6].require_position); // 小 yaw 和内部位置需求都存在。
     RobotCanMotorPlan_t saved = plan; // 错误配置不能改写旧结果。
+    config.chassis_param.wheel_motors[MOTOR_LF].device_id = 5u; // 左前轮的反馈 ID 会与 GM6020 的编号 1 重合。
+    config.gimbal_param.mini_yaw_motor_config.can_init_config.can_bus = PLATFORM_CAN_BUS_1; // 同总线上的两台电机不能共享反馈 ID。
+    TEST_CHECK(!RobotCanMotorPlanBuild(&config, &modules, &plan));
+    TEST_CHECK(memcmp(&plan, &saved, sizeof(plan)) == 0); // 拒绝跨机构冲突时保留完整旧清单。
+    config.gimbal_param.mini_yaw_motor_config.can_init_config.can_bus = PLATFORM_CAN_BUS_2; // 分到不同总线后允许使用相同反馈 ID。
+    TEST_CHECK(RobotCanMotorPlanBuild(&config, &modules, &plan) && plan.motors[0].id == 5u);
+    config.chassis_param.wheel_motors[MOTOR_LF].device_id = 3u; // 恢复本用例余下检查使用的轮组编号。
+    plan = saved; // 后续仍以通过的原计划检查错误保留行为。
     config.gimbal_param.mini_yaw_motor_config.can_init_config.tx_id = 2u; // 小 yaw 与 pitch 冲突。
     TEST_CHECK(!RobotCanMotorPlanBuild(&config, &modules, &plan));
     TEST_CHECK(memcmp(&plan, &saved, sizeof(plan)) == 0);
