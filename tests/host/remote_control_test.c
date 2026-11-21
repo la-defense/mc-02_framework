@@ -75,6 +75,70 @@ static void pc_frame(uint16_t heartbeat, uint16_t keys)
 static void set_heartbeat(uint8_t b[18], uint16_t heartbeat)
 { b[10]=(uint8_t)heartbeat; b[11]=(uint8_t)(heartbeat>>8); }
 
+static int CheckManualPermitRevocation(void)
+{
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    const RobotControlPolicy_t policy = {
+        .enabled_functions = ROBOT_CONTROL_CHASSIS, // 使用受限调试的底盘许可。
+        .configured = 1u, // 采用分功能许可。
+        .commissioning = 1u, // 只接受人工来源。
+    };
+    CHECK(RobotSafetyConfigureControl(&policy));
+    uint8_t frame[18];
+    const uint16_t center[5] = {1024u, 1024u, 1024u, 1024u, 1024u};
+    encode(frame, center, RC_SW_DOWN, RC_SW_MID); // 保持在遥控摇杆档。
+    now = 1u; receive(frame, sizeof(frame)); // 先建立有效无线来源。
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate(); // 等待当前核心条件建立。
+    now = 2u; receive(frame, sizeof(frame));
+    RobotSafetyControlInputs_t inputs = {
+        .mode = ROBOT_CONTROL_MANUAL, // 由测试代替命令任务提交人工来源。
+        .manual = {2u, REMOTE_RADIO_LEASE_MS, 1u}, // 来源保留接收时间。
+        .feedback = {{2u, REMOTE_RADIO_LEASE_MS, 1u}}, // 四轮反馈视为在本场景内有效。
+        .feedback_valid_functions = ROBOT_CONTROL_CHASSIS, // 只提供底盘反馈。
+    };
+    CHECK(RobotSafetyPublishControlInputs(&inputs));
+    RobotSafetyUpdate();
+    RobotSafetySnapshot_t before;
+    CHECK(RobotSafetyGetSnapshot(&before) && RobotSafetyIsReady());
+    now = 3u; receive(frame, sizeof(frame)); // 同档新帧和后台零心跳不会打断摇杆控制。
+    CHECK(RobotSafetyIsReadyForGeneration(now, before.control_generation));
+    encode(frame, center, RC_SW_MID, RC_SW_MID);
+    now = 4u; receive(frame, sizeof(frame)); // 离开摇杆档，命令任务尚未轮询。
+    CHECK(!RobotSafetyIsReadyForGeneration(now, before.control_generation));
+    encode(frame, center, RC_SW_DOWN, RC_SW_MID);
+    now = 5u; receive(frame, sizeof(frame)); // 在命令任务运行前重新切回摇杆档。
+    CHECK(!RobotSafetyIsReadyForGeneration(now, before.control_generation));
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); // 模拟被抢占的命令任务迟到提交旧来源。
+    CHECK(!RobotSafetyIsReadyAt(now)); // 此处旧来源尚未超过自己的期限。
+    RobotSafetyUpdate();
+    now = 6u; receive(frame, sizeof(frame));
+    inputs.manual.source_time_ms = now;
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    CHECK(RobotSafetyIsReady()); // 新无线输入可恢复，原使能请求仍保留。
+
+    now = 7u; pc_frame(1u, 0u); // 切到键鼠档并开始全松开验证。
+    RobotSafetyUpdate();
+    now = 8u; pc_frame(2u, 0u); // 第二帧授权键鼠。
+    inputs.manual = (RobotControlLease_t){now, REMOTE_PC_LEASE_MS, 1u};
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    CHECK(RobotSafetyGetSnapshot(&before) && RobotSafetyIsReady());
+    now = 9u; pc_frame(3u, 0u); // 连续合法键鼠心跳不撤销已发布目标。
+    CHECK(RobotSafetyIsReadyForGeneration(now, before.control_generation));
+    now = 10u; pc_frame(0u, 0u); // 键鼠端撤销，左开关仍在同一档。
+    CHECK(!RobotSafetyIsReadyForGeneration(now, before.control_generation));
+    now = 11u; pc_frame(1u, 0u); now = 12u; pc_frame(2u, 0u); // 命令轮询前重新握手。
+    CHECK(!RobotSafetyIsReadyForGeneration(now, before.control_generation));
+    RobotSafetyUpdate();
+    now = 13u; pc_frame(3u, 0u);
+    inputs.manual.source_time_ms = now;
+    CHECK(RobotSafetyPublishControlInputs(&inputs)); RobotSafetyUpdate();
+    CHECK(RobotSafetyIsReady());
+    return 0;
+}
+
 #ifdef MC02_REMOTE_THREAD_TEST
 static atomic_int remote_thread_start;
 static atomic_int remote_thread_done;
@@ -245,6 +309,8 @@ int main(int argc, char **argv)
         CHECK(RobotSafetyIsReady()); // 正式自主继续按比赛阶段与核心状态运行。
         return 0;
     }
+    if (argc > 1 && !strcmp(argv[1], "manual-permit-revoke"))
+        return CheckManualPermitRevocation();
     if (argc > 1 && !strcmp(argv[1], "snapshot-metadata")) {
         RemoteControlSnapshot_s value;
         RemoteControlGetSnapshot(&value); // 首帧前没有可用来源或编号。

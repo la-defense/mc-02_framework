@@ -377,6 +377,18 @@ uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs
     return accepted;
 }
 
+void RobotSafetyRevokeManualSource(void)
+{
+    const uint32_t previous = RobotSafetyEnterCritical(); // 与接收端和输出许可使用相同的中断保护。
+    if (control_configured && control_inputs.mode != ROBOT_CONTROL_AUTONOMOUS)
+    {
+        control_inputs.manual = (RobotControlLease_t){0}; // 清掉当前人工来源，保留其他来源和反馈。
+        control_inputs.manual_fire_requested = 0u; // 旧人工请求不能随接管重放。
+        ControlRevokeLocked(); // 记录切换时刻，并让仍在软件队列的旧代次失效。
+    }
+    RobotSafetyExitCritical(previous); // 恢复调用前的屏蔽状态。
+}
+
 uint8_t RobotSafetyGetFunctionPermitsAt(uint32_t now_ms, RobotControlPermits_t *output)
 {
     if (output == NULL) return 0u; // 参数错误时不触碰输出。

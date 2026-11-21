@@ -1788,6 +1788,7 @@ target_compile_definitions(remote_control_test PRIVATE MC02_STD_CMD_ADAPTER_TEST
 add_test(NAME production_remote_startup_offline COMMAND remote_control_test)
 add_test(NAME production_remote_snapshot_source_metadata COMMAND remote_control_test snapshot-metadata) # 验证数据和原始时间一致交付。
 add_test(NAME production_remote_source_selection_generation COMMAND remote_control_test source-epoch) # 短暂切换和重连必须留下代次。
+add_test(NAME production_remote_revokes_manual_permit COMMAND remote_control_test manual-permit-revoke) # 不运行命令任务也能撤销切档和键鼠失效前的人工目标。
 add_test(NAME production_remote_formal_autonomous_offline COMMAND remote_control_test formal-autonomous-offline) # 真实离线回调不能绕过模式规则。
 add_test(NAME production_remote_formal_autonomous_gap COMMAND remote_control_test formal-autonomous-gap) # 延迟派发时仍区分正式自主资格。
 set_tests_properties(production_remote_snapshot_source_metadata PROPERTIES TIMEOUT 10)

@@ -76,6 +76,11 @@ uint8_t RobotSafetyConfigureControl(const RobotControlPolicy_t *policy);
  * @return 1为接受；0为未配置或输入错误。提交不代替RobotSafetyUpdate推进状态。
  */
 uint8_t RobotSafetyPublishControlInputs(const RobotSafetyControlInputs_t *inputs);
+/** @brief 人工来源切换或失效时，立即停止使用已发布的人工指令。
+ * @note 只处理已配置的人工或辅助模式。保留已请求使能，恢复时要求在撤销后接收的新输入。
+ *       可在输入接收的中断保护内调用。
+ */
+void RobotSafetyRevokeManualSource(void);
 /** @brief 启动时把分功能反馈交给整车采集者，阻止旧整车许可绕过反馈。
  * @return 1 为绑定成功；0 为重复绑定、非初始 SAFE、有使能请求或底盘板角色。
  * @note 绑定后，命令提交中的反馈字段被忽略，配置来源策略前保持失能。

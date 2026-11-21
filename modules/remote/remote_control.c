@@ -83,6 +83,8 @@ static void RevokePC(uint32_t now, RemotePcRevokeReason_e reason)
     {
         remote_control_diag.pc_revoke_tick = now;
         remote_control_diag.pc_revoke_reason = reason;
+        if (switch_is_up(rc_ctrl[TEMP].rc.switch_left))
+            RobotSafetyRevokeManualSource(); // 已选键鼠失效时立即撤销，摇杆档的后台键鼠故障不影响其许可。
     }
     pc_sequence = 0u; pc_have_sequence = pc_authorized = 0u;
     ClearMousePending(); // 失联或人工撤销后不能重放旧鼠标位移。
@@ -258,9 +260,12 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
         memcpy(candidate.key_count, controls[TEMP].key_count, sizeof(candidate.key_count));
     }
     if (!switch_is_up(candidate.rc.switch_left)) ClearMousePending(); // 即使 PC 心跳重复，切出键鼠档也要清除旧位移。
-    if (remote_control_diag.has_valid_frame == 0u ||
-        controls[TEMP].rc.switch_left != candidate.rc.switch_left)
+    const uint8_t source_switched = (uint8_t)(remote_control_diag.has_valid_frame != 0u &&
+        controls[TEMP].rc.switch_left != candidate.rc.switch_left); // 已取得合法输入后的切档才是来源变化。
+    if (remote_control_diag.has_valid_frame == 0u || source_switched)
         source_selection_generation = NextSampleSequence(source_selection_generation); // 合法来源切换即使很短也留下记录。
+    if (source_switched)
+        RobotSafetyRevokeManualSource(); // 接收端先撤销旧人工许可，命令任务稍后用新来源接续。
     controls[TEMP] = candidate;
     controls[LAST] = candidate;
     remote_control_diag.accepted_frames++;
