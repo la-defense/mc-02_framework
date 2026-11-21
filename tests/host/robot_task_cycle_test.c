@@ -30,6 +30,7 @@ static TaskMonitor_FaultReason_e expected_fault = TASK_MONITOR_FAULT_PERIOD_CLOC
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS) || MC02_TASK_CONTROL
 static uint8_t skipped_release; // 注入等待成功但漏过了上一拍的结果。
 static uint8_t deadline_error; // 注入工作完成时已经越过下一计划拍。
+static uint8_t budget_error; // 注入执行时间已超过本轮预算。
 #endif
 #if MC02_TASK_CONTROL
 static RobotControlTaskConfig_t control = {
@@ -99,7 +100,8 @@ PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, ui
 
 void RobotSafetyRequestDisable(void)
 {
-    TEST_CHECK(expected_monitor == TASK_MONITOR_MOTOR && timing_faults == 0u && waits == 3u);
+    TEST_CHECK(expected_monitor == TASK_MONITOR_MOTOR && timing_faults == 0u);
+    TEST_CHECK(waits == (finish_error ? 2u : 3u)); // 完成超期在当轮报告，漏拍在下一次等待时报告。
     ++stops; // 整车许可必须在核心故障上报前撤销。
 }
 #endif
@@ -146,6 +148,7 @@ PlatformPeriodicResult_t PlatformTaskPeriodicInit(PlatformPeriodicClock_t *clock
     TEST_CHECK(clock != NULL && initializations == 0u && release_delays == 1u);
     TEST_CHECK(config->period_us == expected_period_ms * 1000u && config->budget_us == config->period_us);
     clock->period_ticks = expected_period_ms;
+    clock->budget_ticks = expected_period_ms; // 这里的 RTOS 替身使用与周期相同的预算。
     ++initializations;
     return PLATFORM_PERIODIC_READY;
 }
@@ -154,9 +157,16 @@ PlatformPeriodicResult_t PlatformTaskPeriodicFinish(const PlatformPeriodicClock_
     const PlatformPeriodicRelease_t *release, PlatformPeriodicTiming_t *timing)
 {
     TEST_CHECK(work == 1u && waits == 2u && begins == 2u && finishes == 0u);
-    TEST_CHECK(release->scheduled_tick == 0u && release->observed_tick == 0u);
+    TEST_CHECK(release->scheduled_tick == 0u); // 完成检查和等待共用原定拍点。
     ++finishes;
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS) || MC02_TASK_CONTROL
+    if (budget_error)
+    {
+        const uint32_t work = clock->budget_ticks + 1u; // 模拟多执行一个计数刻度。
+        *timing = (PlatformPeriodicTiming_t){.work_ticks = work, .over_budget = 1u,
+            .missed_deadline = (uint8_t)(release->observed_tick + work > clock->period_ticks)};
+        return PLATFORM_PERIODIC_READY;
+    }
     if (deadline_error)
     {
         *timing = (PlatformPeriodicTiming_t){.work_ticks = clock->period_ticks, .missed_deadline = 1u}; // 迟到使本拍错过截止点。
@@ -164,7 +174,7 @@ PlatformPeriodicResult_t PlatformTaskPeriodicFinish(const PlatformPeriodicClock_
     }
 #endif
     if (finish_error) return PLATFORM_PERIODIC_CLOCK; // 事件已运行，但时钟失效使完成时刻不可信。
-    *timing = (PlatformPeriodicTiming_t){.work_ticks = clock->period_ticks}; // 恰好到下一拍。
+    *timing = (PlatformPeriodicTiming_t){.work_ticks = clock->period_ticks - release->observed_tick}; // 恰好到下一拍。
     return PLATFORM_PERIODIC_READY;
 }
 
@@ -182,13 +192,15 @@ PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock
 #endif
     if (waits == 3u) return PLATFORM_PERIODIC_CLOCK; // 模拟唤醒失败；之后不得再调用此接口。
     *release = (PlatformPeriodicRelease_t){0};
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS) || MC02_TASK_CONTROL
+    if (waits == 2u && deadline_error) release->observed_tick = 1u; // 工作满足预算，但启动延迟使其超过完成期限。
+#endif
     return PLATFORM_PERIODIC_READY;
 }
 
 #if MC02_TASK_CONTROL
 static PlatformPeriodicClock_t *tim5_owner; // 硬件后端按实际任务栈地址记录所有权。
 static unsigned tim5_closes;
-static uint8_t budget_error;
 
 PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
     const PlatformPeriodicConfig_t *config)
@@ -197,6 +209,7 @@ PlatformPeriodicResult_t PlatformTaskHighResOpen(PlatformPeriodicClock_t *clock,
     TEST_CHECK(config->period_us == 500u && config->budget_us == 250u); // 不把实际周期向上取整。
     tim5_owner = clock; // 后续接口须传入同一个地址。
     clock->period_ticks = 500u;
+    clock->budget_ticks = 250u; // TIM5 替身用微秒表达预算。
     ++initializations;
     return PLATFORM_PERIODIC_READY;
 }
@@ -205,20 +218,17 @@ PlatformPeriodicResult_t PlatformTaskHighResWait(PlatformPeriodicClock_t *clock,
     PlatformPeriodicRelease_t *release)
 {
     TEST_CHECK(clock == tim5_owner && tim5_closes == 0u);
-    return PlatformTaskPeriodicWait(clock, release); // 使用相同的假等待事件，硬件入口仍单独计数。
+    const PlatformPeriodicResult_t result = PlatformTaskPeriodicWait(clock, release); // 使用相同的假等待事件。
+    if (result == PLATFORM_PERIODIC_READY && waits == 2u && !budget_error)
+        release->observed_tick = 250u; // 晚 250 μs 开始，工作 250 μs 恰好满足预算和完成期限。
+    return result;
 }
 
 PlatformPeriodicResult_t PlatformTaskHighResFinish(const PlatformPeriodicClock_t *clock,
     const PlatformPeriodicRelease_t *release, PlatformPeriodicTiming_t *timing)
 {
     TEST_CHECK(clock == tim5_owner && tim5_closes == 0u);
-    const PlatformPeriodicResult_t result = PlatformTaskPeriodicFinish(clock, release, timing);
-    if (budget_error)
-    {
-        *timing = (PlatformPeriodicTiming_t){.work_ticks = 251u, .over_budget = 1u}; // 只超出执行预算。
-        return PLATFORM_PERIODIC_READY; // 后端正确报告超期，任务负责停止并释放通道。
-    }
-    return result;
+    return PlatformTaskPeriodicFinish(clock, release, timing); // 复用模拟的到期和超期结果。
 }
 
 PlatformPeriodicResult_t PlatformTaskHighResClose(const PlatformPeriodicClock_t *clock)
@@ -341,10 +351,12 @@ int main(int argc, char **argv)
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS) || MC02_TASK_CONTROL
     skipped_release = (uint8_t)(argc == 3 && strcmp(argv[2], "skip-release") == 0);
     deadline_error = (uint8_t)(argc == 3 && strcmp(argv[2], "deadline-error") == 0);
+    budget_error = (uint8_t)(argc == 3 && strcmp(argv[2], "budget-error") == 0);
     TEST_CHECK(argc == 2 || (argc == 3 && (skipped_release || deadline_error ||
         strcmp(argv[2], "finish-error") == 0 || strcmp(argv[2], "budget-error") == 0)));
     finish_error = (uint8_t)(argc == 3 && !skipped_release); // 跳拍在第一轮成功完成后注入。
     if (skipped_release || deadline_error) expected_fault = TASK_MONITOR_FAULT_PERIOD_DEADLINE;
+    if (budget_error) expected_fault = TASK_MONITOR_FAULT_WORK_DEADLINE; // 执行预算超期优先报告。
 #else
     TEST_CHECK(argc == 2 || (argc == 3 && (strcmp(argv[2], "finish-error") == 0 || strcmp(argv[2], "budget-error") == 0)));
     finish_error = (uint8_t)(argc == 3);
@@ -355,22 +367,25 @@ int main(int argc, char **argv)
         expected_monitor = tasks[i].monitor;
         expected_period_ms = tasks[i].period_ms;
 #if MC02_TASK_CONTROL
-        const uint8_t tim5 = (uint8_t)(strcmp(argv[1], "tim5") == 0 || strcmp(argv[1], "gimbal-tim5") == 0);
-        if (tim5)
+        const uint8_t tim5_selected = (uint8_t)(strcmp(argv[1], "tim5") == 0 || strcmp(argv[1], "gimbal-tim5") == 0);
+        if (tim5_selected)
         {
             control.timing = (PlatformPeriodicConfig_t){.period_us = 500u, .budget_us = 250u};
             control.source = PLATFORM_PERIODIC_SOURCE_HIGH_RES; // 模拟启动预检交付的实际来源。
-            budget_error = (uint8_t)(argc == 3 && strcmp(argv[2], "budget-error") == 0);
-            if (budget_error) expected_fault = TASK_MONITOR_FAULT_WORK_DEADLINE; // 超预算应有明确原因。
         }
 #endif
         if (setjmp(task_exit) == 0) tasks[i].entry(NULL);
         TEST_CHECK(initializations == 1u && begins == 2u && work == 1u && finishes == 1u && fault_delays == 2u);
         TEST_CHECK(waits == (finish_error ? 2u : 3u));
         const unsigned reported = finish_error ? 0u : 1u; // 完成时钟失败时保持监控进度不变。
-        TEST_CHECK(completes == reported && idle_reports == reported && fairness_delays == reported);
+        TEST_CHECK(completes == reported && idle_reports == reported);
+#if MC02_TASK_CONTROL || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+        TEST_CHECK(fairness_delays == 0u); // 截止点恰好满足时，硬期限任务不能再睡过下一拍。
+#else
+        TEST_CHECK(fairness_delays == reported); // 常驻诊断仍主动为其他任务让出一个刻度。
+#endif
 #if MC02_TASK_CONTROL
-        TEST_CHECK(tim5_closes == tim5 && tim5_owner == NULL); // 故障后只释放一次硬件通道。
+        TEST_CHECK(tim5_closes == tim5_selected && tim5_owner == NULL); // 故障后只释放一次硬件通道。
 #endif
         return 0;
     }

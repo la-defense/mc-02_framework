@@ -118,10 +118,13 @@ static RobotTaskCycle_t OpenTaskCycle(RobotPeriodicTask_t task, TaskMonitor_Id_e
     return cycle; // 这些常驻任务只使用 RTOS，不登记周期状态地址。
 }
 
-// 独立控制任务使用硬完成期限；受限底盘的人工命令任务也使用同样的规则。
+// 独立控制、电机分拍和受限人工命令使用硬完成期限。
 static uint8_t UsesHardCycleDeadline(TaskMonitor_Id_e monitor)
 {
     return monitor == TASK_MONITOR_CHASSIS || monitor == TASK_MONITOR_GIMBAL || monitor == TASK_MONITOR_SHOOTER
+#if MC02_TASK_MOTOR_SPLIT
+        || monitor == TASK_MONITOR_MOTOR // 漏过派发拍点后不计算也不发送该轮目标。
+#endif
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
         || monitor == TASK_MONITOR_ROBOT
 #endif
@@ -177,7 +180,8 @@ static void CompleteTaskCycle(RobotTaskCycle_t *cycle)
             StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 无法证明完成时刻时不报告进度。
             return;
         }
-        if (UsesHardCycleDeadline(cycle->monitor) && (timing.over_budget || timing.missed_deadline))
+        const uint8_t hard_deadline = UsesHardCycleDeadline(cycle->monitor); // 控制任务还需要检查完成期限。
+        if (hard_deadline && (timing.over_budget || timing.missed_deadline))
         {
             const TaskMonitor_FaultReason_e reason = timing.over_budget
                 ? TASK_MONITOR_FAULT_WORK_DEADLINE : TASK_MONITOR_FAULT_PERIOD_DEADLINE; // 区分计算超时和拍点错过。
@@ -185,12 +189,12 @@ static void CompleteTaskCycle(RobotTaskCycle_t *cycle)
             return;
         }
         const uint32_t start_lag = cycle->release.observed_tick - cycle->release.scheduled_tick; // 开始前已过的刻度。
-        yield_for_peers = (uint8_t)(start_lag + timing.work_ticks >= cycle->clock.period_ticks); // 下一拍是否已到。
+        yield_for_peers = (uint8_t)(!hard_deadline && start_lag + timing.work_ticks >= cycle->clock.period_ticks); // 软期限任务让出刻度；硬期限任务按原拍点继续等待。
     }
     (void)TaskMonitorCompleteWork(cycle->monitor); // 记录完成时间。
     (void)TaskMonitorSetWaiting(cycle->monitor, TASK_MONITOR_WAIT_PERIOD); // 标记接下来等待下一拍。
     if (yield_for_peers)
-        PlatformTaskDelayMs(1u); // 下一拍已到，先让出一个 RTOS 刻度，之后仍按原相位取最近一拍。
+        PlatformTaskDelayMs(1u); // 诊断等软期限任务先让其他任务运行，随后仍按原相位取最近一拍。
     else if (!cycle->fixed)
         PlatformTaskDelayMs(cycle->delay_ms); // 旧配置沿用轮间相对延迟。
 }

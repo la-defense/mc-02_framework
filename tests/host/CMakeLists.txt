@@ -245,12 +245,15 @@ add_test(NAME production_chassis_task_clock_failure COMMAND robot_chassis_cycle_
 add_test(NAME production_chassis_task_tim5_cycle COMMAND robot_chassis_cycle_test tim5)
 add_test(NAME production_chassis_task_tim5_budget COMMAND robot_chassis_cycle_test tim5 budget-error)
 add_test(NAME production_motor_task_timing_failure COMMAND robot_chassis_cycle_test motor)
+add_test(NAME production_motor_task_skip_release COMMAND robot_chassis_cycle_test motor skip-release) # 漏拍先撤销输出，当前拍不计算或发送。
+add_test(NAME production_motor_task_finish_budget COMMAND robot_chassis_cycle_test motor budget-error) # 完成时超过预算立即报告，保持旧监控进度。
 foreach(scenario IN ITEMS normal create missing not-started disabled)
   add_test(NAME production_chassis_task_create_${scenario} COMMAND robot_chassis_create_test chassis-${scenario})
   set_tests_properties(production_chassis_task_create_${scenario} PROPERTIES TIMEOUT 10)
 endforeach()
 set_tests_properties(production_chassis_task_monitor production_chassis_task_cycle production_chassis_task_clock_failure
   production_chassis_task_tim5_cycle production_chassis_task_tim5_budget production_motor_task_timing_failure
+  production_motor_task_skip_release production_motor_task_finish_budget
   PROPERTIES TIMEOUT 10)
 # 直接运行生成代码中的 FDCAN MSP，模拟重复初始化和跨总线退出。
 add_executable(fdcan_msp_test fdcan_msp_test.c ../../Core/Src/fdcan.c)
