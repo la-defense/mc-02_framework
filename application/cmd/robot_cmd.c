@@ -412,21 +412,26 @@ static VisionControlInput_s GetVisionV2ControlInput(void)
     return input;
 }
 
+// 恢复前或同一毫秒收到的导航不能接管；超过导航最长寿命的恢复时刻已不影响判断。
+static uint8_t VisionV2NavigationAfterRecovery(uint32_t now_ms, uint32_t navigation_age_ms,
+                                              uint8_t recorded, uint32_t recovered_ms)
+{
+    const uint32_t recovery_age_ms = now_ms - recovered_ms; // 裁判和导航的时刻均为本机接收时间，允许回绕。
+    return (uint8_t)(!recorded || recovery_age_ms > VISION_V2_NAV_MAX_AGE_MS || navigation_age_ms < recovery_age_ms);
+}
+
 // 现有导航要求两组裁判数据都有效。缓冲失效的普通限功率在模型接入后另行启用。
 static uint8_t VisionV2ReadNavigationPower(RefereeChassisPower_t *power)
 {
     if (RefereeGetChassisPower(power) != REFEREE_OK || power->limit.state != REFEREE_DATA_FRESH ||
         power->limit_w == 0u || !power->chassis_power_enabled || power->buffer.state != REFEREE_DATA_FRESH)
         return 0u; // 当前缺少任一必需功率数据时撤销导航目标。
-    if (power->recovery_recorded)
-    {
-        const uint32_t now_ms = PlatformTimeNowMs(); // 导航接收与裁判恢复使用同一本机时钟。
-        const uint32_t recovery_age_ms = now_ms - power->recovered_ms; // 正常回绕时仍能比较两者的年龄。
-        const uint32_t navigation_age_ms = now_ms - vision_v2_navigation_freshness.received_time_ms; // 使用导航的本机接收时间。
-        if (recovery_age_ms <= VISION_V2_NAV_MAX_AGE_MS && navigation_age_ms >= recovery_age_ms)
-            return 0u; // 恢复前或同一毫秒接收的旧命令都不能接管。
-    }
-    return 1u; // 更早的恢复已超过命令的最长有效期，无须再比较。
+    const uint32_t now_ms = PlatformTimeNowMs(); // 两种恢复条件使用同一次检查时间。
+    const uint32_t navigation_age_ms = now_ms - vision_v2_navigation_freshness.received_time_ms; // 保留导航的原接收时刻。
+    return VisionV2NavigationAfterRecovery(now_ms, navigation_age_ms, power->limit_recovery_recorded,
+        power->limit_recovered_ms) && // 任何供电许可中断都要求新命令。
+        VisionV2NavigationAfterRecovery(now_ms, navigation_age_ms, power->recovery_recorded,
+            power->recovered_ms); // 当前路径也依赖缓冲恢复。
 }
 
 static uint8_t VisionV2NavigationAllowed(uint8_t autonomous_selected)

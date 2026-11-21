@@ -343,6 +343,19 @@ int main(void)
         chassis.chassis_mode == CHASSIS_ZERO_FORCE);
     referee_power.chassis_power_enabled = 1u;
 
+    referee_power.recovery_recorded = 0u; // 单独注入普通供电的恢复记录，不能只检查两组共同恢复时间。
+    referee_power.limit_recovery_recorded = 1u;
+    referee_power.limit_recovered_ms = test_tick;
+    TEST_CHECK(PublishVision(nav_publisher, &navigation, 90u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_OK &&
+        chassis.chassis_mode == CHASSIS_ZERO_FORCE); // 同毫秒的导航不能跨过普通供电恢复。
+    ++test_tick;
+    TEST_CHECK(PublishVision(nav_publisher, &navigation, 91u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_OK &&
+        chassis.chassis_mode == CHASSIS_NO_FOLLOW); // 恢复之后收到的新导航正常通过。
+
     test_tick += 1u;
     TEST_CHECK(PublishVision(nav_publisher, &navigation, 87u, MESSAGE_CLOCK_REMOTE_RAW) == 0);
     TEST_CHECK(MessagePublishNow(feedback, &pose) == MESSAGE_OK);

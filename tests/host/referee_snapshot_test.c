@@ -527,6 +527,7 @@ static void check_chassis_power_sources(void)
     TEST_CHECK(power.limit.state == REFEREE_DATA_FRESH && power.limit.source_rx_ms == UINT32_MAX - 49u &&
         power.limit.max_age_ms == 300u && power.limit_w == 80u && power.chassis_power_enabled == 1u);
     TEST_CHECK(power.buffer.state == REFEREE_DATA_FRESH && power.buffer.source_rx_ms == 0u && power.buffer_energy_j == 50u);
+    TEST_CHECK(!power.limit_recovery_recorded && !power.recovery_recorded); // 启动后的首次有效数据不算恢复。
 
     set_tick(251u); // 上限超期，链路和缓冲仍有效。
     feed_frame(ID_game_state, game, sizeof(game), 3u); // 其他消息发现超期，但不能续期。
@@ -537,16 +538,20 @@ static void check_chassis_power_sources(void)
     feed_frame(ID_game_robot_state, robot, sizeof(robot), 4u); // 只有 0x0201 自己能恢复额度。
     TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit_w == 80u &&
         power.buffer.state == REFEREE_DATA_EXPIRED);
+    TEST_CHECK(power.limit_recovery_recorded && power.limit_recovered_ms == UINT32_MAX - 40u &&
+               !power.recovery_recorded); // 缓冲还没回来，只有普通供电条件已恢复。
     set_tick(UINT32_MAX - 30u);
     feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 5u); // 恢复缓冲必须收到自己的新帧。
     const DaemonEvent_t old_offline = {.state = DAEMON_SOURCE_OFFLINE, .last_detected_ms = UINT32_MAX - 41u};
     daemon_config.event_handler(&old_offline, daemon_config.owner_id); // 晚到的离线通知不能撤销后来恢复的数据。
     TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit_w == 80u && power.buffer_energy_j == 50u);
     TEST_CHECK(power.recovery_recorded && power.recovered_ms == UINT32_MAX - 30u); // 以最后恢复的一组为准，晚到的离线事件不能改写。
+    TEST_CHECK(power.limit_recovery_recorded && power.limit_recovered_ms == UINT32_MAX - 40u); // 缓冲恢复不刷新上限恢复时刻。
     const DaemonEvent_t current_offline = {.state = DAEMON_SOURCE_OFFLINE, .last_detected_ms = UINT32_MAX - 29u};
     daemon_config.event_handler(&current_offline, daemon_config.owner_id); // 当前断联立即撤销两条仍未到各自期限的旧数据。
     TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit.state == REFEREE_DATA_EXPIRED &&
         power.buffer.state == REFEREE_DATA_EXPIRED && power.limit_w == 0u && power.buffer_energy_j == 0u);
+    TEST_CHECK(!power.limit_recovery_recorded && !power.recovery_recorded); // 当前断联期间不交付任何恢复资格。
     set_tick(UINT32_MAX);
     feed_frame(ID_game_robot_state, robot, sizeof(robot), 6u); // 链路已恢复，但缓冲尚无新数据。
     set_tick(0u);
@@ -572,6 +577,28 @@ static void check_chassis_power_sources(void)
     write_u16le(robot + 10u, 80u);
     feed_frame(ID_game_robot_state, robot, sizeof(robot), 12u);
     TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.recovery_recorded && power.recovered_ms == 9u);
+
+    set_tick(250u);
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 13u); // 只刷新上限，缓冲仍使用 7 ms 的原时刻。
+    set_tick(308u); // 缓冲过期，上限仍有效。
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit_w == 80u &&
+        power.chassis_power_enabled && power.buffer.state == REFEREE_DATA_EXPIRED && power.buffer_energy_j == 0u);
+    TEST_CHECK(power.limit_recovery_recorded && power.limit_recovered_ms == 9u && !power.recovery_recorded);
+    set_tick(309u);
+    feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 14u);
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.recovery_recorded && power.recovered_ms == 309u &&
+        power.limit_recovery_recorded && power.limit_recovered_ms == 9u); // 只恢复缓冲路径。
+
+    set_tick(550u);
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 15u); // 保证缓冲再次过期时上限仍新鲜。
+    set_tick(610u);
+    robot[16] = 0u;
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 16u); // 缓冲已经失效，此帧又撤销普通供电。
+    set_tick(611u);
+    robot[16] = REFEREE_OUTPUT_CHASSIS_MASK;
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 17u); // 两次变化之间没有读取接口。
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.buffer.state == REFEREE_DATA_EXPIRED &&
+        !power.recovery_recorded && power.limit_recovery_recorded && power.limit_recovered_ms == 611u);
 }
 
 #if defined(REFEREE_TEST_THREADS)

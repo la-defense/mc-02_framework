@@ -37,9 +37,13 @@ static uint8_t referee_initialized;
 static uint8_t referee_has_valid_frame;
 static uint8_t referee_link_active;
 static uint32_t referee_last_valid_rx_ms;
-static uint32_t referee_power_recovered_ms; // 两组额度恢复时的本机处理时刻。
-static uint8_t referee_power_available; // 最近一次检查，两组都可用于现有底盘许可。
-static uint8_t referee_power_interrupted; // 至少有一次从可用变为不可用。
+typedef struct {
+    uint32_t recovered_ms; // 已获准后中断，再次可用时的本机处理时刻，单位 ms。
+    uint8_t available; // 最近一次检查是否可用。
+    uint8_t interrupted; // 是否发生过可用到不可用的变化；首次接收不算恢复。
+} RefereePowerContinuity_t;
+static RefereePowerContinuity_t referee_base_power; // 上限和供电许可，不依赖缓冲。
+static RefereePowerContinuity_t referee_buffered_power; // 需要上限、供电许可和缓冲的现有模式。
 
 // 接收、离线和发送回调均由任务派发；共享状态使用可嵌套的任务临界区保护。
 // 此处不从中断调用平台任务锁，也不改变原来的毫秒时基和无符号回绕计算。
@@ -296,19 +300,27 @@ static uint8_t RefereeIsEventIndex(size_t index)
                      index == REF_CMD_SHOOT_DATA || index == REF_CMD_INTERACTIVE);
 }
 
-// 在裁判任务锁内记录可用性，即使外部没有读取也能保留一次短暂中断。
+// 用同一规则记录任一套供电条件的中断与恢复，调用者持有裁判任务锁。
+static void RefereeTrackPowerContinuity(RefereePowerContinuity_t *continuity, uint8_t available, uint32_t now_ms)
+{
+    if (!available && continuity->available)
+        continuity->interrupted = 1u; // 记录已获准后发生的中断。
+    if (available && !continuity->available && continuity->interrupted)
+        continuity->recovered_ms = now_ms; // 只在恢复的一刻更新，旧命令必须晚于此时刻。
+    continuity->available = available; // 连续有效的帧不改变恢复时刻。
+}
+
+// 在裁判任务锁内分别记录两套条件；即使无人读取也能保留短暂中断。
 static void RefereeTrackChassisPower(uint32_t now_ms)
 {
     const RefereeCommandSnapshot_t *robot = &referee_published.command[REF_CMD_ROBOT_STATE]; // 上限与许可取自同一状态帧。
     const RefereeCommandSnapshot_t *buffer = &referee_published.command[REF_CMD_POWER_HEAT]; // 缓冲帧单独检查。
-    const uint8_t available = (uint8_t)(robot->state == REFEREE_DATA_FRESH && buffer->state == REFEREE_DATA_FRESH &&
+    const uint8_t base_available = (uint8_t)(robot->state == REFEREE_DATA_FRESH &&
         robot->data.robot_state.chassis_power_limit_w != 0u &&
-        (robot->data.robot_state.power_output_bits & REFEREE_OUTPUT_CHASSIS_MASK) != 0u); // 与现有双来源许可规则一致。
-    if (!available && referee_power_available)
-        referee_power_interrupted = 1u; // 记录已获准后发生的中断。
-    if (available && !referee_power_available && referee_power_interrupted)
-        referee_power_recovered_ms = now_ms; // 用实际恢复处理时刻，不接受先前已接收的旧命令。
-    referee_power_available = available; // 连续有效的帧不会改写恢复时刻。
+        (robot->data.robot_state.power_output_bits & REFEREE_OUTPUT_CHASSIS_MASK) != 0u); // 普通供电必须具备这两项。
+    RefereeTrackPowerContinuity(&referee_base_power, base_available, now_ms); // 缓冲的更新或失效都不改变此区间。
+    RefereeTrackPowerContinuity(&referee_buffered_power,
+        (uint8_t)(base_available && buffer->state == REFEREE_DATA_FRESH), now_ms); // 同时需要缓冲的模式独立记录。
 }
 
 // 两个功率来源一旦确认过期，只有同类帧可以恢复，避免毫秒回绕后旧帧重新有效。
@@ -572,9 +584,8 @@ RefereeStatus_t RefereeInit(PlatformUartPort_t port, const RefereeConfig_t *conf
     referee_last_valid_rx_ms = 0u;
     referee_has_valid_frame = 0u;
     referee_link_active = 0u;
-    referee_power_recovered_ms = 0u; // 上电后还未发生恢复。
-    referee_power_available = 0u; // 必须先取得两组合法信息。
-    referee_power_interrupted = 0u; // 初始化后第一次取得信息沿用首次接收规则。
+    referee_base_power = (RefereePowerContinuity_t){0}; // 重新初始化后先等待上限与供电许可。
+    referee_buffered_power = (RefereePowerContinuity_t){0}; // 依赖缓冲的路径也从首次接收开始。
     referee_daemon = daemon;
     PlatformTaskCriticalExit();
     PlatformUartConfig uart_conf = {0}; // 未启用的可选回调保持空值。
@@ -670,9 +681,12 @@ RefereeStatus_t RefereeGetChassisPower(RefereeChassisPower_t *output)
     }
     if (buffer->state == REFEREE_DATA_FRESH)
         output->buffer_energy_j = buffer->data.power_heat.buffer_energy_j; // 保持焦耳，不能直接当瓦数使用。
-    output->recovery_recorded = (uint8_t)(referee_power_available && referee_power_interrupted); // 有效恢复才交付重接管时刻。
+    output->recovery_recorded = (uint8_t)(referee_buffered_power.available && referee_buffered_power.interrupted);
     if (output->recovery_recorded)
-        output->recovered_ms = referee_power_recovered_ms; // 读取不会推进这个时刻。
+        output->recovered_ms = referee_buffered_power.recovered_ms; // 读取不会推进两组共同恢复的时刻。
+    output->limit_recovery_recorded = (uint8_t)(referee_base_power.available && referee_base_power.interrupted);
+    if (output->limit_recovery_recorded)
+        output->limit_recovered_ms = referee_base_power.recovered_ms; // 缓冲过期时仍可取得这组有效记录。
     PlatformTaskCriticalExit();
     return REFEREE_OK;
 }

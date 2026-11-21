@@ -119,4 +119,13 @@
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过，WSL Debug 和 Release 各通过 849 项。普通禁热及遥控诊断完成 ARM 构建和 ELF 检查，六种未确认车型的生产预设按预期拒绝。
 - V2 当前只接收本体速度，场地参考仍需可信定位来源，枪口参照仍需对应关节方向和安装关系。实车来源及校准未配置为已确认，本轮只使用隔离数据。
 
+## 裁判普通供电的独立恢复记录（R25-15）
+
+- `RefereeGetChassisPower` 同时交付 `0x0201` 上限／供电许可恢复记录和两组共同恢复记录。首次接收不当作恢复，两次读取之间的短暂撤权也会被记录。缓冲过期时，两组共同恢复记录暂不可用。缓冲恢复不刷新普通供电恢复时间。
+- V2 在选择和发布导航时检验两条恢复记录。恢复前或同一毫秒的命令保持禁止。生产解析器回归覆盖缓冲失效期间的撤权与恢复、仅缓冲恢复、断联和计时回绕。V2 命令回归单独注入普通供电恢复记录，核对旧命令拒绝和新命令接管。
+- 这两项生产入口测试通过 ASan／UBSan。隔离单板 SP 和 V2 通过 ARM Debug 构建、源码和 ELF 检查，主 RAM 分别为 130032 B、130800 B。相对 `3a63d7f`，SP 主 RAM 持平，V2 增加 32 B，静态链接余量为 272 B。未连接硬件。
+- 裁判诊断单独用 CMake 的 `refdiag-debug` 预设构建，并通过 `check_firmware_profile.py --referee-diagnostics` 检查。Flash 为 264672 B，主 RAM 为 121560 B。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 850 项，普通禁热和遥控诊断通过构建与 ELF 检查。六种未确认车型的正式预设仍按预期拒绝。
+- 当前 V2 路径仍需两组数据有效，普通供电模型及保守余量未确认。这里验证来源时序和重新接管，功率输出上限还需要与经过验证的模型接线并在现场测量。
+
 见[本底盘接口](../../../../application/chassis/chassis.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。
