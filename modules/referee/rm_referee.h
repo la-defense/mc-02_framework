@@ -88,7 +88,7 @@ RefereeStatus_t RefereeGetChassisPower(RefereeChassisPower_t *output);
 
 /** @brief 检查底盘目标使用的两组裁判数据是否仍处于同一连续有效区间。
  * @param[in] generation 由 RefereeGetChassisPower 交付的非零编号。
- * @param[in] now_ms 本机检查时刻，单位 ms。
+ * @param[in] now_ms 调用方读取的本机毫秒时刻，可回绕。接口以同一时钟中较晚的观察复核期限。
  * @return 1 表示区间未中断、上限和供电许可有效、缓冲仍新鲜；否则为 0。
  * @note 任务上下文调用，可在已有任务临界区中使用，不等待，也不发送报文。
  */

@@ -153,4 +153,11 @@
 - 隔离单板 SP、V2 和受限底盘均通过 ARM Debug 构建、源码和 ELF 检查。相对上次同配置构建，Flash 分别增加 32 B、32 B、48 B，主 RAM 分别增加 0 B、32 B、32 B。V2 主 RAM 静态链接余量为 240 B。三份 ELF 均保留 16 B 的四轮间断记录，当前固件尚无调用这两个反馈读口的模块，读出行为由主机回归覆盖。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 859 项，两份禁热固件通过 ARM 构建与 ELF 检查，六种正式预设按未确认条件拒绝构建。本轮未连接硬件，实际读取耗时、里程计精度及实车配置仍待现场确认。
 
+## 裁判供电区间复核的取时顺序（R25-15）
+
+- 修复前，调用方在毫秒回绕之前取时，裁判任务发布回绕后的有效缓冲帧。旧检查时刻会把新帧和供电区间错误撤销。复核时现取入锁后的本机时间，并与调用方取时比较，以较晚的时刻检查链路和两组原始期限。
+- 两项 ASan／UBSan 回归通过。真实裁判接收覆盖毫秒回绕、正常刷新后用旧取时复核、等待中越过上限期限以及连续区间编号保持。底盘回归继续覆盖供电中断后拒绝旧区间。[裁判解析回归](../../../../tests/host/referee_snapshot_test.c)
+- 裁判诊断和隔离单板 V2 通过 ARM Debug 构建、源码和 ELF 检查。裁判诊断 Flash 264720 B，主 RAM 121560 B。V2 确认链接供电复核入口，Flash 341000 B、主 RAM 130832 B，均与 `85b3a03` 的同配置一致。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 859 项，普通禁热和遥控诊断通过 ARM 构建与 ELF 检查，六种实际车型的正式预设按未确认条件拒绝。本轮仅验证软件期限，实际供电模型和实车响应仍待确认。
+
 见[本底盘接口](../../../../application/chassis/chassis.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

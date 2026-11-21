@@ -703,8 +703,11 @@ uint8_t RefereeBufferedPowerIsCurrent(uint32_t generation, uint32_t now_ms)
 {
     if (generation == 0u) return 0u; // 没有原始区间编号时不能放行。
     PlatformTaskCriticalEnter(); // 防止裁判任务在检查期限与编号之间插入状态变化。
-    RefereeExpirePowerSources(now_ms, referee_has_valid_frame &&
-        now_ms - referee_last_valid_rx_ms > REFEREE_LINK_TIMEOUT_MS); // 发布者停更时也按原期限撤销。
+    const uint32_t checked_at_ms = PlatformTimeNowMs(); // 调用者取时后可能收到新帧或跨过原期限。
+    const uint32_t effective_now_ms = checked_at_ms - now_ms <= INT32_MAX ?
+        checked_at_ms : now_ms; // 取同一时钟中较晚的一次观察，兼容毫秒回绕。
+    RefereeExpirePowerSources(effective_now_ms, referee_has_valid_frame &&
+        effective_now_ms - referee_last_valid_rx_ms > REFEREE_LINK_TIMEOUT_MS); // 两组期限与链路均使用同一复核时刻。
     const uint8_t current = (uint8_t)(referee_initialized && referee_buffered_power.available &&
         generation == referee_buffered_generation); // 恢复后的新编号不能授权旧目标。
     PlatformTaskCriticalExit(); // 结果已经取得，保留调用者原来的临界区层级。

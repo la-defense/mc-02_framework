@@ -522,18 +522,21 @@ static void check_chassis_power_sources(void)
     feed_frame(ID_game_robot_state, robot, sizeof(robot), 1u);
     set_tick(0u);
     feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 2u);
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK);
+    const uint32_t first_power_generation = power.buffered_generation;
+    TEST_CHECK(first_power_generation != 0u &&
+        RefereeBufferedPowerIsCurrent(first_power_generation, UINT32_MAX)); // 调用者回绕前取时，检查时已收到回绕后的缓冲帧。
     set_tick(250u);
     TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK);
     TEST_CHECK(power.limit.state == REFEREE_DATA_FRESH && power.limit.source_rx_ms == UINT32_MAX - 49u &&
         power.limit.max_age_ms == 300u && power.limit_w == 80u && power.chassis_power_enabled == 1u);
     TEST_CHECK(power.buffer.state == REFEREE_DATA_FRESH && power.buffer.source_rx_ms == 0u && power.buffer_energy_j == 50u);
     TEST_CHECK(!power.limit_recovery_recorded && !power.recovery_recorded); // 启动后的首次有效数据不算恢复。
-    const uint32_t first_power_generation = power.buffered_generation;
-    TEST_CHECK(first_power_generation != 0u && RefereeBufferedPowerIsCurrent(first_power_generation, 250u));
+    TEST_CHECK(power.buffered_generation == first_power_generation && RefereeBufferedPowerIsCurrent(first_power_generation, 250u));
     TEST_CHECK(!RefereeBufferedPowerIsCurrent(0u, 250u)); // 零不能作为有效来源。
 
     set_tick(251u); // 上限超期，链路和缓冲仍有效。
-    TEST_CHECK(!RefereeBufferedPowerIsCurrent(first_power_generation, 251u)); // 发送前检查自己发现超期。
+    TEST_CHECK(!RefereeBufferedPowerIsCurrent(first_power_generation, 250u)); // 调用者在边界取时，检查阶段仍按当前时间撤销。
     feed_frame(ID_game_state, game, sizeof(game), 3u); // 其他消息发现超期，但不能续期。
     TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit.state == REFEREE_DATA_EXPIRED &&
         power.limit_w == 0u && !power.chassis_power_enabled && power.buffer_energy_j == 50u && power.buffered_generation == 0u);
@@ -577,6 +580,7 @@ static void check_chassis_power_sources(void)
         RefereeBufferedPowerIsCurrent(current_power_generation, 6u)); // 发送端无需看见中断本身就能拒绝旧目标。
     set_tick(7u);
     feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 10u); // 正常帧只更新自己的期限。
+    TEST_CHECK(RefereeBufferedPowerIsCurrent(current_power_generation, 6u)); // 较新的正常刷新不会被旧检查时刻作废。
     TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.recovered_ms == 6u &&
         power.buffered_generation == current_power_generation); // 连续刷新不重新编号。
 
