@@ -56,6 +56,7 @@ typedef struct
     char output[BSP_LOG_OUTPUT_CAPACITY];
     uint8_t diagnostic_rx[BSP_LOG_DIAG_REQUEST_MAX];
     BSPLogHealthSnapshotHandler_t health_snapshot_handler;
+    BSPLogHealthSnapshotHandler_t chassis_motion_handler; // 可选的受限底盘只读查询。
     BSPLogTopicDiagnosticsHandler_t topic_diagnostics_handler;
     uint32_t next_sequence;
     uint32_t diagnostic_response_dropped;
@@ -256,9 +257,11 @@ static void BSPLogHandleDiagnosticRequest(const uint8_t *frame, size_t length)
         if (status != BSP_LOG_STATUS_OK)
             BSPLogCountDiagnostic(&log_workspace.diagnostic_command_errors);
     }
-    else if (command == BSP_LOG_DIAG_GET_HEALTH && payload_length == 0u)
+    else if ((command == BSP_LOG_DIAG_GET_HEALTH || command == BSP_LOG_DIAG_GET_CHASSIS_MOTION) &&
+             payload_length == 0u)
     {
-        BSPLogHealthSnapshotHandler_t handler = log_workspace.health_snapshot_handler;
+        BSPLogHealthSnapshotHandler_t handler = command == BSP_LOG_DIAG_GET_HEALTH
+            ? log_workspace.health_snapshot_handler : log_workspace.chassis_motion_handler; // 两个无负载查询各用自己的处理函数。
         if ((handler == NULL) ||
             (handler(reply, (uint8_t)sizeof(reply), &reply_length) == 0u) ||
             (reply_length == 0u) || (reply_length > sizeof(reply)))
@@ -833,7 +836,8 @@ BSPLogStatus_t BSPLogGetSourceLevel(BSPLogSourceId_t source, BSPLogLevel_t *outp
     return BSP_LOG_STATUS_OK;
 }
 
-BSPLogStatus_t BSPLogRegisterHealthSnapshotHandler(BSPLogHealthSnapshotHandler_t handler)
+static BSPLogStatus_t BSPLogRegisterReadHandler(BSPLogHealthSnapshotHandler_t *slot,
+                                               BSPLogHealthSnapshotHandler_t handler)
 {
     if (handler == NULL)
         return BSP_LOG_STATUS_BAD_ARGUMENT;
@@ -842,11 +846,21 @@ BSPLogStatus_t BSPLogRegisterHealthSnapshotHandler(BSPLogHealthSnapshotHandler_t
     if (BSPLogPortInInterrupt() || BSPLogPortSchedulerRunning())
         return BSP_LOG_STATUS_BAD_CONTEXT;
 
-    if (log_workspace.health_snapshot_handler != NULL)
+    if (*slot != NULL)
         return BSP_LOG_STATUS_HANDLER_ALREADY_REGISTERED;
     // 注册被限制在调度器启动前；此时接收任务尚未派发，不需进入RTOS临界区。
-    log_workspace.health_snapshot_handler = handler;
+    *slot = handler;
     return BSP_LOG_STATUS_OK;
+}
+
+BSPLogStatus_t BSPLogRegisterHealthSnapshotHandler(BSPLogHealthSnapshotHandler_t handler)
+{
+    return BSPLogRegisterReadHandler(&log_workspace.health_snapshot_handler, handler);
+}
+
+BSPLogStatus_t BSPLogRegisterChassisMotionHandler(BSPLogHealthSnapshotHandler_t handler)
+{
+    return BSPLogRegisterReadHandler(&log_workspace.chassis_motion_handler, handler);
 }
 
 BSPLogStatus_t BSPLogRegisterTopicDiagnosticsHandler(BSPLogTopicDiagnosticsHandler_t handler)

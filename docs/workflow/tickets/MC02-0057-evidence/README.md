@@ -160,4 +160,11 @@
 - 裁判诊断和隔离单板 V2 通过 ARM Debug 构建、源码和 ELF 检查。裁判诊断 Flash 264720 B，主 RAM 121560 B。V2 确认链接供电复核入口，Flash 341000 B、主 RAM 130832 B，均与 `85b3a03` 的同配置一致。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 859 项，普通禁热和遥控诊断通过 ARM 构建与 ELF 检查，六种实际车型的正式预设按未确认条件拒绝。本轮仅验证软件期限，实际供电模型和实车响应仍待确认。
 
-见[本底盘接口](../../../../application/chassis/chassis.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。
+## 受限底盘经诊断串口读取速度和位姿
+
+- 底盘用同一读出时刻再次检查两组数据的原始期限与四轮连续性。主机生产底盘用例覆盖速度和位姿来源时刻不同、只读取到有效速度及单轮断流。生产日志分帧与应用编码联测核对 38 字节独立固定答案、序号、CRC、未登记、位姿缺测、两项均缺测、坏 CRC 和有负载请求。速度、里程计和诊断相关 7 项通过 ASan／UBSan。[底盘回归](../../../../tests/host/chassis_task_test.c) · [诊断回归](../../../../tests/host/log_test.c)
+- 隔离受限底盘、正式单板 SP 和 V2 通过 Cortex-M7 Debug 构建、源码和 ELF 检查。只有受限底盘链接此应答的注册入口。受限底盘 Flash 为 310964 B，比 `953138a` 增加 624 B，主 RAM 119952 B。SP 和 V2 Flash 分别为 334216 B、341016 B，均比上次未包含 LCD 试改的 `f164920` 基线增加 16 B，主 RAM 分别保持 130064 B、130832 B。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug／Release 各通过 860 项。普通禁热和遥控诊断通过 ARM 构建及 ELF 检查，Flash 分别增加 32 B 和 16 B，主 RAM 保持不变。六种实际车型的正式预设继续因核心配置未确认而拒绝构建。
+- 诊断只在请求到达时读取。实际串口时序、轮序、估速误差与反馈间隔仍待现场确认。本轮未连接硬件。哨兵本地里程计的实车配置保持关闭。[查询格式](../MC02-0144.md#usart10-只读运动反馈)
+
+见[本底盘接口](../../../../application/chassis/chassis_feedback.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

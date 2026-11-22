@@ -18,6 +18,8 @@
 #define BSP_LOG_DIAG_TOPIC_HEADER_SIZE 4u
 #define BSP_LOG_DIAG_TOPIC_RECORD_SIZE 54u
 #define BSP_LOG_DIAG_TOPIC_REPLY_SIZE 58u
+#define BSP_LOG_DIAG_CHASSIS_MOTION_SCHEMA 1u // 底盘按需应答的独立数据版本。
+#define BSP_LOG_DIAG_CHASSIS_MOTION_REPLY_SIZE 38u // 版本、有效位、速度和位姿所占的字节数。
 
 /** @brief 主机发给MCU的诊断命令；不包含日志文本流。 */
 typedef enum
@@ -25,14 +27,15 @@ typedef enum
     BSP_LOG_DIAG_SET_LEVEL = 1u,
     BSP_LOG_DIAG_GET_LEVEL = 2u,
     BSP_LOG_DIAG_GET_HEALTH = 3u,
-    BSP_LOG_DIAG_GET_TOPIC_DIAGNOSTICS = 4u
+    BSP_LOG_DIAG_GET_TOPIC_DIAGNOSTICS = 4u,
+    BSP_LOG_DIAG_GET_CHASSIS_MOTION = 5u // 无负载，只读取受限底盘的速度和里程计。
 } BSPLogDiagnosticCommand_t;
 
 /**
  * 请求帧按字节排列为：同步字节D3 6C、版本、命令、序号、负载长度、负载、CRC低字节、CRC高字节。
  * CRC采用CRC16_MODBUS_A5配置，覆盖同步字节至负载末尾。SET负载为来源编号和等级各1字节；
  * GET_LEVEL负载为1字节来源编号。GET_HEALTH无负载；GET_TOPIC_DIAGNOSTICS负载为零起始话题序号。
- * 两种查询的回复均由已注册处理器生成，最多120字节。此串口仅承载等级命令和按需只读状态；日志记录只经RTT输出。
+ * 各结构化查询由已注册处理器生成回复，最多120字节。日志记录只经RTT输出。
  * 话题统计应答前4字节为状态、schema、序号和启用话题数，随后是54字节固定字段；整次请求只读取一个话题。
  */
 

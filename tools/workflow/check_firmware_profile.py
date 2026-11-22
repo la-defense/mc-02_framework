@@ -122,6 +122,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "modules/remote/remote_bench.c",  # 裸板遥控诊断。
     "modules/master_machine/vision_protocol_v2.c",  # V2 协议编解码。
     "application/chassis/chassis_motion.c",  # 模式、坐标和轮速目标计算。
+    "application/chassis/chassis_motion_diag.c",  # 受限底盘只读串口反馈。
     "application/cmd/commissioning_chassis_cmd.c",  # 受限底盘专用人工命令。
     "application/config/commissioning_chassis_config.c",  # 受限底盘人工配置预检。
     "application/chassis/chassis_kinematics.c",  # 轮组几何和运动映射。
@@ -221,7 +222,10 @@ def main():
     if chassis_commissioning:
         missing -= {"USBTransportProcess", "USBTransportProcessRx"}  # 不启动或派发上位机链路。
         missing |= (COMMISSIONING_CHASSIS_ACTUATORS |
-                    {"MotorTaskRunScheduled", "StartCHASSISTASK", "RobotCanRuntimeInstall"}) - functions
+                    {"MotorTaskRunScheduled", "StartCHASSISTASK", "RobotCanRuntimeInstall",
+                     "ChassisMotionDiagnosticInit"}) - functions
+    elif "ChassisMotionDiagnosticInit" in functions:
+        raise SystemExit("chassis motion diagnostic must only be linked into commissioning/chassis")
     # 当前工程用 ELF 文件名和 CMake 选择报告标识配置；旧的全局标记从未由源码定义。
     missing |= STARTUP_DIAGNOSTICS - symbols
     if args.profile == "robot":
@@ -329,6 +333,7 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
     commissioning_sources = {
         "application/cmd/commissioning_chassis_cmd.c",  # 只发布本地人工底盘命令。
         "application/config/commissioning_chassis_config.c",  # 只在受限底盘构建中检查人工参数。
+        "application/chassis/chassis_motion_diag.c",  # 只在受限底盘中接入读出命令。
     }
     if chassis_commissioning:
         required_chassis_sources = commissioning_sources | {
@@ -576,6 +581,8 @@ def check_portable_dependencies(deps: str, source_root: Path, build_dir: Path, s
                         source_root / "application/config/sentinel_robot/sentinel_config.h",
                         source_root / "application/config/shoot_config_types.h",
                         source_root / "application/chassis/chassis_motion.h",
+                        source_root / "application/chassis/chassis_feedback.h",  # 不含驱动类型的只读速度和位姿。
+                        source_root / "application/chassis/chassis_motion_diag.h",  # 诊断登记入口。
                         source_root / "application/chassis/chassis.h",
                         source_root / "application/chassis/chassis_supercap_legacy.h",
                         source_root / "application/chassis/chassis_kinematics.h",

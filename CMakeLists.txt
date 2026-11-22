@@ -405,6 +405,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     application/shoot/shoot.c # 发射命令和拨弹时序。
     application/chassis/chassis.c # 底盘命令、反馈和电机控制。
     application/chassis/chassis_motion.c # 底盘模式和轮速目标计算。
+    application/chassis/chassis_motion_diag.c # 底盘速度和里程计的只读编码。
     application/chassis/chassis_kinematics.c # 轮组几何校验与运动映射。
     application/chassis/mecanum.c # 麦轮几何到轮速的适配。
     application/chassis/omni.c # 全向轮几何到轮速的适配。

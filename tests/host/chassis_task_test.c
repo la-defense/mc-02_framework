@@ -627,6 +627,10 @@ static int TestOmniOdometryBatch(void)
     test_tick = 15u;
     PublishForwardWheel(0u, 15u); // 只更新最早轮，序号回绕且四轮估速时刻已经前进。
     ChassisTask();
+    const uint32_t before_read = tick_read_count;
+    CHECK(Chassis_GetMotionFeedback(&velocity, &pose) == 3u);
+    CHECK(tick_read_count == before_read + 1u); // 两组反馈在同一时刻复核。
+    CHECK(velocity.source_time_ms == 12u && pose.source_time_ms == 10u);
     CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u && velocity.source_time_ms == 12u);
     CHECK(Chassis_GetOdometry(&pose) == 1u && pose.source_time_ms == 10u && pose.pose.x_m == 0.0f);
     test_tick = 17u;
@@ -651,6 +655,7 @@ static int TestOmniOdometryBatch(void)
     test_tick = 41u; // 上次位姿已过期，但只刷新最早轮后，当前四轮仍可估速。
     PublishForwardWheel(0u, test_tick);
     ChassisTask();
+    CHECK(Chassis_GetMotionFeedback(&velocity, &pose) == 1u && pose.segment == 0u);
     CHECK(Chassis_GetVelocityFeedback(&velocity) == 1u && Chassis_GetOdometry(&pose) == 0u);
     test_tick = 42u;
     for (unsigned i = 1u; i < CHASSIS_WHEEL_COUNT; ++i)

@@ -79,6 +79,7 @@
 
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 #include "commissioning_chassis_cmd.h"
+#include "chassis/chassis_motion_diag.h"
 #elif MC02_FEATURE_COMMAND || defined(ONE_BOARD) || defined(GIMBAL_BOARD)
 #include "robot_cmd.h"
 #endif
@@ -406,6 +407,9 @@ uint8_t RobotInit(void)
     }
     (void)VehicleHealthInit();
     (void)VehicleHealthDiagnosticInit();
+#if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+    (void)ChassisMotionDiagnosticInit(); // 受限底盘按需提供运动反馈，诊断失败不授予运行许可。
+#endif
     const ParamLongOperationGuard_t param_guard = {
         .begin = RobotParamFlashOperationBegin,
         .end = RobotParamFlashOperationEnd,

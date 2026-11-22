@@ -345,6 +345,7 @@ if(MC02_COMMISSIONING_CHASSIS)
         application/cmd/commissioning_chassis_cmd.c # 受限底盘只发布本地人工控制目标。
         application/cmd/robot_manual_motion.c # 复用既有人工单位换算。
         application/chassis/chassis.c # 四轮登记与独立底盘任务。
+        application/chassis/chassis_motion_diag.c # 受限调试串口按需读取轮速估计和里程计。
         application/chassis/chassis_motion.c # 保留车型设定的轮速上限。
         application/robot_control_feedback.c # 核对每个必需的轮电机。
         application/robot_control_feedback_runtime.c) # 将轮组反馈期限独立交给安全管理。

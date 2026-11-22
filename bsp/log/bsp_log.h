@@ -275,6 +275,13 @@ BSPLogStatus_t BSPLogGetHistory(uint32_t sequence, BSPLogHistoryRecord_t *output
  */
 BSPLogStatus_t BSPLogRegisterHealthSnapshotHandler(BSPLogHealthSnapshotHandler_t handler);
 
+/** @brief 注册受限底盘的无负载只读查询，回调格式与健康读取一致。
+ * @param[in] handler 启动后保持有效的处理函数，令其填入固定格式回复。
+ * @return OK，或参数、上下文、未初始化及已注册错误。
+ * @note 在 BSPLogInit 后、调度器启动前调用；回调在接收派发任务中运行。
+ */
+BSPLogStatus_t BSPLogRegisterChassisMotionHandler(BSPLogHealthSnapshotHandler_t handler);
+
 /** @brief 注册按需消息中心统计回复处理器，不向串口推送周期数据。
  * @param[in] handler 接收请求字节并写入最多120字节回复的长期回调。
  * @return OK，或参数、上下文、未初始化及重复注册错误。

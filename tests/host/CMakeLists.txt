@@ -2847,10 +2847,12 @@ endif()
 add_test(NAME production_lcd_referee_group_freshness COMMAND lcd_referee_rows_test)
 # 生产日志核心只替代平台时钟、临界区、任务创建和整条RTT写入。
 add_executable(log_test log_test.c ../../bsp/log/bsp_log.c
-  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../application/topics/robot_topics_diag.c)
+  ${MC02_HOST_MESSAGE_CENTER_SOURCES} ../../application/topics/robot_topics_diag.c
+  ../../application/chassis/chassis_motion_diag.c) # 通过真实串口解析器检查底盘只读应答。
 target_include_directories(log_test BEFORE PRIVATE init_resource_fakes)
 target_include_directories(log_test PRIVATE . ../../bsp/log ../../modules/message_center
-  ../../application/topics)
+  ../../application/topics
+  ../../application/chassis) # 使用不依赖电机驱动的底盘反馈声明。
 target_include_directories(log_test PRIVATE ../../modules/algorithm)
 target_compile_definitions(log_test PRIVATE LOG_TEST=1 LOG_TEST_WRAP_FORMAT=1 BSP_LOG_TESTING=1
   MC02_LOG_COMPILED_MAX_LEVEL=3 LOG_TOPIC_DIAGNOSTIC_TEST=1)
@@ -2867,7 +2869,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     -Wl,--wrap=__vsnprintf_chk -Wl,--wrap=__snprintf_chk)
 endif()
 foreach(case IN ITEMS values history sequence queue catalog task levels diagnostic diagnostic-unavailable
-    topic-diagnostics ordinary fairness format-overflow threads)
+    topic-diagnostics chassis-motion ordinary fairness format-overflow threads)
   if(case STREQUAL "threads" AND NOT UNIX)
     continue()
   endif()

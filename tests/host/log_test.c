@@ -16,6 +16,8 @@
 #if defined(LOG_TOPIC_DIAGNOSTIC_TEST)
 #include "message_center.h"
 #include "robot_topics_diag.h"
+#include "chassis_feedback.h"
+#include "chassis_motion_diag.h"
 #endif
 
 #if defined(LOG_TEST_THREADS)
@@ -713,6 +715,76 @@ static void test_diagnostic(void)
     TEST_CHECK(state.diagnostic_tx_rejected == 1u);
 }
 
+#if defined(LOG_TOPIC_DIAGNOSTIC_TEST)
+static uint8_t chassis_valid;
+static unsigned chassis_reads;
+
+uint8_t Chassis_GetMotionFeedback(ChassisVelocityFeedback_t *speed, ChassisOdometryFeedback_t *odometry)
+{
+    ++chassis_reads; // 确认一份合法诊断请求只读一次。
+    *speed = (chassis_valid & 1u) ? (ChassisVelocityFeedback_t){{1.0f, -2.0f, 0.5f}, 0x78563412u}
+                                  : (ChassisVelocityFeedback_t){0};
+    *odometry = (chassis_valid & 2u) ? (ChassisOdometryFeedback_t){{0.0f, 1.5f, -0.5f}, 9u, 2u}
+                                     : (ChassisOdometryFeedback_t){0};
+    return chassis_valid;
+}
+
+static void test_chassis_motion(void)
+{
+    BSPLogInit();
+    uint8_t request[BSP_LOG_DIAG_REQUEST_MAX];
+    size_t length = make_diagnostic_request(5u, 71u, NULL, 0u, request); // 主机发送无负载的底盘查询。
+    inject_diagnostic_bytes(request, length);
+    TEST_CHECK(chassis_reads == 0u && diagnostic_frame_count == 1u); // 未登记的固件拒绝此查询。
+    TEST_CHECK(diagnostic_frames[0][5] == 1u && diagnostic_frames[0][6] == BSP_LOG_STATUS_BAD_ARGUMENT);
+    TEST_CHECK(ChassisMotionDiagnosticInit() == BSP_LOG_STATUS_OK);
+    TEST_CHECK(ChassisMotionDiagnosticInit() == BSP_LOG_STATUS_HANDLER_ALREADY_REGISTERED);
+
+    chassis_valid = 3u;
+    inject_diagnostic_bytes(request, length);
+    TEST_CHECK(chassis_reads == 1u && diagnostic_frame_count == 2u);
+    const uint8_t *reply = diagnostic_frames[1];
+    const uint8_t expected[] = {
+        1u, 3u, // 版本和两个有效位。
+        0x12u, 0x34u, 0x56u, 0x78u, // 速度来源时刻。
+        0u, 0u, 0x80u, 0x3fu, // 前向 1 m/s。
+        0u, 0u, 0u, 0xc0u, // 左向 -2 m/s。
+        0u, 0u, 0u, 0x3fu, // 旋转 0.5 rad/s。
+        9u, 0u, 0u, 0u, // 位姿来源时刻。
+        2u, 0u, 0u, 0u, // 本地段号。
+        0u, 0u, 0u, 0u, // 前向位移有效且为零。
+        0u, 0u, 0xc0u, 0x3fu, // 左向位移 1.5 m。
+        0u, 0u, 0u, 0xbfu, // 朝向 -0.5 rad。
+    };
+    TEST_CHECK(reply[3] == 0x85u && reply[4] == 71u && reply[5] == sizeof(expected));
+    TEST_CHECK(diagnostic_frame_crc_valid(reply, diagnostic_lengths[1]));
+    TEST_CHECK(memcmp(reply + BSP_LOG_DIAG_HEADER_SIZE, expected, sizeof(expected)) == 0);
+
+    chassis_valid = 1u;
+    inject_diagnostic_bytes(request, length);
+    TEST_CHECK(chassis_reads == 2u && diagnostic_frame_count == 3u);
+    reply = diagnostic_frames[2] + BSP_LOG_DIAG_HEADER_SIZE;
+    TEST_CHECK(reply[1] == 1u && memcmp(reply + 2u, expected + 2u, 16u) == 0);
+    TEST_CHECK(memcmp(reply + 18u, (const uint8_t[20]){0}, 20u) == 0); // 里程计关闭或无效时保留速度。
+
+    chassis_valid = 0u;
+    inject_diagnostic_bytes(request, length);
+    TEST_CHECK(chassis_reads == 3u && diagnostic_frame_count == 4u);
+    TEST_CHECK(memcmp(diagnostic_frames[3] + BSP_LOG_DIAG_HEADER_SIZE,
+                      (const uint8_t[BSP_LOG_DIAG_CHASSIS_MOTION_REPLY_SIZE]){1u},
+                      BSP_LOG_DIAG_CHASSIS_MOTION_REPLY_SIZE) == 0); // 无反馈时保留格式版本，其余字节清零。
+
+    request[length - 1u] ^= 1u; // 坏 CRC 不得读取底盘。
+    inject_diagnostic_bytes(request, length);
+    TEST_CHECK(chassis_reads == 3u && diagnostic_frame_count == 4u);
+    const uint8_t unexpected_payload = 0u;
+    length = make_diagnostic_request(5u, 72u, &unexpected_payload, 1u, request);
+    inject_diagnostic_bytes(request, length);
+    TEST_CHECK(chassis_reads == 3u && diagnostic_frame_count == 5u); // 有负载的请求同样不读取。
+    TEST_CHECK(diagnostic_frames[4][5] == 1u && diagnostic_frames[4][6] == BSP_LOG_STATUS_BAD_ARGUMENT);
+}
+#endif
+
 static void test_diagnostic_unavailable(void)
 {
     diagnostic_available = 0u;
@@ -1018,6 +1090,8 @@ int main(int argc, char **argv)
 #if defined(LOG_TOPIC_DIAGNOSTIC_TEST)
     else if (strcmp(argv[1], "topic-diagnostics") == 0)
         test_topic_diagnostics();
+    else if (strcmp(argv[1], "chassis-motion") == 0)
+        test_chassis_motion();
 #endif
 #if MC02_LOG_COMPILED_MAX_LEVEL >= 3
     else if (strcmp(argv[1], "ordinary") == 0)
