@@ -167,4 +167,10 @@
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug／Release 各通过 860 项。普通禁热和遥控诊断通过 ARM 构建及 ELF 检查，Flash 分别增加 32 B 和 16 B，主 RAM 保持不变。六种实际车型的正式预设继续因核心配置未确认而拒绝构建。
 - 诊断只在请求到达时读取。实际串口时序、轮序、估速误差与反馈间隔仍待现场确认。本轮未连接硬件。哨兵本地里程计的实车配置保持关闭。[查询格式](../MC02-0144.md#usart10-只读运动反馈)
 
+## 单板四轮目标整组提交与撤销
+
+- 本体坐标命令原先没有包住四个轮位的共同临界区。新增的主机回归让已经启用的四轮换向，检查派发任务在逐轮写入之间能否运行。用例先复现未保护的写入，再验证正常提交、右前轮拒绝后的四轮清零，以及单独调用关断入口。方向撤销、裁判供电撤销、异步轮速里程计和双板消息撤销等相关 5 项通过 ASan／UBSan。[轮组回归](../../../../tests/host/chassis_task_test.c)
+- 隔离受限底盘、单板 SP 和 V2 通过 Cortex-M7 Debug 构建、源码和 ELF 检查。Flash 和主 RAM 均与 `b2b34a8` 的同配置一致。受限底盘反汇编确认四次停用和四次清零都位于同一临界区。未连接硬件，临界区实际耗时和实车停止表现仍待测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过，WSL Debug／Release 各通过 862 项。普通禁热和遥控诊断通过 ARM 增量构建与 ELF 检查。六种实际车型的正式预设继续按未确认条件拒绝构建。
+
 见[本底盘接口](../../../../application/chassis/chassis_feedback.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

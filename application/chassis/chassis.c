@@ -249,6 +249,7 @@ uint8_t ChassisReleaseStartupDevices(void)
 
 void ChassisStopAndClear(void)
 {
+    PlatformTaskCriticalEnter(); // 防止派发任务在部分轮位停用时读取另一部分旧目标。
     DJIMotorStop(motor_lf);
     DJIMotorStop(motor_rf);
     DJIMotorStop(motor_lb);
@@ -257,6 +258,7 @@ void ChassisStopAndClear(void)
     DJIMotorSetRef(motor_rf, 0.0f);
     DJIMotorSetRef(motor_lb, 0.0f);
     DJIMotorSetRef(motor_rb, 0.0f);
+    PlatformTaskCriticalExit(); // 四个轮位均停用并清零后再允许派发。
 }
 
 #ifdef CHASSIS_BOARD
@@ -577,13 +579,13 @@ void ChassisTask()
         ? DJI_CHASSIS_SOURCE_REFEREE_POWER : DJI_CHASSIS_SOURCE_DIRECTION; // 相同数字也要按类型分别检查。
     if (power_generation != 0u && direction_sequence != 0u)
         command_allowed = 0u; // 当前协议没有同时携带两种来源的命令，不能遗漏其中一种检查。
-    const uint8_t check_source = command_allowed && source_sequence != 0u;
-    if (check_source) PlatformTaskCriticalEnter(); // 防止来源在复核之后、四轮目标提交之前被撤销。
+    const uint8_t commit_locked = command_allowed; // 保留是否进入保护，后续检查失败也必须退出。
+    if (commit_locked) PlatformTaskCriticalEnter(); // 复核命令并一次交付全部轮位，派发任务不能看到新旧混合的参考。
     if (command_allowed != 0u)
     {
         const uint32_t checked_at_ms = PlatformTimeNowMs(); // 到期检查和剩余时间使用同一时刻。
         command_allowed = ChassisCommandIsSameAndFresh(&command_freshness, checked_at_ms); // 拒绝计算期间失效或替换的旧命令。
-        if (command_allowed && check_source && !ChassisReferenceIsCurrent(source_kind, source_sequence, checked_at_ms))
+        if (command_allowed && source_sequence != 0u && !ChassisReferenceIsCurrent(source_kind, source_sequence, checked_at_ms))
             command_allowed = 0u; // 新反馈若属于撤销后的区间，也不能恢复旧命令。
         if (command_allowed != 0u)
             command_deadline_ms = ChassisCommandDeadline(&command_freshness, checked_at_ms); // 保留已复核命令的原始截止点。
@@ -655,7 +657,7 @@ void ChassisTask()
         }
     }
 #if defined(ONE_BOARD)
-    if (check_source) PlatformTaskCriticalExit(); // 已提交或清除轮组目标，可以继续处理外部数据。
+    if (commit_locked) PlatformTaskCriticalExit(); // 全部轮位已提交或撤销，派发现在可以读取完整状态。
 #endif
 
     // 速度估计独立于命令许可，停机滑行期间也能读取有效轮速。

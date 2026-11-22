@@ -26,6 +26,22 @@ static uint32_t test_tick;
 static uint32_t tick_read_count;
 static uint32_t advance_tick_on_read;
 static uint32_t advance_tick_by_ms;
+#if defined(CHASSIS_TEST_TRACK_CRITICAL)
+unsigned chassis_test_critical_depth; // 平台替身记录临界区的进入与退出。
+static uint8_t track_wheel_mutations;
+static unsigned observed_wheel_mutations;
+static unsigned unprotected_wheel_mutations;
+#endif
+
+static void NoteWheelMutation(void)
+{
+#if defined(CHASSIS_TEST_TRACK_CRITICAL)
+    if (!track_wheel_mutations) return;
+    ++observed_wheel_mutations;
+    if (chassis_test_critical_depth == 0u)
+        ++unprotected_wheel_mutations; // 模拟单轮操作退出自身保护后，派发任务可能看到只改了一部分的轮组。
+#endif
+}
 uint32_t HAL_GetTick(void)
 {
     tick_read_count++;
@@ -138,7 +154,7 @@ uint8_t DJIMotorRollbackStartup(DJIMotorInstance *motor)
     return 0u; // 重复或未知实例不能视为成功。
 }
 void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
-{ if (motor) { motor->ref = ref; motor->set_ref_order = ++operation_order; } }
+{ if (motor) { motor->ref = ref; motor->set_ref_order = ++operation_order; NoteWheelMutation(); } }
 uint8_t DJIMotorBindChassisReferenceSource(DJIChassisReferenceSourceCheck_t check)
 {
     source_check = check; // 后续由用例直接核对驱动能读取到的来源状态。
@@ -164,9 +180,9 @@ uint8_t DJIMotorSetChassisRefUntilWithPower(DJIMotorInstance *motor, float ref, 
     return accepted;
 }
 void DJIMotorStop(DJIMotorInstance *motor)
-{ if (motor) { motor->enabled = 0; ++motor->stop_count; } }
+{ if (motor) { motor->enabled = 0; ++motor->stop_count; NoteWheelMutation(); } }
 void DJIMotorEnable(DJIMotorInstance *motor)
-{ if (motor) { motor->enabled = 1; ++motor->enable_count; motor->enable_order = ++operation_order; } }
+{ if (motor) { motor->enabled = 1; ++motor->enable_count; motor->enable_order = ++operation_order; NoteWheelMutation(); } }
 void DJIMotorGetSummary(DJIMotorInstance *motor, DJIMotorSummary_t *summary)
 { if (summary) { memset(summary, 0, sizeof(*summary)); if (motor) summary->online = motor->feedback_online; } }
 Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uint32_t now_ms,
@@ -697,6 +713,42 @@ static int TestOmniOdometryBatch(void)
 }
 
 #if defined(ONE_BOARD)
+#if defined(CHASSIS_TEST_TRACK_CRITICAL)
+static int TestWheelGroupCommit(void)
+{
+    CHECK(ChassisInit() == 1u);
+    MessagePublisher_t *commands = MessagePublisherRegister(ROBOT_TOPIC_CHASSIS_COMMAND, ROBOT_TOPIC_ENDPOINT_COMMAND);
+    CHECK(commands != NULL);
+    test_tick = 100u;
+    Chassis_Ctrl_Cmd_s command = {.vx = 100.0f, .chassis_mode = CHASSIS_NO_FOLLOW}; // 本体目标没有外部方向或供电来源。
+    CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
+    ChassisTask(); // 先建立仍然启用的四轮旧参考。
+    const float old_left = motors[0].ref;
+    command.vx = -100.0f;
+    test_tick++;
+    CHECK(MessagePublishNow(commands, &command) == MESSAGE_OK);
+    track_wheel_mutations = 1u;
+    ChassisTask(); // 已启用轮位依次写入时，派发任务不能读取它们。
+    CHECK(observed_wheel_mutations == 8u && unprotected_wheel_mutations == 0u && chassis_test_critical_depth == 0u);
+    CHECK(motors[0].ref * old_left < 0.0f); // 这一轮确实以方向不同的参考替换旧值。
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(motors[i].enabled && motors[i].ref != 0.0f);
+
+    reject_motion_reference = 1u; // 左前先写入，右前提交失败后整个轮组必须一起撤销。
+    observed_wheel_mutations = 0u;
+    ChassisTask();
+    CHECK(observed_wheel_mutations >= 8u && unprotected_wheel_mutations == 0u && chassis_test_critical_depth == 0u);
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+
+    reject_motion_reference = 0u;
+    ChassisTask(); // 重新建立四轮目标，再模拟调用任务的主动关断入口。
+    observed_wheel_mutations = 0u;
+    ChassisStopAndClear();
+    CHECK(observed_wheel_mutations == 8u && unprotected_wheel_mutations == 0u && chassis_test_critical_depth == 0u);
+    for (unsigned i = 0u; i < CHASSIS_WHEEL_COUNT; ++i) CHECK(!motors[i].enabled && motors[i].ref == 0.0f);
+    return 0;
+}
+#endif
+
 static int TestChassisDirectionRevocation(void)
 {
     CHECK(ChassisInit() == 1u); // 使用实际底盘初始化和话题实现。
@@ -783,6 +835,9 @@ static int TestChassisPowerRevocation(void)
 int main(int argc, char **argv)
 {
 #if defined(ONE_BOARD)
+#if defined(CHASSIS_TEST_TRACK_CRITICAL)
+    if (argc == 2 && strcmp(argv[1], "wheel-group-commit") == 0) return TestWheelGroupCommit();
+#endif
     if (argc == 2 && strcmp(argv[1], "direction-revocation") == 0) return TestChassisDirectionRevocation();
 #if defined(MC02_VISION_PROTOCOL_V2)
     if (argc == 2 && strcmp(argv[1], "power-revocation") == 0) return TestChassisPowerRevocation();
