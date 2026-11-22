@@ -126,6 +126,34 @@ static void CheckVehicleSelection(const RobotManualInputConfig_s *valid_input)
     TEST_CHECK(selected == NULL && RobotConfigFeed() == NULL);
     vehicle.manual_input = *valid_input; // 只允许重新选中已修正的配置。
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &vehicle);
+
+    StdCmdRemoteMap_t map = *valid_input->map; // 用隔离副本逐项检查活动输入的非零边界。
+    vehicle.manual_input.map = &map;
+    map.remote_map.axis[STD_CMD_VX].gain = FLT_MAX; // 零输入通过，但拨满时先于限幅发生溢出。
+    TEST_CHECK(StdCmdRemoteMapIsValid(&map));
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_MANUAL_INPUT);
+    TEST_CHECK(selected == NULL && RobotConfigFeed() == NULL);
+
+    map = *valid_input->map;
+    map.remote_map.axis[STD_CMD_VX].gain = FLT_MAX / 1024.0f; // 原始值到 m/s 有限，换到 mm/s 会溢出。
+    map.remote_map.axis[STD_CMD_VX].output_limit = FLT_MAX;
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_MANUAL_INPUT);
+
+    map = *valid_input->map;
+    map.keyboard_map.axis[STD_CMD_VX].input_limit = 0.5f; // 实际按住方向键时产生 1 或 -1。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_MANUAL_INPUT);
+
+    map = *valid_input->map;
+    map.keyboard_positive[STD_CMD_WZ] = (uint16_t)(1u << Key_D); // 只在此用例启用键盘转动通道。
+    map.keyboard_map.axis[STD_CMD_WZ].gain = -FLT_MAX;
+    map.keyboard_map.axis[STD_CMD_WZ].output_limit = FLT_MAX;
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_MANUAL_INPUT); // 有限 rad/s 换到 deg/s 时溢出。
+
+    map = *valid_input->map;
+    map.remote_map.axis[STD_CMD_VX].input_limit = FLT_MAX; // 协议不会交付超出拨杆物理上限的原始值。
+    map.remote_map.axis[STD_CMD_WZ].output_limit = FLT_MAX; // 实际可到达的速度仍受正常比例限制。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &vehicle);
+    vehicle.manual_input = *valid_input; // 离开函数前恢复有效的长期车型映射。
 }
 
 // 用独立副本检查名义周期边界，保留后续运行场景原有的时限。

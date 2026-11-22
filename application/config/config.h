@@ -129,7 +129,7 @@ typedef struct {
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 /** @brief 检查受限底盘的人工参数，不访问设备或话题。
  * @param[in] input 车型提供的只读映射、最大间隔与变化率，不能为空。
- * @return 1 表示本体映射完整、间隔有效且最大速度步长可计算；否则返回 0。
+ * @return 1 表示本体映射和间隔有效，最大速度步长与两种来源的速度边界均可换算；否则返回 0。
  */
 uint8_t RobotCommissioningChassisInputIsValid(const RobotManualInputConfig_s *input);
 
