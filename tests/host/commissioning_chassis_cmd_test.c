@@ -193,7 +193,12 @@ static void CheckChassisPipelineTiming(const RobotManualInputConfig_s *valid_inp
     const PlatformPeriodicConfig_t dispatch = {.period_us = 1000u, .budget_us = 1000u}; // 发送轮次另留 1 ms 处理。
     map.remote_map.max_age_ms = 15u; // 五个阶段的名义合计恰好 15 ms。
     map.keyboard_map.max_age_ms = 15u;
+    input.max_dt_ms = 10u; // 上一拍一开始就发布，下一拍用完预算才发布，间隔恰好 10 ms。
     TEST_CHECK(RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
+    input.max_dt_ms = 9u; // 来源与话题有时间送达，但变化率会因两次发布间隔超限而撤销旧目标。
+    TEST_CHECK(RobotCommissioningChassisInputFitsPeriod(&input, command.period_us));
+    TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
+    input.max_dt_ms = 10u; // 恢复合法的发布间隔，以下继续检查端到端路径。
     ++chassis.period_us;
     TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch)); // 多 1 μs 也不能向下舍入。
     --chassis.period_us;
@@ -207,9 +212,14 @@ static void CheckChassisPipelineTiming(const RobotManualInputConfig_s *valid_inp
     TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
     --chassis.period_us;
     command = (PlatformPeriodicConfig_t){.period_us = 25000u, .budget_us = 25000u}; // 输入可读取后合计恰好达到无线期限。
+    input.max_dt_ms = 80u; // 放宽变化率的间隔，允许单独检查话题与协议。
     TEST_CHECK(RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
     ++command.period_us;
     TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
+    chassis.period_us = 1000u; // 下游缩短，整条路径仍在来源期限内。
+    TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch)); // 发布间隔 50001 μs 会让话题过期。
+    --command.period_us;
+    TEST_CHECK(RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch)); // 恰好等于话题期限时保留旧目标。
     chassis.period_us = UINT32_MAX; // 用宽整数保留真实大小，不能绕回合法时限。
     TEST_CHECK(!RobotCommissioningChassisTimingFits(&input, &command, &chassis, &motor, &dispatch));
     chassis = (PlatformPeriodicConfig_t){.period_us = 1000u}; // 缺少执行预算，不能判断组合时限。

@@ -148,7 +148,7 @@ uint8_t RobotCommissioningChassisInputFitsPeriod(const RobotManualInputConfig_s 
  * @param[in] chassis 独立底盘任务的周期和执行预算，单位 μs。
  * @param[in] motor 电机计算和发送的固定周期，单位 μs。
  * @param[in] dispatch 电机派发任务的周期和执行预算，单位 μs。
- * @return 1 表示按各阶段最不利的名义相位估算，仍未越过输入及话题期限。缺项或超期返回 0。
+ * @return 1 表示命令能在输入和话题有效期内提交，且相邻发布的名义间隔满足变化率计算；缺项或超期返回 0。
  * @note 输入范围从合法数据已可读取开始。实际接收、调度抖动、总线等待和停车时延需另行验证。
  */
 uint8_t RobotCommissioningChassisTimingFits(const RobotManualInputConfig_s *input,

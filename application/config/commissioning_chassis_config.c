@@ -86,9 +86,13 @@ uint8_t RobotCommissioningChassisTimingFits(const RobotManualInputConfig_s *inpu
 
     const uint64_t after_publish_us = (uint64_t)chassis->period_us + chassis->budget_us + // 等待底盘任务并提交轮速参考。
         motor->compute_us + motor->transmit_us + dispatch->budget_us; // 等待两个电机阶段，再给最终发送轮次留执行预算。
-    const uint64_t from_input_us = (uint64_t)command->period_us + command->budget_us + after_publish_us; // 从合法输入可读取时算起，逐段相加避免溢出。
+    const uint64_t publish_gap_us = (uint64_t)command->period_us + command->budget_us; // 上一拍立即发布，下一拍用完预算才发布。
+    const uint64_t from_input_us = publish_gap_us + after_publish_us; // 新输入刚错过一拍时，同样要等下次唤醒和发布。
+    const uint64_t topic_window_us = (uint64_t)ROBOT_CHASSIS_COMMAND_MAX_AGE_MS * 1000u; // 话题期限同时用于发送和相邻发布检查。
     const StdCmdRemoteMap_t *map = input->map; // 人工摇杆和键鼠各有配置期限。
-    return (uint8_t)(after_publish_us <= (uint64_t)ROBOT_CHASSIS_COMMAND_MAX_AGE_MS * 1000u && // 话题期限从发布起算。
+    return (uint8_t)(publish_gap_us <= (uint64_t)input->max_dt_ms * 1000u && // 下一次计算速度变化时仍能使用上次发布结果。
+        publish_gap_us <= topic_window_us && // 上一个话题目标必须保持有效到下一次发布。
+        after_publish_us <= topic_window_us && // 已发布的命令还须及时到达发送服务。
         from_input_us <= (uint64_t)map->remote_map.max_age_ms * 1000u && // 摇杆使用车型期限。
         from_input_us <= (uint64_t)map->keyboard_map.max_age_ms * 1000u && // 键鼠也必须能走完这条路径。
         from_input_us <= (uint64_t)REMOTE_RADIO_LEASE_MS * 1000u && // 两种来源都受无线帧期限限制。

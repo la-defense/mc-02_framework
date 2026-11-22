@@ -70,3 +70,9 @@
 - 单板 SP 和 V2 的反汇编确认，`RobotInit` 先检查常驻任务周期，再初始化任务监控并推迟运行放行。
 - 隔离单板 SP、V2 和受限底盘通过 ARM Debug 构建、源码与 ELF 检查。三者的 Flash 分别为 333800 B、340600 B、309588 B，相比 `95f6077` 分别增加 200 B、216 B、0 B，主 RAM 均持平。板上调度、耗时和周期确认仍待现场验证。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug 与 Release 各通过 858 项，普通禁热和遥控诊断通过 ARM 构建与 ELF 检查。六种正式预设按未确认的核心条件拒绝构建。
+
+## 受限底盘相邻发布的名义间隔
+
+- 修改前，命令任务的 5 ms 周期和 5 ms 执行预算可配上 9 ms 的变化率最大间隔，但相邻发布可能差 10 ms。主机回归先复现错误通过，再验证 9 ms 拒绝、10 ms 接受。话题检查另用 50000 μs 和 50001 μs 验证边界，同时保持输入至发送服务的期限用例。两项受限底盘联测通过 ASan／UBSan。[联测代码](../../../../tests/host/commissioning_chassis_cmd_test.c)
+- 隔离 `commissioning/chassis` 通过 Cortex-M7 Debug 构建、源码与 ELF 检查。反汇编确认组合时限检查先于反馈计划。与 `a060001` 的同配置相比，Flash 增加 96 B 至 310340 B，主 RAM 仍为 119952 B。实际调度抖动、反馈与 CAN 排队及实车停止表现仍待测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug／Release 各通过 859 项，普通禁热和遥控诊断通过 ARM 构建与 ELF 检查，Flash 与主 RAM 均与上一提交一致。六种正式预设继续因核心配置未确认而拒绝，实际受限底盘也仍报告轮组与人工参数未确认。未连接硬件。
