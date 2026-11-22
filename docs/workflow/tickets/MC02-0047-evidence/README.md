@@ -104,3 +104,9 @@ DJI 内部反馈期限补充：使用真实电机控制代码和测试 CAN 输�
 - 原样本重试和稳定结束当轮均保持故障，重新等待全部反馈及之后的新输入才允许清除。协调器、恢复策略及两项真实 DJI 反馈相关用例共 4 项通过 ASan／UBSan。[恢复协调回归](../../../../tests/host/robot_can_recovery_coordinator_test.c)
 - 隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码和 ELF 检查，三份均链接恢复协调器。相对 `0793510` 的同配置，Flash 分别减少 32 B、16 B、16 B，主 RAM 均保持原值。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 859 项，普通禁热和遥控诊断通过 ARM 构建与 ELF 检查，六种正式预设仍按未确认条件拒绝构建。未连接硬件，哨兵稳定等待候选值及实际恢复、停止时延仍待确认。
+
+## 底盘反馈按原始接收时间更新
+
+- 生产 DJI 回调接收仍在期限内的迟到旧帧时，修复前会覆盖轮速原始时刻。修复后在滤波前拒绝该帧，保留当前速度、电流、序号、间断代次和在线期限。主机同时覆盖回绕前后迟到旧帧、同毫秒接收多帧、正常回绕、真正的超期断流和超过半圈后刚到的新反馈。反馈、分功能许可及 CAN 恢复相关 7 项通过 ASan／UBSan。[回归用例](../../../../tests/host/motor_feedback_filter_test.c)
+- 隔离受限底盘、单板 SP 和 V2 通过 Cortex-M7 Debug 构建、源码与 ELF 检查。相比 `71afd36`，三份 Flash 均增加 48 B，分别为 311012 B、334264 B 和 341064 B，主 RAM 均保持原值。测试输入没有进入实车配置，未连接硬件。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过，WSL Debug／Release 各通过 861 项。普通禁热与遥控诊断未选用该驱动，增量构建无需重编，ELF 检查通过。六种实际车型的正式预设继续因核心配置未确认而拒绝构建。

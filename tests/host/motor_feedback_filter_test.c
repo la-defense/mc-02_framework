@@ -1102,6 +1102,61 @@ static int single_feedback_roles_to_safety(void)
     return EXIT_SUCCESS;
 }
 
+static int single_chassis_feedback_timestamp_order(void)
+{
+    Motor_Init_Config_s config = motor_config(1u);
+    config.output_role = MOTOR_OUTPUT_CHASSIS; // 测试只使用真实驱动的底盘反馈入口。
+    DJIMotorInstance *wheel = DJIMotorInit(&config);
+    TEST_CHECK(wheel != NULL);
+    const uint32_t before_wrap = UINT32_MAX - 1u;
+    now_us = (uint64_t)before_wrap * 1000u;
+    receive(wheel, 1000u, before_wrap, 200, 40);
+
+    now_us = (uint64_t)UINT32_MAX * 1000u;
+    receive(wheel, 481000u, UINT32_MAX, 220, 41);
+    DJI_RecoveryFeedback_s baseline;
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(HAL_GetTick(), &baseline) && baseline.count == 1u);
+    TEST_CHECK(baseline.motors[0].source_time_ms == UINT32_MAX && baseline.motors[0].speed_valid);
+    const unsigned reloads_before = daemon_reloads;
+    receive(wheel, 1000u, before_wrap, -900, -320); // 迟到的旧帧仍在 20 ms 内，值故意设得不同。
+    DJI_RecoveryFeedback_s observed;
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(HAL_GetTick(), &observed));
+    TEST_CHECK(observed.motors[0].source_time_ms == baseline.motors[0].source_time_ms);
+    TEST_CHECK(observed.motors[0].sequence == baseline.motors[0].sequence);
+    TEST_CHECK(observed.motors[0].gap_generation == baseline.motors[0].gap_generation);
+    TEST_CHECK(wheel->measure.raw_speed_aps == 1320.0f && wheel->measure.raw_current == 41);
+    TEST_CHECK(daemon_reloads == reloads_before); // 旧帧不能刷新设备的在线期限。
+
+    now_us += 1000u; // 毫秒计数正常跨过零。
+    receive(wheel, 961000u, 0u, 230, 42);
+    receive(wheel, 1009000u, 0u, 240, 43); // 同一个毫秒可以接收多份按序反馈。
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(HAL_GetTick(), &observed));
+    TEST_CHECK(observed.motors[0].source_time_ms == 0u && observed.motors[0].speed_valid);
+    TEST_CHECK(observed.motors[0].sequence == baseline.motors[0].sequence + 2u);
+    TEST_CHECK(observed.motors[0].gap_generation == baseline.motors[0].gap_generation);
+    TEST_CHECK(DJIMotorRecoveryStillValid(&baseline, 1u, HAL_GetTick()));
+    receive(wheel, 481000u, UINT32_MAX, -900, -320); // 回绕前的旧帧也不能覆盖零毫秒的有效帧。
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(HAL_GetTick(), &observed));
+    TEST_CHECK(observed.motors[0].source_time_ms == 0u && wheel->measure.raw_current == 43);
+    TEST_CHECK(observed.motors[0].sequence == baseline.motors[0].sequence + 2u);
+
+    const uint32_t after_gap = DJI_FEEDBACK_MAX_AGE_MS + 1u;
+    now_us += (uint64_t)after_gap * 1000u;
+    receive(wheel, 1009000u + after_gap * 480000u, after_gap, 200, 40); // 正向跨过有效期是一次真实断流。
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(HAL_GetTick(), &observed));
+    TEST_CHECK(observed.motors[0].source_time_ms == after_gap);
+    TEST_CHECK(observed.motors[0].gap_generation == baseline.motors[0].gap_generation + 1u);
+    TEST_CHECK(!DJIMotorRecoveryStillValid(&baseline, 1u, HAL_GetTick()));
+
+    const uint32_t long_silence = UINT32_C(0x80000000); // 主机让上一帧超过半圈，仍允许刚接收的反馈重建。
+    now_us += (uint64_t)long_silence * 1000u;
+    receive(wheel, 2000u, HAL_GetTick(), 180, 38);
+    TEST_CHECK(DJIMotorGetRecoveryFeedback(HAL_GetTick(), &observed));
+    TEST_CHECK(observed.motors[0].source_time_ms == after_gap + long_silence);
+    TEST_CHECK(observed.motors[0].gap_generation == baseline.motors[0].gap_generation + 2u);
+    return EXIT_SUCCESS;
+}
+
 static int single_control_feedback_to_safety(void)
 {
     now_us = 1000u; RobotSafetyInit(); // 使用真实安全管理和生产电机驱动。
@@ -1707,6 +1762,8 @@ int main(int argc, char **argv)
         return recovery_coordinator_real_motors();
     if (strcmp(argv[1], "control-feedback-safety") == 0)
         return single_control_feedback_to_safety();
+    if (strcmp(argv[1], "chassis-feedback-timestamp-order") == 0)
+        return single_chassis_feedback_timestamp_order();
     if (strcmp(argv[1], "single-chassis-gap-revokes-group") == 0)
         return single_chassis_gap_revokes_group();
     if (strcmp(argv[1], "single-loader-fire-permit") == 0)

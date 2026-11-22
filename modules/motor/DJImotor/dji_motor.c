@@ -412,6 +412,14 @@ static void DecodeDJIMotor(void *context, const PlatformCanRxFrame_t *frame)
     const uint8_t first_feedback = motor->has_feedback_timestamp == 0u;
     const uint32_t elapsed_ms = first_feedback ? 0u :
         (uint32_t)(frame->received_ms - motor->last_feedback_timestamp_ms);
+    if (motor->output_role == MOTOR_OUTPUT_CHASSIS && elapsed_ms > INT32_MAX)
+    {
+        const uint32_t now_ms = PlatformTimeNowMs(); // 两次接收时间相距超过半圈时，用当前时刻比较各自年龄。
+        const uint32_t incoming_age_ms = now_ms - frame->received_ms; // 先确认新到的报文还能作为当前反馈。
+        if (incoming_age_ms > DJI_FEEDBACK_MAX_AGE_MS ||
+            incoming_age_ms >= now_ms - motor->last_feedback_timestamp_ms)
+            return; // 拒绝过期或迟到的旧帧，不更新滤波、间断记录和离线期限。
+    }
     const float dt_s = first_feedback ? 0.0f : FeedbackIntervalSeconds(frame, motor);
     const int16_t raw_rpm = (int16_t)(((uint16_t)rxbuff[2] << 8u) | rxbuff[3]);
     const int16_t raw_current = (int16_t)(((uint16_t)rxbuff[4] << 8u) | rxbuff[5]);

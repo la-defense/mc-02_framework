@@ -1404,6 +1404,7 @@ add_test(NAME production_dji_single_motion_reference_generation COMMAND motor_si
 add_test(NAME production_dji_recovery_real_feedback COMMAND motor_single_safety_test recovery-real-feedback) # 用真实电机反馈推进恢复条件。
 add_test(NAME production_dji_recovery_coordinator_real_motors COMMAND motor_single_safety_test recovery-coordinator-real-motors) # 协调器与真实电机及安全管理联测。
 add_test(NAME production_dji_control_feedback_to_safety COMMAND motor_single_safety_test control-feedback-safety) # 分功能反馈及恢复后新来源。
+add_test(NAME production_dji_chassis_feedback_timestamp_order COMMAND motor_single_safety_test chassis-feedback-timestamp-order) # 拒绝迟到旧轮速，保留正常回绕和断流判断。
 add_test(NAME production_dji_single_chassis_gap_revokes_group COMMAND motor_single_safety_test single-chassis-gap-revokes-group) # 短断流撤销跨 CAN 分组的底盘旧目标。
 add_test(NAME production_dji_single_shared_frame_permissions COMMAND motor_single_safety_test single-shared-frame) # 同帧不同机构分开授权。
 add_test(NAME production_dji_single_feedback_roles COMMAND motor_single_safety_test single-feedback-roles) # 同机构逐台检查反馈。
