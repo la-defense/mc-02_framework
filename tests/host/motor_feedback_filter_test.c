@@ -287,6 +287,7 @@ static uint8_t recovery_timed_step(CanRecoveryTimed_t *state, const CanRecoveryI
 // 用两条真实驱动反馈推进恢复；不使用机构汇总时间冒充每台电机的更新。
 static int recovery_real_feedback(void)
 {
+    now_us = 1000u; // 在派发前推进本机时钟，与首批反馈处于同一时间域。
     DJIMotorInstance *motors[2] = {0}; // 两台电机使用固定登记顺序。
     for (uint8_t i = 0u; i < 2u; ++i)
     {
@@ -301,7 +302,6 @@ static int recovery_real_feedback(void)
     optional.output_role = MOTOR_OUTPUT_FRICTION; // 明确区分它的用途。
     optional.can_init_config.can_bus = PLATFORM_CAN_BUS_2; // 与第二台共享测试总线但使用不同设备编号。
     TEST_CHECK(DJIMotorInit(&optional) != NULL); // 该设备虽未收到帧，也必须出现在登记列表。
-    now_us = 1000u; // 与最早反馈使用相同时间域。
     DJI_RecoveryFeedback_s feedback = {0}; // 收集每台电机的原始信息。
     TEST_CHECK(DJIMotorGetRecoveryFeedback(1u, &feedback) && feedback.count == 3u); // 全部已登记设备都必须出现。
     TEST_CHECK(feedback.motors[0].bus == PLATFORM_CAN_BUS_1 && feedback.motors[1].bus == PLATFORM_CAN_BUS_2); // 总线绑定不能混淆。
@@ -729,6 +729,7 @@ static int single_chassis_output_limit(void)
     TEST_CHECK(DJIMotorSetChassisRefUntil(second, 40.0f, safety.control_generation, 20u));
     DJIMotorEnable(first);
     DJIMotorEnable(second);
+    now_us = 2000u; // 派发时钟与本次注入的接收时刻一致。
     receive(first, 960000u, 2u, 0, 0);
     receive(second, 960000u, 2u, 0, 0);
     control_at(3000u); // 首轮建立 PID 时间基准。
@@ -766,6 +767,7 @@ static int single_chassis_queued_stop(void)
     TEST_CHECK(DJIMotorSetChassisRefUntil(second, 9.0f, safety.control_generation, 15u));
     DJIMotorEnable(first);
     DJIMotorEnable(second);
+    now_us = 2000u; // 先推进派发时钟，避免把测试反馈标成未来帧。
     receive(first, 960000u, 2u, 0, 0);
     receive(second, 960000u, 2u, 0, 0);
     control_at(3000u); // 建立 PID 时间基准。
@@ -1154,6 +1156,31 @@ static int single_chassis_feedback_timestamp_order(void)
     TEST_CHECK(DJIMotorGetRecoveryFeedback(HAL_GetTick(), &observed));
     TEST_CHECK(observed.motors[0].source_time_ms == after_gap + long_silence);
     TEST_CHECK(observed.motors[0].gap_generation == baseline.motors[0].gap_generation + 2u);
+    return EXIT_SUCCESS;
+}
+
+static int single_chassis_feedback_dispatch_age(void)
+{
+    Motor_Init_Config_s config = motor_config(1u);
+    config.output_role = MOTOR_OUTPUT_CHASSIS; // 只检查用于底盘闭环的反馈入口。
+    DJIMotorInstance *wheel = DJIMotorInit(&config);
+    TEST_CHECK(wheel != NULL);
+
+    now_us = 25000u; // 模拟派发任务到 25 ms 才开始处理积压。
+    receive(wheel, 1920000u, 4u, -300, 10); // 首帧超过 20 ms，不能建立基准。
+    receive(wheel, 12480000u, 26u, -400, 11); // 仍在当前时刻之后的报文也不能使用。
+    TEST_CHECK(!wheel->has_feedback_timestamp && wheel->feedback_sequence == 0u && daemon_reloads == 0u);
+    receive(wheel, 2400000u, 5u, 200, 40); // 正好 20 ms，仍允许建立基准。
+    TEST_CHECK(wheel->last_feedback_timestamp_ms == 5u && wheel->feedback_sequence == 1u && daemon_reloads == 1u);
+    const uint32_t initial_gap = wheel->feedback_gap_generation; // 对照真正恢复时是否检测到间断。
+
+    now_us = 40000u; // 下一轮取队列时，后续报文也已有积压。
+    receive(wheel, 9120000u, 19u, -400, -10); // 接收时间向前，实际已经过期 1 ms。
+    TEST_CHECK(wheel->last_feedback_timestamp_ms == 5u && wheel->feedback_sequence == 1u);
+    TEST_CHECK(wheel->measure.raw_speed_aps == 1200.0f && wheel->measure.raw_current == 40 && daemon_reloads == 1u);
+    receive(wheel, 16800000u, 35u, 220, 42); // 尚新鲜，但距上次采纳的反馈已间断 30 ms。
+    TEST_CHECK(wheel->last_feedback_timestamp_ms == 35u && wheel->feedback_sequence == 2u && daemon_reloads == 2u);
+    TEST_CHECK(wheel->feedback_gap_generation == initial_gap + 1u); // 积压报文不能填平这次间断。
     return EXIT_SUCCESS;
 }
 
@@ -1764,6 +1791,8 @@ int main(int argc, char **argv)
         return single_control_feedback_to_safety();
     if (strcmp(argv[1], "chassis-feedback-timestamp-order") == 0)
         return single_chassis_feedback_timestamp_order();
+    if (strcmp(argv[1], "chassis-feedback-dispatch-age") == 0)
+        return single_chassis_feedback_dispatch_age();
     if (strcmp(argv[1], "single-chassis-gap-revokes-group") == 0)
         return single_chassis_gap_revokes_group();
     if (strcmp(argv[1], "single-loader-fire-permit") == 0)

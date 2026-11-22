@@ -412,13 +412,14 @@ static void DecodeDJIMotor(void *context, const PlatformCanRxFrame_t *frame)
     const uint8_t first_feedback = motor->has_feedback_timestamp == 0u;
     const uint32_t elapsed_ms = first_feedback ? 0u :
         (uint32_t)(frame->received_ms - motor->last_feedback_timestamp_ms);
-    if (motor->output_role == MOTOR_OUTPUT_CHASSIS && elapsed_ms > INT32_MAX)
+    if (motor->output_role == MOTOR_OUTPUT_CHASSIS)
     {
-        const uint32_t now_ms = PlatformTimeNowMs(); // 两次接收时间相距超过半圈时，用当前时刻比较各自年龄。
-        const uint32_t incoming_age_ms = now_ms - frame->received_ms; // 先确认新到的报文还能作为当前反馈。
-        if (incoming_age_ms > DJI_FEEDBACK_MAX_AGE_MS ||
-            incoming_age_ms >= now_ms - motor->last_feedback_timestamp_ms)
-            return; // 拒绝过期或迟到的旧帧，不更新滤波、间断记录和离线期限。
+        const uint32_t now_ms = PlatformTimeNowMs(); // 用任务实际处理时刻判断队列里的反馈是否过期。
+        const uint32_t incoming_age_ms = now_ms - frame->received_ms; // 毫秒回绕仍能算出短间隔，未来时刻则得到大差值。
+        if (incoming_age_ms > DJI_FEEDBACK_MAX_AGE_MS)
+            return; // 过期积压不能更新滤波、编码器基准或在线记录。
+        if (elapsed_ms > INT32_MAX && incoming_age_ms >= now_ms - motor->last_feedback_timestamp_ms)
+            return; // 超过半圈时比较两份反馈的实际年龄，丢弃迟到的旧帧。
     }
     const float dt_s = first_feedback ? 0.0f : FeedbackIntervalSeconds(frame, motor);
     const int16_t raw_rpm = (int16_t)(((uint16_t)rxbuff[2] << 8u) | rxbuff[3]);
