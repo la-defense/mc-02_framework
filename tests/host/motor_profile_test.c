@@ -44,6 +44,11 @@ DaemonStatus_t DaemonProcessTaskEvents(uint8_t consumer_id, uint8_t max_events, 
 }
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
+static uint8_t CheckTransmit(void *context)
+{
+    return *(const uint8_t *)context; // 测试轮次通过此值决定是否推进实际发送适配器。
+}
+
 static int CheckSplitPeriods(void)
 {
     MotorTaskSchedule_t schedule;
@@ -63,6 +68,7 @@ static int CheckSplitPeriods(void)
     CHECK(MotorTaskScheduleInit(&schedule, &periods, 1000u, 1000u, start) == PLATFORM_PERIODIC_CONFIG);
 
     const uint32_t release_offsets[] = {0u, 1u, 2u, 3u, 6u}; // 首拍、仅接收、仅计算、仅发送、迟到后同拍。
+    uint8_t allow_transmit = 1u; // 正常轮次先验证原计算和发送顺序。
     dji_outputs = lk_outputs = can_tx_pumps = daemon_dispatches = 0u;
 #if defined(MC02_CONFIG_GENERATED)
     communication_started = 1u; // 使用正常启动状态验证发送和接收仍串行。
@@ -70,7 +76,7 @@ static int CheckSplitPeriods(void)
     for (unsigned i = 0u; i < sizeof(release_offsets) / sizeof(release_offsets[0]); ++i)
     {
         order_count = 0u;
-        CHECK(MotorTaskRunScheduled(&schedule, start + release_offsets[i]) == PLATFORM_PERIODIC_READY);
+        CHECK(MotorTaskRunScheduled(&schedule, start + release_offsets[i], CheckTransmit, &allow_transmit) == PLATFORM_PERIODIC_READY);
         // 任意拍先接收 CAN，最后才允许已有的发送端调用。
         CHECK(order_count >= 4u && order[0] == 'C');
         const char *compute = memchr(order, 'D', order_count);
@@ -88,8 +94,12 @@ static int CheckSplitPeriods(void)
     CHECK(dji_outputs == 3u && lk_outputs == 3u);
 #endif
     order_count = 0u;
-    CHECK(MotorTaskRunScheduled(&schedule, start + 5u) == PLATFORM_PERIODIC_CLOCK); // 倒退的时刻不能触发任何访问。
+    CHECK(MotorTaskRunScheduled(&schedule, start + 5u, CheckTransmit, &allow_transmit) == PLATFORM_PERIODIC_CLOCK); // 倒退的时刻不能触发任何访问。
     CHECK(order_count == 0u && schedule.compute.last_tick == start + 6u);
+    allow_transmit = 0u; // 在第 9 拍的发送检查中拒绝进入硬件服务。
+    CHECK(MotorTaskRunScheduled(&schedule, start + 9u, CheckTransmit, &allow_transmit) == PLATFORM_PERIODIC_READY);
+    CHECK(can_tx_pumps == 3u && daemon_dispatches == 6u); // 保留已执行的接收，禁止提交 CAN 队列。
+    CHECK(memchr(order, 'T', order_count) == NULL && memchr(order, 'X', order_count) == NULL); // 两个硬件发送入口都须跳过。
     return 0;
 }
 

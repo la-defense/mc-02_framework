@@ -36,12 +36,19 @@ typedef struct {
 PlatformPeriodicResult_t MotorTaskScheduleInit(MotorTaskSchedule_t *schedule, const MotorTaskPeriods_t *periods,
     uint32_t dispatch_us, uint32_t quantum_us, uint32_t first_tick);
 
-/** @brief 派发接收，然后执行到期的计算和发送。过期拍点不会补跑。
+/** @brief 在推进发送队列前检查当前派发轮次，返回 0 时本轮不进入发送阶段。 */
+typedef uint8_t (*MotorTaskTransmitCheck_t)(void *context);
+
+/** @brief 派发接收，执行到期的计算，检查通过后再进入发送。过期拍点不会补跑。
  * @param[in,out] schedule 当前电机任务独占的周期状态。
  * @param[in] now_tick 本次从接收任务时钟观察到的计数值。
- * @return READY 为已推进本轮，错误时不访问收发或电机。
+ * @param[in] check_transmit 发送到期时调用的检查，不可为空。
+ * @param[in,out] context 传给检查函数的调用者状态，允许为空。
+ * @return READY 为两个拍点均已检查，发送还需获得 check_transmit 允许。
+ * @note 拍点检查失败时不访问收发或电机；发送检查拒绝时不推进 CAN 发送服务。
  */
-PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, uint32_t now_tick);
+PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, uint32_t now_tick,
+    MotorTaskTransmitCheck_t check_transmit, void *context);
 
 /** @brief 先派发 CAN、UART、USB 接收，再在正式配置计算 DJI、LK 输出；裸板配置跳过电机计算。
 * @note 由 MOTOR 任务约每 1 ms 调用，全工程仅此处周期派发接收；实际延迟仍取决于调度。

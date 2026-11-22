@@ -157,6 +157,27 @@ static uint8_t BeginTaskCycle(RobotTaskCycle_t *cycle)
     return 0u;
 }
 
+// 衡量当前时刻。发送前抵达上限已经无法再开始发送，最终完成允许正好抵达上限。
+static TaskMonitor_FaultReason_e CheckTaskCycleTiming(const RobotTaskCycle_t *cycle,
+    PlatformPeriodicTiming_t *timing, uint8_t before_transmit)
+{
+#if defined(MC02_PLATFORM_TIM5_PERIODIC)
+    const PlatformPeriodicResult_t status = cycle->high_res
+        ? PlatformTaskHighResFinish(&cycle->clock, &cycle->release, timing) // 用领取拍点时的同一个硬件时钟。
+        : PlatformTaskPeriodicFinish(&cycle->clock, &cycle->release, timing); // RTOS 任务使用原有刻度。
+#else
+    const PlatformPeriodicResult_t status = PlatformTaskPeriodicFinish(&cycle->clock, &cycle->release, timing);
+#endif
+    if (status != PLATFORM_PERIODIC_READY) return TASK_MONITOR_FAULT_PERIOD_CLOCK; // 无法核实时刻时拒绝报告成功。
+    if (!UsesHardCycleDeadline(cycle->monitor)) return TASK_MONITOR_FAULT_NONE; // 软期限任务保留完成记录。
+    if (timing->over_budget || (before_transmit && timing->work_ticks == cycle->clock.budget_ticks))
+        return TASK_MONITOR_FAULT_WORK_DEADLINE; // 执行时间已超支，或发送前没有剩余执行预算。
+    const uint32_t start_lag = cycle->release.observed_tick - cycle->release.scheduled_tick; // 本拍被领取时已过去的刻度。
+    if (timing->missed_deadline || (before_transmit && start_lag + timing->work_ticks == cycle->clock.period_ticks))
+        return TASK_MONITOR_FAULT_PERIOD_DEADLINE; // 兼顾迟醒造成的截止点不足。
+    return TASK_MONITOR_FAULT_NONE;
+}
+
 // 检查完成时刻，再交付任务进度。
 static void CompleteTaskCycle(RobotTaskCycle_t *cycle)
 {
@@ -164,28 +185,15 @@ static void CompleteTaskCycle(RobotTaskCycle_t *cycle)
     if (cycle->fixed)
     {
         PlatformPeriodicTiming_t timing; // 完成检查使用与等待相同的时钟。
-#if defined(MC02_PLATFORM_TIM5_PERIODIC)
-        const PlatformPeriodicResult_t status = cycle->high_res
-            ? PlatformTaskHighResFinish(&cycle->clock, &cycle->release, &timing) // 硬件拍点只能与硬件完成时刻比较。
-            : PlatformTaskPeriodicFinish(&cycle->clock, &cycle->release, &timing);
-#else
-        const PlatformPeriodicResult_t status = PlatformTaskPeriodicFinish(&cycle->clock, &cycle->release, &timing);
-#endif
-        if (status != PLATFORM_PERIODIC_READY)
+        const TaskMonitor_FaultReason_e reason = CheckTaskCycleTiming(cycle, &timing, 0u); // 允许在上限时完成。
+        if (reason != TASK_MONITOR_FAULT_NONE)
         {
-            StopTaskClock(cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 无法证明完成时刻时不报告进度。
-            return;
-        }
-        const uint8_t hard_deadline = UsesHardCycleDeadline(cycle->monitor); // 控制任务还需要检查完成期限。
-        if (hard_deadline && (timing.over_budget || timing.missed_deadline))
-        {
-            const TaskMonitor_FaultReason_e reason = timing.over_budget
-                ? TASK_MONITOR_FAULT_WORK_DEADLINE : TASK_MONITOR_FAULT_PERIOD_DEADLINE; // 区分计算超时和拍点错过。
             StopTaskClock(cycle, reason); // 先撤销控制，再立即记录已确认的超期。
             return;
         }
         const uint32_t start_lag = cycle->release.observed_tick - cycle->release.scheduled_tick; // 开始前已过的刻度。
-        yield_for_peers = (uint8_t)(!hard_deadline && start_lag + timing.work_ticks >= cycle->clock.period_ticks); // 软期限任务让出刻度；硬期限任务按原拍点继续等待。
+        yield_for_peers = (uint8_t)(!UsesHardCycleDeadline(cycle->monitor) &&
+            start_lag + timing.work_ticks >= cycle->clock.period_ticks); // 只有软期限任务额外让出刻度。
     }
     (void)TaskMonitorCompleteWork(cycle->monitor); // 记录完成时间。
     (void)TaskMonitorSetWaiting(cycle->monitor, TASK_MONITOR_WAIT_PERIOD); // 标记接下来等待下一拍。
@@ -228,6 +236,16 @@ static void StopMotorTaskOutputs(void)
 {
     RobotSafetyRequestDisable(); // 撤销许可；电机任务停止工作和发送。
 }
+
+static uint8_t MotorTaskCheckTransmit(void *context)
+{
+    RobotTaskCycle_t *cycle = context; // 使用当前派发任务已领取的拍点。
+    PlatformPeriodicTiming_t timing;
+    const TaskMonitor_FaultReason_e reason = CheckTaskCycleTiming(cycle, &timing, 1u); // 接收和计算执行后重新取时。
+    if (reason == TASK_MONITOR_FAULT_NONE) return 1u; // 本轮仍有时间开始发送。
+    StopTaskClock(cycle, reason); // 先撤销许可，再处理任务故障。
+    return 0u; // 核心故障上报若返回，仍禁止推进硬件发送队列。
+}
 #endif
 __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 {
@@ -250,11 +268,13 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
         if (!BeginTaskCycle(&cycle)) continue; // 时钟或监控失败时不运行本轮派发。
         uint32_t motor_probe = PlatformProbeStart();
 #if MC02_TASK_MOTOR_SPLIT
-        if (MotorTaskRunScheduled(&schedule, cycle.release.observed_tick) != PLATFORM_PERIODIC_READY)
+        if (MotorTaskRunScheduled(&schedule, cycle.release.observed_tick,
+                                 MotorTaskCheckTransmit, &cycle) != PLATFORM_PERIODIC_READY)
         {
             StopTaskClock(&cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 两个阶段失步时撤销许可并锁存故障。
             continue; // 保留本轮进度，任务监控将发现没有完成报告。
         }
+        if (!cycle.ready) continue; // 发送前已失能时，不再报告本轮正常完成。
 #else
         MotorControlTask();
 #endif

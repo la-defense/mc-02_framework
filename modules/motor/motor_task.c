@@ -54,7 +54,8 @@ PlatformPeriodicResult_t MotorTaskScheduleInit(MotorTaskSchedule_t *schedule, co
     return PLATFORM_PERIODIC_READY;
 }
 
-static void MotorTaskStep(uint8_t compute_due, uint8_t transmit_due)
+static void MotorTaskStep(uint8_t compute_due, uint8_t transmit_due,
+                          MotorTaskTransmitCheck_t check_transmit, void *context)
 {
     uint32_t probe_all = PlatformProbeStart();
 
@@ -95,7 +96,7 @@ static void MotorTaskStep(uint8_t compute_due, uint8_t transmit_due)
 #endif
 
 #if MC02_FEATURE_MOTOR_CONTROL
-    if (transmit_due)
+    if (transmit_due && (check_transmit == NULL || check_transmit(context)))
     {
         PlatformDispatchCanTx(); // 只在发送拍点推进按原期限和许可检查的队列。
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
@@ -107,13 +108,16 @@ static void MotorTaskStep(uint8_t compute_due, uint8_t transmit_due)
     }
 #else
     (void)transmit_due; // 该构建无 CAN 周期发送。
+    (void)check_transmit; // 没有发送，也无需读取发送前时钟。
+    (void)context;
 #endif
     PlatformProbeDone(&motor_prof_all, probe_all);
 }
 
-PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, uint32_t now_tick)
+PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, uint32_t now_tick,
+    MotorTaskTransmitCheck_t check_transmit, void *context)
 {
-    if (schedule == NULL) return PLATFORM_PERIODIC_CONFIG;
+    if (schedule == NULL || check_transmit == NULL) return PLATFORM_PERIODIC_CONFIG; // 固定拍点必须提供发送前复查。
     MotorTaskSchedule_t candidate = *schedule; // 任一时钟失效都不推进原有拍点。
     PlatformPeriodicRelease_t compute_release;
     PlatformPeriodicRelease_t transmit_release;
@@ -122,11 +126,12 @@ PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, ui
     const PlatformPeriodicResult_t transmit = PlatformPeriodicPoll(&candidate.transmit, now_tick, &transmit_release);
     if (transmit != PLATFORM_PERIODIC_READY && transmit != PLATFORM_PERIODIC_WAIT) return transmit;
     *schedule = candidate; // 两项都有效，提交本轮已领取的拍点。
-    MotorTaskStep(compute == PLATFORM_PERIODIC_READY, transmit == PLATFORM_PERIODIC_READY); // 同时到期时先计算。
+    MotorTaskStep(compute == PLATFORM_PERIODIC_READY, transmit == PLATFORM_PERIODIC_READY,
+                 check_transmit, context); // 同时到期时先计算，再检查当前时刻是否还可发送。
     return PLATFORM_PERIODIC_READY;
 }
 
 void MotorControlTask(void)
 {
-    MotorTaskStep(1u, 1u); // 旧调用者仍在同一轮处理计算和发送。
+    MotorTaskStep(1u, 1u, NULL, NULL); // 旧调用者仍在同一轮处理计算和发送。
 }

@@ -76,3 +76,10 @@
 - 修改前，命令任务的 5 ms 周期和 5 ms 执行预算可配上 9 ms 的变化率最大间隔，但相邻发布可能差 10 ms。主机回归先复现错误通过，再验证 9 ms 拒绝、10 ms 接受。话题检查另用 50000 μs 和 50001 μs 验证边界，同时保持输入至发送服务的期限用例。两项受限底盘联测通过 ASan／UBSan。[联测代码](../../../../tests/host/commissioning_chassis_cmd_test.c)
 - 隔离 `commissioning/chassis` 通过 Cortex-M7 Debug 构建、源码与 ELF 检查。反汇编确认组合时限检查先于反馈计划。与 `a060001` 的同配置相比，Flash 增加 96 B 至 310340 B，主 RAM 仍为 119952 B。实际调度抖动、反馈与 CAN 排队及实车停止表现仍待测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug／Release 各通过 859 项，普通禁热和遥控诊断通过 ARM 构建与 ELF 检查，Flash 与主 RAM 均与上一提交一致。六种正式预设继续因核心配置未确认而拒绝，实际受限底盘也仍报告轮组与人工参数未确认。未连接硬件。
+
+## 电机发送前检查剩余时间
+
+- 主机从实际电机任务入口复现发送服务先于预算超期报告。修改后，在接收和闭环计算结束后复核实际时刻。发送前恰好用尽预算或因迟醒恰好到达绝对截止点时，均先撤销许可，并跳过本轮发送及正常完成报告。正常发送后仍校验完成时间和监控进度。[任务入口回归](../../../../tests/host/robot_task_cycle_test.c)
+- 电机派发回归注入发送检查拒绝，验证 CAN 发送和桥接附加发送都不执行，已处理的接收仍保留。包含周期适配、派发和 TIM5 的 13 项通过 ASan／UBSan。[生产派发回归](../../../../tests/host/motor_profile_test.c)
+- 隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码和 ELF 检查。相对 `1764f46`，三份 Flash 增加 144 B 至 311332 B、334584 B、341384 B。主 RAM 分别保持 119952 B、130064 B、130832 B。未连接硬件，实际 CAN 提交、停车与发送开销仍待测量。已提交到硬件的帧仍使用原有处理流程。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过，WSL Debug／Release 各通过 866 项。普通禁热、遥控诊断及受限观察通过 ARM 构建与 ELF 检查。六种正式预设仍按核心配置未确认拒绝。
