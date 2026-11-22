@@ -179,4 +179,10 @@
 - 隔离受限底盘、单板 SP 和 V2 通过 Cortex-M7 Debug 构建、源码和 ELF 检查。相对 `1e797ab`，三份 Flash 均增加 176 B，分别为 311188 B、334440 B、341240 B。主 RAM 保持 119952 B、130064 B、130832 B。未连接硬件，任务切换频率及实际轮组响应仍待现场测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 864 项，底盘反馈、参考期限和同帧分功能许可相关 9 项通过 ASan／UBSan。普通禁热与遥控诊断通过 ARM 构建和 ELF 检查，六种正式预设继续按未确认条件拒绝构建。
 
+## 底盘诊断的主机读取工具
+
+- 新增 `chassis_motion_query.py`。离线模式按请求序号校验一帧应答，在线模式向明确指定的端口发送一次无负载查询，写入与读取共用截止时刻。数据沿用 SI 单位和 MCU 原始时间，缺测组为 `null`。[使用说明](../MC02-0144.md#usart10-只读运动反馈)
+- 5 项工具回归覆盖固件固定字节样例、有效零与缺测、坏帧、错误序号、状态拒绝、超时和短写。完整 `verify.py --fast` 工具回归共 194 项，其中 1 项跳过。现有生产日志解析的底盘应答回归在 WSL Debug／Release 各通过 1 项。[主机用例](../../../../tests/tools/test_chassis_motion_query.py) · [固件编码回归](../../../../tests/host/log_test.c)
+- WSL 用虚拟终端连接实际 `pyserial` 命令行，收到一条查询，分段返回含噪声的应答，得到预期 JSON。离线模式也用固定帧核对成功输出，用状态 `7` 核对非零退出码。此次只改主机工具，未连接实际 USART10，实车串口时序和轮速误差待现场验证。
+
 见[本底盘接口](../../../../application/chassis/chassis_feedback.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。
