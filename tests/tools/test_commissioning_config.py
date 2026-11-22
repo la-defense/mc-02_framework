@@ -18,20 +18,20 @@ class CommissioningConfigTest(unittest.TestCase):
     def test_observation_and_rejections(self):
         with tempfile.TemporaryDirectory(prefix="mc02-commissioning-") as temp:
             build = Path(temp) / "build"
-            base = ["cmake", "--preset", "bench-debug", "-B", str(build),
-                    "-DMC02_PROFILE=commissioning"]
+            base = ["cmake", "--preset", "commission-observe-rcdiag-debug", "-B", str(build)]
             # 观察配置必须能生成，并把身份和禁止输出的选择写入生成头。
-            result = subprocess.run(base + ["-DMC02_BENCH_RC_DIAGNOSTICS=ON"], cwd=ROOT,
+            result = subprocess.run(base, cwd=ROOT,
                                     capture_output=True, text=True, timeout=90)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             header = (build / "generated/mc02_build_config.h").read_text(encoding="utf-8")
             self.assertIn('#define MC02_BUILD_ROLE_NAME "commissioning"', header)
-            for feature in ("COMMAND", "CHASSIS", "GIMBAL", "SHOOTER", "HEATER", "MOTOR_CONTROL"):
+            for feature in ("COMMAND", "CHASSIS", "GIMBAL", "SHOOTER", "HEATER", "MOTOR_CONTROL", "LCD"):
                 self.assertIn(f"#define MC02_FEATURE_{feature} 0", header)
             for rail in ("24V_1", "24V_2", "5V"):
                 self.assertIn(f"#define MC02_POWER_{rail}_STAGE 0u", header)
             sources = (build / "mc02-selected-sources.txt").read_text(encoding="utf-8")
             self.assertIn("target=Basic_Framework_MC02_commissioning_observe_rcdiag.elf", sources)
+            self.assertIn("modules/remote/remote_bench.c", sources)  # 观察任务应实际进入构建清单。
             self.assertNotIn("application/chassis/chassis.c", sources)
             self.assertNotIn("application/gimbal/gimbal.c", sources)
             self.assertNotIn("application/shoot/shoot.c", sources)

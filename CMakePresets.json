@@ -105,6 +105,16 @@
       }
     },
     {
+      "name": "commission-observe-rcdiag-debug",
+      "displayName": "MC-02 commissioning/observe remote diagnostics Debug",
+      "inherits": "rcdiag-debug",
+      "cacheVariables": {
+        "MC02_PROFILE": "commissioning",
+        "MC02_COMMISSIONING_TARGET": "observe",
+        "MC02_ENABLE_LCD": "OFF"
+      }
+    },
+    {
       "name": "refdiag-debug",
       "inherits": "arm-base",
       "cacheVariables": {
@@ -215,6 +225,7 @@
     {"name": "usbtest-debug", "configurePreset": "usbtest-debug", "jobs": 4},
     {"name": "rcdiag-debug", "configurePreset": "rcdiag-debug", "jobs": 4},
     {"name": "rcdiag-rel", "configurePreset": "rcdiag-rel", "jobs": 4},
+    {"name": "commission-observe-rcdiag-debug", "configurePreset": "commission-observe-rcdiag-debug", "jobs": 4},
     {"name": "refdiag-debug", "configurePreset": "refdiag-debug", "jobs": 4},
     {"name": "refdiag-rel", "configurePreset": "refdiag-rel", "jobs": 4},
     {"name": "robot-single-debug", "configurePreset": "robot-single-debug", "jobs": 4},

@@ -57,6 +57,17 @@ class PresetTests(unittest.TestCase):
             self.assertTrue(row["artifact"].endswith(".elf"))
             self.assertEqual(row["profile"], "bench_safe")
 
+    def test_commissioning_observation_is_opt_in(self) -> None:
+        name = "commission-observe-rcdiag-debug"
+        (preset,) = presets.selected(name)
+        filename = presets.artifact_name(preset)
+        self.assertEqual(filename, "Basic_Framework_MC02_commissioning_observe_rcdiag.elf")
+        check_args = presets.profile_arguments(preset, Path("build"), Path(filename))
+        self.assertEqual(check_args, [filename, "--profile", "commissioning", "--role", "single",
+                                     "--build-dir", "build", "--commissioning-target", "observe", "--rc-diagnostics"])
+        self.assertNotIn(preset, presets.selected(None))  # 本地默认验证沿用原基线。
+        self.assertNotIn(name, {row["name"] for row in presets.github_matrix()})  # CI 也保留原矩阵。
+
     def test_repository_cmake_matches_official_list(self) -> None:
         self.assertEqual(presets.check_cmake(), [])
 

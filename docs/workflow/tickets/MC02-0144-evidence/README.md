@@ -66,3 +66,8 @@
 - 修改前，零输入的映射检查接受了拨杆满幅时会溢出的配置。新增的车型选择回归在修复前复现了这一问题。修复后，车型入口用 DBUS 与车型共同允许的最大原始幅值和实际按键幅值试算，再检查限幅后的速度是否能换成旧底盘消息单位。验证覆盖原始值乘法溢出、平移和转动单位换算溢出、键盘输入上限低于 1，以及仅有较大的名义上限但实际输入仍可正常换算。非法配置清除活动车型，修正后可重新选择。两项受限底盘联测通过 ASan／UBSan。[回归用例](../../../../tests/host/commissioning_chassis_cmd_test.c)
 - 隔离的 `commissioning/chassis` 通过 Cortex-M7 Debug 构建、源码及 ELF 检查。与 `f164920` 的同配置相比，Flash 增加 240 B 至 310244 B，主 RAM 仍为 119952 B。主仓库的实际车型继续因轮组及供电、人工映射及时序两组未确认而拒绝配置。未连接硬件，实际范围、输入抖动及停止时延仍待现场核对。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 859 项。普通禁热和遥控诊断通过 ARM 构建及 ELF 检查，Flash 和主 RAM 均与 `f164920` 的同配置一致。六个正式预设仍因核心配置未确认而拒绝构建。
+
+## 观察配置的一键本机验证
+
+- `verify.py --fast --firmware --presets commission-observe-rcdiag-debug --parallel 2` 通过。工具回归共 189 项，其中 1 项跳过。CMake 回归检查观察配置和不受命令行缓存覆盖的两组底盘确认项，六种正式预设按缺少核心配置拒绝。新观察预设按名称选择，本地默认构建及 CI 矩阵仍使用原有项目。
+- WSL Cortex-M7 Debug 完整构建 `Basic_Framework_MC02_commissioning_observe_rcdiag.elf`。生成头和源码清单确认观察身份、遥控观察、禁热、关闭板载显示及三路受控电源。ELF 检查通过，未链接执行器入口。Flash 237904 B，主 RAM 110744 B，Build ID `dd7beebe93ecac8ceff7816f3e8a344bc1b517a5`。未连接硬件或烧录。[预设用法](../MC02-0144.md#观察入口)

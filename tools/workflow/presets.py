@@ -35,12 +35,13 @@ class Preset:
     diagnostics: str = ""
 
 
-# 保留十种命名配置；robot 的实物参数尚未确认，只用于检查配置被拒绝。
+# robot 的实物参数尚未确认，只用于检查配置是否被拒绝。
 OFFICIAL: tuple[Preset, ...] = (
     Preset("bench-debug", "bench_safe", "single", "Debug"),
     Preset("bench-rel", "bench_safe", "single", "RelWithDebInfo"),
     Preset("rcdiag-debug", "bench_safe", "single", "Debug", "rc"),
     Preset("rcdiag-rel", "bench_safe", "single", "RelWithDebInfo", "rc"),
+    Preset("commission-observe-rcdiag-debug", "commissioning", "single", "Debug", "rc"),  # 显式选择的无动作遥控观察入口。
     Preset("robot-single-debug", "robot", "single", "Debug"),
     Preset("robot-single-rel", "robot", "single", "RelWithDebInfo"),
     Preset("robot-chassis-debug", "robot", "chassis", "Debug"),
@@ -49,12 +50,15 @@ OFFICIAL: tuple[Preset, ...] = (
     Preset("robot-gimbal-rel", "robot", "gimbal", "RelWithDebInfo"),
 )
 
-# 默认只构建当前允许生成的裸板固件；不能用测试值绕过生产配置检查。
+# 默认构建及 CI 保留裸板基线。本机观察预设按名称选择。
 BUILDABLE = tuple(preset for preset in OFFICIAL if preset.profile == "bench_safe")
 
 
 def artifact_name(preset: Preset) -> str:
     """按 CMakeLists 的命名规则返回 ELF 文件名。"""
+    if preset.profile == "commissioning":
+        suffix = "_rcdiag" if preset.diagnostics == "rc" else ""  # 观察固件在身份后标记启用的诊断。
+        return f"Basic_Framework_MC02_commissioning_observe{suffix}.elf"
     if preset.diagnostics == "rc":
         return "Basic_Framework_MC02_rcdiag_bench_safe.elf"
     if preset.profile == "bench_safe":
@@ -74,6 +78,8 @@ def profile_arguments(preset: Preset, build_dir: Path, elf: Path) -> list[str]:
         "--role", preset.role,
         "--build-dir", str(build_dir),
     ]
+    if preset.profile == "commissioning":
+        arguments.extend(("--commissioning-target", "observe"))  # 复核报告里的观察目标，避免误用运动 ELF。
     if preset.diagnostics == "rc":
         arguments.append("--rc-diagnostics")
     return arguments
@@ -119,6 +125,13 @@ def check_cmake(path: Path | None = None) -> list[str]:
             "MC02_BOARD_ROLE": preset.role,
             "CMAKE_BUILD_TYPE": preset.build_type,
         }
+        if preset.profile == "commissioning":
+            expected.update({
+                "MC02_COMMISSIONING_TARGET": "observe",  # 只允许此入口生成观察目标。
+                "MC02_BENCH_RC_DIAGNOSTICS": "ON",  # 检查实际继承来的遥控观察开关。
+                "MC02_ENABLE_HEATER": "OFF",  # 保证继承后的加热输出关闭。
+                "MC02_ENABLE_LCD": "OFF",  # 观察不使用暂停的板载显示。
+            })
         for key, value in expected.items():
             if str(values.get(key)) != value:
                 errors.append(
