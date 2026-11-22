@@ -82,14 +82,15 @@ RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output);
 /** @brief 在一次短临界区内取得底盘额度、供电许可及缓冲能量。
  * @param[out] output 非空时接收各组原时间、状态及两组恢复时刻。过期或未收到的一组数据清零，状态仍可查询。
  * @return REFEREE_OK 或具体参数／未初始化错误。未初始化时清零输出。
- * @note 任务中使用。查询不会延长期限，两个来源也不会互相续期。值为 0 的新鲜上限不授予非零功率。
+ * @note 任务中使用。查询不会延长期限，两个来源也不会互相续期。
+ *       新鲜的 0 W 不授予功率。新鲜的 0 J 仍可查询，同时撤销缓冲区间。
  */
 RefereeStatus_t RefereeGetChassisPower(RefereeChassisPower_t *output);
 
 /** @brief 检查底盘目标使用的两组裁判数据是否仍处于同一连续有效区间。
  * @param[in] generation 由 RefereeGetChassisPower 交付的非零编号。
  * @param[in] now_ms 调用方读取的本机毫秒时刻，可回绕。接口以同一时钟中较晚的观察复核期限。
- * @return 1 表示区间未中断、上限和供电许可有效、缓冲仍新鲜；否则为 0。
+ * @return 1 表示区间未中断、上限和供电许可有效、缓冲仍新鲜且大于 0 J，否则为 0。
  * @note 任务上下文调用，可在已有任务临界区中使用，不等待，也不发送报文。
  */
 uint8_t RefereeBufferedPowerIsCurrent(uint32_t generation, uint32_t now_ms);

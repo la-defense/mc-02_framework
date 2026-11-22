@@ -43,7 +43,7 @@ typedef struct {
     uint8_t interrupted; // 是否发生过可用到不可用的变化；首次接收不算恢复。
 } RefereePowerContinuity_t;
 static RefereePowerContinuity_t referee_base_power; // 上限和供电许可，不依赖缓冲。
-static RefereePowerContinuity_t referee_buffered_power; // 需要上限、供电许可和缓冲的现有模式。
+static RefereePowerContinuity_t referee_buffered_power; // 需要上限、供电许可和新鲜的正缓冲能量。
 static uint32_t referee_buffered_generation; // 每个可用区间使用不同且非零的编号。
 
 // 接收、离线和发送回调均由任务派发；共享状态使用可嵌套的任务临界区保护。
@@ -320,7 +320,8 @@ static void RefereeTrackChassisPower(uint32_t now_ms)
         robot->data.robot_state.chassis_power_limit_w != 0u &&
         (robot->data.robot_state.power_output_bits & REFEREE_OUTPUT_CHASSIS_MASK) != 0u); // 普通供电必须具备这两项。
     RefereeTrackPowerContinuity(&referee_base_power, base_available, now_ms); // 缓冲的更新或失效都不改变此区间。
-    const uint8_t buffered_available = (uint8_t)(base_available && buffer->state == REFEREE_DATA_FRESH); // 同时需要两组数据。
+    const uint8_t buffered_available = (uint8_t)(base_available && buffer->state == REFEREE_DATA_FRESH &&
+        buffer->data.power_heat.buffer_energy_j != 0u); // 0 J 仍可读，但立即结束缓冲供电区间。
     if (buffered_available && !referee_buffered_power.available)
     {
         ++referee_buffered_generation; // 首次可用或中断后恢复时开启新区间，旧目标不能接管。

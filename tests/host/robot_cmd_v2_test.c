@@ -347,6 +347,15 @@ int main(void)
         chassis.chassis_mode == CHASSIS_ZERO_FORCE);
     referee_power.chassis_power_enabled = 1u;
 
+    const uint32_t previous_power_generation = referee_power.buffered_generation; // 保存降为 0 J 前的模拟状态。
+    referee_power.buffer_energy_j = 0u; // 0x0202 依旧新鲜，裁判接口撤销缓冲区间。
+    referee_power.buffered_generation = 0u;
+    RobotCMDTask();
+    TEST_CHECK(MessageReadSnapshot(chassis_subscriber, &chassis, sizeof(chassis), test_tick, NULL) == MESSAGE_OK &&
+        chassis.chassis_mode == CHASSIS_ZERO_FORCE && chassis.vx == 0.0f && chassis.local_power_generation == 0u);
+    referee_power.buffer_energy_j = 40u;
+    referee_power.buffered_generation = previous_power_generation + 1u; // 模拟能量恢复后发布新区间。
+
     referee_power.recovery_recorded = 0u; // 单独注入普通供电的恢复记录，不能只检查两组共同恢复时间。
     referee_power.limit_recovery_recorded = 1u;
     referee_power.limit_recovered_ms = test_tick;

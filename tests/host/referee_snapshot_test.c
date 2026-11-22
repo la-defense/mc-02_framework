@@ -613,6 +613,31 @@ static void check_chassis_power_sources(void)
     feed_frame(ID_game_robot_state, robot, sizeof(robot), 17u); // 两次变化之间没有读取接口。
     TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.buffer.state == REFEREE_DATA_EXPIRED &&
         !power.recovery_recorded && power.limit_recovery_recorded && power.limit_recovered_ms == 611u);
+
+    set_tick(612u);
+    write_u16le(buffer + 8u, 0u); // 缓冲报文仍新鲜，但设备报告零焦耳。
+    feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 18u);
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.buffer.state == REFEREE_DATA_FRESH &&
+        power.buffer_energy_j == 0u && power.buffered_generation == 0u && !power.recovery_recorded);
+    TEST_CHECK(power.limit_w == 80u && power.chassis_power_enabled && power.limit_recovered_ms == 611u);
+
+    set_tick(613u);
+    write_u16le(buffer + 8u, 50u); // 正能量恢复后开启新区间。
+    feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 19u);
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.recovery_recorded && power.recovered_ms == 613u);
+    const uint32_t before_depletion = power.buffered_generation; // 保存进入软件 CAN 队列时可用的编号。
+    TEST_CHECK(before_depletion != 0u && RefereeBufferedPowerIsCurrent(before_depletion, 613u));
+    set_tick(614u);
+    write_u16le(buffer + 8u, 0u);
+    feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 20u);
+    TEST_CHECK(!RefereeBufferedPowerIsCurrent(before_depletion, 613u)); // 直接用发送端接口检查旧授权，无需先调用读口。
+    set_tick(615u);
+    write_u16le(buffer + 8u, 50u);
+    feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 21u);
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.recovery_recorded && power.recovered_ms == 615u &&
+        power.buffered_generation != before_depletion && power.limit_recovered_ms == 611u);
+    TEST_CHECK(!RefereeBufferedPowerIsCurrent(before_depletion, 615u) &&
+        RefereeBufferedPowerIsCurrent(power.buffered_generation, 615u)); // 恢复后旧帧仍不可用。
 }
 
 #if defined(REFEREE_TEST_THREADS)
