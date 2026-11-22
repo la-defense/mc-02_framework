@@ -60,6 +60,7 @@ static uint8_t sender_enable_flag[9] = {0};
 #if defined(ONE_BOARD)
 static uint32_t sender_safety_generation[9]; // 每组已排队目标所属的安全代际。
 static DJIChassisReferenceSourceCheck_t chassis_source_check; // 底盘启动时登记，同一固件运行期间使用同一检查函数。
+static uint32_t chassis_reference_revision; // 每次写入或撤销底盘参考时推进，供逐轮读取期间比较。
 enum {
     DJI_QUEUED_SPEED = 1u << 0, // 依赖本电机的速度反馈。
     DJI_QUEUED_CURRENT = 1u << 1, // 依赖本电机的电流反馈。
@@ -697,6 +698,7 @@ void DJIMotorStop(DJIMotorInstance *motor)
     {
         ++motor->chassis_stop_generation; // 已计算的轮速目标属于旧代次，重新启用也不能发送。
         motor->reference_generation_valid = 0u; // 重新计算前要有底盘提交的新参考。
+        ++chassis_reference_revision; // 正在逐轮读取的任务也须看到此次撤销。
     }
 #endif
     PlatformTaskCriticalExit(); // 发送方只能看到更新前或更新后的一组数据。
@@ -1149,6 +1151,10 @@ void DJIMotorSetRef(DJIMotorInstance *motor, float ref)
     motor->reference_has_deadline = 0u; // 清零或其他普通参考不能继承旧目标的期限。
     motor->reference_source_sequence = 0u; // 普通参考不继承此前的外部来源。
     motor->reference_source_kind = DJI_CHASSIS_SOURCE_DIRECTION; // 没有来源编号时恢复默认类型。
+#if defined(ONE_BOARD)
+    if (motor->output_role == MOTOR_OUTPUT_CHASSIS)
+        ++chassis_reference_revision; // 普通写入同样会改变电机任务读到的轮组参考。
+#endif
     PlatformTaskCriticalExit();
 }
 
@@ -1186,6 +1192,8 @@ static uint8_t DJIMotorSetGenerationRef(DJIMotorInstance *motor, float ref, uint
         motor->reference_source_sequence = source_sequence; // 后续检查本参考自身的依赖。
         motor->reference_source_kind = (uint8_t)source_kind; // 目标和依赖类型同时生效。
         motor->reference_generation_valid = 1u; // 完整写入后才标记代际有效。
+        if (motor->output_role == MOTOR_OUTPUT_CHASSIS)
+            ++chassis_reference_revision; // 同一安全代际内也能识别新增的一批轮速目标。
     }
     PlatformIrqRestore(irq); // 恢复进入前的中断状态。
     return allowed; // 拒绝时保留旧参考，但发送路径不会借新代际重用它。
@@ -1242,6 +1250,9 @@ void DJIMotorControl()
     RobotSafetySnapshot_t cycle_safety = {0}; // 在计算之前记录本周期所属的安全代际。
     const uint8_t cycle_safety_valid = RobotSafetyGetSnapshot(&cycle_safety); // 查询失败时本周期只输出零值。
     DJI_Queued_Feedback_s computed_feedback[9] = {0}; // 本次计算暂存每组、每电机的反馈时间。
+    uint32_t first_chassis_reference_revision = 0u; // 首个轮位读到的版本号，允许计数回绕到零。
+    uint8_t chassis_reference_read = 0u; // 区分尚未读取首轮和读到的版本号为零。
+    uint8_t chassis_references_changed = 0u; // 读取不同轮位期间发生过参考变更时保持置位。
 #endif
     uint32_t probe_all = PlatformProbeStart();
     // 直接保存一次指针引用从而减小访存的开销,同样可以提高可读性
@@ -1283,6 +1294,16 @@ void DJIMotorControl()
         output_axis = motor->output_axis;
         pid_ref = motor_controller->pid_ref;
 #if defined(ONE_BOARD)
+        if (motor->output_role == MOTOR_OUTPUT_CHASSIS)
+        {
+            if (chassis_reference_read == 0u)
+            {
+                first_chassis_reference_revision = chassis_reference_revision; // 用首个轮位的版本与后续轮位比较。
+                chassis_reference_read = 1u; // 参考和版本在同一次保护内读取。
+            }
+            else if (first_chassis_reference_revision != chassis_reference_revision)
+                chassis_references_changed = 1u; // 此轮可能混有更新前后的参考，记录后统一丢弃。
+        }
         reference_generation = motor->reference_safety_generation; // 与参考值读取同一组数据。
         reference_has_deadline = motor->reference_has_deadline; // 与参考值在同一临界区读取。
         reference_deadline_ms = motor->reference_deadline_ms; // 原始截止时刻不会随电机周期刷新。
@@ -1487,6 +1508,21 @@ void DJIMotorControl()
         if (motor->stop_flag == MOTOR_STOP)
             memset(sender_assignment[group].tx_buff + 2 * num, 0, sizeof(uint16_t));
     }
+
+#if defined(ONE_BOARD)
+    if (chassis_references_changed != 0u)
+    {
+        for (size_t index = 0u; index < idx; ++index)
+        {
+            DJIMotorInstance *wheel = dji_motor_instance[index]; // 查找所有轮位，包括不同 CAN 帧的轮位。
+            if (wheel->output_role != MOTOR_OUTPUT_CHASSIS) continue; // 保留同帧其他电机的计算结果。
+            uint8_t *output = sender_assignment[wheel->sender_group].tx_buff + 2u * wheel->message_num; // 找到本轮待入队的两个字节。
+            memset(output, 0, sizeof(uint16_t)); // 丢弃这批混合结果，下一轮再使用已提交的参考。
+            Motor_Controller_s *controller = &wheel->motor_controller; // 只清除本次被丢弃的轮电机控制历史。
+            MotorPIDResetLoops(&controller->angle_PID, &controller->speed_PID, &controller->current_PID); // 下轮不继承被丢弃的计算历史。
+        }
+    }
+#endif
 
     // 遍历flag,检查是否要发送这一帧报文
     PlatformProbeDone(&dji_prof_pid, probe_all);

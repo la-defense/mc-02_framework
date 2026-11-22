@@ -51,6 +51,7 @@ static uint8_t reject_periodic; // 模拟队列拒绝替换旧目标。
 static PlatformCanFaultObserver_t recovery_fault_observer; // 保存测试使用的总线故障回调。
 static void *recovery_fault_context; // 测试回调关联上下文。
 static uint8_t recovery_bus_ok; // 注入核心总线是否已经重启。
+static void (*motor_time_hook)(void); // 在电机读取本轮参考后模拟一次任务切换。
 
 uint8_t PlatformCanInstallFaultObserver(PlatformCanFaultObserver_t observer, void *context)
 {
@@ -75,7 +76,18 @@ uint8_t RemoteControlRecoveryStillValid(const RemoteControlSnapshot_s *remote, u
 }
 #endif
 
-uint64_t DWT_GetTimeline_us(void) { return now_us; }
+uint64_t DWT_GetTimeline_us(void)
+{
+#if defined(ONE_BOARD)
+    if (motor_time_hook != NULL)
+    {
+        void (*hook)(void) = motor_time_hook; // 保存本次任务切换的入口。
+        motor_time_hook = NULL; // 只切换一次，替换参考时不得再次进入。
+        hook(); // 电机已读一轮参考，其他轮位还未读取。
+    }
+#endif
+    return now_us;
+}
 uint32_t HAL_GetTick(void) { return (uint32_t)(now_us / 1000u); }
 float DWT_GetDeltaT(uint32_t *count) { ++*count; return 0.001f; }
 uint32_t DWT_ProbeStart(void) { return 0u; }
@@ -797,6 +809,63 @@ static int single_chassis_queued_stop(void)
     DJIMotorEnable(first);
     control_at(8000u);
     TEST_CHECK(!(sent[0] || sent[1]) && (sent[2] || sent[3])); // 光重新启用也不能再次计算旧参考。
+    return EXIT_SUCCESS;
+}
+
+static DJIMotorInstance *interleaved_wheels[2]; // 用两个槽位复现同一轮组的先后读取。
+static uint32_t interleaved_generation;
+
+static void publish_replacement_wheel_references(void)
+{
+    TEST_CHECK(motor_safety_test_critical_depth == 0u); // 只有电机退出读操作的临界区后才可切换任务。
+    taskENTER_CRITICAL(); // 和底盘的整组提交一样，两个新参考之间不切回电机任务。
+    TEST_CHECK(DJIMotorSetChassisRefUntil(interleaved_wheels[0], 30.0f, interleaved_generation, 15u));
+    TEST_CHECK(DJIMotorSetChassisRefUntil(interleaved_wheels[1], 40.0f, interleaved_generation, 15u));
+    taskEXIT_CRITICAL();
+}
+
+static int single_chassis_reference_interleaving(void)
+{
+    now_us = 1000u;
+    RobotSafetyInit();
+    RobotSafetySetRcOnline(1u);
+    RobotSafetySetImuValid(1u);
+    RobotSafetySetCalibValid(1u);
+    RobotSafetySetTaskHealthy(1u);
+    RobotSafetyRequestEnable();
+    RobotSafetyUpdate();
+    RobotSafetySnapshot_t safety;
+    TEST_CHECK(RobotSafetyGetSnapshot(&safety));
+    interleaved_generation = safety.control_generation; // 两批参考共用同一个整车许可，单靠安全代际分不出来。
+
+    now_us = 2000u;
+    for (uint8_t i = 0u; i < 2u; ++i)
+    {
+        Motor_Init_Config_s config = motor_config((uint8_t)(i + 1u)); // 两个轮位并入同一个 CAN 帧。
+        config.output_role = MOTOR_OUTPUT_CHASSIS;
+        interleaved_wheels[i] = DJIMotorInit(&config);
+        TEST_CHECK(interleaved_wheels[i] != NULL);
+        TEST_CHECK(DJIMotorSetChassisRefUntil(interleaved_wheels[i], 10.0f * (float)(i + 1u),
+            interleaved_generation, 15u)); // 初始值与替换值不同，方便识别混合结果。
+        DJIMotorEnable(interleaved_wheels[i]);
+        receive(interleaved_wheels[i], 960000u, 2u, 0, 0); // 输入保持新鲜，只有轮速参考发生变化。
+    }
+    Motor_Init_Config_s independent_config = motor_config(3u); // 同帧的独立测试电机不属于底盘。
+    DJIMotorInstance *independent = DJIMotorInit(&independent_config);
+    TEST_CHECK(independent != NULL);
+    DJIMotorSetRef(independent, 7.0f);
+    DJIMotorEnable(independent);
+    receive(independent, 960000u, 2u, 0, 0);
+
+    control_at(3000u); // 建立 PID 时钟。
+    control_at(4000u);
+    TEST_CHECK(sent[1] == 10u && sent[3] == 20u && sent[5] == 7u); // 验证未发生任务切换时的初始值。
+    motor_time_hook = publish_replacement_wheel_references; // 第一个轮位读完后插入完整发布。
+    control_at(5000u);
+    TEST_CHECK(motor_time_hook == NULL); // 确认本轮确实发生了切换。
+    TEST_CHECK(sent[0] == 0u && sent[1] == 0u && sent[2] == 0u && sent[3] == 0u && sent[5] == 7u);
+    control_at(6000u); // 下轮使用已完整交付的新参考。
+    TEST_CHECK(sent[1] == 30u && sent[3] == 40u && sent[5] == 7u);
     return EXIT_SUCCESS;
 }
 
@@ -1807,6 +1876,8 @@ int main(int argc, char **argv)
         return single_chassis_output_limit();
     if (strcmp(argv[1], "single-chassis-queued-stop") == 0)
         return single_chassis_queued_stop();
+    if (strcmp(argv[1], "single-chassis-reference-interleaving") == 0)
+        return single_chassis_reference_interleaving();
     if (strcmp(argv[1], "single-queued-feedback-gap") == 0)
         return single_queued_feedback_gap();
     if (strcmp(argv[1], "single-queued-external-expiry") == 0)

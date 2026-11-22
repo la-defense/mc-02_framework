@@ -173,4 +173,10 @@
 - 隔离受限底盘、单板 SP 和 V2 通过 Cortex-M7 Debug 构建、源码和 ELF 检查。Flash 和主 RAM 均与 `b2b34a8` 的同配置一致。受限底盘反汇编确认四次停用和四次清零都位于同一临界区。未连接硬件，临界区实际耗时和实车停止表现仍待测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过，WSL Debug／Release 各通过 862 项。普通禁热和遥控诊断通过 ARM 增量构建与 ELF 检查。六种实际车型的正式预设继续按未确认条件拒绝构建。
 
+## 电机逐轮读取时底盘提交了新参考
+
+- 主机让单板电机任务读完第一个轮位，再用底盘任务的临界区提交两个新参考，随后继续读取第二个轮位。原实现没有将这一批轮电机输出清零。修复后，电机任务在各轮读取期间发现底盘参考版本变化，会清除本轮全部底盘输出及对应 PID 历史。同帧独立测试电机仍保有其目标，下一轮可以读取两个新参考。[任务切换回归](../../../../tests/host/motor_feedback_filter_test.c)
+- 隔离受限底盘、单板 SP 和 V2 通过 Cortex-M7 Debug 构建、源码和 ELF 检查。相对 `1e797ab`，三份 Flash 均增加 176 B，分别为 311188 B、334440 B、341240 B。主 RAM 保持 119952 B、130064 B、130832 B。未连接硬件，任务切换频率及实际轮组响应仍待现场测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 864 项，底盘反馈、参考期限和同帧分功能许可相关 9 项通过 ASan／UBSan。普通禁热与遥控诊断通过 ARM 构建和 ELF 检查，六种正式预设继续按未确认条件拒绝构建。
+
 见[本底盘接口](../../../../application/chassis/chassis_feedback.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。
