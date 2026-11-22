@@ -140,11 +140,12 @@ uint8_t RobotCanRecoveryCoordinatorStep(RobotCanRecoveryCoordinator_t *state,
     if (buses_ready && application_current && motors_current && remote_current)
         cleared = RobotCanRuntimeTryClearFault(bus.fault_generation, safety.control_generation, now); // 最终原子复核故障代次和整车资格。
     PlatformIrqRestore(irq); // 恢复调用者原来的中断状态。
-    if (!buses_ready || !application_current || !motors_current || !remote_current)
+    if (!cleared)
     {
         if (!application_current) state->gimbal_feedback_sequence = 0u; // 状态机重新等待，新区间从下一轮开始记录。
-        input.core.bus_ok = 0u; // 硬件或应用反馈失效立即中断连续有效计时。
-        (void)CanRecoveryTimedStep(&state->timing, &input); // 保存当前反馈作为新的比较起点。
+        input.core.now_ms = now; // 以最终检查时刻判断哪些输入还可记入比较基准。
+        input.core.permit_ok = 0u; // 最终清除被拒绝也中断等待，原命令不能在下一轮重试。
+        (void)CanRecoveryTimedStep(&state->timing, &input); // 保留已观察到的反馈和命令序号，等待新证据。
     }
     return cleared; // 清除故障不直接发布电机输出。
 }

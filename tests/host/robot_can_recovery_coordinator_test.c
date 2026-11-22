@@ -13,6 +13,7 @@
 static uint32_t tick, can_generation, safety_generation, gap, sequence, clears; // 模拟各独立来源的代次。
 static uint8_t bus_ready = 1u, permit = 1u, final_feedback = 1u, final_remote = 1u; // 按场景改变检查结果。
 static uint8_t final_bus_ready = 1u, formal_mode; // 分别模拟最终总线状态和控制模式。
+static uint8_t final_clear_allowed = 1u; // 模拟前置条件通过后，最终安全许可仍可能拒绝清除。
 static uint32_t final_check_delay; // 模拟最终检查前反馈期限恰好到期。
 static uint32_t irq_state; // 保留调用前的中断状态。
 static uint8_t invalidate_before_final_lock; // 模拟取到应用反馈后、最终保护前的撤销。
@@ -56,7 +57,7 @@ uint8_t PlatformCanRecoveryStillReady(PlatformCanBus_t bus)
 uint8_t RobotCanRuntimeTryClearFault(uint32_t can, uint32_t safety, uint32_t now)
 {
     TEST_CHECK(irq_state == 1u && now == tick); // 清除和最后的检查处于同一保护中。
-    if (!permit || can != can_generation || safety != safety_generation) return 0u;
+    if (!final_clear_allowed || !permit || can != can_generation || safety != safety_generation) return 0u;
     ++clears;
     return 1u;
 }
@@ -207,5 +208,20 @@ int main(void)
     TEST_CHECK(!Step(&state, &remote, 1552u) && clears == 4u); // 新样本的年龄为零，仍需重新等待。
     TEST_CHECK(!Step(&state, &remote, 1553u) && !Step(&state, &remote, 1653u));
     TEST_CHECK(Step(&state, &remote, 1654u) && clears == 5u);
+
+    TEST_CHECK(RobotCanRecoveryCoordinatorInit(&state, &config, &modules));
+    TEST_CHECK(!Step(&state, &remote, 1700u) && !Step(&state, &remote, 1701u));
+    TEST_CHECK(!Step(&state, &remote, 1801u)); // 完成反馈稳定等待。
+    final_clear_allowed = 0u;
+    TEST_CHECK(!Step(&state, &remote, 1802u) && clears == 5u && irq_state == 0u); // 前置检查全通过，最终清除仍被拒绝。
+    final_clear_allowed = 1u;
+    ++sequence;
+    tick = 1803u;
+    uint8_t payload;
+    MessageFreshness_t application;
+    TEST_CHECK(MessageReadSnapshot(application_subscriber, &payload, sizeof(payload), tick, &application) == MESSAGE_OK);
+    TEST_CHECK(!RobotCanRecoveryCoordinatorStep(&state, &remote, 0u, &application) && clears == 5u); // 保持同一人工样本，不能重试原许可。
+    TEST_CHECK(!Step(&state, &remote, 1903u) && clears == 5u); // 稳定时长满足后仍等待新输入。
+    TEST_CHECK(Step(&state, &remote, 1904u) && clears == 6u); // 本轮稳定后的新输入方可清除。
     return 0;
 }

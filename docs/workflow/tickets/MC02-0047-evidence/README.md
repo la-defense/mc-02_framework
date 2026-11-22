@@ -97,3 +97,10 @@ DJI 内部反馈期限补充：使用真实电机控制代码和测试 CAN 输�
 - 单板 SP 反汇编确认，最终反馈复核和尝试清除 CAN 故障均在同一次中断保护内。
 - 隔离单板 SP、单板 V2 和受限底盘通过 ARM Debug 构建、源码与 ELF 检查。三个配置的 Flash 分别为 333472 B、340256 B、309460 B，均比 `28e1de3` 增加 64 B。主 RAM 分别为 130064 B、130800 B、119920 B，均与上一轮一致。实际总线和停止时间仍待现场测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各 851/851，普通禁热与遥控诊断通过 ARM 构建和 ELF 检查；六种正式配置按未确认的核心条件拒绝构建。
+
+## 最终清除被拒绝后重新等待
+
+- 协调器回归让总线、反馈和人工样本都通过前置检查，再由最终安全接口拒绝清除。修复前，同一人工样本可在下一轮清除故障。修复后，最终结果失败就中断稳定等待，保留已观察到的反馈与命令序号。
+- 原样本重试和稳定结束当轮均保持故障，重新等待全部反馈及之后的新输入才允许清除。协调器、恢复策略及两项真实 DJI 反馈相关用例共 4 项通过 ASan／UBSan。[恢复协调回归](../../../../tests/host/robot_can_recovery_coordinator_test.c)
+- 隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码和 ELF 检查，三份均链接恢复协调器。相对 `0793510` 的同配置，Flash 分别减少 32 B、16 B、16 B，主 RAM 均保持原值。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 859 项，普通禁热和遥控诊断通过 ARM 构建与 ELF 检查，六种正式预设仍按未确认条件拒绝构建。未连接硬件，哨兵稳定等待候选值及实际恢复、停止时延仍待确认。
