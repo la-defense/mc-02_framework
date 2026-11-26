@@ -6,6 +6,7 @@
 #include "platform_irq.h"
 #include "platform_sync.h"
 #include "bsp_log.h"
+#include "bsp_reset_recovery.h"
 #include <limits.h>
 #include <string.h>
 
@@ -18,6 +19,9 @@ static uint8_t task_healthy = 1u;
 static uint8_t enable_requested = 0u;
 static uint8_t calib_requested = 0u;
 static uint8_t estop_latched = 0u;
+static uint8_t remote_estop_dial_active; // 最后一份已接收合法帧是否仍在请求拨轮急停。
+static uint8_t remote_estop_dial_changed; // 首次变化也可能发生在 0 ms，单独记录是否有时间。
+static uint32_t remote_estop_dial_changed_ms; // 最后一次拨轮越过急停阈值的本机时刻，ms。
 static uint8_t remote_chassis_permit = 0u;
 static uint32_t remote_chassis_source_time_ms = 0u;
 static uint32_t remote_chassis_max_age_ms = 0u;
@@ -476,6 +480,8 @@ static uint8_t RobotSafetyRequestEstopLocked(Estop_Reason_e reason)
     ControlRevokeLocked(); // 已排队的旧来源在急停明确解除后也不能重新接管。
     estop_reason = reason;
     enable_requested = 0u;
+    if (reason == ESTOP_REASON_MANUAL)
+        BSP_ResetRecoverySetManualEstop(1u); // 同一保护内更新跨复位记录，避免后到的动作被旧记录覆盖。
 #if defined(CHASSIS_BOARD)
     RobotSafetyClearRemoteChassisPermitLocked(0u);
     chassis_inhibit_generation++;
@@ -497,6 +503,8 @@ void RobotSafetyInit(void)
     enable_requested = 0u;
     calib_requested = 0u;
     estop_latched = 0u;
+    remote_estop_dial_active = 0u; // 上电后由合法遥控帧提供拨轮状态。
+    remote_estop_dial_changed = 0u; // 还没有可用于核对手势的拨轮变化时间。
     remote_chassis_permit = 0u;
     remote_chassis_source_time_ms = 0u;
     remote_chassis_max_age_ms = 0u;
@@ -769,10 +777,36 @@ void EstopRequest(Estop_Reason_e reason)
                         BSP_LOG_FIELD_I32((int)reason));
 }
 
-uint8_t EstopClear(void)
+uint8_t EstopAcceptRemoteDial(uint8_t asserted)
+{
+    const uint32_t previous = RobotSafetyEnterCritical(); // 与解除急停共用同一保护。
+    asserted = asserted != 0u; // 只保存触发或释放，不依赖原始拨轮幅值。
+    if (remote_estop_dial_active != asserted)
+    {
+        remote_estop_dial_active = asserted; // 先记录当前是否允许执行解除手势。
+        remote_estop_dial_changed_ms = PlatformTimeNowMs(); // 按接收端接受这次变化的时刻开始计时。
+        remote_estop_dial_changed = 1u; // 即使变化发生在 0 ms 也参与判断。
+    }
+    const uint8_t new_latch = asserted && RobotSafetyRequestEstopLocked(ESTOP_REASON_MANUAL); // 只锁存，不在接收保护内提交日志。
+    RobotSafetyExitCritical(previous); // 保留调用者的外层接收保护。
+    return new_latch;
+}
+
+void EstopReportRemoteDialLatched(void)
+{
+    BSP_LOG_EVENT_1(EV_MODULES_SAFETY_ROBOT_SAFETY_C_04, BSP_LOG_FIELD_I32((int)ESTOP_REASON_MANUAL));
+}
+
+uint8_t EstopClearAfterDialRelease(uint32_t released_ms)
 {
     Robot_Status_e old_state;
     const uint32_t previous = RobotSafetyEnterCritical();
+    if (remote_estop_dial_active || (released_ms != 0u && remote_estop_dial_changed &&
+        (uint32_t)(PlatformTimeNowMs() - remote_estop_dial_changed_ms) < released_ms))
+    {
+        RobotSafetyExitCritical(previous); // 拒绝仍触发的拨轮，或在最近一次释放前就开始累计的旧手势。
+        return 0u;
+    }
     uint32_t blocking = ROBOT_FAULT_TASK_TIMEOUT | ROBOT_FAULT_INIT_FAILURE | ROBOT_FAULT_RESET_LOCKOUT; // 核心禁止不能由急停解除。
     if (!ControlFormalLocked()) blocking |= ROBOT_FAULT_RC_OFFLINE; // 正式自主不依赖遥控，其他模式仍要求其恢复。
     if ((fault_flags & blocking) != 0u)
@@ -790,6 +824,7 @@ uint8_t EstopClear(void)
     estop_latched = 0u;
     estop_reason = ESTOP_REASON_NONE;
     enable_requested = 0u;
+    BSP_ResetRecoverySetManualEstop(0u); // 明确解除时同步清除跨复位记录。
     old_state = robot_state;
     robot_state = ROBOT_SAFE;
     RobotSafetyExitCritical(previous);
@@ -797,6 +832,11 @@ uint8_t EstopClear(void)
     BSP_LOG_EVENT_0(EV_MODULES_SAFETY_ROBOT_SAFETY_C_05);
     RobotSafetyLogStateChange(old_state, ROBOT_SAFE);
     return 1u;
+}
+
+uint8_t EstopClear(void)
+{
+    return EstopClearAfterDialRelease(0u); // 非遥控手势调用仍须检查实时拨轮与已有核心故障。
 }
 
 uint8_t EstopIsLatched(void)

@@ -81,3 +81,9 @@ DJI 源码按单板、底盘板和云台板三种 Cortex-M7 硬浮点选项独�
 - `production_remote_estop_dial_overrides_gesture` 通过 UART 队列和 DBUS 解码提供同一帧上的拨轮急停及双开关居中。修复前，一秒到时急停虽在本轮末保持锁存，控制代次却改变，复现先解除再锁回。修复后，拨轮保持在 +301 时急停持续锁存，控制代次不再变化。拨轮回到 +300 后，居中 999 ms 仍保持急停，满 1000 ms 才回到 `ROBOT_SAFE`。[回归用例](../../../../tests/host/remote_control_test.c)
 - 10 项相关回归通过 ASan／UBSan。隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码与 ELF 检查，三种配置的 Flash 和主 RAM 均与 `da50d7d` 相同。本轮覆盖已被手势任务读取的拨轮状态，未验证两次读取间的短拨轮脉冲或现场停止时延。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 868 项，三个诊断预设通过构建和 ELF 检查。六种生产预设仍因核心配置未确认而拒绝构建。
+
+## 单帧拨轮急停与旧解除手势
+
+- `production_remote_estop_single_frame` 使用生产 UART 队列和 DBUS 解码，在命令任务读取开关后、处理手势前送入拨轮急停帧及释放帧。旧实现没有锁存这次急停。修复后，17 字节短帧不触发，接收合法帧后立即锁存。已累计满一秒的旧输入也不能解除。新的居中输入在 999 ms 时仍保持急停，满 1000 ms 后进入 `ROBOT_SAFE`。跨复位标志的替身记录提交顺序，检查锁存和有效解除各写入一次。[回归用例](../../../../tests/host/remote_control_test.c)
+- 隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码与 ELF 检查。相对 `8babb65`，三种配置的 Flash 各增加 240 B，主 RAM 分别为 119952 B、130096 B 和 130832 B，均持平。本轮未连接实车或测量物理停止时延。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 869 项，15 项相关检查通过 ASan／UBSan，三个诊断预设通过构建和 ELF 检查。六种生产预设因核心配置未确认而按预期拒绝构建。首次全量构建缺少安全模块新增依赖的主机头文件路径，补齐编译检查和对应的测试替身后通过。

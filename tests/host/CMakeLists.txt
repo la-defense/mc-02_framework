@@ -442,11 +442,13 @@ set_property(SOURCE ../../modules/can_comm/can_topic_link.c ../../application/to
 set_property(SOURCE ../../modules/master_machine/master_process.c APPEND PROPERTY
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../bsp/os")
 add_library(mc02_robot_safety_portable OBJECT ../../modules/safety/robot_safety.c)
-target_include_directories(mc02_robot_safety_portable PRIVATE ../../modules/safety ../../bsp/os ../../bsp/log)
+target_include_directories(mc02_robot_safety_portable PRIVATE ../../modules/safety ../../bsp/os ../../bsp/log
+  ../../bsp/reset_recovery) # 安全模块通过公开接口保存跨复位标志。
 target_compile_options(mc02_robot_safety_portable PRIVATE -Wall -Wextra -Werror)
 # 双板底盘路径也不得依赖厂商头或 RTOS 头。
 add_library(mc02_robot_safety_chassis_portable OBJECT ../../modules/safety/robot_safety.c)
-target_include_directories(mc02_robot_safety_chassis_portable PRIVATE ../../modules/safety ../../bsp/os ../../bsp/log)
+target_include_directories(mc02_robot_safety_chassis_portable PRIVATE ../../modules/safety ../../bsp/os ../../bsp/log
+  ../../bsp/reset_recovery) # 双板底盘采用同一接口。
 target_compile_definitions(mc02_robot_safety_chassis_portable PRIVATE CHASSIS_BOARD=1)
 target_compile_options(mc02_robot_safety_chassis_portable PRIVATE -Wall -Wextra -Werror)
 add_library(mc02_referee_ui_portable OBJECT ../../modules/referee/referee_task.c)
@@ -1348,7 +1350,7 @@ add_executable(motor_chassis_safety_test motor_feedback_filter_test.c
   ../../modules/motor/motor_feedback.c ../../modules/algorithm/controller.c
   ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c
   ../../modules/safety/robot_safety.c)
-target_include_directories(motor_chassis_safety_test BEFORE PRIVATE motor_safety_fakes motor_pid_fakes)
+target_include_directories(motor_chassis_safety_test BEFORE PRIVATE motor_safety_fakes motor_pid_fakes bsp_recovery_fakes)
 target_include_directories(motor_chassis_safety_test PRIVATE ../../modules/motor
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/safety
   ../../modules/imu ../../modules/master_machine ../../application ../../bsp/usart)
@@ -1376,7 +1378,7 @@ add_executable(motor_single_safety_test motor_feedback_filter_test.c
   ../../modules/algorithm/sample_filter.c ../../modules/algorithm/math_utils.c
   ../../modules/safety/robot_safety.c ../../modules/safety/can_recovery.c
   ../../modules/message_center/message_center.c) # 使用实际方向发布、撤销和队列发送前检查。
-target_include_directories(motor_single_safety_test BEFORE PRIVATE motor_safety_fakes motor_pid_fakes)
+target_include_directories(motor_single_safety_test BEFORE PRIVATE motor_safety_fakes motor_pid_fakes bsp_recovery_fakes)
 target_include_directories(motor_single_safety_test PRIVATE ../../modules/motor
   ../../modules/motor/DJImotor ../../modules/algorithm ../../modules/daemon ../../modules/safety
   ../../modules/remote # 协调器的人工来源定义。
@@ -1581,7 +1583,7 @@ foreach(role IN ITEMS CHASSIS_BOARD GIMBAL_BOARD)
   endif()
   add_executable(robot_can_bridge_${role_name}_test ${robot_can_bridge_test_sources})
   target_include_directories(robot_can_bridge_${role_name}_test BEFORE PRIVATE
-    can_bridge_fakes can_comm_fakes init_resource_fakes chassis_fakes)
+    can_bridge_fakes can_comm_fakes init_resource_fakes chassis_fakes bsp_recovery_fakes)
   target_include_directories(robot_can_bridge_${role_name}_test PRIVATE
     ../../application ../../application/topics ../../modules/can_comm ../../modules/message_center
     ../../modules/time_sync ../../modules/imu ../../modules/master_machine ../../modules/safety ../../bsp/board)
@@ -1798,6 +1800,7 @@ target_include_directories(remote_control_test BEFORE PRIVATE remote_fakes robot
 target_include_directories(remote_control_test PRIVATE ../../bsp/usart ../../modules/remote ../../modules/standard_cmd
   ../../modules/daemon ../../modules/safety ../../modules/imu ../../modules/master_machine ../../modules/message_center ../../application)
 target_compile_definitions(remote_control_test PRIVATE MC02_STD_CMD_ADAPTER_TEST=1) # 启用真实来源与转换联测。
+target_compile_definitions(remote_control_test PRIVATE MC02_REMOTE_CAPTURE_RESET_ESTOP=1) # 记录安全模块提交的跨复位标志。
 add_test(NAME production_remote_startup_offline COMMAND remote_control_test)
 add_test(NAME production_remote_snapshot_source_metadata COMMAND remote_control_test snapshot-metadata) # 验证数据和原始时间一致交付。
 add_test(NAME production_remote_source_selection_generation COMMAND remote_control_test source-epoch) # 短暂切换和重连必须留下代次。
@@ -1814,6 +1817,8 @@ add_test(NAME production_remote_gesture_right_switch_edge COMMAND remote_control
 set_tests_properties(production_remote_gesture_right_switch_edge PROPERTIES TIMEOUT 10)
 add_test(NAME production_remote_estop_dial_overrides_gesture COMMAND remote_control_test estop-dial-priority) # 持续触发急停时禁止开始解除手势。
 set_tests_properties(production_remote_estop_dial_overrides_gesture PROPERTIES TIMEOUT 10)
+add_test(NAME production_remote_estop_single_frame COMMAND remote_control_test estop-single-frame) # 未经命令任务读取的一帧急停仍须锁存。
+set_tests_properties(production_remote_estop_single_frame PROPERTIES TIMEOUT 10)
 add_test(NAME production_remote_keyboard_ad_mapping COMMAND remote_control_test keyboard-map)
 add_test(NAME production_remote_mouse_z_wire_bits COMMAND remote_control_test mouse-z)
 add_test(NAME production_pc_zero_heartbeat_denied COMMAND remote_control_test pc-startup)
@@ -1951,7 +1956,7 @@ add_executable(chassis_dual_topic_test chassis_task_test.c
     ../../application/chassis/chassis_kinematics.c ../../application/chassis/mecanum.c ../../application/chassis/omni.c
   ../../application/topics/robot_topics.c ${MC02_HOST_MESSAGE_CENTER_SOURCES}
   ../../modules/safety/robot_safety.c)
-target_include_directories(chassis_dual_topic_test BEFORE PRIVATE chassis_fakes)
+target_include_directories(chassis_dual_topic_test BEFORE PRIVATE chassis_fakes bsp_recovery_fakes)
 target_include_directories(chassis_dual_topic_test PRIVATE ../../application ../../application/chassis
   ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine
   ../../modules/safety ../../bsp/usart ../../bsp/os)
@@ -1970,7 +1975,7 @@ add_executable(chassis_bridge_integration_test chassis_task_test.c
   ../../modules/can_comm/can_topic_wire.c ../../modules/can_comm/can_time_sync.c
   ../../modules/time_sync/time_mapping.c ../../modules/safety/robot_safety.c platform_can_request_fake.c
   platform_can_rx_fake.c ../../bsp/board/platform_can_rx_stm32.c)
-target_include_directories(chassis_bridge_integration_test BEFORE PRIVATE chassis_fakes can_comm_fakes)
+target_include_directories(chassis_bridge_integration_test BEFORE PRIVATE chassis_fakes can_comm_fakes bsp_recovery_fakes)
 target_include_directories(chassis_bridge_integration_test PRIVATE ../../application ../../application/chassis
   ../../application/topics ../../modules ../../modules/message_center ../../modules/imu ../../modules/master_machine
   ../../modules/can_comm ../../modules/time_sync ../../modules/safety ../../bsp/usart ../../bsp/os)
@@ -2200,7 +2205,7 @@ add_executable(shoot_freshness_test shoot_freshness_test.c
   ../../application/shoot/shoot.c ../../application/topics/robot_topics.c
   ../../modules/safety/robot_safety.c # 使用真实安全管理验证发射任务的跨周期检查。
   ${MC02_HOST_MESSAGE_CENTER_SOURCES})
-target_include_directories(shoot_freshness_test BEFORE PRIVATE shoot_fakes init_resource_fakes)
+target_include_directories(shoot_freshness_test BEFORE PRIVATE shoot_fakes init_resource_fakes bsp_recovery_fakes)
 target_include_directories(shoot_freshness_test PRIVATE ../../application ../../application/shoot
   ../../modules ../../modules/message_center ../../modules/master_machine ../../modules/imu ../../modules/safety
   ../../modules/algorithm ../../modules/BMI088

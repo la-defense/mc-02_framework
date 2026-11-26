@@ -8,6 +8,11 @@
 
 #include "../../../bsp/reset_recovery/reset_recovery_policy.h"
 
+#if defined(MC02_REMOTE_CAPTURE_RESET_ESTOP)
+extern uint8_t remote_test_reset_estop_latched; // 由遥控联测读取安全模块最后一次提交的标志。
+extern uint32_t remote_test_reset_estop_writes; // 检查重复帧是否反复写入跨复位记录。
+#endif
+
 static inline void BSP_ResetRecoveryMarkFault(ResetRecoveryCause_e cause)
 {
     (void)cause;
@@ -15,7 +20,12 @@ static inline void BSP_ResetRecoveryMarkFault(ResetRecoveryCause_e cause)
 
 static inline void BSP_ResetRecoverySetManualEstop(uint8_t latched)
 {
+#if defined(MC02_REMOTE_CAPTURE_RESET_ESTOP)
+    remote_test_reset_estop_latched = latched;
+    ++remote_test_reset_estop_writes;
+#else
     (void)latched;
+#endif
 }
 
 #endif

@@ -182,6 +182,17 @@ uint8_t RobotSafetyTryClearCanFault(uint32_t expected_generation, uint32_t now_m
 /** @brief 保存急停和原因并清除使能请求；运行状态在 Update 中转为 ESTOP。
 * @param[in] reason 急停原因，重复相同原因不重复报告。 */
 void EstopRequest(Estop_Reason_e reason);
+/** @brief 提交合法遥控帧的拨轮状态，触发时立即保存人工急停。
+ * @param[in] asserted 非零表示拨轮请求急停，0 表示已释放。
+ * @return 本帧新锁存人工急停返回 1，否则返回 0。
+ * @note 在遥控帧提交保护内调用；返回 1 时，退出外层保护后调用 EstopReportRemoteDialLatched。 */
+uint8_t EstopAcceptRemoteDial(uint8_t asserted);
+/** @brief 在接收保护外记录一次由合法拨轮帧触发的人工急停。 */
+void EstopReportRemoteDialLatched(void);
+/** @brief 检查实时拨轮状态及释放后的最短等待，再按整车规则尝试解除急停。
+ * @param[in] released_ms 从最后一次拨轮释放起至少等待的毫秒数；0 表示只检查拨轮当前状态。
+ * @return 1 为已清除或原本未急停，0 为仍有禁止解除的条件。 */
+uint8_t EstopClearAfterDialRelease(uint32_t released_ms);
 /** @brief 尝试清除急停；任务超时、初始化失败和恢复额度锁定时拒绝，非正式自主还要求遥控在线。
 * @return 1 为已清除或原本未急停，0 为仍有上述故障；实际清除进入SAFE，人工模式须重新使能，正式自主重新检查比赛与核心条件。 */
 uint8_t EstopClear(void);

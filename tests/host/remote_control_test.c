@@ -30,6 +30,10 @@ static uint32_t now;
 static unsigned tick_reads_before_delay; // 测试指定在第几次取时后插入一次调度延迟。
 static uint32_t tick_after_delay; // 延迟结束后的本机时刻。
 static uint8_t *dma_buffer;
+#if defined(MC02_REMOTE_CAPTURE_RESET_ESTOP)
+uint8_t remote_test_reset_estop_latched;
+uint32_t remote_test_reset_estop_writes;
+#endif
 static RemoteControlDiagnostics_s remote_diag_snapshot;
 #define DIAG(field) (RemoteControlGetDiagnostics(&remote_diag_snapshot), remote_diag_snapshot.field)
 static RemoteControlSnapshot_s remote_input_snapshot;
@@ -276,6 +280,60 @@ int main(int argc, char **argv)
     const RC_ctrl_t *rc = RemoteControlInit(PLATFORM_UART_5);
     CHECK(rc != NULL && dma_buffer != NULL);
     CHECK(!RemoteControlIsOnline());
+    if (argc > 1 && !strcmp(argv[1], "estop-single-frame")) {
+        uint8_t frame[18];
+        uint16_t channels[5] = {1024u, 1024u, 1024u, 1024u, 1024u}; // 双杆和拨轮起初都在中位。
+        RemoteSafetyGestures_s holds;
+        RemoteSafetyGesturesInit(&holds);
+        RemoteControlSnapshot_s sample;
+        RobotSafetySetImuValid(1u);
+        RobotSafetySetCalibValid(1u);
+        encode(frame, channels, RC_SW_MID, RC_SW_MID);
+        now = 1u;
+        receive(frame, sizeof(frame)); // 先让手势任务开始累计两个开关居中。
+        RemoteControlGetSnapshot(&sample);
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        for (now = 51u; now <= 1001u; now += 50u)
+            receive(frame, sizeof(frame)); // 合法帧持续到达，手势任务尚未再次运行。
+        now = 1001u;
+        RemoteControlGetSnapshot(&sample); // 命令任务读取后被抢占，此时中位计时已满一秒。
+        channels[4] = 1325u; // 原始读数对应拨轮 +301。
+        encode(frame, channels, RC_SW_MID, RC_SW_MID);
+        receive(frame, 17u); // 短帧无效，不能提交拨轮动作。
+        CHECK(!EstopIsLatched());
+        receive(frame, sizeof(frame)); // 同一时钟刻度内收到一份合法的急停帧。
+        CHECK(EstopIsLatched() && EstopGetReason() == ESTOP_REASON_MANUAL);
+#if defined(MC02_REMOTE_CAPTURE_RESET_ESTOP)
+        CHECK(remote_test_reset_estop_latched == 1u && remote_test_reset_estop_writes == 1u); // 接收返回前同步跨复位标志。
+#endif
+        channels[4] = 1024u;
+        encode(frame, channels, RC_SW_MID, RC_SW_MID);
+        receive(frame, sizeof(frame)); // 拨轮随下一帧恢复中位，命令任务仍未恢复。
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        CHECK(EstopIsLatched()); // 被抢占前的旧居中证据不能清除新急停。
+#if defined(MC02_REMOTE_CAPTURE_RESET_ESTOP)
+        CHECK(remote_test_reset_estop_latched == 1u && remote_test_reset_estop_writes == 1u); // 旧的清除尝试不能重写记录。
+#endif
+        RemoteControlGetSnapshot(&sample);
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+
+        for (now = 1051u; now <= 1951u; now += 50u)
+            receive(frame, sizeof(frame)); // 保持开关居中且无线持续在线。
+        now = 2000u;
+        receive(frame, sizeof(frame));
+        RemoteControlGetSnapshot(&sample);
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        CHECK(EstopIsLatched()); // 新的居中保持只有 999 ms。
+        now = 2001u;
+        receive(frame, sizeof(frame));
+        RemoteControlGetSnapshot(&sample);
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        CHECK(!EstopIsLatched() && RobotSafetyGetState() == ROBOT_SAFE);
+#if defined(MC02_REMOTE_CAPTURE_RESET_ESTOP)
+        CHECK(remote_test_reset_estop_latched == 0u && remote_test_reset_estop_writes == 2u); // 仅在有效解除时清除一次。
+#endif
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "estop-dial-priority")) {
         uint8_t frame[18];
         uint16_t channels[5] = {1024u, 1024u, 1024u, 1024u, 1325u}; // 摇杆居中，拨轮原始读数对应 +301。

@@ -148,7 +148,7 @@ typedef struct
     uint32_t radio_source_time_ms; // 最近合法无线帧的原接收时刻，0也可以是有效时间。
     uint32_t radio_sequence; // 合法无线帧的本机序号，初始0；重复读取不递增。
     uint32_t source_selection_generation; // 左开关选择变化或无线断线重连时递增。
-    uint32_t gesture_switch_generation; // 任一开关变化或无线断线重连时递增，初始为 0。
+    uint32_t gesture_switch_generation; // 任一开关变化、拨轮急停触发或释放、无线重连时递增，初始为 0。
     uint32_t pc_source_time_ms; // 最近向前键鼠心跳的原接收时刻，无线重复帧不能刷新。
     uint32_t pc_sample_sequence; // 本机记录的键鼠样本号，区别于线上的16位心跳号。
 } RemoteControlSnapshot_s;

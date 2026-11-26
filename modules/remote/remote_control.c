@@ -3,6 +3,7 @@
 * UART 派发调用接收函数，Daemon 处理离线；命令任务周期读取当前输入和可用标记。
 */
 #include "remote_control.h"
+#include "remote_safety.h"
 #include "string.h"
 #include "platform_uart.h"
 #include "daemon.h"
@@ -22,7 +23,7 @@ static uint16_t pc_sequence;
 static uint8_t pc_have_sequence, pc_authorized;
 static uint32_t radio_sample_sequence; // 每份合法无线输入递增，独立于诊断累计数。
 static uint32_t source_selection_generation; // 记录来源开关变化和断线重连。
-static uint32_t gesture_switch_generation; // 记录任一开关变化和断线重连，为持续手势提供连续性依据。
+static uint32_t gesture_switch_generation; // 记录开关、拨轮急停和断线重连的变化，为持续手势提供连续性依据。
 static uint32_t pc_sample_sequence; // 只有键鼠心跳向前并接受时递增，超时不清去重历史。
 typedef struct {
     int16_t x, y; // 一次接受的鼠标相对位移。
@@ -270,11 +271,14 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
     if (!switch_is_up(candidate.rc.switch_left)) ClearMousePending(); // 即使 PC 心跳重复，切出键鼠档也要清除旧位移。
     const uint8_t source_switched = (uint8_t)(remote_control_diag.has_valid_frame != 0u &&
         controls[TEMP].rc.switch_left != candidate.rc.switch_left); // 已取得合法输入后的切档才是来源变化。
+    const uint8_t dial_asserted = (uint8_t)(candidate.rc.dial > REMOTE_ESTOP_DIAL_THRESHOLD); // 合法帧的拨轮急停不等待命令任务轮询。
+    const uint8_t log_dial = EstopAcceptRemoteDial(dial_asserted); // 同一保护内锁存急停，再公开遥控输入。
     if (remote_control_diag.has_valid_frame == 0u || source_switched)
         source_selection_generation = NextSampleSequence(source_selection_generation); // 合法来源切换即使很短也留下记录。
     if (remote_control_diag.has_valid_frame == 0u || source_switched ||
-        controls[TEMP].rc.switch_right != candidate.rc.switch_right)
-        gesture_switch_generation = NextSampleSequence(gesture_switch_generation); // 拨出再拨回也会结束上一段手势。
+        controls[TEMP].rc.switch_right != candidate.rc.switch_right ||
+        (controls[TEMP].rc.dial > REMOTE_ESTOP_DIAL_THRESHOLD) != dial_asserted)
+        gesture_switch_generation = NextSampleSequence(gesture_switch_generation); // 开关变化及拨轮触发或释放都会结束上一段手势。
     if (source_switched)
         RobotSafetyRevokeManualSource(); // 接收端先撤销旧人工许可，命令任务稍后用新来源接续。
     controls[TEMP] = candidate;
@@ -288,6 +292,8 @@ static void RemoteControlRxCallback(void *context, const USART_RxBlock_t *block)
     remote_control_diag.online = 1u;
     RobotSafetySetRcOnline(1u);
     PlatformIrqRestore(primask);
+    if (log_dial)
+        EstopReportRemoteDialLatched(); // 退出接收保护后才提交急停日志。
 }
 
 // 离线时撤销键鼠并清空摇杆，记录断开时间、请求急停，再重新准备 UART 接收。
