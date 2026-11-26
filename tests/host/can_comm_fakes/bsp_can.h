@@ -12,6 +12,7 @@ typedef struct { FDCAN_HandleTypeDef *can_handle; uint32_t tx_id, rx_id; void (*
 CANInstance *CANRegister(CAN_Init_Config_s *config);
 uint8_t CANUnregisterInstance(CANInstance *instance);
 void CANProcessTxBus(FDCAN_HandleTypeDef *handle);
+void CANProcessTxChecked(FDCAN_HandleTypeDef *handle, CAN_TxCheckStartFn_t check, void *context);
 CAN_TxSubmitStatus_t CANSubmitOneShotBatch(FDCAN_HandleTypeDef *hcan, const void *source,
                                            const CAN_TxFrame_t *frames, size_t frame_count,
                                            CAN_TxPriority_t priority, uint32_t deadline_ms,

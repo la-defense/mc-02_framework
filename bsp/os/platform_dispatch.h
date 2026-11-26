@@ -3,6 +3,7 @@
  */
 #ifndef MC02_PLATFORM_DISPATCH_H
 #define MC02_PLATFORM_DISPATCH_H
+#include "../can/can_tx.h"
 
 /** @brief 派发当前平台各 CAN 接收队列中本轮允许处理的数据。
  * @note 仅普通任务调用；全工程须保持唯一的周期接收派发者。
@@ -15,7 +16,9 @@ void PlatformDispatchCanRx(void);
 void PlatformDispatchUartRx(void);
 
 /** @brief 推进当前平台各 CAN 总线的发送队列。
+ * @param[in] check 每帧发送前的时限检查，NULL 表示不检查任务时限。
+ * @param[in,out] context 调用方传给检查函数的状态。
  * @note 仅普通任务调用；返回不代表硬件或总线完成发送。
  */
-void PlatformDispatchCanTx(void);
+void PlatformDispatchCanTx(CAN_TxCheckStartFn_t check, void *context);
 #endif

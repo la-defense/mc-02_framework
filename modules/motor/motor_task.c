@@ -98,12 +98,13 @@ static void MotorTaskStep(uint8_t compute_due, uint8_t transmit_due,
 #if MC02_FEATURE_MOTOR_CONTROL
     if (transmit_due && (check_transmit == NULL || check_transmit(context)))
     {
-        PlatformDispatchCanTx(); // 只在发送拍点推进按原期限和许可检查的队列。
+        PlatformDispatchCanTx(check_transmit, context); // 发送拍点内，每帧交给 HAL 前都复查剩余时间。
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
 #if defined(MC02_CONFIG_GENERATED)
         if (RobotBuildModuleStarted(ROBOT_MODULE_COMMUNICATION)) // 辅助通信降级后不发送桥接帧。
 #endif
-            RobotCanBridgeServiceTx();
+            if (check_transmit == NULL || check_transmit(context)) // 普通派发可能已经耗尽发送预算。
+                RobotCanBridgeServiceTx(check_transmit, context); // 桥接额外机会使用相同的最终时限检查。
 #endif
     }
 #else

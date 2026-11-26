@@ -33,10 +33,10 @@ uint8_t PlatformCanCancelRequest(uint32_t request_id)
     return CANCancelTxRequest(request_id); // 已交给硬件的帧仍不能撤回。
 }
 
-uint8_t PlatformCanProcessTxBus(PlatformCanBus_t bus)
+uint8_t PlatformCanProcessTxBus(PlatformCanBus_t bus, CAN_TxCheckStartFn_t check, void *context)
 {
     FDCAN_HandleTypeDef *handle = BoardCanResolve(bus); // 找到本板控制器。
     if (handle == NULL) return 0u; // 无绑定时不调用底层服务。
-    CANProcessTxBus(handle); // 继续只为这一总线提供一次有界推进机会。
+    CANProcessTxChecked(handle, check, context); // 桥接和普通派发共用实际提交时限检查。
     return 1u; // 已调用服务，不代表硬件完成发送。
 }

@@ -189,8 +189,10 @@ uint8_t PlatformCanCancelRequest(uint32_t request_id);
 
 /** @brief 推进指定总线最多一帧。
  * @param[in] bus 板级声明的逻辑总线。
+ * @param[in] check 每帧发送前的时限检查，NULL 表示不检查任务时限。
+ * @param[in,out] context 调用方传给检查函数的状态。
  * @return 1 为总线已绑定并已调用队列服务，0 为未绑定；不表示帧已发送。
  * @note 仅普通任务串行调用，不等待硬件空闲。
  */
-uint8_t PlatformCanProcessTxBus(PlatformCanBus_t bus);
+uint8_t PlatformCanProcessTxBus(PlatformCanBus_t bus, CAN_TxCheckStartFn_t check, void *context);
 #endif

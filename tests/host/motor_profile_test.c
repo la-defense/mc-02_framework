@@ -6,6 +6,7 @@
 #include <string.h>
 #include "motor_task.h"
 #include "profile_io.h"
+#include "bsp_can.h"
 #include "daemon.h"
 #include "usb_transport.h"
 #include "../../bsp/dwt/platform_probe.h"
@@ -26,12 +27,20 @@ uint32_t PlatformProbeStart(void) { return 0u; } // 测试不访问硬件周期�
 void PlatformProbeDone(volatile PlatformProbe_t *probe, uint32_t start) { (void)probe; (void)start; }
 void CANProcessRx(void) { record('C'); if (can_pending) --can_pending; }
 void CANProcessTx(void) { record('T'); ++can_tx_pumps; }
+void CANProcessTxChecked(FDCAN_HandleTypeDef *handle, CAN_TxCheckStartFn_t check, void *context)
+{
+    (void)handle; // 本测试只记录全总线服务和提交次数。
+    if (check == NULL || check(context)) CANProcessTx(); // 模拟进入硬件前再次检查。
+}
 void USARTProcessRx(void) { record('U'); if (uart_pending) --uart_pending; }
 USBStatus_t USBTransportProcessRx(void) { record('B'); if (usb_pending) --usb_pending; return USB_OK; }
 void DJIMotorControl(void) { record('D'); ++dji_outputs; }
 void LKMotorControl(void) { record('L'); ++lk_outputs; }
 void RobotCanBridgeService(void) { record('S'); } // 双板在 CAN 接收之后检查同步与话题。
-void RobotCanBridgeServiceTx(void) { record('X'); } // 常规 CAN 发送之后推进桥接总线。
+void RobotCanBridgeServiceTx(CAN_TxCheckStartFn_t check, void *context)
+{
+    if (check == NULL || check(context)) record('X'); // 模拟桥接额外一次真实提交。
+}
 DaemonStatus_t DaemonProcessTaskEvents(uint8_t consumer_id, uint8_t max_events, uint8_t *processed)
 {
     if (processed != NULL)
@@ -46,7 +55,18 @@ DaemonStatus_t DaemonProcessTaskEvents(uint8_t consumer_id, uint8_t max_events, 
 
 static uint8_t CheckTransmit(void *context)
 {
-    return *(const uint8_t *)context; // 测试轮次通过此值决定是否推进实际发送适配器。
+    uint8_t *allow = context; // 场景可在允许第一帧后耗尽预算。
+    if (*allow == 2u)
+    {
+        *allow = 3u; // 入口预算检查已通过。
+        return 1u;
+    }
+    if (*allow == 3u)
+    {
+        *allow = 0u; // 第一帧交给硬件前通过，之后的检查都拒绝。
+        return 1u;
+    }
+    return *allow;
 }
 
 static int CheckSplitPeriods(void)
@@ -100,6 +120,11 @@ static int CheckSplitPeriods(void)
     CHECK(MotorTaskRunScheduled(&schedule, start + 9u, CheckTransmit, &allow_transmit) == PLATFORM_PERIODIC_READY);
     CHECK(can_tx_pumps == 3u && daemon_dispatches == 6u); // 保留已执行的接收，禁止提交 CAN 队列。
     CHECK(memchr(order, 'T', order_count) == NULL && memchr(order, 'X', order_count) == NULL); // 两个硬件发送入口都须跳过。
+    order_count = 0u;
+    allow_transmit = 2u; // 第一阶段提交后耗尽预算，同轮桥接不能额外提交。
+    CHECK(MotorTaskRunScheduled(&schedule, start + 12u, CheckTransmit, &allow_transmit) == PLATFORM_PERIODIC_READY);
+    CHECK(can_tx_pumps == 4u && memchr(order, 'T', order_count) != NULL);
+    CHECK(memchr(order, 'X', order_count) == NULL);
     return 0;
 }
 

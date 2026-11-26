@@ -237,14 +237,18 @@ static void StopMotorTaskOutputs(void)
     RobotSafetyRequestDisable(); // 撤销许可；电机任务停止工作和发送。
 }
 
+typedef struct {
+    const RobotTaskCycle_t *cycle; // 当前派发任务领取的拍点。
+    TaskMonitor_FaultReason_e fault; // 首次拒绝的原因，退出全部 CAN 队列保护后再处理。
+} MotorTaskTransmitGuard_t;
+
 static uint8_t MotorTaskCheckTransmit(void *context)
 {
-    RobotTaskCycle_t *cycle = context; // 使用当前派发任务已领取的拍点。
+    MotorTaskTransmitGuard_t *guard = context; // 同一轮的各次提交共用这份检查结果。
+    if (guard->fault != TASK_MONITOR_FAULT_NONE) return 0u; // 已拒绝时，本轮不能再尝试发送。
     PlatformPeriodicTiming_t timing;
-    const TaskMonitor_FaultReason_e reason = CheckTaskCycleTiming(cycle, &timing, 1u); // 接收和计算执行后重新取时。
-    if (reason == TASK_MONITOR_FAULT_NONE) return 1u; // 本轮仍有时间开始发送。
-    StopTaskClock(cycle, reason); // 先撤销许可，再处理任务故障。
-    return 0u; // 核心故障上报若返回，仍禁止推进硬件发送队列。
+    guard->fault = CheckTaskCycleTiming(guard->cycle, &timing, 1u); // 只检查当前时间并记录故障原因。
+    return guard->fault == TASK_MONITOR_FAULT_NONE; // 保护内不撤销许可或上报。
 }
 #endif
 __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
@@ -268,13 +272,19 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
         if (!BeginTaskCycle(&cycle)) continue; // 时钟或监控失败时不运行本轮派发。
         uint32_t motor_probe = PlatformProbeStart();
 #if MC02_TASK_MOTOR_SPLIT
-        if (MotorTaskRunScheduled(&schedule, cycle.release.observed_tick,
-                                 MotorTaskCheckTransmit, &cycle) != PLATFORM_PERIODIC_READY)
+        MotorTaskTransmitGuard_t guard = {.cycle = &cycle, .fault = TASK_MONITOR_FAULT_NONE}; // 每个拍点独立记录首次拒绝。
+        const PlatformPeriodicResult_t dispatched = MotorTaskRunScheduled(&schedule, cycle.release.observed_tick,
+            MotorTaskCheckTransmit, &guard); // 完成所有已允许的提交或遇到超期返回。
+        if (guard.fault != TASK_MONITOR_FAULT_NONE)
+        {
+            StopTaskClock(&cycle, guard.fault); // 此时已退出 CAN 队列保护，立即撤销许可并上报。
+            continue; // 本轮发送被拒绝，不报告正常完成。
+        }
+        if (dispatched != PLATFORM_PERIODIC_READY)
         {
             StopTaskClock(&cycle, TASK_MONITOR_FAULT_PERIOD_CLOCK); // 两个阶段失步时撤销许可并锁存故障。
             continue; // 保留本轮进度，任务监控将发现没有完成报告。
         }
-        if (!cycle.ready) continue; // 发送前已失能时，不再报告本轮正常完成。
 #else
         MotorControlTask();
 #endif

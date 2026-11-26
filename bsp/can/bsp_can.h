@@ -332,6 +332,14 @@ void CANProcessTx(void);
  */
 void CANProcessTxBus(FDCAN_HandleTypeDef *hcan);
 
+/** @brief 推进 CAN 发送，在每帧交给 HAL 前检查当前轮次的时限。
+ * @param[in] hcan 指定控制器；NULL 表示遍历已启用的控制器。
+ * @param[in] check 发送检查；NULL 沿用无轮次检查的诊断入口。
+ * @param[in,out] context 调用方提供的检查状态。
+ * @note 检查拒绝时退出队列保护，当前帧保持待提交，本次调用不再检查其他控制器。
+ */
+void CANProcessTxChecked(FDCAN_HandleTypeDef *hcan, CAN_TxCheckStartFn_t check, void *context);
+
 /** @brief 查询请求入队、HAL接受及完成状态；读取不推进队列。
 * @param[in] request_id 非零请求编号。
 * @param[out] result 非空；找到时整体复制，参数错误或记录已回收时保持原值。

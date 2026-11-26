@@ -63,6 +63,13 @@ typedef enum
 typedef void (*CAN_TxPeriodicPrepareFn_t)(const void *source, uint32_t now_ms,
                                           uint8_t *payload, uint8_t length);
 
+/** @brief 交给硬件前检查本轮发送时限，返回 0 时停止推进本轮队列。
+ * @param[in,out] context 调用方提供的检查状态。
+ * @return 1 允许尝试提交，0 拒绝。
+ * @note 可在 CAN 队列临界区调用，只读时间或记录检查结果；退出临界区后再处理故障。
+ */
+typedef uint8_t (*CAN_TxCheckStartFn_t)(void *context);
+
 /** @brief 单次请求的异步处理状态，硬件接受与总线完成分开报告。 */
 typedef enum
 {

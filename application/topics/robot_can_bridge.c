@@ -150,9 +150,9 @@ uint8_t RobotCanBridgeGetTimeSyncState(TimeMappingState_t *output, uint32_t *upd
     return 1u;
 }
 
-void RobotCanBridgeServiceTx(void)
+void RobotCanBridgeServiceTx(CAN_TxCheckStartFn_t check, void *context)
 {
     // 额外机会只作用于当前桥接总线，避免改变其他总线每轮的提交次数。
     if (robot_link.ready && PlatformCanRxIsRegistered(&robot_link.port))
-        (void)PlatformCanProcessTxBus(robot_bridge_bus);
+        (void)PlatformCanProcessTxBus(robot_bridge_bus, check, context);
 }

@@ -895,7 +895,7 @@ static uint8_t CANTxHardwareIndex(uint32_t buffer_mask)
     return CAN_TX_INVALID_RESULT_INDEX;
 }
 
-static void CANProcessTxSelected(uint8_t selected_bus)
+static void CANProcessTxSelected(uint8_t selected_bus, CAN_TxCheckStartFn_t check, void *context)
 {
     if (__get_IPSR() != 0u || can_service_started == 0u)
         return;
@@ -937,7 +937,8 @@ static void CANProcessTxSelected(uint8_t selected_bus)
                 }
             }
         }
-        if (queue_index == CAN_TX_INVALID_RESULT_INDEX)
+        const uint8_t already_active = (uint8_t)(queue_index != CAN_TX_INVALID_RESULT_INDEX); // 记录本请求是否在本次选择之前已经开始。
+        if (!already_active)
             queue_index = CANTxSelectNextRequest(bus, now);
         if (queue_index == CAN_TX_INVALID_RESULT_INDEX)
         {
@@ -1006,6 +1007,18 @@ static void CANProcessTxSelected(uint8_t selected_bus)
         header.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
         header.MessageMarker = 0u;
 
+        if (check != NULL && !check(context)) // 准备完负载后复核时限，拒绝时尚未向 HAL 提交。
+        {
+            if (!already_active) // 未开始的请求回到等待队列，下一次仍按优先级选择。
+            {
+                queued->active = 0u; // 撤销本次选择。
+                scheduler->active_queue_index = CAN_TX_INVALID_RESULT_INDEX; // 释放这次服务占用的活动位置。
+                scheduler->results[queued->result_index].state = CAN_TX_RESULT_QUEUED; // 保留原期限及结果编号。
+            }
+            taskEXIT_CRITICAL(); // 退出后才允许调用方撤销输出和上报时序故障。
+            DWT_ProbeDone(&can_prof_tx, probe_start); // 记录本次尝试占用的时间。
+            return; // 本轮其余总线也没有发送预算。
+        }
         const HAL_StatusTypeDef hal_status = HAL_FDCAN_AddMessageToTxFifoQ(
             bus->handle, &header, (uint8_t *)frame->data);
         if (hal_status != HAL_OK)
@@ -1061,7 +1074,7 @@ static void CANProcessTxSelected(uint8_t selected_bus)
 
 void CANProcessTx(void)
 {
-    CANProcessTxSelected(CAN_TX_INVALID_RESULT_INDEX);
+    CANProcessTxSelected(CAN_TX_INVALID_RESULT_INDEX, NULL, NULL);
 }
 
 void CANProcessTxBus(FDCAN_HandleTypeDef *hcan)
@@ -1069,7 +1082,14 @@ void CANProcessTxBus(FDCAN_HandleTypeDef *hcan)
     if (hcan==NULL || __get_IPSR()!=0u) return;
     uint8_t bus_index=CANBusIndexFromHandle(hcan);
     if (bus_index==CAN_TX_INVALID_RESULT_INDEX) return;
-    CANProcessTxSelected(bus_index);
+    CANProcessTxSelected(bus_index, NULL, NULL);
+}
+
+void CANProcessTxChecked(FDCAN_HandleTypeDef *hcan, CAN_TxCheckStartFn_t check, void *context)
+{
+    const uint8_t bus_index = hcan == NULL ? CAN_TX_INVALID_RESULT_INDEX : CANBusIndexFromHandle(hcan);
+    if (hcan != NULL && bus_index == CAN_TX_INVALID_RESULT_INDEX) return; // 未知句柄不能当作全总线请求。
+    CANProcessTxSelected(bus_index, check, context); // 旧诊断入口与固定周期入口使用同一队列。
 }
 
 uint8_t CANGetTxRequestState(uint32_t request_id, CAN_TxResult_t *result)

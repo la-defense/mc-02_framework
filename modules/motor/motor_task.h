@@ -36,7 +36,9 @@ typedef struct {
 PlatformPeriodicResult_t MotorTaskScheduleInit(MotorTaskSchedule_t *schedule, const MotorTaskPeriods_t *periods,
     uint32_t dispatch_us, uint32_t quantum_us, uint32_t first_tick);
 
-/** @brief 在推进发送队列前检查当前派发轮次，返回 0 时本轮不进入发送阶段。 */
+/** @brief 检查本轮能否开始发送，返回 0 时停止推进。
+ * @note 可能在 CAN 队列保护中多次调用，只读时间或记录失败，不处理故障。
+ */
 typedef uint8_t (*MotorTaskTransmitCheck_t)(void *context);
 
 /** @brief 派发接收，执行到期的计算，检查通过后再进入发送。过期拍点不会补跑。
@@ -45,7 +47,7 @@ typedef uint8_t (*MotorTaskTransmitCheck_t)(void *context);
  * @param[in] check_transmit 发送到期时调用的检查，不可为空。
  * @param[in,out] context 传给检查函数的调用者状态，允许为空。
  * @return READY 为两个拍点均已检查，发送还需获得 check_transmit 允许。
- * @note 拍点检查失败时不访问收发或电机；发送检查拒绝时不推进 CAN 发送服务。
+ * @note 拍点检查失败时不访问收发或电机；每帧发送前均可被本轮时限检查拒绝。
  */
 PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, uint32_t now_tick,
     MotorTaskTransmitCheck_t check_transmit, void *context);

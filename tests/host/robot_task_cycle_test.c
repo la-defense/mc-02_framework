@@ -74,6 +74,8 @@ void ShootStopAndClear(void) { StopControl(TASK_MONITOR_SHOOTER); }
 #if MC02_TASK_MOTOR_SPLIT
 static uint8_t before_send_budget; // 本轮接收和计算已耗尽发送前的执行预算。
 static uint8_t before_send_deadline; // 开始较迟，发送前刚到绝对截止点。
+static uint8_t mid_send_budget; // 第一帧已提交，第二帧进入 HAL 前耗尽预算。
+static uint8_t motor_dispatch_active; // 判断故障处理是否在派发返回之后执行。
 static unsigned motor_sends;
 
 const PlatformPeriodicConfig_t *RobotGetTaskPeriod(RobotPeriodicTask_t id)
@@ -110,14 +112,23 @@ PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, ui
     TEST_CHECK(schedule != NULL && now_tick == before_send_deadline && work == 0u && waits == 2u);
     TEST_CHECK(check_transmit != NULL && context != NULL);
     ++work; // 模拟已执行接收和闭环计算。
-    if (check_transmit(context)) ++motor_sends; // 记录通过检查后才进入发送的次数。
+    motor_dispatch_active = 1u; // 模拟 CAN 服务尚未退出。
+    if (check_transmit(context))
+    {
+        ++motor_sends; // 记录先前已提交的帧。
+        if (mid_send_budget)
+            TEST_CHECK(!check_transmit(context)); // 同轮后续提交必须被拒绝。
+    }
+    motor_dispatch_active = 0u; // 故障处理可以在退出派发后执行。
     return PLATFORM_PERIODIC_READY;
 }
 
 void RobotSafetyRequestDisable(void)
 {
     TEST_CHECK(expected_monitor == TASK_MONITOR_MOTOR && timing_faults == 0u);
+    TEST_CHECK(!motor_dispatch_active); // 在 CAN 队列保护内只能记录故障，不能撤销输出或上报。
     if (before_send_budget || before_send_deadline) TEST_CHECK(motor_sends == 0u); // 耗尽时限时尚未推进发送队列。
+    if (mid_send_budget) TEST_CHECK(motor_sends == 1u);
     TEST_CHECK(waits == (finish_error ? 2u : 3u)); // 完成超期在当轮报告，漏拍在下一次等待时报告。
     ++stops; // 整车许可必须在核心故障上报前撤销。
 }
@@ -188,6 +199,12 @@ PlatformPeriodicResult_t PlatformTaskPeriodicFinish(const PlatformPeriodicClock_
         *timing = (PlatformPeriodicTiming_t){
             .work_ticks = before_send_budget ? clock->budget_ticks : before_send_deadline, // 分别正好到预算或绝对截止点。
         };
+        return PLATFORM_PERIODIC_READY;
+    }
+    if (expected_monitor == TASK_MONITOR_MOTOR && mid_send_budget)
+    {
+        TEST_CHECK(finishes == 2u && motor_sends == 1u && motor_dispatch_active); // 第二次检查在派发过程中执行。
+        *timing = (PlatformPeriodicTiming_t){.work_ticks = clock->budget_ticks}; // 已无时间启动第二帧。
         return PLATFORM_PERIODIC_READY;
     }
     TEST_CHECK(finishes == (expected_monitor == TASK_MONITOR_MOTOR ? 2u : 1u));
@@ -390,7 +407,8 @@ int main(int argc, char **argv)
 #if MC02_TASK_MOTOR_SPLIT
     before_send_budget = (uint8_t)(argc == 3 && strcmp(argv[2], "pre-send-budget") == 0);
     before_send_deadline = (uint8_t)(argc == 3 && strcmp(argv[2], "pre-send-deadline") == 0);
-    budget_error |= before_send_budget; // 验证安全报告将耗尽预算与时钟失效分开。
+    mid_send_budget = (uint8_t)(argc == 3 && strcmp(argv[2], "mid-send-budget") == 0);
+    budget_error |= (uint8_t)(before_send_budget || mid_send_budget); // 验证安全报告将耗尽预算与时钟失效分开。
     deadline_error |= before_send_deadline; // 让等待替身模拟一个刻度的迟醒。
 #endif
     TEST_CHECK(argc == 2 || (argc == 3 && (skipped_release || deadline_error ||

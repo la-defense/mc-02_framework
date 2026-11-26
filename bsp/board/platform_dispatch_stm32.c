@@ -4,6 +4,7 @@
 #include "../os/platform_dispatch.h"
 #include "bsp_can.h"
 #include "bsp_usart.h"
+#include <stddef.h>
 
 void PlatformDispatchCanRx(void)
 {
@@ -15,7 +16,7 @@ void PlatformDispatchUartRx(void)
     USARTProcessRx(); // 保留原有串口接收和错误恢复流程。
 }
 
-void PlatformDispatchCanTx(void)
+void PlatformDispatchCanTx(CAN_TxCheckStartFn_t check, void *context)
 {
-    CANProcessTx(); // 保留全部总线的原有统一发送调度。
+    CANProcessTxChecked(NULL, check, context); // 每条启用的总线都检查实际提交时刻。
 }

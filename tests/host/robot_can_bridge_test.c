@@ -64,6 +64,11 @@ uint8_t CANUnregisterInstance(CANInstance *instance)
 
 void CANProcessTxBus(FDCAN_HandleTypeDef *handle) { serviced_handle=handle; }
 
+void CANProcessTxChecked(FDCAN_HandleTypeDef *handle, CAN_TxCheckStartFn_t check, void *context)
+{
+    if (check == NULL || check(context)) CANProcessTxBus(handle); // 模拟提交前允许才能推进这一总线。
+}
+
 CAN_TxSubmitStatus_t CANSubmitInterruptibleBatch(FDCAN_HandleTypeDef *handle, const void *source,
     const CAN_TxFrame_t *input, size_t count, CAN_TxPriority_t priority,
     uint32_t deadline_ms, uint32_t *request_id)
@@ -169,13 +174,13 @@ int main(int argc, char **argv)
         TEST_CHECK(RobotCanBridgeStopStartup() == (uint8_t)!fake_filter_close_failure);
         TEST_CHECK(receive_callback == NULL); // 硬件关闭失败也不能保留软件接收回调。
         RobotCanBridgeService(); // 停止后调用服务不能重新提交数据。
-        RobotCanBridgeServiceTx();
+        RobotCanBridgeServiceTx(NULL, NULL);
         TEST_CHECK(frame_count == 0u && serviced_handle == NULL);
         TEST_CHECK(!RobotCanBridgeGetTimeSyncState(&state, &updated_ms));
         return 0;
     }
 #endif
-    RobotCanBridgeServiceTx();
+    RobotCanBridgeServiceTx(NULL, NULL);
     TEST_CHECK(serviced_handle==expected_handle);
     TEST_CHECK(!RobotCanBridgeGetTimeSyncState(&state, &updated_ms));
 

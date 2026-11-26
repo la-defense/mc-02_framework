@@ -254,6 +254,7 @@ add_test(NAME production_motor_task_skip_release COMMAND robot_chassis_cycle_tes
 add_test(NAME production_motor_task_finish_budget COMMAND robot_chassis_cycle_test motor budget-error) # 完成时超过预算立即报告，保持旧监控进度。
 add_test(NAME production_motor_task_pre_send_budget COMMAND robot_chassis_cycle_test motor pre-send-budget) # 发送前耗尽预算则停止，未提交的帧保持在软件队列。
 add_test(NAME production_motor_task_pre_send_deadline COMMAND robot_chassis_cycle_test motor pre-send-deadline) # 迟醒耗尽绝对期限也禁止发送。
+add_test(NAME production_motor_task_mid_send_budget COMMAND robot_chassis_cycle_test motor mid-send-budget) # 多次提交共用同一预算，队列保护退出后再关断。
 foreach(scenario IN ITEMS normal create missing not-started disabled)
   add_test(NAME production_chassis_task_create_${scenario} COMMAND robot_chassis_create_test chassis-${scenario})
   set_tests_properties(production_chassis_task_create_${scenario} PROPERTIES TIMEOUT 10)
@@ -261,6 +262,7 @@ endforeach()
 set_tests_properties(production_chassis_task_monitor production_chassis_task_cycle production_chassis_task_clock_failure
   production_chassis_task_tim5_cycle production_chassis_task_tim5_budget production_motor_task_timing_failure
   production_motor_task_skip_release production_motor_task_finish_budget production_motor_task_pre_send_budget production_motor_task_pre_send_deadline
+  production_motor_task_mid_send_budget
   PROPERTIES TIMEOUT 10)
 # 直接运行生成代码中的 FDCAN MSP，模拟重复初始化和跨总线退出。
 add_executable(fdcan_msp_test fdcan_msp_test.c ../../Core/Src/fdcan.c)
@@ -1204,7 +1206,7 @@ add_test(NAME production_can_full_queue_burst COMMAND lk_motor_bsp_can_test rx-b
 set_tests_properties(production_can_full_queue_burst PROPERTIES TIMEOUT 10)
 add_test(NAME production_dji_parser_full_queue_burst COMMAND lk_motor_bsp_can_test dji-rx-burst)
 set_tests_properties(production_dji_parser_full_queue_burst PROPERTIES TIMEOUT 10)
-foreach(can_tx_scenario IN ITEMS arguments-copy queue-batch-buses topic-group topic-interrupt topic-contention topic-shared topic-drain topic-sync-budget topic-absolute-deadline topic-pending topic-cancel topic-rx periodic-budget periodic-guarded-revoke expiry-cancel-wrap
+foreach(can_tx_scenario IN ITEMS arguments-copy queue-batch-buses dispatch-deadline topic-group topic-interrupt topic-contention topic-shared topic-drain topic-sync-budget topic-absolute-deadline topic-pending topic-cancel topic-rx periodic-budget periodic-guarded-revoke expiry-cancel-wrap
     retry-abort budget-large-arithmetic retry-priority)
   string(REPLACE "-" "_" can_tx_test_suffix "${can_tx_scenario}")
   add_test(NAME production_can_tx_${can_tx_test_suffix}

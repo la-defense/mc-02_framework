@@ -2370,6 +2370,33 @@ static void test_can_tx_periodic_latest_and_budget(void)
     scheduler_complete_latest(&hfdcan1);
 }
 
+static uint8_t allow_tx_before_first_accept(void *context)
+{
+    unsigned *calls = context; // 记录每次准备交给硬件前的核对。
+    ++*calls;
+    return (uint8_t)(tx_accept_count[0] == 0u); // 第一条总线的提交耗尽本轮预算。
+}
+
+static void test_can_tx_dispatch_deadline(void)
+{
+    scheduler_register(); // 注册并启动第一条总线。
+    TEST_CHECK(PlatformCanStartBus(PLATFORM_CAN_BUS_2)); // 第二条总线仅用于发送。
+    const uint8_t data = 0u; // 测试使用无动作的零负载。
+    const CAN_TxFrame_t frame = scheduler_frame(0x320u, CAN_TX_ID_STANDARD, &data, 1u);
+    uint32_t first_id = 0u, second_id = 0u;
+    TEST_CHECK(CANSubmitOneShot(&hfdcan1, NULL, &frame, CAN_TX_PRIORITY_NORMAL, 30u, &first_id) == CAN_TX_SUBMIT_ACCEPTED);
+    TEST_CHECK(CANSubmitOneShot(&hfdcan2, NULL, &frame, CAN_TX_PRIORITY_NORMAL, 30u, &second_id) == CAN_TX_SUBMIT_ACCEPTED);
+    unsigned checks = 0u;
+    CANProcessTxChecked(NULL, allow_tx_before_first_accept, &checks); // 按正式顺序检查各总线。
+    TEST_CHECK(tx_accept_count[0] == 1u && tx_accept_count[1] == 0u);
+    TEST_CHECK(checks == 2u); // 第二帧必须在自己的 HAL 调用前重新检查。
+    CAN_TxResult_t state;
+    TEST_CHECK(CANGetTxRequestState(first_id, &state) && state.state == CAN_TX_RESULT_IN_FLIGHT);
+    TEST_CHECK(CANGetTxRequestState(second_id, &state) && state.state == CAN_TX_RESULT_QUEUED && state.accepted_frames == 0u);
+    CANProcessTxBus(&hfdcan2); // 后续独立服务仍可按请求自己的期限处理。
+    TEST_CHECK(tx_accept_count[1] == 1u);
+}
+
 static void test_can_tx_expiry_cancel_and_wrap(void)
 {
     const CAN_TxBusConfig_t bus_config = {
@@ -2646,12 +2673,12 @@ static void test_platform_can_queue(void)
     // 未绑定总线不能提交，也不能改写调用者保留的请求编号。
     TEST_CHECK(PlatformCanSubmitBatch(PLATFORM_CAN_INVALID, &data, &frame, 1u,
         CAN_TX_PRIORITY_NORMAL, 50u, &id) == CAN_TX_SUBMIT_NOT_READY && id == 99u);
-    TEST_CHECK(PlatformCanProcessTxBus(PLATFORM_CAN_INVALID) == 0u);
+    TEST_CHECK(PlatformCanProcessTxBus(PLATFORM_CAN_INVALID, NULL, NULL) == 0u);
     now_us = 115000u;
     TEST_CHECK(PlatformCanSubmitBatchUntil(PLATFORM_CAN_BUS_1, &data, &frame, 1u,
         CAN_TX_PRIORITY_NORMAL, 150u, &id) == CAN_TX_SUBMIT_ACCEPTED);
     now_us = 150000u; // 到达原始截止时刻后，队列必须过期而不能发送。
-    TEST_CHECK(PlatformCanProcessTxBus(PLATFORM_CAN_BUS_1) == 1u);
+    TEST_CHECK(PlatformCanProcessTxBus(PLATFORM_CAN_BUS_1, NULL, NULL) == 1u);
     CAN_TxResult_t result;
     TEST_CHECK(PlatformCanGetRequest(id, &result) && result.state == CAN_TX_RESULT_EXPIRED);
     TEST_CHECK(tx_accept_count[0] == 0u);
@@ -3109,6 +3136,8 @@ int main(int argc, char **argv)
         test_can_tx_arguments_and_copy();
     else if (strcmp(argv[1], "tx-queue-batch-buses") == 0)
         test_can_tx_queue_batch_and_buses();
+    else if (strcmp(argv[1], "tx-dispatch-deadline") == 0)
+        test_can_tx_dispatch_deadline();
     else if (strcmp(argv[1], "tx-topic-group") == 0)
         test_can_tx_topic_group();
     else if (strcmp(argv[1], "tx-topic-interrupt") == 0)

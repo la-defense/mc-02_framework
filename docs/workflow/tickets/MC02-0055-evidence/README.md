@@ -83,3 +83,9 @@
 - 电机派发回归注入发送检查拒绝，验证 CAN 发送和桥接附加发送都不执行，已处理的接收仍保留。包含周期适配、派发和 TIM5 的 13 项通过 ASan／UBSan。[生产派发回归](../../../../tests/host/motor_profile_test.c)
 - 隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码和 ELF 检查。相对 `1764f46`，三份 Flash 增加 144 B 至 311332 B、334584 B、341384 B。主 RAM 分别保持 119952 B、130064 B、130832 B。未连接硬件，实际 CAN 提交、停车与发送开销仍待测量。已提交到硬件的帧仍使用原有处理流程。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过，WSL Debug／Release 各通过 866 项。普通禁热、遥控诊断及受限观察通过 ARM 构建与 ELF 检查。六种正式预设仍按核心配置未确认拒绝。
+
+## 每次向 CAN HAL 提交前复查派发时限
+
+- `production_can_tx_dispatch_deadline` 在真实软件队列中注入第一条总线接受后预算耗尽的场景。修复前 HAL 替身同时收到两条总线的帧。修复后第二条总线的帧留在等待队列，接受计数和原期限不变。电机任务入口另验证第二次检查拒绝，退出发送保护后才撤销许可并上报超期，不记录本轮完成。双板派发检查普通发送用完预算后跳过桥接提交。[CAN 队列回归](../../../../tests/host/lk_motor_bsp_can_test.c) · [任务入口回归](../../../../tests/host/robot_task_cycle_test.c)
+- 21 项相关用例通过 ASan／UBSan。隔离受限底盘、单板 SP／V2、双板底盘和双板云台通过 ARM Debug 构建、源码与 ELF 检查。相对 `669e057`，受限底盘和两种单板的 Flash 各增加 224 B，主 RAM 保持 119952 B、130096 B、130832 B。此次验证覆盖软件向 HAL 提交的边界。RTOS 刻度可见性、已经提交硬件的帧以及实车停车时延仍需现场测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过，WSL Debug 和 Release 各通过 871 项。三个诊断预设通过构建和 ELF 检查，六种正式预设因核心配置未确认而按预期拒绝。为新增任务回归补上 10 秒时限后，两项新用例均单独复跑通过。
