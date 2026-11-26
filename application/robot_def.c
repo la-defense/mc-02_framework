@@ -15,6 +15,7 @@
 #endif
 
 #include <math.h>
+#include <float.h>
 #include <stddef.h>
 
 static const Robot_Config_s *robot_instance;
@@ -47,6 +48,30 @@ static uint8_t IsSupportedDJIMotor(const Motor_Init_Config_s *motor, uint8_t req
 #endif
 
 #if MC02_FEATURE_CHASSIS
+#if defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+// 检查四轮分别达到允许速度时，估计出的三个底盘速度仍可用 float 表示。
+static uint8_t ChassisFeedbackFitsWheelLimit(const Chassis_Config_s *chassis, float max_wheel_rad_s)
+{
+    ChassisVelocityEstimator_t estimator; // 使用实际运行时的轮速到车体速度系数。
+#if MC02_CHASSIS_IS_OMNI
+    const ChassisKinematicsStatus_t status = OmniPrepareEstimator(&chassis->omni_geometry, &estimator); // 按全向轮各自的轮位和轮径求系数。
+#else
+    const ChassisKinematicsStatus_t status = MecanumPrepareEstimator(&chassis->mecanum_geometry, &estimator); // 按麦轮的几何中心和轮径求系数。
+#endif
+    if (status != CHASSIS_KINEMATICS_OK) return 0u; // 估速所需的系数不可用时禁止启动。
+
+    for (unsigned axis = 0u; axis < 3u; ++axis) // 分别检查前进、横移和绕上轴的速度。
+    {
+        double total_gain = 0.0; // 用 double 累加，检查后才允许交给 float 话题。
+        for (unsigned wheel = 0u; wheel < CHASSIS_WHEEL_COUNT; ++wheel) // 按固定轮序取四轮的作用。
+            total_gain += fabs(estimator.gain[axis][wheel]); // 取绝对值，覆盖四轮贡献同向相加的情况。
+        const double limit = total_gain * (double)max_wheel_rad_s; // 四轮角速度都不超过轮轴 rad/s 上限时，该方向的最大估计量。
+        if (!isfinite(limit) || limit > FLT_MAX) return 0u; // 拒绝估速结果无法表示的车型，不改变运行时的反馈判断。
+    }
+    return 1u;
+}
+#endif
+
 // 确认底盘尺寸、轮电机编号和已编译运动学模型能够共同计算有效轮速。
 static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
 {
@@ -100,6 +125,8 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
         if (!isfinite(rotor_speed_deg_s))
             return 0u; // 换算已溢出时，限速无法恢复有效轮速。
     }
+    if (!ChassisFeedbackFitsWheelLimit(chassis, max_wheel_rad_s))
+        return 0u; // 正向计算通过后，还需核对允许范围内的逆向反馈换算。
 #endif
     // 四台轮电机共用型号和总线，各自声明编号与安装方向。
     for (unsigned index = 0u; index < CHASSIS_WHEEL_COUNT; ++index)

@@ -3,6 +3,11 @@
  */
 #include "config.h"
 #include "test_check.h"
+#if MC02_CHASSIS_IS_OMNI
+#include "omni.h"
+#else
+#include "mecanum.h"
+#endif
 
 #include <float.h>
 #include <math.h>
@@ -59,8 +64,49 @@ static void set_valid_config(void)
 #endif
 }
 
-int main(void)
+static void check_velocity_feedback_range(uint8_t startup)
 {
+    const Robot_Config_s *selected = NULL;
+    set_valid_config();
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
+
+    ChassisVelocityEstimator_t estimator;
+#if MC02_CHASSIS_IS_OMNI
+    OmniGeometry_t *geometry = &test_config.chassis_param.omni_geometry; // 使用全部四轮的实际估速入口。
+    for (unsigned wheel = 0u; wheel < CHASSIS_WHEEL_COUNT; ++wheel)
+        geometry->wheels[wheel].radius_m = FLT_MAX; // 主机故障注入，轮径有限但超出可估速的范围。
+    TEST_CHECK(OmniPrepareEstimator(geometry, &estimator) == CHASSIS_KINEMATICS_OK);
+#else
+    MecanumGeometry_t *geometry = &test_config.chassis_param.mecanum_geometry; // 复用麦轮本身的估速入口。
+    geometry->radius_m = FLT_MAX; // 主机故障注入，轮径有限但超出可估速的范围。
+    TEST_CHECK(MecanumPrepareEstimator(geometry, &estimator) == CHASSIS_KINEMATICS_OK);
+#endif
+    if (startup)
+    {
+        TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS); // 配置选择在启动设备前拒绝。
+        TEST_CHECK(selected == NULL && ChassisConfigFeed() == NULL); // 失败时没有可用的旧车型选择。
+    }
+    else
+    {
+        const ChassisWheelSpeeds_t spin = {.rad_s = {-1.0f, 1.0f, -1.0f, 1.0f}}; // 四轮角速度有限，单位 rad/s。
+        ChassisTwist_t feedback = {.vx_m_s = 10.0f, .vy_m_s = 20.0f, .wz_rad_s = 30.0f}; // 模拟查询前仍保存旧结果。
+        TEST_CHECK(ChassisKinematicsEstimatePrepared(&spin, &estimator, &feedback) == CHASSIS_KINEMATICS_ARGUMENT);
+        TEST_CHECK(feedback.vx_m_s == 0.0f && feedback.vy_m_s == 0.0f && feedback.wz_rad_s == 0.0f); // 任一分量溢出便清掉整组。
+    }
+
+    set_valid_config(); // 修正几何后依然允许正常选择。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 2)
+    {
+        const uint8_t startup = (uint8_t)(strcmp(argv[1], "feedback-range-startup") == 0); // 分别执行启动和运行期检查。
+        TEST_CHECK(startup || strcmp(argv[1], "feedback-range-runtime") == 0);
+        check_velocity_feedback_range(startup);
+        return EXIT_SUCCESS;
+    }
     const Robot_Config_s *selected = NULL;
     set_valid_config();
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK);

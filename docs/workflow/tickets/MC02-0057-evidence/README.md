@@ -199,4 +199,10 @@
 - 隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码及 ELF 检查。相比 `b0bff5f`，各增加 128 B Flash 至 311476 B、334728 B、341528 B，主 RAM 仍为 119952 B、130064 B、130832 B。裁判诊断通过实际 ARM 链接，Flash 为 264944 B，主 RAM 为 121560 B。未连接硬件，实际功率模型与保守余量仍待确认。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过，WSL Debug 和 Release 各通过 866 项。普通禁热及遥控诊断通过 ARM 构建和 ELF 检查，六种正式预设仍按核心配置未确认拒绝构建。
 
+## 配置限速内的反馈浮点范围（APP-10）
+
+- 麦轮和全向轮的主机配置均使用有限但极端的轮径。旧车型入口可以接受，运行时估速却因转回 `float` 超出范围而拒绝并清零三个分量。新增启动检查用同一模型的四轮估速系数核对开通前的数值范围。两种车型现在均拒绝无效配置，常规几何仍能被选中，运行时检查继续通过回归。[车型预检与运行时回归](../../../../tests/host/robot_def_chassis_config_test.c)
+- 两种车型预检与估速、原有几何拒绝和受限底盘相关 8 项通过 ASan／UBSan。隔离受限底盘、单板 SP／V2、双板底盘和双板云台通过 ARM Debug 构建、源码与 ELF 检查。相对 `ec50240`，启用底盘的四份固件 Flash 各增加 176 B，双板云台的 Flash 保持 287856 B，五份主 RAM 均持平。未更改生产确认标记或写入实车参数。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 879 项，三个诊断预设通过构建和 ELF 检查，六种正式预设因核心配置未确认而按预期拒绝构建。
+
 见[本底盘接口](../../../../application/chassis/chassis_feedback.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

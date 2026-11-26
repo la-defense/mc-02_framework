@@ -3176,6 +3176,12 @@ target_compile_definitions(robot_def_mecanum_config_test PRIVATE MC02_PROFILE_RO
 target_link_libraries(robot_def_mecanum_config_test PRIVATE m)
 mc02_apply_format_diagnostics(robot_def_mecanum_config_test)
 add_test(NAME production_mecanum_config_rejects_invalid_geometry COMMAND robot_def_mecanum_config_test)
+foreach(stage IN ITEMS startup runtime)
+  add_test(NAME production_chassis_feedback_range_${stage} COMMAND robot_def_chassis_config_test feedback-range-${stage})
+  add_test(NAME production_mecanum_feedback_range_${stage} COMMAND robot_def_mecanum_config_test feedback-range-${stage})
+  set_tests_properties(production_chassis_feedback_range_${stage} production_mecanum_feedback_range_${stage}
+    PROPERTIES TIMEOUT 10) # 两种轮组都核对启动拒绝和运行时失效结果。
+endforeach()
 if(Python3_EXECUTABLE)
   add_test(NAME production_vehicle_build_selection
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_vehicle_selection.py)
