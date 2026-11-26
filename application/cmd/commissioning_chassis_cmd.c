@@ -132,7 +132,8 @@ void CommissioningChassisCmdTask(void)
     const uint8_t radio_fresh = (uint8_t)(remote.remote_online && remote.radio_sequence != 0u &&
         (uint32_t)(now_ms - remote.radio_source_time_ms) <= REMOTE_RADIO_LEASE_MS);
     RobotSafetySetRcOnline(radio_fresh); // 遥控离线在受限调试仍按人工急停处理。
-    RemoteSafetyGesturesUpdate(&gestures, &remote.input, radio_fresh, now_ms, 1u); // 复用现有使能、失能和急停手势。
+    // 和普通命令入口使用相同的双开关连续性检查。
+    RemoteSafetyGesturesUpdate(&gestures, &remote.input, radio_fresh, now_ms, 1u, remote.gesture_switch_generation);
 
     const uint8_t switched = (uint8_t)(source_seen && remote.source_selection_generation != source_generation);
     source_generation = remote.source_selection_generation; // 即使切出去又切回，代次仍会变化。

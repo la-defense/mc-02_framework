@@ -276,6 +276,45 @@ int main(int argc, char **argv)
     const RC_ctrl_t *rc = RemoteControlInit(PLATFORM_UART_5);
     CHECK(rc != NULL && dma_buffer != NULL);
     CHECK(!RemoteControlIsOnline());
+    if (argc > 1 && !strcmp(argv[1], "gesture-right-edge")) {
+        uint8_t frame[18];
+        const uint16_t center[5] = {1024u, 1024u, 1024u, 1024u, 1024u}; // 合法无线帧，两个摇杆居中。
+        RemoteSafetyGestures_s holds;
+        RemoteSafetyGesturesInit(&holds);
+        RobotSafetySetImuValid(1u);
+        RobotSafetySetCalibValid(1u);
+        EstopRequest(ESTOP_REASON_MANUAL); // 只用模拟手势验证急停锁存。
+
+        RemoteControlSnapshot_s sample;
+        encode(frame, center, RC_SW_MID, RC_SW_MID);
+        now = 1u;
+        receive(frame, sizeof(frame));
+        RemoteControlGetSnapshot(&sample);
+        const uint32_t left_generation = sample.source_selection_generation;
+        const uint32_t gesture_generation = sample.gesture_switch_generation; // 首次读取对应的双开关计数。
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, gesture_generation);
+        for (now = 51u; now < 951u; now += 50u) receive(frame, sizeof(frame)); // 期间无线链路持续有效。
+        encode(frame, center, RC_SW_MID, RC_SW_UP);
+        receive(frame, sizeof(frame)); // 右开关先移开，命令任务未运行。
+        now = 1000u;
+        encode(frame, center, RC_SW_MID, RC_SW_MID);
+        receive(frame, sizeof(frame)); // 同一轮命令任务读取前，右开关又拨回。
+        now = 1001u;
+        RemoteControlGetSnapshot(&sample);
+        CHECK(sample.remote_online && sample.source_selection_generation == left_generation); // 右开关不改变人工平移来源。
+        CHECK(sample.gesture_switch_generation != gesture_generation); // 两次合法变化留下记录。
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        CHECK(EstopIsLatched()); // 两次看到相同组合，仍不能把中间的断开算入一秒。
+
+        for (now = 1051u; now <= 2001u; now += 50u) receive(frame, sizeof(frame)); // 新组合持续保持一秒。
+        now = 2001u;
+        RemoteControlGetSnapshot(&sample);
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        CHECK(!EstopIsLatched());
+        RobotSafetyUpdate();
+        CHECK(RobotSafetyGetState() == ROBOT_SAFE); // 解除急停仍遵守原调试状态。
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "formal-autonomous-gap")) {
         RobotSafetySetImuValid(1u); RobotSafetySetCalibValid(1u);
         const RobotControlPolicy_t policy = {ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL, 1u, 1u, 0u};
@@ -622,29 +661,29 @@ int main(int argc, char **argv)
         const uint32_t starts[]={0,UINT32_MAX-500};
         for(unsigned i=0;i<2;++i) {
             EstopRequest(ESTOP_REASON_MANUAL); RemoteSafetyGesturesInit(&holds);
-            RemoteSafetyGesturesUpdate(&holds,&input,1,starts[i],1);
-            RemoteSafetyGesturesUpdate(&holds,&input,1,starts[i]+999u,1); CHECK(EstopIsLatched());
-            RemoteSafetyGesturesUpdate(&holds,&input,1,starts[i]+1000u,1); CHECK(!EstopIsLatched());
+            RemoteSafetyGesturesUpdate(&holds,&input,1,starts[i],1,0u); // 单元夹具直接提供每次开关读数。
+            RemoteSafetyGesturesUpdate(&holds,&input,1,starts[i]+999u,1,0u); CHECK(EstopIsLatched());
+            RemoteSafetyGesturesUpdate(&holds,&input,1,starts[i]+1000u,1,0u); CHECK(!EstopIsLatched());
             RobotSafetyUpdate(); CHECK(RobotSafetyGetState()==ROBOT_SAFE);
         }
         input.rc.switch_left=input.rc.switch_right=RC_SW_DOWN;
         RemoteSafetyGesturesInit(&holds);
         RobotSafetyRequestEnable(); /* Diagnostic must revoke even an earlier request. */
-        RemoteSafetyGesturesUpdate(&holds,&input,1,0,0);
-        RemoteSafetyGesturesUpdate(&holds,&input,1,1000,0);
+        RemoteSafetyGesturesUpdate(&holds,&input,1,0,0,0u);
+        RemoteSafetyGesturesUpdate(&holds,&input,1,1000,0,0u);
         RobotSafetyUpdate(); CHECK(!RobotSafetyIsReady());
-        RemoteSafetyGesturesUpdate(&holds,&input,1,1001,1);
-        RemoteSafetyGesturesUpdate(&holds,&input,1,2001,1); RobotSafetyUpdate(); CHECK(RobotSafetyIsReady());
+        RemoteSafetyGesturesUpdate(&holds,&input,1,1001,1,0u);
+        RemoteSafetyGesturesUpdate(&holds,&input,1,2001,1,0u); RobotSafetyUpdate(); CHECK(RobotSafetyIsReady());
         input.rc.switch_left=input.rc.switch_right=RC_SW_UP;
-        RemoteSafetyGesturesUpdate(&holds,&input,1,2100,1);
-        RemoteSafetyGesturesUpdate(&holds,&input,1,3100,1); RobotSafetyUpdate(); CHECK(!RobotSafetyIsReady());
+        RemoteSafetyGesturesUpdate(&holds,&input,1,2100,1,0u);
+        RemoteSafetyGesturesUpdate(&holds,&input,1,3100,1,0u); RobotSafetyUpdate(); CHECK(!RobotSafetyIsReady());
         EstopRequest(ESTOP_REASON_MANUAL); input.rc.switch_left=input.rc.switch_right=RC_SW_MID;
-        RemoteSafetyGesturesUpdate(&holds,&input,1,4000,1);
-        RemoteSafetyGesturesUpdate(&holds,&input,0,4500,1);
-        RemoteSafetyGesturesUpdate(&holds,&input,1,5000,1); CHECK(EstopIsLatched());
-        RemoteSafetyGesturesUpdate(&holds,&input,1,5999,1); CHECK(EstopIsLatched());
-        RemoteSafetyGesturesUpdate(&holds,&input,1,6000,1); CHECK(!EstopIsLatched());
-        input.rc.dial=301; RemoteSafetyGesturesUpdate(&holds,&input,1,6100,1); CHECK(EstopIsLatched());
+        RemoteSafetyGesturesUpdate(&holds,&input,1,4000,1,0u);
+        RemoteSafetyGesturesUpdate(&holds,&input,0,4500,1,0u);
+        RemoteSafetyGesturesUpdate(&holds,&input,1,5000,1,0u); CHECK(EstopIsLatched());
+        RemoteSafetyGesturesUpdate(&holds,&input,1,5999,1,0u); CHECK(EstopIsLatched());
+        RemoteSafetyGesturesUpdate(&holds,&input,1,6000,1,0u); CHECK(!EstopIsLatched());
+        input.rc.dial=301; RemoteSafetyGesturesUpdate(&holds,&input,1,6100,1,0u); CHECK(EstopIsLatched());
     }
     return 0;
 }

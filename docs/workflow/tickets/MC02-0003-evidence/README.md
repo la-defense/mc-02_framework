@@ -57,3 +57,9 @@ WSL Debug／Release 的遥控相关定向用例各14/14、键鼠相关各7/7通�
 - 遥控接收、输入适配、来源代次、键鼠心跳、原接收时间回绕和并发读取等 16 项回归通过 ASan／UBSan。[真实接收回归](../../../../tests/host/remote_control_test.c)
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 859 项。普通禁热和遥控诊断通过 ARM 构建与 ELF 检查，六种实际车型的正式预设仍按未确认条件拒绝。
 - 隔离受限底盘、正式单板 SP 和 V2 通过 ARM Debug 构建、源码与 ELF 检查，均链接生产 DBUS 回调。三种配置和遥控诊断的 Flash 各增加 16 B，主 RAM 均持平。本轮未连接硬件，现场接收和停止时延仍待测。
+
+## 双开关手势保持时间
+
+- `production_remote_gesture_right_switch_edge` 经 UART 队列及 DBUS 解码提交右开关移开和拨回的两帧，两帧之间不运行手势处理。旧实现提前解除急停。修复后，下一次读取看到手势计数变化才重新开始计时，满一秒后解除急停并回到 `ROBOT_SAFE`。同一用例检查左开关对应的人工来源计数保持不变。[真实接收回归](../../../../tests/host/remote_control_test.c)
+- 遥控手势、来源代次、人工许可、受限底盘和裸板诊断等 9 项 ASan／UBSan 检查通过。隔离受限底盘、单板 SP 和 V2 均通过 ARM Debug 链接及 ELF 检查。相对 `e6db46b`，三种配置的 Flash 各增加 80 B，主 RAM 分别为 119952 B、130096 B 和 130832 B，仅单板 SP 增加 32 B。隔离构建使用测试确认条件，本轮未烧录或上车。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 867 项，三个诊断预设均通过构建和 ELF 检查。未确认的生产哨兵配置仍按预期拒绝。

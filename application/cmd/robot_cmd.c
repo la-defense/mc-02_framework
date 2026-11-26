@@ -712,7 +712,7 @@ static void ApplySafeCommands(void)
 static void EmergencyHandler(uint8_t remote_online)
 {
     RemoteSafetyGesturesUpdate(&remote_gestures, remote_initialized ? &rc_data[TEMP] : NULL,
-                               remote_online, PlatformTimeNowMs(), 1u);
+                               remote_online, PlatformTimeNowMs(), 1u, remote_snapshot.gesture_switch_generation);
     RobotSafetyUpdate();
     if (!RobotSafetyIsReady()) ApplySafeCommands();
 }

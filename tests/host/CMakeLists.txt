@@ -1810,6 +1810,8 @@ add_test(NAME production_remote_complete_frame COMMAND remote_control_test lengt
 add_test(NAME production_remote_fields_and_lease COMMAND remote_control_test fields)
 add_test(NAME production_remote_queue_and_key_history COMMAND remote_control_test queue-keys)
 add_test(NAME production_remote_shared_gestures COMMAND remote_control_test gestures)
+add_test(NAME production_remote_gesture_right_switch_edge COMMAND remote_control_test gesture-right-edge) # 右开关短暂移开要重置保持时间。
+set_tests_properties(production_remote_gesture_right_switch_edge PROPERTIES TIMEOUT 10)
 add_test(NAME production_remote_keyboard_ad_mapping COMMAND remote_control_test keyboard-map)
 add_test(NAME production_remote_mouse_z_wire_bits COMMAND remote_control_test mouse-z)
 add_test(NAME production_pc_zero_heartbeat_denied COMMAND remote_control_test pc-startup)

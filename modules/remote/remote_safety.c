@@ -22,7 +22,7 @@ static uint8_t Held(RemoteHold_s *hold, uint8_t selected, uint32_t now)
 }
 
 void RemoteSafetyGesturesUpdate(RemoteSafetyGestures_s *state, const RC_ctrl_t *input,
-                               uint8_t online, uint32_t now, uint8_t allow_enable)
+                               uint8_t online, uint32_t now, uint8_t allow_enable, uint32_t switch_generation)
 {
     // 裸板诊断等场合每轮都撤销使能，不让旧请求随手势恢复。
     if (!allow_enable) RobotSafetyRequestDisable();
@@ -30,6 +30,11 @@ void RemoteSafetyGesturesUpdate(RemoteSafetyGestures_s *state, const RC_ctrl_t *
     {
         RemoteSafetyGesturesInit(state);
         return;
+    }
+    if (state->switch_generation != switch_generation) // 两次读取之间开关曾变化，或接收端经历了断线重连。
+    {
+        RemoteSafetyGesturesInit(state); // 结束旧的保持区间，当前输入可重新开始计时。
+        state->switch_generation = switch_generation; // 记住本段计时对应的开关变化计数。
     }
     // 三种组合分别累计，开关离开对应位置后取消该组合的保持时间。
     uint8_t left = input->rc.switch_left, right = input->rc.switch_right;

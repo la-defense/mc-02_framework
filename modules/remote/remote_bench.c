@@ -24,7 +24,7 @@ void RemoteBenchTask(void)
     RobotSafetySetRcOnline(online);
     // allow_enable 固定为 0，保留手势诊断过程，同时撤销使能请求。
     RemoteSafetyGesturesUpdate(&gestures, &snapshot.input,
-                               online, PlatformTimeNowMs(), 0u);
+                               online, PlatformTimeNowMs(), 0u, snapshot.gesture_switch_generation);
     // 更新状态前再次明确失能，避免其他来源留下的请求影响诊断。
     RobotSafetyRequestDisable();
     RobotSafetyUpdate();
