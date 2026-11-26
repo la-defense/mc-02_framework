@@ -75,3 +75,9 @@ DJI 源码按单板、底盘板和云台板三种 Cortex-M7 硬浮点选项独�
 - 隔离单板 SP、V2 和受限底盘通过 ARM Debug 构建、源码与 ELF 检查。Flash 分别为 333584 B、340368 B、309572 B，较 `e88f1e7` 各增加 112 B，主 RAM 均持平。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各 852/852，普通禁热和遥控诊断通过 ARM 构建和 ELF 检查。六种正式配置按未确认的核心条件拒绝构建。
 - 验证覆盖软件许可查询及待发目标的代次复核。硬件已接受报文、板上处理耗时和实车停止时间仍待现场验收。
+
+## 拨轮优先于解除急停手势
+
+- `production_remote_estop_dial_overrides_gesture` 通过 UART 队列和 DBUS 解码提供同一帧上的拨轮急停及双开关居中。修复前，一秒到时急停虽在本轮末保持锁存，控制代次却改变，复现先解除再锁回。修复后，拨轮保持在 +301 时急停持续锁存，控制代次不再变化。拨轮回到 +300 后，居中 999 ms 仍保持急停，满 1000 ms 才回到 `ROBOT_SAFE`。[回归用例](../../../../tests/host/remote_control_test.c)
+- 10 项相关回归通过 ASan／UBSan。隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码与 ELF 检查，三种配置的 Flash 和主 RAM 均与 `da50d7d` 相同。本轮覆盖已被手势任务读取的拨轮状态，未验证两次读取间的短拨轮脉冲或现场停止时延。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 868 项，三个诊断预设通过构建和 ELF 检查。六种生产预设仍因核心配置未确认而拒绝构建。

@@ -21,7 +21,7 @@ void RemoteSafetyGesturesInit(RemoteSafetyGestures_s *state);
 * @param[in] now 当前毫秒时间，同一手势连续调用须使用同一时间来源。
 * @param[in] allow_enable 非 0 才允许使能；为 0 时每次都请求失能。
 * @param[in] switch_generation 与 input 一起取得的双开关变化计数，变化时重新累计。
-* @note 组合持续一秒触发一次，继续保持会重新计时；拨轮大于 300 时立即请求人工急停。
+* @note 组合持续一秒触发一次，继续保持会重新计时。拨轮大于 300 时先请求人工急停并取消全部计时，释放后重新累计。
 */
 void RemoteSafetyGesturesUpdate(RemoteSafetyGestures_s *state, const RC_ctrl_t *input,
                                uint8_t online, uint32_t now, uint8_t allow_enable, uint32_t switch_generation);

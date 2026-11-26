@@ -31,6 +31,16 @@ void RemoteSafetyGesturesUpdate(RemoteSafetyGestures_s *state, const RC_ctrl_t *
         RemoteSafetyGesturesInit(state);
         return;
     }
+    if (input->rc.dial > 300) // 拨轮触发急停时，开关组合不能继续累计或解除急停。
+    {
+        RemoteSafetyGesturesInit(state); // 释放拨轮后再从第一次有效读取开始计时。
+        const uint8_t was_manual_estop =
+            (EstopIsLatched() != 0u && EstopGetReason() == ESTOP_REASON_MANUAL) ? 1u : 0u; // 区分保持原锁存与本轮新锁存。
+        EstopRequest(ESTOP_REASON_MANUAL); // 立即禁止输出，重复请求保持原锁存。
+        if (was_manual_estop == 0u)
+            BSP_ResetRecoverySetManualEstop(1u); // 只在新锁存时写入跨复位记录。
+        return; // 本轮不处理任何双开关手势。
+    }
     if (state->switch_generation != switch_generation) // 两次读取之间开关曾变化，或接收端经历了断线重连。
     {
         RemoteSafetyGesturesInit(state); // 结束旧的保持区间，当前输入可重新开始计时。
@@ -45,12 +55,4 @@ void RemoteSafetyGesturesUpdate(RemoteSafetyGestures_s *state, const RC_ctrl_t *
     if (Held(&state->reset, (uint8_t)(left == RC_SW_MID && right == RC_SW_MID), now) &&
         EstopIsLatched() && EstopClear())
         BSP_ResetRecoverySetManualEstop(0u);
-    if (input->rc.dial > 300)
-    {
-        const uint8_t was_manual_estop =
-            (EstopIsLatched() != 0u && EstopGetReason() == ESTOP_REASON_MANUAL) ? 1u : 0u;
-        EstopRequest(ESTOP_REASON_MANUAL);
-        if (was_manual_estop == 0u)
-            BSP_ResetRecoverySetManualEstop(1u);
-    }
 }

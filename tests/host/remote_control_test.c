@@ -276,6 +276,51 @@ int main(int argc, char **argv)
     const RC_ctrl_t *rc = RemoteControlInit(PLATFORM_UART_5);
     CHECK(rc != NULL && dma_buffer != NULL);
     CHECK(!RemoteControlIsOnline());
+    if (argc > 1 && !strcmp(argv[1], "estop-dial-priority")) {
+        uint8_t frame[18];
+        uint16_t channels[5] = {1024u, 1024u, 1024u, 1024u, 1325u}; // 摇杆居中，拨轮原始读数对应 +301。
+        RemoteSafetyGestures_s holds;
+        RemoteSafetyGesturesInit(&holds);
+        RobotSafetySetImuValid(1u);
+        RobotSafetySetCalibValid(1u);
+        RemoteControlSnapshot_s sample;
+        encode(frame, channels, RC_SW_MID, RC_SW_MID); // 双开关居中也是解除急停手势。
+        now = 1u;
+        receive(frame, sizeof(frame));
+        RemoteControlGetSnapshot(&sample);
+        CHECK(sample.remote_online && sample.input.rc.dial == 301);
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        RobotSafetySnapshot_t locked;
+        CHECK(RobotSafetyGetSnapshot(&locked) && locked.estop_latched);
+        for (now = 51u; now <= 1001u; now += 50u) {
+            receive(frame, sizeof(frame)); // 保持无线输入在线，同时维持相冲突的拨轮和开关位置。
+            RemoteControlGetSnapshot(&sample);
+            RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        }
+        RobotSafetySnapshot_t continued;
+        CHECK(RobotSafetyGetSnapshot(&continued) && continued.estop_latched);
+        CHECK(continued.control_generation == locked.control_generation); // 若暗中先解除再锁回，急停会使控制代次再次变化。
+
+        channels[4] = 1324u; // +300 刚好退出拨轮急停范围，释放拨轮本身不能解除锁存。
+        encode(frame, channels, RC_SW_MID, RC_SW_MID);
+        for (now = 1002u; now <= 1952u; now += 50u) {
+            receive(frame, sizeof(frame)); // 保持两个开关原位，重新累计有效的居中时间。
+            RemoteControlGetSnapshot(&sample);
+            RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        }
+        now = 2001u;
+        receive(frame, sizeof(frame));
+        RemoteControlGetSnapshot(&sample);
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        CHECK(EstopIsLatched()); // 释放拨轮后只过了 999 ms，急停仍须保持。
+        now = 2002u;
+        receive(frame, sizeof(frame));
+        RemoteControlGetSnapshot(&sample);
+        RemoteSafetyGesturesUpdate(&holds, &sample.input, sample.remote_online, now, 1u, sample.gesture_switch_generation);
+        CHECK(!EstopIsLatched()); // 连续保持满一秒，才允许按原规则回到 SAFE。
+        CHECK(RobotSafetyGetState() == ROBOT_SAFE);
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "gesture-right-edge")) {
         uint8_t frame[18];
         const uint16_t center[5] = {1024u, 1024u, 1024u, 1024u, 1024u}; // 合法无线帧，两个摇杆居中。

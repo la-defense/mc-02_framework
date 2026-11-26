@@ -1812,6 +1812,8 @@ add_test(NAME production_remote_queue_and_key_history COMMAND remote_control_tes
 add_test(NAME production_remote_shared_gestures COMMAND remote_control_test gestures)
 add_test(NAME production_remote_gesture_right_switch_edge COMMAND remote_control_test gesture-right-edge) # 右开关短暂移开要重置保持时间。
 set_tests_properties(production_remote_gesture_right_switch_edge PROPERTIES TIMEOUT 10)
+add_test(NAME production_remote_estop_dial_overrides_gesture COMMAND remote_control_test estop-dial-priority) # 持续触发急停时禁止开始解除手势。
+set_tests_properties(production_remote_estop_dial_overrides_gesture PROPERTIES TIMEOUT 10)
 add_test(NAME production_remote_keyboard_ad_mapping COMMAND remote_control_test keyboard-map)
 add_test(NAME production_remote_mouse_z_wire_bits COMMAND remote_control_test mouse-z)
 add_test(NAME production_pc_zero_heartbeat_denied COMMAND remote_control_test pc-startup)
