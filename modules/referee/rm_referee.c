@@ -38,9 +38,9 @@ static uint8_t referee_has_valid_frame;
 static uint8_t referee_link_active;
 static uint32_t referee_last_valid_rx_ms;
 typedef struct {
-    uint32_t recovered_ms; // 已获准后中断，再次可用时的本机处理时刻，单位 ms。
+    uint32_t recovered_ms; // 中断或下调后新条件生效的本机处理时刻，单位 ms。
     uint8_t available; // 最近一次检查是否可用。
-    uint8_t interrupted; // 是否发生过可用到不可用的变化；首次接收不算恢复。
+    uint8_t interrupted; // 是否发生过中断或下调，首次接收不算恢复。
 } RefereePowerContinuity_t;
 static RefereePowerContinuity_t referee_base_power; // 上限和供电许可，不依赖缓冲。
 static RefereePowerContinuity_t referee_buffered_power; // 需要上限、供电许可和新鲜的正缓冲能量。
@@ -362,8 +362,16 @@ static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8
     if (data == NULL || index < 0 || index >= REFEREE_COMMAND_COUNT) return 0u;
     PlatformTaskCriticalEnter();
     const uint32_t now_ms = PlatformTimeNowMs(); // 取实际提交时刻，解码期间的等待也会消耗期限。
-    if (referee_stream.reset_requested || (uint32_t)(now_ms-source_rx_ms) > REFEREE_ASSEMBLY_TIMEOUT_MS) {
+    const uint32_t source_age_ms = now_ms - source_rx_ms; // 使用接收时刻计算年龄，毫秒计数允许回绕。
+    if (referee_stream.reset_requested || source_age_ms > REFEREE_ASSEMBLY_TIMEOUT_MS) {
         PlatformTaskCriticalExit();
+        return 0u;
+    }
+    RefereeCommandSnapshot_t *entry = &referee_published.command[index]; // 和上次接收的同类报文比较。
+    const uint8_t power_source = (uint8_t)(index == REF_CMD_ROBOT_STATE || index == REF_CMD_POWER_HEAT); // 两组功率报文独立检查先后。
+    if (power_source && entry->receive_count != 0u && source_age_ms > now_ms - entry->source_rx_ms)
+    {
+        PlatformTaskCriticalExit(); // 使用同一时刻比较，迟到的旧报文不能覆盖较新的功率或刷新链路时刻。
         return 0u;
     }
     if (index == REF_CMD_INTERACTIVE) {
@@ -387,20 +395,26 @@ static uint8_t RefereePublish(int index, const RefereeCommandData_t *data, uint8
         referee_interaction.received = 1u;
         if (referee_interaction.receive_count != UINT32_MAX) ++referee_interaction.receive_count;
     }
-    RefereeCommandSnapshot_t *entry = &referee_published.command[index];
     const uint32_t link_gap_ms = source_rx_ms - referee_last_valid_rx_ms; // 以接收时刻识别重连，中间的排队不算成断线。
     const uint8_t link_gap = referee_has_valid_frame && link_gap_ms <= INT32_MAX &&
         link_gap_ms > REFEREE_LINK_TIMEOUT_MS; // 首帧或较早时间不能被误判为跨线间隔。
     RefereeExpirePowerSources(now_ms, link_gap); // 恢复时先撤销断线前的两组，只让当前同类帧更新自身。
+    const uint8_t limit_lowered = (uint8_t)(index == REF_CMD_ROBOT_STATE && referee_base_power.available &&
+        data->robot_state.chassis_power_limit_w < entry->data.robot_state.chassis_power_limit_w); // 旧条件有效，且本帧给出更低上限。
+    if (limit_lowered)
+    {
+        RefereeTrackPowerContinuity(&referee_base_power, 0u, now_ms); // 旧上限对应的普通供电条件失效。
+        RefereeTrackPowerContinuity(&referee_buffered_power, 0u, now_ms); // 依赖旧上限的待发编号也不能继续使用。
+    }
     entry->data = *data;
     entry->source_rx_ms = source_rx_ms;
     entry->wire_sequence = wire_sequence;
     if (entry->receive_count != UINT32_MAX) ++entry->receive_count;
-    if (index == REF_CMD_ROBOT_STATE || index == REF_CMD_POWER_HEAT)
+    if (power_source)
     {
-        entry->state = now_ms - source_rx_ms <= RefereeTimeoutForIndex((size_t)index) ?
+        entry->state = source_age_ms <= RefereeTimeoutForIndex((size_t)index) ?
             REFEREE_DATA_FRESH : REFEREE_DATA_EXPIRED; // 接受用于诊断的迟到帧，但它不能恢复功率资格。
-        RefereeTrackChassisPower(now_ms); // 合法帧也可能明确关闭供电或使两组额度恢复。
+        RefereeTrackChassisPower(now_ms); // 下调后的新有效条件从现在起算；失效条件继续保持禁止。
     }
     referee_last_valid_rx_ms = source_rx_ms;
     referee_has_valid_frame = 1u;

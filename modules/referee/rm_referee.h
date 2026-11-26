@@ -84,6 +84,7 @@ RefereeStatus_t RefereeGetSnapshot(RefereeSnapshot_t *output);
  * @return REFEREE_OK 或具体参数／未初始化错误。未初始化时清零输出。
  * @note 任务中使用。查询不会延长期限，两个来源也不会互相续期。
  *       新鲜的 0 W 不授予功率。新鲜的 0 J 仍可查询，同时撤销缓冲区间。
+ *       上限下调时记录新生效时刻，并废止依赖旧上限的缓冲编号。
  */
 RefereeStatus_t RefereeGetChassisPower(RefereeChassisPower_t *output);
 

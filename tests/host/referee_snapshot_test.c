@@ -118,11 +118,15 @@ static size_t make_frame(uint8_t *frame,uint16_t command,const uint8_t *payload,
     frame[length+7u]=(uint8_t)tail;frame[length+8u]=(uint8_t)(tail>>8u);return length+9u;
 }
 
-static void feed(const uint8_t *bytes,size_t length)
+static void queue_rx(const uint8_t *bytes,size_t length)
 {
     TEST_CHECK(length<=dma_capacity);
     memcpy(dma_bytes,bytes,length);
-    HAL_UARTEx_RxEventCallback(&handle,(uint16_t)length);
+    HAL_UARTEx_RxEventCallback(&handle,(uint16_t)length); // 生产 UART 回调保存当前接收时刻。
+}
+static void feed(const uint8_t *bytes,size_t length)
+{
+    queue_rx(bytes,length);
     USARTProcessRx();
 }
 static void feed_frame(uint16_t command,const uint8_t *payload,size_t length,uint8_t sequence)
@@ -638,6 +642,51 @@ static void check_chassis_power_sources(void)
         power.buffered_generation != before_depletion && power.limit_recovered_ms == 611u);
     TEST_CHECK(!RefereeBufferedPowerIsCurrent(before_depletion, 615u) &&
         RefereeBufferedPowerIsCurrent(power.buffered_generation, 615u)); // 恢复后旧帧仍不可用。
+
+    const uint32_t before_limit_drop = power.buffered_generation; // 旧目标按较高的上限取得授权。
+    set_tick(616u);
+    write_u16le(robot + 10u, 60u); // 缩减上限，许可位保持开启。
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 22u);
+    TEST_CHECK(!RefereeBufferedPowerIsCurrent(before_limit_drop, 615u)); // 尚未交给 CAN 硬件的旧编号应失效。
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit_w == 60u &&
+        power.chassis_power_enabled && power.buffer_energy_j == 50u && power.buffered_generation != 0u &&
+        power.recovered_ms == 616u && power.limit_recovered_ms == 616u);
+    const uint32_t lower_limit_generation = power.buffered_generation;
+    set_tick(618u);
+    write_u16le(robot + 10u, 65u); // 上限提高时仍允许旧的较保守授权。
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 23u);
+    TEST_CHECK(RefereeBufferedPowerIsCurrent(lower_limit_generation, 618u));
+
+    uint8_t late_frame[128];
+    write_u16le(robot + 10u, 80u); // 注入一帧原始时刻较早的较高限额。
+    size_t late_size = make_frame(late_frame, ID_game_robot_state, robot, sizeof(robot), 24u);
+    set_tick(617u);
+    queue_rx(late_frame, late_size);
+    set_tick(619u); // 派发时刻较新，不能掩盖帧的原始顺序。
+    USARTProcessRx();
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit_w == 65u &&
+        power.limit.source_rx_ms == 618u && power.limit_recovered_ms == 616u);
+
+    set_tick(620u);
+    write_u16le(buffer + 8u, 0u);
+    feed_frame(ID_power_heat_data, buffer, sizeof(buffer), 25u); // 新报文已明确缓冲耗尽。
+    write_u16le(buffer + 8u, 50u);
+    late_size = make_frame(late_frame, ID_power_heat_data, buffer, sizeof(buffer), 26u);
+    set_tick(619u);
+    queue_rx(late_frame, late_size);
+    set_tick(621u);
+    USARTProcessRx();
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.buffer_energy_j == 0u &&
+        power.buffer.source_rx_ms == 620u && power.buffered_generation == 0u); // 迟到的正能量帧不能重开资格。
+    RefereeSnapshot_t snapshot;
+    TEST_CHECK(RefereeGetSnapshot(&snapshot) == REFEREE_OK && snapshot.link_source_rx_ms == 620u); // 丢弃的旧帧不改变链路时刻。
+
+    set_tick(622u);
+    write_u16le(robot + 10u, 55u); // 缓冲不可用时，普通供电仍有独立的下调时间。
+    feed_frame(ID_game_robot_state, robot, sizeof(robot), 27u);
+    TEST_CHECK(RefereeGetChassisPower(&power) == REFEREE_OK && power.limit_w == 55u &&
+        power.limit_recovery_recorded && power.limit_recovered_ms == 622u &&
+        !power.recovery_recorded && power.buffered_generation == 0u);
 }
 
 #if defined(REFEREE_TEST_THREADS)

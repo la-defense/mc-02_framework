@@ -192,4 +192,11 @@
 - 隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码及 ELF 检查。比 `f29396b` 各增加 16 B Flash，分别为 311348 B、334600 B、341400 B。主 RAM 分别保持 119952 B、130064 B、130832 B。未连接硬件。普通供电限功率仍等待实际模型、实测数据及确认过的保守余量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 866 项。普通禁热、遥控诊断及独立运行的裁判诊断通过 ARM 构建和 ELF 检查。裁判诊断占用 Flash 264800 B、主 RAM 121560 B。六种实际车型的正式预设仍按未确认条件拒绝构建。
 
+## 裁判功率上限下调和迟到报文（R25-15）
+
+- 原实现处理仍为正值的功率下调后，旧编号还能通过发送前复核。修复后，解析同一帧时更新普通供电的生效时刻，并给仍可用的缓冲条件分配新编号。上限上调保留当前编号。缓冲耗尽时也可单独记录普通供电的下调时刻。[裁判功率回归](../../../../tests/host/referee_snapshot_test.c)
+- 生产 UART 和裁判解析回归使用较早的原始接收时间注入迟到帧，验证它既不能恢复更早的高上限或正缓冲，也不改写链路时间。裁判解析、V2 命令及底盘撤权相关 3 项通过 ASan／UBSan。
+- 隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码及 ELF 检查。相比 `b0bff5f`，各增加 128 B Flash 至 311476 B、334728 B、341528 B，主 RAM 仍为 119952 B、130064 B、130832 B。裁判诊断通过实际 ARM 链接，Flash 为 264944 B，主 RAM 为 121560 B。未连接硬件，实际功率模型与保守余量仍待确认。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 2` 通过，WSL Debug 和 Release 各通过 866 项。普通禁热及遥控诊断通过 ARM 构建和 ELF 检查，六种正式预设仍按核心配置未确认拒绝构建。
+
 见[本底盘接口](../../../../application/chassis/chassis_feedback.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

@@ -167,10 +167,10 @@ typedef struct {
     uint16_t limit_w; /**< 裁判底盘功率上限，W。 */
     uint16_t buffer_energy_j; /**< 裁判缓冲能量，J。 */
     uint8_t chassis_power_enabled; /**< 底盘供电许可位，1 表示开启。 */
-    uint8_t recovery_recorded; /**< 1 表示两组数据在一次中断后恢复，recovered_ms 可用。 */
-    uint8_t limit_recovery_recorded; /**< 1 表示上限和供电许可已从中断恢复，不依赖缓冲。 */
-    uint32_t recovered_ms; /**< 最近一次恢复的本机处理时刻，单位 ms，0 合法。 */
-    uint32_t limit_recovered_ms; /**< 0x0201 最近一次恢复的本机处理时刻，单位 ms，0 合法。 */
+    uint8_t recovery_recorded; /**< 1 表示缓冲条件在中断或下调后重新生效，recovered_ms 可用。 */
+    uint8_t limit_recovery_recorded; /**< 1 表示上限和供电许可在中断或下调后重新生效，不依赖缓冲。 */
+    uint32_t recovered_ms; /**< 两组条件最近一次重新生效的本机处理时刻，单位 ms，0 合法。 */
+    uint32_t limit_recovered_ms; /**< 0x0201 条件最近一次重新生效的本机处理时刻，单位 ms，0 合法。 */
     uint32_t buffered_generation; /**< 上限与供电许可有效且缓冲能量新鲜并大于 0 J 时的连续编号，否则为 0。 */
 } RefereeChassisPower_t;
 
