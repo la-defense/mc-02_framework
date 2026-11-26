@@ -23,8 +23,10 @@ static TaskMonitor_Id_e expected_monitor;
 static uint32_t expected_period_ms;
 static unsigned release_delays, initializations, waits, begins, work, finishes, completes, idle_reports, fault_delays;
 static unsigned fairness_delays;
+static unsigned prework_checks; // 只统计取得监控许可后、开始业务前的检查。
 static uint8_t hard_deadline; // 区分硬期限控制和普通常驻任务的完成策略。
 static uint8_t finish_error; // 注入实际工作以后才发生的计数错误。
+static TaskMonitor_FaultReason_e prework_fault; // 在监控许可和实际业务之间注入的故障。
 #if MC02_TASK_CONTROL || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
 static unsigned stops, timing_faults;
 static TaskMonitor_FaultReason_e expected_fault = TASK_MONITOR_FAULT_PERIOD_CLOCK;
@@ -55,8 +57,11 @@ uint8_t RobotBuildModuleStarted(RobotModule_t module)
 }
 static void StopControl(TaskMonitor_Id_e monitor)
 {
-    TEST_CHECK(expected_monitor == monitor && work == 1u);
-    TEST_CHECK(finish_error ? (finishes == 1u && completes == 0u) : (waits == 3u && completes == 1u));
+    TEST_CHECK(expected_monitor == monitor && work == (prework_fault == TASK_MONITOR_FAULT_NONE));
+    if (prework_fault != TASK_MONITOR_FAULT_NONE)
+        TEST_CHECK(prework_checks == 1u && finishes == 0u && completes == 0u); // 获得监控许可后拒绝启动业务。
+    else
+        TEST_CHECK(finish_error ? (finishes == 1u && completes == 0u) : (waits == 3u && completes == 1u));
     ++stops; // 时钟故障只撤销一次，下一轮仍禁止工作。
 }
 #endif
@@ -111,6 +116,7 @@ PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, ui
 {
     TEST_CHECK(schedule != NULL && now_tick == before_send_deadline && work == 0u && waits == 2u);
     TEST_CHECK(check_transmit != NULL && context != NULL);
+    TEST_CHECK(prework_fault == TASK_MONITOR_FAULT_NONE); // 启动时限已到时不准进入任何电机派发。
     ++work; // 模拟已执行接收和闭环计算。
     motor_dispatch_active = 1u; // 模拟 CAN 服务尚未退出。
     if (check_transmit(context))
@@ -142,7 +148,7 @@ void RobotSafetyRequestDisable(void)
 
 void RobotStopCommissioningCommand(void)
 {
-    TEST_CHECK(expected_monitor == TASK_MONITOR_ROBOT && work == 1u && timing_faults == 0u);
+    TEST_CHECK(expected_monitor == TASK_MONITOR_ROBOT && work == (prework_fault == TASK_MONITOR_FAULT_NONE) && timing_faults == 0u);
     ++stops; // 人工许可和旧命令必须在监控故障报告前撤销。
 }
 #endif
@@ -189,8 +195,22 @@ PlatformPeriodicResult_t PlatformTaskPeriodicInit(PlatformPeriodicClock_t *clock
 PlatformPeriodicResult_t PlatformTaskPeriodicFinish(const PlatformPeriodicClock_t *clock,
     const PlatformPeriodicRelease_t *release, PlatformPeriodicTiming_t *timing)
 {
-    TEST_CHECK(work == 1u && waits == 2u && begins == 2u);
+    TEST_CHECK(waits == 2u && begins == 2u);
     TEST_CHECK(release->scheduled_tick == 0u); // 完成检查和等待共用原定拍点。
+    if (work == 0u)
+    {
+        TEST_CHECK(hard_deadline && prework_checks == 0u); // 只有硬期限任务在投入业务前再次核对。
+        ++prework_checks;
+        if (prework_fault == TASK_MONITOR_FAULT_PERIOD_CLOCK)
+            return PLATFORM_PERIODIC_CLOCK; // 任务取得许可后发现计时不可用。
+        const uint32_t start_lag = release->observed_tick - release->scheduled_tick; // 原拍点到领取之间的时间。
+        *timing = (PlatformPeriodicTiming_t){
+            .work_ticks = prework_fault == TASK_MONITOR_FAULT_WORK_DEADLINE ? clock->budget_ticks :
+                (prework_fault == TASK_MONITOR_FAULT_PERIOD_DEADLINE ? clock->period_ticks - start_lag : 0u),
+        }; // 启动前恰好到预算或截止点，完成标志都还没有越界。
+        return PLATFORM_PERIODIC_READY;
+    }
+    TEST_CHECK(work == 1u);
     ++finishes;
 #if MC02_TASK_MOTOR_SPLIT
     if (expected_monitor == TASK_MONITOR_MOTOR && finishes == 1u)
@@ -245,7 +265,8 @@ PlatformPeriodicResult_t PlatformTaskPeriodicWait(PlatformPeriodicClock_t *clock
     if (waits == 3u) return PLATFORM_PERIODIC_CLOCK; // 模拟唤醒失败；之后不得再调用此接口。
     *release = (PlatformPeriodicRelease_t){0};
 #if defined(MC02_PROFILE_COMMISSIONING_CHASSIS) || MC02_TASK_CONTROL
-    if (waits == 2u && deadline_error) release->observed_tick = 1u; // 工作满足预算，但启动延迟使其超过完成期限。
+    if (waits == 2u && (deadline_error || prework_fault == TASK_MONITOR_FAULT_PERIOD_DEADLINE))
+        release->observed_tick = 1u; // 迟醒后仍可领取，但剩余时间比执行预算短。
 #endif
     return PLATFORM_PERIODIC_READY;
 }
@@ -300,7 +321,7 @@ TaskMonitor_Result_e TaskMonitorReportTimingFailure(TaskMonitor_Id_e id, TaskMon
     ++timing_faults;
 #elif defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
     TEST_CHECK(id == TASK_MONITOR_ROBOT && reason == expected_fault && timing_faults == 0u);
-    TEST_CHECK(stops == 1u && begins == 2u && work == 1u); // 已撤销许可，漏掉的拍没有触发工作。
+    TEST_CHECK(stops == 1u && begins == 2u && work == (prework_fault == TASK_MONITOR_FAULT_NONE)); // 撤销后不再启动业务。
     ++timing_faults;
 #else
     (void)id;
@@ -333,6 +354,7 @@ TaskMonitor_Result_e TaskMonitorSetWaiting(TaskMonitor_Id_e id, TaskMonitor_Wait
 static void RunWork(TaskMonitor_Id_e id)
 {
     TEST_CHECK(id == expected_monitor && waits == 2u && begins == 2u && work == 0u);
+    TEST_CHECK(prework_fault == TASK_MONITOR_FAULT_NONE); // 在开始前耗尽时间或失去时钟时禁止进入业务。
     ++work; // 只在第二次取得拍点且被监控许可时执行。
 }
 
@@ -404,6 +426,9 @@ int main(int argc, char **argv)
     skipped_release = (uint8_t)(argc == 3 && strcmp(argv[2], "skip-release") == 0);
     deadline_error = (uint8_t)(argc == 3 && strcmp(argv[2], "deadline-error") == 0);
     budget_error = (uint8_t)(argc == 3 && strcmp(argv[2], "budget-error") == 0);
+    if (argc == 3 && strcmp(argv[2], "pre-work-deadline") == 0) prework_fault = TASK_MONITOR_FAULT_PERIOD_DEADLINE;
+    if (argc == 3 && strcmp(argv[2], "pre-work-budget") == 0) prework_fault = TASK_MONITOR_FAULT_WORK_DEADLINE;
+    if (argc == 3 && strcmp(argv[2], "pre-work-clock") == 0) prework_fault = TASK_MONITOR_FAULT_PERIOD_CLOCK;
 #if MC02_TASK_MOTOR_SPLIT
     before_send_budget = (uint8_t)(argc == 3 && strcmp(argv[2], "pre-send-budget") == 0);
     before_send_deadline = (uint8_t)(argc == 3 && strcmp(argv[2], "pre-send-deadline") == 0);
@@ -412,10 +437,11 @@ int main(int argc, char **argv)
     deadline_error |= before_send_deadline; // 让等待替身模拟一个刻度的迟醒。
 #endif
     TEST_CHECK(argc == 2 || (argc == 3 && (skipped_release || deadline_error ||
-        strcmp(argv[2], "finish-error") == 0 || budget_error)));
+        strcmp(argv[2], "finish-error") == 0 || budget_error || prework_fault != TASK_MONITOR_FAULT_NONE)));
     finish_error = (uint8_t)(argc == 3 && !skipped_release); // 跳拍在第一轮成功完成后注入。
     if (skipped_release || deadline_error) expected_fault = TASK_MONITOR_FAULT_PERIOD_DEADLINE;
     if (budget_error) expected_fault = TASK_MONITOR_FAULT_WORK_DEADLINE; // 执行预算超期优先报告。
+    if (prework_fault != TASK_MONITOR_FAULT_NONE) expected_fault = prework_fault; // 入口场景保留实际注入的原因。
 #else
     TEST_CHECK(argc == 2 || (argc == 3 && (strcmp(argv[2], "finish-error") == 0 || strcmp(argv[2], "budget-error") == 0)));
     finish_error = (uint8_t)(argc == 3);
@@ -448,7 +474,10 @@ int main(int argc, char **argv)
         if (expected_monitor == TASK_MONITOR_MOTOR && !before_send_budget && !before_send_deadline)
             expected_finishes = 2u; // 正常进入发送时仍需在轮末再次检查。
 #endif
-        TEST_CHECK(initializations == 1u && begins == 2u && work == 1u && finishes == expected_finishes && fault_delays == 2u);
+        const unsigned expected_work = prework_fault == TASK_MONITOR_FAULT_NONE ? 1u : 0u; // 故障时业务完全未运行。
+        if (expected_work == 0u) expected_finishes = 0u; // 业务开始前拒绝，不应执行任何业务内复查或完成检查。
+        TEST_CHECK(initializations == 1u && begins == 2u && work == expected_work && finishes == expected_finishes && fault_delays == 2u);
+        TEST_CHECK(prework_checks == hard_deadline); // 每个获得监控许可的硬期限拍点先复查一次。
         TEST_CHECK(waits == (finish_error ? 2u : 3u));
         const unsigned reported = finish_error ? 0u : 1u; // 完成时钟失败时保持监控进度不变。
         TEST_CHECK(completes == reported && idle_reports == reported);

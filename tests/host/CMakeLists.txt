@@ -201,6 +201,8 @@ foreach(failure IN ITEMS finish-error skip-release deadline-error)
 endforeach()
 set_tests_properties(production_commissioning_command_wait_error production_commissioning_command_finish-error
   production_commissioning_command_skip-release production_commissioning_command_deadline-error PROPERTIES TIMEOUT 10)
+add_test(NAME production_commissioning_command_pre_work_deadline COMMAND commissioning_command_cycle_test robot pre-work-deadline)
+set_tests_properties(production_commissioning_command_pre_work_deadline PROPERTIES TIMEOUT 10)
 # 在主机替身上编译正式底盘分支，分别检查监控、创建和实际任务入口。
 add_executable(robot_chassis_monitor_test robot_monitor_plan_test.c ../../application/robot_monitor_plan.c
   ../../application/config/module_plan.c ../../bsp/os/platform_periodic.c)
@@ -255,6 +257,9 @@ add_test(NAME production_motor_task_finish_budget COMMAND robot_chassis_cycle_te
 add_test(NAME production_motor_task_pre_send_budget COMMAND robot_chassis_cycle_test motor pre-send-budget) # 发送前耗尽预算则停止，未提交的帧保持在软件队列。
 add_test(NAME production_motor_task_pre_send_deadline COMMAND robot_chassis_cycle_test motor pre-send-deadline) # 迟醒耗尽绝对期限也禁止发送。
 add_test(NAME production_motor_task_mid_send_budget COMMAND robot_chassis_cycle_test motor mid-send-budget) # 多次提交共用同一预算，队列保护退出后再关断。
+add_test(NAME production_chassis_task_pre_work_deadline COMMAND robot_chassis_cycle_test chassis pre-work-deadline) # 抢占耗尽只剩下的拍点时间。
+add_test(NAME production_chassis_task_tim5_pre_work_clock COMMAND robot_chassis_cycle_test tim5 pre-work-clock) # 领取拍点后失去计时，不运行底盘。
+add_test(NAME production_motor_task_pre_work_budget COMMAND robot_chassis_cycle_test motor pre-work-budget) # 不启动接收、计算及发送。
 foreach(scenario IN ITEMS normal create missing not-started disabled)
   add_test(NAME production_chassis_task_create_${scenario} COMMAND robot_chassis_create_test chassis-${scenario})
   set_tests_properties(production_chassis_task_create_${scenario} PROPERTIES TIMEOUT 10)
@@ -263,6 +268,7 @@ set_tests_properties(production_chassis_task_monitor production_chassis_task_cyc
   production_chassis_task_tim5_cycle production_chassis_task_tim5_budget production_motor_task_timing_failure
   production_motor_task_skip_release production_motor_task_finish_budget production_motor_task_pre_send_budget production_motor_task_pre_send_deadline
   production_motor_task_mid_send_budget
+  production_chassis_task_pre_work_deadline production_chassis_task_tim5_pre_work_clock production_motor_task_pre_work_budget
   PROPERTIES TIMEOUT 10)
 # 直接运行生成代码中的 FDCAN MSP，模拟重复初始化和跨总线退出。
 add_executable(fdcan_msp_test fdcan_msp_test.c ../../Core/Src/fdcan.c)

@@ -89,3 +89,9 @@
 - `production_can_tx_dispatch_deadline` 在真实软件队列中注入第一条总线接受后预算耗尽的场景。修复前 HAL 替身同时收到两条总线的帧。修复后第二条总线的帧留在等待队列，接受计数和原期限不变。电机任务入口另验证第二次检查拒绝，退出发送保护后才撤销许可并上报超期，不记录本轮完成。双板派发检查普通发送用完预算后跳过桥接提交。[CAN 队列回归](../../../../tests/host/lk_motor_bsp_can_test.c) · [任务入口回归](../../../../tests/host/robot_task_cycle_test.c)
 - 21 项相关用例通过 ASan／UBSan。隔离受限底盘、单板 SP／V2、双板底盘和双板云台通过 ARM Debug 构建、源码与 ELF 检查。相对 `669e057`，受限底盘和两种单板的 Flash 各增加 224 B，主 RAM 保持 119952 B、130096 B、130832 B。此次验证覆盖软件向 HAL 提交的边界。RTOS 刻度可见性、已经提交硬件的帧以及实车停车时延仍需现场测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过，WSL Debug 和 Release 各通过 871 项。三个诊断预设通过构建和 ELF 检查，六种正式预设因核心配置未确认而按预期拒绝。为新增任务回归补上 10 秒时限后，两项新用例均单独复跑通过。
+
+## 获得监控许可后复查业务开始时限
+
+- 四项生产入口回归在修复前均进入了本轮业务调用。修复后，正式底盘与受限人工命令在到达绝对截止点时停止，电机派发在执行预算用完时不启动任何业务，TIM5 底盘在计时失效时停止并释放比较通道。各失败场景均先撤销输出，再报告对应原因，完成计数没有推进。普通常驻任务保留原来的周期行为。[回归代码](../../../../tests/host/robot_task_cycle_test.c)
+- 31 项调度及任务入口用例通过 ASan／UBSan。隔离受限底盘、单板 SP／V2、双板底盘和双板云台通过 ARM Debug 构建、源码与 ELF 检查。相对 `d2fec64`，前三种 Flash 各增加 64 B，后两种各增加 48 B，主 RAM 均持平。本轮通过替身注入抢占后的计时结果，实车周期、板上抢占延迟和停车时延仍待测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 875 项，三个诊断预设通过构建和 ELF 检查，六种正式预设因核心配置未确认而按预期拒绝。
