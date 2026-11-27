@@ -3162,6 +3162,7 @@ target_include_directories(robot_def_chassis_config_test PRIVATE . ../../applica
 target_compile_definitions(robot_def_chassis_config_test PRIVATE MC02_PROFILE_ROBOT=1
   MC02_FEATURE_CHASSIS=1 MC02_FEATURE_GIMBAL=0 MC02_FEATURE_SHOOTER=0
   MC02_FEATURE_ALARM=0 MC02_FEATURE_UI=0 MC02_CHASSIS_IS_OMNI=1)
+target_compile_definitions(robot_def_chassis_config_test PRIVATE MC02_TASK_MOTOR_SPLIT=1) # 启用正式 DJI 轮组的独立计算拍点校验。
 target_link_libraries(robot_def_chassis_config_test PRIVATE m)
 mc02_apply_format_diagnostics(robot_def_chassis_config_test)
 add_test(NAME production_chassis_config_rejects_invalid_geometry COMMAND robot_def_chassis_config_test)
@@ -3174,6 +3175,7 @@ target_include_directories(robot_def_mecanum_config_test PRIVATE . ../../applica
 target_compile_definitions(robot_def_mecanum_config_test PRIVATE MC02_PROFILE_ROBOT=1
   MC02_FEATURE_CHASSIS=1 MC02_FEATURE_GIMBAL=0 MC02_FEATURE_SHOOTER=0
   MC02_FEATURE_ALARM=0 MC02_FEATURE_UI=0 MC02_CHASSIS_IS_OMNI=0)
+target_compile_definitions(robot_def_mecanum_config_test PRIVATE MC02_TASK_MOTOR_SPLIT=1) # 麦轮执行同一周期校验。
 target_link_libraries(robot_def_mecanum_config_test PRIVATE m)
 mc02_apply_format_diagnostics(robot_def_mecanum_config_test)
 add_test(NAME production_mecanum_config_rejects_invalid_geometry COMMAND robot_def_mecanum_config_test)
@@ -3189,7 +3191,7 @@ foreach(target IN ITEMS robot_can_requirements_test robot_can_requirements_disab
     robot_def_chassis_config_test robot_def_mecanum_config_test)
   target_include_directories(${target} PRIVATE ../../modules/algorithm)
 endforeach()
-foreach(check IN ITEMS mode pid)
+foreach(check IN ITEMS mode pid period)
   add_test(NAME production_chassis_config_motor_${check} COMMAND robot_def_chassis_config_test motor-${check})
   add_test(NAME production_mecanum_config_motor_${check} COMMAND robot_def_mecanum_config_test motor-${check})
   set_tests_properties(production_chassis_config_motor_${check} production_mecanum_config_motor_${check}

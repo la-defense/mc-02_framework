@@ -27,6 +27,7 @@ const Chassis_Config_s *ChassisConfigFeed(void);
 static void set_valid_config(void)
 {
     memset(&test_config, 0, sizeof(test_config));
+    test_config.motor_periods.compute_us = 2000u; // 主机使用 2 ms 作为名义计算周期。
     Chassis_Config_s *chassis = &test_config.chassis_param;
     chassis->motion_limits = (ChassisMotionLimits_s){
         .configured = 1u,
@@ -144,8 +145,35 @@ static void check_wheel_control(uint8_t check_pid)
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
 }
 
+static void check_wheel_compute_period(void)
+{
+    set_valid_config();
+    const Robot_Config_s *selected = NULL;
+    Motor_Init_Config_s *motor = &test_config.chassis_param.chassis_motor_config;
+    Motor_Controller_Init_s *pid = &motor->controller_param_init_config;
+    pid->speed_PID.DtMin_s = 0.004f; // 有效区间从 4 ms 开始，挡住了正常的 2 ms 拍点。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    TEST_CHECK(ChassisConfigFeed() == NULL);
+    pid->speed_PID.DtMin_s = 0.002f; // 刚好等于下限可以选用，未启用的电流环可留空。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
+    motor->controller_setting_init_config.close_loop_type = SPEED_AND_CURRENT_LOOP;
+    pid->current_PID = pid->speed_PID;
+    pid->current_PID.DtMin_s = MOTOR_PID_DT_MIN_S;
+    pid->current_PID.DtMax_s = 0.001f; // 电流环合法但最多接受 1 ms。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    pid->current_PID.DtMax_s = 0.002f; // 刚好等于电流环上限也可选用。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
+    test_config.motor_periods.compute_us = 0u; // 缺少计算周期时不交付车型。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "motor-period") == 0)
+    {
+        check_wheel_compute_period();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && strncmp(argv[1], "motor-", 6u) == 0)
     {
         const uint8_t check_pid = (uint8_t)(strcmp(argv[1], "motor-pid") == 0); // PID 和环组合分别执行。

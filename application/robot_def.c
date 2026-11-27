@@ -62,6 +62,25 @@ static uint8_t ChassisWheelControlIsValid(const Motor_Init_Config_s *motor)
     return setting->close_loop_type == SPEED_LOOP || PIDCheckConfig(&pid->current_PID) == PID_OK; // 串接时才检查电流环。
 }
 
+#if MC02_TASK_MOTOR_SPLIT
+// 独立电机任务按车型给出的计算拍点推进，所有启用环必须接受这一间隔。
+static uint8_t ChassisWheelComputePeriodIsValid(const Robot_Config_s *config)
+{
+    const uint32_t compute_us = config->motor_periods.compute_us; // 取计算周期，CAN 发送周期独立配置。
+    if (compute_us < MOTOR_PID_DT_MIN_US || compute_us > MOTOR_PID_DT_MAX_US)
+        return 0u; // 与电机运行时计时检查使用同一范围。
+
+    const float dt_s = (float)compute_us / 1000000.0f; // 采用运行时相同的换算，避免误拒绝边界。
+    const Motor_Init_Config_s *motor = &config->chassis_param.chassis_motor_config; // 四轮共用环参数。
+    const Motor_Controller_Init_s *pid = &motor->controller_param_init_config; // 调用前已检查启用环的参数合法性。
+    if (dt_s < pid->speed_PID.DtMin_s || dt_s > pid->speed_PID.DtMax_s)
+        return 0u; // 速度环每拍都会使用该时间间隔。
+
+    return motor->controller_setting_init_config.close_loop_type == SPEED_LOOP || // 单速度环无需读取电流环参数。
+        (dt_s >= pid->current_PID.DtMin_s && dt_s <= pid->current_PID.DtMax_s); // 两环串接时共享同一计算间隔。
+}
+#endif
+
 // 检查四轮分别达到允许速度时，估计出的三个底盘速度仍可用 float 表示。
 static uint8_t ChassisFeedbackFitsWheelLimit(const Chassis_Config_s *chassis, float max_wheel_rad_s)
 {
@@ -223,6 +242,10 @@ static uint8_t RobotConfigParametersAreValid(const Robot_Config_s *config)
 #if MC02_FEATURE_CHASSIS
     if (!ChassisConfigIsValid(&config->chassis_param))
         return 0u;
+#if MC02_TASK_MOTOR_SPLIT
+    if (!ChassisWheelComputePeriodIsValid(config))
+        return 0u; // 上电前拒绝名义计算周期与任一启用环不匹配的轮组。
+#endif
 #endif
 #if MC02_FEATURE_GIMBAL
     if (!GimbalConfigIsValid(&config->gimbal_param))

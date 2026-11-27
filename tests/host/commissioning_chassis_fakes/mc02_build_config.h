@@ -7,3 +7,5 @@
 #define MC02_FEATURE_GIMBAL 0 // 受限底盘不读取云台参数。
 #define MC02_FEATURE_SHOOTER 0 // 受限底盘不读取发射参数。
 #define MC02_CHASSIS_IS_OMNI 1 // 哨兵使用四轮全向轮模型。
+#define MC02_FEATURE_MOTOR_CONTROL 1 // 编入受限轮组的电机控制。
+#define MC02_SELECTED_DRIVER_DJI 1 // 单一 DJI 驱动启用独立计算和发送拍点。

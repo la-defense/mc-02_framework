@@ -118,8 +118,12 @@ static void CheckVehicleSelection(const RobotManualInputConfig_s *valid_input)
         chassis->wheel_motors[i] = (ChassisWheelMotorConfig_t){(uint8_t)(i + 1u), MOTOR_AXIS_DIRECTION_NORMAL}; // 四个编号互异。
 
     const Robot_Config_s *selected = NULL;
+    vehicle.motor_periods.compute_us = 2000u; // 主机受限轮组的计算周期为 2 ms。
     vehicle.manual_input = *valid_input;
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &vehicle);
+    chassis->chassis_motor_config.controller_param_init_config.speed_PID.DtMax_s = 0.001f; // 名义 2 ms 超过速度环允许的 1 ms。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    chassis->chassis_motor_config.controller_param_init_config.speed_PID.DtMax_s = 0.002f; // 恢复至允许边界，后续继续核对人工输入。
     chassis->chassis_motor_config.controller_setting_init_config.outer_loop_type = ANGLE_LOOP; // 受限调试也不能用速度命令驱动位置环。
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
     chassis->chassis_motor_config.controller_setting_init_config.outer_loop_type = SPEED_LOOP; // 恢复后继续独立核对人工输入。

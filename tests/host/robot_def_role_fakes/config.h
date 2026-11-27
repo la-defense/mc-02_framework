@@ -51,6 +51,7 @@ typedef struct RobotAlarmConfig RobotAlarmConfig_t;
 typedef struct RefereeUIConfig RefereeUIConfig_t;
 typedef struct {
     Chassis_Config_s chassis_param;
+    struct { uint32_t compute_us; } motor_periods; // 车型预检读取电机计算周期，单位 μs。
     Gimbal_Config_s gimbal_param;
     Shoot_Config_s shoot_param;
     struct { PlatformCanBus_t can_bus; } can_bridge; // 双板 CAN 需求测试使用的逻辑总线。

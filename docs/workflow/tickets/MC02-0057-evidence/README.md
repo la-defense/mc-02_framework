@@ -211,4 +211,10 @@
 - 21 项主机车型、轮组、PID 及 CAN 需求回归通过 ASan／UBSan。隔离受限底盘、单板 SP／V2、双板底盘与双板云台均通过 ARM Debug 构建、源码和 ELF 检查。相对 `233f3c4`，五份 Flash 分别增加 96 B、96 B、96 B、112 B、16 B，主 RAM 均持平。未写入实车参数，未测量实车 PID 表现。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 883 项，三个诊断预设通过构建和 ELF 检查。六种正式预设因核心配置未确认而按预期拒绝构建。
 
+## 车型预检核对轮组计算周期（APP-10）
+
+- 麦轮、全向轮与受限底盘在旧版本均接受了 PID 时间范围与计算周期不匹配的配置。预检现已拒绝名义周期超出速度环或已启用电流环时间范围的轮组，接受等于上下限的周期。未启用的环可留空。9 项车型、受限调试与电机串级回归通过 ASan／UBSan。[车型回归](../../../../tests/host/robot_def_chassis_config_test.c) · [受限底盘回归](../../../../tests/host/commissioning_chassis_cmd_test.c)
+- 隔离受限底盘、单板 SP／V2、双板底盘和双板云台的 ARM Debug 构建、源码和 ELF 检查通过。相比 `37165e9`，受限底盘 Flash 增加 160 B，两种单板和双板底盘各增加 144 B，双板云台持平。五份固件的主 RAM 持平。本轮未进行实车测量。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 885 项，三个诊断预设均通过固件构建和 ELF 检查。
+
 见[本底盘接口](../../../../application/chassis/chassis_feedback.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。
