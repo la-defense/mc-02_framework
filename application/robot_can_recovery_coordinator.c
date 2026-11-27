@@ -9,6 +9,7 @@
 #include "platform_can.h"
 #include "platform_irq.h"
 #include "platform_sync.h"
+#include "../modules/standard_cmd/std_cmd_remote.h" // 读取已声明人工映射的期限。
 #include <stddef.h>
 
 static RobotCanRecoveryCoordinator_t command_recovery; // 唯一命令任务的固定恢复存储。
@@ -30,6 +31,20 @@ uint8_t RobotCanRecoveryCoordinatorInit(RobotCanRecoveryCoordinator_t *state,
         .stable_ms = config->can_recovery.feedback_stable_ms, // 使用车型确认的毫秒值。
     };
     if (!CanRecoveryTimedInit(&candidate.timing, &timing)) return 0u; // 时间或反馈位无效时不交付。
+    candidate.radio_command_max_age_ms = REMOTE_RADIO_LEASE_MS; // 兼容没有配置映射的旧人工入口。
+    candidate.keyboard_command_max_age_ms = REMOTE_PC_LEASE_MS; // 键鼠协议使用独立期限。
+    const StdCmdRemoteMap_t *map = config->manual_input.map; // 车型可缩短每种人工输入的使用时间。
+    if (map != NULL)
+    {
+        const uint32_t radio_age = map->remote_map.max_age_ms; // 摇杆原始帧的车型期限，单位 ms。
+        const uint32_t keyboard_age = map->keyboard_map.max_age_ms; // 键鼠心跳的车型期限，单位 ms。
+        if (radio_age == 0u || radio_age > INT32_MAX || keyboard_age == 0u || keyboard_age > INT32_MAX)
+            return 0u; // 配置了映射就必须明确合法期限，不沿用较宽的协议期限。
+        if (radio_age < candidate.radio_command_max_age_ms)
+            candidate.radio_command_max_age_ms = radio_age; // 车型仅可缩短协议期限。
+        if (keyboard_age < candidate.keyboard_command_max_age_ms)
+            candidate.keyboard_command_max_age_ms = keyboard_age; // 无线在线要求仍由协议单独检查。
+    }
     candidate.require_gimbal_feedback = (modules->enabled & ROBOT_MODULE_BIT(ROBOT_MODULE_GIMBAL)) != 0u; // 纯底盘车型只检查已有核心来源。
     candidate.enabled = 1u; // 完整配置通过后才允许运行检查。
     *state = candidate; // 一次交付完整上下文。
@@ -38,7 +53,7 @@ uint8_t RobotCanRecoveryCoordinatorInit(RobotCanRecoveryCoordinator_t *state,
 
 // 将本轮人工来源及其原始时间送入恢复检查，来源切换代次独立保留。
 static void SelectManualSource(CanRecoveryTimedInput_t *input, const RemoteControlSnapshot_s *remote,
-                               uint8_t keyboard_allowed)
+                               const RobotCanRecoveryCoordinator_t *state, uint8_t keyboard_allowed)
 {
     input->command_source_epoch = remote->source_selection_generation; // 短暂切换也要求重新等待。
     if (!remote->remote_online || remote->radio_sequence == 0u ||
@@ -48,14 +63,14 @@ static void SelectManualSource(CanRecoveryTimedInput_t *input, const RemoteContr
         input->command_source_id = 1u; // 遥控摇杆使用无线帧的独立序号。
         input->core.command_sequence = remote->radio_sequence; // 重复读取不会生成新命令。
         input->command_source_ms = remote->radio_source_time_ms; // 保留原始接收时刻。
-        input->command_max_age_ms = REMOTE_RADIO_LEASE_MS; // 不因重试而续期。
+        input->command_max_age_ms = state->radio_command_max_age_ms; // 使用车型和无线协议中较短的期限。
     }
     else if (keyboard_allowed && switch_is_up(remote->input.rc.switch_left) && remote->pc_valid)
     {
         input->command_source_id = 2u; // 键鼠来源与遥控摇杆分别比较。
         input->core.command_sequence = remote->pc_sample_sequence; // 键鼠心跳必须向前推进。
         input->command_source_ms = remote->pc_source_time_ms; // 保留键鼠自己的原始时刻。
-        input->command_max_age_ms = REMOTE_PC_LEASE_MS; // 使用键鼠独立期限。
+        input->command_max_age_ms = state->keyboard_command_max_age_ms; // 使用车型和键鼠协议中较短的期限。
     }
 }
 
@@ -123,7 +138,7 @@ uint8_t RobotCanRecoveryCoordinatorStep(RobotCanRecoveryCoordinator_t *state,
         state->feedback_gap_seen = 1u; // 后续即使回到健康状态也能识别曾发生的间断。
         input.core.inhibit_generation = state->inhibit_generation; // 交给状态机撤销旧的稳定时间。
     }
-    SelectManualSource(&input, remote, keyboard_allowed); // 只选当前合法人工来源。
+    SelectManualSource(&input, remote, state, keyboard_allowed); // 只选当前合法人工来源。
     if (!CanRecoveryTimedStep(&state->timing, &input)) return 0u; // 先等新反馈、稳定时间和新命令。
     const PlatformIrqState_t irq = PlatformIrqSaveAndDisable(); // 防止最终检查之间插入可屏蔽中断。
     uint8_t buses_ready = 1u; // 逐条复核此前识别的核心总线。
@@ -135,15 +150,17 @@ uint8_t RobotCanRecoveryCoordinatorStep(RobotCanRecoveryCoordinator_t *state,
     const uint8_t application_current = (uint8_t)(!state->require_gimbal_feedback ||
         GimbalFeedbackIsCurrent(application_feedback, now)); // 原期限和发布区间都必须保持有效。
     const uint8_t motors_current = DJIMotorRecoveryStillValid(&state->feedback, registered_mask, now); // 复核当前反馈、间断和设备身份。
-    const uint8_t remote_current = RemoteControlRecoveryStillValid(remote, now); // 复核本次人工来源及其期限。
+    const uint32_t clear_ms = PlatformTimeNowMs(); // 人工输入的期限以各路反馈检查结束后的时刻为准。
+    const uint8_t remote_current = (uint8_t)((uint32_t)(clear_ms - input.command_source_ms) <= input.command_max_age_ms &&
+        RemoteControlRecoveryStillValid(remote, clear_ms)); // 同时复核原帧身份、协议在线状态及车型期限。
     uint8_t cleared = 0u; // 检查失败默认保持故障。
     if (buses_ready && application_current && motors_current && remote_current)
-        cleared = RobotCanRuntimeTryClearFault(bus.fault_generation, safety.control_generation, now); // 最终原子复核故障代次和整车资格。
+        cleared = RobotCanRuntimeTryClearFault(bus.fault_generation, safety.control_generation, clear_ms); // 最终原子复核故障代次和整车资格。
     PlatformIrqRestore(irq); // 恢复调用者原来的中断状态。
     if (!cleared)
     {
         if (!application_current) state->gimbal_feedback_sequence = 0u; // 状态机重新等待，新区间从下一轮开始记录。
-        input.core.now_ms = now; // 以最终检查时刻判断哪些输入还可记入比较基准。
+        input.core.now_ms = clear_ms; // 以最终检查时刻判断哪些输入还可记入比较基准。
         input.core.permit_ok = 0u; // 最终清除被拒绝也中断等待，原命令不能在下一轮重试。
         (void)CanRecoveryTimedStep(&state->timing, &input); // 保留已观察到的反馈和命令序号，等待新证据。
     }

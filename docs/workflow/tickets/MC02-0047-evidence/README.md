@@ -116,3 +116,9 @@ DJI 内部反馈期限补充：使用真实电机控制代码和测试 CAN 输�
 - 主机先在原版驱动复现采纳过期首帧的问题。修复后，底盘在滤波前丢弃超过 20 ms 或原始时间晚于当前时刻的帧，累计序号、滤波值、编码器基准和在线上报均保持原值。后续新鲜帧若距上次采纳的帧超过有效期，仍记录间断。原有轮速测试中三处注入同步推进测试时钟，保留原回归断言。[回归用例](../../../../tests/host/motor_feedback_filter_test.c)
 - Cortex-M7 Debug 的受限底盘及单板 SP／V2 隔离构建通过源码和 ELF 检查。相对 `c654dea`，Flash 分别为 311012 B、334264 B、341064 B，主 RAM 分别为 119952 B、130064 B、130832 B，两者均保持原值。隔离构建的测试参数未写入生产车型配置。未连接硬件，实际 CAN 调度与停止时延待现场验证。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug --parallel 1` 通过。WSL Debug 和 Release 各通过 863 项，反馈和 CAN 恢复相关的 10 项通过 ASan／UBSan。普通禁热和遥控诊断通过 ARM 构建与 ELF 检查，六种正式预设仍按未确认条件拒绝构建。
+
+## 人工输入期限参与 CAN 故障解除
+
+- 隔离协调器用例复现了两种情况。输入在初次检查时已超期，或初次检查时有效、完成最终总线检查时过期，旧实现都会尝试清除故障。摇杆和键鼠现在分别采用车型与协议中较短的期限，两处都按原始接收时刻计算。最终检查拒绝后重新等待稳定反馈及之后的新输入，新样本恰好到期时仍可使用。11 项回归通过 ASan／UBSan。[协调器回归](../../../../tests/host/robot_can_recovery_coordinator_test.c)
+- 隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码与 ELF 检查。相比 `acaec4b`，三份 Flash 各增加 80 B，受限底盘主 RAM 增加 32 B 至 119984 B，两种单板正式配置的主 RAM 持平。哨兵的 100 ms 稳定等待仍是未启用的候选值，板上总线与停车表现仍待现场验证。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 885 项，三个诊断预设通过 ARM 构建和 ELF 检查。正式预设因核心配置未确认而按预期拒绝。

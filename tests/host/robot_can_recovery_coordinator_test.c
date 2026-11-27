@@ -7,6 +7,7 @@
 #include "message_center.h"
 #include "platform_irq.h"
 #include "topics/robot_topics.h"
+#include "../../modules/standard_cmd/std_cmd_remote.h" // 使用车型实际的人工输入期限类型。
 #include "test_check.h"
 #include <string.h>
 
@@ -119,6 +120,52 @@ static uint8_t Step(RobotCanRecoveryCoordinator_t *state, RemoteControlSnapshot_
     return RobotCanRecoveryCoordinatorStep(state, remote, 0u, &freshness);
 }
 
+static uint8_t StepWithManualAge(RobotCanRecoveryCoordinator_t *state, RemoteControlSnapshot_s *remote,
+                                 uint32_t time, uint32_t age, uint8_t keyboard)
+{
+    tick = time; // 本机时钟推进到当前恢复检查。
+    ++sequence; // 必需电机持续提供新反馈。
+    ++remote->radio_sequence; // 两种人工来源都保持无线接收。
+    remote->radio_source_time_ms = keyboard ? time : time - age; // 摇杆场景只改变无线帧年龄。
+    ++remote->pc_sample_sequence; // 键鼠心跳有自己的序号。
+    remote->pc_source_time_ms = time - age; // 键鼠场景使用独立时刻。
+    return RobotCanRecoveryCoordinatorStep(state, remote, keyboard, NULL); // 纯底盘无姿态消息依赖。
+}
+
+static void CheckMappedManualAge(Robot_Config_s config, uint8_t keyboard)
+{
+    // 两种来源故意使用不同期限，验证协调器取实际档位使用的配置。
+    const StdCmdRemoteMap_t map = {
+        .remote_map = {.max_age_ms = 5u}, // 仅恢复时间测试，摇杆帧最多使用 5 ms。
+        .keyboard_map = {.max_age_ms = 9u}, // 键鼠样本最多使用 9 ms。
+    };
+    config.manual_input.map = &map;
+    const uint32_t max_age_ms = keyboard ? map.keyboard_map.max_age_ms : map.remote_map.max_age_ms;
+    const RobotModulePlan_t modules = {.enabled = ROBOT_MODULE_BIT(ROBOT_MODULE_CHASSIS)}; // 不引入姿态先到期的影响。
+    RobotCanRecoveryCoordinator_t state;
+    RemoteControlSnapshot_s remote = {
+        .remote_online = 1u, // 无线链路保持在线。
+        .pc_valid = keyboard, // 键鼠场景才能使用 PC 心跳。
+        .source_selection_generation = 1u, // 每个场景内保持同一档位。
+    };
+    remote.input.rc.switch_left = keyboard ? RC_SW_UP : RC_SW_DOWN; // 选择实际使用的人工来源。
+    const uint32_t previous_clears = clears; // 保留前面其他场景的故障清除次数。
+    TEST_CHECK(RobotCanRecoveryCoordinatorInit(&state, &config, &modules));
+    TEST_CHECK(!StepWithManualAge(&state, &remote, 2000u, 0u, keyboard)); // 建立原反馈基准。
+    TEST_CHECK(!StepWithManualAge(&state, &remote, 2001u, 0u, keyboard)); // 新反馈开始稳定计时。
+    TEST_CHECK(!StepWithManualAge(&state, &remote, 2101u, 0u, keyboard)); // 稳定期结束，等之后的新输入。
+    TEST_CHECK(!StepWithManualAge(&state, &remote, 2120u, max_age_ms + 1u, keyboard)); // 协议仍在线，车型期限已超 1 ms。
+    TEST_CHECK(clears == previous_clears);
+
+    final_check_delay = 2u; // 进入最终总线检查时，人工来源还剩 1 ms。
+    TEST_CHECK(!StepWithManualAge(&state, &remote, 2121u, max_age_ms - 1u, keyboard)); // 清除前已超出车型期限。
+    TEST_CHECK(clears == previous_clears && final_check_delay == 0u); // 这次确实进入了最终复核。
+    TEST_CHECK(!StepWithManualAge(&state, &remote, 2124u, 0u, keyboard)); // 最终拒绝后从新反馈重新开始。
+    TEST_CHECK(!StepWithManualAge(&state, &remote, 2224u, 0u, keyboard)); // 再次达到稳定时长。
+    TEST_CHECK(StepWithManualAge(&state, &remote, 2240u, max_age_ms, keyboard)); // 新输入恰好到期仍可使用。
+    TEST_CHECK(clears == previous_clears + 1u);
+}
+
 int main(void)
 {
     const MessageTopicDescriptor_t application_topic = {
@@ -223,5 +270,7 @@ int main(void)
     TEST_CHECK(!RobotCanRecoveryCoordinatorStep(&state, &remote, 0u, &application) && clears == 5u); // 保持同一人工样本，不能重试原许可。
     TEST_CHECK(!Step(&state, &remote, 1903u) && clears == 5u); // 稳定时长满足后仍等待新输入。
     TEST_CHECK(Step(&state, &remote, 1904u) && clears == 6u); // 本轮稳定后的新输入方可清除。
+    CheckMappedManualAge(config, 0u); // 无线帧使用摇杆映射期限。
+    CheckMappedManualAge(config, 1u); // 键鼠心跳使用自己的车型期限。
     return 0;
 }

@@ -15,6 +15,8 @@ typedef struct {
     uint32_t can_generation; /**< 上一轮观察到的核心 CAN 故障代次。 */
     uint32_t safety_generation; /**< 上一轮观察到的整车禁止代次。 */
     uint32_t inhibit_generation; /**< 任一禁止代次变化时推进。 */
+    uint32_t radio_command_max_age_ms; /**< 摇杆帧的最长可用时间，单位 ms。 */
+    uint32_t keyboard_command_max_age_ms; /**< 键鼠心跳的最长可用时间，单位 ms。 */
     uint32_t gimbal_feedback_sequence; /**< 上轮云台反馈序号，用于识别两轮之间已结束的发布区间。 */
     uint32_t feedback_gap[DJI_MOTOR_CNT]; /**< 各实际登记设备上次观察到的反馈间断代次。 */
     uint8_t feedback_gap_seen; /**< 区分首次读取与代次恰好为零。 */
@@ -25,7 +27,7 @@ typedef struct {
 
 /** @brief 初始化单板人工来源的恢复检查，不操作总线或解除故障。
  * @param[out] state 单一命令任务持有的上下文；失败保持旧值。
- * @param[in] config 非空车型配置，未确认时初始化为禁用。
+ * @param[in] config 非空车型配置，未确认时初始化为禁用。已提供人工映射时，使用车型与协议中较短的期限。
  * @param[in] modules 非空模块依赖计划。
  * @return 1 为成功或按配置禁用，0 为非法配置或无法构造必需设备清单。
  */

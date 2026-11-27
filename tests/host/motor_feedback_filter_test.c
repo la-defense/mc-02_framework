@@ -247,6 +247,8 @@ static int recovery_coordinator_real_motors(void)
     DJIMotorInstance *motors[2] = {0}; // 两台测试电机都有独立身份。
     RobotCanRecoveryCoordinator_t coordinator = {0}; // 模拟已确认的隔离测试配置。
     coordinator.enabled = 1u;
+    coordinator.radio_command_max_age_ms = REMOTE_RADIO_LEASE_MS; // 本用例直接构造协调器，保留无车型映射时的协议期限。
+    coordinator.keyboard_command_max_age_ms = REMOTE_PC_LEASE_MS; // 未选键鼠，仍提供与常规初始化相同的默认值。
     coordinator.motors.count = 2u;
     for (uint8_t i = 0u; i < 2u; ++i)
     {
