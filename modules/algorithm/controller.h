@@ -78,6 +78,12 @@ typedef struct {
     uint32_t initialized;
 } PIDInstance;
 
+/** @brief 检查 PID 参数，不初始化实例或修改配置。
+ * @param[in] config 待检查的参数；空指针返回 PID_BAD_ARGUMENT。
+ * @return PID_OK 表示可初始化，非法数值或未实现的选项返回对应错误。
+ */
+PID_Status_e PIDCheckConfig(const PID_Init_Config_s *config);
+
 /**
  * @brief 检查参数并清除运行历史，成功后接受整份配置。
  * @param[out] pid 首次使用前清零的实例，不能为 NULL。

@@ -103,6 +103,12 @@ static void CheckVehicleSelection(const RobotManualInputConfig_s *valid_input)
     chassis->chassis_motor_config.output_axis.gear_ratio = 19.0f;
     chassis->chassis_motor_config.motor_type = M3508;
     chassis->chassis_motor_config.dji_chassis_output_limit_raw = 60u; // 主机专用电调原始命令上限。
+    chassis->chassis_motor_config.controller_setting_init_config.outer_loop_type = SPEED_LOOP; // 受限底盘也交付轮轴速度。
+    chassis->chassis_motor_config.controller_setting_init_config.close_loop_type = SPEED_LOOP; // 只使用速度环。
+    chassis->chassis_motor_config.controller_param_init_config.speed_PID = (PID_Init_Config_s){
+        .DtMin_s = MOTOR_PID_DT_MIN_S, // 主机测试沿用电机计算间隔下限。
+        .DtMax_s = MOTOR_PID_DT_MAX_S, // 主机测试沿用电机计算间隔上限。
+    };
     const float diagonal = 0.70710678118f; // 测试轮的 45 度滚动方向分量。
     chassis->omni_geometry.wheels[0] = (ChassisWheelGeometry_t){0.2f, 0.2f, diagonal, -diagonal, 0.08f}; // 左前轮位置、方向和半径。
     chassis->omni_geometry.wheels[1] = (ChassisWheelGeometry_t){0.2f, -0.2f, diagonal, diagonal, 0.08f}; // 右前轮。
@@ -114,6 +120,9 @@ static void CheckVehicleSelection(const RobotManualInputConfig_s *valid_input)
     const Robot_Config_s *selected = NULL;
     vehicle.manual_input = *valid_input;
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &vehicle);
+    chassis->chassis_motor_config.controller_setting_init_config.outer_loop_type = ANGLE_LOOP; // 受限调试也不能用速度命令驱动位置环。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    chassis->chassis_motor_config.controller_setting_init_config.outer_loop_type = SPEED_LOOP; // 恢复后继续独立核对人工输入。
     vehicle.manual_input.map = NULL; // 未提供人工映射时清除上一次成功选择。
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_MANUAL_INPUT);
     TEST_CHECK(selected == NULL && RobotConfigFeed() == NULL);

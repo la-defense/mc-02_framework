@@ -205,4 +205,10 @@
 - 两种车型预检与估速、原有几何拒绝和受限底盘相关 8 项通过 ASan／UBSan。隔离受限底盘、单板 SP／V2、双板底盘和双板云台通过 ARM Debug 构建、源码与 ELF 检查。相对 `ec50240`，启用底盘的四份固件 Flash 各增加 176 B，双板云台的 Flash 保持 287856 B，五份主 RAM 均持平。未更改生产确认标记或写入实车参数。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 879 项，三个诊断预设通过构建和 ELF 检查，六种正式预设因核心配置未确认而按预期拒绝构建。
 
+## 车型预检核对轮速外环与 PID（APP-10）
+
+- 麦轮和全向轮的四项主机用例先在旧车型入口复现开环与非法 PID 被接受。更新后，轮组只接受单独速度环或速度外环加电流内环。位置外环、缺少速度环、未知环组合以及启用的 PID 参数非法时均拒绝车型。速度环和电流环通过的组合继续可用，未启用环的参数可留空。受限底盘入口也验证位置外环被拒绝。[车型回归](../../../../tests/host/robot_def_chassis_config_test.c) · [受限底盘回归](../../../../tests/host/commissioning_chassis_cmd_test.c)
+- 21 项主机车型、轮组、PID 及 CAN 需求回归通过 ASan／UBSan。隔离受限底盘、单板 SP／V2、双板底盘与双板云台均通过 ARM Debug 构建、源码和 ELF 检查。相对 `233f3c4`，五份 Flash 分别增加 96 B、96 B、96 B、112 B、16 B，主 RAM 均持平。未写入实车参数，未测量实车 PID 表现。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 883 项，三个诊断预设通过构建和 ELF 检查。六种正式预设因核心配置未确认而按预期拒绝构建。
+
 见[本底盘接口](../../../../application/chassis/chassis_feedback.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

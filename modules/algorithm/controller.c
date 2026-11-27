@@ -14,9 +14,10 @@
 #define PID_INITIALIZED 0x50494431u
 #define PID_IMPLEMENTED_OPTIONS 0xf7u
 
-// 检查参数，使非法时间和非有限数值不能进入积分、微分及滤波计算。
-static PID_Status_e PIDCheckConfig(const PID_Init_Config_s *c)
+PID_Status_e PIDCheckConfig(const PID_Init_Config_s *c)
 {
+    if (c == NULL)
+        return PID_BAD_ARGUMENT; // 启动预检与实例初始化可共用同一个参数检查。
     if (((uint32_t)c->Improve & ~PID_IMPLEMENTED_OPTIONS) != 0u)
         return PID_UNSUPPORTED_IMPROVEMENT;
     if (!isfinite(c->Kp) || !isfinite(c->Ki) || !isfinite(c->Kd) ||
@@ -44,7 +45,7 @@ static uint8_t PIDStateIsFinite(const PID_State_t *s)
 
 PID_Status_e PIDInit(PIDInstance *pid, const PID_Init_Config_s *config)
 {
-    if (pid == NULL || config == NULL)
+    if (pid == NULL)
         return PID_BAD_ARGUMENT;
     PID_Status_e status = PIDCheckConfig(config);
     if (status != PID_OK)

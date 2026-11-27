@@ -49,6 +49,19 @@ static uint8_t IsSupportedDJIMotor(const Motor_Init_Config_s *motor, uint8_t req
 
 #if MC02_FEATURE_CHASSIS
 #if defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+// 底盘提交的是轮轴 rad/s，速度环必须是输入环，电流环可作为内环。
+static uint8_t ChassisWheelControlIsValid(const Motor_Init_Config_s *motor)
+{
+    const Motor_Control_Setting_s *setting = &motor->controller_setting_init_config; // 四轮共用同一控制环组合。
+    const Motor_Controller_Init_s *pid = &motor->controller_param_init_config; // 只检查当前组合会用到的参数。
+    if (setting->outer_loop_type != SPEED_LOOP ||
+        (setting->close_loop_type != SPEED_LOOP && setting->close_loop_type != SPEED_AND_CURRENT_LOOP))
+        return 0u; // 拒绝把轮轴速度交给开环、位置环、仅电流环或未知组合。
+    if (PIDCheckConfig(&pid->speed_PID) != PID_OK)
+        return 0u; // 速度环始终参与计算，参数必须能用于初始化。
+    return setting->close_loop_type == SPEED_LOOP || PIDCheckConfig(&pid->current_PID) == PID_OK; // 串接时才检查电流环。
+}
+
 // 检查四轮分别达到允许速度时，估计出的三个底盘速度仍可用 float 表示。
 static uint8_t ChassisFeedbackFitsWheelLimit(const Chassis_Config_s *chassis, float max_wheel_rad_s)
 {
@@ -92,6 +105,8 @@ static uint8_t ChassisConfigIsValid(const Chassis_Config_s *chassis)
     const uint16_t output_limit = chassis->chassis_motor_config.dji_chassis_output_limit_raw;
     if (output_limit == 0u || output_limit > DJI_OUTPUT_MAX_RAW)
         return 0u; // 运动固件须提供明确的轮组输出上限，不能沿用驱动默认范围。
+    if (!ChassisWheelControlIsValid(&chassis->chassis_motor_config))
+        return 0u; // 在轮组受控供电前拒绝控制量或启用 PID 与车型不匹配的配置。
 
     const float reduction = chassis->chassis_motor_config.output_axis.gear_ratio; // 轮轴和电机轴共用车型声明的减速比。
     const float motor_deg_per_wheel_rad = RAD_2_DEGREE * reduction; // 按控制周期的算法将轮轴 rad/s 换成电机轴 deg/s。

@@ -38,6 +38,12 @@ static void set_valid_config(void)
     chassis->chassis_motor_config.output_axis.gear_ratio = 19.0f;
     chassis->chassis_motor_config.motor_type = M3508;
     chassis->chassis_motor_config.dji_chassis_output_limit_raw = 60u; // 仅用于主机车型测试的原始命令上限。
+    chassis->chassis_motor_config.controller_setting_init_config.outer_loop_type = SPEED_LOOP; // 轮轴目标是 rad/s。
+    chassis->chassis_motor_config.controller_setting_init_config.close_loop_type = SPEED_LOOP; // 默认只启用速度环。
+    chassis->chassis_motor_config.controller_param_init_config.speed_PID = (PID_Init_Config_s){
+        .DtMin_s = MOTOR_PID_DT_MIN_S, // 测试允许电机的最小计算间隔。
+        .DtMax_s = MOTOR_PID_DT_MAX_S, // 测试允许电机的最大计算间隔。
+    };
     for (unsigned index = 0u; index < CHASSIS_WHEEL_COUNT; ++index)
     {
         chassis->wheel_motors[index].device_id = (uint8_t)(index + 1u); // 依轮序配置互不重复的测试编号。
@@ -98,8 +104,55 @@ static void check_velocity_feedback_range(uint8_t startup)
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
 }
 
+static void check_wheel_control(uint8_t check_pid)
+{
+    set_valid_config();
+    const Robot_Config_s *selected = NULL;
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
+    Motor_Init_Config_s *motor = &test_config.chassis_param.chassis_motor_config;
+    Motor_Control_Setting_s *setting = &motor->controller_setting_init_config;
+    Motor_Controller_Init_s *pid = &motor->controller_param_init_config;
+    if (check_pid)
+    {
+        pid->speed_PID.MaxOut = NAN; // 已启用速度环不能带非有限输出限值。
+        TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+        pid->speed_PID.MaxOut = 0.0f; // 零上限沿用 PID 原接口的有效取值。
+        setting->close_loop_type = SPEED_AND_CURRENT_LOOP; // 启用串接的电流环。
+        TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL); // 启用的电流环缺少有效计算间隔。
+        pid->current_PID = pid->speed_PID; // 为测试电流环提供同样合法的时间参数。
+        pid->current_PID.DtMax_s = 0.0f; // 最大间隔小于最小间隔。
+        TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+        pid->current_PID = pid->speed_PID; // 两个已启用的环都通过检查。
+        pid->angle_PID.DtMax_s = NAN; // 未启用的位置环不参与底盘校验。
+    }
+    else
+    {
+        setting->outer_loop_type = OPEN_LOOP; // 开环会把速度数值当成设备命令。
+        setting->close_loop_type = OPEN_LOOP;
+        TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+        setting->outer_loop_type = ANGLE_LOOP; // 位置外环会把同一数值当成 rad。
+        setting->close_loop_type = ANGLE_AND_SPEED_LOOP;
+        TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+        setting->outer_loop_type = SPEED_LOOP;
+        setting->close_loop_type = CURRENT_LOOP; // 声明速度外环却没有启用速度环。
+        TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+        setting->close_loop_type = (Closeloop_Type_e)(SPEED_LOOP | 0x80u); // 未识别的环选项不能默默通过。
+        TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+        setting->close_loop_type = SPEED_LOOP; // 恢复速度环后重新选择。
+    }
+    TEST_CHECK(ChassisConfigFeed() == NULL); // 最近一次非法选择未保留底盘配置。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strncmp(argv[1], "motor-", 6u) == 0)
+    {
+        const uint8_t check_pid = (uint8_t)(strcmp(argv[1], "motor-pid") == 0); // PID 和环组合分别执行。
+        TEST_CHECK(check_pid || strcmp(argv[1], "motor-mode") == 0);
+        check_wheel_control(check_pid);
+        return EXIT_SUCCESS;
+    }
     if (argc == 2)
     {
         const uint8_t startup = (uint8_t)(strcmp(argv[1], "feedback-range-startup") == 0); // 分别执行启动和运行期检查。

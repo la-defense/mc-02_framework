@@ -2054,6 +2054,7 @@ add_test(NAME production_command_generated_manual_unsupported_frame COMMAND robo
 add_test(NAME production_command_generated_manual_frame_feedback COMMAND robot_cmd_generated_manual_test manual-frame-feedback)
 add_executable(commissioning_chassis_cmd_test commissioning_chassis_cmd_test.c
   ../../application/robot_def.c # 车型选择通过实际预检，确认启动前拒绝非法输入参数。
+  ../../modules/algorithm/controller.c # 预检使用正式 PID 参数校验。
   ../../application/config/commissioning_chassis_config.c # 车型选择和命令登记共用这套检查。
   ../../application/chassis/chassis_kinematics.c ../../application/chassis/omni.c # 使用真实的全向轮几何预检。
   ../../application/cmd/commissioning_chassis_cmd.c # 测试受限调试实际命令入口。
@@ -3155,7 +3156,7 @@ target_compile_options(robot_def_mecanum_role_compile PRIVATE -Wall -Wextra -Wer
 mc02_apply_format_diagnostics(robot_def_mecanum_role_compile)
 add_executable(robot_def_chassis_config_test robot_def_chassis_config_test.c
   ../../application/robot_def.c ../../application/chassis/chassis_kinematics.c
-  ../../application/chassis/omni.c)
+  ../../application/chassis/omni.c ../../modules/algorithm/controller.c)
 target_include_directories(robot_def_chassis_config_test BEFORE PRIVATE robot_def_role_fakes)
 target_include_directories(robot_def_chassis_config_test PRIVATE . ../../application/chassis)
 target_compile_definitions(robot_def_chassis_config_test PRIVATE MC02_PROFILE_ROBOT=1
@@ -3167,7 +3168,7 @@ add_test(NAME production_chassis_config_rejects_invalid_geometry COMMAND robot_d
 # 同一车型校验入口也执行麦轮组合，几何只检查编入的麦轮模型。
 add_executable(robot_def_mecanum_config_test robot_def_chassis_config_test.c
   ../../application/robot_def.c ../../application/chassis/chassis_kinematics.c
-  ../../application/chassis/mecanum.c)
+  ../../application/chassis/mecanum.c ../../modules/algorithm/controller.c)
 target_include_directories(robot_def_mecanum_config_test BEFORE PRIVATE robot_def_role_fakes)
 target_include_directories(robot_def_mecanum_config_test PRIVATE . ../../application/chassis)
 target_compile_definitions(robot_def_mecanum_config_test PRIVATE MC02_PROFILE_ROBOT=1
@@ -3181,6 +3182,18 @@ foreach(stage IN ITEMS startup runtime)
   add_test(NAME production_mecanum_feedback_range_${stage} COMMAND robot_def_mecanum_config_test feedback-range-${stage})
   set_tests_properties(production_chassis_feedback_range_${stage} production_mecanum_feedback_range_${stage}
     PROPERTIES TIMEOUT 10) # 两种轮组都核对启动拒绝和运行时失效结果。
+endforeach()
+# 车型替身沿用实际电机配置，控制环和值域不再由主机另写一份。
+foreach(target IN ITEMS robot_can_requirements_test robot_can_requirements_disabled_test
+    robot_def_chassis_role_compile robot_def_gimbal_role_compile robot_def_mecanum_role_compile
+    robot_def_chassis_config_test robot_def_mecanum_config_test)
+  target_include_directories(${target} PRIVATE ../../modules/algorithm)
+endforeach()
+foreach(check IN ITEMS mode pid)
+  add_test(NAME production_chassis_config_motor_${check} COMMAND robot_def_chassis_config_test motor-${check})
+  add_test(NAME production_mecanum_config_motor_${check} COMMAND robot_def_mecanum_config_test motor-${check})
+  set_tests_properties(production_chassis_config_motor_${check} production_mecanum_config_motor_${check}
+    PROPERTIES TIMEOUT 10)
 endforeach()
 if(Python3_EXECUTABLE)
   add_test(NAME production_vehicle_build_selection
