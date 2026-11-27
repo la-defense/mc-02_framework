@@ -21,6 +21,7 @@
 #include "robot_can_recovery_coordinator.h" // 联合实际协调器验证恢复顺序。
 #include "robot_control_feedback_runtime.h" // 使用固件实际采集入口提交分功能反馈。
 #include "message_center.h" // 姿态来源时间使用消息中心的本机时钟标识。
+#include "topics/robot_topics.h" // 测试使用应用层真实的姿态话题和端点编号。
 #endif
 #endif
 
@@ -1273,7 +1274,25 @@ static int single_control_feedback_to_safety(void)
     RobotSafetyRequestDisable(); // 恢复启动测试的初始 SAFE 条件。
     const RobotControlPolicy_t policy = {ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL, 1u, 0u, 0u};
     TEST_CHECK(RobotSafetyConfigureControl(&policy)); RobotSafetyRequestEnable(); RobotSafetyUpdate();
-    MessageFreshness_t pose = {.valid = 1u, .source_clock = MESSAGE_CLOCK_LOCAL, .timestamp_ms = 1u};
+    const MessageTopicDescriptor_t pose_topic = {
+        .topic_id = ROBOT_TOPIC_GIMBAL_FEEDBACK, // 与正式反馈话题使用同一编号。
+        .payload_size = sizeof(uint8_t), // 这里只核对数据所属的有效区间。
+        .max_age_ms = MESSAGE_DEFAULT_MAX_AGE_MS, // 使用正式反馈的最长保留时间。
+        .capacity = 1u, // 只保留最新姿态。
+        .delivery = MESSAGE_DELIVERY_SNAPSHOT, // 撤销后开始新的有效区间。
+        .overflow = MESSAGE_OVERFLOW_REPLACE_OLDEST, // 连续更新覆盖原数据。
+        .source_clock = MESSAGE_CLOCK_LOCAL, // 测试发送、读取和反馈使用同一个时钟。
+        .publisher_mask = UINT32_C(1) << (ROBOT_TOPIC_ENDPOINT_GIMBAL - 1u), // 云台发布。
+        .subscriber_mask = UINT32_C(1) << (ROBOT_TOPIC_ENDPOINT_COMMAND - 1u), // 命令任务读取。
+    };
+    TEST_CHECK(MessageCenterInit(&pose_topic, 1u) == MESSAGE_OK);
+    MessagePublisher_t *pose_pub = MessagePublisherRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_GIMBAL);
+    MessageSubscriber_t *pose_sub = MessageSubscriberRegister(ROBOT_TOPIC_GIMBAL_FEEDBACK, ROBOT_TOPIC_ENDPOINT_COMMAND);
+    TEST_CHECK(pose_pub != NULL && pose_sub != NULL);
+    uint8_t pose_data = 0u; // 测试只使用真实消息的序号和时间。
+    MessageFreshness_t pose;
+    TEST_CHECK(MessagePublishAt(pose_pub, &pose_data, 1u, 1u, 1u, MESSAGE_CLOCK_LOCAL) == MESSAGE_OK);
+    TEST_CHECK(MessageReadSnapshot(pose_sub, &pose_data, sizeof(pose_data), 1u, &pose) == MESSAGE_OK);
     now_us = 2000u; receive(chassis, 960000u, 2u, 0, 0); receive(gimbal, 960000u, 2u, 0, 0);
     TEST_CHECK(RobotControlFeedbackPoll(&pose)); // 由实际采集器读取、复核并提交电机反馈。
     RobotSafetyControlInputs_t input = {.mode = ROBOT_CONTROL_MANUAL, .manual = {2u, 100u, 1u}};
@@ -1283,6 +1302,8 @@ static int single_control_feedback_to_safety(void)
     RobotControlPermits_t permits = {0}; TEST_CHECK(RobotSafetyGetFunctionPermitsAt(3u, &permits));
     TEST_CHECK(permits.functions == (ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL));
     now_us = 15000u; receive(gimbal, 7200000u, 15u, 0, 0); // 云台持续有反馈，底盘暂时未更新。
+    TEST_CHECK(MessagePublishAt(pose_pub, &pose_data, 15u, 15u, 15u, MESSAGE_CLOCK_LOCAL) == MESSAGE_OK);
+    TEST_CHECK(MessageReadSnapshot(pose_sub, &pose_data, sizeof(pose_data), 15u, &pose) == MESSAGE_OK); // 同一连续区间内的新序号。
     TEST_CHECK(RobotControlFeedbackPoll(&pose));
     input.manual.source_time_ms = 15u;
     TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
@@ -1301,8 +1322,37 @@ static int single_control_feedback_to_safety(void)
     TEST_CHECK(RobotSafetyGetFunctionPermitsAt(26u, &permits) &&
         permits.functions == (ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL)); // 新来源恢复对应功能。
     now_us = 27000u;
-    TEST_CHECK(RobotControlFeedbackPoll(NULL)); // 云台姿态消失不影响仍有效的底盘反馈。
+    TEST_CHECK(MessagePublisherInvalidate(pose_pub) == MESSAGE_OK); // 模拟命令任务复制姿态后消息被撤销。
+    TEST_CHECK(RobotControlFeedbackPoll(&pose)); // 旧副本仍在原期限内，但这一段已结束。
     TEST_CHECK(RobotSafetyGetFunctionPermitsAt(27u, &permits) && permits.functions == ROBOT_CONTROL_CHASSIS);
+    now_us = 28000u;
+    TEST_CHECK(MessagePublishAt(pose_pub, &pose_data, 28u, 28u, 28u, MESSAGE_CLOCK_LOCAL) == MESSAGE_OK);
+    TEST_CHECK(RobotControlFeedbackPoll(&pose)); // 新区间建立也不能使旧副本重新有效。
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(28u, &permits) && permits.functions == ROBOT_CONTROL_CHASSIS);
+    TEST_CHECK(MessageReadSnapshot(pose_sub, &pose_data, sizeof(pose_data), 28u, &pose) == MESSAGE_OK);
+    TEST_CHECK(RobotControlFeedbackPoll(&pose)); // 新姿态恢复后，仍需此后的原始人工输入。
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(28u, &permits) && permits.functions == ROBOT_CONTROL_CHASSIS);
+    now_us = 29000u;
+    input.manual.source_time_ms = 29u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(29u, &permits) &&
+        permits.functions == (ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL));
+    now_us = 30000u;
+    TEST_CHECK(MessagePublisherInvalidate(pose_pub) == MESSAGE_OK); // 两次命令检查之间发生短暂撤销。
+    TEST_CHECK(MessagePublishAt(pose_pub, &pose_data, 30u, 30u, 30u, MESSAGE_CLOCK_LOCAL) == MESSAGE_OK);
+    TEST_CHECK(MessageReadSnapshot(pose_sub, &pose_data, sizeof(pose_data), 30u, &pose) == MESSAGE_OK); // 本轮直接读到新区间的有效姿态。
+    TEST_CHECK(RobotControlFeedbackPoll(&pose)); // 本轮须先报告中间出现过失效。
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(30u, &permits) && permits.functions == ROBOT_CONTROL_CHASSIS);
+    now_us = 31000u;
+    TEST_CHECK(RobotControlFeedbackPoll(&pose)); // 新区间确认后，上一份人工输入仍不能接管。
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(31u, &permits) && permits.functions == ROBOT_CONTROL_CHASSIS);
+    now_us = 32000u;
+    input.manual.source_time_ms = 32u;
+    TEST_CHECK(RobotSafetyPublishControlInputs(&input)); RobotSafetyUpdate();
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(32u, &permits) &&
+        permits.functions == (ROBOT_CONTROL_CHASSIS | ROBOT_CONTROL_GIMBAL));
+    TEST_CHECK(RobotControlFeedbackPoll(NULL)); // 明确没有姿态时仍保持底盘独立运行。
+    TEST_CHECK(RobotSafetyGetFunctionPermitsAt(32u, &permits) && permits.functions == ROBOT_CONTROL_CHASSIS);
     return EXIT_SUCCESS;
 }
 

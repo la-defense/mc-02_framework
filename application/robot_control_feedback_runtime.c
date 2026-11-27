@@ -3,11 +3,14 @@
  */
 #include "robot_control_feedback_runtime.h"
 #include "robot_safety.h"
+#include "message_center.h"
+#include "topics/robot_topics.h"
 #include "platform_irq.h"
 #include "platform_sync.h"
 #include <stddef.h>
 
 static RobotControlFeedback_t collector; // 启动时固定，只由命令任务更新间断记录。
+static uint32_t gimbal_pose_sequence; // 最近验证过的姿态序号，零表示没有可比较的发布区间。
 
 uint8_t RobotControlFeedbackStart(const RobotCanMotorPlan_t *plan)
 {
@@ -39,7 +42,18 @@ uint8_t RobotControlFeedbackPoll(const MessageFreshness_t *pose)
             !DJIMotorRecoveryStillValid(&samples, result.registered_motor_mask[group], publish_ms))
             result.valid_functions &= ~bit; // 复查失败只撤销受影响的功能。
     }
+    uint32_t current_pose_sequence = 0u; // 已检测到失效时，下轮无需再次报告同一处间断。
+    if ((result.valid_functions & ROBOT_CONTROL_GIMBAL) != 0u)
+    {
+        if (MessageSnapshotSourceIsCurrent(ROBOT_TOPIC_GIMBAL_FEEDBACK, pose->sequence, publish_ms))
+            current_pose_sequence = pose->sequence; // 只记仍属于当前有效区间的副本。
+        if (current_pose_sequence == 0u || // 已撤销的副本即使未到期也不能维持许可。
+            (gimbal_pose_sequence != 0u && gimbal_pose_sequence != current_pose_sequence &&
+             !MessageSnapshotSourceIsCurrent(ROBOT_TOPIC_GIMBAL_FEEDBACK, gimbal_pose_sequence, publish_ms)))
+            result.valid_functions &= ~ROBOT_CONTROL_GIMBAL; // 若两次检查间换过区间，先报告一次云台失效。
+    }
     const uint8_t accepted = RobotSafetyPublishVehicleFeedback(result.valid_functions, result.feedback); // 只更新反馈，不改写来源选择。
+    gimbal_pose_sequence = accepted ? current_pose_sequence : 0u; // 成功发布后才比较下一次读取的区间。
     PlatformIrqRestore(previous); // 恢复调用前的中断屏蔽。
     return accepted;
 }

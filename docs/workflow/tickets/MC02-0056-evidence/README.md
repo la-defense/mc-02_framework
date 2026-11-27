@@ -87,3 +87,9 @@ DJI 源码按单板、底盘板和云台板三种 Cortex-M7 硬浮点选项独�
 - `production_remote_estop_single_frame` 使用生产 UART 队列和 DBUS 解码，在命令任务读取开关后、处理手势前送入拨轮急停帧及释放帧。旧实现没有锁存这次急停。修复后，17 字节短帧不触发，接收合法帧后立即锁存。已累计满一秒的旧输入也不能解除。新的居中输入在 999 ms 时仍保持急停，满 1000 ms 后进入 `ROBOT_SAFE`。跨复位标志的替身记录提交顺序，检查锁存和有效解除各写入一次。[回归用例](../../../../tests/host/remote_control_test.c)
 - 隔离受限底盘、单板 SP 和 V2 通过 ARM Debug 构建、源码与 ELF 检查。相对 `8babb65`，三种配置的 Flash 各增加 240 B，主 RAM 分别为 119952 B、130096 B 和 130832 B，均持平。本轮未连接实车或测量物理停止时延。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 869 项，15 项相关检查通过 ASan／UBSan，三个诊断预设通过构建和 ELF 检查。六种生产预设因核心配置未确认而按预期拒绝构建。首次全量构建缺少安全模块新增依赖的主机头文件路径，补齐编译检查和对应的测试替身后通过。
+
+## 提交整车反馈前复核姿态
+
+- 主机用例从真实话题复制姿态，随后撤销消息。旧实现仍用未到期的副本维持云台许可。现在在提交前核对序号所属的连续有效区间。旧副本被撤销、新发布无法替它恢复，或者两次检查之间已撤销并恢复时，均先撤销云台许可。匹配当前区间的姿态和恢复后的新人工输入才可重新接管，底盘继续按自己的反馈判断。9 项相关回归通过 ASan／UBSan。[生产入口回归](../../../../tests/host/motor_feedback_filter_test.c)
+- 隔离受限底盘、单板 SP／V2、双板底盘及双板云台通过 ARM Debug 构建、源码与 ELF 检查。相比 `95992f9`，前三份 Flash 各增加 80 B，单板 V2 主 RAM 增加 32 B 至 130864 B，受限底盘与单板 SP 的主 RAM 持平。双板配置未重新链接。本轮只验证软件许可和反馈提交，没有测量板上执行开销或实际停止时延。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 885 项，三个诊断预设通过 ARM 构建和 ELF 检查，正式预设按核心配置未确认拒绝构建。

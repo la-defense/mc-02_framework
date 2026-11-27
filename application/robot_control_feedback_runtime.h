@@ -11,8 +11,8 @@
  */
 uint8_t RobotControlFeedbackStart(const RobotCanMotorPlan_t *plan);
 
-/** @brief 由命令任务汇总反馈并提交，在发布前再次检查各组电机。
- * @param[in] pose 本轮有效的云台消息时间，NULL 表示姿态或编码器无效。
+/** @brief 由命令任务汇总反馈并提交，发布前复查各组电机和云台姿态的连续有效区间。
+ * @param[in] pose 本轮从云台反馈话题读取的序号和时间，NULL 表示姿态或编码器无效。
  * @return 1 为安全管理接受了本轮状态；0 为状态未配置或无法发布。
  * @note 单一命令任务调用。没有设置任何模式、使能请求或运动目标。
  */
