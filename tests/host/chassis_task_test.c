@@ -88,6 +88,7 @@ static Chassis_Config_s chassis_configuration = {
 };
 const Chassis_Config_s *ChassisConfigFeed(void) { return &chassis_configuration; }
 static DJIMotorInstance motors[4];
+static uint8_t replace_wheel_during_estimate; // 完成最后一轮复制时，模拟第一轮已断流并收到新反馈。
 static Motor_Init_Config_s motor_configs[4];
 static unsigned motor_count;
 static unsigned rollback_count; // 保存测试期间已撤销的电机数。
@@ -200,6 +201,12 @@ Motor_Feedback_Status_e DJIMotorGetFeedbackSnapshot(DJIMotorInstance *motor, uin
     snapshot->current.valid = motor->feedback_current_valid;
     if (motor->feedback_online == 0u) return MOTOR_FEEDBACK_NOT_READY;
     if (motor->feedback_age_ms > 20u) return MOTOR_FEEDBACK_STALE;
+    if (replace_wheel_during_estimate && motor == &motors[3])
+    {
+        replace_wheel_during_estimate = 0u; // 一次注入，随后各次读取保持正常。
+        ++motors[0].feedback_continuity_generation; // 第一轮的新反馈已从下一段开始。
+        ++motors[0].feedback_sequence; // 已复制的第一轮样本仍是旧序号。
+    }
     return MOTOR_FEEDBACK_OK;
 }
 uint8_t DJIMotorSpeedFeedbackIsContinuous(const DJIMotorInstance *motor,
@@ -564,6 +571,7 @@ static void PublishForwardWheels(uint32_t time_ms)
 static int TestOmniOdometry(void)
 {
     ChassisOdometryFeedback_t result;
+    ChassisVelocityFeedback_t velocity;
     chassis_configuration.odometry_max_gap_ms = 5u; // 测试值，先验证麦轮不能启用本功能。
     CHECK(ChassisInit() == 0u && motor_attempt == 0u);
     SelectOmniFixture();
@@ -571,8 +579,12 @@ static int TestOmniOdometry(void)
 
     test_tick = UINT32_MAX - 2u; // 从回绕前开始，下一样本的时间为零。
     PublishForwardWheels(test_tick);
+    replace_wheel_during_estimate = 1u; // 复制四轮期间出现中断，整个候选批次不能推进里程计。
     ChassisTask();
-    CHECK(Chassis_GetOdometry(&result) == 1u && result.pose.x_m == 0.0f);
+    CHECK(Chassis_GetOdometry(&result) == 0u);
+    CHECK(Chassis_GetVelocityFeedback(&velocity) == 0u);
+    ChassisTask();
+    CHECK(Chassis_GetOdometry(&result) == 1u && result.pose.x_m == 0.0f && result.segment == 1u);
     const uint32_t first_segment = result.segment;
     test_tick = 0u;
     PublishForwardWheels(test_tick);

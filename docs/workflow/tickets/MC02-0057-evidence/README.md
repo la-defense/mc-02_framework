@@ -217,4 +217,10 @@
 - 隔离受限底盘、单板 SP／V2、双板底盘和双板云台的 ARM Debug 构建、源码和 ELF 检查通过。相比 `37165e9`，受限底盘 Flash 增加 160 B，两种单板和双板底盘各增加 144 B，双板云台持平。五份固件的主 RAM 持平。本轮未进行实车测量。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 885 项，三个诊断预设均通过固件构建和 ELF 检查。
 
+## 底盘反馈与积分基准一起提交
+
+- 主机在复制最后一轮反馈时，模拟已经读过的第一轮断流后收到新样本。旧版读接口会挡住无效位姿，但内部已将这批数据当成积分起点，紧接着的有效样本不能建立第一段。现在先计算候选位姿，发布时复查四轮连续性和原始期限。拒绝后不消耗段号，随后有效样本可建立第一段。24 项底盘相关用例通过 ASan／UBSan。[断流回归](../../../../tests/host/chassis_task_test.c)
+- 隔离受限底盘、单板 SP／V2、双板底盘通过 ARM Debug 构建、源码和 ELF 检查。相比 `d95f431`，Flash 分别增加 64、240、240、240 B，受限底盘主 RAM 减少 32 B，其余持平。用同一编译参数加 `-fstack-usage` 单独编译前后版本，`ChassisTask` 在单板上的函数帧由 192 B 增至 280 B，双板底盘由 208 B 增至 296 B。`PublishMotionFeedback` 由 64 B 增至 80 B。这些是编译器报告的函数帧大小，板上任务栈峰值和临界区耗时仍待验证。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 885 项，三个诊断预设通过 ARM 构建和 ELF 检查。正式预设按核心配置未确认拒绝构建。
+
 见[本底盘接口](../../../../application/chassis/chassis_feedback.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。
