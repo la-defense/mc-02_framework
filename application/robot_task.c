@@ -252,12 +252,12 @@ static void StopMotorTaskOutputs(void)
 typedef struct {
     const RobotTaskCycle_t *cycle; // 当前派发任务领取的拍点。
     TaskMonitor_FaultReason_e fault; // 首次拒绝的原因，退出全部 CAN 队列保护后再处理。
-} MotorTaskTransmitGuard_t;
+} MotorTaskDeadlineGuard_t;
 
-static uint8_t MotorTaskCheckTransmit(void *context)
+static uint8_t MotorTaskCheckDeadline(void *context)
 {
-    MotorTaskTransmitGuard_t *guard = context; // 同一轮的各次提交共用这份检查结果。
-    if (guard->fault != TASK_MONITOR_FAULT_NONE) return 0u; // 已拒绝时，本轮不能再尝试发送。
+    MotorTaskDeadlineGuard_t *guard = context; // 同一轮的计算与各次提交共用这份检查结果。
+    if (guard->fault != TASK_MONITOR_FAULT_NONE) return 0u; // 本轮的第一次拒绝保留到上报。
     PlatformPeriodicTiming_t timing;
     guard->fault = CheckTaskCycleTiming(guard->cycle, &timing, 1u); // 只检查当前时间并记录故障原因。
     return guard->fault == TASK_MONITOR_FAULT_NONE; // 保护内不撤销许可或上报。
@@ -287,13 +287,13 @@ __attribute__((noreturn)) void StartMOTORTASK(void const *argument)
 #endif
         uint32_t motor_probe = PlatformProbeStart();
 #if MC02_TASK_MOTOR_SPLIT
-        MotorTaskTransmitGuard_t guard = {.cycle = &cycle, .fault = TASK_MONITOR_FAULT_NONE}; // 每个拍点独立记录首次拒绝。
+        MotorTaskDeadlineGuard_t guard = {.cycle = &cycle, .fault = TASK_MONITOR_FAULT_NONE}; // 每个拍点独立记录首次拒绝。
         const PlatformPeriodicResult_t dispatched = MotorTaskRunScheduled(&schedule, cycle.release.observed_tick,
-            MotorTaskCheckTransmit, &guard); // 完成所有已允许的提交或遇到超期返回。
+            MotorTaskCheckDeadline, &guard); // 计算或发送前遇到超期时返回。
         if (guard.fault != TASK_MONITOR_FAULT_NONE)
         {
             StopTaskClock(&cycle, guard.fault); // 此时已退出 CAN 队列保护，立即撤销许可并上报。
-            continue; // 本轮发送被拒绝，不报告正常完成。
+            continue; // 本轮计算或发送被拒绝，不报告正常完成。
         }
         if (dispatched != PLATFORM_PERIODIC_READY)
         {

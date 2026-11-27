@@ -20,6 +20,7 @@ uint8_t RobotBuildModuleStarted(RobotModule_t module)
 #endif
 static unsigned can_pending, can_tx_pumps, uart_pending, usb_pending, dji_outputs, lk_outputs;
 static unsigned daemon_dispatches;
+static unsigned deadline_checks; // 核对计算拒绝后，本轮不会再检查发送。
 static char order[32]; // 保存两轮实际派发顺序，便于发现接收与控制的先后变化。
 static unsigned order_count;
 static void record(char event) { if (order_count < sizeof(order)) order[order_count++] = event; }
@@ -53,20 +54,14 @@ DaemonStatus_t DaemonProcessTaskEvents(uint8_t consumer_id, uint8_t max_events, 
 }
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
-static uint8_t CheckTransmit(void *context)
+static uint8_t CheckDeadline(void *context)
 {
-    uint8_t *allow = context; // 场景可在允许第一帧后耗尽预算。
-    if (*allow == 2u)
-    {
-        *allow = 3u; // 入口预算检查已通过。
-        return 1u;
-    }
-    if (*allow == 3u)
-    {
-        *allow = 0u; // 第一帧交给硬件前通过，之后的检查都拒绝。
-        return 1u;
-    }
-    return *allow;
+    uint8_t *allowed_checks = context; // 模拟到本轮第几次检查才用完预算。
+    ++deadline_checks; // 包括拒绝，便于检查各阶段的调用次数。
+    if (*allowed_checks == UINT8_MAX) return 1u; // 正常场景每次都允许。
+    if (*allowed_checks == 0u) return 0u; // 本轮预算已用完。
+    --*allowed_checks; // 通过一次后，减少还可通过的次数。
+    return 1u;
 }
 
 static int CheckSplitPeriods(void)
@@ -88,7 +83,7 @@ static int CheckSplitPeriods(void)
     CHECK(MotorTaskScheduleInit(&schedule, &periods, 1000u, 1000u, start) == PLATFORM_PERIODIC_CONFIG);
 
     const uint32_t release_offsets[] = {0u, 1u, 2u, 3u, 6u}; // 首拍、仅接收、仅计算、仅发送、迟到后同拍。
-    uint8_t allow_transmit = 1u; // 正常轮次先验证原计算和发送顺序。
+    uint8_t allowed_checks = UINT8_MAX; // 正常轮次每次都允许，用来验证原计算和发送顺序。
     dji_outputs = lk_outputs = can_tx_pumps = daemon_dispatches = 0u;
 #if defined(MC02_CONFIG_GENERATED)
     communication_started = 1u; // 使用正常启动状态验证发送和接收仍串行。
@@ -96,7 +91,7 @@ static int CheckSplitPeriods(void)
     for (unsigned i = 0u; i < sizeof(release_offsets) / sizeof(release_offsets[0]); ++i)
     {
         order_count = 0u;
-        CHECK(MotorTaskRunScheduled(&schedule, start + release_offsets[i], CheckTransmit, &allow_transmit) == PLATFORM_PERIODIC_READY);
+        CHECK(MotorTaskRunScheduled(&schedule, start + release_offsets[i], CheckDeadline, &allowed_checks) == PLATFORM_PERIODIC_READY);
         // 任意拍先接收 CAN，最后才允许已有的发送端调用。
         CHECK(order_count >= 4u && order[0] == 'C');
         const char *compute = memchr(order, 'D', order_count);
@@ -114,17 +109,38 @@ static int CheckSplitPeriods(void)
     CHECK(dji_outputs == 3u && lk_outputs == 3u);
 #endif
     order_count = 0u;
-    CHECK(MotorTaskRunScheduled(&schedule, start + 5u, CheckTransmit, &allow_transmit) == PLATFORM_PERIODIC_CLOCK); // 倒退的时刻不能触发任何访问。
+    CHECK(MotorTaskRunScheduled(&schedule, start + 5u, CheckDeadline, &allowed_checks) == PLATFORM_PERIODIC_CLOCK); // 倒退的时刻不能触发任何访问。
     CHECK(order_count == 0u && schedule.compute.last_tick == start + 6u);
-    allow_transmit = 0u; // 在第 9 拍的发送检查中拒绝进入硬件服务。
-    CHECK(MotorTaskRunScheduled(&schedule, start + 9u, CheckTransmit, &allow_transmit) == PLATFORM_PERIODIC_READY);
+    allowed_checks = 0u; // 在第 9 拍的第一次检查中拒绝进入硬件服务。
+    CHECK(MotorTaskRunScheduled(&schedule, start + 9u, CheckDeadline, &allowed_checks) == PLATFORM_PERIODIC_READY);
     CHECK(can_tx_pumps == 3u && daemon_dispatches == 6u); // 保留已执行的接收，禁止提交 CAN 队列。
     CHECK(memchr(order, 'T', order_count) == NULL && memchr(order, 'X', order_count) == NULL); // 两个硬件发送入口都须跳过。
     order_count = 0u;
-    allow_transmit = 2u; // 第一阶段提交后耗尽预算，同轮桥接不能额外提交。
-    CHECK(MotorTaskRunScheduled(&schedule, start + 12u, CheckTransmit, &allow_transmit) == PLATFORM_PERIODIC_READY);
+#if defined(MC02_PROFILE_BENCH_SAFE)
+    allowed_checks = 2u; // 诊断配置只检查发送入口和第一帧提交。
+#else
+    allowed_checks = 3u; // 允许计算、进入发送和提交第一帧，同轮桥接不能额外提交。
+#endif
+    CHECK(MotorTaskRunScheduled(&schedule, start + 12u, CheckDeadline, &allowed_checks) == PLATFORM_PERIODIC_READY);
     CHECK(can_tx_pumps == 4u && memchr(order, 'T', order_count) != NULL);
     CHECK(memchr(order, 'X', order_count) == NULL);
+#if !defined(MC02_PROFILE_BENCH_SAFE)
+    // 第 14 拍只有计算到期，第 18 拍两项都到期。接收耗尽预算时，两种场景都不得计算或发送。
+    const uint32_t late_compute_offsets[] = {14u, 18u};
+    for (unsigned i = 0u; i < sizeof(late_compute_offsets) / sizeof(late_compute_offsets[0]); ++i)
+    {
+        const unsigned previous_dji = dji_outputs; // 保存原 DJI 调用次数。
+        const unsigned previous_lk = lk_outputs; // LK 调用次数分别检查。
+        const unsigned previous_receives = daemon_dispatches; // 确认本轮仍处理了接收和离线事件。
+        const unsigned previous_checks = deadline_checks; // 计算前只拒绝一次。
+        order_count = 0u; // 只检查本轮发生了哪些调用。
+        allowed_checks = 0u; // 接收处理结束时预算已用完。
+        CHECK(MotorTaskRunScheduled(&schedule, start + late_compute_offsets[i], CheckDeadline, &allowed_checks) == PLATFORM_PERIODIC_READY);
+        CHECK(daemon_dispatches == previous_receives + 1u && order_count > 0u && order[order_count - 1u] == 'E');
+        CHECK(deadline_checks == previous_checks + 1u && can_tx_pumps == 4u);
+        CHECK(dji_outputs == previous_dji && lk_outputs == previous_lk);
+    }
+#endif
     return 0;
 }
 

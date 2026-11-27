@@ -55,7 +55,7 @@ PlatformPeriodicResult_t MotorTaskScheduleInit(MotorTaskSchedule_t *schedule, co
 }
 
 static void MotorTaskStep(uint8_t compute_due, uint8_t transmit_due,
-                          MotorTaskTransmitCheck_t check_transmit, void *context)
+                          MotorTaskDeadlineCheck_t check_deadline, void *context)
 {
     uint32_t probe_all = PlatformProbeStart();
 
@@ -80,6 +80,11 @@ static void MotorTaskStep(uint8_t compute_due, uint8_t transmit_due,
 #if !defined(MC02_PROFILE_BENCH_SAFE)
     if (compute_due)
     {
+        if (check_deadline != NULL && !check_deadline(context)) // 接收处理可能已耗完本轮预算。
+        {
+            PlatformProbeDone(&motor_prof_all, probe_all); // 记录已花在接收与离线事件上的时间。
+            return; // 保留已处理的输入，本轮不生成候选帧，也不发送已排队的帧。
+        }
         uint32_t probe_seg = PlatformProbeStart(); // 只在计算到期时记录各驱动耗时。
 #if MC02_SELECTED_DRIVER_DJI
         DJIMotorControl();
@@ -96,29 +101,29 @@ static void MotorTaskStep(uint8_t compute_due, uint8_t transmit_due,
 #endif
 
 #if MC02_FEATURE_MOTOR_CONTROL
-    if (transmit_due && (check_transmit == NULL || check_transmit(context)))
+    if (transmit_due && (check_deadline == NULL || check_deadline(context)))
     {
-        PlatformDispatchCanTx(check_transmit, context); // 发送拍点内，每帧交给 HAL 前都复查剩余时间。
+        PlatformDispatchCanTx(check_deadline, context); // 发送拍点内，每帧交给 HAL 前都复查剩余时间。
 #if defined(MC02_PROFILE_ROBOT) && (defined(CHASSIS_BOARD) || defined(GIMBAL_BOARD))
 #if defined(MC02_CONFIG_GENERATED)
         if (RobotBuildModuleStarted(ROBOT_MODULE_COMMUNICATION)) // 辅助通信降级后不发送桥接帧。
 #endif
-            if (check_transmit == NULL || check_transmit(context)) // 普通派发可能已经耗尽发送预算。
-                RobotCanBridgeServiceTx(check_transmit, context); // 桥接额外机会使用相同的最终时限检查。
+            if (check_deadline == NULL || check_deadline(context)) // 普通派发可能已经耗尽发送预算。
+                RobotCanBridgeServiceTx(check_deadline, context); // 桥接额外机会使用相同的最终时限检查。
 #endif
     }
 #else
     (void)transmit_due; // 该构建无 CAN 周期发送。
-    (void)check_transmit; // 没有发送，也无需读取发送前时钟。
+    (void)check_deadline; // 同时关闭电机计算时，这个配置无需检查时钟。
     (void)context;
 #endif
     PlatformProbeDone(&motor_prof_all, probe_all);
 }
 
 PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, uint32_t now_tick,
-    MotorTaskTransmitCheck_t check_transmit, void *context)
+    MotorTaskDeadlineCheck_t check_deadline, void *context)
 {
-    if (schedule == NULL || check_transmit == NULL) return PLATFORM_PERIODIC_CONFIG; // 固定拍点必须提供发送前复查。
+    if (schedule == NULL || check_deadline == NULL) return PLATFORM_PERIODIC_CONFIG; // 固定拍点必须提供时限复查。
     MotorTaskSchedule_t candidate = *schedule; // 任一时钟失效都不推进原有拍点。
     PlatformPeriodicRelease_t compute_release;
     PlatformPeriodicRelease_t transmit_release;
@@ -128,7 +133,7 @@ PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, ui
     if (transmit != PLATFORM_PERIODIC_READY && transmit != PLATFORM_PERIODIC_WAIT) return transmit;
     *schedule = candidate; // 两项都有效，提交本轮已领取的拍点。
     MotorTaskStep(compute == PLATFORM_PERIODIC_READY, transmit == PLATFORM_PERIODIC_READY,
-                 check_transmit, context); // 同时到期时先计算，再检查当前时刻是否还可发送。
+                 check_deadline, context); // 同时到期时，计算和发送分别检查当前时刻。
     return PLATFORM_PERIODIC_READY;
 }
 

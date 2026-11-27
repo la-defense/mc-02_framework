@@ -36,21 +36,21 @@ typedef struct {
 PlatformPeriodicResult_t MotorTaskScheduleInit(MotorTaskSchedule_t *schedule, const MotorTaskPeriods_t *periods,
     uint32_t dispatch_us, uint32_t quantum_us, uint32_t first_tick);
 
-/** @brief 检查本轮能否开始发送，返回 0 时停止推进。
- * @note 可能在 CAN 队列保护中多次调用，只读时间或记录失败，不处理故障。
+/** @brief 检查本轮能否开始计算或发送，返回 0 时停止推进对应工作。
+ * @note 计算前及每帧发送前可重复调用，也可能处在 CAN 队列保护内。只读时间或记录失败，不处理故障。
  */
-typedef uint8_t (*MotorTaskTransmitCheck_t)(void *context);
+typedef uint8_t (*MotorTaskDeadlineCheck_t)(void *context);
 
-/** @brief 派发接收，执行到期的计算，检查通过后再进入发送。过期拍点不会补跑。
+/** @brief 派发接收，分别在到期计算和发送前检查本轮时限。过期拍点不会补跑。
  * @param[in,out] schedule 当前电机任务独占的周期状态。
  * @param[in] now_tick 本次从接收任务时钟观察到的计数值。
- * @param[in] check_transmit 发送到期时调用的检查，不可为空。
+ * @param[in] check_deadline 到期计算和发送前调用的检查，不可为空。
  * @param[in,out] context 传给检查函数的调用者状态，允许为空。
- * @return READY 为两个拍点均已检查，发送还需获得 check_transmit 允许。
- * @note 拍点检查失败时不访问收发或电机；每帧发送前均可被本轮时限检查拒绝。
+ * @return READY 表示两个拍点已检查。实际计算和发送仍由 check_deadline 决定。
+ * @note 拍点检查失败时不访问收发或电机。计算前拒绝时也跳过本轮的发送。
  */
 PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, uint32_t now_tick,
-    MotorTaskTransmitCheck_t check_transmit, void *context);
+    MotorTaskDeadlineCheck_t check_deadline, void *context);
 
 /** @brief 先派发 CAN、UART、USB 接收，再在正式配置计算 DJI、LK 输出；裸板配置跳过电机计算。
 * @note 由 MOTOR 任务约每 1 ms 调用，全工程仅此处周期派发接收；实际延迟仍取决于调度。

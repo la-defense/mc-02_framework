@@ -112,7 +112,7 @@ PlatformPeriodicResult_t MotorTaskScheduleInit(MotorTaskSchedule_t *schedule, co
 }
 
 PlatformPeriodicResult_t MotorTaskRunScheduled(MotorTaskSchedule_t *schedule, uint32_t now_tick,
-    MotorTaskTransmitCheck_t check_transmit, void *context)
+    MotorTaskDeadlineCheck_t check_transmit, void *context)
 {
     TEST_CHECK(schedule != NULL && now_tick == before_send_deadline && work == 0u && waits == 2u);
     TEST_CHECK(check_transmit != NULL && context != NULL);
