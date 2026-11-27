@@ -406,9 +406,11 @@ set(MC02_HOST_REMOTE_SOURCES
   ../../bsp/board/board_uart_stm32.c # 生产 UART 绑定使用该目标的测试句柄。
   ../../bsp/board/platform_uart_stm32.c # 逻辑 UART 接收适配复用测试设备。
   remote_uart_handles.c) # 提供遥控测试未单独声明的其余 UART 句柄。
+set(MC02_HOST_DJI_CONTROL_CONFIG ../../modules/motor/DJImotor/dji_motor_control_config.c) # 预检和电机测试共用驱动的来源检查。
 # 电机测试按目标原有的 CAN 替身编译同一份板级绑定。
 set(MC02_HOST_DJI_SOURCES
   ../../modules/motor/DJImotor/dji_motor.c # 生产电机驱动。
+  ${MC02_HOST_DJI_CONTROL_CONFIG}
   ../../bsp/os/platform_irq_stm32.c # 电机反馈最终复核保存与恢复中断状态。
   ../../bsp/board/board_can_stm32.c # 逻辑 CAN 到测试总线的绑定。
   ../../bsp/board/platform_can_rx_stm32.c # 真实逻辑 CAN 接收适配。
@@ -1315,7 +1317,8 @@ endif()
 target_link_libraries(motor_pid_integration_test PRIVATE mc02_numeric)
 add_test(NAME production_motor_pid_cascade_and_failure COMMAND motor_pid_integration_test)
 # 使用公开头编译生产 DJI 普通控制路径，禁止继承芯片和 RTOS 头目录。
-add_library(dji_portable_compile OBJECT ../../modules/motor/DJImotor/dji_motor.c)
+add_library(dji_portable_compile OBJECT ../../modules/motor/DJImotor/dji_motor.c
+  ${MC02_HOST_DJI_CONTROL_CONFIG}) # 配置检查也须在无厂商头路径时编译。
 target_include_directories(dji_portable_compile PRIVATE
   ../../modules # 通用单位换算定义。
   ../../modules/motor # 电机公共定义与 PID 接口。
@@ -2054,6 +2057,7 @@ add_test(NAME production_command_generated_manual_unsupported_frame COMMAND robo
 add_test(NAME production_command_generated_manual_frame_feedback COMMAND robot_cmd_generated_manual_test manual-frame-feedback)
 add_executable(commissioning_chassis_cmd_test commissioning_chassis_cmd_test.c
   ../../application/robot_def.c # 车型选择通过实际预检，确认启动前拒绝非法输入参数。
+  ${MC02_HOST_DJI_CONTROL_CONFIG} ../../modules/motor/motor_feedback.c # 使用与驱动相同的反馈及前馈声明检查。
   ../../modules/algorithm/controller.c # 预检使用正式 PID 参数校验。
   ../../application/config/commissioning_chassis_config.c # 车型选择和命令登记共用这套检查。
   ../../application/chassis/chassis_kinematics.c ../../application/chassis/omni.c # 使用真实的全向轮几何预检。
@@ -3155,6 +3159,7 @@ target_compile_definitions(robot_def_mecanum_role_compile PRIVATE MC02_PROFILE_R
 target_compile_options(robot_def_mecanum_role_compile PRIVATE -Wall -Wextra -Werror)
 mc02_apply_format_diagnostics(robot_def_mecanum_role_compile)
 add_executable(robot_def_chassis_config_test robot_def_chassis_config_test.c
+  ${MC02_HOST_DJI_CONTROL_CONFIG} ../../modules/motor/motor_feedback.c # 用真实 DJI 和公共来源检查核对车型配置。
   ../../application/robot_def.c ../../application/chassis/chassis_kinematics.c
   ../../application/chassis/omni.c ../../modules/algorithm/controller.c)
 target_include_directories(robot_def_chassis_config_test BEFORE PRIVATE robot_def_role_fakes)
@@ -3168,6 +3173,7 @@ mc02_apply_format_diagnostics(robot_def_chassis_config_test)
 add_test(NAME production_chassis_config_rejects_invalid_geometry COMMAND robot_def_chassis_config_test)
 # 同一车型校验入口也执行麦轮组合，几何只检查编入的麦轮模型。
 add_executable(robot_def_mecanum_config_test robot_def_chassis_config_test.c
+  ${MC02_HOST_DJI_CONTROL_CONFIG} ../../modules/motor/motor_feedback.c # 麦轮复用同一电机和来源检查。
   ../../application/robot_def.c ../../application/chassis/chassis_kinematics.c
   ../../application/chassis/mecanum.c ../../modules/algorithm/controller.c)
 target_include_directories(robot_def_mecanum_config_test BEFORE PRIVATE robot_def_role_fakes)
@@ -3191,7 +3197,7 @@ foreach(target IN ITEMS robot_can_requirements_test robot_can_requirements_disab
     robot_def_chassis_config_test robot_def_mecanum_config_test)
   target_include_directories(${target} PRIVATE ../../modules/algorithm)
 endforeach()
-foreach(check IN ITEMS mode pid period)
+foreach(check IN ITEMS mode pid period sources)
   add_test(NAME production_chassis_config_motor_${check} COMMAND robot_def_chassis_config_test motor-${check})
   add_test(NAME production_mecanum_config_motor_${check} COMMAND robot_def_mecanum_config_test motor-${check})
   set_tests_properties(production_chassis_config_motor_${check} production_mecanum_config_motor_${check}

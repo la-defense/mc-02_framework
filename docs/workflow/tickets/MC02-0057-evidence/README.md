@@ -223,4 +223,10 @@
 - 隔离受限底盘、单板 SP／V2、双板底盘通过 ARM Debug 构建、源码和 ELF 检查。相比 `d95f431`，Flash 分别增加 64、240、240、240 B，受限底盘主 RAM 减少 32 B，其余持平。用同一编译参数加 `-fstack-usage` 单独编译前后版本，`ChassisTask` 在单板上的函数帧由 192 B 增至 280 B，双板底盘由 208 B 增至 296 B。`PublishMotionFeedback` 由 64 B 增至 80 B。这些是编译器报告的函数帧大小，板上任务栈峰值和临界区耗时仍待验证。
 - `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 885 项，三个诊断预设通过 ARM 构建和 ELF 检查。正式预设按核心配置未确认拒绝构建。
 
+## 上电前检查轮组反馈和前馈的声明（APP-10）
+
+- 麦轮和全向轮原先允许没有回调的外部速度来源，受限底盘也接受未声明来源的电流前馈。车型选择现在与 DJI 登记共用来源检查，能在启动前识别缺少回调、错误单位、错误参考系和旧反转标志。符合声明的来源仍可使用，预检调用回调的次数为零。25 项车型、受限调试及 DJI 用例通过 ASan／UBSan。[车型回归](../../../../tests/host/robot_def_chassis_config_test.c) · [受限底盘回归](../../../../tests/host/commissioning_chassis_cmd_test.c)
+- 隔离受限底盘、单板 SP／V2、双板底盘和双板云台通过 ARM Debug 构建、源码和 ELF 检查。新源文件在无厂商头路径的框架目标内编译。相比 `7627eeb`，受限底盘 Flash 增加 32 B，其余四份各增加 48 B，主 RAM 均持平。没有写入实际轮组参数或测量实车反馈。
+- `verify.py --fast --host --firmware --presets bench-debug,rcdiag-debug,commission-observe-rcdiag-debug --parallel 2` 通过。WSL Debug 和 Release 各通过 887 项，三个诊断预设通过 ARM 构建和 ELF 检查。正式预设因核心配置未确认而按预期拒绝构建。
+
 见[本底盘接口](../../../../application/chassis/chassis_feedback.h)和[运动学学习笔记](../../../学习笔记/26-车型配置与底盘逆运动学.md)。

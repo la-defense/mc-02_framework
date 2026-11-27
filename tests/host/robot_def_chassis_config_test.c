@@ -15,6 +15,15 @@
 #include <string.h>
 
 static Robot_Config_s test_config;
+static unsigned source_reads; // 车型预检只查声明，不应读取实际反馈。
+
+static Motor_Feedback_Status_e read_source(const void *context, Motor_Signal_Snapshot_s *output)
+{
+    (void)context;
+    (void)output;
+    ++source_reads;
+    return MOTOR_FEEDBACK_NOT_READY; // 启动前来源还没有样本。
+}
 
 const Robot_Config_s *SentinelConfigInit(void)
 {
@@ -167,8 +176,47 @@ static void check_wheel_compute_period(void)
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
 }
 
+static void check_wheel_control_sources(void)
+{
+    set_valid_config();
+    const Robot_Config_s *selected = NULL;
+    Motor_Init_Config_s *motor = &test_config.chassis_param.chassis_motor_config;
+    Motor_Control_Setting_s *setting = &motor->controller_setting_init_config;
+    Motor_Controller_Init_s *controller = &motor->controller_param_init_config;
+    setting->speed_feedback_source = OTHER_FEED; // 外部速度来源启用，但还没有读取回调。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    TEST_CHECK(ChassisConfigFeed() == NULL);
+    controller->other_speed_feedback = (Motor_Signal_Source_s){
+        .read = read_source, // 回调只在实际控制周期采样。
+        .max_age_ms = 20u, // 测试样本期限，单位 ms。
+        .unit = MOTOR_UNIT_RAD, // 刻意使用位置单位。
+        .reference = MOTOR_REFERENCE_EXTERNAL, // 外部速度声明应使用外部参考系。
+    };
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    controller->other_speed_feedback.unit = MOTOR_UNIT_RAD_S; // 修正后可启用外部速度反馈。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
+    setting->feedforward_flag = SPEED_FEEDFORWARD; // 启用速度前馈后，必须提供输出轴速度来源。
+    controller->speed_feedforward = controller->other_speed_feedback; // 当前参考系错误，仍标成外部坐标。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    controller->speed_feedforward.reference = MOTOR_REFERENCE_OUTPUT_AXIS; // 前馈按轮轴方向表达。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
+    setting->feedforward_flag = CURRENT_FEEDFORWARD; // 电流前馈也需要自己的单位和来源。
+    controller->current_feedforward = controller->speed_feedforward; // 误配成 rad/s 时不能启动。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    controller->current_feedforward.unit = MOTOR_UNIT_DEVICE_CURRENT; // DJI 使用设备电流单位。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_OK && selected == &test_config);
+    setting->motor_reverse_flag = MOTOR_DIRECTION_REVERSE; // 安装方向已经由各轮提供，不能再反转。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    TEST_CHECK(source_reads == 0u);
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "motor-sources") == 0)
+    {
+        check_wheel_control_sources();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && strcmp(argv[1], "motor-period") == 0)
     {
         check_wheel_compute_period();

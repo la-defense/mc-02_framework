@@ -133,6 +133,7 @@ OPTIONAL_PORTABLE_FRAMEWORK_SOURCES = {
     "application/topics/robot_topics_diag.c",  # 话题统计查询。
     "application/topics/robot_can_bridge.c",  # 双板话题与 CAN 适配。
     "modules/motor/DJImotor/dji_motor.c",  # DJI 逻辑端点、控制和反馈。
+    "modules/motor/DJImotor/dji_motor_control_config.c",  # DJI 控制来源的配置检查。
     "modules/motor/LKmotor/LK9025.c",  # LK 逻辑端点和分组发送。
     "modules/motor/HTmotor/HT04.c",  # HT 逻辑端点和控制。
     "modules/motor/motor_task.c",  # 通信派发顺序及电机周期调用。
@@ -339,6 +340,7 @@ def check_source_selection(build_dir: Path, profile: str, role: str,
         required_chassis_sources = commissioning_sources | {
             "application/chassis/chassis.c",  # 四轮登记和底盘周期计算。
             "modules/motor/DJImotor/dji_motor.c",  # 受限轮组使用的 CAN 电机驱动。
+            "modules/motor/DJImotor/dji_motor_control_config.c",  # 启动前检查轮组反馈和前馈的声明。
         }
         missing |= required_chassis_sources - compiled
         unexpected |= (role_sources["chassis"] | {"modules/master_machine/master_process.c",

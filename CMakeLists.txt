@@ -375,6 +375,7 @@ set(MC02_OPTIONAL_PORTABLE_SOURCES
     modules/imu/ins_task.c # 姿态采样、解算和安全状态。
     modules/imu/imu_heater.c # 温控策略使用逻辑 PWM 与模拟输入。
     modules/motor/DJImotor/dji_motor.c # DJI 普通控制及逻辑 CAN 接口。
+    modules/motor/DJImotor/dji_motor_control_config.c # 车型预检和 DJI 登记使用的纯配置检查。
     modules/motor/LKmotor/LK9025.c # LK 反馈及按逻辑总线组帧。
     modules/motor/HTmotor/HT04.c # HT 反馈、模式命令与周期控制。
     modules/motor/motor_task.c # 单一通信派发和电机周期任务。

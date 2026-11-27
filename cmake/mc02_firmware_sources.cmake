@@ -169,6 +169,7 @@ set(MC02_COMMON_MODULE_C_SOURCES
     modules/lcd/lcd_ui.c
     modules/message_center/message_center.c
     modules/motor/DJImotor/dji_motor.c
+    modules/motor/DJImotor/dji_motor_control_config.c # 车型检查和 DJI 电机登记共用的纯配置检查。
     bsp/board/dji_can_diagnostic_stm32.c # 已选 DJI 驱动的板级回环诊断，默认不启用。
     modules/motor/HTmotor/HT04.c
     modules/motor/LKmotor/LK9025.c
@@ -309,6 +310,7 @@ foreach(pair IN ITEMS "DJI;DJImotor/dji_motor.c" "LK;LKmotor/LK9025.c" "HT;HTmot
 endforeach()
 if(NOT MC02_SELECTED_DRIVER_DJI)
     list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES bsp/board/dji_can_diagnostic_stm32.c) # 无 DJI 电机时不编入诊断。
+    list(REMOVE_ITEM MC02_COMMON_MODULE_C_SOURCES modules/motor/DJImotor/dji_motor_control_config.c) # 无 DJI 电机时无需校验这类控制来源。
 endif()
 if(MC02_PLATFORM_TIM5_PERIODIC)
     list(APPEND MC02_BSP_C_SOURCES bsp/board/platform_periodic_tim5_stm32.c) # 底盘唤醒或独立定时自测使用 TIM5。

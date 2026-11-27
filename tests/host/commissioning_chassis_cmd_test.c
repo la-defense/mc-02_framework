@@ -124,6 +124,9 @@ static void CheckVehicleSelection(const RobotManualInputConfig_s *valid_input)
     chassis->chassis_motor_config.controller_param_init_config.speed_PID.DtMax_s = 0.001f; // 名义 2 ms 超过速度环允许的 1 ms。
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
     chassis->chassis_motor_config.controller_param_init_config.speed_PID.DtMax_s = 0.002f; // 恢复至允许边界，后续继续核对人工输入。
+    chassis->chassis_motor_config.controller_setting_init_config.feedforward_flag = CURRENT_FEEDFORWARD; // 受限底盘也必须拒绝缺少回调的启用来源。
+    TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
+    chassis->chassis_motor_config.controller_setting_init_config.feedforward_flag = FEEDFORWARD_NONE; // 测试轮组不使用前馈。
     chassis->chassis_motor_config.controller_setting_init_config.outer_loop_type = ANGLE_LOOP; // 受限调试也不能用速度命令驱动位置环。
     TEST_CHECK(RobotConfigSelect(SENTINEL_ROBOT, &selected) == ROBOT_CONFIG_BAD_PARAMETERS && selected == NULL);
     chassis->chassis_motor_config.controller_setting_init_config.outer_loop_type = SPEED_LOOP; // 恢复后继续独立核对人工输入。

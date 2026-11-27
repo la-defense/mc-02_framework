@@ -2,6 +2,7 @@
 * @brief 解码 DJI 电调反馈，逐电机计算参考输出，并按总线与设备编号组成四电机 CAN 帧。
  */
 #include "dji_motor.h"
+#include "dji_motor_control_config.h"
 #include <string.h>
 #include "general_def.h"
 #include "../../../bsp/dwt/platform_probe.h"
@@ -117,55 +118,16 @@ static SampleFilterStatus_t InitTimeConstantFilter(SampleFilter_t *filter,
     return SampleFilterInit(filter, &filter_config, NULL, 0u);
 }
 
-static uint8_t FeedbackSourceValid(const Motor_Signal_Source_s *source,
-                                   Motor_Unit_e unit,
-                                   Motor_Reference_e reference)
-{
-    return (uint8_t)(MotorFeedbackValidateSignalSource(source) == MOTOR_FEEDBACK_OK &&
-                     source->unit == unit && source->reference == reference);
-}
-
 static uint8_t DjiConfigValid(const Motor_Init_Config_s *config)
 {
-    const Motor_Control_Setting_s *setting = &config->controller_setting_init_config;
-    const Motor_Controller_Init_s *controller = &config->controller_param_init_config;
-    Motor_Capabilities_s capabilities;
     if (config->dji_chassis_output_limit_raw > DJI_OUTPUT_MAX_RAW ||
         (config->dji_chassis_output_limit_raw != 0u && config->output_role != MOTOR_OUTPUT_CHASSIS))
-        return 0u; // 专用上限只能用于底盘，且不得超出驱动的报文范围。
-    if (MotorFeedbackValidateOutputAxis(&config->output_axis) != MOTOR_FEEDBACK_OK ||
-        MotorFeedbackGetCapabilities(config->motor_type, &capabilities) != MOTOR_FEEDBACK_OK ||
-        (capabilities.measurement_mask & MOTOR_CAPABILITY_CURRENT) == 0u ||
-        setting->motor_reverse_flag != MOTOR_DIRECTION_NORMAL ||
-        setting->feedback_reverse_flag != FEEDBACK_DIRECTION_NORMAL ||
-        (setting->feedforward_flag & (uint8_t)~CURRENT_AND_SPEED_FEEDFORWARD) != 0u)
-        return 0u;
-
-    if ((setting->close_loop_type & ANGLE_LOOP) != 0u &&
-        (setting->outer_loop_type == ANGLE_LOOP) &&
-        (setting->angle_feedback_source == OTHER_FEED &&
-         !FeedbackSourceValid(&controller->other_angle_feedback, MOTOR_UNIT_RAD,
-                              MOTOR_REFERENCE_EXTERNAL)))
-        return 0u;
-    if ((setting->close_loop_type & SPEED_LOOP) != 0u &&
-        (setting->outer_loop_type & (ANGLE_LOOP | SPEED_LOOP)) != 0u &&
-        (setting->speed_feedback_source == OTHER_FEED &&
-         !FeedbackSourceValid(&controller->other_speed_feedback, MOTOR_UNIT_RAD_S,
-                              MOTOR_REFERENCE_EXTERNAL)))
-        return 0u;
-    if ((setting->feedforward_flag & SPEED_FEEDFORWARD) != 0u &&
-        !FeedbackSourceValid(&controller->speed_feedforward, MOTOR_UNIT_RAD_S,
-                             MOTOR_REFERENCE_OUTPUT_AXIS))
-        return 0u;
-    if ((setting->feedforward_flag & CURRENT_FEEDFORWARD) != 0u &&
-        !FeedbackSourceValid(&controller->current_feedforward, MOTOR_UNIT_DEVICE_CURRENT,
-                             MOTOR_REFERENCE_OUTPUT_AXIS))
-        return 0u;
-    if (setting->angle_feedback_source != MOTOR_FEED && setting->angle_feedback_source != OTHER_FEED)
-        return 0u;
-    if (setting->speed_feedback_source != MOTOR_FEED && setting->speed_feedback_source != OTHER_FEED)
-        return 0u;
-    return 1u;
+        return 0u; // ????????????????????????
+    Motor_Capabilities_s capabilities;
+    return MotorFeedbackValidateOutputAxis(&config->output_axis) == MOTOR_FEEDBACK_OK &&
+        MotorFeedbackGetCapabilities(config->motor_type, &capabilities) == MOTOR_FEEDBACK_OK &&
+        (capabilities.measurement_mask & MOTOR_CAPABILITY_CURRENT) != 0u &&
+        DJIMotorControlConfigIsValid(config); // ??????????????
 }
 
 static float FeedbackIntervalSeconds(const PlatformCanRxFrame_t *frame, const DJIMotorInstance *motor)

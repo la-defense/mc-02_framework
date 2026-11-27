@@ -7,6 +7,9 @@
 #include "../modules/general_def.h"
 
 #if MC02_FEATURE_CHASSIS
+#if defined(MC02_PROFILE_ROBOT) || defined(MC02_PROFILE_COMMISSIONING_CHASSIS)
+#include "../modules/motor/DJImotor/dji_motor_control_config.h"
+#endif
 #if MC02_CHASSIS_IS_OMNI
 #include "omni.h"
 #else
@@ -57,6 +60,8 @@ static uint8_t ChassisWheelControlIsValid(const Motor_Init_Config_s *motor)
     if (setting->outer_loop_type != SPEED_LOOP ||
         (setting->close_loop_type != SPEED_LOOP && setting->close_loop_type != SPEED_AND_CURRENT_LOOP))
         return 0u; // 拒绝把轮轴速度交给开环、位置环、仅电流环或未知组合。
+    if (!DJIMotorControlConfigIsValid(motor))
+        return 0u; // 开启供电前确认反馈及前馈声明能被实际驱动接受。
     if (PIDCheckConfig(&pid->speed_PID) != PID_OK)
         return 0u; // 速度环始终参与计算，参数必须能用于初始化。
     return setting->close_loop_type == SPEED_LOOP || PIDCheckConfig(&pid->current_PID) == PID_OK; // 串接时才检查电流环。
